@@ -130,6 +130,15 @@ export class Conversation implements ChatInterface {
     });
   }
 
+  /**
+   * Returns the number of tokens in the conversation KV Cache (prefill +
+   * decode).
+   *
+   * Note: When `filterChannelContentFromKvCache` is enabled (the default),
+   * channel content (such as reasoning/thinking tokens) from the most recent
+   * turn remains in the KV cache until the next user message triggers a rewind
+   * and re-prefill.
+   */
   async getTokenCount(): Promise<number> {
     return this.mutexes.executor.acquireAndRun(() => {
       return this.conversation.getTokenCount();

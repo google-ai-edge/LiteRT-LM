@@ -747,7 +747,29 @@ class AbstractConversation(abc.ABC):
   @property
   @abc.abstractmethod
   def token_count(self) -> int:
-    """The number of tokens in the KV Cache (prefill + decode)."""
+    """The number of tokens in the KV Cache (prefill + decode).
+
+    Note: When `filter_channel_content_from_kv_cache` is enabled (the default),
+    channel content (such as reasoning/thinking tokens) from the most recent
+    turn remains in the KV cache until the next user message triggers a rewind
+    and re-prefill. To get the token count excluding pending-removal channel
+    tokens, use `get_token_count(include_channel_content=False)`.
+    """
+
+  @abc.abstractmethod
+  def get_token_count(self, include_channel_content: bool = True) -> int:
+    """Returns the number of tokens in the conversation KV Cache.
+
+    Args:
+      include_channel_content: If True (default), returns the current KV cache
+        step including any channel tokens (e.g., reasoning/thinking tokens) from
+        the latest turn that have not yet been rolled back. If False, excludes
+        the token count of any channel content that is pending removal from the
+        KV cache on the next user turn.
+
+    Returns:
+      The number of tokens in the KV cache.
+    """
 
   @abc.abstractmethod
   def get_benchmark_info(self) -> BenchmarkInfo:

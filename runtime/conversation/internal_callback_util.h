@@ -49,7 +49,8 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
     const std::optional<std::string>& open_channel_name = std::nullopt,
     bool return_error_on_max_tokens_reached = false,
     bool stream_tool_calls = false,
-    absl::string_view tool_call_channel_name = "tool_call");
+    absl::string_view tool_call_channel_name = "tool_call",
+    absl::AnyInvocable<void(int)> on_channel_tokens_callback = nullptr);
 
 }  // namespace litert::lm
 
