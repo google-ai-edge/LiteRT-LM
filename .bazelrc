@@ -294,6 +294,16 @@ build:windows --host_copt=/d2ReducedOptimizeHugeFunctions
 build:windows --copt=-D_ENABLE_EXTENDED_ALIGNED_STORAGE
 build:windows --host_copt=-D_ENABLE_EXTENDED_ALIGNED_STORAGE
 
+# XNNPACK's AVX512-BF16 GEMM configuration unconditionally references assembly
+# microkernels (`..._asm_amd64_avx512bf16_broadcast`) that are not assembled
+# under MSVC, so enabling the feature here fails to link. XNNPACK enabled it by
+# default for the whole x86 family in
+# https://github.com/google/XNNPACK/commit/0363fd2f2b, and its `x86` config
+# setting matches plain `windows_x86_64` (MSVC) whereas the previous `x86_64`
+# setting only matched the clang-cl, clang and mingw variants. Opt back out to
+# keep the behavior this build had before that change.
+build:windows --define=xnn_enable_avx512bf16=false
+
 # Enable the runfiles symlink tree on Windows. This makes it possible to build
 # the pip package on Windows without an intermediate data-file archive, as the
 # build_pip_package script in its current form (as of Aug 2023) uses the

@@ -3,19 +3,27 @@
 workspace(name = "litert_lm")
 
 # UPDATED = 2026-09-25
-LITERT_REF = "26895c9fbcc25c43faa8c1a98cd1fd28951602c3"
+LITERT_REF = "86112a3263efdbcf2183c48580c9aa1b89850c98"
 
-LITERT_SHA256 = "698811a8ec56f6a9bd7705ffaa75ff792cae03a67d3a759dbc84f2023493ee6f"
+LITERT_SHA256 = "f6a092e585f801ccb112e55d4f0e86d285e2cc8db38ead1f4c234b9ca17b8548"
 
-# Keep TensorFlow at this commit for now. Newer commits load
-# `compatibility_proxy_repo` from `@rules_cc//cc:extensions.bzl` in
-# `tensorflow/workspace1.bzl`, which the rules_cc version resolved by this
-# WORKSPACE does not provide, breaking the bazel build (as of 2026-09-15).
-TENSORFLOW_REF = "d9a8da74b4c3de28a39ab34ad007838d6bc30c67"
+TENSORFLOW_REF = "615d5ee70e34da548fd4fe149544b5e0c62d548b"
 
-TENSORFLOW_SHA256 = "cd46b37c0f722d5a48c0accc9618cc5684c553332b913091023703461f318d9b"
+TENSORFLOW_SHA256 = "05b7f5fa49ea48d9145269f69c607d244389138bc4c7c743a679fca2f97d892b"
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Declared before `rules_shell_dependencies()` and `apple_rules_dependencies()`
+# because those macros also declare `bazel_skylib`, and the first declaration of
+# a repository wins. The pinned TensorFlow expects 1.9.0: its `@rules_cc` uses
+# the `scope` attribute on `bool_flag`, which older bazel_skylib releases do not
+# define. Keep this in sync with the version in TensorFlow's
+# `tensorflow/workspace3.bzl`.
+http_archive(
+    name = "bazel_skylib",
+    sha256 = "3b5b49006181f5f8ff626ef8ddceaa95e9bb8ad294f7b5d7b11ea9f7ddaf8c59",
+    urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz"],
+)
 
 http_archive(
     name = "rules_shell",
@@ -130,10 +138,6 @@ http_archive(
     ],
 )
 
-load("@io_bazel_rules_go//go:deps.bzl", "go_rules_dependencies")
-
-go_rules_dependencies()
-
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
@@ -152,6 +156,18 @@ http_archive(
 load("@org_tensorflow//tensorflow:workspace3.bzl", "tf_workspace3")
 
 tf_workspace3()
+
+load("@bazel_features//:deps.bzl", "bazel_features_deps")
+
+bazel_features_deps()
+
+load("@rules_cc//cc:extensions.bzl", "compatibility_proxy_repo")
+
+compatibility_proxy_repo()
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_rules_dependencies")
+
+go_rules_dependencies()
 
 load(
     "@rules_ml_toolchain//cc/deps:cc_toolchain_deps.bzl",
