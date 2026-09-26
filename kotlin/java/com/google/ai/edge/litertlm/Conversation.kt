@@ -687,13 +687,22 @@ class Conversation(
   /**
    * Gets the number of tokens in the conversation KV Cache (prefill + decode).
    *
+   * Note: When `filterChannelContentFromKvCache` is enabled (the default), channel content (such as
+   * reasoning/thinking tokens) from the most recent turn remains in the KV cache until the next
+   * user message triggers a rewind and re-prefill.
+   *
+   * @param includeChannelContent If true (default), returns the current KV cache step including any
+   *   channel tokens from the latest turn that have not yet been rolled back. If false, excludes
+   *   the token count of any channel content that is pending removal from the KV cache on the next
+   *   user turn.
    * @return The number of tokens.
    * @throws IllegalStateException if the conversation is not alive.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun getTokenCount(): Int {
+  @JvmOverloads
+  fun getTokenCount(includeChannelContent: Boolean = true): Int {
     checkIsAlive()
-    return LiteRtLmJni.nativeConversationGetTokenCount(handle)
+    return LiteRtLmJni.nativeConversationGetTokenCount(handle, includeChannelContent)
   }
 
   /**
