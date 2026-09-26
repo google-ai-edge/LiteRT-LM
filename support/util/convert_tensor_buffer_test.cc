@@ -191,6 +191,34 @@ TEST(ConvertTensorBufferTest, ReferTensorBufferAsSpan_IncompatibleElementType) {
                       "Element type is not compatible to the target type."));
 }
 
+TEST(ConvertTensorBufferTest, MutateTensorBufferAsSpan_Success) {
+  std::vector<int8_t> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
+                              CopyToTensorBuffer<int8_t>(data, {2, 5}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto span,
+                              MutateTensorBufferAsSpan<int8_t>(tensor_buffer));
+  EXPECT_THAT(span, ElementsAre(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+  span[0] = 42;
+  EXPECT_THAT(span, ElementsAre(42, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+}
+
+TEST(ConvertTensorBufferTest, MutateTensorBufferAsSpan_NonHostMemory) {
+  ::litert::TensorBuffer tensor_buffer;
+  EXPECT_THAT(MutateTensorBufferAsSpan<int8_t>(tensor_buffer),
+              IsError(::litert::Status::kErrorInvalidArgument,
+                      "Tensor buffer is not in the host memory."));
+}
+
+TEST(ConvertTensorBufferTest,
+     MutateTensorBufferAsSpan_IncompatibleElementType) {
+  std::vector<int32_t> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
+                              CopyToTensorBuffer<int32_t>(data, {2, 5}));
+  EXPECT_THAT(MutateTensorBufferAsSpan<float>(tensor_buffer),
+              IsError(::litert::Status::kErrorInvalidArgument,
+                      "Element type is not compatible to the target type."));
+}
+
 TEST(ConvertTensorBufferTest, CopyFromTensorBuffer_Success) {
   std::vector<int8_t> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
   LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
