@@ -34,6 +34,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   presubmit:
     name: "Presubmit-Mac"
@@ -51,9 +54,10 @@ jobs:
                          (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
     steps:
       - name: Checkout code.
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
+          persist-credentials: false
 
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4
@@ -80,7 +84,7 @@ jobs:
       - name: Restore bazel cache if cache is not being refreshed.
         id: bazel-cache
         if: env.REFRESH_CACHE != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
@@ -112,9 +116,9 @@ jobs:
           echo "Downloading model across Hugging Face..."
           curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
             --oauth2-bearer "$HF_TOKEN" \
-            -o ${{ env.MODEL_PATH }} \
-            "${{ env.MODEL_URL }}"
-          ls -lh ${{ env.MODEL_PATH }}
+            -o ${MODEL_PATH} \
+            "${MODEL_URL}"
+          ls -lh ${MODEL_PATH}
 
       - name: Install Rust
         run: |
@@ -151,10 +155,10 @@ jobs:
 
       - name: Run pytest
         run: |
-          if [ -f "${{ env.MODEL_PATH }}" ]; then
-            pytest tools/pytest/ --backend=cpu --model-path=${{ env.MODEL_PATH }} --build-system=bazel
+          if [ -f "${MODEL_PATH}" ]; then
+            pytest tools/pytest/ --backend=cpu --model-path=${MODEL_PATH} --build-system=bazel
           else
-            echo "Skipping pytest on macOS because model file ${{ env.MODEL_PATH }} is not downloaded (unauthenticated PR)."
+            echo "Skipping pytest on macOS because model file ${MODEL_PATH} is not downloaded (unauthenticated PR)."
           fi
 
       # TODO(totero): Re-enable this step once the bug is fixed.
@@ -187,7 +191,7 @@ jobs:
           STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
 
       - name: Save bazel cache if it's new or being refreshed.
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         if: env.REFRESH_CACHE == 'true'
         with:
           path: ~/.cache/bazel
