@@ -201,6 +201,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
            post_graph_run_callback_ != nullptr;
   }
 
+  ::litert::Environment* GetEnvironment() const override { return &env_; }
+
  protected:
   LlmLiteRtCompiledModelExecutorBase(
       LlmExecutorSettings executor_settings, Environment& env,

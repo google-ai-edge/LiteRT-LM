@@ -69,7 +69,7 @@ TEST_P(RepetitionPenaltyConstraintParamTest, AppliesMultiplicativePenalty) {
   // Before seeing any tokens, mask is empty/no-op
   {
     ASSERT_OK_AND_ASSIGN(auto mask, constraint.ComputeMask(*state));
-    EXPECT_EQ(mask->GetType(), MaskType::kCustom);
+    EXPECT_EQ(mask->GetType(), MaskType::kSparse);
     auto* rpm = static_cast<RepetitionPenaltyMask*>(mask.get());
     EXPECT_TRUE(rpm->entries().empty());
   }
@@ -78,7 +78,7 @@ TEST_P(RepetitionPenaltyConstraintParamTest, AppliesMultiplicativePenalty) {
   ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 1));
 
   ASSERT_OK_AND_ASSIGN(auto mask, constraint.ComputeMask(*state));
-  EXPECT_EQ(mask->GetType(), MaskType::kCustom);
+  EXPECT_EQ(mask->GetType(), MaskType::kSparse);
 
   RunWithParam([&](auto dummy_type) {
     using T = decltype(dummy_type);
