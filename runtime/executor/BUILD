@@ -202,11 +202,17 @@ config_setting(
     define_values = {"LITERT_GPU_ACCELERATOR": "webgpu"},
 )
 
+config_setting(
+    name = "gpu_accelerator_webgpu_copt",
+    values = {"copt": "-DLITERT_USE_WEBGPU_ACCELERATOR"},
+)
+
 selects.config_setting_group(
     name = "gpu_accelerator_webgpu_requested",
     match_any = [
         ":gpu_accelerator_webgpu_setting",
         ":gpu_accelerator_webgpu_define",
+        ":gpu_accelerator_webgpu_copt",
     ],
 )
 
@@ -228,6 +234,15 @@ selects.config_setting_group(
         ":gpu_accelerator_metal_setting",
         ":gpu_accelerator_metal_define",
     ],
+)
+
+selects.config_setting_group(
+    name = "android_webgpu",
+    match_all = [
+        "@platforms//os:android",
+        ":gpu_accelerator_webgpu_requested",
+    ],
+    visibility = ["//visibility:public"],
 )
 
 selects.config_setting_group(
