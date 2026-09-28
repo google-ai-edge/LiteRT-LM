@@ -87,17 +87,54 @@ cc_library(
     srcs = ["executor_settings_base.cc"],
     hdrs = ["executor_settings_base.h"],
     deps = [
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
         "//runtime/util:data_stream",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:scoped_file",
+    ],
+)
+
+cc_library(
+    name = "executor_backend_registry",
+    srcs = ["executor_backend_registry.cc"],
+    hdrs = ["executor_backend_registry.h"],
+    deps = [
+        ":executor_settings_base",
+        ":llm_executor",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "//runtime/components:model_resources",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//support/tokenizer",
+    ],
+)
+
+cc_test(
+    name = "executor_backend_registry_test",
+    srcs = ["executor_backend_registry_test.cc"],
+    deps = [
+        ":executor_backend_registry",
+        ":executor_settings_base",
+        ":llm_executor_settings",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/engine:engine_settings",
     ],
 )
 
