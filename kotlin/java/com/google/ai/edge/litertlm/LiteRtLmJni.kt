@@ -333,10 +333,15 @@ internal object LiteRtLmJni {
    * Gets the number of tokens in the conversation KV Cache.
    *
    * @param conversationPointer A pointer to the native conversation instance.
+   * @param includeChannelContent Whether to include channel content pending removal from the KV
+   *   cache.
    * @return The number of tokens.
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
-  external fun nativeConversationGetTokenCount(conversationPointer: Long): Int
+  external fun nativeConversationGetTokenCount(
+    conversationPointer: Long,
+    includeChannelContent: Boolean,
+  ): Int
 
   /**
    * Renders the message into a string for testing purposes.

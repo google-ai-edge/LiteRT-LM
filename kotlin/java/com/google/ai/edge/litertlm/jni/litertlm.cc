@@ -992,11 +992,13 @@ JNI_METHOD(nativeConversationGetBenchmarkInfo)(JNIEnv* env, jclass thiz,
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeConversationGetTokenCount)(
-    JNIEnv* env, jclass thiz, jlong conversation_pointer) {
+    JNIEnv* env, jclass thiz, jlong conversation_pointer,
+    jboolean include_channel_content) {
   Conversation* conversation =
       reinterpret_cast<Conversation*>(conversation_pointer);
 
-  auto tokens_count = conversation->GetTokenCount();
+  auto tokens_count =
+      conversation->GetTokenCount(include_channel_content == JNI_TRUE);
   if (!tokens_count.ok()) {
     ThrowLiteRtLmJniException(
         env, "Failed to get token count: " + tokens_count.status().ToString());

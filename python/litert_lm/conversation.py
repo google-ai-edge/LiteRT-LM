@@ -500,9 +500,15 @@ class Conversation(interfaces.AbstractConversation):
   @property
   def token_count(self) -> int:
     """See base class."""
+    return self.get_token_count(include_channel_content=True)
+
+  def get_token_count(self, include_channel_content: bool = True) -> int:
+    """See base class."""
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
-    res = self._lib.litert_lm_conversation_get_token_count(self._ptr)
+    res = self._lib.litert_lm_conversation_get_token_count_with_options(
+        self._ptr, include_channel_content
+    )
     if res == -1:
       raise RuntimeError("Failed to get token count.")
     return res

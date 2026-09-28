@@ -594,10 +594,19 @@ public final class Conversation: Sendable {
 
   /// Gets the number of tokens in the conversation KV Cache (prefill + decode).
   ///
+  /// Note: When `filterChannelContentFromKvCache` is enabled (the default), channel content (such
+  /// as reasoning/thinking tokens) from the most recent turn remains in the KV cache until the next
+  /// user message triggers a rewind and re-prefill.
+  ///
+  /// - Parameter includeChannelContent: If `true` (default), returns the current KV cache step
+  ///   including any channel tokens from the latest turn that have not yet been rolled back. If
+  ///   `false`, excludes the token count of any channel content that is pending removal from the
+  ///   KV cache on the next user turn.
   /// - Throws: A `LiteRTLMError` if the conversation is not alive.
-  public func getTokenCount() throws -> Int {
+  public func getTokenCount(includeChannelContent: Bool = true) throws -> Int {
     let handle = try checkIsAlive()
-    return Int(litert_lm_conversation_get_token_count(handle))
+    return Int(
+      litert_lm_conversation_get_token_count_with_options(handle, includeChannelContent))
   }
 
   /// Retrieves the benchmark information from the conversation.

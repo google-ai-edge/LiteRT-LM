@@ -513,11 +513,30 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     LiteRtLmConversation* conversation);
 
 // Gets the number of tokens in the conversation KV Cache (prefill + decode).
+// Note: When `filter_channel_content_from_kv_cache` is enabled (the default),
+// channel content (e.g. reasoning/thinking tokens) from the most recent turn
+// remains in the KV cache until the next user message triggers a rewind and
+// re-prefill. Use `litert_lm_conversation_get_token_count_with_options` with
+// `include_channel_content = false` to exclude pending-removal channel tokens.
 // Returns the number of tokens, or a negative value on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
 int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation);
+
+// Gets the number of tokens in the conversation KV Cache (prefill + decode).
+//
+// @param conversation The conversation to get the token count from.
+// @param include_channel_content If true, returns the current KV cache step
+//   including any channel tokens from the latest turn that have not yet been
+//   rolled back. If false, excludes channel tokens pending removal from the KV
+//   cache on the next user turn.
+// @return The number of tokens, or a negative value on failure.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_conversation_get_token_count_with_options(
+    LiteRtLmConversation* conversation, bool include_channel_content);
 
 #ifdef __cplusplus
 }  // extern "C"
