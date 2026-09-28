@@ -69,6 +69,7 @@ class Engine(interfaces.AbstractEngine):
       enable_benchmark: bool = False,
       use_ringbuffers_local_attention: bool | None = None,
       enable_ynnpack: bool | None = None,
+      max_vision_tokens_per_image: int | None = None,
       **kwargs,
   ):
     backend = _normalize_backend(backend)
@@ -87,6 +88,7 @@ class Engine(interfaces.AbstractEngine):
         activation_data_type=activation_data_type,
         use_ringbuffers_local_attention=use_ringbuffers_local_attention,
         enable_ynnpack=enable_ynnpack,
+        max_vision_tokens_per_image=max_vision_tokens_per_image,
         **kwargs,
     )
 
@@ -145,6 +147,10 @@ class Engine(interfaces.AbstractEngine):
     if self.max_num_images is not None:
       self._lib.litert_lm_engine_settings_set_max_num_images(
           settings, self.max_num_images
+      )
+    if self.max_vision_tokens_per_image is not None:
+      self._lib.litert_lm_engine_settings_set_max_vision_tokens_per_image(
+          settings, self.max_vision_tokens_per_image
       )
     if self.cache_dir is not None:
       self._lib.litert_lm_engine_settings_set_cache_dir(
@@ -245,6 +251,7 @@ class Engine(interfaces.AbstractEngine):
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
       enable_speculative_decoding: bool | None = None,
+      visual_token_budget: int | None = None,
   ) -> Conversation:
     session_config = self._lib.litert_lm_session_config_create()
     if enable_speculative_decoding is not None:
@@ -390,6 +397,7 @@ class Engine(interfaces.AbstractEngine):
         max_output_tokens=max_output_tokens,
         chat_template=chat_template,
         constrained_decoding_config=constrained_decoding_config,
+        visual_token_budget=visual_token_budget,
     )
 
   def create_session(
