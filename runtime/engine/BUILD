@@ -92,6 +92,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:executor_backend_registry",
         "//runtime/executor:executor_settings_base",
     ],
 )
@@ -407,6 +408,7 @@ cc_library(
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/core:version",
         "//runtime/executor:audio_executor_settings",
+        "//runtime/executor:executor_backend_registry",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
