@@ -460,5 +460,108 @@ TEST(StbImagePreprocessorTest, DecodeFailedWithInvalidImage) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+// Preprocessing decoded pixels is meant to be the encoded-bytes pipeline with
+// the decode lifted out, so the two must agree exactly. Comparing the tensors
+// element by element, rather than spot-checking pixels, is what makes this a
+// regression test: any future change that touches only one of the two paths
+// fails here.
+TEST(StbImagePreprocessorTest, PreprocessDecodedImageMatchesEncodedBytes) {
+  StbImagePreprocessor preprocessor;
+
+  const std::string image_path =
+      (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / "apple.png")
+          .string();
+  std::ifstream file_stream(image_path, std::ios::binary);
+  ASSERT_TRUE(file_stream.is_open())
+      << "Failed to open image file: " << image_path;
+  std::stringstream buffer;
+  buffer << file_stream.rdbuf();
+  const std::string image_bytes = buffer.str();
+
+  // Same configuration as PreprocessWithPatchifyResize: 49 patches of 16x16
+  // pixels, which resizes the 1024x1024 apple down to 96x96 and yields 36
+  // pooled patches of 768 values.
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 16,
+                               .patch_height = 16,
+                               .max_num_patches = 49,
+                               .pooling_kernel_size = 3});
+
+  auto input_image = InputImage(image_bytes);
+  ASSERT_OK_AND_ASSIGN(auto from_bytes,
+                       preprocessor.Preprocess(input_image, parameter));
+  ASSERT_OK_AND_ASSIGN(const DecodedImage decoded,
+                       preprocessor.Decode(image_bytes));
+  ASSERT_OK_AND_ASSIGN(auto from_pixels,
+                       preprocessor.Preprocess(decoded, parameter));
+
+  ASSERT_TRUE(from_pixels.IsTensorBufferMap());
+  ASSERT_OK_AND_ASSIGN(auto pixels_map,
+                       from_pixels.GetPreprocessedImageTensorMap());
+  ASSERT_OK_AND_ASSIGN(auto bytes_map,
+                       from_bytes.GetPreprocessedImageTensorMap());
+
+  const auto& pixels_images = pixels_map->at("images");
+  auto pixels_images_type = pixels_images.TensorType();
+  ASSERT_TRUE(pixels_images_type.HasValue());
+  EXPECT_THAT(pixels_images_type.Value().Layout().Dimensions(),
+              ElementsAre(1, 36, 768));
+
+  const auto& bytes_images = bytes_map->at("images");
+  auto pixels_lock = ::litert::TensorBufferScopedLock::Create(
+      pixels_images, ::litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(pixels_lock.HasValue());
+  auto bytes_lock = ::litert::TensorBufferScopedLock::Create(
+      bytes_images, ::litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(bytes_lock.HasValue());
+  const float* pixels_data =
+      reinterpret_cast<const float*>(pixels_lock->second);
+  const float* bytes_data = reinterpret_cast<const float*>(bytes_lock->second);
+  for (int i = 0; i < 36 * 768; ++i) {
+    ASSERT_EQ(pixels_data[i], bytes_data[i]) << "Mismatch at element " << i;
+  }
+}
+
+// A DecodedImage carries no header, so its dimensions are the only description
+// of the buffer. A mismatch has to be rejected rather than read past the end.
+TEST(StbImagePreprocessorTest, PreprocessDecodedImageRejectsWrongPixelCount) {
+  StbImagePreprocessor preprocessor;
+  DecodedImage decoded;
+  decoded.width = 4;
+  decoded.height = 4;
+  decoded.pixels.assign(4 * 4 * 3 - 1, 0);
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+  EXPECT_THAT(preprocessor.Preprocess(decoded, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// Zero and negative dimensions have to be caught before they are multiplied
+// out, since a negative one wraps round into a huge unsigned size.
+TEST(StbImagePreprocessorTest, PreprocessDecodedImageRejectsNonPositiveDims) {
+  StbImagePreprocessor preprocessor;
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+
+  DecodedImage zero_width;
+  zero_width.width = 0;
+  zero_width.height = 4;
+  EXPECT_THAT(preprocessor.Preprocess(zero_width, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  DecodedImage negative_height;
+  negative_height.width = 4;
+  negative_height.height = -4;
+  EXPECT_THAT(preprocessor.Preprocess(negative_height, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 }  // namespace
 }  // namespace litert::support

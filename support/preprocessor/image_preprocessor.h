@@ -146,6 +146,21 @@ class ImagePreprocessor {
       absl::string_view image_bytes) const {
     return absl::UnimplementedError("Image decoding is not implemented.");
   }
+
+  // Preprocesses an already decoded 8-bit RGB image, skipping the decode step.
+  // Output is a TensorBuffer of the resized RGB image, or a TensorBufferMap if
+  // patchification is enabled.
+  //
+  // This is the entry point for callers that obtained their pixels from
+  // somewhere other than an encoded byte stream -- for instance a client that
+  // handed over a raw framebuffer -- and would otherwise have to re-encode the
+  // image just to be able to call Preprocess() above.
+  virtual absl::StatusOr<InputImage> Preprocess(
+      const DecodedImage& decoded_image,
+      const ImagePreprocessParameter& parameter) {
+    return absl::UnimplementedError(
+        "Preprocessing decoded image is not implemented.");
+  }
 };
 
 }  // namespace litert::support
