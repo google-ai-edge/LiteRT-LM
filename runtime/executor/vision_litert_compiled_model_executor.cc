@@ -662,9 +662,15 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
 
   for (const auto& [key, value] : input_maps) {
     LITERT_ASSIGN_OR_RETURN(auto tensor_type, value.TensorType());
-    LITERT_ASSIGN_OR_RETURN(auto input_index,
-                            vision_encoder_->GetCompiledModel().FindInputIndex(
-                                encoder_signature_index, key));
+    size_t input_index = 0;
+    auto input_index_or = vision_encoder_->GetCompiledModel().FindInputIndex(
+        encoder_signature_index, key);
+    if (input_index_or.HasValue()) {
+      input_index = *input_index_or;
+    } else if (vision_encoder_->GetModel().GetNumSignatures() > 1) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("FindInputIndex failed for signature: ", key));
+    }
     encoder_input_buffers[input_index].Clear();
     if (tensor_type.ElementType() == ElementType::Float32) {
       LITERT_ASSIGN_OR_RETURN(auto input_data,

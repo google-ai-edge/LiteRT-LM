@@ -19,6 +19,15 @@ sampler_params {
 max_num_tokens: 32768
 llm_model_type {
   lfm2 {
+    start_of_image_token {
+      token_str: "<|image_start|>"
+    }
+    end_of_image_token {
+      token_str: "<|image_end|>"
+    }
+    patch_width: 16
+    patch_height: 16
+    max_num_patches: 1024
   }
 }
 # Note that LFM2.5 does not support dynamic thinking toggle.
