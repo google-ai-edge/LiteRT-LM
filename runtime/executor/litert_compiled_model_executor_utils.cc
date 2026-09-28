@@ -416,11 +416,16 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
       return absl::OkStatus();
     }
   }
-  // Fall back to conv cache if no standard key/value cache names exist.
+  // Fall back to linear attention (conv / recurrent) cache if no standard
+  // key/value cache names exist.
   for (auto input_name : input_names) {
     if (absl::StartsWith(input_name, "kv_cache_c_")) {
       k_root_name = "kv_cache_c_";
       v_root_name = "kv_cache_c_";
+      return absl::OkStatus();
+    } else if (absl::StartsWith(input_name, "kv_cache_r_")) {
+      k_root_name = "kv_cache_r_";
+      v_root_name = "kv_cache_r_";
       return absl::OkStatus();
     }
   }
@@ -428,6 +433,10 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
     if (absl::StartsWith(output_name, "kv_cache_c_")) {
       k_root_name = "kv_cache_c_";
       v_root_name = "kv_cache_c_";
+      return absl::OkStatus();
+    } else if (absl::StartsWith(output_name, "kv_cache_r_")) {
+      k_root_name = "kv_cache_r_";
+      v_root_name = "kv_cache_r_";
       return absl::OkStatus();
     }
   }
