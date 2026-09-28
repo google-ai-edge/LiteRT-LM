@@ -330,6 +330,30 @@ TEST(SamplingCpuUtilTest, TopKTopPSampling_BatchSize2SequenceLength2) {
   EXPECT_EQ(sampled_scores[1].size(), 2);
 }
 
+TEST(SamplingCpuUtilTest, TopKTopPSampling_GreedyTop1BatchAndSequence) {
+  // Batch of 2, sequence length 2, vocab size of 3, k = 1 (greedy fast path).
+  const std::vector<float> logits = {
+      0.1f, 0.2f, 0.9f,  // b0, s0: max is 2
+      0.8f, 0.1f, 0.0f,  // b0, s1: max is 0
+      0.0f, 0.7f, 0.3f,  // b1, s0: max is 1
+      0.2f, 0.1f, 0.95f  // b1, s1: max is 2
+  };
+  auto rng = std::make_shared<std::default_random_engine>(0);
+  std::vector<std::vector<float>> sampled_scores;
+  auto sampled_ids =
+      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/1, /*p=*/0.9f,
+                       /*temperature=*/1.0f, rng, /*batch_size=*/2,
+                       /*sequence_size=*/2, sampled_scores);
+  ASSERT_TRUE(sampled_ids.ok());
+  EXPECT_EQ(sampled_ids->size(), 2);
+  EXPECT_THAT((*sampled_ids)[0], ElementsAre(2, 0));
+  EXPECT_THAT((*sampled_ids)[1], ElementsAre(1, 2));
+
+  EXPECT_EQ(sampled_scores.size(), 2);
+  EXPECT_THAT(sampled_scores[0], ElementsAre(1.0f, 1.0f));
+  EXPECT_THAT(sampled_scores[1], ElementsAre(1.0f, 1.0f));
+}
+
 TEST(SamplingCpuUtilTest, BenchmarkTopKTokenIds) {
   constexpr int kVocabSize = 256000;  // Gemma vocab size
   constexpr int kIterations = 10;

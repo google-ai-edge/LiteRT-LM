@@ -22,6 +22,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
@@ -292,6 +293,11 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
   auto topk_token_ids = TopKTokenIds(logits, k, batch_size, sequence_size);
   if (!topk_token_ids.ok()) return topk_token_ids.status();
 
+  if (k == 1) {
+    sampled_scores.assign(batch_size, std::vector<float>(sequence_size, 1.0f));
+    return *std::move(topk_token_ids);
+  }
+
   std::vector<int> flat_topk_token_ids(batch_size * sequence_size * k);
   for (int b = 0; b < batch_size; ++b) {
     std::copy((*topk_token_ids)[b].begin(), (*topk_token_ids)[b].end(),
@@ -306,15 +312,6 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
   std::vector<std::vector<int>> sampled_ids(batch_size,
                                             std::vector<int>(sequence_size));
   sampled_scores.assign(batch_size, std::vector<float>(sequence_size));
-  if (k == 1) {  // Greedy sampling. Return the topk_token_ids directly.
-    for (int b = 0; b < batch_size; ++b) {
-      for (int s = 0; s < sequence_size; ++s) {
-        sampled_ids[b][s] = (*topk_token_ids)[b][s];
-        sampled_scores[b][s] = 1.0f;
-      }
-    }
-    return sampled_ids;
-  }
   float current_temp =
       std::max(temperature, std::numeric_limits<float>::epsilon());
   for (int b = 0; b < batch_size; ++b) {
