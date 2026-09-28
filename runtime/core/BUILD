@@ -75,6 +75,7 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/executor:audio_executor_settings",
     "//runtime/executor:audio_executor_utils",
     "//runtime/executor:audio_litert_compiled_model_executor",
+    "//runtime/executor:executor_backend_registry",
     "//runtime/executor:executor_settings_base",
     "//runtime/executor:litert_compiled_model_executor_utils",
     "//runtime/executor:llm_executor",
