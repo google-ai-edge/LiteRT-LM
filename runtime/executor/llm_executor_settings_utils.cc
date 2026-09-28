@@ -174,7 +174,6 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         // This option prevents KVCache handling from being affected by
         // BHWC conversion in NoExternalTensorsMode.
         gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
-        gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
         if (single_kv_cache_buffer) {
           gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
         }
@@ -191,6 +190,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         gpu_compilation_options.AddExternalTensorPattern("w_prime");
         gpu_compilation_options.AddExternalTensorPattern("lora_");
       }
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_r_");
       if (single_kv_cache_buffer) {
         gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
       }
