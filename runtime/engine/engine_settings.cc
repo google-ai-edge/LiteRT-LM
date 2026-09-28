@@ -163,41 +163,51 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
   if (backend == Backend::GPU) {
     bool is_text_artisan = false;
 
-    std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>
-        loader_status;
-    // Optimize peak memory usage by reusing the existing memory mapping if
-    // available, avoiding duplicating file descriptors and creating new
-    // mappings.
-    if (model_assets.HasMemoryMappedFile()) {
-      auto mapped_file_status = model_assets.GetMemoryMappedFile();
-      if (mapped_file_status.ok()) {
-        loader_status = LitertLmLoader::Create(*mapped_file_status);
-      }
-    } else {
-      auto scoped_file_status = model_assets.GetOrCreateScopedFile();
-      if (scoped_file_status.ok()) {
-        auto duplicated_file_status = (*scoped_file_status)->Duplicate();
-        if (duplicated_file_status.ok()) {
-          loader_status =
-              LitertLmLoader::Create(std::move(*duplicated_file_status));
-        }
-      }
-    }
-
-    if (loader_status.has_value() && (*loader_status).ok()) {
-      // loader_status is
-      // std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>. We need
-      // to dereference 3 times to get to the LitertLmLoader object:
-      // 1. *loader_status gets the StatusOr.
-      // 2. **loader_status gets the unique_ptr.
-      // 3. ***loader_status gets the LitertLmLoader.
-      const auto& loader = ***loader_status;
-      if (loader
-              .GetSectionLocation(
-                  BufferKey(schema::AnySectionDataType_TFLiteModel,
-                            ModelType::kArtisanTextDecoder))
+    if (model_assets.HasModelResourcesFactory()) {
+      auto resources_status = model_assets.CreateModelResources();
+      if (resources_status.ok() &&
+          (*resources_status)
+              ->GetTFLiteModelSectionFileRegion(ModelType::kArtisanTextDecoder)
               .ok()) {
         is_text_artisan = true;
+      }
+    } else {
+      std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>
+          loader_status;
+      // Optimize peak memory usage by reusing the existing memory mapping if
+      // available, avoiding duplicating file descriptors and creating new
+      // mappings.
+      if (model_assets.HasMemoryMappedFile()) {
+        auto mapped_file_status = model_assets.GetMemoryMappedFile();
+        if (mapped_file_status.ok()) {
+          loader_status = LitertLmLoader::Create(*mapped_file_status);
+        }
+      } else {
+        auto scoped_file_status = model_assets.GetOrCreateScopedFile();
+        if (scoped_file_status.ok()) {
+          auto duplicated_file_status = (*scoped_file_status)->Duplicate();
+          if (duplicated_file_status.ok()) {
+            loader_status =
+                LitertLmLoader::Create(std::move(*duplicated_file_status));
+          }
+        }
+      }
+
+      if (loader_status.has_value() && (*loader_status).ok()) {
+        // loader_status is
+        // std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>. We
+        // need to dereference 3 times to get to the LitertLmLoader object:
+        // 1. *loader_status gets the StatusOr.
+        // 2. **loader_status gets the unique_ptr.
+        // 3. ***loader_status gets the LitertLmLoader.
+        const auto& loader = ***loader_status;
+        if (loader
+                .GetSectionLocation(
+                    BufferKey(schema::AnySectionDataType_TFLiteModel,
+                              ModelType::kArtisanTextDecoder))
+                .ok()) {
+          is_text_artisan = true;
+        }
       }
     }
 

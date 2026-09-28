@@ -28,6 +28,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -179,6 +180,12 @@ absl::StatusOr<ModelAssets> ModelAssets::Create(
   return ModelAssets(std::move(model_file), model_path);
 }
 
+// static
+absl::StatusOr<ModelAssets> ModelAssets::Create(
+    ModelResourcesFactory resources_factory, absl::string_view model_path) {
+  return ModelAssets(std::move(resources_factory), model_path);
+}
+
 ModelAssets::ModelAssets(std::shared_ptr<litert::lm::ScopedFile> model_file,
                          absl::string_view model_path)
     : path_(model_path), scoped_file_(std::move(model_file)) {}
@@ -197,6 +204,10 @@ ModelAssets::ModelAssets(
 
 ModelAssets::ModelAssets(std::shared_ptr<litert::lm::DataStream> data_stream)
     : data_stream_(std::move(data_stream)) {}
+
+ModelAssets::ModelAssets(ModelResourcesFactory resources_factory,
+                         absl::string_view model_path)
+    : path_(model_path), resources_factory_(std::move(resources_factory)) {}
 
 absl::StatusOr<absl::string_view> ModelAssets::GetPath() const {
   if (!path_.empty()) {
@@ -228,6 +239,15 @@ absl::StatusOr<std::shared_ptr<DataStream>> ModelAssets::GetDataStream() const {
         "Assets were not created with a data stream.");
   }
   return data_stream_;
+}
+
+absl::StatusOr<std::unique_ptr<ModelResources>>
+ModelAssets::CreateModelResources(bool enable_file_backed_model_loading) const {
+  if (!HasModelResourcesFactory()) {
+    return absl::InvalidArgumentError(
+        "Assets were not created with a ModelResources factory.");
+  }
+  return resources_factory_(enable_file_backed_model_loading);
 }
 
 absl::StatusOr<std::shared_ptr<ScopedFile>> ModelAssets::GetOrCreateScopedFile()

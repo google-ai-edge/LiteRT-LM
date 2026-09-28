@@ -251,6 +251,13 @@ class ModelResources {
   virtual absl::StatusOr<std::reference_wrapper<ScopedFile>>
   GetScopedFile() = 0;
 
+  // Returns the reference to the ScopedFile for the given model_type's external
+  // weights. Defaults to the single-file GetScopedFile().
+  virtual absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile(
+      ModelType model_type) {
+    return GetScopedFile();
+  }
+
   // Returns the section start offset and end offset.
   virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
       ModelType model_type) = 0;

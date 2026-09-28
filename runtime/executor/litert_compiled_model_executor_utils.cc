@@ -818,6 +818,9 @@ absl::StatusOr<std::unique_ptr<ModelResources>>
 BuildLiteRtCompiledModelResources(const ModelAssets& model_assets,
                                   bool enable_file_backed_model_loading,
                                   bool enable_file_backed_for_aot_npu) {
+  if (model_assets.HasModelResourcesFactory()) {
+    return model_assets.CreateModelResources(enable_file_backed_model_loading);
+  }
   ABSL_ASSIGN_OR_RETURN(auto format, GetFileFormat(model_assets));
   switch (format) {
     case FileFormat::TASK:
@@ -1062,6 +1065,9 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
         if (model_scoped_file.ok() && *model_scoped_file != nullptr &&
             (*model_scoped_file)->IsValid()) {
           metadata_id_or = GetFileCacheIdentifier(**model_scoped_file);
+        } else if (executor_settings.GetModelAssets()
+                       .HasModelResourcesFactory()) {
+          metadata_id_or = std::string("sections");
         }
       }
       ABSL_ASSIGN_OR_RETURN(std::string metadata_id, std::move(metadata_id_or));
@@ -1070,7 +1076,7 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
         cache_data.cache_key =
             absl::StrCat(model_basename, cache_name, "_", metadata_id);
       }
-    } else {
+    } else if (!executor_settings.GetModelAssets().HasModelResourcesFactory()) {
       // If the model path is empty, we should still set a cache key. This
       // cache key should include the file timestamp and size in order
       // to be able to detect changes in the model files.
@@ -1109,7 +1115,8 @@ absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
 
   external_weights.sections["tflite_weights"] = {
       section_offset->first, section_offset->second - section_offset->first};
-  LITERT_ASSIGN_OR_RETURN(auto scoped_file, resources.GetScopedFile());
+  LITERT_ASSIGN_OR_RETURN(auto scoped_file,
+                          resources.GetScopedFile(model_type));
   LITERT_ASSIGN_OR_RETURN(auto duplicated_scoped_file,
                           scoped_file.get().Duplicate());
   external_weights.scoped_file = std::move(duplicated_scoped_file);
