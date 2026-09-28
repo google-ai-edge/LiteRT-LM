@@ -50,6 +50,29 @@ constructor(
 }
 
 /**
+ * Strategy for handling input that exceeds the maximum supported signature length.
+ *
+ * @property value The underlying integer representation matching C/C++ enum values.
+ */
+enum class InputOverflowStrategy(val value: Int) {
+  /**
+   * Chunks the input text to multiple sequences that fit the max input length, computes the
+   * embedding for each chunk, and averages the embeddings.
+   */
+  CHUNK_AND_AVERAGE(0),
+
+  /** Truncates the input text to fit the max input length. */
+  TRUNCATE(1),
+
+  /** Returns an error if the input text exceeds the max input length. */
+  ERROR(2);
+
+  companion object {
+    fun fromValue(value: Int): InputOverflowStrategy? = entries.firstOrNull { it.value == value }
+  }
+}
+
+/**
  * Configuration options for a single or batch embedding calculation.
  *
  * @property normalize Whether to L2-normalize the resulting output vectors. If `null`, uses the C++
@@ -60,6 +83,8 @@ constructor(
  *   default.
  * @property visionTokensPerImage The number of vision soft tokens to generate per image. If `null`,
  *   uses the C++ engine default.
+ * @property inputOverflowStrategy Strategy for handling inputs longer than the maximum supported
+ *   signature length. If `null`, uses the C++ engine default.
  */
 data class EmbeddingOptions
 @JvmOverloads
@@ -68,6 +93,7 @@ constructor(
   val insertSpecialTokens: Boolean? = null,
   val outputSize: Int? = null,
   val visionTokensPerImage: Int? = null,
+  val inputOverflowStrategy: InputOverflowStrategy? = null,
 )
 
 /**
