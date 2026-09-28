@@ -85,7 +85,7 @@ absl::Status ConstrainedDecoder::ProcessLogits(
       << "Batch size [" << batch_size
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int b = 0; b < batch_size; ++b) {
-    auto& constraint_state = constraint_states_[b];
+    auto& constraint_state = states_[b];
     ABSL_ASSIGN_OR_RETURN(auto mask,
                           constraint_->ComputeMask(*constraint_state));
     if (mask != nullptr) {
@@ -109,7 +109,7 @@ absl::Status ConstrainedDecoder::ProcessLogits(
       << "Batch size [" << batch_size
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int b = 0; b < batch_size; ++b) {
-    auto& constraint_state = constraint_states_[b];
+    auto& constraint_state = states_[b];
     ABSL_ASSIGN_OR_RETURN(auto mask,
                           constraint_->ComputeMask(*constraint_state));
     if (mask != nullptr) {
@@ -132,7 +132,7 @@ absl::Status ConstrainedDecoder::UpdateState(absl::Span<int> next_token_ids) {
       << "Batch size [" << next_token_ids.size()
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int i = 0; i < batch_size_; ++i) {
-    auto& constraint_state = constraint_states_[i];
+    auto& constraint_state = states_[i];
     ABSL_ASSIGN_OR_RETURN(
         constraint_state,
         constraint_->ComputeNext(*constraint_state, next_token_ids[i]));
