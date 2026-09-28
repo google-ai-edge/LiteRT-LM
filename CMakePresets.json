@@ -43,6 +43,26 @@
         "LITERTLM_CC_NDK": "$env{HOME}/android-ndk/android-ndk-r28b/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang",
         "LITERTLM_CXX_NDK": "$env{HOME}/android-ndk/android-ndk-r28b/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang++"
       }
+    },
+    {
+      "name": "oe-linux-aarch64",
+      "displayName": "Qualcomm OE-Linux aarch64 (IQ-8275)",
+      "description": "Cross-compiles LiteRT-LM for Qualcomm OE-Linux aarch64. Auto-builds host tools first.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/cmake/build/${presetName}",
+      "environment": {
+        "CC": "gcc",
+        "CXX": "g++",
+        "PATH": "$env{HOME}/.cargo/bin:$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/litertlm_oe_linux_aarch64.toolchain.cmake",
+        "LITERTLM_TOOLCHAIN_SCRIPT": "${sourceDir}/cmake/toolchains/litertlm_oe_linux_aarch64.script.cmake",
+        "Rust_CARGO_TARGET": "aarch64-unknown-linux-gnu",
+        "LITERTLM_CC": "gcc",
+        "LITERTLM_CXX": "g++",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ]
 }

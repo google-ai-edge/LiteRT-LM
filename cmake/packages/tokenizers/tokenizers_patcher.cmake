@@ -48,6 +48,12 @@ patch_file_content("${ROOT_LIST}"
     FALSE
 )
 
+patch_file_content("${ROOT_LIST}"
+    "AR_\${TOKENIZERS_CPP_CARGO_TARGET}=\${TOOLCHAIN_DIR}\${TOKENIZERS_CPP_CARGO_TARGET}-ar\n      CC_\${TOKENIZERS_CPP_CARGO_TARGET}=\${TOOLCHAIN_DIR}\${TOKENIZERS_CPP_CARGO_TARGET}-gcc\n      CXX_\${TOKENIZERS_CPP_CARGO_TARGET}=\${TOOLCHAIN_DIR}\${TOKENIZERS_CPP_CARGO_TARGET}-g++"
+    "AR_aarch64_unknown_linux_gnu=\${CMAKE_AR}\n      CC_aarch64_unknown_linux_gnu=\${CMAKE_C_COMPILER}\n      CXX_aarch64_unknown_linux_gnu=\${CMAKE_CXX_COMPILER}\n      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=\${CMAKE_C_COMPILER}\n      \"CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=--sysroot=\${CMAKE_SYSROOT}\"\n      CFLAGS_aarch64_unknown_linux_gnu=--sysroot=\${CMAKE_SYSROOT}\n      CXXFLAGS_aarch64_unknown_linux_gnu=--sysroot=\${CMAKE_SYSROOT}"
+    FALSE
+)
+
 file(GLOB_RECURSE ALL_SOURCE_FILES
     "${LITERTLM_TOKENIZERS_SRC_DIR}/../**/*.h" 
     "${LITERTLM_TOKENIZERS_SRC_DIR}/../**/*.cc")

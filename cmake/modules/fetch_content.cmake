@@ -127,6 +127,7 @@ FetchContent_Declare(
 )
 block()
   cmake_policy(SET CMP0077 OLD)
+  set(KISSFFT_STATIC ON CACHE BOOL "" FORCE)
   set(KISSFFT_TEST OFF CACHE BOOL "" FORCE)
   set(KISSFFT_TOOLS OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(kissfft_lib)

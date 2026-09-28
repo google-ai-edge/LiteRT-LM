@@ -338,6 +338,7 @@ target_link_libraries(runtime_components_constrained_decoding_llguidance_schema_
     LiteRTLM::Runtime::Util
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolUtils
   )
 
 

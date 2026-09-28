@@ -14,6 +14,13 @@
 
 include("${LITERTLM_LITERT_TARGET_MAP_PATH}")
 
+set(_gated_delta_net_archive "${LITERTLM_LITERT_BUILD_DIR}/experimental/custom_ops/gated_delta_net/libgated_delta_net${CMAKE_STATIC_LIBRARY_SUFFIX}")
+if(NOT LITERTLM_LITERT_TARGET_MAP MATCHES "gated_delta_net")
+    string(APPEND LITERTLM_LITERT_TARGET_MAP
+        ";litert::litert_gated_delta_net=${_gated_delta_net_archive}"
+    )
+endif()
+
 macro(generate_litert_aggregate)
     if(NOT TARGET LiteRTLM::litert::litert)
         message(STATUS "[LiteRTLM] Generating the litert aggregate...")

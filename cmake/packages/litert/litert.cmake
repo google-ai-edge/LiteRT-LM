@@ -25,6 +25,7 @@ set(LITERTLM_LITERT_EXTERNAL_DONE ${LITERTLM_LITERT_STAMP_DIR}/litert_external-d
 set(LITERTLM_LITERT_TAG "main" CACHE STRING "LiteRT git tag")
 
 include(ExternalProject)
+if(NOT EXISTS "${LITERTLM_LITERT_EXTERNAL_DONE}")
   if(TARGET fetch_content_complete)
     ExternalProject_Add(
       litert_external
@@ -246,6 +247,7 @@ include(ExternalProject)
     endif()
 else()
   message(FATAL_ERROR "fetch_content_complete does not exist")
+endif()
 endif()
 
 message(STATUS "[LiteRTLM] LiteRT already installed at: ${LITERTLM_LITERT_INSTALL_PREFIX}")
