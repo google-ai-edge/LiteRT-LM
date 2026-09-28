@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_compile_options(
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-w>
+    $<$<CXX_COMPILER_ID:MSVC>:/W0>
+)
+
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
 include("${LITERTLM_MODULES_DIR}/generators/generate_protobuf.cmake")
 

@@ -254,7 +254,9 @@ jobs:
           cmake --preset android-x86_64 -DANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 
       - name: Build
-        run: cmake --build cmake/build/android-x86_64 -j $(nproc)
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 8
+        run: cmake --build cmake/build/android-x86_64
 
       - name: Save CCache to GCS
         uses: ./.github/workflows/actions/gcs-cache

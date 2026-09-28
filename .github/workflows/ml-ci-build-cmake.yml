@@ -284,7 +284,9 @@ jobs:
           cmake --preset default
 
       - name: Build
-        run: cmake --build cmake/build/default -j $(nproc)
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 8
+        run: cmake --build cmake/build/default -j8
 
       - name: Run pytest
         run: pytest tools/pytest/ --build-name=default --backend=cpu --model-path=./models/gemma4/gemma-4-E2B-it.litertlm --build-system=cmake

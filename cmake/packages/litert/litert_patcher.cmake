@@ -30,12 +30,12 @@ if(EXISTS "${LITERTLM_LITERT_SRC_DIR}/../tensor")
 endif()
 
 if(EXISTS "${LITERTLM_TFLITE_SRC_DIR}")
-    file(COPY "${LITERTLM_TFLITE_SRC_DIR}/" 
+    file(COPY "${LITERTLM_TFLITE_SRC_DIR}/"
      DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tflite")
 endif()
 
 if(EXISTS "${LITERTLM_TENSORFLOW_SOURCE_DIR}")
-file(COPY "${LITERTLM_TENSORFLOW_SOURCE_DIR}/" 
+file(COPY "${LITERTLM_TENSORFLOW_SOURCE_DIR}/"
      DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tensor")
 endif()
 
@@ -43,12 +43,12 @@ file(COPY_FILE "${LITERTLM_LITERT_PACKAGE_DIR}/shims/CMakeLists-shim.txt"
      "${ROOT_LIST}")
 file(REMOVE "${LITERTLM_LITERT_SRC_DIR}/../support/preprocessor/CMakeLists.txt")
 
-patch_file_content("${ROOT_LIST}" 
+patch_file_content("${ROOT_LIST}"
     "# Add TFLite as a subdirectory"
     "# Add TFLite as a subdirectory\nif(FALSE)"
     FALSE
 )
-patch_file_content("${ROOT_LIST}" 
+patch_file_content("${ROOT_LIST}"
     "CMAKE_CROSSCOMPILING"
     "FALSE"
     FALSE
@@ -61,8 +61,8 @@ patch_file_content("${ROOT_LIST}"
 )
 
 patch_file_content("${ROOT_LIST}"
-    "# Add TFLite as a subdirectory[^@]+# Set default TensorFlow source directory if not found" 
-    "\n" 
+    "# Add TFLite as a subdirectory[^@]+# Set default TensorFlow source directory if not found"
+    "\n"
     TRUE
 )
 
@@ -88,8 +88,8 @@ foreach(TARGET_PATH ${LITERTLM_BYPASS_PATHS})
 endforeach()
 
 message(STATUS "[LiteRTLM] Patching LiteRT CMakeLists.txt files...")
-file(GLOB_RECURSE ALL_CMAKELISTS 
-    "${LITERTLM_LITERT_SRC_DIR}/../*.cmake" 
+file(GLOB_RECURSE ALL_CMAKELISTS
+    "${LITERTLM_LITERT_SRC_DIR}/../*.cmake"
     "${LITERTLM_LITERT_SRC_DIR}/../**/CMakeLists.txt")
 
 
@@ -98,8 +98,8 @@ foreach(C_FILE ${ALL_CMAKELISTS})
         continue()
     endif()
     patch_file_content("${C_FILE}"
-        "absl::[a-zA-Z0-9_]+" 
-        "LiteRTLM::absl::shim" 
+        "absl::[a-zA-Z0-9_]+"
+        "LiteRTLM::absl::shim"
         TRUE)
     patch_file_content("${C_FILE}"
         "[^\" ]*/_deps/flatbuffers-build/libflatbuffers.a"
@@ -118,7 +118,7 @@ foreach(C_FILE ${ALL_CMAKELISTS})
         "TFLITE_FLATBUFFERS_LIB"
         "LiteRTLM::flatbuffers::flatbuffers"
         FALSE)
-    patch_file_content("${C_FILE}" 
+    patch_file_content("${C_FILE}"
         "find_program\\(FLATC_EXECUTABLE[^\\)]+\\)"
         "# [LiteRTLM] Suppressed: Using Global Shim"
         TRUE)
@@ -152,13 +152,12 @@ patch_file_content("${LITERTLM_LITERT_SRC_DIR}/cc/internal/litert_runtime_builti
     FALSE
 )
 
+patch_file_content("${LITERTLM_LITERT_SRC_DIR}/c/CMakeLists.txt"
+    "farmhash"
+    "LiteRTLM::tflite::shim"
+    FALSE
+)
 
-# file(READ "${LITERTLM_LITERT_PACKAGE_DIR}/shims/litert_cc_options_shim.cmake" litert_cc_options_shim_CONTENT)
-# patch_file_content("${LITERTLM_LITERT_SRC_DIR}/cc/options/CMakeLists.txt"
-#     "cmake_minimum_required\\(VERSION 3.20\\).*"
-#     "${LITERTLM_litert_cc_options_shim_CONTENT}"
-#     TRUE
-# )
 
 set(GPU_INJECTION_STR
     "\${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/gl_interop.cc
@@ -180,11 +179,8 @@ set(GPU_INJECTION_STR
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/util.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/api.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/cl_kernel.cc)"
-    )
-    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/egl_environment.cc
-    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/gl_texture.cc
-    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/object_manager.cc
-    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/request_gpu_info.cc)"
+)
+
 
 patch_file_content("${LITERTLM_LITERT_SRC_DIR}/c/CMakeLists.txt"
     "\${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/gl_interop.cc)"
@@ -274,5 +270,5 @@ endforeach()
 
 message(STATUS "[LiteRTLM] Patching Phase Complete.")
 
-file(COPY_FILE "${LITERTLM_LITERT_SHIMS_DIR}/CMakeLists_gated-delta-net.txt" 
+file(COPY_FILE "${LITERTLM_LITERT_SHIMS_DIR}/CMakeLists_gated-delta-net.txt"
     "${LITERTLM_LITERT_SRC_DIR}/experimental/custom_ops/gated_delta_net/CMakeLists.txt")

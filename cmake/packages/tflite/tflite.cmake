@@ -17,7 +17,7 @@ include(${LITERTLM_TFLITE_PACKAGE_DIR}/tflite_config.cmake)
 
 setup_external_install_structure("${LITERTLM_TFLITE_INSTALL_PREFIX}")
 
-set(LITERTLM_TFLITE_TAG "master" CACHE STRING "TFLite git tag")
+set(LITERTLM_TFLITE_TAG "fadb2ca7b5c17ba3b9380f32487cef62eebcf2c9" CACHE STRING "TFLite git tag")
 
 if(NOT EXISTS "${LITERTLM_LITERTLM_TFLITE_STATIC_LIB}")
     message(STATUS "TFLite not found. Configuring external build...")
