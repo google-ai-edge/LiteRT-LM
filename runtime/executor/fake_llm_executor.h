@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -87,6 +88,8 @@ class FakeLlmExecutor : public LlmExecutor {
   };
 
   absl::StatusOr<int> GetVocabSize() override { return vocab_size_; }
+
+  ::litert::Environment* GetEnvironment() const override;
 
   absl::StatusOr<LlmExecutorSettings> GetExecutorSettings() const override {
     return executor_settings_;
@@ -198,6 +201,8 @@ class FakeLlmExecutor : public LlmExecutor {
     kDecode,
   };
   LastOp last_op_ = LastOp::kNone;
+
+  mutable std::optional<::litert::Environment> env_;
 };
 
 class DiffusionLlmFakeLlmExecutor : public FakeLlmExecutor {

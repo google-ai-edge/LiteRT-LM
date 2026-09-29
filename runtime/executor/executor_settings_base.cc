@@ -28,6 +28,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "runtime/util/data_stream.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -57,6 +58,18 @@ std::string GetBackendString(Backend backend) {
 
 std::ostream& operator<<(std::ostream& os, const Backend& backend) {
   return os << GetBackendString(backend);
+}
+
+::litert::HwAccelerators GetHwAcceleratorForBackend(Backend backend) {
+  switch (backend) {
+    case Backend::GPU:
+      return ::litert::HwAccelerators::kGpu;
+    case Backend::CPU:
+      return ::litert::HwAccelerators::kCpu;
+
+    default:
+      return ::litert::HwAccelerators::kNone;
+  }
 }
 
 absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {

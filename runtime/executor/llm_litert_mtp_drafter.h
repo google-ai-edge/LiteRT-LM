@@ -33,6 +33,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
@@ -111,7 +112,9 @@ class LlmLiteRtMtpDrafter {
       TensorBuffer drafter_id_tensor, TensorBuffer verifier_id_tensor,
       int num_draft_steps, ModelSignatures drafter_signatures,
       ModelSignatures verifier_signatures, int vocab_size,
-      AttentionMaskParams attn_params)
+      AttentionMaskParams attn_params,
+      std::unique_ptr<LiteRtLogitMaskRunner> drafter_mask_runner,
+      std::unique_ptr<LiteRtLogitMaskRunner> verifier_mask_runner)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
@@ -132,7 +135,9 @@ class LlmLiteRtMtpDrafter {
         drafter_signatures_(std::move(drafter_signatures)),
         verifier_signatures_(std::move(verifier_signatures)),
         vocab_size_(vocab_size),
-        attn_params_(attn_params) {
+        attn_params_(attn_params),
+        drafter_mask_runner_(std::move(drafter_mask_runner)),
+        verifier_mask_runner_(std::move(verifier_mask_runner)) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
       auto expected = buffer.Duplicate();
       active_drafter_input_buffers_[name] = std::move(expected.Value());
@@ -261,6 +266,9 @@ class LlmLiteRtMtpDrafter {
   // Active constraint and verified constraint state.
   const Constraint* constraint_ = nullptr;
   std::unique_ptr<Constraint::State> constraint_state_;
+
+  std::unique_ptr<LiteRtLogitMaskRunner> drafter_mask_runner_;
+  std::unique_ptr<LiteRtLogitMaskRunner> verifier_mask_runner_;
 };
 
 // Updates existing LiteRT compilation options for the MTP drafter model with

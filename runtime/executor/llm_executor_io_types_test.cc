@@ -31,6 +31,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -826,9 +827,11 @@ TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstrainedDecoder) {
   EXPECT_EQ(params.GetConstrainedDecoder(), nullptr);
 
   FakeConstraint constraint({1, 2, 3}, /*vocabulary_size=*/10);
-  ConstrainedDecoder constrained_decoder(&constraint, /*batch_size=*/1);
-  params.SetConstrainedDecoder(&constrained_decoder);
-  EXPECT_EQ(params.GetConstrainedDecoder(), &constrained_decoder);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::CreateForHost(&constraint, /*batch_size=*/1));
+  params.SetConstrainedDecoder(constrained_decoder.get());
+  EXPECT_EQ(params.GetConstrainedDecoder(), constrained_decoder.get());
 
   params.SetConstrainedDecoder(nullptr);
   EXPECT_EQ(params.GetConstrainedDecoder(), nullptr);

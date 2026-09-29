@@ -204,6 +204,26 @@ TEST_P(LogitMaskParamTest, BitmapApplyMasksDisallowedAndPadding) {
   });
 }
 
+TEST_P(LogitMaskParamTest, BitmapWithNegativeVocabDisallowsEverything) {
+  auto mask = BitmapLogitMask::CreateAllAllowed(/*vocab_size=*/-1);
+
+  RunWithParam([&](auto dummy_type) {
+    using T = decltype(dummy_type);
+    std::vector<T> logits = {static_cast<T>(1.0f), static_cast<T>(2.0f),
+                             static_cast<T>(3.0f)};
+
+    EXPECT_OK(mask->Apply(absl::MakeSpan(logits)));
+
+    for (const T logit : logits) {
+      if constexpr (std::is_same_v<T, float>) {
+        EXPECT_TRUE(std::isinf(logit) && logit < 0.0f);
+      } else {
+        EXPECT_EQ(logit, tflite::half::min());
+      }
+    }
+  });
+}
+
 TEST_P(LogitMaskParamTest, BitmapApplyMultiWordAllAllowedSkipped) {
   constexpr int kVocabSize = 130;
   auto mask = BitmapLogitMask::CreateAllAllowed(kVocabSize);

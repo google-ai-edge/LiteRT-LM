@@ -15,19 +15,20 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_CONSTRAINED_DECODER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_CONSTRAINED_DECODER_H_
 
-#include <algorithm>
-#include <iterator>
 #include <memory>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
-#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
+
+class LiteRtLogitMaskRunner;
 
 // Manages the state of constrained decoding for a batch of sequences.
 //
@@ -38,12 +39,14 @@ namespace litert::lm {
 //
 // Example usage:
 //   Constraint* constraint = ...;
-//   ConstrainedDecoder decoder(constraint, batch_size);
+//   ABSL_ASSIGN_OR_RETURN(
+//       auto decoder,
+//       ConstrainedDecoder::Create(constraint, batch_size, env, accelerator));
 //   while (!done) {
 //     TensorBuffer logits = Decode(...);
-//     ABSL_RETURN_IF_ERROR(decoder.ProcessLogits(logits));
+//     ABSL_RETURN_IF_ERROR(decoder->ProcessLogits(logits));
 //     TensorBuffer next_tokens = sampler.Sample(logits);
-//     ABSL_RETURN_IF_ERROR(decoder.UpdateState(next_tokens));
+//     ABSL_RETURN_IF_ERROR(decoder->UpdateState(next_tokens));
 //   }
 class ConstrainedDecoder {
  public:
@@ -52,18 +55,37 @@ class ConstrainedDecoder {
   // @param constraint The constraint to apply during decoding. The caller
   // retains ownership and must ensure it outlives the decoder.
   // @param batch_size The number of sequences in the batch.
-  explicit ConstrainedDecoder(Constraint* constraint, int batch_size)
-      : constraint_(constraint), batch_size_(batch_size) {
-    constraint_states_.reserve(batch_size_);
-    std::generate_n(std::back_inserter(constraint_states_), batch_size_,
-                    [&]() { return constraint_->Start(); });
-  }
-  ~ConstrainedDecoder() = default;
+  // @param env LiteRT Environment for device masking. Must be externally
+  // defined and outlive the decoder.
+  // @param accelerator The hardware accelerator `LiteRtLogitMaskRunner` uses to
+  // mask logits that live in device memory. Pass `HwAccelerators::kNone` to
+  // always mask on the host. See `LiteRtLogitMaskRunner` for how the masking
+  // path is chosen.
+  // @param force_graph_on_host Test-only override forwarded to
+  // `LiteRtLogitMaskRunner::Create`, which makes host-memory logits go through
+  // the mask graphs instead of being masked in place.
+  // @return An error if `constraint` is null, `batch_size` is not positive, or
+  // the `LiteRtLogitMaskRunner` cannot be created for `accelerator`.
+  static absl::StatusOr<std::unique_ptr<ConstrainedDecoder>> Create(
+      Constraint* constraint, int batch_size, Environment& env,
+      HwAccelerators accelerator, bool force_graph_on_host = false);
+
+  // Creates a host-only ConstrainedDecoder (`HwAccelerators::kNone`)
+  // that always masks logits on the host and does not require a LiteRT
+  // Environment.
+  static absl::StatusOr<std::unique_ptr<ConstrainedDecoder>> CreateForHost(
+      Constraint* constraint, int batch_size = 1);
+
+  // Defined out of line: `LiteRtLogitMaskRunner` is only forward declared
+  // here, so that this header does not pull in the LiteRT graph builder.
+  ~ConstrainedDecoder();
 
   // Masks the input logits tensor based on the current constraint state of
   // each sequence in the batch.
   // For each sequence, tokens disallowed by the constraint in the current state
-  // will have their corresponding logit values set to -inf.
+  // will have their corresponding logit values suppressed. Masking runs on the
+  // host or on the accelerator, whichever `LiteRtLogitMaskRunner` picks for the
+  // buffer.
   //
   // @param logits A tensor of shape [batch_size, sequence_length, vocab_size]
   // containing the logits for the next token prediction. This tensor is
@@ -71,13 +93,6 @@ class ConstrainedDecoder {
   // @return Ok if masking was successful, or an error if dimensions are
   // incorrect or masking fails.
   absl::Status ProcessLogits(TensorBuffer& logits);
-
-  // Same as above, but takes a span of logits instead of a tensor buffer.
-  absl::Status ProcessLogits(absl::Span<float> logits,
-                             absl::Span<const Layout::Dim> logits_dims);
-
-  absl::Status ProcessLogits(absl::Span<tflite::half> logits,
-                             absl::Span<const Layout::Dim> logits_dims);
 
   // Updates the internal constraint state for each sequence in the batch based
   // on the newly selected tokens. If a sequence reaches an end state
@@ -97,11 +112,17 @@ class ConstrainedDecoder {
   Constraint* GetConstraint() const { return constraint_; }
 
  private:
+  ConstrainedDecoder(
+      Constraint* constraint, int batch_size,
+      std::unique_ptr<LiteRtLogitMaskRunner> litert_logit_mask_runner);
+
   // The constraint to be applied.
   Constraint* constraint_;
   const int batch_size_;
   // The current constraint states.
   std::vector<std::unique_ptr<Constraint::State>> constraint_states_;
+
+  std::unique_ptr<LiteRtLogitMaskRunner> litert_logit_mask_runner_;
 };
 
 }  // namespace litert::lm

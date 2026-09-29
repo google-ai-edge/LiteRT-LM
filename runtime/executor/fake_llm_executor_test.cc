@@ -24,6 +24,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
@@ -384,8 +385,12 @@ TEST(FakeLlmExecutorTest, DecodeWithConstraint) {
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
 
   auto decode_params = ExecutorDecodeParams();
-  ConstrainedDecoder constrained_decoder(&constraint, /*batch_size=*/1);
-  decode_params.SetConstrainedDecoder(&constrained_decoder);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::Create(&constraint, /*batch_size=*/1,
+                                 *fake_llm_executor.GetEnvironment(),
+                                 HwAccelerators::kCpu));
+  decode_params.SetConstrainedDecoder(constrained_decoder.get());
   // Call Decode for the 1st time. The output tokens should be the 1st decode
   // tokens: 4. (first constraint token)
   ASSERT_OK_AND_ASSIGN(auto output_tokens,

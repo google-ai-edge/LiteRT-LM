@@ -17,7 +17,6 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <numeric>
 #include <string>
@@ -28,6 +27,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "litert/c/litert_model_types.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -46,6 +46,11 @@ namespace {
 
 using ::sentencepiece::ModelProto;
 using ::testing::status::StatusIs;
+
+// The masking graphs express "disallowed" as a large negative bias rather than
+// -inf, so disallowed tokens are checked for being effectively impossible
+// instead of for equality.
+constexpr float kDisallowedLogitThreshold = -1e8f;
 
 void AddToken(ModelProto& model, std::string token,
               const ModelProto::SentencePiece::Type type) {
@@ -109,8 +114,12 @@ class ConstrainedDecoderTest : public ::testing::Test {
                              model, FstConstraintProviderOptions{
                                         .check_vocabulary_type = false}));
     vocab_size_ = spm_processor_.GetPieceSize();
+    auto env = litert::Environment::Create({});
+    ASSERT_TRUE(env.HasValue());
+    env_ = std::make_unique<litert::Environment>(std::move(*env));
   }
 
+  std::unique_ptr<litert::Environment> env_;
   std::unique_ptr<ConstraintProvider> provider_;
   sentencepiece::SentencePieceProcessor spm_processor_;
   int vocab_size_;
@@ -120,17 +129,21 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
   ASSERT_OK_AND_ASSIGN(
       auto constraint,
       provider_->CreateConstraint(FstConstraintArg{.constraint_string = "ab"}));
-  ConstrainedDecoder constrained_decoder(constraint.get(), /*batch_size=*/1);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::Create(constraint.get(), /*batch_size=*/1, *env_,
+                                 HwAccelerators::kCpu,
+                                 /*force_graph_on_host=*/true));
 
   // Create a tensor buffer for the token ids for "a".
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  const litert::Environment& env = *env_;
   int32_t token_ids[] = {spm_processor_.PieceToId("a")};
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto tokens_id_tensor_buffer,
       CreateTokenIdsTensorBuffer<int32_t>(env, token_ids, {1, 1}));
 
   // Update state with "a".
-  ASSERT_OK(constrained_decoder.UpdateState(tokens_id_tensor_buffer));
+  ASSERT_OK(constrained_decoder->UpdateState(tokens_id_tensor_buffer));
 
   // Create a tensor buffer for the logits with all values set to 2.0f.
   std::vector<float> logits_data(vocab_size_, 2.0f);
@@ -139,7 +152,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
       CreateTokenIdsTensorBuffer<float>(env, logits_data.data(),
                                         {1, 1, vocab_size_}));
 
-  ASSERT_OK(constrained_decoder.ProcessLogits(logits_tensor_buffer));
+  ASSERT_OK(constrained_decoder->ProcessLogits(logits_tensor_buffer));
 
   // Verify that only the "b" token is allowed.
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -149,7 +162,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
     if (i == spm_processor_.PieceToId("b")) {
       EXPECT_EQ(masked_logits_span[i], 2.0f);
     } else {
-      EXPECT_EQ(masked_logits_span[i], -std::numeric_limits<float>::infinity());
+      EXPECT_LT(masked_logits_span[i], kDisallowedLogitThreshold);
     }
   }
 
@@ -159,7 +172,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
       CreateTokenIdsTensorBuffer<int32_t>(env, new_token_ids, {1, 1}));
 
   // Update state with "b".
-  ASSERT_OK(constrained_decoder.UpdateState(new_token_ids_tensor_buffer));
+  ASSERT_OK(constrained_decoder->UpdateState(new_token_ids_tensor_buffer));
 
   // Create a tensor buffer for the logits with all values set to 3.0f.
   std::vector<float> new_logits_data(vocab_size_, 3.0f);
@@ -169,7 +182,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
                                         {1, 1, vocab_size_}));
 
   // Update state with "b".
-  ASSERT_OK(constrained_decoder.ProcessLogits(new_logits_tensor_buffer));
+  ASSERT_OK(constrained_decoder->ProcessLogits(new_logits_tensor_buffer));
 
   // Verify that only the "<e>" token is allowed.
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -179,8 +192,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
     if (i == spm_processor_.PieceToId("<e>")) {
       EXPECT_EQ(new_masked_logits_span[i], 3.0f);
     } else {
-      EXPECT_EQ(new_masked_logits_span[i],
-                -std::numeric_limits<float>::infinity());
+      EXPECT_LT(new_masked_logits_span[i], kDisallowedLogitThreshold);
     }
   }
 }
@@ -189,10 +201,14 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize2) {
   ASSERT_OK_AND_ASSIGN(auto constraint,
                        provider_->CreateConstraint(
                            FstConstraintArg{.constraint_string = "a|c"}));
-  ConstrainedDecoder constrained_decoder(constraint.get(), /*batch_size=*/2);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::Create(constraint.get(), /*batch_size=*/2, *env_,
+                                 HwAccelerators::kCpu,
+                                 /*force_graph_on_host=*/true));
 
   // Create a tensor buffer for the token ids for "a" and "c".
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  const litert::Environment& env = *env_;
   int32_t token_ids[] = {spm_processor_.PieceToId("a"),
                          spm_processor_.PieceToId("c")};
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -200,7 +216,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize2) {
       CreateTokenIdsTensorBuffer<int32_t>(env, token_ids, {2, 1}));
 
   // Update state with "a" and "c".
-  ASSERT_OK(constrained_decoder.UpdateState(tokens_id_tensor_buffer));
+  ASSERT_OK(constrained_decoder->UpdateState(tokens_id_tensor_buffer));
 
   std::vector<float> logits_data(vocab_size_ * 2, 1.0f);
   RankedTensorType logits_tensor_type(
@@ -211,7 +227,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize2) {
       CreateTokenIdsTensorBuffer<float>(env, logits_data.data(),
                                         {2, 1, vocab_size_}));
 
-  ASSERT_OK(constrained_decoder.ProcessLogits(logits_tensor_buffer));
+  ASSERT_OK(constrained_decoder->ProcessLogits(logits_tensor_buffer));
 
   // Verify that only "<e>" is allowed.
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -222,7 +238,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize2) {
     if (token_id == spm_processor_.PieceToId("<e>")) {
       EXPECT_EQ(masked_logits_span[i], 1.0f);
     } else {
-      EXPECT_EQ(masked_logits_span[i], -std::numeric_limits<float>::infinity());
+      EXPECT_LT(masked_logits_span[i], kDisallowedLogitThreshold);
     }
   }
 }
@@ -231,10 +247,14 @@ TEST_F(ConstrainedDecoderTest, UpdateStateFailsWithWrongBatchSize) {
   ASSERT_OK_AND_ASSIGN(
       auto constraint,
       provider_->CreateConstraint(FstConstraintArg{.constraint_string = "ab"}));
-  ConstrainedDecoder constrained_decoder(constraint.get(), /*batch_size=*/2);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::Create(constraint.get(), /*batch_size=*/2, *env_,
+                                 HwAccelerators::kCpu,
+                                 /*force_graph_on_host=*/true));
 
   // Create a tensor buffer for the token ids for "a".
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  const litert::Environment& env = *env_;
   int32_t token_ids[] = {spm_processor_.PieceToId("a")};
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto tokens_id_tensor_buffer,
@@ -242,7 +262,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateFailsWithWrongBatchSize) {
 
   // UpdateState should fail because the batch size does not match the expected
   // batch size.
-  EXPECT_THAT(constrained_decoder.UpdateState(tokens_id_tensor_buffer),
+  EXPECT_THAT(constrained_decoder->UpdateState(tokens_id_tensor_buffer),
               StatusIs(absl::StatusCode::kInternal));
 }
 
@@ -250,17 +270,21 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsFailsWithWrongBatchSize) {
   ASSERT_OK_AND_ASSIGN(
       auto constraint,
       provider_->CreateConstraint(FstConstraintArg{.constraint_string = "ab"}));
-  ConstrainedDecoder constrained_decoder(constraint.get(), /*batch_size=*/1);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::Create(constraint.get(), /*batch_size=*/1, *env_,
+                                 HwAccelerators::kCpu,
+                                 /*force_graph_on_host=*/true));
 
   // Create a tensor buffer for the token ids for "a".
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  const litert::Environment& env = *env_;
   int32_t token_ids[] = {spm_processor_.PieceToId("a")};
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto tokens_id_tensor_buffer,
       CreateTokenIdsTensorBuffer<int32_t>(env, token_ids, {1, 1}));
 
   // Update state with "a".
-  ASSERT_OK(constrained_decoder.UpdateState(tokens_id_tensor_buffer));
+  ASSERT_OK(constrained_decoder->UpdateState(tokens_id_tensor_buffer));
 
   std::vector<float> logits_data(vocab_size_ * 2, 1.0f);
   RankedTensorType logits_tensor_type(
@@ -272,7 +296,7 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsFailsWithWrongBatchSize) {
                                         {2, 1, vocab_size_}));
   // ProcessLogits should fail because the batch size does not match the
   // expected batch size.
-  EXPECT_THAT(constrained_decoder.ProcessLogits(logits_tensor_buffer),
+  EXPECT_THAT(constrained_decoder->ProcessLogits(logits_tensor_buffer),
               StatusIs(absl::StatusCode::kInternal));
 }
 
@@ -280,17 +304,21 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsWithPaddedVocabSize) {
   ASSERT_OK_AND_ASSIGN(
       auto constraint,
       provider_->CreateConstraint(FstConstraintArg{.constraint_string = "ab"}));
-  ConstrainedDecoder constrained_decoder(constraint.get(), /*batch_size=*/1);
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::Create(constraint.get(), /*batch_size=*/1, *env_,
+                                 HwAccelerators::kCpu,
+                                 /*force_graph_on_host=*/true));
 
   // Create a tensor buffer for the token ids for "a".
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  const litert::Environment& env = *env_;
   int32_t token_ids[] = {spm_processor_.PieceToId("a")};
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto tokens_id_tensor_buffer,
       CreateTokenIdsTensorBuffer<int32_t>(env, token_ids, {1, 1}));
 
   // Update state with "a".
-  ASSERT_OK(constrained_decoder.UpdateState(tokens_id_tensor_buffer));
+  ASSERT_OK(constrained_decoder->UpdateState(tokens_id_tensor_buffer));
 
   // Padded model vocabulary dimension (larger than constraint vocabulary size).
   int padded_vocab_size = vocab_size_ + 16;
@@ -301,7 +329,7 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsWithPaddedVocabSize) {
                                         {1, 1, padded_vocab_size}));
 
   // ProcessLogits should succeed with padded vocabulary size.
-  ASSERT_OK(constrained_decoder.ProcessLogits(logits_tensor_buffer));
+  ASSERT_OK(constrained_decoder->ProcessLogits(logits_tensor_buffer));
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto masked_logits_span,
@@ -310,7 +338,37 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsWithPaddedVocabSize) {
     if (i == spm_processor_.PieceToId("b")) {
       EXPECT_EQ(masked_logits_span[i], 2.0f);
     } else {
-      EXPECT_EQ(masked_logits_span[i], -std::numeric_limits<float>::infinity());
+      EXPECT_LT(masked_logits_span[i], kDisallowedLogitThreshold);
+    }
+  }
+}
+
+TEST_F(ConstrainedDecoderTest, ProcessLogitsOnHostMemorySucceedsWithoutAccel) {
+  ASSERT_OK_AND_ASSIGN(
+      auto constraint,
+      provider_->CreateConstraint(FstConstraintArg{.constraint_string = "ab"}));
+  ASSERT_OK_AND_ASSIGN(
+      auto constrained_decoder,
+      ConstrainedDecoder::CreateForHost(constraint.get(), /*batch_size=*/1));
+
+  std::vector<float> logits_data(vocab_size_, 2.0f);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto logits_tensor_buffer,
+      CreateTokenIdsTensorBuffer<float>(*env_, logits_data.data(),
+                                        {1, 1, vocab_size_}));
+
+  ASSERT_OK(constrained_decoder->ProcessLogits(logits_tensor_buffer));
+
+  // The constraint only permits "a" at the start, so every other token must be
+  // masked out.
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto masked_logits_span,
+      ReferTensorBufferAsSpan<float>(logits_tensor_buffer));
+  for (int i = 0; i < vocab_size_; ++i) {
+    if (i == spm_processor_.PieceToId("a")) {
+      EXPECT_EQ(masked_logits_span[i], 2.0f);
+    } else {
+      EXPECT_LT(masked_logits_span[i], kDisallowedLogitThreshold);
     }
   }
 }

@@ -72,8 +72,11 @@ absl::Status ApplyBitmapImpl(absl::Span<const uint64_t> words, int vocab_size,
     }
   }
 
-  // Any logits beyond vocab_size (e.g. padding) are disallowed.
-  for (int i = vocab_size; i < static_cast<int>(logits.size()); ++i) {
+  // Any logits beyond vocab_size (e.g. padding) are disallowed. Nothing
+  // validates vocab_size, and a negative one would start this sweep before the
+  // beginning of the span.
+  for (int i = std::max(vocab_size, 0); i < static_cast<int>(logits.size());
+       ++i) {
     logits[i] = min_val;
   }
 
@@ -195,7 +198,10 @@ absl::Status ApplyCompositeImpl(
       }
     }
 
-    for (int i = min_vocab_size; i < static_cast<int>(logits.size()); ++i) {
+    // As in ApplyBitmapImpl, a negative vocabulary size would otherwise index
+    // before the start of the span.
+    for (int i = std::max(min_vocab_size, 0);
+         i < static_cast<int>(logits.size()); ++i) {
       logits[i] = min_val;
     }
   }
