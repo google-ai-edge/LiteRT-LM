@@ -77,12 +77,12 @@ class Engine(interfaces.AbstractEngine):
 
     super().__init__(
         model_path=model_path,
-        backend=backend,
+        backend=backend,  # pyrefly: ignore[bad-argument-type]
         max_num_tokens=max_num_tokens,
         max_num_images=max_num_images,
         cache_dir=cache_dir,
-        vision_backend=vision_backend,
-        audio_backend=audio_backend,
+        vision_backend=vision_backend,  # pyrefly: ignore[bad-argument-type]
+        audio_backend=audio_backend,  # pyrefly: ignore[bad-argument-type]
         lora_rank_config=lora_rank_config,
         activation_data_type=activation_data_type,
         use_ringbuffers_local_attention=use_ringbuffers_local_attention,
