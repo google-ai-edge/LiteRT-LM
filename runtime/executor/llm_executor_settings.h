@@ -160,6 +160,30 @@ struct NpuConfig {
 
   // Whether enable debug logging for NPU.
   bool enable_npu_debug_logging = false;
+
+  // The following two settings only apply to models exported with a dynamic
+  // (resizable) KV cache. They are ignored for static models.
+  //
+  // Number of tokens the KV cache is allocated for when the executor is
+  // created.
+  // - 0 (default): allocate the full `max_num_tokens` up front, so that all
+  //   tensor allocation cost is paid during executor initialization.
+  // - > 0: allocate only this many tokens initially and grow the KV cache on
+  //   demand during prefill/decode, bounded by `max_num_tokens`. Growing
+  //   re-allocates the KV cache buffers and migrates the already processed
+  //   tokens, which adds latency to the prefill/decode call that triggers it.
+  // The actual allocation may be larger than requested due to hardware
+  // bucketing. The KV cache is never shrunk automatically.
+  int dynamic_kv_cache_initial_size = 0;
+
+  // Minimum number of tokens by which the dynamic KV cache is grown whenever it
+  // runs out of capacity (only used when `dynamic_kv_cache_initial_size` > 0).
+  // Larger values reduce the number of re-allocations at the cost of memory.
+  //
+  // Do not rely on this default setting. The 'correct' value is highly
+  // dependent on the model and underlying hardware; 512 is effectively a
+  // placeholder as we build out support for this feature.
+  int dynamic_kv_cache_growth_step = 512;
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
 
