@@ -422,6 +422,10 @@ common --experimental_repo_remote_exec
 # Use GitHub mirror for BCR to work around bcr.bazel.build outages
 common --registry=https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/
 
+# Route android.googlesource.com downloads (e.g. @com_android_dex) through mirror.bazel.build
+# first, falling back to the original host. See bazel_downloader.cfg.
+common --experimental_downloader_config=bazel_downloader.cfg
+
 # TFLite build configs for generic embedded Linux
 build:elinux --crosstool_top=@local_config_embedded_arm//:toolchain
 build:elinux --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
