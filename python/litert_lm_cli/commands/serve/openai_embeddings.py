@@ -12,7 +12,109 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpenAI /v1/embeddings endpoint handler for LiteRT-LM."""
+r"""OpenAI /v1/embeddings endpoint handler for LiteRT-LM.
+
+Note: The official OpenAI /v1/embeddings specification only supports text
+inputs (single string, array of strings, or token arrays). LiteRT-LM extends
+this endpoint to support multimodal embeddings (images, audio, and joint
+text+media sequences) using OpenAI Chat Completions content part conventions
+(e.g., 'image_url', 'input_audio') as well as LiteRT-LM native types ('image',
+'audio').
+
+Sample cURL commands:
+
+1. Text Embedding:
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": "Hello world"
+      }'
+
+2. Batch Text Embedding (Array of Strings):
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": [
+          "Hello world",
+          "Embedding test"
+        ]
+      }'
+
+3. Image Embedding (via base64 data URL):
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAA..."
+          }
+        }
+      }'
+
+4. Image Embedding (via local file path):
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": {
+          "type": "image_url",
+          "image_url": {
+            "url": "file:///path/to/image.png"
+          }
+        }
+      }'
+
+5. Audio Embedding (via base64 data):
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": {
+          "type": "input_audio",
+          "input_audio": {
+            "data": "<base64_encoded_audio>",
+            "format": "wav"
+          }
+        }
+      }'
+
+6. Multimodal Embedding (joint text + image sequence):
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": [
+          {"type": "text", "text": "A photograph of a cat:"},
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,iVBORw0KGgoAAA..."
+            }
+          }
+        ]
+      }'
+
+7. Batch Multimodal Embedding Request:
+    curl http://127.0.0.1:9379/v1/embeddings \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "embedding-model-id",
+        "input": [
+          [{
+            "type": "image_url",
+            "image_url": {"url": "file:///path/to/image1.png"}
+          }],
+          [{
+            "type": "image_url",
+            "image_url": {"url": "file:///path/to/image2.png"}
+          }]
+        ]
+      }'
+"""
 
 from __future__ import annotations
 
