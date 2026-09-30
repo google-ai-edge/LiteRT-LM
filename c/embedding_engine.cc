@@ -59,6 +59,18 @@ absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
   return engine_inputs;
 }
 
+// Returns true if `settings` is a usable embedding engine settings handle.
+// Otherwise records a kInvalidArgument last error and returns false.
+bool IsValidEmbeddingEngineSettings(
+    const LiteRtLmEmbeddingEngineSettings* settings) {
+  if (settings != nullptr && settings->settings != nullptr) {
+    return true;
+  }
+  litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                              "Invalid embedding engine settings.");
+  return false;
+}
+
 }  // namespace
 
 LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
@@ -153,7 +165,7 @@ void litert_lm_embedding_engine_settings_delete(
 
 void litert_lm_embedding_engine_settings_set_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads) {
-  if (settings && settings->settings && num_threads > 0) {
+  if (IsValidEmbeddingEngineSettings(settings) && num_threads > 0) {
     settings->settings->GetMutableMainExecutorSettings().SetNumThreads(
         num_threads);
   }
@@ -161,7 +173,7 @@ void litert_lm_embedding_engine_settings_set_num_threads(
 
 void litert_lm_embedding_engine_settings_set_audio_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads) {
-  if (settings && settings->settings && num_threads > 0 &&
+  if (IsValidEmbeddingEngineSettings(settings) && num_threads > 0 &&
       settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()->SetNumThreads(
         num_threads);
@@ -170,7 +182,8 @@ void litert_lm_embedding_engine_settings_set_audio_num_threads(
 
 void litert_lm_embedding_engine_settings_set_cache_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* cache_dir) {
-  if (settings && settings->settings && cache_dir != nullptr) {
+  if (IsValidEmbeddingEngineSettings(settings) &&
+      LITERT_LM_C_CHECK_NOT_NULL(cache_dir)) {
     settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
     if (settings->settings->GetVisionExecutorSettings().has_value()) {
       settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
@@ -185,7 +198,8 @@ void litert_lm_embedding_engine_settings_set_cache_dir(
 
 void litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir) {
-  if (settings && settings->settings && lib_dir != nullptr) {
+  if (IsValidEmbeddingEngineSettings(settings) &&
+      LITERT_LM_C_CHECK_NOT_NULL(lib_dir)) {
     settings->settings->GetMutableMainExecutorSettings()
         .SetLitertDispatchLibDir(lib_dir);
   }
@@ -193,7 +207,8 @@ void litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
 
 void litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir) {
-  if (settings && settings->settings && lib_dir != nullptr &&
+  if (IsValidEmbeddingEngineSettings(settings) &&
+      LITERT_LM_C_CHECK_NOT_NULL(lib_dir) &&
       settings->settings->GetVisionExecutorSettings().has_value()) {
     settings->settings->GetMutableVisionExecutorSettings()
         ->SetLitertDispatchLibDir(lib_dir);
@@ -202,7 +217,8 @@ void litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
 
 void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir) {
-  if (settings && settings->settings && lib_dir != nullptr &&
+  if (IsValidEmbeddingEngineSettings(settings) &&
+      LITERT_LM_C_CHECK_NOT_NULL(lib_dir) &&
       settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()
         ->SetLitertDispatchLibDir(lib_dir);
@@ -211,7 +227,7 @@ void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
 
 void litert_lm_embedding_engine_settings_set_max_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int max_input_length) {
-  if (settings && settings->settings) {
+  if (IsValidEmbeddingEngineSettings(settings)) {
     if (max_input_length > 0) {
       settings->settings->SetMaxInputLength(max_input_length);
     } else {
@@ -222,7 +238,7 @@ void litert_lm_embedding_engine_settings_set_max_input_length(
 
 void litert_lm_embedding_engine_settings_set_min_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int min_input_length) {
-  if (settings && settings->settings) {
+  if (IsValidEmbeddingEngineSettings(settings)) {
     if (min_input_length >= 0) {
       settings->settings->SetMinInputLength(min_input_length);
     } else {
@@ -233,7 +249,7 @@ void litert_lm_embedding_engine_settings_set_min_input_length(
 
 void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
     LiteRtLmEmbeddingEngineSettings* settings, int vision_tokens_per_image) {
-  if (settings && settings->settings) {
+  if (IsValidEmbeddingEngineSettings(settings)) {
     if (vision_tokens_per_image > 0) {
       settings->settings->SetVisionTokensPerImage(vision_tokens_per_image);
     } else {
@@ -245,7 +261,7 @@ void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
 void litert_lm_embedding_engine_settings_set_activation_data_type(
     LiteRtLmEmbeddingEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type) {
-  if (settings && settings->settings) {
+  if (IsValidEmbeddingEngineSettings(settings)) {
     settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
         static_cast<litert::lm::ActivationDataType>(activation_data_type));
     if (settings->settings->GetVisionExecutorSettings().has_value()) {
@@ -266,14 +282,14 @@ void litert_lm_embedding_options_delete(LiteRtLmEmbeddingOptions* options) {
 
 void litert_lm_embedding_options_set_normalize(
     LiteRtLmEmbeddingOptions* options, bool normalize) {
-  if (options) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
     options->options.normalize = normalize;
   }
 }
 
 bool litert_lm_embedding_options_get_normalize(
     const LiteRtLmEmbeddingOptions* options) {
-  if (!options) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(options)) {
     return false;
   }
   return options->options.normalize;
@@ -281,14 +297,14 @@ bool litert_lm_embedding_options_get_normalize(
 
 void litert_lm_embedding_options_set_insert_special_tokens(
     LiteRtLmEmbeddingOptions* options, bool insert_special_tokens) {
-  if (options) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
     options->options.insert_special_tokens = insert_special_tokens;
   }
 }
 
 bool litert_lm_embedding_options_get_insert_special_tokens(
     const LiteRtLmEmbeddingOptions* options) {
-  if (!options) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(options)) {
     return false;
   }
   return options->options.insert_special_tokens;
@@ -296,7 +312,7 @@ bool litert_lm_embedding_options_get_insert_special_tokens(
 
 void litert_lm_embedding_options_set_input_overflow_strategy(
     LiteRtLmEmbeddingOptions* options, LiteRtLmInputOverflowStrategy strategy) {
-  if (options) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
     options->options.input_overflow_strategy =
         static_cast<litert::lm::InputOverflowStrategy>(strategy);
   }
@@ -305,7 +321,7 @@ void litert_lm_embedding_options_set_input_overflow_strategy(
 LiteRtLmInputOverflowStrategy
 litert_lm_embedding_options_get_input_overflow_strategy(
     const LiteRtLmEmbeddingOptions* options) {
-  if (!options) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(options)) {
     return kLiteRtLmInputOverflowStrategyError;
   }
   return static_cast<LiteRtLmInputOverflowStrategy>(
@@ -314,7 +330,7 @@ litert_lm_embedding_options_get_input_overflow_strategy(
 
 void litert_lm_embedding_options_set_output_size(
     LiteRtLmEmbeddingOptions* options, int output_size) {
-  if (options) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
     if (output_size <= 0) {
       options->options.output_size = std::nullopt;
     } else {
@@ -325,7 +341,8 @@ void litert_lm_embedding_options_set_output_size(
 
 int litert_lm_embedding_options_get_output_size(
     const LiteRtLmEmbeddingOptions* options) {
-  if (!options || !options->options.output_size.has_value()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(options) ||
+      !options->options.output_size.has_value()) {
     return -1;
   }
   return *options->options.output_size;
@@ -333,7 +350,7 @@ int litert_lm_embedding_options_get_output_size(
 
 void litert_lm_embedding_options_set_vision_tokens_per_image(
     LiteRtLmEmbeddingOptions* options, int vision_tokens_per_image) {
-  if (options) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
     if (vision_tokens_per_image > 0) {
       options->options.vision_tokens_per_image = vision_tokens_per_image;
     } else {
@@ -344,7 +361,8 @@ void litert_lm_embedding_options_set_vision_tokens_per_image(
 
 int litert_lm_embedding_options_get_vision_tokens_per_image(
     const LiteRtLmEmbeddingOptions* options) {
-  if (!options || !options->options.vision_tokens_per_image.has_value()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(options) ||
+      !options->options.vision_tokens_per_image.has_value()) {
     return 0;
   }
   return *options->options.vision_tokens_per_image;
@@ -355,7 +373,7 @@ void litert_lm_embedding_response_delete(LiteRtLmEmbeddingResponse* response) {
 
 size_t litert_lm_embedding_response_get_size(
     const LiteRtLmEmbeddingResponse* response) {
-  if (!response) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(response)) {
     return 0;
   }
   return response->response.embedding.size();
@@ -363,7 +381,8 @@ size_t litert_lm_embedding_response_get_size(
 
 const float* litert_lm_embedding_response_get_values(
     const LiteRtLmEmbeddingResponse* response) {
-  if (!response || response->response.embedding.empty()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(response) ||
+      response->response.embedding.empty()) {
     return nullptr;
   }
   return response->response.embedding.data();
@@ -376,7 +395,7 @@ void litert_lm_embedding_responses_delete(
 
 size_t litert_lm_embedding_responses_get_size(
     const LiteRtLmEmbeddingResponses* responses) {
-  if (!responses) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses)) {
     return 0;
   }
   return responses->responses.size();
@@ -384,7 +403,8 @@ size_t litert_lm_embedding_responses_get_size(
 
 const LiteRtLmEmbeddingResponse* litert_lm_embedding_responses_get_at(
     const LiteRtLmEmbeddingResponses* responses, size_t index) {
-  if (!responses || index >= responses->responses.size()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses) ||
+      index >= responses->responses.size()) {
     return nullptr;
   }
   return reinterpret_cast<const LiteRtLmEmbeddingResponse*>(

@@ -155,49 +155,56 @@ LiteRtLmConversationConfig* litert_lm_conversation_config_create() {
 void litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config) {
-  if (config && session_config && session_config->config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(session_config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(session_config->config.get())) {
     config->session_config = *session_config->config;
   }
 }
 
 void litert_lm_conversation_config_set_system_message(
     LiteRtLmConversationConfig* config, const char* system_message_json) {
-  if (config && system_message_json) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(system_message_json)) {
     config->system_message_json = system_message_json;
   }
 }
 
 void litert_lm_conversation_config_set_tools(LiteRtLmConversationConfig* config,
                                              const char* tools_json) {
-  if (config && tools_json) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(tools_json)) {
     config->tools_json = tools_json;
   }
 }
 
 void litert_lm_conversation_config_set_messages(
     LiteRtLmConversationConfig* config, const char* messages_json) {
-  if (config && messages_json) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(messages_json)) {
     config->messages_json = messages_json;
   }
 }
 
 void litert_lm_conversation_config_set_extra_context(
     LiteRtLmConversationConfig* config, const char* extra_context_json) {
-  if (config && extra_context_json) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(extra_context_json)) {
     config->extra_context_json = extra_context_json;
   }
 }
 
 void litert_lm_conversation_config_set_prompt_template(
     LiteRtLmConversationConfig* config, const char* prompt_template) {
-  if (config && prompt_template) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(prompt_template)) {
     config->prompt_template = prompt_template;
   }
 }
 
 void litert_lm_conversation_config_set_enable_constrained_decoding(
     LiteRtLmConversationConfig* config, bool enable_constrained_decoding) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     config->enable_constrained_decoding = enable_constrained_decoding;
   }
 }
@@ -205,7 +212,7 @@ void litert_lm_conversation_config_set_enable_constrained_decoding(
 void litert_lm_conversation_config_set_constraint_provider(
     LiteRtLmConversationConfig* config,
     const LiteRtLmConstraintProviderType* provider_type) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     if (provider_type != nullptr) {
       config->constraint_provider_type = *provider_type;
     } else {
@@ -217,7 +224,7 @@ void litert_lm_conversation_config_set_constraint_provider(
 void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
     LiteRtLmConversationConfig* config,
     bool filter_channel_content_from_kv_cache) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     config->filter_channel_content_from_kv_cache =
         filter_channel_content_from_kv_cache;
   }
@@ -226,7 +233,7 @@ void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
 void litert_lm_conversation_config_set_stream_tool_calls(
     LiteRtLmConversationConfig* config, bool stream_tool_calls,
     const char* channel_name) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     config->stream_tool_calls = stream_tool_calls;
     if (channel_name != nullptr) {
       config->stream_tool_calls_channel_name = channel_name;
@@ -244,7 +251,7 @@ void litert_lm_thinking_config_delete(LiteRtLmThinkingConfig* config) {
 
 void litert_lm_thinking_config_set_enable_thinking(
     LiteRtLmThinkingConfig* config, bool enable_thinking) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     config->thinking_config = litert::lm::ThinkingConfig(
         enable_thinking, config->thinking_config.thinking_token_budget());
   }
@@ -252,7 +259,7 @@ void litert_lm_thinking_config_set_enable_thinking(
 
 void litert_lm_thinking_config_set_thinking_token_budget(
     LiteRtLmThinkingConfig* config, int thinking_token_budget) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     config->thinking_config = litert::lm::ThinkingConfig(
         config->thinking_config.enable_thinking(), thinking_token_budget);
   }
@@ -261,7 +268,7 @@ void litert_lm_thinking_config_set_thinking_token_budget(
 void litert_lm_conversation_config_set_thinking_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmThinkingConfig* thinking_config) {
-  if (config) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
     if (thinking_config) {
       config->thinking_config = thinking_config->thinking_config;
     } else {
@@ -282,7 +289,7 @@ litert_lm_conversation_optional_args_create() {
 void litert_lm_conversation_optional_args_set_repetition_penalty_config(
     LiteRtLmConversationOptionalArgs* args,
     const LiteRtLmRepetitionPenaltyConfig* repetition_penalty_config) {
-  if (!args) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(args)) {
     return;
   }
 
@@ -299,7 +306,7 @@ void litert_lm_conversation_optional_args_set_repetition_penalty_config(
 void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
     LiteRtLmConversationOptionalArgs* args,
     const LiteRtLmNoRepeatNgramConfig* no_repeat_ngram_config) {
-  if (!args) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(args)) {
     return;
   }
 
@@ -315,7 +322,7 @@ void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
 void litert_lm_conversation_optional_args_set_suppress_tokens_config(
     LiteRtLmConversationOptionalArgs* args,
     const LiteRtLmSuppressTokensConfig* suppress_tokens_config) {
-  if (!args) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(args)) {
     return;
   }
 
@@ -330,14 +337,14 @@ void litert_lm_conversation_optional_args_set_suppress_tokens_config(
 
 void litert_lm_conversation_optional_args_set_visual_token_budget(
     LiteRtLmConversationOptionalArgs* args, int visual_token_budget) {
-  if (args) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(args)) {
     args->visual_token_budget = visual_token_budget;
   }
 }
 
 void litert_lm_conversation_optional_args_set_max_output_tokens(
     LiteRtLmConversationOptionalArgs* args, int max_output_tokens) {
-  if (args) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(args)) {
     args->max_output_tokens = max_output_tokens;
   }
 }
@@ -345,7 +352,7 @@ void litert_lm_conversation_optional_args_set_max_output_tokens(
 void litert_lm_conversation_optional_args_set_thinking_config(
     LiteRtLmConversationOptionalArgs* args,
     const LiteRtLmThinkingConfig* thinking_config) {
-  if (args) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(args)) {
     if (thinking_config) {
       args->thinking_config = thinking_config->thinking_config;
     } else {
@@ -357,7 +364,7 @@ void litert_lm_conversation_optional_args_set_thinking_config(
 void litert_lm_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmConstraintType constraint_type, const char* constraint_string) {
-  if (optional_args) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(optional_args)) {
     optional_args->constraint_type = constraint_type;
     if (constraint_string) {
       optional_args->constraint_string = constraint_string;
@@ -547,6 +554,9 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return nullptr;
   }
+  if (!LITERT_LM_C_CHECK_NOT_NULL(message_json)) {
+    return nullptr;
+  }
   nlohmann::json json_message =
       nlohmann::json::parse(message_json, /*cb=*/nullptr,
                             /*allow_exceptions=*/false);
@@ -578,7 +588,7 @@ void litert_lm_json_response_delete(LiteRtLmJsonResponse* response) {
 
 const char* litert_lm_json_response_get_string(
     const LiteRtLmJsonResponse* response) {
-  if (!response) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(response)) {
     return nullptr;
   }
   return response->json_string.c_str();
@@ -591,6 +601,9 @@ int litert_lm_conversation_send_message_stream(
     LiteRtLmStreamCallback callback, void* callback_data) {
   if (!conversation || !conversation->conversation) {
     SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
+    return -1;
+  }
+  if (!LITERT_LM_C_CHECK_NOT_NULL(message_json)) {
     return -1;
   }
   nlohmann::json json_message =
@@ -665,6 +678,7 @@ const char* litert_lm_conversation_render_preface_to_string(
 
 void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return;
   }
   conversation->conversation->CancelProcess();

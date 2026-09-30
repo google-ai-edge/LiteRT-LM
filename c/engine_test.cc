@@ -39,6 +39,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace {
 
@@ -224,7 +225,7 @@ TEST(EngineCTest, SetPrefillChunkSize) {
                                                    prefill_chunk_size);
   auto config = settings->settings->GetMainExecutorSettings()
                     .GetBackendConfig<litert::lm::CpuConfig>();
-  ASSERT_TRUE(config.ok());
+  ASSERT_OK(config);
   EXPECT_EQ(config->prefill_chunk_size, prefill_chunk_size);
 }
 
@@ -242,13 +243,13 @@ TEST(EngineCTest, SetEnableYNNPack) {
   litert_lm_engine_settings_set_enable_ynnpack(settings.get(), true);
   auto config1 = settings->settings->GetMainExecutorSettings()
                      .GetBackendConfig<litert::lm::CpuConfig>();
-  ASSERT_TRUE(config1.ok());
+  ASSERT_OK(config1);
   EXPECT_TRUE(config1->enable_ynnpack);  // NOLINT: config is checked above.
 
   litert_lm_engine_settings_set_enable_ynnpack(settings.get(), false);
   auto config2 = settings->settings->GetMainExecutorSettings()
                      .GetBackendConfig<litert::lm::CpuConfig>();
-  ASSERT_TRUE(config2.ok());
+  ASSERT_OK(config2);
   EXPECT_FALSE(config2->enable_ynnpack);  // NOLINT: config is checked above.
 }
 
@@ -354,14 +355,14 @@ TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
                                                                 true);
   auto config1 = settings->settings->GetMainExecutorSettings()
                      .GetBackendConfig<litert::lm::GpuArtisanConfig>();
-  ASSERT_TRUE(config1.ok());
+  ASSERT_OK(config1);
   EXPECT_TRUE(config1->use_autosized_ringbuffers);
 
   litert_lm_engine_settings_set_use_ringbuffers_local_attention(settings.get(),
                                                                 false);
   auto config2 = settings->settings->GetMainExecutorSettings()
                      .GetBackendConfig<litert::lm::GpuArtisanConfig>();
-  ASSERT_TRUE(config2.ok());
+  ASSERT_OK(config2);
   EXPECT_FALSE(config2->use_autosized_ringbuffers);
 }
 
@@ -2268,6 +2269,157 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EXPECT_GT(text.length(), 0);
   EXPECT_LT(text.length(), 5);
   EXPECT_EQ(text, "\xE6\xB2\xBF");
+}
+
+TEST(EngineCErrorTest, InputDataCreateUnknownTypeSetsError) {
+  litert_lm_clear_last_error();
+  // 7 is within the enum's value range but is not a declared enumerator.
+  EXPECT_EQ(litert_lm_input_data_create(static_cast<LiteRtLmInputDataType>(7),
+                                        "a", 1),
+            nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Unknown LiteRtLmInputDataType"));
+}
+
+TEST(EngineCErrorTest, InputDataCreateNullDataWithSizeSetsError) {
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_input_data_create(kLiteRtLmInputDataTypeText, nullptr, 4),
+            nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("data must not be NULL"));
+}
+
+TEST(EngineCErrorTest, SuppressTokensNullWithCountSetsError) {
+  SuppressTokensConfigPtr config(litert_lm_suppress_tokens_config_create(),
+                                 &litert_lm_suppress_tokens_config_delete);
+  ASSERT_NE(config, nullptr);
+  litert_lm_clear_last_error();
+  litert_lm_suppress_tokens_config_set_suppress_tokens(config.get(), nullptr,
+                                                       3);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("suppress_tokens must not be NULL"));
+}
+
+TEST(EngineCErrorTest, VoidSettersWithNullHandleSetError) {
+  litert_lm_clear_last_error();
+  litert_lm_engine_settings_set_max_num_tokens(nullptr, 16);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid engine settings"));
+
+  litert_lm_clear_last_error();
+  litert_lm_session_config_set_max_output_tokens(nullptr, 16);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid session config"));
+
+  litert_lm_clear_last_error();
+  litert_lm_sampler_params_set_top_k(nullptr, 1);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("params must not be NULL"));
+
+  litert_lm_clear_last_error();
+  litert_lm_repetition_penalty_config_set_window_size(nullptr, 1);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("config must not be NULL"));
+
+  litert_lm_clear_last_error();
+  litert_lm_session_cancel_process(nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid session"));
+}
+
+TEST(EngineCErrorTest, SessionConfigNullSamplerParamsSetsError) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+  litert_lm_clear_last_error();
+  litert_lm_session_config_set_sampler_params(config.get(), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("sampler_params must not be NULL"));
+}
+
+TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_responses_get_num_candidates(nullptr), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("responses must not be NULL"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_tokenize_result_get_tokens(nullptr), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("result must not be NULL"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_benchmark_info_get_num_decode_turns(nullptr), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("benchmark_info must not be NULL"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_token_unions_get_token_at(nullptr, 0), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("tokens must not be NULL"));
+}
+
+TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
+  litert_lm_clear_last_error();
+  litert_lm_conversation_config_set_system_message(nullptr, "{}");
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("config must not be NULL"));
+
+  ConversationConfigPtr config(litert_lm_conversation_config_create(),
+                               &litert_lm_conversation_config_delete);
+  ASSERT_NE(config, nullptr);
+  litert_lm_clear_last_error();
+  litert_lm_conversation_config_set_tools(config.get(), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("tools_json must not be NULL"));
+
+  litert_lm_clear_last_error();
+  litert_lm_conversation_optional_args_set_max_output_tokens(nullptr, 1);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("args must not be NULL"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_json_response_get_string(nullptr), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("response must not be NULL"));
+
+  litert_lm_clear_last_error();
+  litert_lm_conversation_cancel_process(nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid conversation"));
+}
+
+TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_experimental_session_get_debug_info(nullptr), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid session"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_experimental_session_debug_info_get_capture_dir(nullptr),
+            nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("debug_info must not be NULL"));
 }
 
 }  // namespace

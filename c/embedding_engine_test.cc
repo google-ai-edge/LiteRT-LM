@@ -17,10 +17,14 @@
 #include <cstddef>
 #include <string>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "c/engine.h"
+#include "c/error_reporter.h"
 
 namespace {
+
+using ::testing::HasSubstr;
 
 constexpr char kTestEmbeddingModelPath[] =
     "runtime/testdata/test_embedding.litertlm";
@@ -366,6 +370,38 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchWithOutputSize) {
   litert_lm_input_data_delete(input1);
   litert_lm_input_data_delete(input2);
   litert_lm_embedding_engine_delete(engine);
+}
+
+TEST(EmbeddingEngineCTest, NullArgumentsSetError) {
+  litert_lm_clear_last_error();
+  litert_lm_embedding_engine_settings_set_max_input_length(nullptr, 16);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("Invalid embedding engine settings"));
+
+  litert_lm_clear_last_error();
+  EXPECT_FALSE(litert_lm_embedding_options_get_normalize(nullptr));
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("options must not be NULL"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_embedding_responses_get_at(nullptr, 0), nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("responses must not be NULL"));
+}
+
+TEST(EmbeddingEngineCTest, SetCacheDirNullSetsError) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_clear_last_error();
+  litert_lm_embedding_engine_settings_set_cache_dir(settings, nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("cache_dir must not be NULL"));
+  litert_lm_embedding_engine_settings_delete(settings);
 }
 
 }  // namespace

@@ -61,6 +61,8 @@ int litert_lm_experimental_is_debugger_enabled() {
 LiteRtLmSessionDebugInfo* litert_lm_experimental_session_get_debug_info(
     LiteRtLmSession* session) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return nullptr;
   }
   auto debug_info = session->session->GetSessionDebugInfo();
@@ -74,6 +76,8 @@ LiteRtLmSessionDebugInfo*
 litert_lm_experimental_conversation_get_session_debug_info(
     LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid conversation.");
     return nullptr;
   }
   auto debug_info = conversation->conversation->GetSessionDebugInfo();
@@ -90,7 +94,10 @@ void litert_lm_experimental_session_debug_info_delete(
 
 const char* litert_lm_experimental_session_debug_info_get_capture_dir(
     const LiteRtLmSessionDebugInfo* debug_info) {
-  return debug_info ? debug_info->debug_info.capture_dir.c_str() : nullptr;
+  if (!LITERT_LM_C_CHECK_NOT_NULL(debug_info)) {
+    return nullptr;
+  }
+  return debug_info->debug_info.capture_dir.c_str();
 }
 
 }  // extern "C"

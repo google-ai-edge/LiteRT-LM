@@ -124,6 +124,15 @@ LiteRtLmStatusCode ReturnError(absl::StatusCode code,
   return ToLiteRtLmStatusCode(code);
 }
 
+bool CheckNotNull(const void* ptr, absl::string_view name) {
+  if (ptr != nullptr) {
+    return true;
+  }
+  SetLastError(absl::StatusCode::kInvalidArgument,
+               std::string(name) + " must not be NULL.");
+  return false;
+}
+
 }  // namespace litert::lm::c
 
 extern "C" {

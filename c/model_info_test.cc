@@ -19,14 +19,19 @@
 #include <string>
 
 #if defined(__APPLE__)
-#include "engine.h"  // NOLINT
+#include "engine.h"          // NOLINT
+#include "error_reporter.h"  // NOLINT
 #else
 #include "c/engine.h"
+#include "c/error_reporter.h"
 #endif
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace {
+
+using ::testing::HasSubstr;
 
 std::string GetRunfilePath(const std::string& relative_path) {
   std::string srcdir = ::testing::SrcDir();
@@ -216,8 +221,8 @@ TEST(ModelInfoCTest, InspectEmbeddingCapabilities) {
   EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
       file, kLiteRtLmModalityVision));
   EXPECT_EQ(litert_lm_loaded_file_max_vision_token_budget(file), -1);
-  EXPECT_EQ(
-      litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0), -1);
+  EXPECT_EQ(litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0),
+            -1);
 
   LiteRtLmBackendType text_backends[3];
   int32_t text_count = litert_lm_loaded_file_modality_supported_backends(
@@ -238,5 +243,21 @@ TEST(ModelInfoCTest, InspectEmbeddingCapabilities) {
   litert_lm_loaded_file_delete(file);
 }
 
-}  // namespace
+TEST(ModelInfoCTest, NullLoadedFileSetsError) {
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_loaded_file_model_type(nullptr),
+            kLiteRtLmModelTypeUnknown);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("loaded_file must not be NULL"));
 
+  litert_lm_clear_last_error();
+  EXPECT_EQ(
+      litert_lm_loaded_file_modality_soc_name(nullptr, kLiteRtLmModalityText),
+      nullptr);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("loaded_file must not be NULL"));
+}
+
+}  // namespace

@@ -114,6 +114,28 @@ absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
   return engine_inputs;
 }
 
+// Returns true if `settings` is a usable engine settings handle. Otherwise
+// records a kInvalidArgument last error and returns false.
+bool IsValidEngineSettings(const LiteRtLmEngineSettings* settings) {
+  if (settings != nullptr && settings->settings != nullptr) {
+    return true;
+  }
+  litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                              "Invalid engine settings.");
+  return false;
+}
+
+// Returns true if `config` is a usable session config handle. Otherwise
+// records a kInvalidArgument last error and returns false.
+bool IsValidSessionConfig(const LiteRtLmSessionConfig* config) {
+  if (config != nullptr && config->config != nullptr) {
+    return true;
+  }
+  litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                              "Invalid session config.");
+  return false;
+}
+
 }  // namespace
 
 using ::litert::lm::Engine;
@@ -126,6 +148,11 @@ using ::litert::lm::proto::SamplerParameters;
 
 LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
                                                const void* data, size_t size) {
+  if (data == nullptr && size > 0) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "data must not be NULL when size is non-zero.");
+    return nullptr;
+  }
   switch (type) {
     case kLiteRtLmInputDataTypeText:
       return std::make_unique<LiteRtLmInputData>(
@@ -149,6 +176,8 @@ LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
       return std::make_unique<LiteRtLmInputData>(litert::lm::InputAudioEnd())
           .release();
     default:
+      litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                  "Unknown LiteRtLmInputDataType.");
       return nullptr;
   }
 }
@@ -241,28 +270,28 @@ void litert_lm_sampler_params_delete(LiteRtLmSamplerParams* params) {
 
 void litert_lm_sampler_params_set_top_k(LiteRtLmSamplerParams* params,
                                         int32_t top_k) {
-  if (params) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
     params->top_k = top_k;
   }
 }
 
 void litert_lm_sampler_params_set_top_p(LiteRtLmSamplerParams* params,
                                         float top_p) {
-  if (params) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
     params->top_p = top_p;
   }
 }
 
 void litert_lm_sampler_params_set_temperature(LiteRtLmSamplerParams* params,
                                               float temperature) {
-  if (params) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
     params->temperature = temperature;
   }
 }
 
 void litert_lm_sampler_params_set_seed(LiteRtLmSamplerParams* params,
                                        int32_t seed) {
-  if (params) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
     params->seed = seed;
   }
 }
@@ -276,21 +305,21 @@ LiteRtLmSessionConfig* litert_lm_session_config_create() {
 
 void litert_lm_session_config_set_max_output_tokens(
     LiteRtLmSessionConfig* config, int max_output_tokens) {
-  if (config && config->config) {
+  if (IsValidSessionConfig(config)) {
     config->config->SetMaxOutputTokens(max_output_tokens);
   }
 }
 
 void litert_lm_session_config_set_apply_prompt_template(
     LiteRtLmSessionConfig* config, bool apply_prompt_template) {
-  if (config && config->config) {
+  if (IsValidSessionConfig(config)) {
     config->config->SetApplyPromptTemplateInSession(apply_prompt_template);
   }
 }
 
 void litert_lm_session_config_set_enable_speculative_decoding(
     LiteRtLmSessionConfig* config, bool enable_speculative_decoding) {
-  if (config && config->config) {
+  if (IsValidSessionConfig(config)) {
     config->config->SetEnableSpeculativeDecoding(enable_speculative_decoding);
   }
 }
@@ -298,7 +327,8 @@ void litert_lm_session_config_set_enable_speculative_decoding(
 void litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config,
     const LiteRtLmSamplerParams* sampler_params) {
-  if (config && config->config && sampler_params) {
+  if (IsValidSessionConfig(config) &&
+      LITERT_LM_C_CHECK_NOT_NULL(sampler_params)) {
     SamplerParameters& params = config->config->GetMutableSamplerParams();
 
     params.set_type(ToSamplerParametersType(sampler_params->type));
@@ -376,7 +406,7 @@ void litert_lm_repetition_penalty_config_delete(
 
 void litert_lm_repetition_penalty_config_set_repetition_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float repetition_penalty) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -388,7 +418,7 @@ void litert_lm_repetition_penalty_config_set_repetition_penalty(
 
 void litert_lm_repetition_penalty_config_set_presence_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float presence_penalty) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -400,7 +430,7 @@ void litert_lm_repetition_penalty_config_set_presence_penalty(
 
 void litert_lm_repetition_penalty_config_set_frequency_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float frequency_penalty) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -412,7 +442,7 @@ void litert_lm_repetition_penalty_config_set_frequency_penalty(
 
 void litert_lm_repetition_penalty_config_set_window_size(
     LiteRtLmRepetitionPenaltyConfig* config, int window_size) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -435,7 +465,7 @@ void litert_lm_no_repeat_ngram_config_delete(
 
 void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
     LiteRtLmNoRepeatNgramConfig* config, int no_repeat_ngram_size) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -445,7 +475,7 @@ void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
 
 void litert_lm_no_repeat_ngram_config_set_window_size(
     LiteRtLmNoRepeatNgramConfig* config, int window_size) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -467,7 +497,7 @@ void litert_lm_suppress_tokens_config_delete(
 void litert_lm_suppress_tokens_config_set_suppress_tokens(
     LiteRtLmSuppressTokensConfig* config, const int* suppress_tokens,
     size_t num_tokens) {
-  if (!config) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
     return;
   }
 
@@ -479,6 +509,9 @@ void litert_lm_suppress_tokens_config_set_suppress_tokens(
 
   if (suppress_tokens == nullptr) {
     ABSL_LOG(ERROR) << "Suppress tokens are null but num_tokens is not 0.";
+    litert::lm::c::SetLastError(
+        absl::StatusCode::kInvalidArgument,
+        "suppress_tokens must not be NULL when num_tokens is non-zero.");
     return;
   }
 
@@ -546,7 +579,7 @@ void litert_lm_engine_settings_delete(LiteRtLmEngineSettings* settings) {
 
 void litert_lm_engine_settings_set_max_num_tokens(
     LiteRtLmEngineSettings* settings, int max_num_tokens) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
         max_num_tokens);
   }
@@ -554,7 +587,7 @@ void litert_lm_engine_settings_set_max_num_tokens(
 
 void litert_lm_engine_settings_set_num_threads(LiteRtLmEngineSettings* settings,
                                                int num_threads) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
     if (config.ok()) {
@@ -570,7 +603,7 @@ void litert_lm_engine_settings_set_num_threads(LiteRtLmEngineSettings* settings,
 
 void litert_lm_engine_settings_set_audio_num_threads(
     LiteRtLmEngineSettings* settings, int num_threads) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto& audio_settings =
         settings->settings->GetMutableAudioExecutorSettings();
     if (audio_settings.has_value()) {
@@ -581,7 +614,7 @@ void litert_lm_engine_settings_set_audio_num_threads(
 
 void litert_lm_engine_settings_set_parallel_file_section_loading(
     LiteRtLmEngineSettings* settings, bool parallel_file_section_loading) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->SetParallelFileSectionLoading(
         parallel_file_section_loading);
   }
@@ -589,14 +622,14 @@ void litert_lm_engine_settings_set_parallel_file_section_loading(
 
 void litert_lm_engine_settings_set_single_threaded_execution(
     LiteRtLmEngineSettings* settings, bool single_threaded_execution) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->SetSingleThreadedExecution(single_threaded_execution);
   }
 }
 
 void litert_lm_engine_settings_set_max_num_images(
     LiteRtLmEngineSettings* settings, int max_num_images) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableMainExecutorSettings().SetMaxNumImages(
         max_num_images);
   }
@@ -604,14 +637,15 @@ void litert_lm_engine_settings_set_max_num_images(
 
 void litert_lm_engine_settings_set_max_vision_tokens_per_image(
     LiteRtLmEngineSettings* settings, int max_vision_tokens_per_image) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->SetMaxVisionTokensPerImage(max_vision_tokens_per_image);
   }
 }
 
 void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
                                              const char* cache_dir) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings) &&
+      LITERT_LM_C_CHECK_NOT_NULL(cache_dir)) {
     settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
 
     if (settings->settings->GetVisionExecutorSettings().has_value()) {
@@ -628,7 +662,7 @@ void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
 
 void litert_lm_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEngineSettings* settings, const char* lib_dir) {
-  if (settings && settings->settings && lib_dir) {
+  if (IsValidEngineSettings(settings) && LITERT_LM_C_CHECK_NOT_NULL(lib_dir)) {
     settings->settings->GetMutableMainExecutorSettings()
         .SetLitertDispatchLibDir(lib_dir);
   }
@@ -636,14 +670,14 @@ void litert_lm_engine_settings_set_litert_dispatch_lib_dir(
 
 void litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableBenchmarkParams();
   }
 }
 
 void litert_lm_engine_settings_set_num_prefill_tokens(
     LiteRtLmEngineSettings* settings, int num_prefill_tokens) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableBenchmarkParams().set_num_prefill_tokens(
         num_prefill_tokens);
   }
@@ -651,7 +685,7 @@ void litert_lm_engine_settings_set_num_prefill_tokens(
 
 void litert_lm_engine_settings_set_num_decode_tokens(
     LiteRtLmEngineSettings* settings, int num_decode_tokens) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableBenchmarkParams().set_num_decode_tokens(
         num_decode_tokens);
   }
@@ -659,7 +693,7 @@ void litert_lm_engine_settings_set_num_decode_tokens(
 
 void litert_lm_engine_settings_set_enable_speculative_decoding(
     LiteRtLmEngineSettings* settings, bool enable_speculative_decoding) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto advanced_settings = main_settings.GetAdvancedSettings().value_or(
         litert::lm::AdvancedSettings());
@@ -670,7 +704,7 @@ void litert_lm_engine_settings_set_enable_speculative_decoding(
 
 void litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
     LiteRtLmEngineSettings* settings, int num_decode_steps_per_sync) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     // Note: This setting is currently only supported for the Artisan GPU
     // backend.
     auto backend_config =
@@ -687,7 +721,7 @@ void litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
 
 void litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
     LiteRtLmEngineSettings* settings, bool wait_for_weight_uploads) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     // Note: This setting is currently only supported for the Artisan GPU
     // backend.
     auto backend_config =
@@ -704,7 +738,7 @@ void litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
 
 void litert_lm_engine_settings_set_use_ringbuffers_local_attention(
     LiteRtLmEngineSettings* settings, bool use_ringbuffers_local_attention) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto config =
         main_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>();
@@ -725,7 +759,7 @@ void litert_lm_engine_settings_set_use_ringbuffers_local_attention(
 
 void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
                                              int lora_rank) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableMainExecutorSettings().SetLoraRank(lora_rank);
   }
 }
@@ -753,7 +787,7 @@ int litert_lm_engine_settings_set_supported_lora_ranks(
 
 void litert_lm_engine_settings_set_audio_lora_rank(
     LiteRtLmEngineSettings* settings, int lora_rank) {
-  if (settings && settings->settings &&
+  if (IsValidEngineSettings(settings) &&
       settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()->SetLoraRank(
         lora_rank);
@@ -790,7 +824,7 @@ int litert_lm_engine_settings_set_supported_audio_lora_ranks(
 void litert_lm_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
         static_cast<litert::lm::ActivationDataType>(activation_data_type));
   }
@@ -798,7 +832,7 @@ void litert_lm_engine_settings_set_activation_data_type(
 
 void litert_lm_engine_settings_set_prefill_chunk_size(
     LiteRtLmEngineSettings* settings, int prefill_chunk_size) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
     if (!config.ok()) {
@@ -813,7 +847,7 @@ void litert_lm_engine_settings_set_prefill_chunk_size(
 
 void litert_lm_engine_settings_set_enable_ynnpack(
     LiteRtLmEngineSettings* settings, bool enable_ynnpack) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
     if (!config.ok()) {
@@ -828,7 +862,7 @@ void litert_lm_engine_settings_set_enable_ynnpack(
 
 void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
     LiteRtLmEngineSettings* settings, bool enable_metal_residency_set) {
-  if (settings && settings->settings) {
+  if (IsValidEngineSettings(settings)) {
     auto advanced_settings = settings->settings->GetMainExecutorSettings()
                                  .GetAdvancedSettings()
                                  .value_or(litert::lm::AdvancedSettings());
@@ -903,6 +937,9 @@ void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }
 void litert_lm_session_cancel_process(LiteRtLmSession* session) {
   if (session && session->session) {
     session->session->CancelProcess();
+  } else {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
   }
 }
 
@@ -1098,7 +1135,7 @@ void litert_lm_responses_delete(LiteRtLmResponses* responses) {
 }
 
 int litert_lm_responses_get_num_candidates(const LiteRtLmResponses* responses) {
-  if (!responses) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses)) {
     return 0;
   }
   const auto& r = responses->responses;
@@ -1114,7 +1151,7 @@ int litert_lm_responses_get_num_candidates(const LiteRtLmResponses* responses) {
 
 const char* litert_lm_responses_get_response_text_at(
     const LiteRtLmResponses* responses, int index) {
-  if (!responses || index < 0 ||
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses) || index < 0 ||
       index >= responses->responses.GetTexts().size()) {
     return nullptr;
   }
@@ -1125,7 +1162,7 @@ const char* litert_lm_responses_get_response_text_at(
 
 bool litert_lm_responses_has_score_at(const LiteRtLmResponses* responses,
                                       int index) {
-  if (!responses || index < 0 ||
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses) || index < 0 ||
       index >= responses->responses.GetScores().size()) {
     return false;
   }
@@ -1142,8 +1179,9 @@ float litert_lm_responses_get_score_at(const LiteRtLmResponses* responses,
 
 bool litert_lm_responses_has_token_length_at(const LiteRtLmResponses* responses,
                                              int index) {
-  if (!responses || !responses->responses.GetTokenLengths().has_value() ||
-      index < 0 || index >= responses->responses.GetTokenLengths()->size()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses) ||
+      !responses->responses.GetTokenLengths().has_value() || index < 0 ||
+      index >= responses->responses.GetTokenLengths()->size()) {
     return false;
   }
   return true;
@@ -1159,8 +1197,9 @@ int litert_lm_responses_get_token_length_at(const LiteRtLmResponses* responses,
 
 bool litert_lm_responses_has_token_scores_at(const LiteRtLmResponses* responses,
                                              int index) {
-  if (!responses || !responses->responses.GetTokenScores().has_value() ||
-      index < 0 || index >= responses->responses.GetTokenScores()->size()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(responses) ||
+      !responses->responses.GetTokenScores().has_value() || index < 0 ||
+      index >= responses->responses.GetTokenScores()->size()) {
     return false;
   }
   return true;
@@ -1205,7 +1244,7 @@ void litert_lm_benchmark_info_delete(LiteRtLmBenchmarkInfo* benchmark_info) {
 
 double litert_lm_benchmark_info_get_time_to_first_token(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetTimeToFirstToken();
@@ -1213,7 +1252,7 @@ double litert_lm_benchmark_info_get_time_to_first_token(
 
 double litert_lm_benchmark_info_get_total_init_time_in_second(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0.0;
   }
   double total_init_time_ms = 0.0;
@@ -1225,7 +1264,7 @@ double litert_lm_benchmark_info_get_total_init_time_in_second(
 
 int litert_lm_benchmark_info_get_num_prefill_turns(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0;
   }
   return benchmark_info->benchmark_info.GetTotalPrefillTurns();
@@ -1233,7 +1272,7 @@ int litert_lm_benchmark_info_get_num_prefill_turns(
 
 int litert_lm_benchmark_info_get_num_decode_turns(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0;
   }
   return benchmark_info->benchmark_info.GetTotalDecodeTurns();
@@ -1241,11 +1280,12 @@ int litert_lm_benchmark_info_get_num_decode_turns(
 
 int litert_lm_benchmark_info_get_prefill_token_count_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0;
   }
   auto turn = benchmark_info->benchmark_info.GetPrefillTurn(index);
   if (!turn.ok()) {
+    litert::lm::c::SetLastError(turn.status());
     return 0;
   }
   return static_cast<int>(turn->num_tokens);
@@ -1253,11 +1293,12 @@ int litert_lm_benchmark_info_get_prefill_token_count_at(
 
 int litert_lm_benchmark_info_get_decode_token_count_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0;
   }
   auto turn = benchmark_info->benchmark_info.GetDecodeTurn(index);
   if (!turn.ok()) {
+    litert::lm::c::SetLastError(turn.status());
     return 0;
   }
   return static_cast<int>(turn->num_tokens);
@@ -1265,7 +1306,7 @@ int litert_lm_benchmark_info_get_decode_token_count_at(
 
 double litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetPrefillTokensPerSec(index);
@@ -1273,7 +1314,7 @@ double litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
 
 double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
-  if (!benchmark_info) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(benchmark_info)) {
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetDecodeTokensPerSec(index);
@@ -1303,7 +1344,7 @@ void litert_lm_tokenize_result_delete(LiteRtLmTokenizeResult* result) {
 
 const int* litert_lm_tokenize_result_get_tokens(
     const LiteRtLmTokenizeResult* result) {
-  if (!result) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(result)) {
     return nullptr;
   }
   return result->tokens.data();
@@ -1311,7 +1352,7 @@ const int* litert_lm_tokenize_result_get_tokens(
 
 size_t litert_lm_tokenize_result_get_num_tokens(
     const LiteRtLmTokenizeResult* result) {
-  if (!result) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(result)) {
     return 0;
   }
   return result->tokens.size();
@@ -1343,7 +1384,7 @@ void litert_lm_detokenize_result_delete(LiteRtLmDetokenizeResult* result) {
 
 const char* litert_lm_detokenize_result_get_string(
     const LiteRtLmDetokenizeResult* result) {
-  if (!result) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(result)) {
     return nullptr;
   }
   return result->text.c_str();
@@ -1355,7 +1396,8 @@ void litert_lm_token_union_delete(LiteRtLmTokenUnion* token_union) {
 
 LiteRtLmTokenUnionType litert_lm_token_union_get_type(
     const LiteRtLmTokenUnion* token_union) {
-  if (token_union && token_union->token_union.has_token_str()) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(token_union) &&
+      token_union->token_union.has_token_str()) {
     return kLiteRtLmTokenUnionTypeString;
   }
   return kLiteRtLmTokenUnionTypeIds;
@@ -1363,7 +1405,8 @@ LiteRtLmTokenUnionType litert_lm_token_union_get_type(
 
 const char* litert_lm_token_union_get_string(
     const LiteRtLmTokenUnion* token_union) {
-  if (token_union && token_union->token_union.has_token_str()) {
+  if (LITERT_LM_C_CHECK_NOT_NULL(token_union) &&
+      token_union->token_union.has_token_str()) {
     return token_union->token_union.token_str().c_str();
   }
   return nullptr;
@@ -1390,7 +1433,7 @@ void litert_lm_token_unions_delete(LiteRtLmTokenUnions* tokens) {
 
 size_t litert_lm_token_unions_get_num_tokens(
     const LiteRtLmTokenUnions* tokens) {
-  if (!tokens) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(tokens)) {
     return 0;
   }
   return tokens->tokens.size();
@@ -1398,7 +1441,10 @@ size_t litert_lm_token_unions_get_num_tokens(
 
 LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
     const LiteRtLmTokenUnions* tokens, size_t index) {
-  if (!tokens || index >= tokens->tokens.size()) {
+  if (!LITERT_LM_C_CHECK_NOT_NULL(tokens)) {
+    return nullptr;
+  }
+  if (index >= tokens->tokens.size()) {
     litert::lm::c::SetLastError(absl::StatusCode::kOutOfRange,
                                 "Token index out of range.");
     return nullptr;
