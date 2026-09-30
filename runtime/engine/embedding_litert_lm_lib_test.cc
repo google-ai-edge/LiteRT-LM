@@ -97,5 +97,10 @@ TEST(EmbeddingLiteRtLmLibTest, GlobalSetEmbeddingFlag) {
       absl::IsNotFound(SetEmbeddingFlag("completely_unknown_flag", "val")));
 }
 
+TEST(EmbeddingLiteRtLmLibTest, RunEmbeddingEmptyModelPathFails) {
+  EmbeddingLiteRtLmSettings settings;
+  EXPECT_TRUE(absl::IsInvalidArgument(RunEmbedding(settings)));
+}
+
 }  // namespace
 }  // namespace litert::lm

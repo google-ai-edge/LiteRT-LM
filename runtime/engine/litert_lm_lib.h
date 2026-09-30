@@ -155,6 +155,7 @@ struct LitertLmMetrics {
   std::optional<BenchmarkInfo> benchmark_info;
   float peak_mem_mb = 0.0f;
   float peak_private_mb = 0.0f;
+  float peak_dmabuf_mb = 0.0f;
 };
 
 // Aggregated (median) statistics of the metrics collected over multiple
@@ -176,6 +177,7 @@ struct AggregatedLitertLmMetrics {
   // Median peak memory usage, in MB.
   std::optional<float> peak_mem_mb;
   std::optional<float> peak_private_mb;
+  std::optional<float> peak_dmabuf_mb;
 };
 
 // Computes the median of each benchmark metric across the per-iteration
