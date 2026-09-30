@@ -471,6 +471,7 @@ cc_test(
         ":error_reporter_internal",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
     ],
 )
 

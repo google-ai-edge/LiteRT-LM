@@ -110,6 +110,20 @@ void SetLastError(absl::StatusCode code, absl::string_view message) {
   error.message = std::string(message);
 }
 
+LiteRtLmStatusCode ToCStatus(const absl::Status& status) {
+  if (status.ok()) {
+    return kLiteRtLmStatusOk;
+  }
+  SetLastError(status);
+  return ToLiteRtLmStatusCode(status.code());
+}
+
+LiteRtLmStatusCode ReturnError(absl::StatusCode code,
+                               absl::string_view message) {
+  SetLastError(code, message);
+  return ToLiteRtLmStatusCode(code);
+}
+
 }  // namespace litert::lm::c
 
 extern "C" {

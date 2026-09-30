@@ -16,10 +16,12 @@
 
 #include <string>
 #include <thread>  // NOLINT
+#include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "c/engine.h"
 #include "c/error_reporter_internal.h"
 
@@ -109,6 +111,93 @@ TEST(ErrorReporterTest, ThreadIsolation) {
   // thread.
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
+}
+
+TEST(ErrorReporterTest, ToCStatusRecordsErrorAndReturnsCode) {
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert::lm::c::ToCStatus(absl::NotFoundError("missing file")),
+            kLiteRtLmStatusNotFound);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusNotFound);
+  EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("missing file"));
+}
+
+TEST(ErrorReporterTest, ToCStatusOkDoesNotClearPriorError) {
+  litert::lm::c::SetLastError(absl::InternalError("earlier failure"));
+  EXPECT_EQ(litert::lm::c::ToCStatus(absl::OkStatus()), kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInternal);
+  EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("earlier failure"));
+}
+
+TEST(ErrorReporterTest, ReturnErrorRecordsErrorAndReturnsCode) {
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert::lm::c::ReturnError(absl::StatusCode::kOutOfRange,
+                                       "index 3 out of range"),
+            kLiteRtLmStatusOutOfRange);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOutOfRange);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("index 3 out of range"));
+}
+
+LiteRtLmStatusCode ReturnIfNullEntryPoint(const int* arg) {
+  LITERT_LM_C_RETURN_IF_NULL(arg);
+  return kLiteRtLmStatusOk;
+}
+
+TEST(ErrorReporterTest, ReturnIfNullMacro) {
+  litert_lm_clear_last_error();
+  int value = 0;
+  EXPECT_EQ(ReturnIfNullEntryPoint(&value), kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
+
+  EXPECT_EQ(ReturnIfNullEntryPoint(nullptr), kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("arg must not be NULL"));
+}
+
+LiteRtLmStatusCode ReturnIfErrorEntryPoint(const absl::Status& status,
+                                           bool* reached_end) {
+  LITERT_LM_C_RETURN_IF_ERROR(status);
+  *reached_end = true;
+  return kLiteRtLmStatusOk;
+}
+
+TEST(ErrorReporterTest, ReturnIfErrorMacro) {
+  litert_lm_clear_last_error();
+  bool reached_end = false;
+  EXPECT_EQ(ReturnIfErrorEntryPoint(absl::OkStatus(), &reached_end),
+            kLiteRtLmStatusOk);
+  EXPECT_TRUE(reached_end);
+
+  reached_end = false;
+  EXPECT_EQ(
+      ReturnIfErrorEntryPoint(absl::UnavailableError("busy"), &reached_end),
+      kLiteRtLmStatusUnavailable);
+  EXPECT_FALSE(reached_end);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusUnavailable);
+  EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("busy"));
+}
+
+LiteRtLmStatusCode AssignOrReturnEntryPoint(absl::StatusOr<std::string> input,
+                                            std::string* out) {
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::string value, std::move(input));
+  LITERT_LM_C_ASSIGN_OR_RETURN(*out, absl::StatusOr<std::string>(value + "!"));
+  return kLiteRtLmStatusOk;
+}
+
+TEST(ErrorReporterTest, AssignOrReturnMacro) {
+  litert_lm_clear_last_error();
+  std::string out;
+  EXPECT_EQ(AssignOrReturnEntryPoint(std::string("hi"), &out),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(out, "hi!");
+
+  out.clear();
+  EXPECT_EQ(AssignOrReturnEntryPoint(absl::DataLossError("corrupt"), &out),
+            kLiteRtLmStatusDataLoss);
+  EXPECT_TRUE(out.empty());
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusDataLoss);
+  EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("corrupt"));
 }
 
 }  // namespace
