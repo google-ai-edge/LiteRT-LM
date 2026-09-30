@@ -56,6 +56,7 @@
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/model_utils.h"
+#include "omni/omni_engine.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/framework/threadpool.h"
@@ -72,6 +73,18 @@ constexpr int kDefaultMaxOutputTokens = 128;
 bool FileExists(absl::string_view path) {
   std::ifstream f(std::string(path).c_str());
   return f.good();
+}
+
+lm::Backend ToLmBackend(OmniEngine::Options::Backend backend) {
+  switch (backend) {
+    case OmniEngine::Options::Backend::kGpu:
+      return lm::Backend::GPU;
+    case OmniEngine::Options::Backend::kNpu:
+      return lm::Backend::NPU;
+    case OmniEngine::Options::Backend::kCpu:
+    default:
+      return lm::Backend::CPU;
+  }
 }
 
 }  // namespace
@@ -110,7 +123,7 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
                             options.GetOptions<::litert::CpuOptions>());
     cpu_options.SetNumThreads(config.num_threads);
   }
-  if (config.backend == AsrEngineConfig::Backend::kGpu) {
+  if (config.backend == OmniEngine::Options::Backend::kGpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kGpu);
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
                             options.GetOptions<::litert::GpuOptions>());
@@ -120,7 +133,7 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
       gpu_options.AddExternalTensorPattern(pattern.c_str());
       gpu_options.AddBufferStorageTensorPattern(pattern.c_str());
     }
-  } else if (config.backend == AsrEngineConfig::Backend::kNpu) {
+  } else if (config.backend == OmniEngine::Options::Backend::kNpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kNpu);
     LITERT_ASSIGN_OR_RETURN(
         auto& qnn_options,
@@ -159,13 +172,7 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   config.decoder_type = AsrEngineConfig::DecoderType::kLm;
 
   ModelOptions lm_options;
-  if (config.backend == AsrEngineConfig::Backend::kGpu) {
-    lm_options.backend = lm::Backend::GPU;
-  } else if (config.backend == AsrEngineConfig::Backend::kNpu) {
-    lm_options.backend = lm::Backend::NPU;
-  } else {
-    lm_options.backend = lm::Backend::CPU;
-  }
+  lm_options.backend = ToLmBackend(config.backend);
   lm_options.num_threads = config.num_threads;
   lm_options.cache_dir = config.cache_dir;
 

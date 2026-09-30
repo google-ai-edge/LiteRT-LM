@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -29,6 +30,7 @@
 #include "omni/asr/log_mel_spectrogram_processor.h"
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "omni/omni_engine.h"
 #include "runtime/framework/threadpool.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -40,12 +42,6 @@ struct AsrEngineConfig {
     kTdt = 1,
     kStateless = 2,
     kLm = 3,
-  };
-
-  enum class Backend {
-    kCpu = 0,
-    kGpu = 1,
-    kNpu = 2,
   };
 
   enum class TextMergerType {
@@ -63,7 +59,7 @@ struct AsrEngineConfig {
   int input_milliseconds = 5000;
 
   DecoderType decoder_type = DecoderType::kTdt;
-  Backend backend = Backend::kCpu;
+  OmniEngine::Options::Backend backend = OmniEngine::Options::Backend::kCpu;
   TextMergerType text_merger_type = TextMergerType::kTimestamp;
   int num_threads = 4;
   float overlap_ratio = 0.4f;

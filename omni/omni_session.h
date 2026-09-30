@@ -16,10 +16,8 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_OMNI_SESSION_H_
 
 #include <memory>
-#include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -38,27 +36,15 @@ class OmniSession {
   // Sentinel input indicating the end of the input stream.
   struct EndOfInput {};
 
-  // Text input payload for TTS synthesis.
-  struct TextInput {
-    std::string text;
-  };
-
-  // Audio input metadata for ASR transcription applied to all following
-  // AudioInput until another AudioInputMetadata is pushed.
-  struct AudioInputMetadata {
-    int sample_rate_hz = 16000;
-    int num_channels = 1;
-  };
-
-  // Audio input payload for ASR transcription.
-  struct AudioInput {
-    std::vector<float> pcm_samples;
-  };
+  using TextInput = ::litert::omni::TextInput;
+  using AudioInputMetadata = ::litert::omni::AudioInputMetadata;
+  using AudioInput = ::litert::omni::AudioInput;
+  using ImageGenInputMetadata = ::litert::omni::ImageGenInputMetadata;
 
   // Unified input variant for InputSource. Note that `EndOfInput` is the first
   // alternative, so a default-constructed `Input` represents `EndOfInput`.
-  using Input =
-      std::variant<EndOfInput, TextInput, AudioInputMetadata, AudioInput>;
+  using Input = std::variant<EndOfInput, TextInput, AudioInputMetadata,
+                             AudioInput, ImageGenInputMetadata>;
 
   // Base stage producing `Input` items for an `OmniSession`.
   class InputSource : public SingleThreadedStageWithDeque<Input> {
@@ -75,7 +61,9 @@ class OmniSession {
 
   using TextOutput = asr::TextMerger::MergeResult;
   using AudioOutput = ::litert::omni::AudioOutput;
-  using Output = std::variant<EndOfOutput, TextOutput, AudioOutput>;
+  using ImageOutput = ::litert::omni::ImageOutput;
+  using Output =
+      std::variant<EndOfOutput, TextOutput, AudioOutput, ImageOutput>;
   using OutputCallback =
       absl::AnyInvocable<absl::Status(absl::StatusOr<Output>)>;
 

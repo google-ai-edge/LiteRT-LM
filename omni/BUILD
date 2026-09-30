@@ -32,6 +32,17 @@ cc_library(
 )
 
 cc_library(
+    name = "omni_engine_header",
+    hdrs = ["omni_engine.h"],
+    deps = [
+        ":omni_session",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
     name = "omni_engine",
     srcs = ["omni_engine.cc"],
     hdrs = ["omni_engine.h"],

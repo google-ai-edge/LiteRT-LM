@@ -36,6 +36,7 @@
 #include "omni/asr/asr_engine.h"
 #include "omni/asr/file_audio_source.h"
 #include "omni/asr/model_metadata.h"
+#include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 
 ABSL_FLAG(std::string, model_name, "parakeet-tdt-0.6b-v3",
@@ -113,11 +114,11 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   }
 
   if (backend_flag == "gpu") {
-    config.backend = litert::omni::asr::AsrEngineConfig::Backend::kGpu;
+    config.backend = litert::omni::OmniEngine::Options::Backend::kGpu;
   } else if (backend_flag == "npu") {
-    config.backend = litert::omni::asr::AsrEngineConfig::Backend::kNpu;
+    config.backend = litert::omni::OmniEngine::Options::Backend::kNpu;
   } else {
-    config.backend = litert::omni::asr::AsrEngineConfig::Backend::kCpu;
+    config.backend = litert::omni::OmniEngine::Options::Backend::kCpu;
   }
 
   std::string model_ext =

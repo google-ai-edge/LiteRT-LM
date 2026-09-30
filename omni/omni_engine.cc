@@ -39,20 +39,7 @@
 namespace litert::omni {
 namespace {
 
-asr::AsrEngineConfig::Backend ToAsrBackend(
-    OmniEngine::Options::Backend backend) {
-  switch (backend) {
-    case OmniEngine::Options::Backend::kGpu:
-      return asr::AsrEngineConfig::Backend::kGpu;
-    case OmniEngine::Options::Backend::kNpu:
-      return asr::AsrEngineConfig::Backend::kNpu;
-    case OmniEngine::Options::Backend::kCpu:
-    default:
-      return asr::AsrEngineConfig::Backend::kCpu;
-  }
-}
-
-lm::Backend ToTtsBackend(OmniEngine::Options::Backend backend) {
+lm::Backend ToBackend(OmniEngine::Options::Backend backend) {
   switch (backend) {
     case OmniEngine::Options::Backend::kGpu:
       return lm::Backend::GPU;
@@ -66,7 +53,7 @@ lm::Backend ToTtsBackend(OmniEngine::Options::Backend backend) {
 
 void ApplyOptionsToAsrConfig(const OmniEngine::Options& options,
                              asr::AsrEngineConfig& asr_config) {
-  asr_config.backend = ToAsrBackend(options.backend);
+  asr_config.backend = options.backend;
   if (!options.cache_dir.empty()) {
     asr_config.cache_dir = options.cache_dir;
   }
@@ -97,7 +84,7 @@ tts::TtsEngineSettings BuildTtsSettings(absl::string_view model_folder,
   tts::TtsEngineSettings tts_settings;
   tts_settings.model_folder = std::string(model_folder);
   tts_settings.cache_dir = options.cache_dir;
-  tts_settings.backend = ToTtsBackend(options.backend);
+  tts_settings.backend = ToBackend(options.backend);
   if (options.num_threads > 0) {
     tts_settings.num_threads = options.num_threads;
   }
