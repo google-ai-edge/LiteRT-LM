@@ -307,6 +307,23 @@ ModelResourcesLitertLm::GetAsrMetadata() {
   return asr_metadata_.get();
 }
 
+absl::StatusOr<const proto::ImageGenMetadata*>
+ModelResourcesLitertLm::GetImageGenMetadata() {
+  if (image_gen_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetImageGenMetadata();
+    if (!buffer_ref.has_value()) {
+      return absl::NotFoundError("No ImageGenMetadata found in the model.");
+    }
+    auto image_gen_metadata = std::make_unique<proto::ImageGenMetadata>();
+    if (!image_gen_metadata->ParseFromArray(buffer_ref->Data(),
+                                            buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse ImageGenMetadata");
+    }
+    image_gen_metadata_ = std::move(image_gen_metadata);
+  }
+  return image_gen_metadata_.get();
+}
+
 absl::StatusOr<absl::string_view>
 ModelResourcesLitertLm::GetGenericBinaryDataBuffer(absl::string_view name) {
   auto buffer_ref = litert_lm_loader_->GetGenericBinaryData(name);

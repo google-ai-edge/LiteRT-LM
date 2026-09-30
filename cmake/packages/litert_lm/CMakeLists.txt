@@ -146,6 +146,8 @@ set(LITERTLM_PROTO_FILES
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_model_type.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/engine.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/image_gen_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/image_gen_model_type.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/litert_lm_metrics.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_model_type.proto"
