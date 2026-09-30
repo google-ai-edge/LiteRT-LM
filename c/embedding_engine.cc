@@ -28,6 +28,7 @@
 #include "c/embedding_engine_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
@@ -68,6 +69,27 @@ bool IsValidEmbeddingEngineSettings(
   }
   litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
                               "Invalid embedding engine settings.");
+  return false;
+}
+
+bool IsValidActivationDataType(LiteRtLmActivationDataType type) {
+  switch (type) {
+    case kLiteRtLmActivationDataTypeFloat32:
+    case kLiteRtLmActivationDataTypeFloat16:
+    case kLiteRtLmActivationDataTypeInt16:
+    case kLiteRtLmActivationDataTypeInt8:
+      return true;
+  }
+  return false;
+}
+
+bool IsValidInputOverflowStrategy(LiteRtLmInputOverflowStrategy strategy) {
+  switch (strategy) {
+    case kLiteRtLmInputOverflowStrategyChunkAndAverage:
+    case kLiteRtLmInputOverflowStrategyTruncate:
+    case kLiteRtLmInputOverflowStrategyError:
+      return true;
+  }
   return false;
 }
 
@@ -163,113 +185,151 @@ void litert_lm_embedding_engine_settings_delete(
   delete settings;
 }
 
-void litert_lm_embedding_engine_settings_set_num_threads(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads) {
-  if (IsValidEmbeddingEngineSettings(settings) && num_threads > 0) {
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  // A non-positive value is ignored.
+  if (num_threads > 0) {
     settings->settings->GetMutableMainExecutorSettings().SetNumThreads(
         num_threads);
   }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_audio_num_threads(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_audio_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads) {
-  if (IsValidEmbeddingEngineSettings(settings) && num_threads > 0 &&
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  // A non-positive value, or no audio executor, makes this a no-op.
+  if (num_threads > 0 &&
       settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()->SetNumThreads(
         num_threads);
   }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_cache_dir(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_cache_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* cache_dir) {
-  if (IsValidEmbeddingEngineSettings(settings) &&
-      LITERT_LM_C_CHECK_NOT_NULL(cache_dir)) {
-    settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
-    if (settings->settings->GetVisionExecutorSettings().has_value()) {
-      settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
-          cache_dir);
-    }
-    if (settings->settings->GetAudioExecutorSettings().has_value()) {
-      settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
-          cache_dir);
-    }
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(cache_dir);
+  settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
+  if (settings->settings->GetVisionExecutorSettings().has_value()) {
+    settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
+        cache_dir);
+  }
+  if (settings->settings->GetAudioExecutorSettings().has_value()) {
+    settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
+        cache_dir);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir) {
-  if (IsValidEmbeddingEngineSettings(settings) &&
-      LITERT_LM_C_CHECK_NOT_NULL(lib_dir)) {
-    settings->settings->GetMutableMainExecutorSettings()
-        .SetLitertDispatchLibDir(lib_dir);
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(lib_dir);
+  settings->settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+      lib_dir);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir) {
-  if (IsValidEmbeddingEngineSettings(settings) &&
-      LITERT_LM_C_CHECK_NOT_NULL(lib_dir) &&
-      settings->settings->GetVisionExecutorSettings().has_value()) {
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  LITERT_LM_C_RETURN_IF_NULL(lib_dir);
+  // No-op if no vision executor is configured.
+  if (settings->settings->GetVisionExecutorSettings().has_value()) {
     settings->settings->GetMutableVisionExecutorSettings()
         ->SetLitertDispatchLibDir(lib_dir);
   }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir) {
-  if (IsValidEmbeddingEngineSettings(settings) &&
-      LITERT_LM_C_CHECK_NOT_NULL(lib_dir) &&
-      settings->settings->GetAudioExecutorSettings().has_value()) {
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  LITERT_LM_C_RETURN_IF_NULL(lib_dir);
+  // No-op if no audio executor is configured.
+  if (settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()
         ->SetLitertDispatchLibDir(lib_dir);
   }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_max_input_length(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_max_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int max_input_length) {
-  if (IsValidEmbeddingEngineSettings(settings)) {
-    if (max_input_length > 0) {
-      settings->settings->SetMaxInputLength(max_input_length);
-    } else {
-      settings->settings->SetMaxInputLength(std::nullopt);
-    }
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  if (max_input_length > 0) {
+    settings->settings->SetMaxInputLength(max_input_length);
+  } else {
+    settings->settings->SetMaxInputLength(std::nullopt);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_min_input_length(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_min_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int min_input_length) {
-  if (IsValidEmbeddingEngineSettings(settings)) {
-    if (min_input_length >= 0) {
-      settings->settings->SetMinInputLength(min_input_length);
-    } else {
-      settings->settings->SetMinInputLength(std::nullopt);
-    }
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  if (min_input_length >= 0) {
+    settings->settings->SetMinInputLength(min_input_length);
+  } else {
+    settings->settings->SetMinInputLength(std::nullopt);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
     LiteRtLmEmbeddingEngineSettings* settings, int vision_tokens_per_image) {
-  if (IsValidEmbeddingEngineSettings(settings)) {
-    if (vision_tokens_per_image > 0) {
-      settings->settings->SetVisionTokensPerImage(vision_tokens_per_image);
-    } else {
-      settings->settings->SetVisionTokensPerImage(std::nullopt);
-    }
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  if (vision_tokens_per_image > 0) {
+    settings->settings->SetVisionTokensPerImage(vision_tokens_per_image);
+  } else {
+    settings->settings->SetVisionTokensPerImage(std::nullopt);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_embedding_engine_settings_set_activation_data_type(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_activation_data_type(
     LiteRtLmEmbeddingEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type) {
-  if (IsValidEmbeddingEngineSettings(settings)) {
-    settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
-        static_cast<litert::lm::ActivationDataType>(activation_data_type));
-    if (settings->settings->GetVisionExecutorSettings().has_value()) {
-      settings->settings->GetMutableVisionExecutorSettings()
-          ->SetActivationDataType(static_cast<litert::lm::ActivationDataType>(
-              activation_data_type));
-    }
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  if (!IsValidActivationDataType(activation_data_type)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmActivationDataType.");
+  }
+  settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
+      static_cast<litert::lm::ActivationDataType>(activation_data_type));
+  if (settings->settings->GetVisionExecutorSettings().has_value()) {
+    settings->settings->GetMutableVisionExecutorSettings()
+        ->SetActivationDataType(
+            static_cast<litert::lm::ActivationDataType>(activation_data_type));
+  }
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmEmbeddingOptions* litert_lm_embedding_options_create(void) {
@@ -280,11 +340,11 @@ void litert_lm_embedding_options_delete(LiteRtLmEmbeddingOptions* options) {
   delete options;
 }
 
-void litert_lm_embedding_options_set_normalize(
+LiteRtLmStatusCode litert_lm_embedding_options_set_normalize(
     LiteRtLmEmbeddingOptions* options, bool normalize) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
-    options->options.normalize = normalize;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(options);
+  options->options.normalize = normalize;
+  return kLiteRtLmStatusOk;
 }
 
 bool litert_lm_embedding_options_get_normalize(
@@ -295,11 +355,11 @@ bool litert_lm_embedding_options_get_normalize(
   return options->options.normalize;
 }
 
-void litert_lm_embedding_options_set_insert_special_tokens(
+LiteRtLmStatusCode litert_lm_embedding_options_set_insert_special_tokens(
     LiteRtLmEmbeddingOptions* options, bool insert_special_tokens) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
-    options->options.insert_special_tokens = insert_special_tokens;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(options);
+  options->options.insert_special_tokens = insert_special_tokens;
+  return kLiteRtLmStatusOk;
 }
 
 bool litert_lm_embedding_options_get_insert_special_tokens(
@@ -310,12 +370,16 @@ bool litert_lm_embedding_options_get_insert_special_tokens(
   return options->options.insert_special_tokens;
 }
 
-void litert_lm_embedding_options_set_input_overflow_strategy(
+LiteRtLmStatusCode litert_lm_embedding_options_set_input_overflow_strategy(
     LiteRtLmEmbeddingOptions* options, LiteRtLmInputOverflowStrategy strategy) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
-    options->options.input_overflow_strategy =
-        static_cast<litert::lm::InputOverflowStrategy>(strategy);
+  LITERT_LM_C_RETURN_IF_NULL(options);
+  if (!IsValidInputOverflowStrategy(strategy)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmInputOverflowStrategy.");
   }
+  options->options.input_overflow_strategy =
+      static_cast<litert::lm::InputOverflowStrategy>(strategy);
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmInputOverflowStrategy
@@ -328,15 +392,15 @@ litert_lm_embedding_options_get_input_overflow_strategy(
       options->options.input_overflow_strategy);
 }
 
-void litert_lm_embedding_options_set_output_size(
+LiteRtLmStatusCode litert_lm_embedding_options_set_output_size(
     LiteRtLmEmbeddingOptions* options, int output_size) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
-    if (output_size <= 0) {
-      options->options.output_size = std::nullopt;
-    } else {
-      options->options.output_size = output_size;
-    }
+  LITERT_LM_C_RETURN_IF_NULL(options);
+  if (output_size <= 0) {
+    options->options.output_size = std::nullopt;
+  } else {
+    options->options.output_size = output_size;
   }
+  return kLiteRtLmStatusOk;
 }
 
 int litert_lm_embedding_options_get_output_size(
@@ -348,15 +412,15 @@ int litert_lm_embedding_options_get_output_size(
   return *options->options.output_size;
 }
 
-void litert_lm_embedding_options_set_vision_tokens_per_image(
+LiteRtLmStatusCode litert_lm_embedding_options_set_vision_tokens_per_image(
     LiteRtLmEmbeddingOptions* options, int vision_tokens_per_image) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(options)) {
-    if (vision_tokens_per_image > 0) {
-      options->options.vision_tokens_per_image = vision_tokens_per_image;
-    } else {
-      options->options.vision_tokens_per_image = std::nullopt;
-    }
+  LITERT_LM_C_RETURN_IF_NULL(options);
+  if (vision_tokens_per_image > 0) {
+    options->options.vision_tokens_per_image = vision_tokens_per_image;
+  } else {
+    options->options.vision_tokens_per_image = std::nullopt;
   }
+  return kLiteRtLmStatusOk;
 }
 
 int litert_lm_embedding_options_get_vision_tokens_per_image(

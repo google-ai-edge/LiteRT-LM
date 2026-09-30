@@ -20,9 +20,13 @@
 #include <stdint.h>
 
 #if defined(__APPLE__)
-#include "engine.h"  // NOLINT
+#include "api_export.h"      // NOLINT
+#include "engine.h"          // NOLINT
+#include "error_reporter.h"  // NOLINT
 #else
+#include "c/api_export.h"
 #include "c/engine.h"
+#include "c/error_reporter.h"
 #endif
 
 #ifdef __cplusplus
@@ -96,10 +100,14 @@ void litert_lm_embedding_engine_settings_delete(
 //
 // @param settings The embedding engine settings.
 // @param num_threads The number of threads.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If `num_threads` is not positive, this call has no
+//   effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_num_threads(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads);
 
 // Sets the number of threads for the audio CPU backend in Embedding Engine
@@ -107,50 +115,71 @@ void litert_lm_embedding_engine_settings_set_num_threads(
 //
 // @param settings The embedding engine settings.
 // @param num_threads The number of threads.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If `num_threads` is not positive or no audio backend is
+//   configured, this call has no effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_audio_num_threads(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_audio_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads);
 
 // Sets the cache directory for the Embedding Engine.
 //
 // @param settings The embedding engine settings.
 // @param cache_dir The cache directory.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `cache_dir` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_cache_dir(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_cache_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* cache_dir);
 
 // Sets the LiteRT dispatch library directory for the main NPU backend.
 //
 // @param settings The embedding engine settings.
 // @param lib_dir The dispatch library directory.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `lib_dir` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir);
 
 // Sets the LiteRT dispatch library directory for the vision NPU backend.
 //
 // @param settings The embedding engine settings.
 // @param lib_dir The dispatch library directory.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `lib_dir` is NULL. If no vision backend is configured, this
+//   call has no effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir);
 
 // Sets the LiteRT dispatch library directory for the audio NPU backend.
 //
 // @param settings The embedding engine settings.
 // @param lib_dir The dispatch library directory.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `lib_dir` is NULL. If no audio backend is configured, this
+//   call has no effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir);
 
 // Sets the maximum sequence length (in tokens) for text encoder signatures in
@@ -159,10 +188,13 @@ void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
 // @param settings The embedding engine settings.
 // @param max_input_length The maximum input length. Passing a non-positive
 //   value unsets the option.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_max_input_length(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_max_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int max_input_length);
 
 // Sets the minimum sequence length (in tokens) for text encoder signatures in
@@ -171,10 +203,13 @@ void litert_lm_embedding_engine_settings_set_max_input_length(
 // @param settings The embedding engine settings.
 // @param min_input_length The minimum input length. Passing a negative
 //   value unsets the option.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_min_input_length(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_min_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int min_input_length);
 
 // Sets the desired number of vision tokens generated per image in Embedding
@@ -183,10 +218,14 @@ void litert_lm_embedding_engine_settings_set_min_input_length(
 // @param settings The embedding engine settings.
 // @param vision_tokens_per_image The vision tokens per image. Passing a
 //   non-positive value unsets the option.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
+LiteRtLmStatusCode
+litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
     LiteRtLmEmbeddingEngineSettings* settings, int vision_tokens_per_image);
 
 // Sets the activation data type for the embedding engine settings.
@@ -194,10 +233,14 @@ void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
 // @param settings The embedding engine settings.
 // @param activation_data_type The activation data type (FLOAT32, FLOAT16,
 // etc.).
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL or `activation_data_type` is not a declared
+//   LiteRtLmActivationDataType value.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_engine_settings_set_activation_data_type(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_activation_data_type(
     LiteRtLmEmbeddingEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type);
 
@@ -223,10 +266,13 @@ void litert_lm_embedding_options_delete(LiteRtLmEmbeddingOptions* options);
 //
 // @param options The options to modify.
 // @param normalize Whether to normalize.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `options` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_options_set_normalize(
+LiteRtLmStatusCode litert_lm_embedding_options_set_normalize(
     LiteRtLmEmbeddingOptions* options, bool normalize);
 
 // Gets whether the embedding should be L2 normalized.
@@ -244,10 +290,13 @@ bool litert_lm_embedding_options_get_normalize(
 //
 // @param options The options to modify.
 // @param insert_special_tokens Whether to insert special tokens.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `options` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_options_set_insert_special_tokens(
+LiteRtLmStatusCode litert_lm_embedding_options_set_insert_special_tokens(
     LiteRtLmEmbeddingOptions* options, bool insert_special_tokens);
 
 // Gets whether special tokens should be automatically inserted.
@@ -264,10 +313,14 @@ bool litert_lm_embedding_options_get_insert_special_tokens(
 //
 // @param options The options to modify.
 // @param strategy The overflow strategy to use.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `options` is NULL or `strategy` is not a declared
+//   LiteRtLmInputOverflowStrategy value.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_options_set_input_overflow_strategy(
+LiteRtLmStatusCode litert_lm_embedding_options_set_input_overflow_strategy(
     LiteRtLmEmbeddingOptions* options, LiteRtLmInputOverflowStrategy strategy);
 
 // Gets the input overflow strategy.
@@ -287,10 +340,13 @@ litert_lm_embedding_options_get_input_overflow_strategy(
 // @param output_size The output embedding size to truncate to. Pass 0 or a
 //   negative value (e.g., 0 or -1) to unset and use the default output
 //   embedding size.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `options` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_options_set_output_size(
+LiteRtLmStatusCode litert_lm_embedding_options_set_output_size(
     LiteRtLmEmbeddingOptions* options, int output_size);
 
 // Gets the output embedding size.
@@ -308,10 +364,13 @@ int litert_lm_embedding_options_get_output_size(
 // @param options The options to modify.
 // @param vision_tokens_per_image The number of vision tokens per image. Passing
 //   a non-positive value unsets the option.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `options` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_embedding_options_set_vision_tokens_per_image(
+LiteRtLmStatusCode litert_lm_embedding_options_set_vision_tokens_per_image(
     LiteRtLmEmbeddingOptions* options, int vision_tokens_per_image);
 
 // Gets the vision tokens per image.

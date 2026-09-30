@@ -15,7 +15,11 @@
 #include "c/embedding_engine.h"
 
 #include <cstddef>
+#include <functional>
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -374,7 +378,9 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchWithOutputSize) {
 
 TEST(EmbeddingEngineCTest, NullArgumentsSetError) {
   litert_lm_clear_last_error();
-  litert_lm_embedding_engine_settings_set_max_input_length(nullptr, 16);
+  EXPECT_EQ(
+      litert_lm_embedding_engine_settings_set_max_input_length(nullptr, 16),
+      kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("Invalid embedding engine settings"));
@@ -397,11 +403,152 @@ TEST(EmbeddingEngineCTest, SetCacheDirNullSetsError) {
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
   ASSERT_NE(settings, nullptr);
   litert_lm_clear_last_error();
-  litert_lm_embedding_engine_settings_set_cache_dir(settings, nullptr);
+  EXPECT_EQ(
+      litert_lm_embedding_engine_settings_set_cache_dir(settings, nullptr),
+      kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("cache_dir must not be NULL"));
   litert_lm_embedding_engine_settings_delete(settings);
+}
+
+// Runs every setter in `setters` against `handle` (expecting OK) and against
+// NULL (expecting kLiteRtLmStatusInvalidArgument, mirrored in the last error).
+template <typename T>
+void ExpectSettersReturnStatus(
+    T* handle,
+    const std::vector<std::pair<std::string, std::function<int(T*)>>>&
+        setters) {
+  for (const auto& [name, setter] : setters) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(setter(handle), kLiteRtLmStatusOk);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(setter(nullptr), kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  }
+}
+
+TEST(EmbeddingEngineCStatusTest, SettingsSettersReturnStatus) {
+  std::unique_ptr<LiteRtLmEmbeddingEngineSettings,
+                  decltype(&litert_lm_embedding_engine_settings_delete)>
+      settings(litert_lm_embedding_engine_settings_create(
+                   kTestEmbeddingModelPath, "cpu", nullptr, nullptr),
+               &litert_lm_embedding_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  using S = LiteRtLmEmbeddingEngineSettings;
+  ExpectSettersReturnStatus<S>(
+      settings.get(),
+      {
+          {"set_num_threads",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_num_threads(s, 2);
+           }},
+          // Non-positive values are ignored but still succeed.
+          {"set_num_threads_ignored",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_num_threads(s, 0);
+           }},
+          {"set_audio_num_threads",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_audio_num_threads(
+                 s, 2);
+           }},
+          {"set_cache_dir",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_cache_dir(
+                 s, "test_cache_dir");
+           }},
+          {"set_litert_dispatch_lib_dir",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(  // NOLINT
+                 s, "test_lib_dir");
+           }},
+          {"set_vision_litert_dispatch_lib_dir",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(  // NOLINT
+                 s, "test_lib_dir");
+           }},
+          {"set_audio_litert_dispatch_lib_dir",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(  // NOLINT
+                 s, "test_lib_dir");
+           }},
+          {"set_max_input_length",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_max_input_length(
+                 s, 512);
+           }},
+          {"set_min_input_length",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_min_input_length(s,
+                                                                             1);
+           }},
+          {"set_vision_tokens_per_image",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_vision_tokens_per_image(  // NOLINT
+                 s, 280);
+           }},
+          {"set_activation_data_type",
+           [](S* s) {
+             return litert_lm_embedding_engine_settings_set_activation_data_type(  // NOLINT
+                 s, kLiteRtLmActivationDataTypeFloat32);
+           }},
+      });
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
+                settings.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              ::testing::HasSubstr("lib_dir must not be NULL"));
+}
+
+TEST(EmbeddingEngineCStatusTest, OptionsSettersReturnStatus) {
+  std::unique_ptr<LiteRtLmEmbeddingOptions,
+                  decltype(&litert_lm_embedding_options_delete)>
+      options(litert_lm_embedding_options_create(),
+              &litert_lm_embedding_options_delete);
+  ASSERT_NE(options, nullptr);
+  using O = LiteRtLmEmbeddingOptions;
+  ExpectSettersReturnStatus<O>(
+      options.get(),
+      {
+          {"set_normalize",
+           [](O* o) {
+             return litert_lm_embedding_options_set_normalize(o, false);
+           }},
+          {"set_insert_special_tokens",
+           [](O* o) {
+             return litert_lm_embedding_options_set_insert_special_tokens(
+                 o, false);
+           }},
+          {"set_input_overflow_strategy",
+           [](O* o) {
+             return litert_lm_embedding_options_set_input_overflow_strategy(
+                 o, kLiteRtLmInputOverflowStrategyTruncate);
+           }},
+          {"set_output_size",
+           [](O* o) {
+             return litert_lm_embedding_options_set_output_size(o, 8);
+           }},
+          {"set_vision_tokens_per_image",
+           [](O* o) {
+             return litert_lm_embedding_options_set_vision_tokens_per_image(o,
+                                                                            16);
+           }},
+      });
+
+  litert_lm_clear_last_error();
+  // 3 is within the enum's value range but is not a declared enumerator.
+  EXPECT_EQ(litert_lm_embedding_options_set_input_overflow_strategy(
+                options.get(), static_cast<LiteRtLmInputOverflowStrategy>(3)),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              ::testing::HasSubstr("Unknown LiteRtLmInputOverflowStrategy"));
+  EXPECT_EQ(
+      litert_lm_embedding_options_get_input_overflow_strategy(options.get()),
+      kLiteRtLmInputOverflowStrategyTruncate);
 }
 
 }  // namespace

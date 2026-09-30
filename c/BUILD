@@ -185,7 +185,11 @@ cc_library(
     name = "embedding_engine_headers",
     hdrs = ["embedding_engine.h"],
     visibility = ["//visibility:public"],
-    deps = [":engine_headers"],
+    deps = [
+        ":api_export_headers",
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
 )
 
 # Header library for experimental C API.
