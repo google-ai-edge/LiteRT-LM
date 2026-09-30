@@ -371,6 +371,16 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "embedding_litert_lm_lib_test",
+    srcs = ["embedding_litert_lm_lib_test.cc"],
+    deps = [
+        ":embedding_litert_lm_lib",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+    ],
+)
+
 cc_binary(
     name = "embedding_litert_lm_main",
     srcs = ["embedding_litert_lm_main.cc"],
