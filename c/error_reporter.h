@@ -76,6 +76,34 @@ extern "C" {
 //      programming (e.g., resetting state before a call sequence or between
 //      test cases, analogous to setting `errno = 0` in POSIX) or to release
 //      thread-local error message memory on long-lived threads.
+//
+// 6. Return Shape (C API 1.0.0 and later):
+//    - Every function that can fail returns a `LiteRtLmStatusCode`:
+//      `kLiteRtLmStatusOk` (0) on success, or another (positive) code on
+//      failure. Negative values are never returned.
+//    - Results are delivered through trailing out-parameters named `out_*`.
+//      Out-parameters are written only on success. Passing NULL for an
+//      out-parameter yields `kLiteRtLmStatusInvalidArgument`.
+//    - A value that is legitimately absent is a success: the function returns
+//      `kLiteRtLmStatusOk` and writes NULL to the out-parameter (for example,
+//      an engine without a configured start token).
+//    - Every non-OK return also records the calling thread's last error, so
+//      the returned code equals `litert_lm_get_last_error_code()` immediately
+//      afterwards, and `litert_lm_get_last_error_message()` carries details.
+//    - The only functions that do not return a status are the NULL-safe
+//      `litert_lm_*_delete` destructors and the error-reporter functions
+//      declared in this header.
+//
+//    Example:
+//
+//      LiteRtLmEngine* engine = NULL;
+//      LiteRtLmStatusCode status = litert_lm_engine_create(settings, &engine);
+//      if (status != kLiteRtLmStatusOk) {
+//        const char* msg = litert_lm_get_last_error_message();
+//        fprintf(stderr, "engine_create failed (%d): %s\n", status,
+//                msg ? msg : "");
+//        return status;
+//      }
 // =============================================================================
 
 // =============================================================================

@@ -19,4 +19,4 @@
 VERSION = "0.18.0"
 
 # C API Compatibility version.
-C_API_VERSION = "0.2.0"
+C_API_VERSION = "1.0.0"
