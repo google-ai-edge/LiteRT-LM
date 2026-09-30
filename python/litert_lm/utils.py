@@ -15,6 +15,7 @@
 
 import ctypes
 from . import interfaces
+from ._ffi import call_checked
 from ._ffi import SamplerType
 from ._ffi import TokenUnionType
 
@@ -29,18 +30,34 @@ def _sampler_config_to_params(
     raise RuntimeError("Failed to create LiteRtLmSamplerParams")
 
   if config is not None:
-    lib.litert_lm_sampler_params_set_top_k(
-        params, config.top_k if config.top_k is not None else 1
-    )
-    lib.litert_lm_sampler_params_set_top_p(
-        params, config.top_p if config.top_p is not None else 0.95
-    )
-    lib.litert_lm_sampler_params_set_temperature(
-        params, config.temperature if config.temperature is not None else 1.0
-    )
-    lib.litert_lm_sampler_params_set_seed(
-        params, config.seed if config.seed is not None else 0
-    )
+    try:
+      call_checked(
+          lib,
+          "litert_lm_sampler_params_set_top_k",
+          params,
+          config.top_k if config.top_k is not None else 1,
+      )
+      call_checked(
+          lib,
+          "litert_lm_sampler_params_set_top_p",
+          params,
+          config.top_p if config.top_p is not None else 0.95,
+      )
+      call_checked(
+          lib,
+          "litert_lm_sampler_params_set_temperature",
+          params,
+          config.temperature if config.temperature is not None else 1.0,
+      )
+      call_checked(
+          lib,
+          "litert_lm_sampler_params_set_seed",
+          params,
+          config.seed if config.seed is not None else 0,
+      )
+    except BaseException:
+      lib.litert_lm_sampler_params_delete(params)
+      raise
   return params
 
 
@@ -59,19 +76,29 @@ def thinking_config_to_params(
       litert_lm_thinking_config_delete when done), or None if config is None.
 
   Raises:
-      RuntimeError: If pointer creation fails.
+      RuntimeError: If pointer creation fails or a setter reports an error.
   """
   if config is None:
     return None
   params = lib.litert_lm_thinking_config_create()
   if not params:
     raise RuntimeError("Failed to create LiteRtLmThinkingConfig")
-  lib.litert_lm_thinking_config_set_enable_thinking(
-      params, config.enable_thinking
-  )
-  lib.litert_lm_thinking_config_set_thinking_token_budget(
-      params, config.thinking_token_budget
-  )
+  try:
+    call_checked(
+        lib,
+        "litert_lm_thinking_config_set_enable_thinking",
+        params,
+        config.enable_thinking,
+    )
+    call_checked(
+        lib,
+        "litert_lm_thinking_config_set_thinking_token_budget",
+        params,
+        config.thinking_token_budget,
+    )
+  except BaseException:
+    lib.litert_lm_thinking_config_delete(params)
+    raise
   return params
 
 

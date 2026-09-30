@@ -22,6 +22,7 @@ from typing import Any, Sequence
 
 from . import interfaces
 from ._ffi import _get_lib
+from ._ffi import call_checked
 from ._ffi import InputDataType
 from ._messages import AudioBytes
 from ._messages import AudioFile
@@ -79,9 +80,7 @@ class EmbeddingResponse:
   embedding: list[float]
 
 
-def _create_c_input_data(
-    lib: Any, item: str | Content
-) -> ctypes.c_void_p:
+def _create_c_input_data(lib: Any, item: str | Content) -> ctypes.c_void_p:
   """Creates a LiteRtLmInputData pointer from a string or Content."""
   if isinstance(item, str):
     data_bytes = item.encode("utf-8")
@@ -167,44 +166,71 @@ class EmbeddingEngine:
     try:
       if isinstance(self._backend, interfaces.CPU):
         if self._backend.thread_count is not None:
-          self._lib.litert_lm_embedding_engine_settings_set_num_threads(
-              settings, self._backend.thread_count
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_num_threads",
+              settings,
+              self._backend.thread_count,
           )
       if isinstance(self._audio_backend, interfaces.CPU):
         if self._audio_backend.thread_count is not None:
-          self._lib.litert_lm_embedding_engine_settings_set_audio_num_threads(
-              settings, self._audio_backend.thread_count
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_audio_num_threads",
+              settings,
+              self._audio_backend.thread_count,
           )
       if self._cache_dir:
-        self._lib.litert_lm_embedding_engine_settings_set_cache_dir(
-            settings, self._cache_dir
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_cache_dir",
+            settings,
+            self._cache_dir,
         )
       if isinstance(self._backend, interfaces.NPU):
         if self._backend.litert_dispatch_lib_dir:
-          self._lib.litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
-              settings, self._backend.litert_dispatch_lib_dir
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir",
+              settings,
+              self._backend.litert_dispatch_lib_dir,
           )
       if isinstance(self._vision_backend, interfaces.NPU):
         if self._vision_backend.litert_dispatch_lib_dir:
-          self._lib.litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
-              settings, self._vision_backend.litert_dispatch_lib_dir
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir",
+              settings,
+              self._vision_backend.litert_dispatch_lib_dir,
           )
       if isinstance(self._audio_backend, interfaces.NPU):
         if self._audio_backend.litert_dispatch_lib_dir:
-          self._lib.litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
-              settings, self._audio_backend.litert_dispatch_lib_dir
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir",
+              settings,
+              self._audio_backend.litert_dispatch_lib_dir,
           )
       if self._min_input_length is not None:
-        self._lib.litert_lm_embedding_engine_settings_set_min_input_length(
-            settings, self._min_input_length
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_min_input_length",
+            settings,
+            self._min_input_length,
         )
       if self._max_input_length is not None:
-        self._lib.litert_lm_embedding_engine_settings_set_max_input_length(
-            settings, self._max_input_length
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_max_input_length",
+            settings,
+            self._max_input_length,
         )
       if self._vision_tokens_per_image is not None:
-        self._lib.litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
-            settings, self._vision_tokens_per_image
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_vision_tokens_per_image",
+            settings,
+            self._vision_tokens_per_image,
         )
 
       self._engine_ptr = self._lib.litert_lm_embedding_engine_create(settings)
@@ -273,30 +299,47 @@ class EmbeddingEngine:
     else:
       items = list(contents)
 
+    created_ptrs: list[ctypes.c_void_p] = []
     options_ptr = self._lib.litert_lm_embedding_options_create()
     try:
       if options.normalize is not None:
-        self._lib.litert_lm_embedding_options_set_normalize(
-            options_ptr, options.normalize
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_normalize",
+            options_ptr,
+            options.normalize,
         )
       if options.insert_special_tokens is not None:
-        self._lib.litert_lm_embedding_options_set_insert_special_tokens(
-            options_ptr, options.insert_special_tokens
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_insert_special_tokens",
+            options_ptr,
+            options.insert_special_tokens,
         )
       if options.input_overflow_strategy is not None:
-        self._lib.litert_lm_embedding_options_set_input_overflow_strategy(
-            options_ptr, int(options.input_overflow_strategy)
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_input_overflow_strategy",
+            options_ptr,
+            int(options.input_overflow_strategy),
         )
       if options.output_size is not None:
-        self._lib.litert_lm_embedding_options_set_output_size(
-            options_ptr, options.output_size
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_output_size",
+            options_ptr,
+            options.output_size,
         )
       if options.vision_tokens_per_image is not None:
-        self._lib.litert_lm_embedding_options_set_vision_tokens_per_image(
-            options_ptr, options.vision_tokens_per_image
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_vision_tokens_per_image",
+            options_ptr,
+            options.vision_tokens_per_image,
         )
 
-      created_ptrs = [_create_c_input_data(self._lib, item) for item in items]
+      for item in items:
+        created_ptrs.append(_create_c_input_data(self._lib, item))
 
       inputs_array = (ctypes.c_void_p * len(created_ptrs))(*created_ptrs)
       resp_ptr = self._lib.litert_lm_embedding_engine_compute_embedding(
@@ -349,32 +392,50 @@ class EmbeddingEngine:
 
     try:
       if options.normalize is not None:
-        self._lib.litert_lm_embedding_options_set_normalize(
-            options_ptr, options.normalize
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_normalize",
+            options_ptr,
+            options.normalize,
         )
       if options.insert_special_tokens is not None:
-        self._lib.litert_lm_embedding_options_set_insert_special_tokens(
-            options_ptr, options.insert_special_tokens
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_insert_special_tokens",
+            options_ptr,
+            options.insert_special_tokens,
         )
       if options.input_overflow_strategy is not None:
-        self._lib.litert_lm_embedding_options_set_input_overflow_strategy(
-            options_ptr, int(options.input_overflow_strategy)
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_input_overflow_strategy",
+            options_ptr,
+            int(options.input_overflow_strategy),
         )
       if options.output_size is not None:
-        self._lib.litert_lm_embedding_options_set_output_size(
-            options_ptr, options.output_size
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_output_size",
+            options_ptr,
+            options.output_size,
         )
       if options.vision_tokens_per_image is not None:
-        self._lib.litert_lm_embedding_options_set_vision_tokens_per_image(
-            options_ptr, options.vision_tokens_per_image
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_options_set_vision_tokens_per_image",
+            options_ptr,
+            options.vision_tokens_per_image,
         )
 
       batch_inputs_arrays: list[Any] = []
       num_inputs_per_batch = (ctypes.c_size_t * batch_size)()
 
       for i, req in enumerate(normalized_batch):
-        req_ptrs = [_create_c_input_data(self._lib, item) for item in req]
-        all_created_ptrs.extend(req_ptrs)
+        req_ptrs: list[ctypes.c_void_p] = []
+        for item in req:
+          ptr = _create_c_input_data(self._lib, item)
+          all_created_ptrs.append(ptr)
+          req_ptrs.append(ptr)
         req_array = (ctypes.c_void_p * len(req_ptrs))(*req_ptrs)
         batch_inputs_arrays.append(req_array)
         num_inputs_per_batch[i] = len(req_ptrs)

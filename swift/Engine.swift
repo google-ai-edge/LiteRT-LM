@@ -85,11 +85,17 @@ public actor Engine {
 
     defer { litert_lm_engine_settings_delete(settings) }
 
+    let settingsError: (String) -> LiteRTLMError = { .engine(.failedToCreateSettings($0)) }
+
     if let maxNumTokens = engineConfig.maxNumTokens {
-      litert_lm_engine_settings_set_max_num_tokens(settings, Int32(maxNumTokens))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_max_num_tokens(settings, Int32(maxNumTokens)),
+        "litert_lm_engine_settings_set_max_num_tokens", settingsError)
     }
     if let cacheDir = engineConfig.cacheDir {
-      litert_lm_engine_settings_set_cache_dir(settings, cacheDir)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_cache_dir(settings, cacheDir),
+        "litert_lm_engine_settings_set_cache_dir", settingsError)
     }
     if let activationDataType = engineConfig.activationDataType {
       let cActivationDataType: LiteRtLmActivationDataType
@@ -103,10 +109,14 @@ public actor Engine {
       case .int8:
         cActivationDataType = kLiteRtLmActivationDataTypeInt8
       }
-      litert_lm_engine_settings_set_activation_data_type(settings, cActivationDataType)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_activation_data_type(settings, cActivationDataType),
+        "litert_lm_engine_settings_set_activation_data_type", settingsError)
     }
     if let loraRank = engineConfig.loraRank {
-      litert_lm_engine_settings_set_lora_rank(settings, Int32(loraRank))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_lora_rank(settings, Int32(loraRank)),
+        "litert_lm_engine_settings_set_lora_rank", settingsError)
       if loraRank > 0 {
         var ranks = [Int32(loraRank)]
         let status = litert_lm_engine_settings_set_supported_lora_ranks(settings, &ranks, 1)
@@ -117,7 +127,9 @@ public actor Engine {
       }
     }
     if let audioLoraRank = engineConfig.audioLoraRank {
-      litert_lm_engine_settings_set_audio_lora_rank(settings, Int32(audioLoraRank))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_audio_lora_rank(settings, Int32(audioLoraRank)),
+        "litert_lm_engine_settings_set_audio_lora_rank", settingsError)
       if audioLoraRank > 0 {
         var ranks = [Int32(audioLoraRank)]
         let status = litert_lm_engine_settings_set_supported_audio_lora_ranks(settings, &ranks, 1)
@@ -128,21 +140,36 @@ public actor Engine {
       }
     }
     if let prefill = benchmarkPrefillTokens, let decode = benchmarkDecodeTokens {
-      litert_lm_engine_settings_enable_benchmark(settings)
-      litert_lm_engine_settings_set_num_prefill_tokens(settings, Int32(prefill))
-      litert_lm_engine_settings_set_num_decode_tokens(settings, Int32(decode))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_enable_benchmark(settings),
+        "litert_lm_engine_settings_enable_benchmark", settingsError)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_num_prefill_tokens(settings, Int32(prefill)),
+        "litert_lm_engine_settings_set_num_prefill_tokens", settingsError)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_num_decode_tokens(settings, Int32(decode)),
+        "litert_lm_engine_settings_set_num_decode_tokens", settingsError)
     } else if ExperimentalFlags.enableBenchmark {
-      litert_lm_engine_settings_enable_benchmark(settings)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_enable_benchmark(settings),
+        "litert_lm_engine_settings_enable_benchmark", settingsError)
     }
     if let enableSpeculativeDecoding = ExperimentalFlags.enableSpeculativeDecoding {
-      litert_lm_engine_settings_set_enable_speculative_decoding(settings, enableSpeculativeDecoding)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_enable_speculative_decoding(
+          settings, enableSpeculativeDecoding),
+        "litert_lm_engine_settings_set_enable_speculative_decoding", settingsError)
     }
     if let visualTokenBudget = ExperimentalFlags.visualTokenBudget {
-      litert_lm_engine_settings_set_max_vision_tokens_per_image(settings, visualTokenBudget)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_max_vision_tokens_per_image(settings, visualTokenBudget),
+        "litert_lm_engine_settings_set_max_vision_tokens_per_image", settingsError)
     }
     if let gpuEnableMetalResidencySet = ExperimentalFlags.gpuEnableMetalResidencySet {
-      litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
-        settings, gpuEnableMetalResidencySet)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+          settings, gpuEnableMetalResidencySet),
+        "litert_lm_engine_settings_set_gpu_enable_metal_residency_set", settingsError)
     }
 
     guard let engine = litert_lm_engine_create(settings) else {
@@ -205,6 +232,10 @@ public actor Engine {
     }
     defer { litert_lm_session_config_delete(cSessionConfig) }
 
+    let sessionConfigError: (String) -> LiteRTLMError = {
+      .engine(.failedToCreateSessionConfig($0))
+    }
+
     if let samplerParams = conversationConfig.samplerConfig {
       guard let cSamplerParams = litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP) else {
         let errorMsg = LiteRTLMError.consumeLastError() ?? ""
@@ -212,12 +243,22 @@ public actor Engine {
       }
       defer { litert_lm_sampler_params_delete(cSamplerParams) }
 
-      litert_lm_sampler_params_set_top_k(cSamplerParams, Int32(samplerParams.topK))
-      litert_lm_sampler_params_set_top_p(cSamplerParams, samplerParams.topP)
-      litert_lm_sampler_params_set_temperature(cSamplerParams, samplerParams.temperature)
-      litert_lm_sampler_params_set_seed(cSamplerParams, Int32(samplerParams.seed))
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_top_k(cSamplerParams, Int32(samplerParams.topK)),
+        "litert_lm_sampler_params_set_top_k", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_top_p(cSamplerParams, samplerParams.topP),
+        "litert_lm_sampler_params_set_top_p", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_temperature(cSamplerParams, samplerParams.temperature),
+        "litert_lm_sampler_params_set_temperature", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_seed(cSamplerParams, Int32(samplerParams.seed)),
+        "litert_lm_sampler_params_set_seed", sessionConfigError)
 
-      litert_lm_session_config_set_sampler_params(cSessionConfig, cSamplerParams)
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_sampler_params(cSessionConfig, cSamplerParams),
+        "litert_lm_session_config_set_sampler_params", sessionConfigError)
     }
 
     if let loraPath = conversationConfig.loraPath {
@@ -239,8 +280,10 @@ public actor Engine {
     if let enableSpeculativeDecoding =
       conversationConfig.enableSpeculativeDecoding
     {
-      litert_lm_session_config_set_enable_speculative_decoding(
-        cSessionConfig, enableSpeculativeDecoding)
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_enable_speculative_decoding(
+          cSessionConfig, enableSpeculativeDecoding),
+        "litert_lm_session_config_set_enable_speculative_decoding", sessionConfigError)
     }
 
     guard let cConversationConfig = litert_lm_conversation_config_create() else {
@@ -249,35 +292,64 @@ public actor Engine {
     }
     defer { litert_lm_conversation_config_delete(cConversationConfig) }
 
-    litert_lm_conversation_config_set_session_config(cConversationConfig, cSessionConfig)
+    let conversationConfigError: (String) -> LiteRTLMError = {
+      .engine(.failedToCreateConversationConfig($0))
+    }
+
+    try LiteRTLMError.check(
+      litert_lm_conversation_config_set_session_config(cConversationConfig, cSessionConfig),
+      "litert_lm_conversation_config_set_session_config", conversationConfigError)
     if !systemMessageJsonStr.isEmpty {
-      litert_lm_conversation_config_set_system_message(cConversationConfig, systemMessageJsonStr)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_system_message(
+          cConversationConfig, systemMessageJsonStr),
+        "litert_lm_conversation_config_set_system_message", conversationConfigError)
     }
     if !toolDescriptionJsonStr.isEmpty {
-      litert_lm_conversation_config_set_tools(cConversationConfig, toolDescriptionJsonStr)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_tools(cConversationConfig, toolDescriptionJsonStr),
+        "litert_lm_conversation_config_set_tools", conversationConfigError)
     }
     if !messagesJsonStr.isEmpty {
-      litert_lm_conversation_config_set_messages(cConversationConfig, messagesJsonStr)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_messages(cConversationConfig, messagesJsonStr),
+        "litert_lm_conversation_config_set_messages", conversationConfigError)
     }
     if let chatTemplate = conversationConfig.chatTemplate {
-      litert_lm_conversation_config_set_prompt_template(cConversationConfig, chatTemplate)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_prompt_template(cConversationConfig, chatTemplate),
+        "litert_lm_conversation_config_set_prompt_template", conversationConfigError)
     }
     if conversationConfig.enableResponseFormat {
       var providerType = kLiteRtLmConstraintProviderTypeLlGuidance
-      litert_lm_conversation_config_set_constraint_provider(cConversationConfig, &providerType)
-      litert_lm_conversation_config_set_enable_constrained_decoding(cConversationConfig, true)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_constraint_provider(
+          cConversationConfig, &providerType),
+        "litert_lm_conversation_config_set_constraint_provider", conversationConfigError)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_enable_constrained_decoding(cConversationConfig, true),
+        "litert_lm_conversation_config_set_enable_constrained_decoding",
+        conversationConfigError)
     } else {
-      litert_lm_conversation_config_set_enable_constrained_decoding(
-        cConversationConfig, ExperimentalFlags.enableConversationConstrainedDecoding)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_enable_constrained_decoding(
+          cConversationConfig, ExperimentalFlags.enableConversationConstrainedDecoding),
+        "litert_lm_conversation_config_set_enable_constrained_decoding",
+        conversationConfigError)
     }
-    litert_lm_conversation_config_set_stream_tool_calls(
-      cConversationConfig,
-      conversationConfig.enableToolCallStreaming
-        && ExperimentalFlags.enableConversationToolCallStreaming,
-      ExperimentalFlags.conversationToolCallStreamingChannelName)
+    try LiteRTLMError.check(
+      litert_lm_conversation_config_set_stream_tool_calls(
+        cConversationConfig,
+        conversationConfig.enableToolCallStreaming
+          && ExperimentalFlags.enableConversationToolCallStreaming,
+        ExperimentalFlags.conversationToolCallStreamingChannelName),
+      "litert_lm_conversation_config_set_stream_tool_calls", conversationConfigError)
     if let filterChannelContentFromKvCache = ExperimentalFlags.filterChannelContentFromKvCache {
-      litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
-        cConversationConfig, filterChannelContentFromKvCache)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
+          cConversationConfig, filterChannelContentFromKvCache),
+        "litert_lm_conversation_config_set_filter_channel_content_from_kv_cache",
+        conversationConfigError)
     }
 
     if let thinkingConfig = conversationConfig.thinkingConfig {
@@ -286,10 +358,17 @@ public actor Engine {
         throw LiteRTLMError.engine(.failedToCreateConversationConfig(errorMsg))
       }
       defer { litert_lm_thinking_config_delete(cThinkingConfig) }
-      litert_lm_thinking_config_set_enable_thinking(cThinkingConfig, thinkingConfig.enableThinking)
-      litert_lm_thinking_config_set_thinking_token_budget(
-        cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget))
-      litert_lm_conversation_config_set_thinking_config(cConversationConfig, cThinkingConfig)
+      try LiteRTLMError.check(
+        litert_lm_thinking_config_set_enable_thinking(
+          cThinkingConfig, thinkingConfig.enableThinking),
+        "litert_lm_thinking_config_set_enable_thinking", conversationConfigError)
+      try LiteRTLMError.check(
+        litert_lm_thinking_config_set_thinking_token_budget(
+          cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget)),
+        "litert_lm_thinking_config_set_thinking_token_budget", conversationConfigError)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_thinking_config(cConversationConfig, cThinkingConfig),
+        "litert_lm_conversation_config_set_thinking_config", conversationConfigError)
     }
 
     guard

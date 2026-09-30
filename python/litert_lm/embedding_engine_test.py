@@ -214,6 +214,33 @@ class EmbeddingEngineTest(parameterized.TestCase):
     with self.assertRaises(RuntimeError):
       engine.compute_embedding_batch(["'s"])
 
+  @parameterized.named_parameters(
+      ("single", False),
+      ("batch", True),
+  )
+  def test_options_setter_failure_propagates_runtime_error(self, batch):
+    engine = litert_lm.EmbeddingEngine(
+        model_path=self.model_path, backend=litert_lm.Backend.CPU()
+    )
+    try:
+      with mock.patch.object(
+          litert_lm.embedding_engine,
+          "call_checked",
+          autospec=True,
+          side_effect=RuntimeError("setter failed"),
+      ):
+        with self.assertRaisesRegex(RuntimeError, "setter failed"):
+          if batch:
+            engine.compute_embedding_batch(
+                ["'s"], options=litert_lm.EmbeddingOptions(normalize=True)
+            )
+          else:
+            engine.compute_embedding(
+                "'s", options=litert_lm.EmbeddingOptions(normalize=True)
+            )
+    finally:
+      engine.close()
+
   def test_invalid_model_path_raises_runtime_error(self):
     with self.assertRaises(RuntimeError):
       litert_lm.EmbeddingEngine(

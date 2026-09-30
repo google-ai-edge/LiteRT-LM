@@ -19,6 +19,7 @@ import pathlib
 import queue
 import warnings
 from . import interfaces
+from ._ffi import call_checked
 from ._ffi import InputDataType
 from ._ffi import STREAM_CALLBACK_TYPE
 
@@ -177,7 +178,7 @@ class Session(interfaces.AbstractSession):
 
   def cancel_process(self) -> None:
     if self._ptr:
-      self._lib.litert_lm_session_cancel_process(self._ptr)
+      call_checked(self._lib, "litert_lm_session_cancel_process", self._ptr)
 
   def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
     """See base class."""

@@ -65,6 +65,82 @@ class EngineTest(LiteRtLmTestBase):
     ):
       litert_lm.Engine("/non/existent/path")
 
+  def test_call_checked_raises_with_last_error_message(self):
+    lib = litert_lm._ffi._get_lib()
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_engine_settings_set_num_threads failed with status"
+        r" INVALID_ARGUMENT \(3\): .+",
+    ):
+      litert_lm._ffi.call_checked(
+          lib, "litert_lm_engine_settings_set_num_threads", None, 4
+      )
+
+  def test_set_min_log_severity_invalid_raises(self):
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_set_min_log_level failed with status INVALID_ARGUMENT"
+        r" \(3\): Unknown LiteRtLmLogSeverity",
+    ):
+      # 6 is within the value range of LiteRtLmLogSeverity but is not a named
+      # enumerator. Values outside the range are undefined behavior in C++.
+      litert_lm._ffi.set_min_log_severity(6)  # pytype: disable=wrong-arg-types
+
+  def test_check_status_unknown_code(self):
+    lib = litert_lm._ffi._get_lib()
+    litert_lm._ffi.check_status(lib, "some_function", 0)
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"some_function failed with status UNKNOWN_STATUS_CODE \(1234\)",
+    ):
+      litert_lm._ffi.check_status(lib, "some_function", 1234)
+
+  def test_engine_init_setter_failure_raises_and_frees_settings(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_delete = lib.litert_lm_engine_settings_delete
+    self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_settings_set_max_num_tokens",
+            autospec=True,
+            return_value=litert_lm._ffi.StatusCode.INTERNAL,
+        )
+    )
+    mock_delete = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_settings_delete",
+            autospec=True,
+            side_effect=orig_delete,
+        )
+    )
+
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_engine_settings_set_max_num_tokens failed with status"
+        r" INTERNAL \(13\)",
+    ):
+      self._create_engine(max_num_tokens=10)
+    mock_delete.assert_called_once()
+
+  def test_create_conversation_setter_failure_raises(self):
+    engine = self._create_engine()
+    lib = litert_lm._ffi._get_lib()
+    self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_config_set_system_message",
+            autospec=True,
+            return_value=litert_lm._ffi.StatusCode.INVALID_ARGUMENT,
+        )
+    )
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_conversation_config_set_system_message failed with status"
+        r" INVALID_ARGUMENT \(3\)",
+    ):
+      engine.create_conversation(system_message="hi")
+
   def test_backend_cpu_equality(self):
     cpu_default = litert_lm.Backend.CPU()
     cpu_default_explicit = litert_lm.Backend.CPU(thread_count=None)

@@ -25,6 +25,7 @@ from typing import Any
 import warnings
 
 from . import interfaces
+from ._ffi import call_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmConstraintType
 from ._ffi import STREAM_CALLBACK_TYPE
@@ -191,23 +192,38 @@ class Conversation(interfaces.AbstractConversation):
         rpp_ptr = self._lib.litert_lm_repetition_penalty_config_create()
         try:
           if repetition_penalty_config.repetition_penalty is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_repetition_penalty(
-                rpp_ptr, repetition_penalty_config.repetition_penalty
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_repetition_penalty",
+                rpp_ptr,
+                repetition_penalty_config.repetition_penalty,
             )
           if repetition_penalty_config.presence_penalty is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_presence_penalty(
-                rpp_ptr, repetition_penalty_config.presence_penalty
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_presence_penalty",
+                rpp_ptr,
+                repetition_penalty_config.presence_penalty,
             )
           if repetition_penalty_config.frequency_penalty is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_frequency_penalty(
-                rpp_ptr, repetition_penalty_config.frequency_penalty
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_frequency_penalty",
+                rpp_ptr,
+                repetition_penalty_config.frequency_penalty,
             )
           if repetition_penalty_config.window_size is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_window_size(
-                rpp_ptr, repetition_penalty_config.window_size
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_window_size",
+                rpp_ptr,
+                repetition_penalty_config.window_size,
             )
-          self._lib.litert_lm_conversation_optional_args_set_repetition_penalty_config(
-              optional_args_ptr, rpp_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_repetition_penalty_config",
+              optional_args_ptr,
+              rpp_ptr,
           )
         finally:
           if rpp_ptr:
@@ -216,15 +232,24 @@ class Conversation(interfaces.AbstractConversation):
         nrn_ptr = self._lib.litert_lm_no_repeat_ngram_config_create()
         try:
           if no_repeat_ngram_config.no_repeat_ngram_size is not None:
-            self._lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
-                nrn_ptr, no_repeat_ngram_config.no_repeat_ngram_size
+            call_checked(
+                self._lib,
+                "litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size",
+                nrn_ptr,
+                no_repeat_ngram_config.no_repeat_ngram_size,
             )
           if no_repeat_ngram_config.window_size is not None:
-            self._lib.litert_lm_no_repeat_ngram_config_set_window_size(
-                nrn_ptr, no_repeat_ngram_config.window_size
+            call_checked(
+                self._lib,
+                "litert_lm_no_repeat_ngram_config_set_window_size",
+                nrn_ptr,
+                no_repeat_ngram_config.window_size,
             )
-          self._lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
-              optional_args_ptr, nrn_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_no_repeat_ngram_config",
+              optional_args_ptr,
+              nrn_ptr,
           )
         finally:
           if nrn_ptr:
@@ -235,28 +260,44 @@ class Conversation(interfaces.AbstractConversation):
           if suppress_tokens_config.suppress_tokens is not None:
             tokens_list = list(suppress_tokens_config.suppress_tokens)
             tokens_array = (ctypes.c_int * len(tokens_list))(*tokens_list)
-            self._lib.litert_lm_suppress_tokens_config_set_suppress_tokens(
-                st_ptr, tokens_array, len(tokens_list)
+            call_checked(
+                self._lib,
+                "litert_lm_suppress_tokens_config_set_suppress_tokens",
+                st_ptr,
+                tokens_array,
+                len(tokens_list),
             )
-          self._lib.litert_lm_conversation_optional_args_set_suppress_tokens_config(
-              optional_args_ptr, st_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_suppress_tokens_config",
+              optional_args_ptr,
+              st_ptr,
           )
         finally:
           if st_ptr:
             self._lib.litert_lm_suppress_tokens_config_delete(st_ptr)
       if self._visual_token_budget is not None:
-        self._lib.litert_lm_conversation_optional_args_set_visual_token_budget(
-            optional_args_ptr, self._visual_token_budget
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_visual_token_budget",
+            optional_args_ptr,
+            self._visual_token_budget,
         )
       if max_output_tokens is not None:
-        self._lib.litert_lm_conversation_optional_args_set_max_output_tokens(
-            optional_args_ptr, max_output_tokens
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_max_output_tokens",
+            optional_args_ptr,
+            max_output_tokens,
         )
       if thinking_config is not None:
         tc_ptr = thinking_config_to_params(self._lib, thinking_config)
         try:
-          self._lib.litert_lm_conversation_optional_args_set_thinking_config(
-              optional_args_ptr, tc_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_thinking_config",
+              optional_args_ptr,
+              tc_ptr,
           )
         finally:
           if tc_ptr:
@@ -267,8 +308,12 @@ class Conversation(interfaces.AbstractConversation):
           c_type = LiteRtLmConstraintType.REGEX
         elif response_format.type == interfaces.ResponseFormat.Type.JSON_OBJECT:
           c_type = LiteRtLmConstraintType.JSON_SCHEMA
-        self._lib.litert_lm_conversation_optional_args_set_constraint(
-            optional_args_ptr, c_type, response_format.schema_or_pattern
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_constraint",
+            optional_args_ptr,
+            c_type,
+            response_format.schema_or_pattern,
         )
       return optional_args_ptr
     except Exception as e:
@@ -505,7 +550,9 @@ class Conversation(interfaces.AbstractConversation):
 
   def cancel_process(self) -> None:
     if self._ptr:
-      self._lib.litert_lm_conversation_cancel_process(self._ptr)
+      call_checked(
+          self._lib, "litert_lm_conversation_cancel_process", self._ptr
+      )
 
   @property
   def token_count(self) -> int:

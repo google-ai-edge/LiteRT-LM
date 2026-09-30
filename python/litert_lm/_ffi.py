@@ -126,6 +126,28 @@ class LiteRtLmConstraintProviderType(enum.IntEnum):
   LL_GUIDANCE = 1
 
 
+class StatusCode(enum.IntEnum):
+  """Mirrors `LiteRtLmStatusCode` in c/error_reporter.h."""
+
+  OK = 0
+  CANCELLED = 1
+  UNKNOWN = 2
+  INVALID_ARGUMENT = 3
+  DEADLINE_EXCEEDED = 4
+  NOT_FOUND = 5
+  ALREADY_EXISTS = 6
+  PERMISSION_DENIED = 7
+  RESOURCE_EXHAUSTED = 8
+  FAILED_PRECONDITION = 9
+  ABORTED = 10
+  OUT_OF_RANGE = 11
+  UNIMPLEMENTED = 12
+  INTERNAL = 13
+  UNAVAILABLE = 14
+  DATA_LOSS = 15
+  UNAUTHENTICATED = 16
+
+
 _LIB: ctypes.CDLL | None = None
 
 
@@ -169,7 +191,14 @@ def _get_lib() -> ctypes.CDLL:
 
 def _setup_lib_signatures(lib):
   """Configures the argument and return types for C API functions."""
+  # Error reporting
+  lib.litert_lm_get_last_error_message.restype = ctypes.c_char_p
+  lib.litert_lm_get_last_error_message.argtypes = []
+  lib.litert_lm_get_last_error_code.restype = ctypes.c_int
+  lib.litert_lm_get_last_error_code.argtypes = []
+
   # Log level
+  lib.litert_lm_set_min_log_level.restype = ctypes.c_int
   lib.litert_lm_set_min_log_level.argtypes = [ctypes.c_int]
 
   # Input Data
@@ -191,59 +220,85 @@ def _setup_lib_signatures(lib):
       c_string_p,
   ]
   lib.litert_lm_engine_settings_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_engine_settings_set_max_num_tokens.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_max_num_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_max_num_images.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_max_num_images.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_max_vision_tokens_per_image.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_engine_settings_set_max_vision_tokens_per_image.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_num_threads.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_num_threads.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_audio_num_threads.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_audio_num_threads.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_cache_dir.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_cache_dir.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_engine_settings_set_litert_dispatch_lib_dir.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_engine_settings_set_litert_dispatch_lib_dir.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_engine_settings_set_enable_speculative_decoding.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_engine_settings_set_enable_speculative_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_engine_settings_set_gpu_decode_steps_per_sync.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_engine_settings_set_gpu_decode_steps_per_sync.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_gpu_wait_for_weight_uploads.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_engine_settings_set_gpu_wait_for_weight_uploads.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_engine_settings_set_use_ringbuffers_local_attention.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_engine_settings_set_use_ringbuffers_local_attention.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_engine_settings_set_activation_data_type.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_activation_data_type.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_enable_ynnpack.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_enable_ynnpack.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
 
+  lib.litert_lm_engine_settings_set_lora_rank.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_lora_rank.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -254,6 +309,7 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_int),
       ctypes.c_size_t,
   ]
+  lib.litert_lm_engine_settings_set_audio_lora_rank.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_audio_lora_rank.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -266,11 +322,14 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_int),
       ctypes.c_size_t,
   ]
+  lib.litert_lm_engine_settings_enable_benchmark.restype = ctypes.c_int
   lib.litert_lm_engine_settings_enable_benchmark.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_engine_settings_set_num_prefill_tokens.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_num_prefill_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_num_decode_tokens.restype = ctypes.c_int
   lib.litert_lm_engine_settings_set_num_decode_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -285,18 +344,22 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_sampler_params_create.restype = ctypes.c_void_p
   lib.litert_lm_sampler_params_create.argtypes = [ctypes.c_int]
   lib.litert_lm_sampler_params_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_sampler_params_set_top_k.restype = ctypes.c_int
   lib.litert_lm_sampler_params_set_top_k.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_sampler_params_set_top_p.restype = ctypes.c_int
   lib.litert_lm_sampler_params_set_top_p.argtypes = [
       ctypes.c_void_p,
       ctypes.c_float,
   ]
+  lib.litert_lm_sampler_params_set_temperature.restype = ctypes.c_int
   lib.litert_lm_sampler_params_set_temperature.argtypes = [
       ctypes.c_void_p,
       ctypes.c_float,
   ]
+  lib.litert_lm_sampler_params_set_seed.restype = ctypes.c_int
   lib.litert_lm_sampler_params_set_seed.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -306,14 +369,17 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_session_config_create.restype = ctypes.c_void_p
   lib.litert_lm_session_config_create.argtypes = []
   lib.litert_lm_session_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_session_config_set_max_output_tokens.restype = ctypes.c_int
   lib.litert_lm_session_config_set_max_output_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_session_config_set_apply_prompt_template.restype = ctypes.c_int
   lib.litert_lm_session_config_set_apply_prompt_template.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_session_config_set_sampler_params.restype = ctypes.c_int
   lib.litert_lm_session_config_set_sampler_params.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
@@ -328,6 +394,9 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_session_config_set_enable_speculative_decoding.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_session_config_set_enable_speculative_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
@@ -340,6 +409,7 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
   ]
   lib.litert_lm_session_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_session_cancel_process.restype = ctypes.c_int
   lib.litert_lm_session_cancel_process.argtypes = [ctypes.c_void_p]
   lib.litert_lm_session_run_prefill.restype = ctypes.c_int
   lib.litert_lm_session_run_prefill.argtypes = [
@@ -381,42 +451,58 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_config_create.restype = ctypes.c_void_p
   lib.litert_lm_conversation_config_create.argtypes = []
   lib.litert_lm_conversation_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_config_set_session_config.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_session_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]
+  lib.litert_lm_conversation_config_set_system_message.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_system_message.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_config_set_tools.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_tools.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_config_set_messages.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_messages.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_config_set_extra_context.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_extra_context.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_config_set_prompt_template.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_prompt_template.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_config_set_enable_constrained_decoding.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_config_set_enable_constrained_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_conversation_config_set_constraint_provider.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_config_set_constraint_provider.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int),
   ]
+  lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_conversation_config_set_thinking_config.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_thinking_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
@@ -426,18 +512,28 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_repetition_penalty_config_create.restype = ctypes.c_void_p
   lib.litert_lm_repetition_penalty_config_create.argtypes = []
   lib.litert_lm_repetition_penalty_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_repetition_penalty_config_set_repetition_penalty.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_repetition_penalty_config_set_repetition_penalty.argtypes = [
       ctypes.c_void_p,
       ctypes.c_float,
   ]
+  lib.litert_lm_repetition_penalty_config_set_presence_penalty.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_repetition_penalty_config_set_presence_penalty.argtypes = [
       ctypes.c_void_p,
       ctypes.c_float,
   ]
+  lib.litert_lm_repetition_penalty_config_set_frequency_penalty.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_repetition_penalty_config_set_frequency_penalty.argtypes = [
       ctypes.c_void_p,
       ctypes.c_float,
   ]
+  lib.litert_lm_repetition_penalty_config_set_window_size.restype = ctypes.c_int
   lib.litert_lm_repetition_penalty_config_set_window_size.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -447,10 +543,14 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_no_repeat_ngram_config_create.restype = ctypes.c_void_p
   lib.litert_lm_no_repeat_ngram_config_create.argtypes = []
   lib.litert_lm_no_repeat_ngram_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_no_repeat_ngram_config_set_window_size.restype = ctypes.c_int
   lib.litert_lm_no_repeat_ngram_config_set_window_size.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -460,6 +560,9 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_suppress_tokens_config_create.restype = ctypes.c_void_p
   lib.litert_lm_suppress_tokens_config_create.argtypes = []
   lib.litert_lm_suppress_tokens_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_suppress_tokens_config_set_suppress_tokens.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_suppress_tokens_config_set_suppress_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int),
@@ -470,10 +573,12 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_thinking_config_create.restype = ctypes.c_void_p
   lib.litert_lm_thinking_config_create.argtypes = []
   lib.litert_lm_thinking_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_thinking_config_set_enable_thinking.restype = ctypes.c_int
   lib.litert_lm_thinking_config_set_enable_thinking.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_thinking_config_set_thinking_token_budget.restype = ctypes.c_int
   lib.litert_lm_thinking_config_set_thinking_token_budget.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -483,26 +588,44 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
   lib.litert_lm_conversation_optional_args_create.argtypes = []
   lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_optional_args_set_repetition_penalty_config.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_optional_args_set_repetition_penalty_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]
+  lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]
+  lib.litert_lm_conversation_optional_args_set_suppress_tokens_config.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_optional_args_set_suppress_tokens_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]
+  lib.litert_lm_conversation_optional_args_set_visual_token_budget.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_optional_args_set_visual_token_budget.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_conversation_optional_args_set_max_output_tokens.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_optional_args_set_max_output_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_conversation_optional_args_set_thinking_config.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_conversation_optional_args_set_thinking_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
@@ -531,6 +654,7 @@ def _setup_lib_signatures(lib):
       STREAM_CALLBACK_TYPE,
       ctypes.c_void_p,
   ]
+  lib.litert_lm_conversation_cancel_process.restype = ctypes.c_int
   lib.litert_lm_conversation_cancel_process.argtypes = [ctypes.c_void_p]
   lib.litert_lm_conversation_render_message_to_string.restype = ctypes.c_char_p
   lib.litert_lm_conversation_render_message_to_string.argtypes = [
@@ -544,6 +668,7 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
   lib.litert_lm_conversation_optional_args_create.argtypes = []
   lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_optional_args_set_constraint.restype = ctypes.c_int
   lib.litert_lm_conversation_optional_args_set_constraint.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -714,38 +839,61 @@ def _setup_lib_signatures(lib):
       c_string_p,
   ]
   lib.litert_lm_embedding_engine_settings_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_engine_settings_set_num_threads.restype = ctypes.c_int
   lib.litert_lm_embedding_engine_settings_set_num_threads.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_embedding_engine_settings_set_audio_num_threads.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_audio_num_threads.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_embedding_engine_settings_set_cache_dir.restype = ctypes.c_int
   lib.litert_lm_embedding_engine_settings_set_cache_dir.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir.argtypes = [
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_embedding_engine_settings_set_min_input_length.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_min_input_length.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_embedding_engine_settings_set_max_input_length.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_max_input_length.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_embedding_engine_settings_set_vision_tokens_per_image.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_engine_settings_set_vision_tokens_per_image.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -755,12 +903,16 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_embedding_options_create.restype = ctypes.c_void_p
   lib.litert_lm_embedding_options_create.argtypes = []
   lib.litert_lm_embedding_options_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_set_normalize.restype = ctypes.c_int
   lib.litert_lm_embedding_options_set_normalize.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
   lib.litert_lm_embedding_options_get_normalize.restype = ctypes.c_bool
   lib.litert_lm_embedding_options_get_normalize.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_set_insert_special_tokens.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_options_set_insert_special_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
@@ -771,6 +923,9 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_embedding_options_get_insert_special_tokens.argtypes = [
       ctypes.c_void_p
   ]
+  lib.litert_lm_embedding_options_set_input_overflow_strategy.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_options_set_input_overflow_strategy.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -781,12 +936,16 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_embedding_options_get_input_overflow_strategy.argtypes = [
       ctypes.c_void_p
   ]
+  lib.litert_lm_embedding_options_set_output_size.restype = ctypes.c_int
   lib.litert_lm_embedding_options_set_output_size.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
   lib.litert_lm_embedding_options_get_output_size.restype = ctypes.c_int
   lib.litert_lm_embedding_options_get_output_size.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_set_vision_tokens_per_image.restype = (
+      ctypes.c_int
+  )
   lib.litert_lm_embedding_options_set_vision_tokens_per_image.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -939,6 +1098,53 @@ def _setup_lib_signatures(lib):
   ]
 
 
+def check_status(lib: ctypes.CDLL, func_name: str, status: int) -> None:
+  """Raises if a C API call returned a non-OK `LiteRtLmStatusCode`.
+
+  Must be called on the same thread that made the C API call, right after it,
+  because the C library stores the last error message in thread-local storage.
+
+  Args:
+    lib: The loaded C library instance.
+    func_name: Name of the C API function that returned `status`.
+    status: The `LiteRtLmStatusCode` returned by `func_name`.
+
+  Raises:
+    RuntimeError: If `status` is not `kLiteRtLmStatusOk`. The message contains
+      `func_name`, the status code and the C library's last error message.
+  """
+  if status == StatusCode.OK:
+    return
+  try:
+    code_name = StatusCode(status).name
+  except ValueError:
+    code_name = "UNKNOWN_STATUS_CODE"
+  message = lib.litert_lm_get_last_error_message()
+  message = (
+      message.decode("utf-8", errors="replace")
+      if message
+      else "no error message"
+  )
+  raise RuntimeError(
+      f"{func_name} failed with status {code_name} ({status}): {message}"
+  )
+
+
+def call_checked(lib: ctypes.CDLL, func_name: str, *args) -> None:
+  """Calls the status-returning C API function `func_name` and checks it.
+
+  Args:
+    lib: The loaded C library instance.
+    func_name: Name of a C API function that returns a `LiteRtLmStatusCode`.
+    *args: Arguments forwarded to the C API function.
+
+  Raises:
+    RuntimeError: If the call does not return `kLiteRtLmStatusOk`.
+  """
+  check_status(lib, func_name, getattr(lib, func_name)(*args))
+
+
 def set_min_log_severity(severity: LogSeverity):
   """Sets the minimum logging severity for the C library."""
-  _get_lib().litert_lm_set_min_log_level(int(severity))
+  lib = _get_lib()
+  call_checked(lib, "litert_lm_set_min_log_level", int(severity))

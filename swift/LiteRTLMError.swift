@@ -79,6 +79,26 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     return message.isEmpty ? nil : message
   }
 
+  /// Checks the `LiteRtLmStatusCode` returned by the native C API function `functionName`.
+  ///
+  /// Must be called on the thread that made the native call, immediately after it, because the
+  /// native error message is stored in thread-local storage.
+  ///
+  /// - Parameters:
+  ///   - status: The status code returned by the native call.
+  ///   - functionName: The name of the native function, used in the error details.
+  ///   - makeError: Builds the error to throw from a description of the failure.
+  /// - Throws: The error built by `makeError` if `status` is not `kLiteRtLmStatusOk`. Its details
+  ///   contain `functionName`, the status code and the native last error message.
+  static func check(
+    _ status: LiteRtLmStatusCode, _ functionName: String, _ makeError: (String) -> LiteRTLMError
+  ) throws {
+    guard status == kLiteRtLmStatusOk else {
+      let message = consumeLastError() ?? "no error message available"
+      throw makeError("\(functionName) failed with status \(status.rawValue): \(message)")
+    }
+  }
+
   /// Specific errors related to the `Engine`.
   public enum EngineError: Error, LocalizedError, Equatable {
     case alreadyInitialized

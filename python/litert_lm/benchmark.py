@@ -17,6 +17,7 @@ import ctypes
 
 from . import interfaces
 from ._ffi import _get_lib
+from ._ffi import call_checked
 from ._ffi import InputDataType
 
 
@@ -40,60 +41,97 @@ class Benchmark(interfaces.AbstractBenchmark):
           f" (model_path={model_path}, backend={backend_str})"
       )
 
-    if self.activation_data_type is not None:
-      lib.litert_lm_engine_settings_set_activation_data_type(
-          settings, self.activation_data_type.value
-      )
-
-    lib.litert_lm_engine_settings_enable_benchmark(settings)
-
-    if (
-        isinstance(self.backend, interfaces.CPU)
-        and self.backend.thread_count is not None
-    ):
-      lib.litert_lm_engine_settings_set_num_threads(
-          settings, self.backend.thread_count
-      )
-
-    if self.max_num_tokens is not None:
-      lib.litert_lm_engine_settings_set_max_num_tokens(
-          settings, self.max_num_tokens
-      )
-    lib.litert_lm_engine_settings_set_num_prefill_tokens(
-        settings, self.prefill_tokens
-    )
-    lib.litert_lm_engine_settings_set_num_decode_tokens(
-        settings, self.decode_tokens
-    )
-    if self.cache_dir:
-      lib.litert_lm_engine_settings_set_cache_dir(settings, self.cache_dir)
-    if self.enable_speculative_decoding is not None:
-      lib.litert_lm_engine_settings_set_enable_speculative_decoding(
-          settings, self.enable_speculative_decoding
-      )
-    if isinstance(self.backend, interfaces.GPU):
-      if self.backend.gpu_decode_steps_per_sync is not None:
-        lib.litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
-            settings, self.backend.gpu_decode_steps_per_sync
+    try:
+      if self.activation_data_type is not None:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_activation_data_type",
+            settings,
+            self.activation_data_type.value,
         )
-      # When benchmarking, we should wait the initialization to complete to make
-      # sure the timing of prefill is correct.
-      # TODO(litertlm@): This should be set to True whenever benchmarking with
-      # GPU backend.
-      lib.litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
-          settings, True
-      )
-    if self.use_ringbuffers_local_attention is not None:
-      lib.litert_lm_engine_settings_set_use_ringbuffers_local_attention(
-          settings, self.use_ringbuffers_local_attention
-      )
-    if self.enable_ynnpack is not None:
-      lib.litert_lm_engine_settings_set_enable_ynnpack(
-          settings, self.enable_ynnpack
-      )
 
-    engine_ptr = lib.litert_lm_engine_create(settings)
-    lib.litert_lm_engine_settings_delete(settings)
+      call_checked(lib, "litert_lm_engine_settings_enable_benchmark", settings)
+
+      if (
+          isinstance(self.backend, interfaces.CPU)
+          and self.backend.thread_count is not None
+      ):
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_num_threads",
+            settings,
+            self.backend.thread_count,
+        )
+
+      if self.max_num_tokens is not None:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_max_num_tokens",
+            settings,
+            self.max_num_tokens,
+        )
+      call_checked(
+          lib,
+          "litert_lm_engine_settings_set_num_prefill_tokens",
+          settings,
+          self.prefill_tokens,
+      )
+      call_checked(
+          lib,
+          "litert_lm_engine_settings_set_num_decode_tokens",
+          settings,
+          self.decode_tokens,
+      )
+      if self.cache_dir:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_cache_dir",
+            settings,
+            self.cache_dir,
+        )
+      if self.enable_speculative_decoding is not None:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_enable_speculative_decoding",
+            settings,
+            self.enable_speculative_decoding,
+        )
+      if isinstance(self.backend, interfaces.GPU):
+        if self.backend.gpu_decode_steps_per_sync is not None:
+          call_checked(
+              lib,
+              "litert_lm_engine_settings_set_gpu_decode_steps_per_sync",
+              settings,
+              self.backend.gpu_decode_steps_per_sync,
+          )
+        # When benchmarking, we should wait the initialization to complete to
+        # make sure the timing of prefill is correct.
+        # TODO(litertlm@): This should be set to True whenever benchmarking
+        # with GPU backend.
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_gpu_wait_for_weight_uploads",
+            settings,
+            True,
+        )
+      if self.use_ringbuffers_local_attention is not None:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_use_ringbuffers_local_attention",
+            settings,
+            self.use_ringbuffers_local_attention,
+        )
+      if self.enable_ynnpack is not None:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_enable_ynnpack",
+            settings,
+            self.enable_ynnpack,
+        )
+
+      engine_ptr = lib.litert_lm_engine_create(settings)
+    finally:
+      lib.litert_lm_engine_settings_delete(settings)
 
     if not engine_ptr:
       raise RuntimeError(
