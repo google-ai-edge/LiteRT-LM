@@ -35,6 +35,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "c/engine_internal.h"
+#include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
@@ -133,6 +134,31 @@ bool IsValidSessionConfig(const LiteRtLmSessionConfig* config) {
   }
   litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
                               "Invalid session config.");
+  return false;
+}
+
+bool IsValidLogSeverity(LiteRtLmLogSeverity level) {
+  switch (level) {
+    case kLiteRtLmLogSeverityVerbose:
+    case kLiteRtLmLogSeverityDebug:
+    case kLiteRtLmLogSeverityInfo:
+    case kLiteRtLmLogSeverityWarning:
+    case kLiteRtLmLogSeverityError:
+    case kLiteRtLmLogSeverityFatal:
+    case kLiteRtLmLogSeveritySilent:
+      return true;
+  }
+  return false;
+}
+
+bool IsValidActivationDataType(LiteRtLmActivationDataType type) {
+  switch (type) {
+    case kLiteRtLmActivationDataTypeFloat32:
+    case kLiteRtLmActivationDataTypeFloat16:
+    case kLiteRtLmActivationDataTypeInt16:
+    case kLiteRtLmActivationDataTypeInt8:
+      return true;
+  }
   return false;
 }
 
@@ -235,8 +261,13 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
 
 extern "C" {
 
-void litert_lm_set_min_log_level(LiteRtLmLogSeverity level) {
+LiteRtLmStatusCode litert_lm_set_min_log_level(LiteRtLmLogSeverity level) {
+  if (!IsValidLogSeverity(level)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmLogSeverity.");
+  }
   litert::lm::SetMinLogSeverity(static_cast<litert::lm::LogSeverity>(level));
+  return kLiteRtLmStatusOk;
 }
 
 SamplerParameters::Type ToSamplerParametersType(LiteRtLmSamplerType type) {
@@ -268,32 +299,32 @@ void litert_lm_sampler_params_delete(LiteRtLmSamplerParams* params) {
   delete params;
 }
 
-void litert_lm_sampler_params_set_top_k(LiteRtLmSamplerParams* params,
-                                        int32_t top_k) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
-    params->top_k = top_k;
-  }
+LiteRtLmStatusCode litert_lm_sampler_params_set_top_k(
+    LiteRtLmSamplerParams* params, int32_t top_k) {
+  LITERT_LM_C_RETURN_IF_NULL(params);
+  params->top_k = top_k;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_sampler_params_set_top_p(LiteRtLmSamplerParams* params,
-                                        float top_p) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
-    params->top_p = top_p;
-  }
+LiteRtLmStatusCode litert_lm_sampler_params_set_top_p(
+    LiteRtLmSamplerParams* params, float top_p) {
+  LITERT_LM_C_RETURN_IF_NULL(params);
+  params->top_p = top_p;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_sampler_params_set_temperature(LiteRtLmSamplerParams* params,
-                                              float temperature) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
-    params->temperature = temperature;
-  }
+LiteRtLmStatusCode litert_lm_sampler_params_set_temperature(
+    LiteRtLmSamplerParams* params, float temperature) {
+  LITERT_LM_C_RETURN_IF_NULL(params);
+  params->temperature = temperature;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_sampler_params_set_seed(LiteRtLmSamplerParams* params,
-                                       int32_t seed) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(params)) {
-    params->seed = seed;
-  }
+LiteRtLmStatusCode litert_lm_sampler_params_set_seed(
+    LiteRtLmSamplerParams* params, int32_t seed) {
+  LITERT_LM_C_RETURN_IF_NULL(params);
+  params->seed = seed;
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmSessionConfig* litert_lm_session_config_create() {
@@ -303,41 +334,49 @@ LiteRtLmSessionConfig* litert_lm_session_config_create() {
   return c_config;
 }
 
-void litert_lm_session_config_set_max_output_tokens(
+LiteRtLmStatusCode litert_lm_session_config_set_max_output_tokens(
     LiteRtLmSessionConfig* config, int max_output_tokens) {
-  if (IsValidSessionConfig(config)) {
-    config->config->SetMaxOutputTokens(max_output_tokens);
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  config->config->SetMaxOutputTokens(max_output_tokens);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_session_config_set_apply_prompt_template(
+LiteRtLmStatusCode litert_lm_session_config_set_apply_prompt_template(
     LiteRtLmSessionConfig* config, bool apply_prompt_template) {
-  if (IsValidSessionConfig(config)) {
-    config->config->SetApplyPromptTemplateInSession(apply_prompt_template);
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  config->config->SetApplyPromptTemplateInSession(apply_prompt_template);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_session_config_set_enable_speculative_decoding(
+LiteRtLmStatusCode litert_lm_session_config_set_enable_speculative_decoding(
     LiteRtLmSessionConfig* config, bool enable_speculative_decoding) {
-  if (IsValidSessionConfig(config)) {
-    config->config->SetEnableSpeculativeDecoding(enable_speculative_decoding);
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  config->config->SetEnableSpeculativeDecoding(enable_speculative_decoding);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_session_config_set_sampler_params(
+LiteRtLmStatusCode litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config,
     const LiteRtLmSamplerParams* sampler_params) {
-  if (IsValidSessionConfig(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(sampler_params)) {
-    SamplerParameters& params = config->config->GetMutableSamplerParams();
-
-    params.set_type(ToSamplerParametersType(sampler_params->type));
-
-    params.set_k(sampler_params->top_k);
-    params.set_p(sampler_params->top_p);
-    params.set_temperature(sampler_params->temperature);
-    params.set_seed(sampler_params->seed);
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(sampler_params);
+  SamplerParameters& params = config->config->GetMutableSamplerParams();
+
+  params.set_type(ToSamplerParametersType(sampler_params->type));
+
+  params.set_k(sampler_params->top_k);
+  params.set_p(sampler_params->top_p);
+  params.set_temperature(sampler_params->temperature);
+  params.set_seed(sampler_params->seed);
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
@@ -404,52 +443,44 @@ void litert_lm_repetition_penalty_config_delete(
   delete config;
 }
 
-void litert_lm_repetition_penalty_config_set_repetition_penalty(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_repetition_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float repetition_penalty) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   config->repetition_penalty_config = litert::lm::RepetitionPenaltyConfig(
       repetition_penalty, config->repetition_penalty_config.presence_penalty(),
       config->repetition_penalty_config.frequency_penalty(),
       config->repetition_penalty_config.window_size());
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_repetition_penalty_config_set_presence_penalty(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_presence_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float presence_penalty) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   config->repetition_penalty_config = litert::lm::RepetitionPenaltyConfig(
       config->repetition_penalty_config.repetition_penalty(), presence_penalty,
       config->repetition_penalty_config.frequency_penalty(),
       config->repetition_penalty_config.window_size());
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_repetition_penalty_config_set_frequency_penalty(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_frequency_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float frequency_penalty) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   config->repetition_penalty_config = litert::lm::RepetitionPenaltyConfig(
       config->repetition_penalty_config.repetition_penalty(),
       config->repetition_penalty_config.presence_penalty(), frequency_penalty,
       config->repetition_penalty_config.window_size());
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_repetition_penalty_config_set_window_size(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_window_size(
     LiteRtLmRepetitionPenaltyConfig* config, int window_size) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   config->repetition_penalty_config = litert::lm::RepetitionPenaltyConfig(
       config->repetition_penalty_config.repetition_penalty(),
       config->repetition_penalty_config.presence_penalty(),
       config->repetition_penalty_config.frequency_penalty(), window_size);
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmNoRepeatNgramConfig* litert_lm_no_repeat_ngram_config_create() {
@@ -463,24 +494,20 @@ void litert_lm_no_repeat_ngram_config_delete(
   delete config;
 }
 
-void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
     LiteRtLmNoRepeatNgramConfig* config, int no_repeat_ngram_size) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   config->no_repeat_ngram_config = litert::lm::NoRepeatNgramConfig(
       no_repeat_ngram_size, config->no_repeat_ngram_config.window_size());
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_no_repeat_ngram_config_set_window_size(
+LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_set_window_size(
     LiteRtLmNoRepeatNgramConfig* config, int window_size) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   config->no_repeat_ngram_config = litert::lm::NoRepeatNgramConfig(
       config->no_repeat_ngram_config.no_repeat_ngram_size(), window_size);
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmSuppressTokensConfig* litert_lm_suppress_tokens_config_create() {
@@ -494,29 +521,26 @@ void litert_lm_suppress_tokens_config_delete(
   delete config;
 }
 
-void litert_lm_suppress_tokens_config_set_suppress_tokens(
+LiteRtLmStatusCode litert_lm_suppress_tokens_config_set_suppress_tokens(
     LiteRtLmSuppressTokensConfig* config, const int* suppress_tokens,
     size_t num_tokens) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(config);
   if (num_tokens == 0) {
     config->suppress_tokens_config =
         litert::lm::SuppressTokensConfig::Default();
-    return;
+    return kLiteRtLmStatusOk;
   }
 
   if (suppress_tokens == nullptr) {
     ABSL_LOG(ERROR) << "Suppress tokens are null but num_tokens is not 0.";
-    litert::lm::c::SetLastError(
+    return litert::lm::c::ReturnError(
         absl::StatusCode::kInvalidArgument,
         "suppress_tokens must not be NULL when num_tokens is non-zero.");
-    return;
   }
 
   config->suppress_tokens_config = litert::lm::SuppressTokensConfig(
       absl::flat_hash_set<int>(suppress_tokens, suppress_tokens + num_tokens));
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmEngineSettings* litert_lm_engine_settings_create(
@@ -577,191 +601,226 @@ void litert_lm_engine_settings_delete(LiteRtLmEngineSettings* settings) {
   delete settings;
 }
 
-void litert_lm_engine_settings_set_max_num_tokens(
+LiteRtLmStatusCode litert_lm_engine_settings_set_max_num_tokens(
     LiteRtLmEngineSettings* settings, int max_num_tokens) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
-        max_num_tokens);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      max_num_tokens);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_num_threads(LiteRtLmEngineSettings* settings,
-                                               int num_threads) {
-  if (IsValidEngineSettings(settings)) {
-    auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-    auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
-    if (config.ok()) {
-      litert::lm::CpuConfig cpu_config = *config;
-      cpu_config.number_of_threads = num_threads;
-      main_settings.SetBackendConfig(cpu_config);
-    } else {
-      ABSL_LOG(WARNING) << "Failed to get CpuConfig to set num threads: "
-                        << config.status();
-    }
-  }
-}
-
-void litert_lm_engine_settings_set_audio_num_threads(
+LiteRtLmStatusCode litert_lm_engine_settings_set_num_threads(
     LiteRtLmEngineSettings* settings, int num_threads) {
-  if (IsValidEngineSettings(settings)) {
-    auto& audio_settings =
-        settings->settings->GetMutableAudioExecutorSettings();
-    if (audio_settings.has_value()) {
-      audio_settings->SetNumThreads(num_threads);
-    }
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
+  if (config.ok()) {
+    litert::lm::CpuConfig cpu_config = *config;
+    cpu_config.number_of_threads = num_threads;
+    main_settings.SetBackendConfig(cpu_config);
+  } else {
+    ABSL_LOG(WARNING) << "Failed to get CpuConfig to set num threads: "
+                      << config.status();
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_parallel_file_section_loading(
+LiteRtLmStatusCode litert_lm_engine_settings_set_audio_num_threads(
+    LiteRtLmEngineSettings* settings, int num_threads) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  auto& audio_settings = settings->settings->GetMutableAudioExecutorSettings();
+  if (audio_settings.has_value()) {
+    audio_settings->SetNumThreads(num_threads);
+  }
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_engine_settings_set_parallel_file_section_loading(
     LiteRtLmEngineSettings* settings, bool parallel_file_section_loading) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->SetParallelFileSectionLoading(
-        parallel_file_section_loading);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->SetParallelFileSectionLoading(
+      parallel_file_section_loading);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_single_threaded_execution(
+LiteRtLmStatusCode litert_lm_engine_settings_set_single_threaded_execution(
     LiteRtLmEngineSettings* settings, bool single_threaded_execution) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->SetSingleThreadedExecution(single_threaded_execution);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->SetSingleThreadedExecution(single_threaded_execution);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_max_num_images(
+LiteRtLmStatusCode litert_lm_engine_settings_set_max_num_images(
     LiteRtLmEngineSettings* settings, int max_num_images) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableMainExecutorSettings().SetMaxNumImages(
-        max_num_images);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->GetMutableMainExecutorSettings().SetMaxNumImages(
+      max_num_images);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_max_vision_tokens_per_image(
+LiteRtLmStatusCode litert_lm_engine_settings_set_max_vision_tokens_per_image(
     LiteRtLmEngineSettings* settings, int max_vision_tokens_per_image) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->SetMaxVisionTokensPerImage(max_vision_tokens_per_image);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->SetMaxVisionTokensPerImage(max_vision_tokens_per_image);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
-                                             const char* cache_dir) {
-  if (IsValidEngineSettings(settings) &&
-      LITERT_LM_C_CHECK_NOT_NULL(cache_dir)) {
-    settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
-
-    if (settings->settings->GetVisionExecutorSettings().has_value()) {
-      settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
-          cache_dir);
-    }
-
-    if (settings->settings->GetAudioExecutorSettings().has_value()) {
-      settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
-          cache_dir);
-    }
+LiteRtLmStatusCode litert_lm_engine_settings_set_cache_dir(
+    LiteRtLmEngineSettings* settings, const char* cache_dir) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(cache_dir);
+  settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
+
+  if (settings->settings->GetVisionExecutorSettings().has_value()) {
+    settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
+        cache_dir);
+  }
+
+  if (settings->settings->GetAudioExecutorSettings().has_value()) {
+    settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
+        cache_dir);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_litert_dispatch_lib_dir(
+LiteRtLmStatusCode litert_lm_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEngineSettings* settings, const char* lib_dir) {
-  if (IsValidEngineSettings(settings) && LITERT_LM_C_CHECK_NOT_NULL(lib_dir)) {
-    settings->settings->GetMutableMainExecutorSettings()
-        .SetLitertDispatchLibDir(lib_dir);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(lib_dir);
+  settings->settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+      lib_dir);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_enable_benchmark(
+LiteRtLmStatusCode litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableBenchmarkParams();
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->GetMutableBenchmarkParams();
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_num_prefill_tokens(
+LiteRtLmStatusCode litert_lm_engine_settings_set_num_prefill_tokens(
     LiteRtLmEngineSettings* settings, int num_prefill_tokens) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableBenchmarkParams().set_num_prefill_tokens(
-        num_prefill_tokens);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->GetMutableBenchmarkParams().set_num_prefill_tokens(
+      num_prefill_tokens);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_num_decode_tokens(
+LiteRtLmStatusCode litert_lm_engine_settings_set_num_decode_tokens(
     LiteRtLmEngineSettings* settings, int num_decode_tokens) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableBenchmarkParams().set_num_decode_tokens(
-        num_decode_tokens);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->GetMutableBenchmarkParams().set_num_decode_tokens(
+      num_decode_tokens);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_enable_speculative_decoding(
+LiteRtLmStatusCode litert_lm_engine_settings_set_enable_speculative_decoding(
     LiteRtLmEngineSettings* settings, bool enable_speculative_decoding) {
-  if (IsValidEngineSettings(settings)) {
-    auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-    auto advanced_settings = main_settings.GetAdvancedSettings().value_or(
-        litert::lm::AdvancedSettings());
-    advanced_settings.enable_speculative_decoding = enable_speculative_decoding;
-    main_settings.SetAdvancedSettings(advanced_settings);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  auto advanced_settings = main_settings.GetAdvancedSettings().value_or(
+      litert::lm::AdvancedSettings());
+  advanced_settings.enable_speculative_decoding = enable_speculative_decoding;
+  main_settings.SetAdvancedSettings(advanced_settings);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
+LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
     LiteRtLmEngineSettings* settings, int num_decode_steps_per_sync) {
-  if (IsValidEngineSettings(settings)) {
-    // Note: This setting is currently only supported for the Artisan GPU
-    // backend.
-    auto backend_config =
-        settings->settings->GetMutableMainExecutorSettings()
-            .MutableBackendConfig<litert::lm::GpuArtisanConfig>();
-    if (backend_config.ok()) {
-      auto config = backend_config.value();
-      config.num_decode_steps_per_sync = num_decode_steps_per_sync;
-      settings->settings->GetMutableMainExecutorSettings().SetBackendConfig(
-          config);
-    }
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  // Note: This setting is currently only supported for the Artisan GPU
+  // backend.
+  auto backend_config =
+      settings->settings->GetMutableMainExecutorSettings()
+          .MutableBackendConfig<litert::lm::GpuArtisanConfig>();
+  if (backend_config.ok()) {
+    auto config = backend_config.value();
+    config.num_decode_steps_per_sync = num_decode_steps_per_sync;
+    settings->settings->GetMutableMainExecutorSettings().SetBackendConfig(
+        config);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
+LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
     LiteRtLmEngineSettings* settings, bool wait_for_weight_uploads) {
-  if (IsValidEngineSettings(settings)) {
-    // Note: This setting is currently only supported for the Artisan GPU
-    // backend.
-    auto backend_config =
-        settings->settings->GetMutableMainExecutorSettings()
-            .MutableBackendConfig<litert::lm::GpuArtisanConfig>();
-    if (backend_config.ok()) {
-      auto config = backend_config.value();
-      config.wait_for_weight_uploads = wait_for_weight_uploads;
-      settings->settings->GetMutableMainExecutorSettings().SetBackendConfig(
-          config);
-    }
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  // Note: This setting is currently only supported for the Artisan GPU
+  // backend.
+  auto backend_config =
+      settings->settings->GetMutableMainExecutorSettings()
+          .MutableBackendConfig<litert::lm::GpuArtisanConfig>();
+  if (backend_config.ok()) {
+    auto config = backend_config.value();
+    config.wait_for_weight_uploads = wait_for_weight_uploads;
+    settings->settings->GetMutableMainExecutorSettings().SetBackendConfig(
+        config);
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_use_ringbuffers_local_attention(
+LiteRtLmStatusCode
+litert_lm_engine_settings_set_use_ringbuffers_local_attention(
     LiteRtLmEngineSettings* settings, bool use_ringbuffers_local_attention) {
-  if (IsValidEngineSettings(settings)) {
-    auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-    auto config =
-        main_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>();
-    if (config.ok()) {
-      litert::lm::GpuArtisanConfig gpu_artisan_config = *config;
-      // TODO: Rename gpu_artisan_config.use_autosized_ringbuffers to
-      // match the C API naming (e.g. use_ringbuffers_local_attention).
-      gpu_artisan_config.use_autosized_ringbuffers =
-          use_ringbuffers_local_attention;
-      main_settings.SetBackendConfig(gpu_artisan_config);
-    } else {
-      ABSL_LOG(INFO) << "Failed to get GpuArtisanConfig to set "
-                        "use_ringbuffers_local_attention: "
-                     << config.status();
-    }
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  auto config =
+      main_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>();
+  if (config.ok()) {
+    litert::lm::GpuArtisanConfig gpu_artisan_config = *config;
+    // TODO: Rename gpu_artisan_config.use_autosized_ringbuffers to
+    // match the C API naming (e.g. use_ringbuffers_local_attention).
+    gpu_artisan_config.use_autosized_ringbuffers =
+        use_ringbuffers_local_attention;
+    main_settings.SetBackendConfig(gpu_artisan_config);
+  } else {
+    ABSL_LOG(INFO) << "Failed to get GpuArtisanConfig to set "
+                      "use_ringbuffers_local_attention: "
+                   << config.status();
+  }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
-                                             int lora_rank) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableMainExecutorSettings().SetLoraRank(lora_rank);
+LiteRtLmStatusCode litert_lm_engine_settings_set_lora_rank(
+    LiteRtLmEngineSettings* settings, int lora_rank) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  settings->settings->GetMutableMainExecutorSettings().SetLoraRank(lora_rank);
+  return kLiteRtLmStatusOk;
 }
 
 int litert_lm_engine_settings_set_supported_lora_ranks(
@@ -785,13 +844,17 @@ int litert_lm_engine_settings_set_supported_lora_ranks(
   return 0;
 }
 
-void litert_lm_engine_settings_set_audio_lora_rank(
+LiteRtLmStatusCode litert_lm_engine_settings_set_audio_lora_rank(
     LiteRtLmEngineSettings* settings, int lora_rank) {
-  if (IsValidEngineSettings(settings) &&
-      settings->settings->GetAudioExecutorSettings().has_value()) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  // No-op if no audio executor is configured.
+  if (settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()->SetLoraRank(
         lora_rank);
   }
+  return kLiteRtLmStatusOk;
 }
 
 int litert_lm_engine_settings_set_supported_audio_lora_ranks(
@@ -821,56 +884,67 @@ int litert_lm_engine_settings_set_supported_audio_lora_ranks(
   return 0;
 }
 
-void litert_lm_engine_settings_set_activation_data_type(
+LiteRtLmStatusCode litert_lm_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type) {
-  if (IsValidEngineSettings(settings)) {
-    settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
-        static_cast<litert::lm::ActivationDataType>(activation_data_type));
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  if (!IsValidActivationDataType(activation_data_type)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmActivationDataType.");
+  }
+  settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
+      static_cast<litert::lm::ActivationDataType>(activation_data_type));
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_prefill_chunk_size(
+LiteRtLmStatusCode litert_lm_engine_settings_set_prefill_chunk_size(
     LiteRtLmEngineSettings* settings, int prefill_chunk_size) {
-  if (IsValidEngineSettings(settings)) {
-    auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-    auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
-    if (!config.ok()) {
-      ABSL_LOG(WARNING) << "Failed to get CpuConfig to set prefill chunk size: "
-                        << config.status();
-      return;
-    }
-    config->prefill_chunk_size = prefill_chunk_size;
-    main_settings.SetBackendConfig(*config);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
+  if (!config.ok()) {
+    ABSL_LOG(WARNING) << "Failed to get CpuConfig to set prefill chunk size: "
+                      << config.status();
+    return kLiteRtLmStatusOk;
+  }
+  config->prefill_chunk_size = prefill_chunk_size;
+  main_settings.SetBackendConfig(*config);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_enable_ynnpack(
+LiteRtLmStatusCode litert_lm_engine_settings_set_enable_ynnpack(
     LiteRtLmEngineSettings* settings, bool enable_ynnpack) {
-  if (IsValidEngineSettings(settings)) {
-    auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-    auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
-    if (!config.ok()) {
-      ABSL_LOG(WARNING) << "Failed to get CpuConfig to set enable ynnpack: "
-                        << config.status();
-      return;
-    }
-    config->enable_ynnpack = enable_ynnpack;
-    main_settings.SetBackendConfig(*config);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
+  if (!config.ok()) {
+    ABSL_LOG(WARNING) << "Failed to get CpuConfig to set enable ynnpack: "
+                      << config.status();
+    return kLiteRtLmStatusOk;
+  }
+  config->enable_ynnpack = enable_ynnpack;
+  main_settings.SetBackendConfig(*config);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
     LiteRtLmEngineSettings* settings, bool enable_metal_residency_set) {
-  if (IsValidEngineSettings(settings)) {
-    auto advanced_settings = settings->settings->GetMainExecutorSettings()
-                                 .GetAdvancedSettings()
-                                 .value_or(litert::lm::AdvancedSettings());
-    advanced_settings.gpu_enable_metal_residency_set =
-        enable_metal_residency_set;
-    settings->settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
-        advanced_settings);
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  auto advanced_settings = settings->settings->GetMainExecutorSettings()
+                               .GetAdvancedSettings()
+                               .value_or(litert::lm::AdvancedSettings());
+  advanced_settings.gpu_enable_metal_residency_set = enable_metal_residency_set;
+  settings->settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+      advanced_settings);
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmEngine* litert_lm_engine_create(
@@ -934,13 +1008,13 @@ LiteRtLmSession* litert_lm_engine_create_session(
 
 void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }
 
-void litert_lm_session_cancel_process(LiteRtLmSession* session) {
-  if (session && session->session) {
-    session->session->CancelProcess();
-  } else {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
+LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session) {
+  if (!session || !session->session) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
+  session->session->CancelProcess();
+  return kLiteRtLmStatusOk;
 }
 
 int litert_lm_session_save_checkpoint(LiteRtLmSession* session,

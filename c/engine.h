@@ -20,9 +20,11 @@
 #include <stdint.h>
 
 #if defined(__APPLE__)
-#include "api_export.h"  // NOLINT
+#include "api_export.h"      // NOLINT
+#include "error_reporter.h"  // NOLINT
 #else
 #include "c/api_export.h"
+#include "c/error_reporter.h"
 #endif
 
 #ifdef __cplusplus
@@ -159,31 +161,55 @@ void litert_lm_sampler_params_delete(LiteRtLmSamplerParams* params);
 
 // Sets the top-k value.
 //
+// @param params The sampler parameters to modify.
+// @param top_k The top-k value.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `params` is NULL.
+//
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_sampler_params_set_top_k(LiteRtLmSamplerParams* params,
-                                        int32_t top_k);
+LiteRtLmStatusCode litert_lm_sampler_params_set_top_k(
+    LiteRtLmSamplerParams* params, int32_t top_k);
 
 // Sets the top-p value.
 //
+// @param params The sampler parameters to modify.
+// @param top_p The top-p value.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `params` is NULL.
+//
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_sampler_params_set_top_p(LiteRtLmSamplerParams* params,
-                                        float top_p);
+LiteRtLmStatusCode litert_lm_sampler_params_set_top_p(
+    LiteRtLmSamplerParams* params, float top_p);
 
 // Sets the temperature.
 //
+// @param params The sampler parameters to modify.
+// @param temperature The sampling temperature.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `params` is NULL.
+//
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_sampler_params_set_temperature(LiteRtLmSamplerParams* params,
-                                              float temperature);
+LiteRtLmStatusCode litert_lm_sampler_params_set_temperature(
+    LiteRtLmSamplerParams* params, float temperature);
 
 // Sets the seed.
 //
+// @param params The sampler parameters to modify.
+// @param seed The random seed.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `params` is NULL.
+//
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_sampler_params_set_seed(LiteRtLmSamplerParams* params,
-                                       int32_t seed);
+LiteRtLmStatusCode litert_lm_sampler_params_set_seed(
+    LiteRtLmSamplerParams* params, int32_t seed);
 
 // Creates a LiteRT LM Session Config.
 // The caller is responsible for destroying the config using
@@ -200,19 +226,25 @@ LiteRtLmSessionConfig* litert_lm_session_config_create();
 // @param config The config to modify.
 // @param max_output_tokens The maximum number of tokens to generate (including
 // thinking tokens).
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_session_config_set_max_output_tokens(
+LiteRtLmStatusCode litert_lm_session_config_set_max_output_tokens(
     LiteRtLmSessionConfig* config, int max_output_tokens);
 
 // Sets whether to apply prompt template for this session.
 // @param config The config to modify.
 // @param apply_prompt_template Whether to apply prompt template.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_session_config_set_apply_prompt_template(
+LiteRtLmStatusCode litert_lm_session_config_set_apply_prompt_template(
     LiteRtLmSessionConfig* config, bool apply_prompt_template);
 
 // Sets whether to enable speculative decoding for this session.
@@ -226,19 +258,25 @@ void litert_lm_session_config_set_apply_prompt_template(
 // initialized with speculative decoding enabled. If this function is not called
 // on the config, the session inherits the engine's speculative decoding setting
 // by default.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_session_config_set_enable_speculative_decoding(
+LiteRtLmStatusCode litert_lm_session_config_set_enable_speculative_decoding(
     LiteRtLmSessionConfig* config, bool enable_speculative_decoding);
 
 // Sets the sampler parameters for this session config.
 // @param config The config to modify.
 // @param sampler_params The sampler parameters to use.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `sampler_params` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_session_config_set_sampler_params(
+LiteRtLmStatusCode litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config, const LiteRtLmSamplerParams* sampler_params);
 
 // Destroys a LiteRT LM Session Config.
@@ -302,10 +340,13 @@ void litert_lm_repetition_penalty_config_delete(
 // by this parameter, and negative logits are multiplied (HuggingFace style).
 // The parameter must be >= 1.0f; values less than 1.0f are automatically
 // clamped to 1.0f during execution.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_repetition_penalty_config_set_repetition_penalty(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_repetition_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float repetition_penalty);
 
 // Sets the subtractive presence penalty for the repetition penalty config.
@@ -314,10 +355,13 @@ void litert_lm_repetition_penalty_config_set_repetition_penalty(
 // token has appeared at least once inside the generated window history.
 // Positive values discourage repetition, while negative values reward repeating
 // tokens (OpenAI style). Defaults to 0.0f.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_repetition_penalty_config_set_presence_penalty(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_presence_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float presence_penalty);
 
 // Sets the subtractive frequency penalty for the repetition penalty config.
@@ -326,10 +370,13 @@ void litert_lm_repetition_penalty_config_set_presence_penalty(
 // linearly by the number of times that token has previously appeared inside the
 // generated window history. Positive values discourage repetition, while
 // negative values reward repeating tokens (OpenAI style). Defaults to 0.0f.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_repetition_penalty_config_set_frequency_penalty(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_frequency_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float frequency_penalty);
 
 // Sets the window size for the repetition penalty config.
@@ -338,10 +385,13 @@ void litert_lm_repetition_penalty_config_set_frequency_penalty(
 // to consider when computing penalization. Tokens generated prior to this
 // window are forgotten. A value of 0 means tracking all infinite generation
 // history. Must be >= 0; negative values are clamped to 0 during execution.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_repetition_penalty_config_set_window_size(
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_window_size(
     LiteRtLmRepetitionPenaltyConfig* config, int window_size);
 
 // Creates a LiteRT LM No Repeat Ngram Config with default values
@@ -378,10 +428,13 @@ void litert_lm_no_repeat_ngram_config_delete(
 // `no_repeat_ngram_size` sequence, the logit of the candidate token is set to
 // -inf. If set <= 0, no repeat ngram banning is disabled. Negative values are
 // automatically clamped to 0 during execution.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
     LiteRtLmNoRepeatNgramConfig* config, int no_repeat_ngram_size);
 
 // Sets the window size for the no repeat ngram config.
@@ -393,10 +446,13 @@ void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
 // `window_size` is greater than 0 but less than `no_repeat_ngram_size`, it is
 // automatically clamped to `no_repeat_ngram_size` so that the ngrams can fit
 // and be tracked.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_no_repeat_ngram_config_set_window_size(
+LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_set_window_size(
     LiteRtLmNoRepeatNgramConfig* config, int window_size);
 
 // Creates a LiteRT LM Suppress Tokens Config with default values (an empty set
@@ -427,14 +483,18 @@ void litert_lm_suppress_tokens_config_delete(
 // @param config The config to modify.
 // @param suppress_tokens An array of integer token IDs that should be banned
 // from generation. During every decode step, each listed token ID's candidate
-// logit will be forced to -inf. If `suppress_tokens` is NULL or `num_tokens` is
-// 0, any previously set suppressed tokens are cleared and token suppression is
-// disabled.
+// logit will be forced to -inf. If `num_tokens` is 0, any previously set
+// suppressed tokens are cleared and token suppression is disabled; in that case
+// `suppress_tokens` may be NULL.
 // @param num_tokens The number of token IDs in the `suppress_tokens` array.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL, or if `suppress_tokens` is NULL while `num_tokens` is
+//   non-zero (the config is left unchanged).
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_suppress_tokens_config_set_suppress_tokens(
+LiteRtLmStatusCode litert_lm_suppress_tokens_config_set_suppress_tokens(
     LiteRtLmSuppressTokensConfig* config, const int* suppress_tokens,
     size_t num_tokens);
 
@@ -452,9 +512,14 @@ typedef enum {
 } LiteRtLmLogSeverity;
 // Sets the minimum log level for the LiteRT LM library.
 //
+// @param level The minimum severity to log.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `level` is not a declared LiteRtLmLogSeverity value.
+//
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_set_min_log_level(LiteRtLmLogSeverity level);
+LiteRtLmStatusCode litert_lm_set_min_log_level(LiteRtLmLogSeverity level);
 
 // Represents the type of input data.
 //
@@ -536,30 +601,41 @@ void litert_lm_engine_settings_delete(LiteRtLmEngineSettings* settings);
 //
 // @param settings The engine settings.
 // @param max_num_tokens The maximum number of tokens.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_max_num_tokens(
+LiteRtLmStatusCode litert_lm_engine_settings_set_max_num_tokens(
     LiteRtLmEngineSettings* settings, int max_num_tokens);
 
 // Sets the number of threads for the CPU backend.
 //
 // @param settings The engine settings.
 // @param num_threads The number of threads.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not CPU, this call has no effect
+//   and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_num_threads(LiteRtLmEngineSettings* settings,
-                                               int num_threads);
+LiteRtLmStatusCode litert_lm_engine_settings_set_num_threads(
+    LiteRtLmEngineSettings* settings, int num_threads);
 
 // Sets the number of threads for the audio CPU backend.
 //
 // @param settings The engine settings.
 // @param num_threads The number of threads.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If no audio backend is configured, this call has no
+//   effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_audio_num_threads(
+LiteRtLmStatusCode litert_lm_engine_settings_set_audio_num_threads(
     LiteRtLmEngineSettings* settings, int num_threads);
 
 // Sets whether the engine should load different sections of the litertlm file
@@ -567,10 +643,13 @@ void litert_lm_engine_settings_set_audio_num_threads(
 //
 // @param settings The engine settings.
 // @param parallel_file_section_loading Whether to load in parallel.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_parallel_file_section_loading(
+LiteRtLmStatusCode litert_lm_engine_settings_set_parallel_file_section_loading(
     LiteRtLmEngineSettings* settings, bool parallel_file_section_loading);
 
 // Sets whether to enable single threaded execution.
@@ -578,10 +657,13 @@ void litert_lm_engine_settings_set_parallel_file_section_loading(
 // @param settings The engine settings.
 // @param single_threaded_execution Whether to enable single threaded
 // execution.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_single_threaded_execution(
+LiteRtLmStatusCode litert_lm_engine_settings_set_single_threaded_execution(
     LiteRtLmEngineSettings* settings, bool single_threaded_execution);
 
 // Sets the maximum number of images for the engine.
@@ -590,10 +672,13 @@ void litert_lm_engine_settings_set_single_threaded_execution(
 //
 // @param settings The engine settings.
 // @param max_num_images The maximum number of images.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_max_num_images(
+LiteRtLmStatusCode litert_lm_engine_settings_set_max_num_images(
     LiteRtLmEngineSettings* settings, int max_num_images);
 
 // Sets the maximum vision tokens generated per image for the engine.
@@ -604,30 +689,39 @@ void litert_lm_engine_settings_set_max_num_images(
 //
 // @param settings The engine settings.
 // @param max_vision_tokens_per_image The maximum vision tokens per image.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_max_vision_tokens_per_image(
+LiteRtLmStatusCode litert_lm_engine_settings_set_max_vision_tokens_per_image(
     LiteRtLmEngineSettings* settings, int max_vision_tokens_per_image);
 
 // Sets the cache directory for the engine.
 //
 // @param settings The engine settings.
 // @param cache_dir The cache directory.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `cache_dir` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
-                                             const char* cache_dir);
+LiteRtLmStatusCode litert_lm_engine_settings_set_cache_dir(
+    LiteRtLmEngineSettings* settings, const char* cache_dir);
 
 // Sets the LiteRT dispatch library directory for NPU backend.
 //
 // @param settings The engine settings.
 // @param lib_dir The dispatch library directory.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `lib_dir` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_litert_dispatch_lib_dir(
+LiteRtLmStatusCode litert_lm_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEngineSettings* settings, const char* lib_dir);
 
 // Represents the activation data type.
@@ -644,10 +738,14 @@ typedef enum {
 //
 // @param settings The engine settings.
 // @param activation_data_type The activation data type.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL or `activation_data_type` is not a declared
+//   LiteRtLmActivationDataType value.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_activation_data_type(
+LiteRtLmStatusCode litert_lm_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type);
 
@@ -656,59 +754,79 @@ void litert_lm_engine_settings_set_activation_data_type(
 //
 // @param settings The engine settings.
 // @param prefill_chunk_size The prefill chunk size.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not CPU, this call has no effect
+//   and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_prefill_chunk_size(
+LiteRtLmStatusCode litert_lm_engine_settings_set_prefill_chunk_size(
     LiteRtLmEngineSettings* settings, int prefill_chunk_size);
 
 // Sets whether YNNPACK should delegate supported operations before XNNPACK.
 //
 // @param settings The engine settings.
 // @param enable_ynnpack Whether to enable YNNPACK.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not CPU, this call has no effect
+//   and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_enable_ynnpack(
+LiteRtLmStatusCode litert_lm_engine_settings_set_enable_ynnpack(
     LiteRtLmEngineSettings* settings, bool enable_ynnpack);
 
 // Enables benchmarking for the engine.
 //
 // @param settings The engine settings.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_enable_benchmark(
+LiteRtLmStatusCode litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings);
 
 // Sets the number of prefill tokens for benchmarking.
 //
 // @param settings The engine settings.
 // @param num_prefill_tokens The number of prefill tokens.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_num_prefill_tokens(
+LiteRtLmStatusCode litert_lm_engine_settings_set_num_prefill_tokens(
     LiteRtLmEngineSettings* settings, int num_prefill_tokens);
 
 // Sets the number of decode tokens for benchmarking.
 //
 // @param settings The engine settings.
 // @param num_decode_tokens The number of decode tokens.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_num_decode_tokens(
+LiteRtLmStatusCode litert_lm_engine_settings_set_num_decode_tokens(
     LiteRtLmEngineSettings* settings, int num_decode_tokens);
 
 // Sets whether to enable speculative decoding.
 //
 // @param settings The engine settings.
 // @param enable_speculative_decoding Whether to enable speculative decoding.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_enable_speculative_decoding(
+LiteRtLmStatusCode litert_lm_engine_settings_set_enable_speculative_decoding(
     LiteRtLmEngineSettings* settings, bool enable_speculative_decoding);
 
 // Sets the number of decode steps per sync for the GPU backend.
@@ -717,10 +835,14 @@ void litert_lm_engine_settings_set_enable_speculative_decoding(
 //
 // @param settings The engine settings.
 // @param num_decode_steps_per_sync The number of decode steps per sync.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not the Artisan GPU backend,
+//   this call has no effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
+LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
     LiteRtLmEngineSettings* settings, int num_decode_steps_per_sync);
 
 // Sets whether to wait for weight uploads for the GPU backend.
@@ -728,10 +850,14 @@ void litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
 //
 // @param settings The engine settings.
 // @param wait_for_weight_uploads Whether to wait for weight uploads.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not the Artisan GPU backend,
+//   this call has no effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
+LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
     LiteRtLmEngineSettings* settings, bool wait_for_weight_uploads);
 
 // Sets whether to use ringbuffers for local attention KV cache.
@@ -748,21 +874,29 @@ void litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
 // @param settings The engine settings.
 // @param use_ringbuffers_local_attention Whether to use ringbuffers for local
 // attention.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not the Artisan GPU backend,
+//   this call has no effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_use_ringbuffers_local_attention(
+LiteRtLmStatusCode
+litert_lm_engine_settings_set_use_ringbuffers_local_attention(
     LiteRtLmEngineSettings* settings, bool use_ringbuffers_local_attention);
 
 // Sets the LoRA rank for the engine.
 //
 // @param settings The engine settings.
 // @param lora_rank The LoRA rank.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
-                                             int lora_rank);
+LiteRtLmStatusCode litert_lm_engine_settings_set_lora_rank(
+    LiteRtLmEngineSettings* settings, int lora_rank);
 
 // Sets the supported LoRA ranks for the engine.
 //
@@ -780,10 +914,14 @@ int litert_lm_engine_settings_set_supported_lora_ranks(
 //
 // @param settings The engine settings.
 // @param lora_rank The Audio LoRA rank.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If no audio backend is configured, this call has no
+//   effect and returns kLiteRtLmStatusOk.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_audio_lora_rank(
+LiteRtLmStatusCode litert_lm_engine_settings_set_audio_lora_rank(
     LiteRtLmEngineSettings* settings, int lora_rank);
 
 // Sets the supported Audio LoRA ranks for the engine.
@@ -811,10 +949,14 @@ int litert_lm_engine_settings_set_supported_audio_lora_ranks(
 //
 // @param settings The engine settings.
 // @param enable_metal_residency_set Whether to enable Metal residency set.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. The setting is still recorded (and kLiteRtLmStatusOk
+//   returned) on platforms or backends where it has no effect.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
     LiteRtLmEngineSettings* settings, bool enable_metal_residency_set);
 
 // Creates a LiteRT LM Engine from the given settings. The caller is responsible
@@ -859,10 +1001,13 @@ void litert_lm_session_delete(LiteRtLmSession* session);
 // Cancels the current processing in the session.
 //
 // @param session The session to cancel processing on.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `session` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_session_cancel_process(LiteRtLmSession* session);
+LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session);
 
 // Saves the current state of the session to a checkpoint with the given label.
 //

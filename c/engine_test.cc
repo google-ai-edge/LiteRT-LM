@@ -18,10 +18,12 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -1658,7 +1660,7 @@ TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
       session.get(), inputs, 1, &StreamCallback, &callback_data);
   ASSERT_EQ(result, kLiteRtLmStatusOk);
 
-  litert_lm_session_cancel_process(session.get());
+  EXPECT_EQ(litert_lm_session_cancel_process(session.get()), kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
 
@@ -2296,8 +2298,9 @@ TEST(EngineCErrorTest, SuppressTokensNullWithCountSetsError) {
                                  &litert_lm_suppress_tokens_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
-  litert_lm_suppress_tokens_config_set_suppress_tokens(config.get(), nullptr,
-                                                       3);
+  EXPECT_EQ(litert_lm_suppress_tokens_config_set_suppress_tokens(config.get(),
+                                                                 nullptr, 3),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("suppress_tokens must not be NULL"));
@@ -2305,31 +2308,36 @@ TEST(EngineCErrorTest, SuppressTokensNullWithCountSetsError) {
 
 TEST(EngineCErrorTest, VoidSettersWithNullHandleSetError) {
   litert_lm_clear_last_error();
-  litert_lm_engine_settings_set_max_num_tokens(nullptr, 16);
+  EXPECT_EQ(litert_lm_engine_settings_set_max_num_tokens(nullptr, 16),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid engine settings"));
 
   litert_lm_clear_last_error();
-  litert_lm_session_config_set_max_output_tokens(nullptr, 16);
+  EXPECT_EQ(litert_lm_session_config_set_max_output_tokens(nullptr, 16),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid session config"));
 
   litert_lm_clear_last_error();
-  litert_lm_sampler_params_set_top_k(nullptr, 1);
+  EXPECT_EQ(litert_lm_sampler_params_set_top_k(nullptr, 1),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("params must not be NULL"));
 
   litert_lm_clear_last_error();
-  litert_lm_repetition_penalty_config_set_window_size(nullptr, 1);
+  EXPECT_EQ(litert_lm_repetition_penalty_config_set_window_size(nullptr, 1),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("config must not be NULL"));
 
   litert_lm_clear_last_error();
-  litert_lm_session_cancel_process(nullptr);
+  EXPECT_EQ(litert_lm_session_cancel_process(nullptr),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid session"));
@@ -2340,10 +2348,313 @@ TEST(EngineCErrorTest, SessionConfigNullSamplerParamsSetsError) {
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
-  litert_lm_session_config_set_sampler_params(config.get(), nullptr);
+  EXPECT_EQ(litert_lm_session_config_set_sampler_params(config.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("sampler_params must not be NULL"));
+}
+
+// Runs every setter in `setters` against `handle` (expecting OK) and against
+// NULL (expecting kLiteRtLmStatusInvalidArgument, mirrored in the last error).
+template <typename T>
+void ExpectSettersReturnStatus(
+    T* handle,
+    const std::vector<std::pair<std::string, std::function<int(T*)>>>&
+        setters) {
+  for (const auto& [name, setter] : setters) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(setter(handle), kLiteRtLmStatusOk);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(setter(nullptr), kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  }
+}
+
+TEST(EngineCStatusTest, SamplerParamsSettersReturnStatus) {
+  SamplerParamsPtr params(
+      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopK),
+      &litert_lm_sampler_params_delete);
+  ASSERT_NE(params, nullptr);
+  using P = LiteRtLmSamplerParams;
+  ExpectSettersReturnStatus<P>(
+      params.get(),
+      {
+          {"set_top_k",
+           [](P* p) { return litert_lm_sampler_params_set_top_k(p, 5); }},
+          {"set_top_p",
+           [](P* p) { return litert_lm_sampler_params_set_top_p(p, 0.5f); }},
+          {"set_temperature",
+           [](P* p) {
+             return litert_lm_sampler_params_set_temperature(p, 0.7f);
+           }},
+          {"set_seed",
+           [](P* p) { return litert_lm_sampler_params_set_seed(p, 42); }},
+      });
+}
+
+TEST(EngineCStatusTest, SessionConfigSettersReturnStatus) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+  SamplerParamsPtr params(
+      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeGreedy),
+      &litert_lm_sampler_params_delete);
+  ASSERT_NE(params, nullptr);
+  const LiteRtLmSamplerParams* sampler_params = params.get();
+  using C = LiteRtLmSessionConfig;
+  ExpectSettersReturnStatus<C>(
+      config.get(),
+      {
+          {"set_max_output_tokens",
+           [](C* c) {
+             return litert_lm_session_config_set_max_output_tokens(c, 8);
+           }},
+          {"set_apply_prompt_template",
+           [](C* c) {
+             return litert_lm_session_config_set_apply_prompt_template(c,
+                                                                       false);
+           }},
+          {"set_enable_speculative_decoding",
+           [](C* c) {
+             return litert_lm_session_config_set_enable_speculative_decoding(
+                 c, true);
+           }},
+          {"set_sampler_params",
+           [sampler_params](C* c) {
+             return litert_lm_session_config_set_sampler_params(c,
+                                                                sampler_params);
+           }},
+      });
+}
+
+TEST(EngineCStatusTest, ConstraintConfigSettersReturnStatus) {
+  RepetitionPenaltyConfigPtr repetition_config(
+      litert_lm_repetition_penalty_config_create(),
+      &litert_lm_repetition_penalty_config_delete);
+  ASSERT_NE(repetition_config, nullptr);
+  using R = LiteRtLmRepetitionPenaltyConfig;
+  ExpectSettersReturnStatus<R>(
+      repetition_config.get(),
+      {
+          {"set_repetition_penalty",
+           [](R* c) {
+             return litert_lm_repetition_penalty_config_set_repetition_penalty(
+                 c, 1.2f);
+           }},
+          {"set_presence_penalty",
+           [](R* c) {
+             return litert_lm_repetition_penalty_config_set_presence_penalty(
+                 c, 0.5f);
+           }},
+          {"set_frequency_penalty",
+           [](R* c) {
+             return litert_lm_repetition_penalty_config_set_frequency_penalty(
+                 c, 0.5f);
+           }},
+          {"set_window_size",
+           [](R* c) {
+             return litert_lm_repetition_penalty_config_set_window_size(c, 4);
+           }},
+      });
+
+  NoRepeatNgramConfigPtr ngram_config(litert_lm_no_repeat_ngram_config_create(),
+                                      &litert_lm_no_repeat_ngram_config_delete);
+  ASSERT_NE(ngram_config, nullptr);
+  using N = LiteRtLmNoRepeatNgramConfig;
+  ExpectSettersReturnStatus<N>(
+      ngram_config.get(),
+      {
+          {"set_no_repeat_ngram_size",
+           [](N* c) {
+             return litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+                 c, 3);
+           }},
+          {"set_window_size",
+           [](N* c) {
+             return litert_lm_no_repeat_ngram_config_set_window_size(c, 8);
+           }},
+      });
+
+  SuppressTokensConfigPtr suppress_config(
+      litert_lm_suppress_tokens_config_create(),
+      &litert_lm_suppress_tokens_config_delete);
+  ASSERT_NE(suppress_config, nullptr);
+  using S = LiteRtLmSuppressTokensConfig;
+  ExpectSettersReturnStatus<S>(
+      suppress_config.get(),
+      {
+          {"set_suppress_tokens",
+           [](S* c) {
+             const int tokens[] = {1, 2, 3};
+             return litert_lm_suppress_tokens_config_set_suppress_tokens(
+                 c, tokens, 3);
+           }},
+          {"set_suppress_tokens_clear",
+           [](S* c) {
+             return litert_lm_suppress_tokens_config_set_suppress_tokens(
+                 c, nullptr, 0);
+           }},
+      });
+}
+
+std::vector<std::pair<std::string, std::function<int(LiteRtLmEngineSettings*)>>>
+AllEngineSettingsSetters() {
+  using E = LiteRtLmEngineSettings;
+  return {
+      {"set_max_num_tokens",
+       [](E* s) {
+         return litert_lm_engine_settings_set_max_num_tokens(s, 16);
+       }},
+      {"set_num_threads",
+       [](E* s) { return litert_lm_engine_settings_set_num_threads(s, 2); }},
+      {"set_audio_num_threads",
+       [](E* s) {
+         return litert_lm_engine_settings_set_audio_num_threads(s, 2);
+       }},
+      {"set_parallel_file_section_loading",
+       [](E* s) {
+         return litert_lm_engine_settings_set_parallel_file_section_loading(
+             s, false);
+       }},
+      {"set_single_threaded_execution",
+       [](E* s) {
+         return litert_lm_engine_settings_set_single_threaded_execution(s,
+                                                                        true);
+       }},
+      {"set_max_num_images",
+       [](E* s) { return litert_lm_engine_settings_set_max_num_images(s, 2); }},
+      {"set_max_vision_tokens_per_image",
+       [](E* s) {
+         return litert_lm_engine_settings_set_max_vision_tokens_per_image(s,
+                                                                          280);
+       }},
+      {"set_cache_dir",
+       [](E* s) {
+         return litert_lm_engine_settings_set_cache_dir(s, "test_cache_dir");
+       }},
+      {"set_litert_dispatch_lib_dir",
+       [](E* s) {
+         return litert_lm_engine_settings_set_litert_dispatch_lib_dir(
+             s, "test_lib_dir");
+       }},
+      {"set_activation_data_type",
+       [](E* s) {
+         return litert_lm_engine_settings_set_activation_data_type(
+             s, kLiteRtLmActivationDataTypeFloat16);
+       }},
+      {"set_prefill_chunk_size",
+       [](E* s) {
+         return litert_lm_engine_settings_set_prefill_chunk_size(s, 128);
+       }},
+      {"set_enable_ynnpack",
+       [](E* s) {
+         return litert_lm_engine_settings_set_enable_ynnpack(s, true);
+       }},
+      {"enable_benchmark",
+       [](E* s) { return litert_lm_engine_settings_enable_benchmark(s); }},
+      {"set_num_prefill_tokens",
+       [](E* s) {
+         return litert_lm_engine_settings_set_num_prefill_tokens(s, 8);
+       }},
+      {"set_num_decode_tokens",
+       [](E* s) {
+         return litert_lm_engine_settings_set_num_decode_tokens(s, 8);
+       }},
+      {"set_enable_speculative_decoding",
+       [](E* s) {
+         return litert_lm_engine_settings_set_enable_speculative_decoding(s,
+                                                                          true);
+       }},
+      {"set_gpu_decode_steps_per_sync",
+       [](E* s) {
+         return litert_lm_engine_settings_set_gpu_decode_steps_per_sync(s, 4);
+       }},
+      {"set_gpu_wait_for_weight_uploads",
+       [](E* s) {
+         return litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(s,
+                                                                          true);
+       }},
+      {"set_use_ringbuffers_local_attention",
+       [](E* s) {
+         return litert_lm_engine_settings_set_use_ringbuffers_local_attention(
+             s, true);
+       }},
+      {"set_lora_rank",
+       [](E* s) { return litert_lm_engine_settings_set_lora_rank(s, 8); }},
+      {"set_audio_lora_rank",
+       [](E* s) {
+         return litert_lm_engine_settings_set_audio_lora_rank(s, 8);
+       }},
+      {"set_gpu_enable_metal_residency_set",
+       [](E* s) {
+         return litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+             s, true);
+       }},
+  };
+}
+
+TEST(EngineCStatusTest, EngineSettingsSettersReturnStatus) {
+  // CPU main backend with audio and vision: GPU-only knobs are no-ops that
+  // still return OK.
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create("test_model_path_1", "cpu",
+                                       /* vision_backend_str */ "gpu",
+                                       /* audio_backend_str */ "cpu"),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  ExpectSettersReturnStatus<LiteRtLmEngineSettings>(settings.get(),
+                                                    AllEngineSettingsSetters());
+}
+
+TEST(EngineCStatusTest, EngineSettingsNoOpSettersReturnOk) {
+  // GPU main backend without audio: CPU-only and audio knobs are no-ops that
+  // still return OK.
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create("test_model_path_1", "gpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  ExpectSettersReturnStatus<LiteRtLmEngineSettings>(settings.get(),
+                                                    AllEngineSettingsSetters());
+}
+
+TEST(EngineCStatusTest, EngineSettingsNullStringArgumentsReturnError) {
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create("test_model_path_1", "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_engine_settings_set_cache_dir(settings.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("cache_dir must not be NULL"));
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_engine_settings_set_litert_dispatch_lib_dir(
+                settings.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("lib_dir must not be NULL"));
+}
+
+TEST(EngineCStatusTest, SetMinLogLevelReturnsStatus) {
+  EXPECT_EQ(litert_lm_set_min_log_level(kLiteRtLmLogSeverityInfo),
+            kLiteRtLmStatusOk);
+
+  litert_lm_clear_last_error();
+  // 6 is within the enum's value range but is not a declared enumerator.
+  EXPECT_EQ(litert_lm_set_min_log_level(static_cast<LiteRtLmLogSeverity>(6)),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Unknown LiteRtLmLogSeverity"));
 }
 
 TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
