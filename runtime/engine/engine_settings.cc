@@ -136,6 +136,7 @@ absl::Status MaybeOverrideActivationType(
     if (prefer_activation_type.value() == "fp32_fp16") {
       // For mixed precision, we need to set the activation data type to F32
       // and set the enable_mixed_precision to true.
+      executor_settings.SetActivationDataType(ActivationDataType::FLOAT32);
       executor_settings.SetEnableMixedPrecision(true);
     }
   }
