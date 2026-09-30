@@ -2,6 +2,8 @@
     {%- for item in content -%}
         {%- if item['type'] == 'text' -%}
             {{- item['text'] -}}
+        {%- elif item['type'] == 'image' -%}
+            {{- '<image>' -}}
         {%- elif item['type'] == 'tool_response' -%}
             {%- if item['response'] is mapping or item['response'] is sequence -%}
                 {{- item['response'] | tojson -}}
