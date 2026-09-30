@@ -38,7 +38,8 @@ struct EmbeddingOptions {
 
   // Strategy for handling inputs longer than the maximum supported signature
   // length.
-  InputOverflowStrategy input_overflow_strategy = InputOverflowStrategy::kError;
+  InputOverflowStrategy input_overflow_strategy =
+      InputOverflowStrategy::kChunkAndAverage;
   // The number of vision soft tokens to generate per image. If set, overrides
   // the default max_num_patches parameter for image preprocessing during this
   // computation.
