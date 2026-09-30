@@ -122,6 +122,9 @@ struct LiteRtLmSettings {
   std::string cache_dir = "";
   int prefill_chunk_size = -1;
   std::string preferred_device_substr = "";
+  // GPU delegate backend selection for the GPU path: "", "opencl", "opengl",
+  // or "webgpu". Empty means keep the build-time default.
+  std::string gpu_backend = "";
   int num_threads_to_upload = -1;
   int num_threads_to_compile = -1;
   bool convert_weights_on_gpu = true;

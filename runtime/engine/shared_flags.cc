@@ -122,6 +122,11 @@ ABSL_FLAG(std::string, preferred_device_substr, "",
           "If not empty, the adapter which the device name contains the "
           "substring will be chosen. "
           "If empty, the device will be determined by other factors.");
+ABSL_FLAG(std::string, gpu_backend, "",
+          "GPU delegate backend to use for the GPU path: 'opencl', 'opengl', "
+          "or 'webgpu'. Empty (default) keeps the build-time behavior (WebGPU "
+          "when built with -DLITERT_USE_WEBGPU_ACCELERATOR, otherwise LiteRT's "
+          "default backend).");
 ABSL_FLAG(int, num_threads_to_upload, -1,
           "Number of threads for WebGPU weight upload. By default (-1), it's "
           "determined by the runtime.");
