@@ -50,6 +50,7 @@ internal object LiteRtLmJni {
    *   engine's default.
    * @param activationDataType The activation data type override for inference. When negative, use
    *   the engine's default.
+   * @param enableYnnpack Whether to enable YNNPACK. When null, use the engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -69,6 +70,7 @@ internal object LiteRtLmJni {
     audioBackendNumThreads: Int,
     maxVisionTokensPerImage: Int,
     activationDataType: Int = -1,
+    enableYnnpack: Boolean? = null,
   ): Long
 
   /**
@@ -81,6 +83,7 @@ internal object LiteRtLmJni {
    * @param cacheDir The directory for cache files.
    * @param mainNpuNativeLibraryDir The directory for the main backend NPU libraries.
    * @param enableSpeculativeDecoding Whether to enable speculative decoding.
+   * @param enableYnnpack Whether to enable YNNPACK. When null, use the engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateBenchmark(
@@ -91,6 +94,7 @@ internal object LiteRtLmJni {
     cacheDir: String,
     mainNpuNativeLibraryDir: String,
     enableSpeculativeDecoding: Boolean?,
+    enableYnnpack: Boolean? = null,
   ): Long
 
   /**

@@ -91,6 +91,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           audioBackendNumThreads,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget ?: -1,
           engineConfig.activationDataType?.value ?: -1,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.enableYnnpack,
         )
     }
   }

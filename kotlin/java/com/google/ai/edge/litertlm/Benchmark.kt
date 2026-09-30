@@ -79,6 +79,7 @@ fun benchmark(
       cacheDir ?: "",
       (backend as? Backend.NPU)?.nativeLibraryDir ?: "",
       ExperimentalFlags.enableSpeculativeDecoding,
+      ExperimentalFlags.enableYnnpack,
     )
 
   try {

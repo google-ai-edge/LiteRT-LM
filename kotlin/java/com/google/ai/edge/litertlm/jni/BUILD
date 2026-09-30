@@ -26,6 +26,7 @@ cc_binary(
     srcs = ["litertlm.cc"],
     linkshared = 1,
     deps = [
+        ":jni_utils",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -41,7 +42,6 @@ cc_binary(
         "@litert//litert/cc/internal:scoped_file",
         "//c:engine",
         "//c:model_info_headers",
-        "//kotlin/java/com/google/ai/edge/litertlm/jni:jni_utils",
         "//runtime/components:model_resources",
         "//runtime/components:prompt_template",
         "//runtime/components/constrained_decoding:llg_constraint_config",

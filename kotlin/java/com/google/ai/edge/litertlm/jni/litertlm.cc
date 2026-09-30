@@ -460,7 +460,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jobject enable_speculative_decoding, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jint main_backend_num_threads, jint audio_backend_num_threads,
-    jint max_vision_tokens_per_image, jint activation_data_type) {
+    jint max_vision_tokens_per_image, jint activation_data_type,
+    jobject enable_ynnpack) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -642,6 +643,17 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     }
   }
 
+  if (std::optional<bool> enable_ynnpack_opt =
+          GetOptionalBoolean(env, enable_ynnpack);
+      enable_ynnpack_opt.has_value()) {
+    if (auto cpu_config = settings->GetMutableMainExecutorSettings()
+                              .MutableBackendConfig<litert::lm::CpuConfig>();
+        cpu_config.ok()) {
+      cpu_config->enable_ynnpack = *enable_ynnpack_opt;
+      settings->GetMutableMainExecutorSettings().SetBackendConfig(*cpu_config);
+    }
+  }
+
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
@@ -655,7 +667,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
     jint prefill_tokens, jint decode_tokens, jstring cache_dir,
-    jstring main_npu_native_library_dir, jobject enable_speculative_decoding) {
+    jstring main_npu_native_library_dir, jobject enable_speculative_decoding,
+    jobject enable_ynnpack) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -719,6 +732,17 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   }
   settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
       advanced_settings);
+
+  if (std::optional<bool> enable_ynnpack_opt =
+          GetOptionalBoolean(env, enable_ynnpack);
+      enable_ynnpack_opt.has_value()) {
+    if (auto cpu_config = settings->GetMutableMainExecutorSettings()
+                              .MutableBackendConfig<litert::lm::CpuConfig>();
+        cpu_config.ok()) {
+      cpu_config->enable_ynnpack = *enable_ynnpack_opt;
+      settings->GetMutableMainExecutorSettings().SetBackendConfig(*cpu_config);
+    }
+  }
 
   auto& benchmark_params = settings->GetMutableBenchmarkParams();
   benchmark_params.set_num_prefill_tokens(prefill_tokens);
