@@ -300,6 +300,16 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetKVCacheRootNames_KvCacheC) {
   EXPECT_EQ(v_root_name, "kv_cache_c_");
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest, IsLinearAttentionStateName) {
+  EXPECT_TRUE(IsLinearAttentionStateName("kv_cache_c_0"));
+  EXPECT_TRUE(IsLinearAttentionStateName("kv_cache_r_12"));
+  EXPECT_FALSE(IsLinearAttentionStateName("kv_cache_k_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("kv_cache_v_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("k_cache_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("input_pos"));
+  EXPECT_FALSE(IsLinearAttentionStateName(""));
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      GetKVCacheRootNames_HybridConvAndKVCache) {
   // Hybrid models like LFM start with conv cache (kv_cache_c_0) followed by

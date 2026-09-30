@@ -433,6 +433,19 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
   return absl::FailedPreconditionError("No KV cache inputs found.");
 }
 
+bool IsLinearAttentionStateName(absl::string_view name) {
+  static constexpr absl::string_view kLinearAttentionStatePrefixes[] = {
+      "kv_cache_c_",  // Convolution state.
+      "kv_cache_r_",  // Recurrent state.
+  };
+  for (absl::string_view prefix : kLinearAttentionStatePrefixes) {
+    if (absl::StartsWith(name, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
     absl::string_view input_positions_name,

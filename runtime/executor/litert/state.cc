@@ -371,9 +371,14 @@ absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
     const bool is_local_kv_cache =
         state_buffer.type == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE ||
         state_buffer.type == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE;
-    if (should_skip_inputs && (!is_prefill || !is_local_kv_cache)) {
+    const bool is_linear_attention =
+        state_buffer.type == proto::StateBuffer::TYPE_LINEAR_ATTENTION ||
+        IsLinearAttentionStateName(input_name);
+    if (should_skip_inputs && !is_linear_attention &&
+        (!is_prefill || !is_local_kv_cache)) {
       // For GPU optimized in place updates, we are required to pass the local
-      // KV cache buffers as inputs too in the prefill stage.
+      // KV cache buffers as inputs too in the prefill stage, and linear
+      // attention / conv state buffers in both prefill and decode.
       continue;
     }
     LITERT_ASSIGN_OR_RETURN(auto duplicated, state_buffer.buffer.Duplicate());

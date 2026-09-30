@@ -106,6 +106,13 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
                                  std::string& k_root_name,
                                  std::string& v_root_name);
 
+// Returns true if `name` is the name of a linear attention / convolution
+// recurrent state tensor (e.g. "kv_cache_c_0" for conv state, "kv_cache_r_0"
+// for recurrent state) of a hybrid model such as LFM2 or Qwen3.5. Unlike the
+// standard KV cache, these states are overwritten every step and must always
+// be fed as inputs.
+bool IsLinearAttentionStateName(absl::string_view name);
+
 // Gets a set of prefill signature runners from the interpreter.
 // The signature runners are sorted by the input tokens dimension.
 // signature_name_base is the prefix of the prefill signature names, e.g.
