@@ -237,7 +237,7 @@ TEST(OmniEngineTest, ResolvesAsrModelAndForwardsOptions) {
   };
   EXPECT_THAT(OmniEngine::Create("moonshine-tiny", options),
               StatusIs(absl::StatusCode::kNotFound,
-                       HasSubstr("/custom/asr_cache/moonshine-tiny.tflite")));
+                       HasSubstr("/custom/asr_cache/moonshine-tiny.litertlm")));
 }
 
 TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {

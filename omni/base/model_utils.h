@@ -110,6 +110,10 @@ absl::StatusOr<std::string> LoadFile(absl::string_view path);
 absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
                                      absl::string_view filename);
 
+// Downloads a file from `url` to `target_path` using curl.
+absl::Status DownloadFileWithCurl(absl::string_view url,
+                                  absl::string_view target_path);
+
 // Creates a shared lm::ModelResources from a .litertlm container file path.
 absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
     absl::string_view model_path);

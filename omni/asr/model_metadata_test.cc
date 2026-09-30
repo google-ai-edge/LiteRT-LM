@@ -36,11 +36,47 @@ TEST(ModelMetadataTest, LoadsSupportedModelsFromEmbeddedJson) {
       "whisper-tiny",         "qwen3-asr-0.6b",    "tinygemma-asr",
   };
 
-  for (const auto& model : models) {
-    ASSERT_OK_AND_ASSIGN(auto config, GetConfigFromMetadataJson(model));
-    EXPECT_EQ(config.model_name, model);
+  for (const auto& model_name : models) {
+    ASSERT_OK_AND_ASSIGN(auto config, GetConfigFromMetadataJson(model_name));
+    EXPECT_EQ(config.model_name, model_name);
     EXPECT_GT(config.input_milliseconds, 0);
+    EXPECT_EQ(config.decoder_type, AsrEngineConfig::DecoderType::kUnspecified);
+    EXPECT_THAT(config.model_url, ::testing::EndsWith(".litertlm"));
+    EXPECT_TRUE(config.tokenizer_url.empty());
   }
+}
+
+TEST(ModelMetadataTest, ResolvesDecoderTypeForTfliteModels) {
+  constexpr absl::string_view kTfliteMetadataJson = R"json({
+    "parakeet-tdt-0.6b-v3": {
+      "modelRemoteUrl": "https://example.com/parakeet_tdt.tflite",
+      "inputMilliseconds": 5000
+    },
+    "parakeet-ctc-0.6b": {
+      "modelRemoteUrl": "https://example.com/parakeet_ctc.tflite",
+      "inputMilliseconds": 5000
+    },
+    "moonshine-tiny": {
+      "modelRemoteUrl": "https://example.com/moonshine_tiny.tflite",
+      "inputMilliseconds": 5000
+    }
+  })json";
+
+  ASSERT_OK_AND_ASSIGN(
+      auto tdt_config,
+      GetConfigFromMetadataJson("parakeet-tdt-0.6b-v3", kTfliteMetadataJson));
+  EXPECT_EQ(tdt_config.decoder_type, AsrEngineConfig::DecoderType::kTdt);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto ctc_config,
+      GetConfigFromMetadataJson("parakeet-ctc-0.6b", kTfliteMetadataJson));
+  EXPECT_EQ(ctc_config.decoder_type, AsrEngineConfig::DecoderType::kCtc);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto stateless_config,
+      GetConfigFromMetadataJson("moonshine-tiny", kTfliteMetadataJson));
+  EXPECT_EQ(stateless_config.decoder_type,
+            AsrEngineConfig::DecoderType::kStateless);
 }
 
 TEST(ModelMetadataTest, RejectsUnknownModel) {

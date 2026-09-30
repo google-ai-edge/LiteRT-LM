@@ -31,6 +31,7 @@
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/omni_engine.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -38,10 +39,11 @@ namespace litert::omni::asr {
 
 struct AsrEngineConfig {
   enum class DecoderType {
-    kCtc = 0,
-    kTdt = 1,
-    kStateless = 2,
-    kLm = 3,
+    kUnspecified = 0,
+    kCtc = 1,
+    kTdt = 2,
+    kStateless = 3,
+    kLm = 4,
   };
 
   enum class TextMergerType {
@@ -105,6 +107,7 @@ class AsrEngine {
 
  private:
   AsrEngine(AsrEngineConfig config,
+            std::shared_ptr<::litert::lm::ModelResources> model_resources,
             std::unique_ptr<::litert::support::Tokenizer> tokenizer,
             std::unique_ptr<::litert::Environment> environment,
             std::unique_ptr<::litert::CompiledModel> compiled_model,
@@ -116,6 +119,7 @@ class AsrEngine {
                                             const FileDownloader& downloader);
 
   AsrEngineConfig config_;
+  std::shared_ptr<::litert::lm::ModelResources> model_resources_;
   std::unique_ptr<::litert::support::Tokenizer> tokenizer_;
   std::unique_ptr<::litert::Environment> environment_;
   std::unique_ptr<::litert::CompiledModel> compiled_model_;

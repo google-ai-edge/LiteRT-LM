@@ -60,6 +60,8 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/asr_metadata.pb.h"
+#include "runtime/proto/asr_model_type.pb.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -84,6 +86,44 @@ lm::Backend ToLmBackend(OmniEngine::Options::Backend backend) {
     case OmniEngine::Options::Backend::kCpu:
     default:
       return lm::Backend::CPU;
+  }
+}
+
+void ResolveDecoderTypeFromLitertLm(lm::ModelResources& lm_resources,
+                                    AsrEngineConfig& config) {
+  auto asr_metadata = lm_resources.GetAsrMetadata();
+  if (asr_metadata.ok() && *asr_metadata != nullptr) {
+    switch ((*asr_metadata)->asr_model_type().model_type_case()) {
+      case lm::proto::AsrModelType::kWhisper:
+      case lm::proto::AsrModelType::kMoonshine:
+        config.decoder_type = AsrEngineConfig::DecoderType::kStateless;
+        return;
+      case lm::proto::AsrModelType::kParakeet:
+        if (lm_resources
+                .GetTFLiteModelBuffer(
+                    lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER)
+                .ok()) {
+          config.decoder_type = AsrEngineConfig::DecoderType::kTdt;
+        } else if (lm_resources
+                       .GetTFLiteModelBuffer(
+                           lm::proto::AsrMetadata::TF_LITE_AUDIO_ENCODER)
+                       .ok()) {
+          config.decoder_type = AsrEngineConfig::DecoderType::kCtc;
+        }
+        return;
+      case lm::proto::AsrModelType::kQwen3Asr:
+        config.decoder_type = AsrEngineConfig::DecoderType::kLm;
+        return;
+      case lm::proto::AsrModelType::MODEL_TYPE_NOT_SET:
+        break;
+    }
+  }
+  // Legacy LLM-based ASR .litertlm packages (e.g., tinygemma-asr,
+  // qwen3-asr-0.6b) may only contain LlmMetadata without an AsrMetadata
+  // section, so check for LlmMetadata as a fallback to identify LM decoders.
+  auto llm_metadata = lm_resources.GetLlmMetadata();
+  if (llm_metadata.ok() && *llm_metadata != nullptr) {
+    config.decoder_type = AsrEngineConfig::DecoderType::kLm;
   }
 }
 
@@ -147,29 +187,63 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   auto thread_pool = std::make_unique<::litert::lm::ThreadPool>(
       "asr_engine_pool", config.num_threads);
 
-  bool use_litert_lm =
-      config.decoder_type == AsrEngineConfig::DecoderType::kLm ||
-      absl::EndsWith(config.model_path, ".litertlm");
-  if (!use_litert_lm) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto tokenizer, ::litert::support::HuggingFaceTokenizer::CreateFromFile(
-                            config.tokenizer_path));
+  std::shared_ptr<lm::ModelResources> lm_resources;
+  if (absl::EndsWith(config.model_path, ".litertlm")) {
+    ABSL_ASSIGN_OR_RETURN(lm_resources,
+                          CreateLmModelResources(config.model_path));
+    ResolveDecoderTypeFromLitertLm(*lm_resources, config);
+  }
+  if (config.decoder_type == AsrEngineConfig::DecoderType::kUnspecified) {
+    return absl::InvalidArgumentError(
+        "ASR decoder_type is unspecified and could not be resolved from model "
+        "metadata.");
+  }
+
+  if (config.decoder_type != AsrEngineConfig::DecoderType::kLm) {
+    std::unique_ptr<::litert::support::Tokenizer> tokenizer;
+    std::unique_ptr<::litert::CompiledModel> compiled_model;
+
+    if (lm_resources != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(tokenizer, lm_resources->GetTokenizer());
+      auto model_buffer = lm_resources->GetTFLiteModelBuffer(
+          lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER);
+      if (!model_buffer.ok()) {
+        model_buffer = lm_resources->GetTFLiteModelBuffer(
+            lm::proto::AsrMetadata::TF_LITE_AUDIO_ENCODER);
+      }
+      if (!model_buffer.ok()) {
+        return model_buffer.status();
+      }
+      LITERT_ASSIGN_OR_RETURN(
+          auto comp_model,
+          ::litert::CompiledModel::Create(
+              environment,
+              ::litert::BufferRef<uint8_t>(
+                  reinterpret_cast<const uint8_t*>(model_buffer->data()),
+                  model_buffer->size()),
+              options));
+      compiled_model =
+          std::make_unique<::litert::CompiledModel>(std::move(comp_model));
+    } else {
+      ABSL_ASSIGN_OR_RETURN(
+          tokenizer, ::litert::support::HuggingFaceTokenizer::CreateFromFile(
+                         config.tokenizer_path));
+      LITERT_ASSIGN_OR_RETURN(auto comp_model,
+                              ::litert::CompiledModel::Create(
+                                  environment, config.model_path, options));
+      compiled_model =
+          std::make_unique<::litert::CompiledModel>(std::move(comp_model));
+    }
+
     if (config.vocab_size == 0) {
       config.vocab_size = tokenizer->GetVocabSize();
     }
 
-    LITERT_ASSIGN_OR_RETURN(auto compiled_model,
-                            ::litert::CompiledModel::Create(
-                                environment, config.model_path, options));
-
     return std::unique_ptr<AsrEngine>(new AsrEngine(
-        std::move(config), std::move(tokenizer),
+        std::move(config), std::move(lm_resources), std::move(tokenizer),
         std::make_unique<::litert::Environment>(std::move(environment)),
-        std::make_unique<::litert::CompiledModel>(std::move(compiled_model)),
-        std::move(thread_pool)));
+        std::move(compiled_model), std::move(thread_pool)));
   }
-
-  config.decoder_type = AsrEngineConfig::DecoderType::kLm;
 
   ModelOptions lm_options;
   lm_options.backend = ToLmBackend(config.backend);
@@ -229,20 +303,23 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   }
 
   return std::unique_ptr<AsrEngine>(new AsrEngine(
-      std::move(config), std::move(tokenizer),
+      std::move(config), std::move(lm_resources), std::move(tokenizer),
       std::make_unique<::litert::Environment>(std::move(environment)),
       std::move(compiled_model), std::move(thread_pool), std::move(lm_runner),
       std::move(lm_engine_runner)));
 }
 
-AsrEngine::AsrEngine(AsrEngineConfig config,
-                     std::unique_ptr<::litert::support::Tokenizer> tokenizer,
-                     std::unique_ptr<::litert::Environment> environment,
-                     std::unique_ptr<::litert::CompiledModel> compiled_model,
-                     std::unique_ptr<::litert::lm::ThreadPool> thread_pool,
-                     std::unique_ptr<LiteRtLmRunner> lm_runner,
-                     std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner)
+AsrEngine::AsrEngine(
+    AsrEngineConfig config,
+    std::shared_ptr<::litert::lm::ModelResources> model_resources,
+    std::unique_ptr<::litert::support::Tokenizer> tokenizer,
+    std::unique_ptr<::litert::Environment> environment,
+    std::unique_ptr<::litert::CompiledModel> compiled_model,
+    std::unique_ptr<::litert::lm::ThreadPool> thread_pool,
+    std::unique_ptr<LiteRtLmRunner> lm_runner,
+    std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner)
     : config_(std::move(config)),
+      model_resources_(std::move(model_resources)),
       tokenizer_(std::move(tokenizer)),
       environment_(std::move(environment)),
       compiled_model_(std::move(compiled_model)),
@@ -317,6 +394,9 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
       }
       break;
     }
+    case AsrEngineConfig::DecoderType::kUnspecified:
+      return absl::InvalidArgumentError(
+          "ASR decoder_type must be specified before creating a session.");
   }
 
   AudioPreprocessor* raw_preprocessor = preprocessor.get();
