@@ -30,32 +30,6 @@ if(EXISTS "${LITERTLM_TFLITE_SRC_DIR}")
      DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tflite")
 endif()
 
-# Generate tflite/schema/mutable/schema_generated.h, the CMake equivalent of
-# Bazel's //tflite/schema:schema_fbs_with_mutable. Required by
-# tensor/backends/tflite/*.
-set(LITERTLM_TFLITE_SCHEMA_FBS
-    "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/schema/schema.fbs")
-set(LITERTLM_TFLITE_MUTABLE_SCHEMA_DIR
-    "${LITERTLM_LITERT_SRC_DIR}/../tflite/schema/mutable")
-if(EXISTS "${LITERTLM_TFLITE_SCHEMA_FBS}")
-    message(STATUS "[LiteRTLM] Generating tflite/schema/mutable/schema_generated.h...")
-    file(MAKE_DIRECTORY "${LITERTLM_TFLITE_MUTABLE_SCHEMA_DIR}")
-    execute_process(
-        COMMAND "${LITERTLM_FLATC_EXECUTABLE}" -c
-                --gen-mutable --gen-object-api
-                -o "${LITERTLM_TFLITE_MUTABLE_SCHEMA_DIR}/"
-                "${LITERTLM_TFLITE_SCHEMA_FBS}"
-        RESULT_VARIABLE _mutable_schema_res
-    )
-    if(NOT _mutable_schema_res EQUAL 0)
-        message(FATAL_ERROR
-            "[LiteRTLM] flatc failed to generate mutable TFLite schema. "
-            "flatc: ${LITERTLM_FLATC_EXECUTABLE}")
-    endif()
-else()
-    message(WARNING "[LiteRTLM] TFLite schema.fbs not found at ${LITERTLM_TFLITE_SCHEMA_FBS}")
-endif()
-
 # Only replace LiteRT's own tensor/ directory when an override source is
 # provided. Otherwise keep the upstream copy, which LiteRT-LM compiles
 # (e.g. tensor/buffer.cc for the logit mask runner).
