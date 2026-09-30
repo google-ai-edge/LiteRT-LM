@@ -14,21 +14,31 @@
 
 #include "runtime/conversation/model_data_processor/data_utils.h"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/constraint.h"
+#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+#include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
+#endif
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/status_macros.h"
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -106,5 +116,73 @@ absl::StatusOr<ordered_json> ResponseTextToMessage(
   }
   return message;
 }
+
+#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+absl::StatusOr<GemmaModelConstraintProviderPtr>
+CreateGemmaModelConstraintProvider(
+    const ::litert::support::Tokenizer* tokenizer,
+    const std::vector<std::vector<int>>& stop_token_ids) {
+  GemmaModelConstraintProviderPtr constraint_provider(
+      nullptr, &LiteRtLmGemmaModelConstraintProvider_Destroy);
+  if (tokenizer->GetTokenizerType() !=
+      ::litert::support::TokenizerType::kSentencePiece) {
+    ABSL_LOG(WARNING) << "Constrained decoding is only supported for "
+                         "SentencePiece tokenizer.";
+    return constraint_provider;
+  }
+  std::vector<const int*> stop_token_ids_ptrs;
+  std::vector<size_t> stop_token_lengths;
+  stop_token_ids_ptrs.reserve(stop_token_ids.size());
+  stop_token_lengths.reserve(stop_token_ids.size());
+  for (const auto& stop_tokens : stop_token_ids) {
+    stop_token_ids_ptrs.push_back(stop_tokens.data());
+    stop_token_lengths.push_back(stop_tokens.size());
+  }
+  auto sp_tokenizer =
+      reinterpret_cast<const ::litert::support::SentencePieceTokenizer*>(
+          tokenizer);
+  auto serialized_model_proto =
+      sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
+  LiteRtLmGemmaModelConstraintProvider* provider =
+      LiteRtLmGemmaModelConstraintProvider_Create(
+          serialized_model_proto.data(), serialized_model_proto.size(),
+          stop_token_ids_ptrs.data(), stop_token_lengths.data(),
+          stop_token_ids.size());
+  if (provider == nullptr) {
+    return absl::InternalError(
+        "Failed to create GemmaModelConstraintProvider.");
+  }
+  constraint_provider.reset(provider);
+  return constraint_provider;
+}
+
+absl::StatusOr<std::unique_ptr<Constraint>> CreateGemmaConstraintFromTools(
+    LiteRtLmGemmaModelConstraintProvider* provider,
+    const nlohmann::ordered_json& tools,
+    const LiteRtLmGemmaModelConstraintOptions& options) {
+  if (provider == nullptr) {
+    return nullptr;
+  }
+  if (!tools.is_array()) {
+    return absl::InvalidArgumentError("Tools must be an array.");
+  }
+  nlohmann::ordered_json functions = nlohmann::ordered_json::array();
+  for (const auto& tool : tools) {
+    if (tool.contains("function")) {
+      functions.push_back(tool["function"]);
+    } else {
+      functions.push_back(tool);
+    }
+  }
+  std::string functions_str = functions.dump();
+  LiteRtLmConstraint* constraint =
+      LiteRtLmGemmaModelConstraintProvider_CreateConstraintFromTools(
+          provider, functions_str.c_str(), &options);
+  if (constraint == nullptr) {
+    return absl::InternalError("Failed to create constraint with tools.");
+  }
+  return absl::WrapUnique(reinterpret_cast<Constraint*>(constraint));
+}
+#endif
 
 }  // namespace litert::lm
