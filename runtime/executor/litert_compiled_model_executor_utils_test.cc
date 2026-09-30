@@ -2102,5 +2102,79 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_FALSE(params.sliding_window_size.has_value());
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ShouldSkipGlobalCausalAttentionMask) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto bool_layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));
+  RankedTensorType bool_tensor_type(ElementType::Bool, std::move(bool_layout));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto bool_host_mask,
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  bool_tensor_type, sizeof(bool) * 128));
+
+  auto float_layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));
+  RankedTensorType float_tensor_type(ElementType::Float32,
+                                     std::move(float_layout));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto float_host_mask,
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  float_tensor_type, sizeof(float) * 128));
+
+  ModelSignatures signatures;
+  signatures.input_tokens = "tokens";
+  signatures.input_positions = "input_pos";
+  signatures.input_attn_mask = "mask";
+  signatures.input_int32_param = "param_tensor";
+  signatures.output_logits = "logits";
+
+  AttentionMaskParams causal_params;
+  causal_params.global_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+
+  // Pruned boolean mask on GPU with single-buffer cache params should be
+  // skipped.
+  EXPECT_TRUE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &bool_host_mask));
+
+  // CPU backend must never skip initializing/filling the host attention mask.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::CPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &bool_host_mask));
+
+  // Float attention masks are not pruned by Flash SDPA and must not be skipped.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &float_host_mask));
+
+  // Null mask buffer or disabled single-buffer cache must not skip.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, /*attn_mask_buffer=*/nullptr));
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/false, signatures,
+      causal_params, &bool_host_mask));
+
+  // Bidirectional and vision-bidirectional masks must not be skipped.
+  AttentionMaskParams bidirectional_params;
+  bidirectional_params.global_type = proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      bidirectional_params, &bool_host_mask));
+
+  AttentionMaskParams vision_bidirectional_params;
+  vision_bidirectional_params.global_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      vision_bidirectional_params, &bool_host_mask));
+
+  // Models with a separate local attention mask must not skip.
+  ModelSignatures local_mask_signatures = signatures;
+  local_mask_signatures.input_attn_mask_local = "local_mask";
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask));
+}
+
 }  // namespace
 }  // namespace litert::lm

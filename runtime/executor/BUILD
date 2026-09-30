@@ -151,6 +151,7 @@ cc_library(
         "@litert//litert/cc:litert_options",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "//runtime/components:model_resources",

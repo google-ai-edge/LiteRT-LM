@@ -236,6 +236,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
         use_fp16_precision_(use_fp16_precision),
         logits_data_type_(logits_data_type),
+        gpu_optimized_single_buffer_cache_(
+            signatures_.input_int32_param.has_value()),
         mtp_drafter_(std::move(mtp_drafter)),
         executor_metadata_(executor_metadata),
         pre_graph_run_callback_(std::move(pre_graph_run_callback)),

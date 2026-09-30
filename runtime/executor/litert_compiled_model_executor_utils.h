@@ -175,6 +175,15 @@ struct AttentionMaskParams {
 AttentionMaskParams GetAttentionMaskParams(
     const proto::ExecutorMetadata* executor_metadata);
 
+// Returns true if host-side global attention mask initialization and filling
+// can be skipped because the GPU compiled model pruned the boolean global
+// causal mask input (e.g., when FlashAttention / FlashDecode SDPA computes
+// causal masking directly on the GPU from `param_tensor`).
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer = nullptr);
+
 // The operational mode for filling the ring-buffer attention mask.
 enum class RingBufferAttentionMaskMode {
   // Prefill mode: keys are split into past cache and fresh chunk.

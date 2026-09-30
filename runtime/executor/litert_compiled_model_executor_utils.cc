@@ -52,6 +52,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -685,6 +686,46 @@ AttentionMaskParams GetAttentionMaskParams(
     }
   }
   return params;
+}
+
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer) {
+  if (backend != Backend::GPU || !gpu_optimized_single_buffer_cache ||
+      !signatures.input_attn_mask.has_value() ||
+      !signatures.input_int32_param.has_value() ||
+      signatures.input_attn_mask_local.has_value() ||
+      attn_params.global_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL ||
+      attn_params.global_type ==
+          proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL ||
+      attn_mask_buffer == nullptr || !*attn_mask_buffer) {
+    return false;
+  }
+  auto tensor_type = attn_mask_buffer->TensorType();
+  if (!tensor_type.HasValue() ||
+      tensor_type->ElementType() != ::litert::ElementType::Bool) {
+    return false;
+  }
+  auto buffer_type = attn_mask_buffer->BufferType();
+  if (!buffer_type.HasValue()) {
+    return false;
+  }
+  // When the GPU delegate consumes the attention mask, it registers GPU buffer
+  // requirements for `input_attn_mask`, so `CreateInputBuffer` allocates a
+  // device buffer (e.g., Metal, OpenCL, or WebGPU). When all SDPA nodes in the
+  // subgraph compute causal masking directly from `param_tensor` and prune the
+  // boolean mask consumer from the GPU graph, no GPU buffer requirement is
+  // registered and `CreateInputBuffer` falls back to `kHostMemory`.
+  //
+  // The fallback host buffer is still allocated (`posix_memalign`), but once
+  // this returns true the executor never locks, initializes, or fills it, and
+  // the GPU graph never reads it. Its pages are therefore never touched and do
+  // not become resident, so the cost is address space rather than physical
+  // memory. Previously the same buffer was zeroed and filled on every prefill
+  // chunk and decode step (e.g. 1024 x 32768 bytes = 32 MB per prefill call),
+  // which did commit it.
+  return *buffer_type == ::litert::TensorBufferType::kHostMemory;
 }
 
 absl::Status FillAttentionMask(

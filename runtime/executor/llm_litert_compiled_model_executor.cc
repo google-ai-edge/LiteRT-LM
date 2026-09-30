@@ -541,7 +541,20 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         static_cast<int32_t*>(prefill_input_pos_lock_and_addr.second);
 
     memset(prefill_input_pos_ptr, 0, prefill_input_pos_size);
-    if (signatures_.input_attn_mask.has_value()) {
+    const AttentionMaskParams prefill_attn_params =
+        GetAttentionMaskParams(executor_metadata_);
+    const TensorBuffer* prefill_attn_mask_buffer =
+        signatures_.input_attn_mask.has_value() &&
+                prefill_input_buffers.contains(*signatures_.input_attn_mask)
+            ? &prefill_input_buffers[*signatures_.input_attn_mask]
+            : nullptr;
+    const bool skip_cpu_global_causal_mask =
+        ShouldSkipGlobalCausalAttentionMask(
+            executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
+            signatures_, prefill_attn_params, prefill_attn_mask_buffer);
+
+    if (signatures_.input_attn_mask.has_value() &&
+        !skip_cpu_global_causal_mask) {
       ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
           prefill_input_buffers[signatures_.input_attn_mask.value()],
           use_fp16_precision_));
@@ -683,9 +696,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
           }
         }
       }
-      if (signatures_.input_attn_mask.has_value()) {
-        const AttentionMaskParams attn_params =
-            GetAttentionMaskParams(executor_metadata_);
+      if (signatures_.input_attn_mask.has_value() &&
+          !skip_cpu_global_causal_mask) {
+        const AttentionMaskParams& attn_params = prefill_attn_params;
         auto tokens_copy = llm_context_->processed_context()
                                .processed_tokens()
                                .GetCopyOfTokens();
@@ -1021,7 +1034,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
     }
   }
 
-  if (signatures_.input_attn_mask.has_value()) {
+  const AttentionMaskParams decode_attn_params =
+      GetAttentionMaskParams(executor_metadata_);
+  const TensorBuffer* decode_attn_mask_buffer =
+      signatures_.input_attn_mask.has_value() &&
+              decode_input_buffers_.contains(*signatures_.input_attn_mask)
+          ? &decode_input_buffers_[*signatures_.input_attn_mask]
+          : nullptr;
+  const bool skip_cpu_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
+      executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
+      signatures_, decode_attn_params, decode_attn_mask_buffer);
+
+  if (signatures_.input_attn_mask.has_value() && !skip_cpu_global_causal_mask) {
     ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
         decode_input_buffers_[signatures_.input_attn_mask.value()],
         use_fp16_precision_));
@@ -1030,8 +1054,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
           decode_input_buffers_[signatures_.input_attn_mask_local.value()],
           use_fp16_precision_));
     }
-    const AttentionMaskParams attn_params =
-        GetAttentionMaskParams(executor_metadata_);
+    const AttentionMaskParams& attn_params = decode_attn_params;
     auto tokens_copy =
         llm_context_->processed_context().processed_tokens().GetCopyOfTokens();
     absl::Span<const int> token_ids_span =
@@ -1556,7 +1579,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
           compiled_model_->CreateInputBuffer(kDecodeSignatureRunner,
                                              signatures_.input_positions));
     }
-    if (!decode_prev_mask_ && signatures_.input_attn_mask.has_value()) {
+    const AttentionMaskParams sampler_attn_params =
+        GetAttentionMaskParams(executor_metadata_);
+    const TensorBuffer* decode_attn_mask_buffer =
+        signatures_.input_attn_mask.has_value() &&
+                decode_input_buffers_.contains(*signatures_.input_attn_mask)
+            ? &decode_input_buffers_[*signatures_.input_attn_mask]
+            : nullptr;
+    const bool skip_sampler_global_causal_mask =
+        ShouldSkipGlobalCausalAttentionMask(
+            executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
+            signatures_, sampler_attn_params, decode_attn_mask_buffer);
+    if (!decode_prev_mask_ && signatures_.input_attn_mask.has_value() &&
+        !skip_sampler_global_causal_mask) {
       LITERT_ASSIGN_OR_RETURN(
           decode_prev_mask_,
           compiled_model_->CreateInputBuffer(kDecodeSignatureRunner,
@@ -1581,7 +1616,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SwapSamplerInputTensors() {
   // Move the input_pos and mask to previous ones.
   std::swap(decode_prev_input_pos_,
             decode_input_buffers_[signatures_.input_positions]);
-  if (signatures_.input_attn_mask.has_value()) {
+  if (signatures_.input_attn_mask.has_value() && decode_prev_mask_) {
     std::swap(decode_prev_mask_,
               decode_input_buffers_[*signatures_.input_attn_mask]);
   }
@@ -1600,7 +1635,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetSamplerInputHandling(
                                                      nullptr, nullptr, nullptr);
   }
 
-  bool has_input_attn_mask = signatures_.input_attn_mask.has_value();
+  bool has_input_attn_mask =
+      signatures_.input_attn_mask.has_value() &&
+      static_cast<bool>(decode_prev_mask_);
   bool has_input_int32_param = signatures_.input_int32_param.has_value();
   return sampler_->SetInferenceFuncAndInputTensors(
       BindTensorsAndRunDecodeStatic, this,
