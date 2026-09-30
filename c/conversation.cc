@@ -138,6 +138,24 @@ litert::lm::OptionalArgs CreateOptionalArgs(
   return litert_lm_optional_args;
 }
 
+bool IsValidConstraintType(LiteRtLmConstraintType type) {
+  switch (type) {
+    case kLiteRtLmConstraintTypeNone:
+    case kLiteRtLmConstraintTypeRegex:
+    case kLiteRtLmConstraintTypeJsonSchema:
+      return true;
+  }
+  return false;
+}
+
+bool IsValidConstraintProviderType(LiteRtLmConstraintProviderType type) {
+  switch (type) {
+    case kLiteRtLmConstraintProviderTypeLlGuidance:
+      return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 using ::litert::lm::Conversation;
@@ -152,93 +170,100 @@ LiteRtLmConversationConfig* litert_lm_conversation_config_create() {
   return new LiteRtLmConversationConfig;
 }
 
-void litert_lm_conversation_config_set_session_config(
+LiteRtLmStatusCode litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(session_config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(session_config->config.get())) {
-    config->session_config = *session_config->config;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  LITERT_LM_C_RETURN_IF_NULL(session_config);
+  LITERT_LM_C_RETURN_IF_NULL(session_config->config);
+  config->session_config = *session_config->config;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_system_message(
+LiteRtLmStatusCode litert_lm_conversation_config_set_system_message(
     LiteRtLmConversationConfig* config, const char* system_message_json) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(system_message_json)) {
-    config->system_message_json = system_message_json;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  LITERT_LM_C_RETURN_IF_NULL(system_message_json);
+  config->system_message_json = system_message_json;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_tools(LiteRtLmConversationConfig* config,
-                                             const char* tools_json) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(tools_json)) {
-    config->tools_json = tools_json;
-  }
+LiteRtLmStatusCode litert_lm_conversation_config_set_tools(
+    LiteRtLmConversationConfig* config, const char* tools_json) {
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  LITERT_LM_C_RETURN_IF_NULL(tools_json);
+  config->tools_json = tools_json;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_messages(
+LiteRtLmStatusCode litert_lm_conversation_config_set_messages(
     LiteRtLmConversationConfig* config, const char* messages_json) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(messages_json)) {
-    config->messages_json = messages_json;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  LITERT_LM_C_RETURN_IF_NULL(messages_json);
+  config->messages_json = messages_json;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_extra_context(
+LiteRtLmStatusCode litert_lm_conversation_config_set_extra_context(
     LiteRtLmConversationConfig* config, const char* extra_context_json) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(extra_context_json)) {
-    config->extra_context_json = extra_context_json;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  LITERT_LM_C_RETURN_IF_NULL(extra_context_json);
+  config->extra_context_json = extra_context_json;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_prompt_template(
+LiteRtLmStatusCode litert_lm_conversation_config_set_prompt_template(
     LiteRtLmConversationConfig* config, const char* prompt_template) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config) &&
-      LITERT_LM_C_CHECK_NOT_NULL(prompt_template)) {
-    config->prompt_template = prompt_template;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  LITERT_LM_C_RETURN_IF_NULL(prompt_template);
+  config->prompt_template = prompt_template;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_enable_constrained_decoding(
+LiteRtLmStatusCode
+litert_lm_conversation_config_set_enable_constrained_decoding(
     LiteRtLmConversationConfig* config, bool enable_constrained_decoding) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    config->enable_constrained_decoding = enable_constrained_decoding;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  config->enable_constrained_decoding = enable_constrained_decoding;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_constraint_provider(
+LiteRtLmStatusCode litert_lm_conversation_config_set_constraint_provider(
     LiteRtLmConversationConfig* config,
     const LiteRtLmConstraintProviderType* provider_type) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    if (provider_type != nullptr) {
-      config->constraint_provider_type = *provider_type;
-    } else {
-      config->constraint_provider_type = std::nullopt;
-    }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  if (provider_type == nullptr) {
+    config->constraint_provider_type = std::nullopt;
+    return kLiteRtLmStatusOk;
   }
+  if (!IsValidConstraintProviderType(*provider_type)) {
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "Unknown LiteRtLmConstraintProviderType.");
+  }
+  config->constraint_provider_type = *provider_type;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
+LiteRtLmStatusCode
+litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
     LiteRtLmConversationConfig* config,
     bool filter_channel_content_from_kv_cache) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    config->filter_channel_content_from_kv_cache =
-        filter_channel_content_from_kv_cache;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  config->filter_channel_content_from_kv_cache =
+      filter_channel_content_from_kv_cache;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_stream_tool_calls(
+LiteRtLmStatusCode litert_lm_conversation_config_set_stream_tool_calls(
     LiteRtLmConversationConfig* config, bool stream_tool_calls,
     const char* channel_name) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    config->stream_tool_calls = stream_tool_calls;
-    if (channel_name != nullptr) {
-      config->stream_tool_calls_channel_name = channel_name;
-    }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  config->stream_tool_calls = stream_tool_calls;
+  if (channel_name != nullptr) {
+    config->stream_tool_calls_channel_name = channel_name;
   }
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmThinkingConfig* litert_lm_thinking_config_create() {
@@ -249,32 +274,32 @@ void litert_lm_thinking_config_delete(LiteRtLmThinkingConfig* config) {
   delete config;
 }
 
-void litert_lm_thinking_config_set_enable_thinking(
+LiteRtLmStatusCode litert_lm_thinking_config_set_enable_thinking(
     LiteRtLmThinkingConfig* config, bool enable_thinking) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    config->thinking_config = litert::lm::ThinkingConfig(
-        enable_thinking, config->thinking_config.thinking_token_budget());
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  config->thinking_config = litert::lm::ThinkingConfig(
+      enable_thinking, config->thinking_config.thinking_token_budget());
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_thinking_config_set_thinking_token_budget(
+LiteRtLmStatusCode litert_lm_thinking_config_set_thinking_token_budget(
     LiteRtLmThinkingConfig* config, int thinking_token_budget) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    config->thinking_config = litert::lm::ThinkingConfig(
-        config->thinking_config.enable_thinking(), thinking_token_budget);
-  }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  config->thinking_config = litert::lm::ThinkingConfig(
+      config->thinking_config.enable_thinking(), thinking_token_budget);
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_config_set_thinking_config(
+LiteRtLmStatusCode litert_lm_conversation_config_set_thinking_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmThinkingConfig* thinking_config) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(config)) {
-    if (thinking_config) {
-      config->thinking_config = thinking_config->thinking_config;
-    } else {
-      config->thinking_config = std::nullopt;
-    }
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  if (thinking_config) {
+    config->thinking_config = thinking_config->thinking_config;
+  } else {
+    config->thinking_config = std::nullopt;
   }
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_conversation_config_delete(LiteRtLmConversationConfig* config) {
@@ -286,92 +311,95 @@ litert_lm_conversation_optional_args_create() {
   return new LiteRtLmConversationOptionalArgs;
 }
 
-void litert_lm_conversation_optional_args_set_repetition_penalty_config(
-    LiteRtLmConversationOptionalArgs* args,
+LiteRtLmStatusCode
+litert_lm_conversation_optional_args_set_repetition_penalty_config(
+    LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmRepetitionPenaltyConfig* repetition_penalty_config) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(args)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
   if (!repetition_penalty_config ||
       !repetition_penalty_config->repetition_penalty_config.enabled()) {
-    args->repetition_penalty_config = std::nullopt;
-    return;
+    optional_args->repetition_penalty_config = std::nullopt;
+    return kLiteRtLmStatusOk;
   }
 
-  args->repetition_penalty_config =
+  optional_args->repetition_penalty_config =
       repetition_penalty_config->repetition_penalty_config;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
-    LiteRtLmConversationOptionalArgs* args,
+LiteRtLmStatusCode
+litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+    LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmNoRepeatNgramConfig* no_repeat_ngram_config) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(args)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
   if (!no_repeat_ngram_config ||
       !no_repeat_ngram_config->no_repeat_ngram_config.enabled()) {
-    args->no_repeat_ngram_config = std::nullopt;
-    return;
+    optional_args->no_repeat_ngram_config = std::nullopt;
+    return kLiteRtLmStatusOk;
   }
 
-  args->no_repeat_ngram_config = no_repeat_ngram_config->no_repeat_ngram_config;
+  optional_args->no_repeat_ngram_config =
+      no_repeat_ngram_config->no_repeat_ngram_config;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_optional_args_set_suppress_tokens_config(
-    LiteRtLmConversationOptionalArgs* args,
+LiteRtLmStatusCode
+litert_lm_conversation_optional_args_set_suppress_tokens_config(
+    LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmSuppressTokensConfig* suppress_tokens_config) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(args)) {
-    return;
-  }
-
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
   if (!suppress_tokens_config ||
       !suppress_tokens_config->suppress_tokens_config.enabled()) {
-    args->suppress_tokens_config = std::nullopt;
-    return;
+    optional_args->suppress_tokens_config = std::nullopt;
+    return kLiteRtLmStatusOk;
   }
 
-  args->suppress_tokens_config = suppress_tokens_config->suppress_tokens_config;
+  optional_args->suppress_tokens_config =
+      suppress_tokens_config->suppress_tokens_config;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_optional_args_set_visual_token_budget(
-    LiteRtLmConversationOptionalArgs* args, int visual_token_budget) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(args)) {
-    args->visual_token_budget = visual_token_budget;
-  }
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_visual_token_budget(
+    LiteRtLmConversationOptionalArgs* optional_args, int visual_token_budget) {
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
+  optional_args->visual_token_budget = visual_token_budget;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_optional_args_set_max_output_tokens(
-    LiteRtLmConversationOptionalArgs* args, int max_output_tokens) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(args)) {
-    args->max_output_tokens = max_output_tokens;
-  }
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_max_output_tokens(
+    LiteRtLmConversationOptionalArgs* optional_args, int max_output_tokens) {
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
+  optional_args->max_output_tokens = max_output_tokens;
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_optional_args_set_thinking_config(
-    LiteRtLmConversationOptionalArgs* args,
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_thinking_config(
+    LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmThinkingConfig* thinking_config) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(args)) {
-    if (thinking_config) {
-      args->thinking_config = thinking_config->thinking_config;
-    } else {
-      args->thinking_config = std::nullopt;
-    }
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
+  if (thinking_config) {
+    optional_args->thinking_config = thinking_config->thinking_config;
+  } else {
+    optional_args->thinking_config = std::nullopt;
   }
+  return kLiteRtLmStatusOk;
 }
 
-void litert_lm_conversation_optional_args_set_constraint(
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmConstraintType constraint_type, const char* constraint_string) {
-  if (LITERT_LM_C_CHECK_NOT_NULL(optional_args)) {
-    optional_args->constraint_type = constraint_type;
-    if (constraint_string) {
-      optional_args->constraint_string = constraint_string;
-    } else {
-      optional_args->constraint_string.clear();
-    }
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
+  if (!IsValidConstraintType(constraint_type)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmConstraintType.");
   }
+  optional_args->constraint_type = constraint_type;
+  if (constraint_string) {
+    optional_args->constraint_string = constraint_string;
+  } else {
+    optional_args->constraint_string.clear();
+  }
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_conversation_optional_args_delete(
@@ -676,12 +704,14 @@ const char* litert_lm_conversation_render_preface_to_string(
   return conversation->last_rendered_preface.c_str();
 }
 
-void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
+LiteRtLmStatusCode litert_lm_conversation_cancel_process(
+    LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
-    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
-    return;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid conversation.");
   }
   conversation->conversation->CancelProcess();
+  return kLiteRtLmStatusOk;
 }
 
 int litert_lm_conversation_wait_until_done(LiteRtLmConversation* conversation) {

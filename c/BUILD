@@ -166,7 +166,10 @@ cc_library(
     name = "conversation_headers",
     hdrs = ["conversation.h"],
     visibility = ["//visibility:public"],
-    deps = [":engine_headers"],
+    deps = [
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
 )
 
 # Header library for model info C API.

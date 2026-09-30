@@ -20,9 +20,11 @@
 #include <stdint.h>
 
 #if defined(__APPLE__)
-#include "engine.h"  // NOLINT
+#include "engine.h"          // NOLINT
+#include "error_reporter.h"  // NOLINT
 #else
 #include "c/engine.h"
+#include "c/error_reporter.h"
 #endif
 
 #ifdef __cplusplus
@@ -83,76 +85,102 @@ LiteRtLmConversationConfig* litert_lm_conversation_config_create();
 // Sets the session config for this conversation config.
 // @param config The config to modify.
 // @param session_config The session config to use.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `session_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_session_config(
+LiteRtLmStatusCode litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config);
 
 // Sets the system message for this conversation config.
 // @param config The config to modify.
 // @param system_message_json The system message in JSON format.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `system_message_json` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_system_message(
+LiteRtLmStatusCode litert_lm_conversation_config_set_system_message(
     LiteRtLmConversationConfig* config, const char* system_message_json);
 
 // Sets the tools for this conversation config.
 // @param config The config to modify.
 // @param tools_json The tools description in JSON array format.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `tools_json` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_tools(LiteRtLmConversationConfig* config,
-                                             const char* tools_json);
+LiteRtLmStatusCode litert_lm_conversation_config_set_tools(
+    LiteRtLmConversationConfig* config, const char* tools_json);
 
 // Sets the initial messages for this conversation config.
 // @param config The config to modify.
 // @param messages_json The initial messages in JSON array format.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `messages_json` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_messages(
+LiteRtLmStatusCode litert_lm_conversation_config_set_messages(
     LiteRtLmConversationConfig* config, const char* messages_json);
 
 // Sets the extra context for the conversation preface.
 // @param config The config to modify.
 // @param extra_context_json A JSON string representing the extra context
 // object.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `extra_context_json` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_extra_context(
+LiteRtLmStatusCode litert_lm_conversation_config_set_extra_context(
     LiteRtLmConversationConfig* config, const char* extra_context_json);
 
 // Sets the prompt template for this conversation config.
 // @param config The config to modify.
 // @param prompt_template The prompt template string (e.g. Jinja template). If
 // not set, use the default provided by the model or the engine.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `prompt_template` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_prompt_template(
+LiteRtLmStatusCode litert_lm_conversation_config_set_prompt_template(
     LiteRtLmConversationConfig* config, const char* prompt_template);
 
 // Sets whether to enable constrained decoding for this conversation config.
 // @param config The config to modify.
 // @param enable_constrained_decoding Whether to enable constrained decoding.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_enable_constrained_decoding(
+LiteRtLmStatusCode
+litert_lm_conversation_config_set_enable_constrained_decoding(
     LiteRtLmConversationConfig* config, bool enable_constrained_decoding);
 
 // Sets the constraint provider type for this conversation config.
 // @param config The config to modify.
 // @param provider_type The constraint provider type to use, or NULL to unset.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL or `*provider_type` is not a declared
+//   LiteRtLmConstraintProviderType value.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_constraint_provider(
+LiteRtLmStatusCode litert_lm_conversation_config_set_constraint_provider(
     LiteRtLmConversationConfig* config,
     const LiteRtLmConstraintProviderType* provider_type);
 
@@ -160,10 +188,14 @@ void litert_lm_conversation_config_set_constraint_provider(
 // @param config The config to modify.
 // @param filter_channel_content_from_kv_cache Whether to filter channel
 // content.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
+LiteRtLmStatusCode
+litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
     LiteRtLmConversationConfig* config,
     bool filter_channel_content_from_kv_cache);
 
@@ -171,10 +203,13 @@ void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
 // @param config The config to modify.
 // @param stream_tool_calls Whether to stream tool call tokens.
 // @param channel_name The channel name to use for tool call tokens.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_stream_tool_calls(
+LiteRtLmStatusCode litert_lm_conversation_config_set_stream_tool_calls(
     LiteRtLmConversationConfig* config, bool stream_tool_calls,
     const char* channel_name);
 
@@ -197,30 +232,39 @@ void litert_lm_thinking_config_delete(LiteRtLmThinkingConfig* config);
 // Sets whether thinking/reasoning generation is enabled.
 // @param config The config to modify.
 // @param enable_thinking Whether thinking is enabled.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_thinking_config_set_enable_thinking(
+LiteRtLmStatusCode litert_lm_thinking_config_set_enable_thinking(
     LiteRtLmThinkingConfig* config, bool enable_thinking);
 
 // Sets the thinking token budget.
 // @param config The config to modify.
 // @param thinking_token_budget Budget for token-by-token reasoning generation
 // (-1 for infinite).
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_thinking_config_set_thinking_token_budget(
+LiteRtLmStatusCode litert_lm_thinking_config_set_thinking_token_budget(
     LiteRtLmThinkingConfig* config, int thinking_token_budget);
 
 // Sets the thinking config for this conversation config.
 // @param config The config to modify.
 // @param thinking_config The thinking config to set. If NULL, clears any
 // previously set thinking config.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_thinking_config(
+LiteRtLmStatusCode litert_lm_conversation_config_set_thinking_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmThinkingConfig* thinking_config);
 
@@ -262,10 +306,14 @@ void litert_lm_conversation_optional_args_delete(
 // `litert_lm_repetition_penalty_config_create`. The contents are deep-copied
 // when set. If NULL, clears any previously set repetition penalty config so no
 // penalties apply.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_repetition_penalty_config(
+LiteRtLmStatusCode
+litert_lm_conversation_optional_args_set_repetition_penalty_config(
     LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmRepetitionPenaltyConfig* repetition_penalty_config);
 
@@ -283,10 +331,14 @@ void litert_lm_conversation_optional_args_set_repetition_penalty_config(
 // `litert_lm_no_repeat_ngram_config_create`. The contents are deep-copied when
 // set. If NULL, clears any previously set no repeat ngram config so no
 // repeat ngram banning applies.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+LiteRtLmStatusCode
+litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
     LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmNoRepeatNgramConfig* no_repeat_ngram_config);
 
@@ -304,20 +356,27 @@ void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
 // `litert_lm_suppress_tokens_config_create`. The contents are deep-copied when
 // set. If NULL or if the inner token set is disabled/empty, clears any
 // previously set suppress tokens config so no token suppression applies.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_suppress_tokens_config(
+LiteRtLmStatusCode
+litert_lm_conversation_optional_args_set_suppress_tokens_config(
     LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmSuppressTokensConfig* suppress_tokens_config);
 
 // Sets the visual token budget for the conversation optional args.
 // @param optional_args The optional args to modify.
 // @param visual_token_budget The visual token budget.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_visual_token_budget(
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_visual_token_budget(
     LiteRtLmConversationOptionalArgs* optional_args, int visual_token_budget);
 
 // Sets the maximum number of output tokens for the conversation optional args.
@@ -326,20 +385,26 @@ void litert_lm_conversation_optional_args_set_visual_token_budget(
 // @param optional_args The optional args to modify.
 // @param max_output_tokens The maximum number of tokens to generate (including
 // thinking tokens).
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_max_output_tokens(
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_max_output_tokens(
     LiteRtLmConversationOptionalArgs* optional_args, int max_output_tokens);
 
 // Sets the thinking config for the conversation optional args.
 // @param optional_args The optional args to modify.
 // @param thinking_config The thinking config to set. If NULL, clears any
 // previously set thinking config.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_thinking_config(
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_thinking_config(
     LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmThinkingConfig* thinking_config);
 
@@ -347,10 +412,14 @@ void litert_lm_conversation_optional_args_set_thinking_config(
 // @param optional_args The optional args to modify.
 // @param constraint_type The type of constraint.
 // @param constraint_string The constraint pattern/schema/grammar string.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL or `constraint_type` is not a declared
+//   LiteRtLmConstraintType value.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_optional_args_set_constraint(
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmConstraintType constraint_type, const char* constraint_string);
 
@@ -479,10 +548,14 @@ const char* litert_lm_conversation_render_preface_to_string(
 // Cancels the ongoing inference process, for asynchronous inference.
 //
 // @param conversation The conversation to cancel the inference for.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `conversation` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of void.
 LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation);
+LiteRtLmStatusCode litert_lm_conversation_cancel_process(
+    LiteRtLmConversation* conversation);
 
 // Triggers execution of, and waits for, all pending tasks in the conversation
 // session to complete.

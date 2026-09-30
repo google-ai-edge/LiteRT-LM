@@ -1845,7 +1845,8 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
   ASSERT_EQ(result, kLiteRtLmStatusOk);
 
-  litert_lm_conversation_cancel_process(conversation.get());
+  EXPECT_EQ(litert_lm_conversation_cancel_process(conversation.get()),
+            kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_THAT(callback_data.status,
@@ -2685,7 +2686,8 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
 
 TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
   litert_lm_clear_last_error();
-  litert_lm_conversation_config_set_system_message(nullptr, "{}");
+  EXPECT_EQ(litert_lm_conversation_config_set_system_message(nullptr, "{}"),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("config must not be NULL"));
@@ -2694,13 +2696,16 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
                                &litert_lm_conversation_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
-  litert_lm_conversation_config_set_tools(config.get(), nullptr);
+  EXPECT_EQ(litert_lm_conversation_config_set_tools(config.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("tools_json must not be NULL"));
 
   litert_lm_clear_last_error();
-  litert_lm_conversation_optional_args_set_max_output_tokens(nullptr, 1);
+  EXPECT_EQ(
+      litert_lm_conversation_optional_args_set_max_output_tokens(nullptr, 1),
+      kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("args must not be NULL"));
@@ -2712,10 +2717,181 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
               testing::HasSubstr("response must not be NULL"));
 
   litert_lm_clear_last_error();
-  litert_lm_conversation_cancel_process(nullptr);
+  EXPECT_EQ(litert_lm_conversation_cancel_process(nullptr),
+            kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid conversation"));
+}
+
+TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
+  ConversationConfigPtr config(litert_lm_conversation_config_create(),
+                               &litert_lm_conversation_config_delete);
+  ASSERT_NE(config, nullptr);
+  SessionConfigPtr session_config(litert_lm_session_config_create(),
+                                  &litert_lm_session_config_delete);
+  ASSERT_NE(session_config, nullptr);
+  std::unique_ptr<LiteRtLmThinkingConfig,
+                  decltype(&litert_lm_thinking_config_delete)>
+      thinking_config(litert_lm_thinking_config_create(),
+                      &litert_lm_thinking_config_delete);
+  ASSERT_NE(thinking_config, nullptr);
+  const LiteRtLmSessionConfig* session = session_config.get();
+  const LiteRtLmThinkingConfig* thinking = thinking_config.get();
+  using C = LiteRtLmConversationConfig;
+  ExpectSettersReturnStatus<C>(
+      config.get(),
+      {
+          {"set_session_config",
+           [session](C* c) {
+             return litert_lm_conversation_config_set_session_config(c,
+                                                                     session);
+           }},
+          {"set_system_message",
+           [](C* c) {
+             return litert_lm_conversation_config_set_system_message(c, "hi");
+           }},
+          {"set_tools",
+           [](C* c) {
+             return litert_lm_conversation_config_set_tools(c, "[]");
+           }},
+          {"set_messages",
+           [](C* c) {
+             return litert_lm_conversation_config_set_messages(c, "[]");
+           }},
+          {"set_extra_context",
+           [](C* c) {
+             return litert_lm_conversation_config_set_extra_context(c, "{}");
+           }},
+          {"set_prompt_template",
+           [](C* c) {
+             return litert_lm_conversation_config_set_prompt_template(c, "t");
+           }},
+          {"set_enable_constrained_decoding",
+           [](C* c) {
+             return litert_lm_conversation_config_set_enable_constrained_decoding(
+                 c, true);
+           }},
+          {"set_constraint_provider",
+           [](C* c) {
+             const LiteRtLmConstraintProviderType provider =
+                 kLiteRtLmConstraintProviderTypeLlGuidance;
+             return litert_lm_conversation_config_set_constraint_provider(
+                 c, &provider);
+           }},
+          {"set_constraint_provider_unset",
+           [](C* c) {
+             return litert_lm_conversation_config_set_constraint_provider(
+                 c, nullptr);
+           }},
+          {"set_filter_channel_content_from_kv_cache",
+           [](C* c) {
+             return litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
+                 c, true);
+           }},
+          {"set_stream_tool_calls",
+           [](C* c) {
+             return litert_lm_conversation_config_set_stream_tool_calls(c, true,
+                                                                        "tool");
+           }},
+          {"set_thinking_config",
+           [thinking](C* c) {
+             return litert_lm_conversation_config_set_thinking_config(c,
+                                                                      thinking);
+           }},
+      });
+
+  using T = LiteRtLmThinkingConfig;
+  ExpectSettersReturnStatus<T>(
+      thinking_config.get(),
+      {
+          {"set_enable_thinking",
+           [](T* t) {
+             return litert_lm_thinking_config_set_enable_thinking(t, false);
+           }},
+          {"set_thinking_token_budget",
+           [](T* t) {
+             return litert_lm_thinking_config_set_thinking_token_budget(t, 16);
+           }},
+      });
+}
+
+TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
+  OptionalArgsPtr args(litert_lm_conversation_optional_args_create(),
+                       &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(args, nullptr);
+  RepetitionPenaltyConfigPtr repetition_config(
+      litert_lm_repetition_penalty_config_create(),
+      &litert_lm_repetition_penalty_config_delete);
+  ASSERT_NE(repetition_config, nullptr);
+  const LiteRtLmRepetitionPenaltyConfig* repetition = repetition_config.get();
+  using A = LiteRtLmConversationOptionalArgs;
+  ExpectSettersReturnStatus<A>(
+      args.get(),
+      {
+          {"set_repetition_penalty_config",
+           [repetition](A* a) {
+             return litert_lm_conversation_optional_args_set_repetition_penalty_config(
+                 a, repetition);
+           }},
+          {"set_no_repeat_ngram_config",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+                 a, nullptr);
+           }},
+          {"set_suppress_tokens_config",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_suppress_tokens_config(
+                 a, nullptr);
+           }},
+          {"set_visual_token_budget",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_visual_token_budget(
+                 a, 70);
+           }},
+          {"set_max_output_tokens",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_max_output_tokens(
+                 a, 8);
+           }},
+          {"set_thinking_config",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_thinking_config(
+                 a, nullptr);
+           }},
+          {"set_constraint",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_constraint(
+                 a, kLiteRtLmConstraintTypeRegex, "a+");
+           }},
+      });
+}
+
+TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
+  ConversationConfigPtr config(litert_lm_conversation_config_create(),
+                               &litert_lm_conversation_config_delete);
+  ASSERT_NE(config, nullptr);
+  litert_lm_clear_last_error();
+  // 0 is within the enum's value range but is not a declared enumerator.
+  const auto provider = static_cast<LiteRtLmConstraintProviderType>(0);
+  EXPECT_EQ(litert_lm_conversation_config_set_constraint_provider(config.get(),
+                                                                  &provider),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Unknown LiteRtLmConstraintProviderType"));
+
+  OptionalArgsPtr args(litert_lm_conversation_optional_args_create(),
+                       &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(args, nullptr);
+  litert_lm_clear_last_error();
+  // 3 is within the enum's value range but is not a declared enumerator.
+  EXPECT_EQ(litert_lm_conversation_optional_args_set_constraint(
+                args.get(), static_cast<LiteRtLmConstraintType>(3), "a+"),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Unknown LiteRtLmConstraintType"));
 }
 
 TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {

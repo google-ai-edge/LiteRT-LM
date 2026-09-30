@@ -13,6 +13,24 @@
 # limitations under the License.
 
 # ==============================================================================
+# Error Reporter
+# ==============================================================================
+add_litertlm_library(c_error_reporter STATIC
+  error_reporter.cc
+)
+add_library(LiteRTLM::C::ErrorReporter ALIAS c_error_reporter)
+
+target_include_directories(c_error_reporter
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_error_reporter
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Conversation
 # ==============================================================================
 add_litertlm_library(c_conversation STATIC
@@ -28,6 +46,7 @@ target_include_directories(c_conversation
 target_link_libraries(c_conversation
   PUBLIC
     LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
     LiteRTLM::Runtime::Conversation
     LiteRTLM::Runtime::Core
     LiteRTLM::Runtime::Components
@@ -41,7 +60,6 @@ target_link_libraries(c_conversation
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
   engine.cc
-  error_reporter.cc
 )
 add_library(LiteRTLM::C::Engine ALIAS c_engine)
 
@@ -55,6 +73,7 @@ target_link_libraries(c_engine
     LITERTLM_DEPS
     LiteRTLM::C::EmbeddingEngine
     LiteRTLM::C::Conversation
+    LiteRTLM::C::ErrorReporter
     LiteRTLM::Runtime::Conversation
     LiteRTLM::Runtime::Core
     LiteRTLM::Runtime::Components
@@ -80,6 +99,7 @@ target_link_libraries(c_embedding_engine
   PUBLIC
     LITERTLM_DEPS
     LiteRTLM::C::Conversation
+    LiteRTLM::C::ErrorReporter
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Executor
@@ -101,6 +121,7 @@ target_include_directories(c_model_info
 target_link_libraries(c_model_info
   PUBLIC
     LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
     LiteRTLM::Schema::ModelInfo
 )
 
@@ -111,6 +132,7 @@ add_library(c_libs INTERFACE)
 add_library(LiteRTLM::C ALIAS c_libs)
 
 target_link_libraries(c_libs INTERFACE
+  LiteRTLM::C::ErrorReporter
   LiteRTLM::C::ModelInfo
   LiteRTLM::C::Conversation
   LiteRTLM::C::Engine
