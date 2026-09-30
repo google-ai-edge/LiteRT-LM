@@ -261,32 +261,11 @@ FunctionGemmaDataProcessor::MessageToTemplateInput(
   // If the message contains tool calls, convert them to FC format and add them
   // to the template input.
   if (message.contains("tool_calls")) {
-    template_input["tool_calls"] = nlohmann::ordered_json::array();
-    for (const auto& tool_call : message["tool_calls"]) {
-      if (!tool_call.contains("function")) {
-        continue;
-      }
-      const nlohmann::ordered_json& function = tool_call["function"];
-      nlohmann::ordered_json tool_call_input = nlohmann::ordered_json::object();
-      tool_call_input["type"] = "function";
-      tool_call_input["function"]["name"] = function["name"];
-
-      if (function.contains("arguments")) {
-        if (function["arguments"].is_object()) {
-          // If `arguments` is an object, format the values in FC format.
-          for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsFc(value));
-            tool_call_input["function"]["arguments"][key] = formatted_value;
-          }
-        } else {
-          // Otherwise, pass through `arguments` unchanged.
-          tool_call_input["function"]["arguments"] = function["arguments"];
-        }
-      }
-
-      template_input["tool_calls"].push_back(tool_call_input);
-    }
+    ABSL_ASSIGN_OR_RETURN(template_input["tool_calls"],
+                          FormatToolCalls(message["tool_calls"],
+                                          [](const nlohmann::ordered_json& v) {
+                                            return FormatValueAsFc(v);
+                                          }));
   }
 
   return template_input;
@@ -309,15 +288,8 @@ absl::StatusOr<nlohmann::ordered_json> FunctionGemmaDataProcessor::FormatTools(
     return tools;
   }
 
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  nlohmann::ordered_json formatted_tools = nlohmann::ordered_json::array();
-  for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsFc(tool));
-    formatted_tools.push_back(formatted_tool);
-  }
-  return formatted_tools;
+  return FormatToolsArray(
+      tools, [](const nlohmann::ordered_json& t) { return FormatToolAsFc(t); });
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>>
