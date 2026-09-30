@@ -535,10 +535,11 @@ public final class Conversation: Sendable {
       contextPtr
     )
 
-    guard status == 0 else {
+    guard status == kLiteRtLmStatusOk else {
       Unmanaged<StreamContext>.fromOpaque(contextPtr).release()
       let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.conversation(.failedToStartStream(status: Int(status), message: errorMsg))
+      throw LiteRTLMError.conversation(
+        .failedToStartStream(status: Int(status.rawValue), message: errorMsg))
     }
   }
 

@@ -383,52 +383,47 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
   delete config;
 }
 
-int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
-                                           const char* lora_path) {
+LiteRtLmStatusCode litert_lm_session_config_set_lora_path(
+    LiteRtLmSessionConfig* config, const char* lora_path) {
   if (!config || !config->config || !lora_path) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session config or LoRA path.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session config or LoRA path.");
   }
   absl::string_view path_view(lora_path);
   if (path_view.empty()) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "LoRA path is empty.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "LoRA path is empty.");
   }
   auto lora_file = ScopedFile::Open(lora_path);
   if (!lora_file.ok()) {
     ABSL_LOG(ERROR) << "Failed to open LoRA file: " << lora_file.status();
-    litert::lm::c::SetLastError(lora_file.status());
-    return -1;
+    return litert::lm::c::ToCStatus(lora_file.status());
   }
   config->config->SetScopedLoraFile(
       std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file)));
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
-int litert_lm_session_config_set_audio_lora_path(LiteRtLmSessionConfig* config,
-                                                 const char* audio_lora_path) {
+LiteRtLmStatusCode litert_lm_session_config_set_audio_lora_path(
+    LiteRtLmSessionConfig* config, const char* audio_lora_path) {
   if (!config || !config->config || !audio_lora_path) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session config or Audio LoRA path.");
-    return -1;
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "Invalid session config or Audio LoRA path.");
   }
   absl::string_view path_view(audio_lora_path);
   if (path_view.empty()) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Audio LoRA path is empty.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Audio LoRA path is empty.");
   }
   auto lora_file = ScopedFile::Open(path_view);
   if (!lora_file.ok()) {
     ABSL_LOG(ERROR) << "Failed to open Audio LoRA file: " << lora_file.status();
-    litert::lm::c::SetLastError(lora_file.status());
-    return -1;
+    return litert::lm::c::ToCStatus(lora_file.status());
   }
   config->config->SetAudioScopedLoraFile(
       std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file)));
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmRepetitionPenaltyConfig* litert_lm_repetition_penalty_config_create() {
@@ -823,25 +818,20 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_lora_rank(
   return kLiteRtLmStatusOk;
 }
 
-int litert_lm_engine_settings_set_supported_lora_ranks(
+LiteRtLmStatusCode litert_lm_engine_settings_set_supported_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks) {
   if (!settings || !settings->settings || !lora_ranks || num_ranks == 0) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine settings or LoRA ranks.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine settings or LoRA ranks.");
   }
   std::vector<uint32_t> ranks;
   ranks.reserve(num_ranks);
   for (size_t i = 0; i < num_ranks; ++i) {
     ranks.push_back(static_cast<uint32_t>(lora_ranks[i]));
   }
-  auto status = settings->settings->GetMutableMainExecutorSettings()
-                    .SetSupportedLoraRanks(ranks);
-  if (!status.ok()) {
-    litert::lm::c::SetLastError(status);
-    return -1;
-  }
-  return 0;
+  return litert::lm::c::ToCStatus(
+      settings->settings->GetMutableMainExecutorSettings()
+          .SetSupportedLoraRanks(ranks));
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_audio_lora_rank(
@@ -857,31 +847,26 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_audio_lora_rank(
   return kLiteRtLmStatusOk;
 }
 
-int litert_lm_engine_settings_set_supported_audio_lora_ranks(
+LiteRtLmStatusCode litert_lm_engine_settings_set_supported_audio_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks) {
   if (!settings || !settings->settings || !lora_ranks || num_ranks == 0) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine settings or Audio LoRA ranks.");
-    return -1;
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "Invalid engine settings or Audio LoRA ranks.");
   }
   if (!settings->settings->GetAudioExecutorSettings().has_value()) {
-    litert::lm::c::SetLastError(
+    return litert::lm::c::ReturnError(
         absl::StatusCode::kFailedPrecondition,
         "Audio executor settings not configured in engine settings.");
-    return -1;
   }
   std::vector<uint32_t> ranks;
   ranks.reserve(num_ranks);
   for (size_t i = 0; i < num_ranks; ++i) {
     ranks.push_back(static_cast<uint32_t>(lora_ranks[i]));
   }
-  auto status = settings->settings->GetMutableAudioExecutorSettings()
-                    ->SetSupportedLoraRanks(ranks);
-  if (!status.ok()) {
-    litert::lm::c::SetLastError(status);
-    return -1;
-  }
-  return 0;
+  return litert::lm::c::ToCStatus(
+      settings->settings->GetMutableAudioExecutorSettings()
+          ->SetSupportedLoraRanks(ranks));
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_activation_data_type(
@@ -1017,52 +1002,47 @@ LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session) {
   return kLiteRtLmStatusOk;
 }
 
-int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
-                                      const char* label) {
+LiteRtLmStatusCode litert_lm_session_save_checkpoint(LiteRtLmSession* session,
+                                                     const char* label) {
   if (!session || !session->session || !label) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session or checkpoint label.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session or checkpoint label.");
   }
   auto status = session->session->SaveCheckpoint(label);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to save checkpoint " << label << ": " << status;
-    litert::lm::c::SetLastError(status);
-    return -1;
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
-int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
-                                           const char* label) {
+LiteRtLmStatusCode litert_lm_session_rewind_to_checkpoint(
+    LiteRtLmSession* session, const char* label) {
   if (!session || !session->session || !label) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session or checkpoint label.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session or checkpoint label.");
   }
   auto status = session->session->RewindToCheckpoint(label);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to rewind to checkpoint " << label << ": "
                     << status;
-    litert::lm::c::SetLastError(status);
-    return -1;
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
-int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step) {
+LiteRtLmStatusCode litert_lm_session_rewind_to_step(LiteRtLmSession* session,
+                                                    int step) {
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto status = session->session->RewindToStep(step);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to rewind to step " << step << ": " << status;
-    litert::lm::c::SetLastError(status);
-    return -1;
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmResponses* litert_lm_session_run_text_scoring(
@@ -1096,27 +1076,24 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
   return c_responses;
 }
 
-int litert_lm_session_run_prefill(LiteRtLmSession* session,
-                                  const LiteRtLmInputData* const* inputs,
-                                  size_t num_inputs) {
+LiteRtLmStatusCode litert_lm_session_run_prefill(
+    LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
+    size_t num_inputs) {
   if (!session || !session->session || !inputs || num_inputs <= 0) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session or inputs.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session or inputs.");
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
-    litert::lm::c::SetLastError(engine_inputs.status());
-    return -1;
+    return litert::lm::c::ToCStatus(engine_inputs.status());
   }
   auto status = session->session->RunPrefill(*engine_inputs);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to run prefill: " << status;
-    litert::lm::c::SetLastError(status);
-    return -1;
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
@@ -1134,22 +1111,20 @@ LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
   return new LiteRtLmResponses{std::move(*responses)};
 }
 
-int litert_lm_session_run_decode_async(LiteRtLmSession* session,
-                                       LiteRtLmStreamCallback callback,
-                                       void* callback_data) {
+LiteRtLmStatusCode litert_lm_session_run_decode_async(
+    LiteRtLmSession* session, LiteRtLmStreamCallback callback,
+    void* callback_data) {
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto status =
       session->session->RunDecodeAsync(CreateCallback(callback, callback_data));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start decode stream: " << status.status();
-    litert::lm::c::SetLastError(status.status());
-    return static_cast<int>(status.status().code());
+    return litert::lm::c::ToCStatus(status.status());
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmResponses* litert_lm_session_generate_content(
@@ -1177,19 +1152,17 @@ LiteRtLmResponses* litert_lm_session_generate_content(
   return c_responses;
 }
 
-int litert_lm_session_generate_content_stream(
+LiteRtLmStatusCode litert_lm_session_generate_content_stream(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs, LiteRtLmStreamCallback callback, void* callback_data) {
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
-    litert::lm::c::SetLastError(engine_inputs.status());
-    return -1;
+    return litert::lm::c::ToCStatus(engine_inputs.status());
   }
 
   absl::Status status = session->session->GenerateContentStream(
@@ -1197,11 +1170,11 @@ int litert_lm_session_generate_content_stream(
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start content stream: " << status;
-    litert::lm::c::SetLastError(status);
     // No need to delete callbacks, unique_ptr handles it if not moved.
-    return static_cast<int>(status.code());
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;  // The call is non-blocking and returns immediately.
+  // The call is non-blocking and returns immediately.
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_responses_delete(LiteRtLmResponses* responses) {
@@ -1486,19 +1459,20 @@ const char* litert_lm_token_union_get_string(
   return nullptr;
 }
 
-int litert_lm_token_union_get_ids(const LiteRtLmTokenUnion* token_union,
-                                  const int** out_tokens,
-                                  size_t* out_num_tokens) {
-  if (!token_union || !token_union->token_union.has_token_ids() ||
-      !out_tokens || !out_num_tokens) {
-    litert::lm::c::SetLastError(
+LiteRtLmStatusCode litert_lm_token_union_get_ids(
+    const LiteRtLmTokenUnion* token_union, const int** out_tokens,
+    size_t* out_num_tokens) {
+  LITERT_LM_C_RETURN_IF_NULL(token_union);
+  LITERT_LM_C_RETURN_IF_NULL(out_tokens);
+  LITERT_LM_C_RETURN_IF_NULL(out_num_tokens);
+  if (!token_union->token_union.has_token_ids()) {
+    return litert::lm::c::ReturnError(
         absl::StatusCode::kInvalidArgument,
-        "Token union does not contain token ids or null output pointer.");
-    return -1;
+        "Token union does not contain token ids.");
   }
   *out_tokens = token_union->token_union.token_ids().ids().data();
   *out_num_tokens = token_union->token_union.token_ids().ids_size();
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_token_unions_delete(LiteRtLmTokenUnions* tokens) {

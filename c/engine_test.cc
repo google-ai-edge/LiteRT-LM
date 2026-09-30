@@ -2769,7 +2769,7 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
            }},
           {"set_enable_constrained_decoding",
            [](C* c) {
-             return litert_lm_conversation_config_set_enable_constrained_decoding(
+             return litert_lm_conversation_config_set_enable_constrained_decoding(  // NOLINT
                  c, true);
            }},
           {"set_constraint_provider",
@@ -2786,7 +2786,7 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
            }},
           {"set_filter_channel_content_from_kv_cache",
            [](C* c) {
-             return litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
+             return litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(  // NOLINT
                  c, true);
            }},
           {"set_stream_tool_calls",
@@ -2831,22 +2831,22 @@ TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
       {
           {"set_repetition_penalty_config",
            [repetition](A* a) {
-             return litert_lm_conversation_optional_args_set_repetition_penalty_config(
+             return litert_lm_conversation_optional_args_set_repetition_penalty_config(  // NOLINT
                  a, repetition);
            }},
           {"set_no_repeat_ngram_config",
            [](A* a) {
-             return litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+             return litert_lm_conversation_optional_args_set_no_repeat_ngram_config(  // NOLINT
                  a, nullptr);
            }},
           {"set_suppress_tokens_config",
            [](A* a) {
-             return litert_lm_conversation_optional_args_set_suppress_tokens_config(
+             return litert_lm_conversation_optional_args_set_suppress_tokens_config(  // NOLINT
                  a, nullptr);
            }},
           {"set_visual_token_budget",
            [](A* a) {
-             return litert_lm_conversation_optional_args_set_visual_token_budget(
+             return litert_lm_conversation_optional_args_set_visual_token_budget(  // NOLINT
                  a, 70);
            }},
           {"set_max_output_tokens",
@@ -2907,6 +2907,165 @@ TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("debug_info must not be NULL"));
+}
+
+// Asserts that `status` is a canonical failure code that equals the calling
+// thread's last error code.
+void ExpectCanonicalFailure(int status, int expected_code) {
+  EXPECT_EQ(status, expected_code);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
+}
+
+TEST(EngineCStatusTest, StatusFunctionsWithNullArgumentsReturnInvalidArgument) {
+  const std::vector<std::pair<std::string, std::function<int()>>> calls = {
+      {"session_config_set_lora_path",
+       [] { return litert_lm_session_config_set_lora_path(nullptr, "a"); }},
+      {"session_config_set_audio_lora_path",
+       [] {
+         return litert_lm_session_config_set_audio_lora_path(nullptr, "a");
+       }},
+      {"engine_settings_set_supported_lora_ranks",
+       [] {
+         const int ranks[] = {8};
+         return litert_lm_engine_settings_set_supported_lora_ranks(nullptr,
+                                                                   ranks, 1);
+       }},
+      {"engine_settings_set_supported_audio_lora_ranks",
+       [] {
+         const int ranks[] = {8};
+         return litert_lm_engine_settings_set_supported_audio_lora_ranks(
+             nullptr, ranks, 1);
+       }},
+      {"session_save_checkpoint",
+       [] { return litert_lm_session_save_checkpoint(nullptr, "a"); }},
+      {"session_rewind_to_checkpoint",
+       [] { return litert_lm_session_rewind_to_checkpoint(nullptr, "a"); }},
+      {"session_rewind_to_step",
+       [] { return litert_lm_session_rewind_to_step(nullptr, 0); }},
+      {"session_run_prefill",
+       [] { return litert_lm_session_run_prefill(nullptr, nullptr, 0); }},
+      {"session_run_decode_async",
+       [] {
+         return litert_lm_session_run_decode_async(nullptr, &StreamCallback,
+                                                   nullptr);
+       }},
+      {"session_generate_content_stream",
+       [] {
+         return litert_lm_session_generate_content_stream(
+             nullptr, nullptr, 0, &StreamCallback, nullptr);
+       }},
+      {"token_union_get_ids",
+       [] {
+         const int* ids = nullptr;
+         size_t num_ids = 0;
+         return litert_lm_token_union_get_ids(nullptr, &ids, &num_ids);
+       }},
+      {"conversation_send_message_stream",
+       [] {
+         return litert_lm_conversation_send_message_stream(
+             nullptr, "{}", /*extra_context=*/nullptr,
+             /*optional_args=*/nullptr, &StreamCallback, nullptr);
+       }},
+      {"experimental_engine_update_gpu_enable_metal_residency_set",
+       [] {
+         return litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(  // NOLINT
+             nullptr, true);
+       }},
+  };
+  for (const auto& [name, call] : calls) {
+    SCOPED_TRACE(name);
+    litert_lm_clear_last_error();
+    ExpectCanonicalFailure(call(), kLiteRtLmStatusInvalidArgument);
+  }
+}
+
+TEST(EngineCStatusTest, SessionConfigSetLoraPathMissingFileReturnsCode) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(
+      litert_lm_session_config_set_lora_path(config.get(), ""),
+      kLiteRtLmStatusInvalidArgument);
+
+  litert_lm_clear_last_error();
+  int status = litert_lm_session_config_set_lora_path(
+      config.get(), "/nonexistent/litert_lm/lora.tflite");
+  EXPECT_GT(status, kLiteRtLmStatusOk);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+}
+
+TEST(EngineCStatusTest, SupportedAudioLoraRanksWithoutAudioFailsPrecondition) {
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create("test_model_path_1", "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  const int ranks[] = {8};
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(
+      litert_lm_engine_settings_set_supported_audio_lora_ranks(settings.get(),
+                                                               ranks, 1),
+      kLiteRtLmStatusFailedPrecondition);
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(litert_lm_engine_settings_set_supported_lora_ranks(
+                             settings.get(), ranks, 0),
+                         kLiteRtLmStatusInvalidArgument);
+}
+
+TEST(EngineCStatusTest, SessionRuntimeFailuresReturnCanonicalCode) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  // A checkpoint that was never saved cannot be rewound to. The exact code is
+  // determined by the runtime; it must be a canonical failure code that
+  // matches the recorded last error.
+  litert_lm_clear_last_error();
+  int status = litert_lm_session_rewind_to_checkpoint(session.get(),
+                                                      "no_such_checkpoint");
+  EXPECT_GT(status, kLiteRtLmStatusOk);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(
+      litert_lm_session_save_checkpoint(session.get(), nullptr),
+      kLiteRtLmStatusInvalidArgument);
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(
+      litert_lm_session_run_prefill(session.get(), nullptr, 0),
+      kLiteRtLmStatusInvalidArgument);
+
+  TokenUnionPtr start_token(litert_lm_engine_get_start_token(engine.get()),
+                            &litert_lm_token_union_delete);
+  if (start_token != nullptr) {
+    litert_lm_clear_last_error();
+    ExpectCanonicalFailure(
+        litert_lm_token_union_get_ids(start_token.get(), nullptr, nullptr),
+        kLiteRtLmStatusInvalidArgument);
+  }
 }
 
 }  // namespace

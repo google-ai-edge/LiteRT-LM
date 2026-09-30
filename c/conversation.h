@@ -505,11 +505,18 @@ const char* litert_lm_json_response_get_string(
 // @param callback The callback function to receive response chunks.
 // @param callback_data A pointer to user data that will be passed to the
 // callback.
-// @return 0 on success, non-zero on failure to start the stream.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation` or `message_json` is NULL or `message_json` is not valid
+//   JSON; otherwise the code of the error that prevented the stream from
+//   starting. Errors that occur after the stream has started are reported
+//   through the callback.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns LiteRtLmStatusCode and failures return a
+// canonical LiteRtLmStatusCode instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_conversation_send_message_stream(
+LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
     LiteRtLmConversation* conversation, const char* message_json,
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args,
@@ -567,11 +574,14 @@ LiteRtLmStatusCode litert_lm_conversation_cancel_process(
 // callback is invoked from within this call.
 //
 // @param conversation The conversation to wait for.
-// @return 0 on success, or a LiteRtLmStatusCode on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns LiteRtLmStatusCode instead of int.
 LITERT_LM_C_API_EXPORT
-int litert_lm_conversation_wait_until_done(LiteRtLmConversation* conversation);
+LiteRtLmStatusCode litert_lm_conversation_wait_until_done(
+    LiteRtLmConversation* conversation);
 
 // Retrieves the benchmark information from the conversation. The caller is
 // responsible for destroying the benchmark info using

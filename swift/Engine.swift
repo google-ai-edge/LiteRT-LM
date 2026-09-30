@@ -120,7 +120,7 @@ public actor Engine {
       if loraRank > 0 {
         var ranks = [Int32(loraRank)]
         let status = litert_lm_engine_settings_set_supported_lora_ranks(settings, &ranks, 1)
-        guard status == 0 else {
+        guard status == kLiteRtLmStatusOk else {
           let errorMsg = LiteRTLMError.consumeLastError() ?? ""
           throw LiteRTLMError.engine(.failedToSetSupportedLoraRanks(errorMsg))
         }
@@ -133,7 +133,7 @@ public actor Engine {
       if audioLoraRank > 0 {
         var ranks = [Int32(audioLoraRank)]
         let status = litert_lm_engine_settings_set_supported_audio_lora_ranks(settings, &ranks, 1)
-        guard status == 0 else {
+        guard status == kLiteRtLmStatusOk else {
           let errorMsg = LiteRTLMError.consumeLastError() ?? ""
           throw LiteRTLMError.engine(.failedToSetSupportedAudioLoraRanks(errorMsg))
         }
@@ -263,7 +263,7 @@ public actor Engine {
 
     if let loraPath = conversationConfig.loraPath {
       let status = litert_lm_session_config_set_lora_path(cSessionConfig, loraPath)
-      guard status == 0 else {
+      guard status == kLiteRtLmStatusOk else {
         let errorMsg = LiteRTLMError.consumeLastError() ?? ""
         throw LiteRTLMError.engine(.failedToSetLoraPath(errorMsg))
       }
@@ -271,7 +271,7 @@ public actor Engine {
 
     if let audioLoraPath = conversationConfig.audioLoraPath {
       let status = litert_lm_session_config_set_audio_lora_path(cSessionConfig, audioLoraPath)
-      guard status == 0 else {
+      guard status == kLiteRtLmStatusOk else {
         let errorMsg = LiteRTLMError.consumeLastError() ?? ""
         throw LiteRTLMError.engine(.failedToSetAudioLoraPath(errorMsg))
       }
@@ -407,7 +407,7 @@ public actor Engine {
     let status =
       litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
         handle, enable)
-    guard status == 0 else {
+    guard status == kLiteRtLmStatusOk else {
       let errorMsg = LiteRTLMError.consumeLastError() ?? ""
       throw LiteRTLMError.engine(.failedToUpdateGPUEnableMetalResidencySet(errorMsg))
     }

@@ -18,11 +18,13 @@
 #include <stdbool.h>
 
 #if defined(__APPLE__)
-#include "api_export.h"  // NOLINT
-#include "engine.h"      // NOLINT
+#include "api_export.h"      // NOLINT
+#include "engine.h"          // NOLINT
+#include "error_reporter.h"  // NOLINT
 #else
 #include "c/api_export.h"
 #include "c/engine.h"
+#include "c/error_reporter.h"
 #endif
 
 #ifdef __cplusplus
@@ -54,11 +56,16 @@ typedef struct LiteRtLmConversation LiteRtLmConversation;
 //
 // @param engine The engine to update.
 // @param enable_metal_residency_set Whether to enable Metal residency set.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `engine`
+//   is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns LiteRtLmStatusCode and failures return a
+// canonical LiteRtLmStatusCode instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+LiteRtLmStatusCode
+litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
     LiteRtLmEngine* engine, bool enable_metal_residency_set);
 
 // Opaque pointer for session debug info.

@@ -622,26 +622,23 @@ const char* litert_lm_json_response_get_string(
   return response->json_string.c_str();
 }
 
-int litert_lm_conversation_send_message_stream(
+LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
     LiteRtLmConversation* conversation, const char* message_json,
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmStreamCallback callback, void* callback_data) {
   if (!conversation || !conversation->conversation) {
-    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid conversation.");
   }
-  if (!LITERT_LM_C_CHECK_NOT_NULL(message_json)) {
-    return -1;
-  }
+  LITERT_LM_C_RETURN_IF_NULL(message_json);
   nlohmann::json json_message =
       nlohmann::json::parse(message_json, /*cb=*/nullptr,
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
-    SetLastError(absl::StatusCode::kInvalidArgument,
-                 "Failed to parse message JSON.");
-    return -1;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Failed to parse message JSON.");
   }
 
   litert::lm::OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
@@ -653,10 +650,9 @@ int litert_lm_conversation_send_message_stream(
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start message stream: " << status;
-    SetLastError(status);
-    return static_cast<int>(status.code());
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 const char* litert_lm_conversation_render_message_to_string(
@@ -714,18 +710,18 @@ LiteRtLmStatusCode litert_lm_conversation_cancel_process(
   return kLiteRtLmStatusOk;
 }
 
-int litert_lm_conversation_wait_until_done(LiteRtLmConversation* conversation) {
+LiteRtLmStatusCode litert_lm_conversation_wait_until_done(
+    LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
-    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
-    return kLiteRtLmStatusInvalidArgument;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid conversation.");
   }
   absl::Status status = conversation->conversation->WaitUntilDone();
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to wait until done: " << status;
-    SetLastError(status);
-    return static_cast<int>(status.code());
+    return litert::lm::c::ToCStatus(status);
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(

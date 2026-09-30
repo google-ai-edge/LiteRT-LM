@@ -289,22 +289,32 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config);
 // Sets the path to the LoRA weights file.
 // @param config The config to modify.
 // @param lora_path The path to the text LoRA weights file.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `config`
+//   or `lora_path` is NULL or `lora_path` is empty; otherwise the code of the
+//   error encountered while opening the file.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns LiteRtLmStatusCode and failures return a
+// canonical LiteRtLmStatusCode instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
-                                           const char* lora_path);
+LiteRtLmStatusCode litert_lm_session_config_set_lora_path(
+    LiteRtLmSessionConfig* config, const char* lora_path);
 
 // Sets the path to the Audio LoRA weights file.
 // @param config The config to modify.
 // @param audio_lora_path The path to the audio LoRA weights file.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `config`
+//   or `audio_lora_path` is NULL or `audio_lora_path` is empty; otherwise the
+//   code of the error encountered while opening the file.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns LiteRtLmStatusCode and failures return a
+// canonical LiteRtLmStatusCode instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_config_set_audio_lora_path(LiteRtLmSessionConfig* config,
-                                                 const char* audio_lora_path);
+LiteRtLmStatusCode litert_lm_session_config_set_audio_lora_path(
+    LiteRtLmSessionConfig* config, const char* audio_lora_path);
 
 // Creates a LiteRT LM Repetition Penalty Config with default values
 // (`repetition_penalty` = 1.0f, `presence_penalty` = 0.0f,
@@ -903,11 +913,15 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_lora_rank(
 // @param settings The engine settings.
 // @param lora_ranks An array of supported LoRA ranks.
 // @param num_ranks The number of ranks in the array.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `settings` or `lora_ranks` is NULL or `num_ranks` is 0.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_engine_settings_set_supported_lora_ranks(
+LiteRtLmStatusCode litert_lm_engine_settings_set_supported_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks);
 
 // Sets the Audio LoRA rank for the engine.
@@ -929,11 +943,16 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_audio_lora_rank(
 // @param settings The engine settings.
 // @param lora_ranks An array of supported Audio LoRA ranks.
 // @param num_ranks The number of ranks in the array.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `settings` or `lora_ranks` is NULL or `num_ranks` is 0;
+//   kLiteRtLmStatusFailedPrecondition if no audio executor is configured.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_engine_settings_set_supported_audio_lora_ranks(
+LiteRtLmStatusCode litert_lm_engine_settings_set_supported_audio_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks);
 
 // Sets whether to enable Metal residency set on GPU.
@@ -1013,27 +1032,44 @@ LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session);
 //
 // @param session The session to save checkpoint for.
 // @param label Label for the checkpoint.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   or `label` is NULL.
+//
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
-                                      const char* label);
+LiteRtLmStatusCode litert_lm_session_save_checkpoint(LiteRtLmSession* session,
+                                                     const char* label);
 
 // Rewinds the session to the given checkpoint label.
 //
 // @param session The session to rewind.
 // @param label Label of the checkpoint to rewind to.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   or `label` is NULL; otherwise the runtime error (e.g. if no checkpoint with
+//   `label` exists).
+//
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
-                                           const char* label);
+LiteRtLmStatusCode litert_lm_session_rewind_to_checkpoint(
+    LiteRtLmSession* session, const char* label);
 
 // Rewinds the session to a specific step number.
 //
 // @param session The session to rewind.
 // @param step The step number to rewind to.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   is NULL; otherwise the runtime error (e.g. if `step` is invalid).
+//
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step);
+LiteRtLmStatusCode litert_lm_session_rewind_to_step(LiteRtLmSession* session,
+                                                    int step);
 
 // Adds the input prompt/query to the model for starting the prefilling
 // process. This is a blocking call and the function will return when the
@@ -1043,13 +1079,17 @@ int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step);
 // @param inputs An array of InputData structs representing the multimodal
 //   input.
 // @param num_inputs The number of InputData structs in the array.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   or `inputs` is NULL or `num_inputs` is 0.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_run_prefill(LiteRtLmSession* session,
-                                  const LiteRtLmInputData* const* inputs,
-                                  size_t num_inputs);
+LiteRtLmStatusCode litert_lm_session_run_prefill(
+    LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
+    size_t num_inputs);
 
 // Starts the decoding process for the model to predict the response based
 // on the input prompt/query added after using litert_lm_session_run_prefill.
@@ -1365,13 +1405,19 @@ typedef void (*LiteRtLmStreamCallback)(void* callback_data,
 // @param callback The callback function to receive response chunks.
 // @param callback_data A pointer to user data that will be passed to the
 // callback.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   is NULL; otherwise the code of the error that prevented the stream from
+//   starting. Errors that occur after the stream has started are reported
+//   through the callback.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_run_decode_async(LiteRtLmSession* session,
-                                       LiteRtLmStreamCallback callback,
-                                       void* callback_data);
+LiteRtLmStatusCode litert_lm_session_run_decode_async(
+    LiteRtLmSession* session, LiteRtLmStreamCallback callback,
+    void* callback_data);
 
 // Generates content from the input prompt and streams the response via a
 // callback. This is a non-blocking call that will invoke the callback from a
@@ -1385,11 +1431,17 @@ int litert_lm_session_run_decode_async(LiteRtLmSession* session,
 // @param callback The callback function to receive response chunks.
 // @param callback_data A pointer to user data that will be passed to the
 // callback.
-// @return 0 on success, non-zero on failure to start the stream.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   is NULL; otherwise the code of the error that prevented the stream from
+//   starting. Errors that occur after the stream has started are reported
+//   through the callback.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_session_generate_content_stream(
+LiteRtLmStatusCode litert_lm_session_generate_content_stream(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs, LiteRtLmStreamCallback callback, void* callback_data);
 
@@ -1506,13 +1558,18 @@ const char* litert_lm_token_union_get_string(
 //   The received pointer is valid only for the lifetime of the `token_union`
 //   object.
 // @param out_num_tokens A pointer to receive the number of token ids.
-// @return 0 on success, non-zero if the type is not kLiteRtLmTokenUnionTypeIds.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if any
+//   argument is NULL or the type of `token_union` is not
+//   kLiteRtLmTokenUnionTypeIds.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
+// instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_token_union_get_ids(const LiteRtLmTokenUnion* token_union,
-                                  const int** out_tokens,
-                                  size_t* out_num_tokens);
+LiteRtLmStatusCode litert_lm_token_union_get_ids(
+    const LiteRtLmTokenUnion* token_union, const int** out_tokens,
+    size_t* out_num_tokens);
 
 // Destroys a LiteRT LM Token Unions object.
 //

@@ -200,6 +200,7 @@ cc_library(
     deps = [
         ":api_export_headers",
         ":engine_headers",
+        ":error_reporter_headers",
     ],
 )
 
