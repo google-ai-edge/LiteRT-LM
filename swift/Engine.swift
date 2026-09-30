@@ -171,6 +171,11 @@ public actor Engine {
           settings, gpuEnableMetalResidencySet),
         "litert_lm_engine_settings_set_gpu_enable_metal_residency_set", settingsError)
     }
+    if let enableYnnpack = ExperimentalFlags.enableYnnpack {
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_enable_ynnpack(settings, enableYnnpack),
+        "litert_lm_engine_settings_set_enable_ynnpack", settingsError)
+    }
 
     guard let engine = litert_lm_engine_create(settings) else {
       let errorMsg = LiteRTLMError.consumeLastError() ?? ""

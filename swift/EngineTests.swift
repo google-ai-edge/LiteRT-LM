@@ -29,10 +29,12 @@ class EngineTests: XCTestCase {
     super.setUp()
     ExperimentalFlags.optIntoExperimentalAPIs()
     ExperimentalFlags.gpuEnableMetalResidencySet = nil
+    ExperimentalFlags.enableYnnpack = nil
   }
 
   override func tearDown() {
     ExperimentalFlags.gpuEnableMetalResidencySet = nil
+    ExperimentalFlags.enableYnnpack = nil
     super.tearDown()
   }
 
@@ -149,6 +151,93 @@ class EngineTests: XCTestCase {
 
     try await engine.updateGPUEnableMetalResidencySet(false)
     try await engine.updateGPUEnableMetalResidencySet(true)
+  }
+
+  func testInitialize_WithEnableYnnpackFalse_Succeeds() async throws {
+    ExperimentalFlags.enableYnnpack = false
+
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm_new_metadata.task"
+    let modelPath = testDataPath(forResource: modelResource)
+    let engineConfig = try EngineConfig(
+      modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())
+    let engine = Engine(engineConfig: engineConfig)
+    try await engine.initialize()
+    let isInitialized = await engine.isInitialized()
+    XCTAssertTrue(isInitialized)
+  }
+
+  func testInitialize_WithEnableYnnpackTrue_ThrowsWhenYnnpackNotCompiledIn() async throws {
+    ExperimentalFlags.enableYnnpack = true
+
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm_new_metadata.task"
+    let modelPath = testDataPath(forResource: modelResource)
+    let engineConfig = try EngineConfig(
+      modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())
+    let engine = Engine(engineConfig: engineConfig)
+
+    do {
+      try await engine.initialize()
+      XCTFail("Expected failedToCreateEngine when YNNPACK is not compiled in.")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, LiteRTLMError.engine(.failedToCreateEngine))
+      guard case .engine(.failedToCreateEngine(let message)) = error else {
+        XCTFail("Expected failedToCreateEngine error, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("UNIMPLEMENTED"), "Unexpected message: \(message)")
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+  }
+
+  func testBenchmark_WithEnableYnnpackFalse_ReturnsBenchmarkInfo() async throws {
+    ExperimentalFlags.enableYnnpack = false
+
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    let info = try await benchmark(
+      modelPath: modelPath,
+      backend: .cpu(),
+      prefillTokens: 16,
+      decodeTokens: 16
+    )
+
+    XCTAssertGreaterThan(info.initTimeInSecond, 0)
+  }
+
+  func testBenchmark_WithEnableYnnpackTrue_ThrowsWhenYnnpackNotCompiledIn() async throws {
+    ExperimentalFlags.enableYnnpack = true
+
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    do {
+      _ = try await benchmark(
+        modelPath: modelPath,
+        backend: .cpu(),
+        prefillTokens: 16,
+        decodeTokens: 16
+      )
+      XCTFail("Expected failedToCreateEngine when YNNPACK is not compiled in.")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, LiteRTLMError.engine(.failedToCreateEngine))
+      guard case .engine(.failedToCreateEngine(let message)) = error else {
+        XCTFail("Expected failedToCreateEngine error, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("UNIMPLEMENTED"), "Unexpected message: \(message)")
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
   }
 
   func testInitialize_ThrowsIfCalledTwice() async throws {
