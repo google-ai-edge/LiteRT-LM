@@ -933,12 +933,13 @@ def _setup_lib_signatures(lib):
   ]
 
   # Embedding Engine Settings
-  lib.litert_lm_embedding_engine_settings_create.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_engine_settings_create.restype = ctypes.c_int
   lib.litert_lm_embedding_engine_settings_create.argtypes = [
       c_string_p,
       c_string_p,
       c_string_p,
       c_string_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_embedding_engine_settings_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_embedding_engine_settings_set_num_threads.restype = ctypes.c_int
@@ -1002,16 +1003,21 @@ def _setup_lib_signatures(lib):
   ]
 
   # Embedding Options
-  lib.litert_lm_embedding_options_create.restype = ctypes.c_void_p
-  lib.litert_lm_embedding_options_create.argtypes = []
+  lib.litert_lm_embedding_options_create.restype = ctypes.c_int
+  lib.litert_lm_embedding_options_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p)
+  ]
   lib.litert_lm_embedding_options_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_embedding_options_set_normalize.restype = ctypes.c_int
   lib.litert_lm_embedding_options_set_normalize.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
-  lib.litert_lm_embedding_options_get_normalize.restype = ctypes.c_bool
-  lib.litert_lm_embedding_options_get_normalize.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_get_normalize.restype = ctypes.c_int
+  lib.litert_lm_embedding_options_get_normalize.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_bool),
+  ]
   lib.litert_lm_embedding_options_set_insert_special_tokens.restype = (
       ctypes.c_int
   )
@@ -1020,10 +1026,11 @@ def _setup_lib_signatures(lib):
       ctypes.c_bool,
   ]
   lib.litert_lm_embedding_options_get_insert_special_tokens.restype = (
-      ctypes.c_bool
+      ctypes.c_int
   )
   lib.litert_lm_embedding_options_get_insert_special_tokens.argtypes = [
-      ctypes.c_void_p
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_bool),
   ]
   lib.litert_lm_embedding_options_set_input_overflow_strategy.restype = (
       ctypes.c_int
@@ -1036,7 +1043,8 @@ def _setup_lib_signatures(lib):
       ctypes.c_int
   )
   lib.litert_lm_embedding_options_get_input_overflow_strategy.argtypes = [
-      ctypes.c_void_p
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
   ]
   lib.litert_lm_embedding_options_set_output_size.restype = ctypes.c_int
   lib.litert_lm_embedding_options_set_output_size.argtypes = [
@@ -1044,7 +1052,10 @@ def _setup_lib_signatures(lib):
       ctypes.c_int,
   ]
   lib.litert_lm_embedding_options_get_output_size.restype = ctypes.c_int
-  lib.litert_lm_embedding_options_get_output_size.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_get_output_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
+  ]
   lib.litert_lm_embedding_options_set_vision_tokens_per_image.restype = (
       ctypes.c_int
   )
@@ -1056,48 +1067,60 @@ def _setup_lib_signatures(lib):
       ctypes.c_int
   )
   lib.litert_lm_embedding_options_get_vision_tokens_per_image.argtypes = [
-      ctypes.c_void_p
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
   ]
 
   # Embedding Response
   lib.litert_lm_embedding_response_delete.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_embedding_response_get_size.restype = ctypes.c_size_t
-  lib.litert_lm_embedding_response_get_size.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_embedding_response_get_values.restype = ctypes.POINTER(
-      ctypes.c_float
-  )
-  lib.litert_lm_embedding_response_get_values.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_response_get_size.restype = ctypes.c_int
+  lib.litert_lm_embedding_response_get_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_size_t),
+  ]
+  lib.litert_lm_embedding_response_get_values.restype = ctypes.c_int
+  lib.litert_lm_embedding_response_get_values.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),
+  ]
 
   # Embedding Responses
   lib.litert_lm_embedding_responses_delete.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_embedding_responses_get_size.restype = ctypes.c_size_t
-  lib.litert_lm_embedding_responses_get_size.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_embedding_responses_get_at.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_responses_get_size.restype = ctypes.c_int
+  lib.litert_lm_embedding_responses_get_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_size_t),
+  ]
+  lib.litert_lm_embedding_responses_get_at.restype = ctypes.c_int
   lib.litert_lm_embedding_responses_get_at.argtypes = [
       ctypes.c_void_p,
       ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
 
   # Embedding Engine
-  lib.litert_lm_embedding_engine_create.restype = ctypes.c_void_p
-  lib.litert_lm_embedding_engine_create.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_engine_create.restype = ctypes.c_int
+  lib.litert_lm_embedding_engine_create.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_embedding_engine_delete.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_embedding_engine_compute_embedding.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_engine_compute_embedding.restype = ctypes.c_int
   lib.litert_lm_embedding_engine_compute_embedding.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_void_p),
       ctypes.c_size_t,
       ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
-  lib.litert_lm_embedding_engine_compute_embedding_batch.restype = (
-      ctypes.c_void_p
-  )
+  lib.litert_lm_embedding_engine_compute_embedding_batch.restype = ctypes.c_int
   lib.litert_lm_embedding_engine_compute_embedding_batch.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)),
       ctypes.POINTER(ctypes.c_size_t),
       ctypes.c_size_t,
       ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
 
   # Experimental C API

@@ -72,20 +72,29 @@ typedef struct LiteRtLmEmbeddingResponse LiteRtLmEmbeddingResponse;
 // Added in version 0.2.0.
 typedef struct LiteRtLmEmbeddingResponses LiteRtLmEmbeddingResponses;
 
-// Creates LiteRT LM Embedding Engine Settings. The caller is responsible for
-// destroying the settings using `litert_lm_embedding_engine_settings_delete`.
+// Creates LiteRT LM Embedding Engine Settings.
 //
 // @param model_path The path to the model file.
 // @param backend_str The backend to use (e.g., "cpu", "gpu", "npu").
 // @param vision_backend_str The vision backend to use, or NULL if not set.
 // @param audio_backend_str The audio backend to use, or NULL if not set.
-// @return A pointer to the created settings, or NULL on failure.
+// @param out_settings On success, receives the created settings, owned by the
+//   caller; release with `litert_lm_embedding_engine_settings_delete`. Set to
+//   NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `model_path`, `backend_str` or `out_settings` is NULL, or a backend string
+//   is not recognized; otherwise the code of the error that prevented the
+//   settings from being created (e.g. the model file could not be opened).
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the settings are returned
+// through out_settings.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
+LiteRtLmStatusCode litert_lm_embedding_engine_settings_create(
     const char* model_path, const char* backend_str,
-    const char* vision_backend_str, const char* audio_backend_str);
+    const char* vision_backend_str, const char* audio_backend_str,
+    LiteRtLmEmbeddingEngineSettings** out_settings);
 
 // Destroys LiteRT LM Embedding Engine Settings.
 //
@@ -245,14 +254,21 @@ LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_activation_data_type(
     LiteRtLmActivationDataType activation_data_type);
 
 // Creates LiteRT LM Embedding Options with default values (`normalize = true`,
-// `insert_special_tokens = true`). The caller is responsible for destroying
-// options using `litert_lm_embedding_options_delete`.
+// `insert_special_tokens = true`).
 //
-// @return A pointer to the created options, or NULL on failure.
+// @param out_options On success, receives the created options, owned by the
+//   caller; release with `litert_lm_embedding_options_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_options` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the options are returned
+// through out_options.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEmbeddingOptions* litert_lm_embedding_options_create(void);
+LiteRtLmStatusCode litert_lm_embedding_options_create(
+    LiteRtLmEmbeddingOptions** out_options);
 
 // Destroys LiteRT LM Embedding Options.
 //
@@ -278,12 +294,18 @@ LiteRtLmStatusCode litert_lm_embedding_options_set_normalize(
 // Gets whether the embedding should be L2 normalized.
 //
 // @param options The options to inspect.
-// @return True if normalization is enabled, false otherwise.
+// @param out_normalize On success, receives true if normalization is enabled,
+//   false otherwise; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `options` or `out_normalize` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_normalize.
 LITERT_LM_C_API_EXPORT
-bool litert_lm_embedding_options_get_normalize(
-    const LiteRtLmEmbeddingOptions* options);
+LiteRtLmStatusCode litert_lm_embedding_options_get_normalize(
+    const LiteRtLmEmbeddingOptions* options, bool* out_normalize);
 
 // Sets whether special tokens (BOS, EOS, start/end of image, start/end of
 // audio) should be automatically inserted.
@@ -302,12 +324,18 @@ LiteRtLmStatusCode litert_lm_embedding_options_set_insert_special_tokens(
 // Gets whether special tokens should be automatically inserted.
 //
 // @param options The options to inspect.
-// @return True if special tokens insertion is enabled, false otherwise.
+// @param out_insert_special_tokens On success, receives true if special tokens
+//   insertion is enabled, false otherwise; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `options` or `out_insert_special_tokens` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_insert_special_tokens.
 LITERT_LM_C_API_EXPORT
-bool litert_lm_embedding_options_get_insert_special_tokens(
-    const LiteRtLmEmbeddingOptions* options);
+LiteRtLmStatusCode litert_lm_embedding_options_get_insert_special_tokens(
+    const LiteRtLmEmbeddingOptions* options, bool* out_insert_special_tokens);
 
 // Sets the input overflow strategy.
 //
@@ -326,13 +354,19 @@ LiteRtLmStatusCode litert_lm_embedding_options_set_input_overflow_strategy(
 // Gets the input overflow strategy.
 //
 // @param options The options to inspect.
-// @return The overflow strategy configured in options.
+// @param out_strategy On success, receives the overflow strategy configured in
+//   options; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `options` or `out_strategy` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the strategy is returned
+// through out_strategy.
 LITERT_LM_C_API_EXPORT
-LiteRtLmInputOverflowStrategy
-litert_lm_embedding_options_get_input_overflow_strategy(
-    const LiteRtLmEmbeddingOptions* options);
+LiteRtLmStatusCode litert_lm_embedding_options_get_input_overflow_strategy(
+    const LiteRtLmEmbeddingOptions* options,
+    LiteRtLmInputOverflowStrategy* out_strategy);
 
 // Sets the output embedding size to truncate the embedding to.
 //
@@ -352,12 +386,20 @@ LiteRtLmStatusCode litert_lm_embedding_options_set_output_size(
 // Gets the output embedding size.
 //
 // @param options The options to inspect.
-// @return The output embedding size, or -1 if not set (using default size).
+// @param out_output_size On success, receives the output embedding size; not
+//   written on failure or if the size is not set.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `options` or `out_output_size` is NULL; kLiteRtLmStatusNotFound if the
+//   output size is not set (the default output embedding size is used).
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the size is returned
+// through out_output_size, and an unset size is reported as
+// kLiteRtLmStatusNotFound instead of -1.
 LITERT_LM_C_API_EXPORT
-int litert_lm_embedding_options_get_output_size(
-    const LiteRtLmEmbeddingOptions* options);
+LiteRtLmStatusCode litert_lm_embedding_options_get_output_size(
+    const LiteRtLmEmbeddingOptions* options, int* out_output_size);
 
 // Sets the vision tokens per image.
 //
@@ -376,12 +418,23 @@ LiteRtLmStatusCode litert_lm_embedding_options_set_vision_tokens_per_image(
 // Gets the vision tokens per image.
 //
 // @param options The options to inspect.
-// @return The vision tokens per image configured in options, or 0 if not set.
+// @param out_vision_tokens_per_image On success, receives the vision tokens per
+//   image configured in options; not written on failure or if the value is not
+//   set.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `options` or `out_vision_tokens_per_image` is NULL;
+//   kLiteRtLmStatusNotFound if the vision tokens per image is not set (the
+//   engine or model default is used).
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_vision_tokens_per_image, and an unset value is reported as
+// kLiteRtLmStatusNotFound instead of 0.
 LITERT_LM_C_API_EXPORT
-int litert_lm_embedding_options_get_vision_tokens_per_image(
-    const LiteRtLmEmbeddingOptions* options);
+LiteRtLmStatusCode litert_lm_embedding_options_get_vision_tokens_per_image(
+    const LiteRtLmEmbeddingOptions* options, int* out_vision_tokens_per_image);
+
 // Destroys a LiteRT LM Embedding Response.
 //
 // @param response The response to destroy.
@@ -390,26 +443,40 @@ int litert_lm_embedding_options_get_vision_tokens_per_image(
 LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_response_delete(LiteRtLmEmbeddingResponse* response);
 
-// Returns the dimension (number of float values) of the embedding response.
+// Gets the dimension (number of float values) of the embedding response.
 //
 // @param response The response to inspect.
-// @return Number of float elements.
+// @param out_size On success, receives the number of float elements; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `response` or `out_size` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the size is returned
+// through out_size.
 LITERT_LM_C_API_EXPORT
-size_t litert_lm_embedding_response_get_size(
-    const LiteRtLmEmbeddingResponse* response);
+LiteRtLmStatusCode litert_lm_embedding_response_get_size(
+    const LiteRtLmEmbeddingResponse* response, size_t* out_size);
 
-// Returns a pointer to the array of float embedding values.
-// The returned pointer is owned by `response` and valid for its lifetime.
+// Gets a pointer to the array of float embedding values.
 //
 // @param response The response to inspect.
-// @return Pointer to float array, or NULL if empty.
+// @param out_values On success, receives a pointer to the
+//   `litert_lm_embedding_response_get_size` float values, or NULL if the
+//   embedding is empty. The array is owned by `response` and valid until
+//   `response` (or the `LiteRtLmEmbeddingResponses` that owns it) is deleted.
+//   Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success (including an empty embedding), or
+//   another LiteRtLmStatusCode on failure (see error_reporter.h).
+//   kLiteRtLmStatusInvalidArgument if `response` or `out_values` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the values are returned
+// through out_values.
 LITERT_LM_C_API_EXPORT
-const float* litert_lm_embedding_response_get_values(
-    const LiteRtLmEmbeddingResponse* response);
+LiteRtLmStatusCode litert_lm_embedding_response_get_values(
+    const LiteRtLmEmbeddingResponse* response, const float** out_values);
 
 // Destroys a collection of LiteRT LM Embedding Responses.
 //
@@ -420,39 +487,60 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_responses_delete(
     LiteRtLmEmbeddingResponses* responses);
 
-// Returns the number of responses in the collection.
+// Gets the number of responses in the collection.
 //
 // @param responses The responses collection.
-// @return The batch size.
+// @param out_size On success, receives the batch size; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_size` is NULL.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the size is returned
+// through out_size.
 LITERT_LM_C_API_EXPORT
-size_t litert_lm_embedding_responses_get_size(
-    const LiteRtLmEmbeddingResponses* responses);
+LiteRtLmStatusCode litert_lm_embedding_responses_get_size(
+    const LiteRtLmEmbeddingResponses* responses, size_t* out_size);
 
-// Returns the embedding response at the given index in the batch.
-// The returned pointer is owned by `responses` and valid for its lifetime.
+// Gets the embedding response at the given index in the batch.
 //
 // @param responses The responses collection.
 // @param index The batch index.
-// @return Pointer to the embedding response, or NULL if out of bounds.
+// @param out_response On success, receives the embedding response at `index`.
+//   It is owned by `responses` and valid until `responses` is deleted; do not
+//   delete it. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_response` is NULL; kLiteRtLmStatusOutOfRange if
+//   `index` is not less than the batch size.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the response is returned
+// through out_response, and an out-of-range index is reported as
+// kLiteRtLmStatusOutOfRange.
 LITERT_LM_C_API_EXPORT
-const LiteRtLmEmbeddingResponse* litert_lm_embedding_responses_get_at(
-    const LiteRtLmEmbeddingResponses* responses, size_t index);
+LiteRtLmStatusCode litert_lm_embedding_responses_get_at(
+    const LiteRtLmEmbeddingResponses* responses, size_t index,
+    const LiteRtLmEmbeddingResponse** out_response);
 
-// Creates a LiteRT LM Embedding Engine from the given settings. The caller is
-// responsible for destroying the engine using
-// `litert_lm_embedding_engine_delete`.
+// Creates a LiteRT LM Embedding Engine from the given settings.
 //
 // @param settings The embedding engine settings.
-// @return A pointer to the created engine, or NULL on failure.
+// @param out_engine On success, receives the created engine, owned by the
+//   caller; release with `litert_lm_embedding_engine_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `settings` or `out_engine` is NULL; otherwise the code of the error that
+//   prevented the engine from being created.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the engine is returned
+// through out_engine.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEmbeddingEngine* litert_lm_embedding_engine_create(
-    const LiteRtLmEmbeddingEngineSettings* settings);
+LiteRtLmStatusCode litert_lm_embedding_engine_create(
+    const LiteRtLmEmbeddingEngineSettings* settings,
+    LiteRtLmEmbeddingEngine** out_engine);
 
 // Destroys a LiteRT LM Embedding Engine.
 //
@@ -470,15 +558,22 @@ void litert_lm_embedding_engine_delete(LiteRtLmEmbeddingEngine* engine);
 // @param num_inputs Number of inputs in the array.
 // @param options Optional embedding options. If NULL, default options are
 //   used.
-// @return A pointer to the embedding response, or NULL on failure. The caller
-//   is responsible for deleting the response using
-//   `litert_lm_embedding_response_delete`.
+// @param out_response On success, receives the embedding response, owned by
+//   the caller; release with `litert_lm_embedding_response_delete`. Set to NULL
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `engine` or `out_response` is NULL; otherwise the code of the error that
+//   prevented the embedding from being computed.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the response is returned
+// through out_response.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEmbeddingResponse* litert_lm_embedding_engine_compute_embedding(
+LiteRtLmStatusCode litert_lm_embedding_engine_compute_embedding(
     LiteRtLmEmbeddingEngine* engine, const LiteRtLmInputData* const* inputs,
-    size_t num_inputs, const LiteRtLmEmbeddingOptions* options);
+    size_t num_inputs, const LiteRtLmEmbeddingOptions* options,
+    LiteRtLmEmbeddingResponse** out_response);
 
 // Computes embedding responses for a batch of requests.
 //
@@ -489,17 +584,24 @@ LiteRtLmEmbeddingResponse* litert_lm_embedding_engine_compute_embedding(
 // @param batch_size The number of requests in the batch.
 // @param options Optional embedding options. If NULL, default options are
 //   used.
-// @return A pointer to the batch responses, or NULL on failure. The caller is
-//   responsible for deleting responses using
-//   `litert_lm_embedding_responses_delete`.
+// @param out_responses On success, receives the batch responses, owned by the
+//   caller; release with `litert_lm_embedding_responses_delete`. Set to NULL
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `engine` or `out_responses` is NULL; otherwise the code of the error that
+//   prevented the embeddings from being computed.
 //
 // Added in version 0.2.0.
+// Changed in version 1.0.0: returns a status code; the responses are returned
+// through out_responses.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEmbeddingResponses* litert_lm_embedding_engine_compute_embedding_batch(
+LiteRtLmStatusCode litert_lm_embedding_engine_compute_embedding_batch(
     LiteRtLmEmbeddingEngine* engine,
     const LiteRtLmInputData* const* const* inputs_batch,
     const size_t* num_inputs_per_batch, size_t batch_size,
-    const LiteRtLmEmbeddingOptions* options);
+    const LiteRtLmEmbeddingOptions* options,
+    LiteRtLmEmbeddingResponses** out_responses);
 
 #ifdef __cplusplus
 }
