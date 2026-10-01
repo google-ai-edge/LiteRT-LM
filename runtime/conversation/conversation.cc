@@ -53,6 +53,7 @@
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
 #include "runtime/conversation/prompt_utils.h"
 #include "runtime/conversation/thinking_config.h"
+#include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -868,6 +869,29 @@ absl::Status Conversation::RunTextScoringAsync(
 
 absl::StatusOr<int> Conversation::GetTokenCount() const {
   return session_->GetCurrentStep();
+}
+
+absl::StatusOr<int> Conversation::CountTokens(
+    const Message& message, const OptionalArgs& optional_args) const {
+  absl::MutexLock lock(history_mutex_);  // NOLINT
+  std::vector<Message> messages;
+  if (message.is_array()) {
+    messages.reserve(message.size());
+    for (const auto& msg : message) {
+      messages.push_back(msg);
+    }
+  } else {
+    messages.push_back(message);
+  }
+
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<InputData> input_data,
+      const_cast<Conversation*>(this)->GetInputDataVectorForMessages(
+          history_, messages, optional_args,
+          /*include_preface=*/history_.empty() &&
+              !config_.prefill_preface_on_init()));
+
+  return CalculateInputDataTokens(input_data, engine_);
 }
 
 absl::StatusOr<BenchmarkInfo> Conversation::GetBenchmarkInfo() {

@@ -92,6 +92,7 @@ target_include_directories(runtime_core_session_utils
 target_link_libraries(runtime_core_session_utils
   PUBLIC
     LiteRTLM::Runtime::Components::TokenizerInterface
+    LiteRTLM::Runtime::Engine::Interface
     LiteRTLM::Runtime::Engine::Settings
     LiteRTLM::Runtime::Engine::IoTypes
 )
