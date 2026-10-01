@@ -23,9 +23,12 @@ from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
+from runtime.proto import image_gen_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import tts_metadata_pb2
 
 _TOML_TEMPLATE = """
 # A template for testing the TOML parser.
@@ -1000,7 +1003,6 @@ min_runtime_version = "0.12.3"
     self.assertIn("supports_thinking: true", ss)
     self.assertIn("supports_function_calling: false", ss)
 
-
   def test_from_toml_file_with_vision_patch_metadata(self):
     """Tests max_num_patches and pooling_kernel_size from TOML."""
     metadata_path = self._create_dummy_file("metadata.pbtext", b"")
@@ -1369,6 +1371,224 @@ pooling_kernel_size = 2
               )
           ],
       )
+
+  def test_from_toml_with_asr_metadata(self):
+    """Tests that TOML with AsrMetadata and capability model types builds properly."""
+    asr_meta = asr_metadata_pb2.AsrMetadata()
+    asr_meta_path = self._create_dummy_file(
+        "asr_meta.pb", asr_meta.SerializeToString()
+    )
+    enc_dec_path = self._create_dummy_file(
+        "enc_dec.tflite", b"dummy enc_dec tflite"
+    )
+
+    toml_content = f"""
+[system_metadata]
+entries = [
+  {{ key = "author", value_type = "String", value = "ODML" }}
+]
+
+[[section]]
+section_type = "AsrMetadata"
+data_path = "{asr_meta_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "ENCODER_DECODER"
+data_path = "{enc_dec_path}"
+"""
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (2)", ss)
+    self.assertIn("Data Type:    AsrMetadataProto", ss)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_encoder_decoder", ss
+    )
+
+  def test_from_toml_with_tts_metadata(self):
+    """Tests that TOML with TtsMetadata and capability model types builds properly."""
+    tts_meta = tts_metadata_pb2.TtsMetadata(
+        output_sample_rate=24000, supported_languages=["en-US"]
+    )
+    tts_meta_path = self._create_dummy_file(
+        "tts_meta.textproto",
+        text_format.MessageToString(tts_meta).encode("utf-8"),
+    )
+    acoustic_path = self._create_dummy_file(
+        "acoustic.tflite", b"dummy acoustic tflite"
+    )
+    vocoder_path = self._create_dummy_file(
+        "vocoder.tflite", b"dummy vocoder tflite"
+    )
+
+    toml_content = f"""
+[system_metadata]
+entries = [
+  {{ key = "author", value_type = "String", value = "ODML" }}
+]
+
+[[section]]
+section_type = "TtsMetadata"
+data_path = "{tts_meta_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "ACOUSTIC"
+data_path = "{acoustic_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "TF_LITE_VOCODER"
+data_path = "{vocoder_path}"
+"""
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (3)", ss)
+    self.assertIn("Data Type:    TtsMetadataProto", ss)
+    self.assertIn("output_sample_rate: 24000", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_acoustic", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_vocoder", ss)
+
+  def test_from_toml_with_image_gen_metadata(self):
+    """Tests that TOML with ImageGenMetadata and capability model types builds properly."""
+    image_gen_meta_content = """
+    image_gen_model_type {
+      bonsai_flux2 {
+        flux2_params {
+          img_size: 256
+          default_steps: 4
+          packed_ch: 128
+          seq_len: 128
+        }
+      }
+    }
+    """
+    image_gen_meta_path = self._create_dummy_file(
+        "image_gen_meta.textproto", image_gen_meta_content.encode()
+    )
+    text_enc_path = self._create_dummy_file(
+        "textenc.tflite", b"dummy textenc tflite"
+    )
+    dit_path = self._create_dummy_file("dit.tflite", b"dummy dit tflite")
+    vae_path = self._create_dummy_file("vae.tflite", b"dummy vae tflite")
+
+    toml_content = f"""
+[system_metadata]
+entries = [
+  {{ key = "author", value_type = "String", value = "ODML" }}
+]
+
+[[section]]
+section_type = "ImageGenMetadata"
+data_path = "{image_gen_meta_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "TF_LITE_TEXT_ENCODER"
+data_path = "{text_enc_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "IMAGE_DENOISER"
+data_path = "{dit_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "IMAGE_DECODER"
+data_path = "{vae_path}"
+"""
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (4)", ss)
+    self.assertIn("Data Type:    ImageGenMetadataProto", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_text_encoder", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_image_denoiser", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_image_decoder", ss)
+
+  def test_capability_tflite_model_type_int_enum_resolution(self):
+    """Tests resolving capability proto enum ints for ASR, TTS, and ImageGen."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    asr_path = self._create_dummy_file(
+        "asr.pb", asr_metadata_pb2.AsrMetadata().SerializeToString()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_asr_metadata(asr_path)
+    builder.add_tflite_model(
+        tflite_path, asr_metadata_pb2.AsrMetadata.TF_LITE_AUDIO_ENCODER
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: model_type, Value (String): tf_lite_audio_encoder", ss)
+
+    tts_path = self._create_dummy_file(
+        "tts.pb", tts_metadata_pb2.TtsMetadata().SerializeToString()
+    )
+    builder_tts = litertlm_builder.LitertLmFileBuilder()
+    builder_tts.add_tts_metadata(tts_path)
+    builder_tts.add_tflite_model(
+        tflite_path, tts_metadata_pb2.TtsMetadata.TF_LITE_ACOUSTIC
+    )
+    ss_tts = self._build_and_read_litertlm(builder_tts)
+    self.assertIn("Key: model_type, Value (String): tf_lite_acoustic", ss_tts)
+
+    img_path = self._create_dummy_file(
+        "img.pb", image_gen_metadata_pb2.ImageGenMetadata().SerializeToString()
+    )
+    builder_img = litertlm_builder.LitertLmFileBuilder()
+    builder_img.add_image_gen_metadata(img_path)
+    builder_img.add_tflite_model(
+        tflite_path,
+        image_gen_metadata_pb2.ImageGenMetadata.TF_LITE_DIFFUSION_TRANSFORMER_INITIAL,
+    )
+    ss_img = self._build_and_read_litertlm(builder_img)
+    self.assertIn(
+        "Key: model_type, Value (String):"
+        " tf_lite_diffusion_transformer_initial",
+        ss_img,
+    )
+    self.assertNotIn(
+        "unspecified", litertlm_builder.get_all_tflite_model_types()
+    )
+
+    builder_no_cap = litertlm_builder.LitertLmFileBuilder()
+    with self.assertRaisesRegex(
+        ValueError, "Capability metadata must be added before resolving"
+    ):
+      builder_no_cap.add_tflite_model(
+          tflite_path, asr_metadata_pb2.AsrMetadata.TF_LITE_AUDIO_ENCODER
+      )
+
+    with self.assertRaisesRegex(ValueError, "TF_LITE_MODEL_TYPE_UNSPECIFIED"):
+      builder_img.add_tflite_model(
+          tflite_path,
+          image_gen_metadata_pb2.ImageGenMetadata.TF_LITE_MODEL_TYPE_UNSPECIFIED,
+      )
+
+  def test_multiple_capability_metadata_raises_error(self):
+    """Tests that adding conflicting capability metadata raises ValueError."""
+    llm_meta_path = self._create_dummy_file(
+        "llm.textproto", b"max_num_tokens: 10\n"
+    )
+    asr_meta_path = self._create_dummy_file("asr.textproto", b"")
+    tts_meta_path = self._create_dummy_file(
+        "tts.textproto", b"output_sample_rate: 24000\n"
+    )
+    image_gen_meta_path = self._create_dummy_file(
+        "image_gen.textproto", b"image_gen_model_type { bonsai_flux2 {} }\n"
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_llm_metadata(llm_meta_path)
+    with self.assertRaisesRegex(
+        ValueError, "can contain only one top-level capability metadata section"
+    ):
+      builder.add_asr_metadata(asr_meta_path)
+    with self.assertRaisesRegex(
+        ValueError, "can contain only one top-level capability metadata section"
+    ):
+      builder.add_tts_metadata(tts_meta_path)
+    with self.assertRaisesRegex(
+        ValueError, "can contain only one top-level capability metadata section"
+    ):
+      builder.add_image_gen_metadata(image_gen_meta_path)
 
 
 if __name__ == "__main__":
