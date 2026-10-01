@@ -16,6 +16,7 @@
 import ctypes
 from . import interfaces
 from ._ffi import call_checked
+from ._ffi import create_checked
 from ._ffi import SamplerType
 from ._ffi import TokenUnionType
 
@@ -23,11 +24,11 @@ from ._ffi import TokenUnionType
 def _sampler_config_to_params(
     lib,
     config: interfaces.SamplerConfig | None,
-) -> ctypes.c_void_p:
+) -> int:
   """Converts a SamplerConfig to a LiteRtLmSamplerParams opaque pointer."""
-  params = lib.litert_lm_sampler_params_create(SamplerType.TOP_P)
-  if not params:
-    raise RuntimeError("Failed to create LiteRtLmSamplerParams")
+  params = create_checked(
+      lib, "litert_lm_sampler_params_create", SamplerType.TOP_P
+  )
 
   if config is not None:
     try:

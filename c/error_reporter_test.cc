@@ -64,22 +64,27 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
 
   // Passing null model_path to litert_lm_engine_settings_create should trigger
   // an error.
-  LiteRtLmEngineSettings* invalid_settings = litert_lm_engine_settings_create(
-      /*model_path=*/nullptr, "cpu", nullptr, nullptr);
+  LiteRtLmEngineSettings* invalid_settings = nullptr;
+  EXPECT_EQ(
+      litert_lm_engine_settings_create(/*model_path=*/nullptr, "cpu", nullptr,
+                                       nullptr, &invalid_settings),
+      kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(invalid_settings, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_THAT(litert_lm_get_last_error_message(),
-              HasSubstr("model_path cannot be null"));
+              HasSubstr("model_path must not be NULL"));
 
   // A successful call does not clear the error (following standard C
   // conventions).
-  LiteRtLmEngineSettings* valid_settings = litert_lm_engine_settings_create(
-      "dummy_model_path", "cpu", nullptr, nullptr);
+  LiteRtLmEngineSettings* valid_settings = nullptr;
+  ASSERT_EQ(litert_lm_engine_settings_create("dummy_model_path", "cpu", nullptr,
+                                             nullptr, &valid_settings),
+            kLiteRtLmStatusOk);
   ASSERT_NE(valid_settings, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
-              HasSubstr("model_path cannot be null"));
+              HasSubstr("model_path must not be NULL"));
 
   // litert_lm_clear_last_error explicitly clears the error.
   litert_lm_clear_last_error();

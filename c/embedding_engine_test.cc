@@ -33,6 +33,16 @@ using ::testing::HasSubstr;
 constexpr char kTestEmbeddingModelPath[] =
     "runtime/testdata/test_embedding.litertlm";
 
+// Creates input data through the status + out-parameter C API. Returns NULL on
+// failure.
+LiteRtLmInputData* CreateInputData(LiteRtLmInputDataType type, const void* data,
+                                   size_t size) {
+  LiteRtLmInputData* input_data = nullptr;
+  EXPECT_EQ(litert_lm_input_data_create(type, data, size, &input_data),
+            kLiteRtLmStatusOk);
+  return input_data;
+}
+
 TEST(EmbeddingEngineCTest, CreateSettingsSuccess) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
@@ -169,8 +179,8 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingSuccess) {
   ASSERT_NE(engine, nullptr);
 
   std::string prompt = "'s";
-  auto* input_data = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                                 prompt.data(), prompt.size());
+  auto* input_data =
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt.data(), prompt.size());
   ASSERT_NE(input_data, nullptr);
 
   const LiteRtLmInputData* inputs[] = {input_data};
@@ -211,8 +221,8 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingWithMaxInputLengthSuccess) {
   ASSERT_NE(engine, nullptr);
 
   std::string prompt = "'s";
-  auto* input_data = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                                 prompt.data(), prompt.size());
+  auto* input_data =
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt.data(), prompt.size());
   ASSERT_NE(input_data, nullptr);
 
   const LiteRtLmInputData* inputs[] = {input_data};
@@ -255,10 +265,10 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchSuccess) {
 
   std::string prompt1 = "'s";
   std::string prompt2 = "'s";
-  auto* input1 = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                             prompt1.data(), prompt1.size());
-  auto* input2 = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                             prompt2.data(), prompt2.size());
+  auto* input1 = CreateInputData(kLiteRtLmInputDataTypeText, prompt1.data(),
+                                 prompt1.size());
+  auto* input2 = CreateInputData(kLiteRtLmInputDataTypeText, prompt2.data(),
+                                 prompt2.size());
 
   const LiteRtLmInputData* req1[] = {input1};
   const LiteRtLmInputData* req2[] = {input2};
@@ -299,8 +309,8 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingWithOutputSize) {
   ASSERT_NE(engine, nullptr);
 
   std::string prompt = "'s";
-  auto* input_data = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                                 prompt.data(), prompt.size());
+  auto* input_data =
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt.data(), prompt.size());
   ASSERT_NE(input_data, nullptr);
 
   const LiteRtLmInputData* inputs[] = {input_data};
@@ -341,10 +351,10 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchWithOutputSize) {
 
   std::string prompt1 = "'s";
   std::string prompt2 = "'s";
-  auto* input1 = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                             prompt1.data(), prompt1.size());
-  auto* input2 = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
-                                             prompt2.data(), prompt2.size());
+  auto* input1 = CreateInputData(kLiteRtLmInputDataTypeText, prompt1.data(),
+                                 prompt1.size());
+  auto* input2 = CreateInputData(kLiteRtLmInputDataTypeText, prompt2.data(),
+                                 prompt2.size());
 
   const LiteRtLmInputData* req1[] = {input1};
   const LiteRtLmInputData* req2[] = {input2};

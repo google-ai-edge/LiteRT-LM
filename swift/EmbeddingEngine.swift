@@ -358,28 +358,23 @@ public actor EmbeddingEngine {
   }
 
   private func createInputData(_ item: Content) throws -> OpaquePointer {
+    let inputDataError: (String) -> LiteRTLMError = {
+      .embeddingEngine(.failedToCreateInputData($0))
+    }
     switch item {
     case .text(let text):
-      guard
-        let ptr = text.withCString({ cStr in
-          litert_lm_input_data_create(kLiteRtLmInputDataTypeText, cStr, text.utf8.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        text.withCString { cStr in
+          litert_lm_input_data_create(kLiteRtLmInputDataTypeText, cStr, text.utf8.count, out)
+        }
       }
-      return ptr
     case .imageData(let data):
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .imageFile(let path):
       let data: Data
       do {
@@ -389,27 +384,19 @@ public actor EmbeddingEngine {
           .failedToCreateInputData(
             "Failed to read image file at '\(path)': \(error.localizedDescription)"))
       }
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .audioData(let data):
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .audioFile(let path):
       let data: Data
       do {
@@ -419,16 +406,12 @@ public actor EmbeddingEngine {
           .failedToCreateInputData(
             "Failed to read audio file at '\(path)': \(error.localizedDescription)"))
       }
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .toolResponse:
       throw LiteRTLMError.embeddingEngine(
         .failedToCreateInputData("Tool responses are not supported for embeddings"))

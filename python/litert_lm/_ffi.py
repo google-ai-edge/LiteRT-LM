@@ -202,22 +202,24 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_set_min_log_level.argtypes = [ctypes.c_int]
 
   # Input Data
-  lib.litert_lm_input_data_create.restype = ctypes.c_void_p
+  lib.litert_lm_input_data_create.restype = ctypes.c_int
   lib.litert_lm_input_data_create.argtypes = [
       ctypes.c_int,
       ctypes.c_void_p,
       ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_input_data_delete.restype = None
   lib.litert_lm_input_data_delete.argtypes = [ctypes.c_void_p]
 
   # Engine Settings
-  lib.litert_lm_engine_settings_create.restype = ctypes.c_void_p
+  lib.litert_lm_engine_settings_create.restype = ctypes.c_int
   lib.litert_lm_engine_settings_create.argtypes = [
       c_string_p,
       c_string_p,
       c_string_p,
       c_string_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_engine_settings_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_engine_settings_set_max_num_tokens.restype = ctypes.c_int
@@ -336,13 +338,19 @@ def _setup_lib_signatures(lib):
   ]
 
   # Engine
-  lib.litert_lm_engine_create.restype = ctypes.c_void_p
-  lib.litert_lm_engine_create.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_engine_create.restype = ctypes.c_int
+  lib.litert_lm_engine_create.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_engine_delete.argtypes = [ctypes.c_void_p]
 
   # Sampler Params
-  lib.litert_lm_sampler_params_create.restype = ctypes.c_void_p
-  lib.litert_lm_sampler_params_create.argtypes = [ctypes.c_int]
+  lib.litert_lm_sampler_params_create.restype = ctypes.c_int
+  lib.litert_lm_sampler_params_create.argtypes = [
+      ctypes.c_int,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_sampler_params_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_sampler_params_set_top_k.restype = ctypes.c_int
   lib.litert_lm_sampler_params_set_top_k.argtypes = [
@@ -366,8 +374,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # Session Config
-  lib.litert_lm_session_config_create.restype = ctypes.c_void_p
-  lib.litert_lm_session_config_create.argtypes = []
+  lib.litert_lm_session_config_create.restype = ctypes.c_int
+  lib.litert_lm_session_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_session_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_session_config_set_max_output_tokens.restype = ctypes.c_int
   lib.litert_lm_session_config_set_max_output_tokens.argtypes = [
@@ -403,10 +413,11 @@ def _setup_lib_signatures(lib):
   ]
 
   # Session
-  lib.litert_lm_engine_create_session.restype = ctypes.c_void_p
+  lib.litert_lm_engine_create_session.restype = ctypes.c_int
   lib.litert_lm_engine_create_session.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_session_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_session_cancel_process.restype = ctypes.c_int
@@ -509,8 +520,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # Repetition Penalty Config
-  lib.litert_lm_repetition_penalty_config_create.restype = ctypes.c_void_p
-  lib.litert_lm_repetition_penalty_config_create.argtypes = []
+  lib.litert_lm_repetition_penalty_config_create.restype = ctypes.c_int
+  lib.litert_lm_repetition_penalty_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_repetition_penalty_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_repetition_penalty_config_set_repetition_penalty.restype = (
       ctypes.c_int
@@ -540,8 +553,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # No Repeat Ngram Config
-  lib.litert_lm_no_repeat_ngram_config_create.restype = ctypes.c_void_p
-  lib.litert_lm_no_repeat_ngram_config_create.argtypes = []
+  lib.litert_lm_no_repeat_ngram_config_create.restype = ctypes.c_int
+  lib.litert_lm_no_repeat_ngram_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_no_repeat_ngram_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size.restype = (
       ctypes.c_int
@@ -557,8 +572,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # Suppress Tokens Config
-  lib.litert_lm_suppress_tokens_config_create.restype = ctypes.c_void_p
-  lib.litert_lm_suppress_tokens_config_create.argtypes = []
+  lib.litert_lm_suppress_tokens_config_create.restype = ctypes.c_int
+  lib.litert_lm_suppress_tokens_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_suppress_tokens_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_suppress_tokens_config_set_suppress_tokens.restype = (
       ctypes.c_int
@@ -1142,6 +1159,33 @@ def call_checked(lib: ctypes.CDLL, func_name: str, *args) -> None:
     RuntimeError: If the call does not return `kLiteRtLmStatusOk`.
   """
   check_status(lib, func_name, getattr(lib, func_name)(*args))
+
+
+def create_checked(lib: ctypes.CDLL, func_name: str, *args) -> int:
+  """Calls a C API constructor that returns its handle through an out-parameter.
+
+  The C API constructors return a `LiteRtLmStatusCode` and write the new handle
+  to a trailing `out_*` parameter. This helper supplies that out-parameter.
+
+  Args:
+    lib: The loaded C library instance.
+    func_name: Name of a C API constructor that takes a trailing `void**`
+      out-parameter and returns a `LiteRtLmStatusCode`.
+    *args: Arguments forwarded to the C API function, excluding the
+      out-parameter.
+
+  Returns:
+    The created handle, owned by the caller.
+
+  Raises:
+    RuntimeError: If the call does not return `kLiteRtLmStatusOk` or does not
+      produce a handle.
+  """
+  out = ctypes.c_void_p()
+  call_checked(lib, func_name, *args, ctypes.byref(out))
+  if out.value is None:
+    raise RuntimeError(f"{func_name} returned a null handle")
+  return out.value
 
 
 def set_min_log_severity(severity: LogSeverity):

@@ -20,6 +20,7 @@ import queue
 import warnings
 from . import interfaces
 from ._ffi import call_checked
+from ._ffi import create_checked
 from ._ffi import InputDataType
 from ._ffi import STREAM_CALLBACK_TYPE
 
@@ -58,11 +59,13 @@ class Session(interfaces.AbstractSession):
     try:
       for i, text in enumerate(contents):
         encoded_text = text.encode("utf-8")
-        input_ptr = self._lib.litert_lm_input_data_create(
-            InputDataType.TEXT, encoded_text, len(encoded_text)
+        input_ptr = create_checked(
+            self._lib,
+            "litert_lm_input_data_create",
+            InputDataType.TEXT,
+            encoded_text,
+            len(encoded_text),
         )
-        if not input_ptr:
-          raise RuntimeError("Failed to create LiteRtLmInputData")
         created_inputs.append(input_ptr)
         inputs[i] = input_ptr
 

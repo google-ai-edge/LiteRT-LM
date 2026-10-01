@@ -99,6 +99,30 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     }
   }
 
+  /// Calls a native constructor that returns a status code and writes the new handle to an
+  /// out-parameter, and returns the handle.
+  ///
+  /// `body` must make the native call synchronously on the calling thread, passing its argument
+  /// as the out-parameter.
+  ///
+  /// - Parameters:
+  ///   - functionName: The name of the native function, used in the error details.
+  ///   - makeError: Builds the error to throw from a description of the failure.
+  ///   - body: Calls the native constructor with the given out-parameter and returns its status.
+  /// - Returns: The created handle, owned by the caller.
+  /// - Throws: The error built by `makeError` if the call fails or produces no handle.
+  static func create(
+    _ functionName: String, _ makeError: (String) -> LiteRTLMError,
+    _ body: (UnsafeMutablePointer<OpaquePointer?>) -> LiteRtLmStatusCode
+  ) throws -> OpaquePointer {
+    var handle: OpaquePointer?
+    try check(body(&handle), functionName, makeError)
+    guard let handle else {
+      throw makeError("\(functionName) returned a null handle")
+    }
+    return handle
+  }
+
   /// Specific errors related to the `Engine`.
   public enum EngineError: Error, LocalizedError, Equatable {
     case alreadyInitialized

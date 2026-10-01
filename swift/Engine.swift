@@ -75,12 +75,11 @@ public actor Engine {
     let visionBackendStr = engineConfig.visionBackend?.rawValue
     let audioBackendStr = engineConfig.audioBackend?.rawValue
 
-    let settings = litert_lm_engine_settings_create(
-      engineConfig.modelPath, backendStr, visionBackendStr, audioBackendStr)
-
-    guard let settings else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.engine(.failedToCreateSettings(errorMsg))
+    let settings = try LiteRTLMError.create(
+      "litert_lm_engine_settings_create", { .engine(.failedToCreateSettings($0)) }
+    ) { out in
+      litert_lm_engine_settings_create(
+        engineConfig.modelPath, backendStr, visionBackendStr, audioBackendStr, out)
     }
 
     defer { litert_lm_engine_settings_delete(settings) }
@@ -177,9 +176,10 @@ public actor Engine {
         "litert_lm_engine_settings_set_enable_ynnpack", settingsError)
     }
 
-    guard let engine = litert_lm_engine_create(settings) else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.engine(.failedToCreateEngine(errorMsg))
+    let engine = try LiteRTLMError.create(
+      "litert_lm_engine_create", { .engine(.failedToCreateEngine($0)) }
+    ) { out in
+      litert_lm_engine_create(settings, out)
     }
 
     self.handle = engine
@@ -230,21 +230,22 @@ public actor Engine {
       messagesJsonStr = ""
     }
 
-    let cSessionConfig = litert_lm_session_config_create()
-    guard let cSessionConfig else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.engine(.failedToCreateSessionConfig(errorMsg))
-    }
-    defer { litert_lm_session_config_delete(cSessionConfig) }
-
     let sessionConfigError: (String) -> LiteRTLMError = {
       .engine(.failedToCreateSessionConfig($0))
     }
 
+    let cSessionConfig = try LiteRTLMError.create(
+      "litert_lm_session_config_create", sessionConfigError
+    ) { out in
+      litert_lm_session_config_create(out)
+    }
+    defer { litert_lm_session_config_delete(cSessionConfig) }
+
     if let samplerParams = conversationConfig.samplerConfig {
-      guard let cSamplerParams = litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP) else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.engine(.failedToCreateSessionConfig(errorMsg))
+      let cSamplerParams = try LiteRTLMError.create(
+        "litert_lm_sampler_params_create", sessionConfigError
+      ) { out in
+        litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP, out)
       }
       defer { litert_lm_sampler_params_delete(cSamplerParams) }
 

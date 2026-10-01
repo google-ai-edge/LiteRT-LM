@@ -140,16 +140,21 @@ typedef enum {
 typedef struct LiteRtLmSamplerParams LiteRtLmSamplerParams;
 
 // Creates LiteRT LM Sampler Parameters with a specific sampler type.
-// The caller is responsible for destroying the parameters using
-// `litert_lm_sampler_params_delete`.
 //
 // @param type The sampler type to use.
-// @return A pointer to the created parameters, or NULL on failure.
+// @param out_params On success, receives the created parameters, owned by the
+//   caller; release with `litert_lm_sampler_params_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_params` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the parameters are returned
+// through out_params.
 LITERT_LM_C_API_EXPORT
-LiteRtLmSamplerParams* litert_lm_sampler_params_create(
-    LiteRtLmSamplerType type);
+LiteRtLmStatusCode litert_lm_sampler_params_create(
+    LiteRtLmSamplerType type, LiteRtLmSamplerParams** out_params);
 
 // Destroys LiteRT LM Sampler Parameters.
 //
@@ -212,13 +217,20 @@ LiteRtLmStatusCode litert_lm_sampler_params_set_seed(
     LiteRtLmSamplerParams* params, int32_t seed);
 
 // Creates a LiteRT LM Session Config.
-// The caller is responsible for destroying the config using
-// `litert_lm_session_config_delete`.
-// @return A pointer to the created config, or NULL on failure.
+//
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_session_config_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the config is returned
+// through out_config.
 LITERT_LM_C_API_EXPORT
-LiteRtLmSessionConfig* litert_lm_session_config_create();
+LiteRtLmStatusCode litert_lm_session_config_create(
+    LiteRtLmSessionConfig** out_config);
 
 // Sets the maximum number of output tokens per decode step for this session.
 // For thinking models, both thinking (reasoning) tokens and the final response
@@ -326,13 +338,19 @@ LiteRtLmStatusCode litert_lm_session_config_set_audio_lora_path(
 // 1. Multiplicative penalty (`repetition_penalty`)
 // 2. Subtractive penalties (`presence_penalty` and `frequency_penalty`)
 //
-// The caller is responsible for destroying the config using
-// `litert_lm_repetition_penalty_config_delete`.
-// @return A pointer to the created config, or NULL on failure.
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_repetition_penalty_config_delete`. Set to
+//   NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the config is returned
+// through out_config.
 LITERT_LM_C_API_EXPORT
-LiteRtLmRepetitionPenaltyConfig* litert_lm_repetition_penalty_config_create();
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_create(
+    LiteRtLmRepetitionPenaltyConfig** out_config);
 
 // Destroys a LiteRT LM Repetition Penalty Config.
 // @param config The config to destroy.
@@ -414,13 +432,19 @@ LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_window_size(
 // would complete a repeating ngram, that candidate token's logit is set to
 // -inf.
 //
-// The caller is responsible for destroying the config using
-// `litert_lm_no_repeat_ngram_config_delete`.
-// @return A pointer to the created config, or NULL on failure.
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_no_repeat_ngram_config_delete`. Set to
+//   NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the config is returned
+// through out_config.
 LITERT_LM_C_API_EXPORT
-LiteRtLmNoRepeatNgramConfig* litert_lm_no_repeat_ngram_config_create();
+LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_create(
+    LiteRtLmNoRepeatNgramConfig** out_config);
 
 // Destroys a LiteRT LM No Repeat Ngram Config.
 // @param config The config to destroy.
@@ -473,13 +497,19 @@ LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_set_window_size(
 // generation. This guarantees that those tokens can never be sampled by the
 // model.
 //
-// The caller is responsible for destroying the config using
-// `litert_lm_suppress_tokens_config_delete`.
-// @return A pointer to the created config, or NULL on failure.
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_suppress_tokens_config_delete`. Set to
+//   NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the config is returned
+// through out_config.
 LITERT_LM_C_API_EXPORT
-LiteRtLmSuppressTokensConfig* litert_lm_suppress_tokens_config_create();
+LiteRtLmStatusCode litert_lm_suppress_tokens_config_create(
+    LiteRtLmSuppressTokensConfig** out_config);
 
 // Destroys a LiteRT LM Suppress Tokens Config.
 // @param config The config to destroy.
@@ -542,8 +572,7 @@ typedef enum {
   kLiteRtLmInputDataTypeAudioEnd,
 } LiteRtLmInputDataType;
 
-// Creates a LiteRT LM Input Data. The caller is responsible for destroying
-// the input data using `litert_lm_input_data_delete`.
+// Creates a LiteRT LM Input Data.
 //
 // @param type The type of the input data.
 // @param data The data pointer. For kLiteRtLmInputDataTypeText, it's a UTF-8
@@ -551,12 +580,21 @@ typedef enum {
 //             For image/audio types, it's a pointer to the raw bytes.
 //             The data is copied internally.
 // @param size The size of the data in bytes.
-// @return A pointer to the created input data, or NULL on failure.
+// @param out_input_data On success, receives the created input data, owned by
+//   the caller; release with `litert_lm_input_data_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_input_data` is NULL, `data` is NULL while `size` is non-zero, or
+//   `type` is not a declared LiteRtLmInputDataType value.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the input data is returned
+// through out_input_data.
 LITERT_LM_C_API_EXPORT
-LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
-                                               const void* data, size_t size);
+LiteRtLmStatusCode litert_lm_input_data_create(
+    LiteRtLmInputDataType type, const void* data, size_t size,
+    LiteRtLmInputData** out_input_data);
 
 // Destroys a LiteRT LM Input Data.
 //
@@ -566,38 +604,54 @@ LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
 LITERT_LM_C_API_EXPORT
 void litert_lm_input_data_delete(LiteRtLmInputData* input_data);
 
-// Creates LiteRT LM Engine Settings. The caller is responsible for destroying
-// the settings using `litert_lm_engine_settings_delete`.
+// Creates LiteRT LM Engine Settings.
 //
 // @param model_path The path to the model file.
 // @param backend_str The backend to use (e.g., "cpu", "gpu").
 // @param vision_backend_str The vision backend to use, or NULL if not set.
 // @param audio_backend_str The audio backend to use, or NULL if not set.
-// @return A pointer to the created settings, or NULL on failure.
+// @param out_settings On success, receives the created settings, owned by the
+//   caller; release with `litert_lm_engine_settings_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_settings` or `model_path` is NULL or a backend string is not
+//   recognized; otherwise the code of the error encountered while loading the
+//   model assets or building the settings.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the settings are returned
+// through out_settings.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEngineSettings* litert_lm_engine_settings_create(
+LiteRtLmStatusCode litert_lm_engine_settings_create(
     const char* model_path, const char* backend_str,
-    const char* vision_backend_str, const char* audio_backend_str);
+    const char* vision_backend_str, const char* audio_backend_str,
+    LiteRtLmEngineSettings** out_settings);
 
 // Creates LiteRT LM Engine Settings from a raw file descriptor. The engine
-// takes ownership of the file descriptor and will close it when done.
-// The caller is responsible for destroying the settings using
-// `litert_lm_engine_settings_delete`.
+// takes ownership of the file descriptor and will close it when done. If
+// `out_settings` is NULL or `fd` is negative, ownership is not taken.
 //
 // @param fd The file descriptor of the model.
 // @param backend_str The backend to use (e.g., "cpu", "gpu").
 // @param vision_backend_str The vision backend to use, or NULL if not set.
 // @param audio_backend_str The audio backend to use, or NULL if not set.
-// @return A pointer to the created settings, or NULL on failure.
+// @param out_settings On success, receives the created settings, owned by the
+//   caller; release with `litert_lm_engine_settings_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_settings` is NULL, `fd` is negative or a backend string is not
+//   recognized; otherwise the code of the error encountered while loading the
+//   model assets or building the settings.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the settings are returned
+// through out_settings.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEngineSettings*
-litert_lm_engine_settings_create_from_raw_file_descriptor(
+LiteRtLmStatusCode litert_lm_engine_settings_create_from_raw_file_descriptor(
     int fd, const char* backend_str, const char* vision_backend_str,
-    const char* audio_backend_str);
+    const char* audio_backend_str, LiteRtLmEngineSettings** out_settings);
 
 // Destroys LiteRT LM Engine Settings.
 //
@@ -978,15 +1032,22 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
     LiteRtLmEngineSettings* settings, bool enable_metal_residency_set);
 
-// Creates a LiteRT LM Engine from the given settings. The caller is responsible
-// for destroying the engine using `litert_lm_engine_delete`.
+// Creates a LiteRT LM Engine from the given settings.
 //
 // @param settings The engine settings.
-// @return A pointer to the created engine, or NULL on failure.
+// @param out_engine On success, receives the created engine, owned by the
+//   caller; release with `litert_lm_engine_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `settings` or `out_engine` is NULL; otherwise the code of the error
+//   encountered while creating the engine (e.g. the model cannot be loaded).
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the engine is returned
+// through out_engine.
 LITERT_LM_C_API_EXPORT
-LiteRtLmEngine* litert_lm_engine_create(const LiteRtLmEngineSettings* settings);
+LiteRtLmStatusCode litert_lm_engine_create(
+    const LiteRtLmEngineSettings* settings, LiteRtLmEngine** out_engine);
 
 // Destroys a LiteRT LM Engine.
 //
@@ -996,18 +1057,25 @@ LiteRtLmEngine* litert_lm_engine_create(const LiteRtLmEngineSettings* settings);
 LITERT_LM_C_API_EXPORT
 void litert_lm_engine_delete(LiteRtLmEngine* engine);
 
-// Creates a LiteRT LM Session. The caller is responsible for destroying the
-// session using `litert_lm_session_delete`.
+// Creates a LiteRT LM Session.
 //
 // @param engine The engine to create the session from.
 // @param config The session config of the session. If NULL, use the default
 // session config.
-// @return A pointer to the created session, or NULL on failure.
+// @param out_session On success, receives the created session, owned by the
+//   caller; release with `litert_lm_session_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `engine`
+//   or `out_session` is NULL; otherwise the code of the error encountered
+//   while creating the session.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the session is returned
+// through out_session.
 LITERT_LM_C_API_EXPORT
-LiteRtLmSession* litert_lm_engine_create_session(LiteRtLmEngine* engine,
-                                                 LiteRtLmSessionConfig* config);
+LiteRtLmStatusCode litert_lm_engine_create_session(
+    LiteRtLmEngine* engine, LiteRtLmSessionConfig* config,
+    LiteRtLmSession** out_session);
 
 // Destroys a LiteRT LM Session.
 //

@@ -61,9 +61,21 @@ class EngineTest(LiteRtLmTestBase):
 
   def test_engine_init_fail(self):
     with self.assertRaisesRegex(
-        RuntimeError, "Failed to create LiteRT-LM engine for /non/existent/path"
+        RuntimeError,
+        r"litert_lm_engine_create failed with status \w+ \(\d+\): .+",
     ):
       litert_lm.Engine("/non/existent/path")
+
+  def test_create_checked_raises_with_last_error_message(self):
+    lib = litert_lm._ffi._get_lib()
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_engine_create_session failed with status"
+        r" INVALID_ARGUMENT \(3\): .+",
+    ):
+      litert_lm._ffi.create_checked(
+          lib, "litert_lm_engine_create_session", None, None
+      )
 
   def test_call_checked_raises_with_last_error_message(self):
     lib = litert_lm._ffi._get_lib()

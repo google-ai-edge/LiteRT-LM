@@ -172,54 +172,59 @@ using ::litert::lm::ScopedFile;
 using ::litert::lm::SessionConfig;
 using ::litert::lm::proto::SamplerParameters;
 
-LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
-                                               const void* data, size_t size) {
+LiteRtLmStatusCode litert_lm_input_data_create(
+    LiteRtLmInputDataType type, const void* data, size_t size,
+    LiteRtLmInputData** out_input_data) {
+  LITERT_LM_C_RETURN_IF_NULL(out_input_data);
+  *out_input_data = nullptr;
   if (data == nullptr && size > 0) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "data must not be NULL when size is non-zero.");
-    return nullptr;
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "data must not be NULL when size is non-zero.");
   }
+  std::unique_ptr<LiteRtLmInputData> input_data;
   switch (type) {
     case kLiteRtLmInputDataTypeText:
-      return std::make_unique<LiteRtLmInputData>(
-                 litert::lm::InputText(
-                     std::string(static_cast<const char*>(data), size)))
-          .release();
+      input_data = std::make_unique<LiteRtLmInputData>(litert::lm::InputText(
+          std::string(static_cast<const char*>(data), size)));
+      break;
     case kLiteRtLmInputDataTypeImage:
-      return std::make_unique<LiteRtLmInputData>(
-                 litert::lm::InputImage(
-                     std::string(static_cast<const char*>(data), size)))
-          .release();
+      input_data = std::make_unique<LiteRtLmInputData>(litert::lm::InputImage(
+          std::string(static_cast<const char*>(data), size)));
+      break;
     case kLiteRtLmInputDataTypeImageEnd:
-      return std::make_unique<LiteRtLmInputData>(litert::lm::InputImageEnd())
-          .release();
+      input_data =
+          std::make_unique<LiteRtLmInputData>(litert::lm::InputImageEnd());
+      break;
     case kLiteRtLmInputDataTypeAudio:
-      return std::make_unique<LiteRtLmInputData>(
-                 litert::lm::InputAudio(
-                     std::string(static_cast<const char*>(data), size)))
-          .release();
+      input_data = std::make_unique<LiteRtLmInputData>(litert::lm::InputAudio(
+          std::string(static_cast<const char*>(data), size)));
+      break;
     case kLiteRtLmInputDataTypeAudioEnd:
-      return std::make_unique<LiteRtLmInputData>(litert::lm::InputAudioEnd())
-          .release();
+      input_data =
+          std::make_unique<LiteRtLmInputData>(litert::lm::InputAudioEnd());
+      break;
     default:
-      litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                  "Unknown LiteRtLmInputDataType.");
-      return nullptr;
+      return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                        "Unknown LiteRtLmInputDataType.");
   }
+  *out_input_data = input_data.release();
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_input_data_delete(LiteRtLmInputData* input_data) {
   delete input_data;
 }
 
-static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
-    ModelAssets model_assets, absl::string_view backend_str,
-    absl::string_view vision_backend_str, absl::string_view audio_backend_str) {
+static absl::StatusOr<std::unique_ptr<LiteRtLmEngineSettings>>
+CreateEngineSettingsHelper(ModelAssets model_assets,
+                           absl::string_view backend_str,
+                           absl::string_view vision_backend_str,
+                           absl::string_view audio_backend_str) {
   auto backend = litert::lm::GetBackendFromString(backend_str);
   if (!backend.ok()) {
     ABSL_LOG(ERROR) << "Failed to parse backend: " << backend.status();
-    litert::lm::c::SetLastError(backend.status());
-    return nullptr;
+    return backend.status();
   }
 
   std::optional<litert::lm::Backend> vision_backend;
@@ -227,8 +232,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
     auto backend = litert::lm::GetBackendFromString(vision_backend_str);
     if (!backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse vision backend: " << backend.status();
-      litert::lm::c::SetLastError(backend.status());
-      return nullptr;
+      return backend.status();
     }
     vision_backend = *backend;
   }
@@ -238,8 +242,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
     auto backend = litert::lm::GetBackendFromString(audio_backend_str);
     if (!backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse audio backend: " << backend.status();
-      litert::lm::c::SetLastError(backend.status());
-      return nullptr;
+      return backend.status();
     }
     audio_backend = *backend;
   }
@@ -249,11 +252,10 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
   if (!engine_settings.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine settings: "
                     << engine_settings.status();
-    litert::lm::c::SetLastError(engine_settings.status());
-    return nullptr;
+    return engine_settings.status();
   }
 
-  auto* c_settings = new LiteRtLmEngineSettings;
+  auto c_settings = std::make_unique<LiteRtLmEngineSettings>();
   c_settings->settings =
       std::make_unique<EngineSettings>(std::move(*engine_settings));
   return c_settings;
@@ -284,15 +286,18 @@ SamplerParameters::Type ToSamplerParametersType(LiteRtLmSamplerType type) {
   return SamplerParameters::TYPE_UNSPECIFIED;
 }
 
-LiteRtLmSamplerParams* litert_lm_sampler_params_create(
-    LiteRtLmSamplerType type) {
+LiteRtLmStatusCode litert_lm_sampler_params_create(
+    LiteRtLmSamplerType type, LiteRtLmSamplerParams** out_params) {
+  LITERT_LM_C_RETURN_IF_NULL(out_params);
+  *out_params = nullptr;
   auto params = std::make_unique<LiteRtLmSamplerParams>();
   params->type = type;
   params->top_k = 0;
   params->top_p = 0.0f;
   params->temperature = 0.0f;
   params->seed = 0;
-  return params.release();
+  *out_params = params.release();
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_sampler_params_delete(LiteRtLmSamplerParams* params) {
@@ -327,11 +332,15 @@ LiteRtLmStatusCode litert_lm_sampler_params_set_seed(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmSessionConfig* litert_lm_session_config_create() {
-  auto* c_config = new LiteRtLmSessionConfig;
+LiteRtLmStatusCode litert_lm_session_config_create(
+    LiteRtLmSessionConfig** out_config) {
+  LITERT_LM_C_RETURN_IF_NULL(out_config);
+  *out_config = nullptr;
+  auto c_config = std::make_unique<LiteRtLmSessionConfig>();
   c_config->config =
       std::make_unique<SessionConfig>(SessionConfig::CreateDefault());
-  return c_config;
+  *out_config = c_config.release();
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_config_set_max_output_tokens(
@@ -426,11 +435,14 @@ LiteRtLmStatusCode litert_lm_session_config_set_audio_lora_path(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmRepetitionPenaltyConfig* litert_lm_repetition_penalty_config_create() {
-  return new LiteRtLmRepetitionPenaltyConfig{
+LiteRtLmStatusCode litert_lm_repetition_penalty_config_create(
+    LiteRtLmRepetitionPenaltyConfig** out_config) {
+  LITERT_LM_C_RETURN_IF_NULL(out_config);
+  *out_config = new LiteRtLmRepetitionPenaltyConfig{
       .repetition_penalty_config =
           litert::lm::RepetitionPenaltyConfig::Default(),
   };
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_repetition_penalty_config_delete(
@@ -478,10 +490,13 @@ LiteRtLmStatusCode litert_lm_repetition_penalty_config_set_window_size(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmNoRepeatNgramConfig* litert_lm_no_repeat_ngram_config_create() {
-  return new LiteRtLmNoRepeatNgramConfig{
+LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_create(
+    LiteRtLmNoRepeatNgramConfig** out_config) {
+  LITERT_LM_C_RETURN_IF_NULL(out_config);
+  *out_config = new LiteRtLmNoRepeatNgramConfig{
       .no_repeat_ngram_config = litert::lm::NoRepeatNgramConfig::Default(),
   };
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_no_repeat_ngram_config_delete(
@@ -505,10 +520,13 @@ LiteRtLmStatusCode litert_lm_no_repeat_ngram_config_set_window_size(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmSuppressTokensConfig* litert_lm_suppress_tokens_config_create() {
-  return new LiteRtLmSuppressTokensConfig{
+LiteRtLmStatusCode litert_lm_suppress_tokens_config_create(
+    LiteRtLmSuppressTokensConfig** out_config) {
+  LITERT_LM_C_RETURN_IF_NULL(out_config);
+  *out_config = new LiteRtLmSuppressTokensConfig{
       .suppress_tokens_config = litert::lm::SuppressTokensConfig::Default(),
   };
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_suppress_tokens_config_delete(
@@ -538,36 +556,38 @@ LiteRtLmStatusCode litert_lm_suppress_tokens_config_set_suppress_tokens(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmEngineSettings* litert_lm_engine_settings_create(
+LiteRtLmStatusCode litert_lm_engine_settings_create(
     const char* model_path, const char* backend_str,
-    const char* vision_backend_str, const char* audio_backend_str) {
-  if (model_path == nullptr) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "model_path cannot be null");
-    return nullptr;
-  }
+    const char* vision_backend_str, const char* audio_backend_str,
+    LiteRtLmEngineSettings** out_settings) {
+  LITERT_LM_C_RETURN_IF_NULL(out_settings);
+  *out_settings = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(model_path);
   auto model_assets = ModelAssets::Create(model_path);
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets: "
                     << model_assets.status();
-    litert::lm::c::SetLastError(model_assets.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(model_assets.status());
   }
-  return CreateEngineSettingsHelper(
-      std::move(*model_assets), absl::NullSafeStringView(backend_str),
-      absl::NullSafeStringView(vision_backend_str),
-      absl::NullSafeStringView(audio_backend_str));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::unique_ptr<LiteRtLmEngineSettings> settings,
+      CreateEngineSettingsHelper(std::move(*model_assets),
+                                 absl::NullSafeStringView(backend_str),
+                                 absl::NullSafeStringView(vision_backend_str),
+                                 absl::NullSafeStringView(audio_backend_str)));
+  *out_settings = settings.release();
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmEngineSettings*
-litert_lm_engine_settings_create_from_raw_file_descriptor(
+LiteRtLmStatusCode litert_lm_engine_settings_create_from_raw_file_descriptor(
     int fd, const char* backend_str, const char* vision_backend_str,
-    const char* audio_backend_str) {
+    const char* audio_backend_str, LiteRtLmEngineSettings** out_settings) {
+  LITERT_LM_C_RETURN_IF_NULL(out_settings);
+  *out_settings = nullptr;
   if (fd < 0) {
     ABSL_LOG(ERROR) << "Invalid file descriptor: " << fd;
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid file descriptor.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid file descriptor.");
   }
   auto model_assets = ModelAssets::Create(
 #if defined(_WIN32)
@@ -580,16 +600,19 @@ litert_lm_engine_settings_create_from_raw_file_descriptor(
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets from raw FD: "
                     << model_assets.status();
-    litert::lm::c::SetLastError(model_assets.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(model_assets.status());
   }
   ABSL_VLOG(1) << "LiteRT-LM successfully created EngineSettings directly "
                   "from raw File Descriptor: "
                << fd;
-  return CreateEngineSettingsHelper(
-      std::move(*model_assets), absl::NullSafeStringView(backend_str),
-      absl::NullSafeStringView(vision_backend_str),
-      absl::NullSafeStringView(audio_backend_str));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::unique_ptr<LiteRtLmEngineSettings> settings,
+      CreateEngineSettingsHelper(std::move(*model_assets),
+                                 absl::NullSafeStringView(backend_str),
+                                 absl::NullSafeStringView(vision_backend_str),
+                                 absl::NullSafeStringView(audio_backend_str)));
+  *out_settings = settings.release();
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_engine_settings_delete(LiteRtLmEngineSettings* settings) {
@@ -796,8 +819,6 @@ litert_lm_engine_settings_set_use_ringbuffers_local_attention(
       main_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>();
   if (config.ok()) {
     litert::lm::GpuArtisanConfig gpu_artisan_config = *config;
-    // TODO: Rename gpu_artisan_config.use_autosized_ringbuffers to
-    // match the C API naming (e.g. use_ringbuffers_local_attention).
     gpu_artisan_config.use_autosized_ringbuffers =
         use_ringbuffers_local_attention;
     main_settings.SetBackendConfig(gpu_artisan_config);
@@ -932,12 +953,13 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmEngine* litert_lm_engine_create(
-    const LiteRtLmEngineSettings* settings) {
+LiteRtLmStatusCode litert_lm_engine_create(
+    const LiteRtLmEngineSettings* settings, LiteRtLmEngine** out_engine) {
+  LITERT_LM_C_RETURN_IF_NULL(out_engine);
+  *out_engine = nullptr;
   if (!settings || !settings->settings) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine settings.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine settings.");
   }
 
   absl::StatusOr<std::unique_ptr<Engine>> engine =
@@ -945,23 +967,25 @@ LiteRtLmEngine* litert_lm_engine_create(
 
   if (!engine.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine: " << engine.status();
-    litert::lm::c::SetLastError(engine.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(engine.status());
   }
 
-  auto* c_engine = new LiteRtLmEngine;
+  auto c_engine = std::make_unique<LiteRtLmEngine>();
   c_engine->engine = *std::move(engine);
-  return c_engine;
+  *out_engine = c_engine.release();
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_engine_delete(LiteRtLmEngine* engine) { delete engine; }
 
-LiteRtLmSession* litert_lm_engine_create_session(
-    LiteRtLmEngine* engine, LiteRtLmSessionConfig* config) {
+LiteRtLmStatusCode litert_lm_engine_create_session(
+    LiteRtLmEngine* engine, LiteRtLmSessionConfig* config,
+    LiteRtLmSession** out_session) {
+  LITERT_LM_C_RETURN_IF_NULL(out_session);
+  *out_session = nullptr;
   if (!engine || !engine->engine) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine.");
   }
 
   SessionConfig session_config = config && config->config
@@ -982,13 +1006,13 @@ LiteRtLmSession* litert_lm_engine_create_session(
       engine->engine->CreateSession(session_config);
   if (!session.ok()) {
     ABSL_LOG(ERROR) << "Failed to create session: " << session.status();
-    litert::lm::c::SetLastError(session.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(session.status());
   }
 
-  auto* c_session = new LiteRtLmSession;
+  auto c_session = std::make_unique<LiteRtLmSession>();
   c_session->session = *std::move(session);
-  return c_session;
+  *out_session = c_session.release();
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }

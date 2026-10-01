@@ -26,6 +26,7 @@ from . import tools as litert_tools
 from ._ffi import _get_lib
 from ._ffi import ActivationDataType
 from ._ffi import call_checked
+from ._ffi import create_checked
 from ._messages import Message
 from .conversation import Conversation
 from .session import Session
@@ -96,32 +97,25 @@ class Engine(interfaces.AbstractEngine):
     self._lib = _get_lib()
     self._engine_ptr = None
 
-    settings = self._lib.litert_lm_engine_settings_create(
+    settings = create_checked(
+        self._lib,
+        "litert_lm_engine_settings_create",
         self.model_path,
         self.backend.get_name(),
         (self.vision_backend.get_name() if self.vision_backend else None),
         (self.audio_backend.get_name() if self.audio_backend else None),
     )
 
-    if not settings:
-      raise RuntimeError(
-          f"Failed to create engine settings for {self.model_path}. "
-          "Verify the model path and backend."
-      )
-
     try:
       self._configure_engine_settings(settings, enable_benchmark)
-      self._engine_ptr = self._lib.litert_lm_engine_create(settings)
+      self._engine_ptr = create_checked(
+          self._lib, "litert_lm_engine_create", settings
+      )
     finally:
       self._lib.litert_lm_engine_settings_delete(settings)
 
-    if not self._engine_ptr:
-      raise RuntimeError(
-          f"Failed to create LiteRT-LM engine for {self.model_path}"
-      )
-
   def _configure_engine_settings(
-      self, settings: ctypes.c_void_p, enable_benchmark: bool
+      self, settings: int, enable_benchmark: bool
   ) -> None:
     """Applies the engine options to `settings`, raising on any failure."""
     lib = self._lib
@@ -471,14 +465,15 @@ class Engine(interfaces.AbstractEngine):
     )
 
     try:
-      sess_ptr = self._lib.litert_lm_engine_create_session(
-          self._engine_ptr, session_config
+      sess_ptr = create_checked(
+          self._lib,
+          "litert_lm_engine_create_session",
+          self._engine_ptr,
+          session_config,
       )
     finally:
       self._lib.litert_lm_session_config_delete(session_config)
 
-    if not sess_ptr:
-      raise RuntimeError("Failed to create session")
     return Session(self._lib, sess_ptr, engine=self)
 
   def _create_session_config(
@@ -489,7 +484,7 @@ class Engine(interfaces.AbstractEngine):
       max_output_tokens: int | None = None,
       lora_config: interfaces.LoraConfig | None = None,
       enable_speculative_decoding: bool | None = None,
-  ) -> ctypes.c_void_p:
+  ) -> int:
     """Creates a configured LiteRtLmSessionConfig owned by the caller.
 
     Args:
@@ -510,9 +505,7 @@ class Engine(interfaces.AbstractEngine):
         apply. The partially configured config is freed in that case.
     """
     lib = self._lib
-    session_config = lib.litert_lm_session_config_create()
-    if not session_config:
-      raise RuntimeError("Failed to create session config")
+    session_config = create_checked(lib, "litert_lm_session_config_create")
 
     try:
       if enable_speculative_decoding is not None:

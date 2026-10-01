@@ -26,6 +26,7 @@ import warnings
 
 from . import interfaces
 from ._ffi import call_checked
+from ._ffi import create_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmConstraintType
 from ._ffi import STREAM_CALLBACK_TYPE
@@ -189,7 +190,9 @@ class Conversation(interfaces.AbstractConversation):
 
     try:
       if repetition_penalty_config is not None:
-        rpp_ptr = self._lib.litert_lm_repetition_penalty_config_create()
+        rpp_ptr = create_checked(
+            self._lib, "litert_lm_repetition_penalty_config_create"
+        )
         try:
           if repetition_penalty_config.repetition_penalty is not None:
             call_checked(
@@ -229,7 +232,9 @@ class Conversation(interfaces.AbstractConversation):
           if rpp_ptr:
             self._lib.litert_lm_repetition_penalty_config_delete(rpp_ptr)
       if no_repeat_ngram_config is not None:
-        nrn_ptr = self._lib.litert_lm_no_repeat_ngram_config_create()
+        nrn_ptr = create_checked(
+            self._lib, "litert_lm_no_repeat_ngram_config_create"
+        )
         try:
           if no_repeat_ngram_config.no_repeat_ngram_size is not None:
             call_checked(
@@ -255,7 +260,9 @@ class Conversation(interfaces.AbstractConversation):
           if nrn_ptr:
             self._lib.litert_lm_no_repeat_ngram_config_delete(nrn_ptr)
       if suppress_tokens_config is not None:
-        st_ptr = self._lib.litert_lm_suppress_tokens_config_create()
+        st_ptr = create_checked(
+            self._lib, "litert_lm_suppress_tokens_config_create"
+        )
         try:
           if suppress_tokens_config.suppress_tokens is not None:
             tokens_list = list(suppress_tokens_config.suppress_tokens)

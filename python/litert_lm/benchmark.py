@@ -18,6 +18,7 @@ import ctypes
 from . import interfaces
 from ._ffi import _get_lib
 from ._ffi import call_checked
+from ._ffi import create_checked
 from ._ffi import InputDataType
 
 
@@ -29,17 +30,14 @@ class Benchmark(interfaces.AbstractBenchmark):
     model_path = self.model_path
     backend_str = self.backend.get_name()
 
-    settings = lib.litert_lm_engine_settings_create(
+    settings = create_checked(
+        lib,
+        "litert_lm_engine_settings_create",
         model_path,
         backend_str,
         None,
         None,
     )
-    if not settings:
-      raise RuntimeError(
-          "Failed to create engine settings for benchmark"
-          f" (model_path={model_path}, backend={backend_str})"
-      )
 
     try:
       if self.activation_data_type is not None:
@@ -106,8 +104,6 @@ class Benchmark(interfaces.AbstractBenchmark):
           )
         # When benchmarking, we should wait the initialization to complete to
         # make sure the timing of prefill is correct.
-        # TODO(litertlm@): This should be set to True whenever benchmarking
-        # with GPU backend.
         call_checked(
             lib,
             "litert_lm_engine_settings_set_gpu_wait_for_weight_uploads",
@@ -129,31 +125,31 @@ class Benchmark(interfaces.AbstractBenchmark):
             self.enable_ynnpack,
         )
 
-      engine_ptr = lib.litert_lm_engine_create(settings)
+      engine_ptr = create_checked(lib, "litert_lm_engine_create", settings)
     finally:
       lib.litert_lm_engine_settings_delete(settings)
 
-    if not engine_ptr:
-      raise RuntimeError(
-          f"Failed to create engine for benchmark (model_path={model_path},"
-          f" backend={backend_str})"
+    try:
+      session_ptr = create_checked(
+          lib, "litert_lm_engine_create_session", engine_ptr, None
       )
-
-    session_ptr = lib.litert_lm_engine_create_session(engine_ptr, None)
-    if not session_ptr:
+    except RuntimeError:
       lib.litert_lm_engine_delete(engine_ptr)
-      raise RuntimeError(
-          f"Failed to create session for benchmark (model_path={model_path})"
-      )
+      raise
 
     prompt = self.prompt.encode("utf-8")
-    input_ptr = lib.litert_lm_input_data_create(
-        InputDataType.TEXT, prompt, len(prompt)
-    )
-    if not input_ptr:
+    try:
+      input_ptr = create_checked(
+          lib,
+          "litert_lm_input_data_create",
+          InputDataType.TEXT,
+          prompt,
+          len(prompt),
+      )
+    except RuntimeError:
       lib.litert_lm_session_delete(session_ptr)
       lib.litert_lm_engine_delete(engine_ptr)
-      raise RuntimeError("Failed to create input data")
+      raise
 
     inputs = (ctypes.c_void_p * 1)(input_ptr)
 

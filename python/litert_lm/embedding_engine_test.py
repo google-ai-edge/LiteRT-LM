@@ -249,7 +249,14 @@ class EmbeddingEngineTest(parameterized.TestCase):
 
   def test_create_c_input_data_multimodal_image_and_audio(self):
     mock_lib = mock.MagicMock()
-    mock_lib.litert_lm_input_data_create.side_effect = [101, 201]
+    handles = iter([101, 201])
+
+    def fake_input_data_create(unused_type, unused_data, unused_size, out):
+      # `out` is a `ctypes.byref` to the handle to fill in.
+      out._obj.value = next(handles)  # pylint: disable=protected-access
+      return litert_lm._ffi.StatusCode.OK
+
+    mock_lib.litert_lm_input_data_create.side_effect = fake_input_data_create
 
     image_content = litert_lm.Content.ImageBytes(bytes=b"fake_image_bytes")
     ptr = litert_lm.embedding_engine._create_c_input_data(

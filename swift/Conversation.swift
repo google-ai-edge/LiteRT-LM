@@ -259,11 +259,10 @@ public final class Conversation: Sendable {
           "litert_lm_conversation_optional_args_set_visual_token_budget", optionalArgsError)
       }
       if let repetitionPenaltyConfig = repetitionPenaltyConfig {
-        guard let cRepetitionPenaltyConfig = litert_lm_repetition_penalty_config_create() else {
-          let errorMsg =
-            LiteRTLMError.consumeLastError()
-            ?? "Failed to create native repetition penalty config."
-          throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+        let cRepetitionPenaltyConfig = try LiteRTLMError.create(
+          "litert_lm_repetition_penalty_config_create", optionalArgsError
+        ) { out in
+          litert_lm_repetition_penalty_config_create(out)
         }
         defer { litert_lm_repetition_penalty_config_delete(cRepetitionPenaltyConfig) }
 
@@ -297,10 +296,10 @@ public final class Conversation: Sendable {
           "litert_lm_conversation_optional_args_set_repetition_penalty_config", optionalArgsError)
       }
       if let noRepeatNgramConfig = noRepeatNgramConfig {
-        guard let cNoRepeatNgramConfig = litert_lm_no_repeat_ngram_config_create() else {
-          let errorMsg =
-            LiteRTLMError.consumeLastError() ?? "Failed to create native no repeat ngram config."
-          throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+        let cNoRepeatNgramConfig = try LiteRTLMError.create(
+          "litert_lm_no_repeat_ngram_config_create", optionalArgsError
+        ) { out in
+          litert_lm_no_repeat_ngram_config_create(out)
         }
         defer { litert_lm_no_repeat_ngram_config_delete(cNoRepeatNgramConfig) }
 
@@ -322,10 +321,10 @@ public final class Conversation: Sendable {
           "litert_lm_conversation_optional_args_set_no_repeat_ngram_config", optionalArgsError)
       }
       if let suppressTokens = suppressTokensConfig?.suppressTokens, !suppressTokens.isEmpty {
-        guard let cSuppressTokensConfig = litert_lm_suppress_tokens_config_create() else {
-          let errorMsg =
-            LiteRTLMError.consumeLastError() ?? "Failed to create native suppress tokens config."
-          throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+        let cSuppressTokensConfig = try LiteRTLMError.create(
+          "litert_lm_suppress_tokens_config_create", optionalArgsError
+        ) { out in
+          litert_lm_suppress_tokens_config_create(out)
         }
         defer { litert_lm_suppress_tokens_config_delete(cSuppressTokensConfig) }
 

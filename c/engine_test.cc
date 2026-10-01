@@ -111,12 +111,97 @@ using TokenUnionsPtr =
     std::unique_ptr<LiteRtLmTokenUnions,
                     decltype(&litert_lm_token_unions_delete)>;
 
+// The C API constructors return a status code and deliver the new handle
+// through a trailing out-parameter. The helpers below return the handle (or
+// NULL on failure) so that it can be adopted directly by a smart pointer. On
+// failure they also check that the returned status matches the last error.
+template <typename T>
+T* HandleOrNull(int status, T* handle) {
+  if (status == kLiteRtLmStatusOk) {
+    EXPECT_NE(handle, nullptr);
+  } else {
+    EXPECT_EQ(handle, nullptr);
+    EXPECT_EQ(status, litert_lm_get_last_error_code());
+  }
+  return handle;
+}
+
+LiteRtLmEngineSettings* CreateEngineSettings(const char* model_path,
+                                             const char* backend_str,
+                                             const char* vision_backend_str,
+                                             const char* audio_backend_str) {
+  LiteRtLmEngineSettings* settings = nullptr;
+  const int status = litert_lm_engine_settings_create(
+      model_path, backend_str, vision_backend_str, audio_backend_str,
+      &settings);
+  return HandleOrNull(status, settings);
+}
+
+LiteRtLmEngineSettings* CreateEngineSettingsFromFd(
+    int fd, const char* backend_str, const char* vision_backend_str,
+    const char* audio_backend_str) {
+  LiteRtLmEngineSettings* settings = nullptr;
+  const int status = litert_lm_engine_settings_create_from_raw_file_descriptor(
+      fd, backend_str, vision_backend_str, audio_backend_str, &settings);
+  return HandleOrNull(status, settings);
+}
+
+LiteRtLmEngine* CreateEngine(const LiteRtLmEngineSettings* settings) {
+  LiteRtLmEngine* engine = nullptr;
+  const int status = litert_lm_engine_create(settings, &engine);
+  return HandleOrNull(status, engine);
+}
+
+LiteRtLmSession* CreateSession(LiteRtLmEngine* engine,
+                               LiteRtLmSessionConfig* config) {
+  LiteRtLmSession* session = nullptr;
+  const int status = litert_lm_engine_create_session(engine, config, &session);
+  return HandleOrNull(status, session);
+}
+
+LiteRtLmSessionConfig* CreateSessionConfig() {
+  LiteRtLmSessionConfig* config = nullptr;
+  const int status = litert_lm_session_config_create(&config);
+  return HandleOrNull(status, config);
+}
+
+LiteRtLmSamplerParams* CreateSamplerParams(LiteRtLmSamplerType type) {
+  LiteRtLmSamplerParams* params = nullptr;
+  const int status = litert_lm_sampler_params_create(type, &params);
+  return HandleOrNull(status, params);
+}
+
+LiteRtLmRepetitionPenaltyConfig* CreateRepetitionPenaltyConfig() {
+  LiteRtLmRepetitionPenaltyConfig* config = nullptr;
+  const int status = litert_lm_repetition_penalty_config_create(&config);
+  return HandleOrNull(status, config);
+}
+
+LiteRtLmNoRepeatNgramConfig* CreateNoRepeatNgramConfig() {
+  LiteRtLmNoRepeatNgramConfig* config = nullptr;
+  const int status = litert_lm_no_repeat_ngram_config_create(&config);
+  return HandleOrNull(status, config);
+}
+
+LiteRtLmSuppressTokensConfig* CreateSuppressTokensConfig() {
+  LiteRtLmSuppressTokensConfig* config = nullptr;
+  const int status = litert_lm_suppress_tokens_config_create(&config);
+  return HandleOrNull(status, config);
+}
+
+LiteRtLmInputData* CreateInputData(LiteRtLmInputDataType type, const void* data,
+                                   size_t size) {
+  LiteRtLmInputData* input_data = nullptr;
+  const int status = litert_lm_input_data_create(type, data, size, &input_data);
+  return HandleOrNull(status, input_data);
+}
+
 TEST(EngineCTest, CreateSettingsWithNoVisionAndAudioBackend) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   EXPECT_FALSE(settings->settings->GetVisionExecutorSettings().has_value());
@@ -126,9 +211,9 @@ TEST(EngineCTest, CreateSettingsWithNoVisionAndAudioBackend) {
 TEST(EngineCTest, CreateSettingsWithVisionAndAudioBackend) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ "gpu",
-                                       /* audio_backend_str */ "cpu"),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ "gpu",
+                           /* audio_backend_str */ "cpu"),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   EXPECT_TRUE(settings->settings->GetVisionExecutorSettings().has_value());
@@ -142,9 +227,9 @@ TEST(EngineCTest, CreateSettingsWithVisionAndAudioBackend) {
 TEST(EngineCTest, CreateSettingsWithInvalidVisionBackend) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ "dummy_backend",
-                                       /* audio_backend_str */ "cpu"),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ "dummy_backend",
+                           /* audio_backend_str */ "cpu"),
       &litert_lm_engine_settings_delete);
   ASSERT_EQ(settings, nullptr);
 }
@@ -152,9 +237,9 @@ TEST(EngineCTest, CreateSettingsWithInvalidVisionBackend) {
 TEST(EngineCTest, SetCacheDir) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   const std::string cache_dir = "test_cache_dir";
@@ -166,9 +251,9 @@ TEST(EngineCTest, SetCacheDir) {
 TEST(EngineCTest, SetCacheDirWithVisionAndAudio) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ "gpu",
-                                       /* audio_backend_str */ "cpu"),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ "gpu",
+                           /* audio_backend_str */ "cpu"),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   EXPECT_TRUE(settings->settings->GetVisionExecutorSettings().has_value());
@@ -188,9 +273,9 @@ TEST(EngineCTest, SetCacheDirWithVisionAndAudio) {
 TEST(EngineCTest, SetMaxNumImages) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_images(settings.get(), 10);
@@ -201,9 +286,9 @@ TEST(EngineCTest, SetMaxNumImages) {
 TEST(EngineCTest, SetMaxVisionTokensPerImage) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   EXPECT_FALSE(settings->settings->GetMaxVisionTokensPerImage().has_value());
@@ -217,9 +302,9 @@ TEST(EngineCTest, SetMaxVisionTokensPerImage) {
 TEST(EngineCTest, SetPrefillChunkSize) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   int prefill_chunk_size = 128;
@@ -237,9 +322,9 @@ TEST(EngineCTest, SetEnableYNNPack) {
 
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_enable_ynnpack(settings.get(), true);
@@ -258,9 +343,9 @@ TEST(EngineCTest, SetEnableYNNPack) {
 TEST(EngineCTest, SetParallelFileSectionLoading) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
@@ -279,9 +364,9 @@ TEST(EngineCTest, SetParallelFileSectionLoading) {
 TEST(EngineCTest, SetSingleThreadedExecution) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
@@ -299,9 +384,9 @@ TEST(EngineCTest, SetSingleThreadedExecution) {
 TEST(EngineCTest, BenchmarkSettings) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
@@ -317,9 +402,9 @@ TEST(EngineCTest, BenchmarkSettings) {
 TEST(EngineCTest, SetEnableSpeculativeDecoding) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
@@ -347,9 +432,9 @@ TEST(EngineCTest, SetEnableSpeculativeDecoding) {
 TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "gpu_artisan",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "gpu_artisan",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
@@ -374,9 +459,8 @@ TEST(EngineCTest, CreateSettingsFromRawFileDescriptor) {
   int fd = open(task_path.c_str(), O_RDONLY);
   ASSERT_GE(fd, 0);
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create_from_raw_file_descriptor(
-          fd, "cpu", /* vision_backend_str */ nullptr,
-          /* audio_backend_str */ nullptr),
+      CreateEngineSettingsFromFd(fd, "cpu", /* vision_backend_str */ nullptr,
+                                 /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   EXPECT_TRUE(settings->settings->GetMainExecutorSettings()
@@ -389,16 +473,15 @@ TEST(EngineCTest, CreateSettingsFromRawFileDescriptor) {
 }
 
 TEST(EngineCTest, CreateSessionConfigWithSamplerParams) {
-  SamplerParamsPtr sampler_params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP),
-      &litert_lm_sampler_params_delete);
+  SamplerParamsPtr sampler_params(CreateSamplerParams(kLiteRtLmSamplerTypeTopP),
+                                  &litert_lm_sampler_params_delete);
   ASSERT_NE(sampler_params, nullptr);
   litert_lm_sampler_params_set_top_k(sampler_params.get(), 10);
   litert_lm_sampler_params_set_top_p(sampler_params.get(), 0.5f);
   litert_lm_sampler_params_set_temperature(sampler_params.get(), 0.1f);
   litert_lm_sampler_params_set_seed(sampler_params.get(), 1234);
 
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_session_config_set_sampler_params(config.get(),
@@ -412,7 +495,7 @@ TEST(EngineCTest, CreateSessionConfigWithSamplerParams) {
 }
 
 TEST(EngineCTest, CreateSessionConfigWithNoSamplerParams) {
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
 
@@ -423,7 +506,7 @@ TEST(EngineCTest, CreateSessionConfigWithNoSamplerParams) {
 }
 
 TEST(EngineCTest, CreateSessionConfigWithApplyPromptTemplate) {
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
 
@@ -438,7 +521,7 @@ TEST(EngineCTest, CreateSessionConfigWithApplyPromptTemplate) {
 }
 
 TEST(EngineCTest, CreateSessionConfigWithEnableSpeculativeDecoding) {
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
 
@@ -460,27 +543,25 @@ TEST(EngineCTest, CreateConversationConfig) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create Sampler Params.
-  SamplerParamsPtr sampler_params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP),
-      &litert_lm_sampler_params_delete);
+  SamplerParamsPtr sampler_params(CreateSamplerParams(kLiteRtLmSamplerTypeTopP),
+                                  &litert_lm_sampler_params_delete);
   ASSERT_NE(sampler_params, nullptr);
   litert_lm_sampler_params_set_top_k(sampler_params.get(), 10);
   litert_lm_sampler_params_set_top_p(sampler_params.get(), 0.5f);
   litert_lm_sampler_params_set_temperature(sampler_params.get(), 0.1f);
   litert_lm_sampler_params_set_seed(sampler_params.get(), 1234);
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   litert_lm_session_config_set_sampler_params(session_config.get(),
@@ -539,15 +620,14 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with the System Message.
@@ -581,15 +661,14 @@ TEST(EngineCTest, CreateConversationConfigWithPromptTemplate) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationConfigPtr conversation_config(
@@ -612,19 +691,18 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with the Session Config.
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   ConversationConfigPtr conversation_config(
@@ -650,18 +728,17 @@ TEST(EngineCTest, CreateConversationConfigWithSamplerBackend) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   session_config->config->SetSamplerBackend(litert::lm::Backend::GPU);
@@ -689,15 +766,14 @@ TEST(EngineCTest, CreateConversationConfigWithTools) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with tools.
@@ -743,15 +819,14 @@ TEST(EngineCTest, CreateConversationConfigWithInvalidTools) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with an invalid tools json.
@@ -781,15 +856,14 @@ TEST(EngineCTest, CreateConversationConfigWithEmptyToolsArray) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with an empty tools array.
@@ -820,15 +894,14 @@ TEST(EngineCTest, CreateConversationConfigWithMalformedToolsJson) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with malformed tools json.
@@ -858,27 +931,25 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create Sampler Params.
-  SamplerParamsPtr sampler_params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP),
-      &litert_lm_sampler_params_delete);
+  SamplerParamsPtr sampler_params(CreateSamplerParams(kLiteRtLmSamplerTypeTopP),
+                                  &litert_lm_sampler_params_delete);
   ASSERT_NE(sampler_params, nullptr);
   litert_lm_sampler_params_set_top_k(sampler_params.get(), 10);
   litert_lm_sampler_params_set_top_p(sampler_params.get(), 0.5f);
   litert_lm_sampler_params_set_temperature(sampler_params.get(), 0.1f);
   litert_lm_sampler_params_set_seed(sampler_params.get(), 1234);
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   litert_lm_session_config_set_sampler_params(session_config.get(),
@@ -915,16 +986,15 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
 TEST(EngineCTest, ThinkingConfig) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm.litertlm");
-  EngineSettingsPtr settings(litert_lm_engine_settings_create(
-                                 task_path.c_str(), "cpu", nullptr, nullptr),
-                             &litert_lm_engine_settings_delete);
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu", nullptr, nullptr),
+      &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
 
@@ -993,13 +1063,12 @@ TEST(EngineCTest, OptionalArgsThinkingConfig) {
 TEST(EngineCTest, TokenizerTest) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm.litertlm");
-  EngineSettingsPtr settings(litert_lm_engine_settings_create(
-                                 task_path.c_str(), "cpu", nullptr, nullptr),
-                             &litert_lm_engine_settings_delete);
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu", nullptr, nullptr),
+      &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   const char* text = "hello";
@@ -1066,26 +1135,23 @@ TEST(EngineCTest, GenerateContent) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -1106,33 +1172,30 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // Test with max_output_tokens=1. The response length should be short (<10).
   {
-    SessionConfigPtr session_config(litert_lm_session_config_create(),
+    SessionConfigPtr session_config(CreateSessionConfig(),
                                     &litert_lm_session_config_delete);
     ASSERT_NE(session_config, nullptr);
     litert_lm_session_config_set_max_output_tokens(session_config.get(), 1);
 
-    SessionPtr session(
-        litert_lm_engine_create_session(engine.get(), session_config.get()),
-        &litert_lm_session_delete);
+    SessionPtr session(CreateSession(engine.get(), session_config.get()),
+                       &litert_lm_session_delete);
     ASSERT_NE(session, nullptr);
 
     const char* prompt = "Hello world!";
     InputDataPtr input_data(
-        litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                    strlen(prompt)),
+        CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
         &litert_lm_input_data_delete);
     ASSERT_NE(input_data, nullptr);
     const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -1151,19 +1214,17 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
 
   // Test without max_output_tokens. The response length should be long (>=10).
   {
-    SessionConfigPtr session_config(litert_lm_session_config_create(),
+    SessionConfigPtr session_config(CreateSessionConfig(),
                                     &litert_lm_session_config_delete);
     ASSERT_NE(session_config, nullptr);
 
-    SessionPtr session(
-        litert_lm_engine_create_session(engine.get(), session_config.get()),
-        &litert_lm_session_delete);
+    SessionPtr session(CreateSession(engine.get(), session_config.get()),
+                       &litert_lm_session_delete);
     ASSERT_NE(session, nullptr);
 
     const char* prompt = "Hello world!";
     InputDataPtr input_data(
-        litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                    strlen(prompt)),
+        CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
         &litert_lm_input_data_delete);
     ASSERT_NE(input_data, nullptr);
     const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -1185,15 +1246,14 @@ TEST(EngineCTest, ConversationSendMessage) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationPtr conversation(
@@ -1221,15 +1281,14 @@ TEST(EngineCTest, ConversationRenderPreface) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationConfigPtr conversation_config(
@@ -1259,27 +1318,25 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create Sampler Params.
-  SamplerParamsPtr sampler_params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP),
-      &litert_lm_sampler_params_delete);
+  SamplerParamsPtr sampler_params(CreateSamplerParams(kLiteRtLmSamplerTypeTopP),
+                                  &litert_lm_sampler_params_delete);
   ASSERT_NE(sampler_params, nullptr);
   litert_lm_sampler_params_set_top_k(sampler_params.get(), 10);
   litert_lm_sampler_params_set_top_p(sampler_params.get(), 0.5f);
   litert_lm_sampler_params_set_temperature(sampler_params.get(), 0.1f);
   litert_lm_sampler_params_set_seed(sampler_params.get(), 1234);
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   litert_lm_session_config_set_sampler_params(session_config.get(),
@@ -1325,15 +1382,14 @@ TEST(EngineCTest, ConversationSendMessageWithExtraContext) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config.
@@ -1370,15 +1426,14 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config.
@@ -1395,7 +1450,7 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
 
   // 4. Create Optional Args.
   RepetitionPenaltyConfigPtr repetition_penalty_config(
-      litert_lm_repetition_penalty_config_create(),
+      CreateRepetitionPenaltyConfig(),
       &litert_lm_repetition_penalty_config_delete);
   ASSERT_NE(repetition_penalty_config, nullptr);
   litert_lm_repetition_penalty_config_set_repetition_penalty(
@@ -1412,8 +1467,7 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
   ASSERT_NE(optional_args, nullptr);
 
   NoRepeatNgramConfigPtr no_repeat_ngram_config(
-      litert_lm_no_repeat_ngram_config_create(),
-      &litert_lm_no_repeat_ngram_config_delete);
+      CreateNoRepeatNgramConfig(), &litert_lm_no_repeat_ngram_config_delete);
   ASSERT_NE(no_repeat_ngram_config, nullptr);
   litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
       no_repeat_ngram_config.get(), 3);
@@ -1421,8 +1475,7 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
                                                    10);
 
   SuppressTokensConfigPtr suppress_tokens_config(
-      litert_lm_suppress_tokens_config_create(),
-      &litert_lm_suppress_tokens_config_delete);
+      CreateSuppressTokensConfig(), &litert_lm_suppress_tokens_config_delete);
   ASSERT_NE(suppress_tokens_config, nullptr);
   int suppress_tokens[] = {10, 20, 30};
   litert_lm_suppress_tokens_config_set_suppress_tokens(
@@ -1457,15 +1510,14 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation Config with constrained decoding enabled.
@@ -1530,15 +1582,14 @@ TEST(EngineCTest, ConversationCloneSuccess) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation.
@@ -1587,26 +1638,23 @@ TEST(EngineCTest, GenerateContentStream) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -1631,27 +1679,24 @@ TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt =
       "Hello world! Write a long essay about the history of Rome.";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -1673,15 +1718,14 @@ TEST(EngineCTest, ConversationSendMessageStream) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationPtr conversation(
@@ -1707,15 +1751,14 @@ TEST(EngineCTest, ConversationSendMessageStreamWithExtraContext) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationPtr conversation(
@@ -1742,15 +1785,14 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationPtr conversation(
@@ -1763,7 +1805,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
 
   RepetitionPenaltyConfigPtr repetition_penalty_config(
-      litert_lm_repetition_penalty_config_create(),
+      CreateRepetitionPenaltyConfig(),
       &litert_lm_repetition_penalty_config_delete);
   ASSERT_NE(repetition_penalty_config, nullptr);
   litert_lm_repetition_penalty_config_set_repetition_penalty(
@@ -1780,8 +1822,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   ASSERT_NE(optional_args, nullptr);
 
   NoRepeatNgramConfigPtr no_repeat_ngram_config(
-      litert_lm_no_repeat_ngram_config_create(),
-      &litert_lm_no_repeat_ngram_config_delete);
+      CreateNoRepeatNgramConfig(), &litert_lm_no_repeat_ngram_config_delete);
   ASSERT_NE(no_repeat_ngram_config, nullptr);
   litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
       no_repeat_ngram_config.get(), 3);
@@ -1789,8 +1830,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
                                                    10);
 
   SuppressTokensConfigPtr suppress_tokens_config(
-      litert_lm_suppress_tokens_config_create(),
-      &litert_lm_suppress_tokens_config_delete);
+      CreateSuppressTokensConfig(), &litert_lm_suppress_tokens_config_delete);
   ASSERT_NE(suppress_tokens_config, nullptr);
   int suppress_tokens[] = {10, 20, 30};
   litert_lm_suppress_tokens_config_set_suppress_tokens(
@@ -1820,15 +1860,14 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationPtr conversation(
@@ -1864,16 +1903,16 @@ EngineAndConversation CreateTestEngineAndConversation(
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   if (settings) {
     litert_lm_engine_settings_set_max_num_tokens(settings.get(),
                                                  max_num_tokens);
   }
 
-  EnginePtr engine(settings ? litert_lm_engine_create(settings.get()) : nullptr,
+  EnginePtr engine(settings ? CreateEngine(settings.get()) : nullptr,
                    &litert_lm_engine_delete);
 
   ConversationPtr conversation(
@@ -1918,17 +1957,16 @@ TEST(EngineCTest, ConversationWaitUntilDonePropagatesError) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
 
   ConversationPtr conversation(nullptr, &litert_lm_conversation_delete);
   {
-    EnginePtr engine(litert_lm_engine_create(settings.get()),
-                     &litert_lm_engine_delete);
+    EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
     ASSERT_NE(engine, nullptr);
 
     conversation.reset(litert_lm_conversation_create(
@@ -1962,27 +2000,24 @@ TEST(EngineCTest, Benchmark) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
   litert_lm_engine_settings_enable_benchmark(settings.get());
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -2033,26 +2068,23 @@ TEST(EngineCTest, RunPrefillSuccess) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -2066,26 +2098,23 @@ TEST(EngineCTest, RunPrefillAndDecode) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -2108,26 +2137,23 @@ TEST(EngineCTest, TextScoringBasic) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -2149,26 +2175,23 @@ TEST(EngineCTest, TextScoringVerifyScores) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -2190,26 +2213,23 @@ TEST(EngineCTest, TextScoringVerifyTokenLengths) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
   InputDataPtr input_data(
-      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
-                                  strlen(prompt)),
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
@@ -2232,15 +2252,14 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
       "litert_lm/runtime/testdata/test_lm.litertlm");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
   ConversationPtr conversation(
@@ -2276,10 +2295,12 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
 
 TEST(EngineCErrorTest, InputDataCreateUnknownTypeSetsError) {
   litert_lm_clear_last_error();
+  LiteRtLmInputData* input_data = reinterpret_cast<LiteRtLmInputData*>(0x1);
   // 7 is within the enum's value range but is not a declared enumerator.
   EXPECT_EQ(litert_lm_input_data_create(static_cast<LiteRtLmInputDataType>(7),
-                                        "a", 1),
-            nullptr);
+                                        "a", 1, &input_data),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(input_data, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmInputDataType"));
@@ -2287,15 +2308,120 @@ TEST(EngineCErrorTest, InputDataCreateUnknownTypeSetsError) {
 
 TEST(EngineCErrorTest, InputDataCreateNullDataWithSizeSetsError) {
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_input_data_create(kLiteRtLmInputDataTypeText, nullptr, 4),
-            nullptr);
+  LiteRtLmInputData* input_data = reinterpret_cast<LiteRtLmInputData*>(0x1);
+  EXPECT_EQ(litert_lm_input_data_create(kLiteRtLmInputDataTypeText, nullptr, 4,
+                                        &input_data),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(input_data, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("data must not be NULL"));
 }
 
+TEST(EngineCErrorTest, CreateSucceedsAndReturnsHandleThroughOutParam) {
+  LiteRtLmInputData* input_data = nullptr;
+  ASSERT_EQ(litert_lm_input_data_create(kLiteRtLmInputDataTypeText, "a", 1,
+                                        &input_data),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(input_data, nullptr);
+  litert_lm_input_data_delete(input_data);
+
+  LiteRtLmSessionConfig* session_config = nullptr;
+  ASSERT_EQ(litert_lm_session_config_create(&session_config),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(session_config, nullptr);
+  litert_lm_session_config_delete(session_config);
+
+  LiteRtLmEngineSettings* settings = nullptr;
+  ASSERT_EQ(litert_lm_engine_settings_create("test_model_path_1", "cpu",
+                                             /*vision_backend_str=*/nullptr,
+                                             /*audio_backend_str=*/nullptr,
+                                             &settings),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(settings, nullptr);
+  litert_lm_engine_settings_delete(settings);
+}
+
+TEST(EngineCErrorTest, CreateWithNullOutParamReturnsInvalidArgument) {
+  const auto expect_invalid_out_param = [](int status) {
+    EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                testing::HasSubstr("must not be NULL"));
+    litert_lm_clear_last_error();
+  };
+  litert_lm_clear_last_error();
+  expect_invalid_out_param(
+      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopK, nullptr));
+  expect_invalid_out_param(litert_lm_session_config_create(nullptr));
+  expect_invalid_out_param(litert_lm_repetition_penalty_config_create(nullptr));
+  expect_invalid_out_param(litert_lm_no_repeat_ngram_config_create(nullptr));
+  expect_invalid_out_param(litert_lm_suppress_tokens_config_create(nullptr));
+  expect_invalid_out_param(litert_lm_input_data_create(
+      kLiteRtLmInputDataTypeText, "a", 1, /*out_input_data=*/nullptr));
+  expect_invalid_out_param(litert_lm_engine_settings_create(
+      "test_model_path_1", "cpu", /*vision_backend_str=*/nullptr,
+      /*audio_backend_str=*/nullptr, /*out_settings=*/nullptr));
+  expect_invalid_out_param(
+      litert_lm_engine_settings_create_from_raw_file_descriptor(
+          /*fd=*/-1, "cpu", /*vision_backend_str=*/nullptr,
+          /*audio_backend_str=*/nullptr, /*out_settings=*/nullptr));
+  expect_invalid_out_param(
+      litert_lm_engine_create(/*settings=*/nullptr, /*out_engine=*/nullptr));
+  expect_invalid_out_param(litert_lm_engine_create_session(
+      /*engine=*/nullptr, /*config=*/nullptr, /*out_session=*/nullptr));
+}
+
+TEST(EngineCErrorTest, EngineSettingsCreateFailureReturnsLastErrorCode) {
+  litert_lm_clear_last_error();
+  LiteRtLmEngineSettings* settings =
+      reinterpret_cast<LiteRtLmEngineSettings*>(0x1);
+  const int status = litert_lm_engine_settings_create(
+      "test_model_path_1", "not_a_backend", /*vision_backend_str=*/nullptr,
+      /*audio_backend_str=*/nullptr, &settings);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(settings, nullptr);
+
+  litert_lm_clear_last_error();
+  settings = reinterpret_cast<LiteRtLmEngineSettings*>(0x1);
+  EXPECT_EQ(litert_lm_engine_settings_create_from_raw_file_descriptor(
+                /*fd=*/-1, "cpu", /*vision_backend_str=*/nullptr,
+                /*audio_backend_str=*/nullptr, &settings),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(settings, nullptr);
+}
+
+TEST(EngineCErrorTest, EngineCreateWithBadModelPathReturnsLastErrorCode) {
+  EngineSettingsPtr settings(
+      CreateEngineSettings("/nonexistent/model.litertlm", "cpu",
+                           /*vision_backend_str=*/nullptr,
+                           /*audio_backend_str=*/nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  litert_lm_clear_last_error();
+  LiteRtLmEngine* engine = reinterpret_cast<LiteRtLmEngine*>(0x1);
+  const int status = litert_lm_engine_create(settings.get(), &engine);
+  EXPECT_NE(status, kLiteRtLmStatusOk);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
+  EXPECT_EQ(engine, nullptr);
+}
+
+TEST(EngineCErrorTest, EngineCreateSessionWithNullEngineReturnsError) {
+  litert_lm_clear_last_error();
+  LiteRtLmSession* session = reinterpret_cast<LiteRtLmSession*>(0x1);
+  EXPECT_EQ(litert_lm_engine_create_session(/*engine=*/nullptr,
+                                            /*config=*/nullptr, &session),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(session, nullptr);
+}
+
 TEST(EngineCErrorTest, SuppressTokensNullWithCountSetsError) {
-  SuppressTokensConfigPtr config(litert_lm_suppress_tokens_config_create(),
+  SuppressTokensConfigPtr config(CreateSuppressTokensConfig(),
                                  &litert_lm_suppress_tokens_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
@@ -2345,7 +2471,7 @@ TEST(EngineCErrorTest, VoidSettersWithNullHandleSetError) {
 }
 
 TEST(EngineCErrorTest, SessionConfigNullSamplerParamsSetsError) {
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
@@ -2373,9 +2499,8 @@ void ExpectSettersReturnStatus(
 }
 
 TEST(EngineCStatusTest, SamplerParamsSettersReturnStatus) {
-  SamplerParamsPtr params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopK),
-      &litert_lm_sampler_params_delete);
+  SamplerParamsPtr params(CreateSamplerParams(kLiteRtLmSamplerTypeTopK),
+                          &litert_lm_sampler_params_delete);
   ASSERT_NE(params, nullptr);
   using P = LiteRtLmSamplerParams;
   ExpectSettersReturnStatus<P>(
@@ -2395,12 +2520,11 @@ TEST(EngineCStatusTest, SamplerParamsSettersReturnStatus) {
 }
 
 TEST(EngineCStatusTest, SessionConfigSettersReturnStatus) {
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
-  SamplerParamsPtr params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeGreedy),
-      &litert_lm_sampler_params_delete);
+  SamplerParamsPtr params(CreateSamplerParams(kLiteRtLmSamplerTypeGreedy),
+                          &litert_lm_sampler_params_delete);
   ASSERT_NE(params, nullptr);
   const LiteRtLmSamplerParams* sampler_params = params.get();
   using C = LiteRtLmSessionConfig;
@@ -2431,7 +2555,7 @@ TEST(EngineCStatusTest, SessionConfigSettersReturnStatus) {
 
 TEST(EngineCStatusTest, ConstraintConfigSettersReturnStatus) {
   RepetitionPenaltyConfigPtr repetition_config(
-      litert_lm_repetition_penalty_config_create(),
+      CreateRepetitionPenaltyConfig(),
       &litert_lm_repetition_penalty_config_delete);
   ASSERT_NE(repetition_config, nullptr);
   using R = LiteRtLmRepetitionPenaltyConfig;
@@ -2459,7 +2583,7 @@ TEST(EngineCStatusTest, ConstraintConfigSettersReturnStatus) {
            }},
       });
 
-  NoRepeatNgramConfigPtr ngram_config(litert_lm_no_repeat_ngram_config_create(),
+  NoRepeatNgramConfigPtr ngram_config(CreateNoRepeatNgramConfig(),
                                       &litert_lm_no_repeat_ngram_config_delete);
   ASSERT_NE(ngram_config, nullptr);
   using N = LiteRtLmNoRepeatNgramConfig;
@@ -2478,8 +2602,7 @@ TEST(EngineCStatusTest, ConstraintConfigSettersReturnStatus) {
       });
 
   SuppressTokensConfigPtr suppress_config(
-      litert_lm_suppress_tokens_config_create(),
-      &litert_lm_suppress_tokens_config_delete);
+      CreateSuppressTokensConfig(), &litert_lm_suppress_tokens_config_delete);
   ASSERT_NE(suppress_config, nullptr);
   using S = LiteRtLmSuppressTokensConfig;
   ExpectSettersReturnStatus<S>(
@@ -2599,9 +2722,9 @@ TEST(EngineCStatusTest, EngineSettingsSettersReturnStatus) {
   // CPU main backend with audio and vision: GPU-only knobs are no-ops that
   // still return OK.
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create("test_model_path_1", "cpu",
-                                       /* vision_backend_str */ "gpu",
-                                       /* audio_backend_str */ "cpu"),
+      CreateEngineSettings("test_model_path_1", "cpu",
+                           /* vision_backend_str */ "gpu",
+                           /* audio_backend_str */ "cpu"),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   ExpectSettersReturnStatus<LiteRtLmEngineSettings>(settings.get(),
@@ -2612,9 +2735,9 @@ TEST(EngineCStatusTest, EngineSettingsNoOpSettersReturnOk) {
   // GPU main backend without audio: CPU-only and audio knobs are no-ops that
   // still return OK.
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create("test_model_path_1", "gpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings("test_model_path_1", "gpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   ExpectSettersReturnStatus<LiteRtLmEngineSettings>(settings.get(),
@@ -2623,9 +2746,9 @@ TEST(EngineCStatusTest, EngineSettingsNoOpSettersReturnOk) {
 
 TEST(EngineCStatusTest, EngineSettingsNullStringArgumentsReturnError) {
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create("test_model_path_1", "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings("test_model_path_1", "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
@@ -2728,7 +2851,7 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
   ConversationConfigPtr config(litert_lm_conversation_config_create(),
                                &litert_lm_conversation_config_delete);
   ASSERT_NE(config, nullptr);
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
+  SessionConfigPtr session_config(CreateSessionConfig(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   std::unique_ptr<LiteRtLmThinkingConfig,
@@ -2821,7 +2944,7 @@ TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
                        &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(args, nullptr);
   RepetitionPenaltyConfigPtr repetition_config(
-      litert_lm_repetition_penalty_config_create(),
+      CreateRepetitionPenaltyConfig(),
       &litert_lm_repetition_penalty_config_delete);
   ASSERT_NE(repetition_config, nullptr);
   const LiteRtLmRepetitionPenaltyConfig* repetition = repetition_config.get();
@@ -2981,7 +3104,7 @@ TEST(EngineCStatusTest, StatusFunctionsWithNullArgumentsReturnInvalidArgument) {
 }
 
 TEST(EngineCStatusTest, SessionConfigSetLoraPathMissingFileReturnsCode) {
-  SessionConfigPtr config(litert_lm_session_config_create(),
+  SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
 
@@ -2999,9 +3122,9 @@ TEST(EngineCStatusTest, SessionConfigSetLoraPathMissingFileReturnsCode) {
 
 TEST(EngineCStatusTest, SupportedAudioLoraRanksWithoutAudioFailsPrecondition) {
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create("test_model_path_1", "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings("test_model_path_1", "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   const int ranks[] = {8};
@@ -3023,19 +3146,17 @@ TEST(EngineCStatusTest, SessionRuntimeFailuresReturnCanonicalCode) {
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
   litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
 
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  SessionPtr session(litert_lm_engine_create_session(
-                         engine.get(), /* session_config */ nullptr),
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
                      &litert_lm_session_delete);
   ASSERT_NE(session, nullptr);
 

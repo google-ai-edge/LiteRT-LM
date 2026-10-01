@@ -23,6 +23,7 @@ from typing import Any, Sequence
 from . import interfaces
 from ._ffi import _get_lib
 from ._ffi import call_checked
+from ._ffi import create_checked
 from ._ffi import InputDataType
 from ._messages import AudioBytes
 from ._messages import AudioFile
@@ -80,23 +81,27 @@ class EmbeddingResponse:
   embedding: list[float]
 
 
-def _create_c_input_data(lib: Any, item: str | Content) -> ctypes.c_void_p:
+def _create_c_input_data(lib: Any, item: str | Content) -> int:
   """Creates a LiteRtLmInputData pointer from a string or Content."""
   if isinstance(item, str):
     data_bytes = item.encode("utf-8")
-    ptr = lib.litert_lm_input_data_create(
-        InputDataType.TEXT, data_bytes, len(data_bytes)
+    ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.TEXT,
+        data_bytes,
+        len(data_bytes),
     )
-    if not ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData")
     return ptr
   elif isinstance(item, Text):
     data_bytes = item.text.encode("utf-8")
-    ptr = lib.litert_lm_input_data_create(
-        InputDataType.TEXT, data_bytes, len(data_bytes)
+    ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.TEXT,
+        data_bytes,
+        len(data_bytes),
     )
-    if not ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData")
     return ptr
   elif isinstance(item, (ImageBytes, ImageFile)):
     if isinstance(item, ImageBytes):
@@ -104,11 +109,13 @@ def _create_c_input_data(lib: Any, item: str | Content) -> ctypes.c_void_p:
     else:
       with open(item.absolute_path, "rb") as f:
         data_bytes = f.read()
-    img_ptr = lib.litert_lm_input_data_create(
-        InputDataType.IMAGE, data_bytes, len(data_bytes)
+    img_ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.IMAGE,
+        data_bytes,
+        len(data_bytes),
     )
-    if not img_ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData for Image")
     return img_ptr
   elif isinstance(item, (AudioBytes, AudioFile)):
     if isinstance(item, AudioBytes):
@@ -116,11 +123,13 @@ def _create_c_input_data(lib: Any, item: str | Content) -> ctypes.c_void_p:
     else:
       with open(item.absolute_path, "rb") as f:
         data_bytes = f.read()
-    audio_ptr = lib.litert_lm_input_data_create(
-        InputDataType.AUDIO, data_bytes, len(data_bytes)
+    audio_ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.AUDIO,
+        data_bytes,
+        len(data_bytes),
     )
-    if not audio_ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData for Audio")
     return audio_ptr
   else:
     raise TypeError(f"Unsupported content type for embedding: {type(item)}")
@@ -299,7 +308,7 @@ class EmbeddingEngine:
     else:
       items = list(contents)
 
-    created_ptrs: list[ctypes.c_void_p] = []
+    created_ptrs: list[int] = []
     options_ptr = self._lib.litert_lm_embedding_options_create()
     try:
       if options.normalize is not None:
@@ -387,7 +396,7 @@ class EmbeddingEngine:
       else:
         normalized_batch.append(list(req))
 
-    all_created_ptrs: list[ctypes.c_void_p] = []
+    all_created_ptrs: list[int] = []
     options_ptr = self._lib.litert_lm_embedding_options_create()
 
     try:
@@ -431,7 +440,7 @@ class EmbeddingEngine:
       num_inputs_per_batch = (ctypes.c_size_t * batch_size)()
 
       for i, req in enumerate(normalized_batch):
-        req_ptrs: list[ctypes.c_void_p] = []
+        req_ptrs: list[int] = []
         for item in req:
           ptr = _create_c_input_data(self._lib, item)
           all_created_ptrs.append(ptr)
