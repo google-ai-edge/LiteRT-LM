@@ -19,6 +19,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
 
@@ -72,7 +73,7 @@ TEST(LlgToolCallUtilsTest, ExtractToolProperties_WithProperties) {
 
   ToolFormatConfig config = {
       .pair_separator = ":",
-      .rule_suffix = "_args",
+      .rule_suffix = "-args",
       .start_wrap = "{",
       .end_wrap = "}",
       .generate_value_rule = [](const nlohmann::ordered_json&, bool is_req) {
@@ -82,13 +83,10 @@ TEST(LlgToolCallUtilsTest, ExtractToolProperties_WithProperties) {
   ExtractToolProperties(tool, "get_weather", config, tool_blocks,
                         required_props, optional_props);
 
-  // tool_blocks should contain rules for properties
-  EXPECT_FALSE(tool_blocks.empty());
-
-  // required_props should contain the location name
+  EXPECT_THAT(tool_blocks,
+              ElementsAre(R"(get_weather-req-location: "location" ":" req_val)",
+                          R"(get_weather-opt-unit: "unit" ":" opt_val)"));
   EXPECT_THAT(required_props, ElementsAre("location"));
-
-  // optional_props should contain the unit name
   EXPECT_THAT(optional_props, ElementsAre("unit"));
 }
 
@@ -98,7 +96,7 @@ TEST(LlgToolCallUtilsTest, AppendRequiredProperties) {
 
   AppendRequiredProperties(required_props, "test", sequence);
 
-  EXPECT_THAT(sequence, ElementsAre("test_req_a", "\",\"", "test_req_b"));
+  EXPECT_THAT(sequence, ElementsAre("test-req-a", "\",\"", "test-req-b"));
 }
 
 TEST(LlgToolCallUtilsTest, AppendOptionalProperties) {
@@ -108,8 +106,23 @@ TEST(LlgToolCallUtilsTest, AppendOptionalProperties) {
 
   AppendOptionalProperties(optional_props, "test", tool_blocks, sequence);
 
-  EXPECT_THAT(sequence, ElementsAre("test_optional"));
-  EXPECT_FALSE(tool_blocks.empty());
+  EXPECT_THAT(sequence, ElementsAre("test-optional"));
+  EXPECT_THAT(
+      tool_blocks,
+      ElementsAre(
+          R"(test-optional: "" | (test-opt-c | test-opt-d) ("," (test-opt-c | test-opt-d))*)"));
+
+  // When required properties already populate `sequence`, optional properties
+  // are prefixed with a leading comma.
+  std::vector<std::string> tool_blocks_after_req;
+  std::vector<std::string> sequence_with_req = {"test-req-a"};
+  AppendOptionalProperties(optional_props, "test", tool_blocks_after_req,
+                           sequence_with_req);
+  EXPECT_THAT(sequence_with_req, ElementsAre("test-req-a", "test-optional"));
+  EXPECT_THAT(
+      tool_blocks_after_req,
+      ElementsAre(
+          R"(test-optional: "," test-opt-c test-optional | "," test-opt-d test-optional | "")"));
 }
 
 TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
@@ -118,6 +131,25 @@ TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
 
   std::string block = GetTextOnlyBlock(options);
   EXPECT_THAT(block, testing::HasSubstr("SAFE_TEXT"));
+}
+
+TEST(LlgToolCallUtilsTest, SanitizeLarkRuleName) {
+  EXPECT_EQ(SanitizeLarkRuleName("get_weather"), "get_weather");
+  EXPECT_EQ(SanitizeLarkRuleName("get_Weather"), "get_-uweather");
+  EXPECT_NE(SanitizeLarkRuleName("get_weather"),
+            SanitizeLarkRuleName("get_Weather"));
+  EXPECT_EQ(SanitizeLarkRuleName("f0_Get_weather"), "f0_-uget_weather");
+  EXPECT_EQ(SanitizeLarkRuleName("getWeather"), "get-uweather");
+  EXPECT_EQ(SanitizeLarkRuleName("GetWeather"), "r---uget-uweather");
+  EXPECT_EQ(SanitizeLarkRuleName("_0_get_time"), "r--_0_get_time");
+  EXPECT_EQ(SanitizeLarkRuleName("0_get_time"), "r--0_get_time");
+  EXPECT_EQ(SanitizeLarkRuleName("get-weather"), "get-x2dweather");
+  EXPECT_EQ(SanitizeLarkRuleName("a.b"), "a-x2eb");
+  EXPECT_EQ(SanitizeLarkRuleName(""), "r--");
+  EXPECT_NE(absl::StrCat(SanitizeLarkRuleName("a_req"), "-req-",
+                         SanitizeLarkRuleName("b")),
+            absl::StrCat(SanitizeLarkRuleName("a"), "-req-",
+                         SanitizeLarkRuleName("req_b")));
 }
 
 }  // namespace

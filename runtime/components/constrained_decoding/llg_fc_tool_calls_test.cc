@@ -26,6 +26,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
@@ -1014,6 +1015,86 @@ TEST_F(LlgFcToolCallsTest, OneOfToolsObjectWrapper) {
 
   AssertAccepts(*constraint,
                 R"(<|tool_call>call:get_time{}<tool_call|><|tool_response>)");
+}
+
+class LlgFcToolNameTest : public LlgFcToolCallsTest,
+                          public testing::WithParamInterface<std::string> {};
+
+TEST_P(LlgFcToolNameTest, AcceptsValidToolName) {
+  const std::string& tool_name = GetParam();
+  nlohmann::ordered_json tool = {
+      {"name", tool_name},
+      {"parameters",
+       {{"type", "object"},
+        {"properties",
+         {{"zipCode", {{"type", "integer"}}}, {"_unit", {{"type", "string"}}}}},
+        {"required", {"zipCode"}}}}};
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                absl::StrCat("<|tool_call>call:", tool_name,
+                             R"({zipCode:94043}<tool_call|><|tool_response>)"));
+  AssertAccepts(
+      *constraint,
+      absl::StrCat(
+          "<|tool_call>call:", tool_name,
+          R"({zipCode:94043,_unit:<|"|>C<|"|>}<tool_call|><|tool_response>)"));
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:other_tool{zipCode:94043}<tool_call|><|tool_response>)");
+}
+
+INSTANTIATE_TEST_SUITE_P(ToolNamesWithCapitalsAndPrefixes, LlgFcToolNameTest,
+                         testing::Values("f0_Get_weather", "getWeather",
+                                         "Get_weather", "_0_get_weather",
+                                         "0_get_weather", "__get_weather",
+                                         "get-weather", "get.weather", "fc"));
+
+TEST_F(LlgFcToolCallsTest, CaseSensitiveToolNamesCoexist) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_Weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zip_code": { "type": "integer" }
+      },
+      "required": ["zip_code"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_Weather{zip_code:94043}<tool_call|><|tool_response>)");
+
+  // Each tool must enforce its own parameter schema, not the other's.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{zip_code:94043}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_Weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
 }
 
 }  // namespace
