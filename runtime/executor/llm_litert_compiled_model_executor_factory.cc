@@ -19,7 +19,6 @@
 #include <string>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -41,6 +40,7 @@
 #include "runtime/util/status_macros.h"
 
 #if !defined(LITERT_DISABLE_NPU)
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
 #endif  // !defined(LITERT_DISABLE_NPU)
 
