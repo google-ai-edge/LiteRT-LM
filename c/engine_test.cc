@@ -196,6 +196,76 @@ LiteRtLmInputData* CreateInputData(LiteRtLmInputDataType type, const void* data,
   return HandleOrNull(status, input_data);
 }
 
+LiteRtLmResponses* GenerateContent(LiteRtLmSession* session,
+                                   const LiteRtLmInputData* const* inputs,
+                                   size_t num_inputs) {
+  LiteRtLmResponses* responses = nullptr;
+  const int status = litert_lm_session_generate_content(session, inputs,
+                                                        num_inputs, &responses);
+  return HandleOrNull(status, responses);
+}
+
+LiteRtLmResponses* RunDecode(LiteRtLmSession* session) {
+  LiteRtLmResponses* responses = nullptr;
+  const int status = litert_lm_session_run_decode(session, &responses);
+  return HandleOrNull(status, responses);
+}
+
+LiteRtLmResponses* RunTextScoring(LiteRtLmSession* session,
+                                  const char** target_text, size_t num_targets,
+                                  bool store_token_lengths) {
+  LiteRtLmResponses* responses = nullptr;
+  const int status = litert_lm_session_run_text_scoring(
+      session, target_text, num_targets, store_token_lengths, &responses);
+  return HandleOrNull(status, responses);
+}
+
+LiteRtLmBenchmarkInfo* GetBenchmarkInfo(LiteRtLmSession* session) {
+  LiteRtLmBenchmarkInfo* benchmark_info = nullptr;
+  const int status =
+      litert_lm_session_get_benchmark_info(session, &benchmark_info);
+  return HandleOrNull(status, benchmark_info);
+}
+
+LiteRtLmTokenizeResult* Tokenize(LiteRtLmEngine* engine, const char* text) {
+  LiteRtLmTokenizeResult* result = nullptr;
+  const int status = litert_lm_engine_tokenize(engine, text, &result);
+  return HandleOrNull(status, result);
+}
+
+LiteRtLmDetokenizeResult* Detokenize(LiteRtLmEngine* engine, const int* tokens,
+                                     size_t num_tokens) {
+  LiteRtLmDetokenizeResult* result = nullptr;
+  const int status =
+      litert_lm_engine_detokenize(engine, tokens, num_tokens, &result);
+  return HandleOrNull(status, result);
+}
+
+LiteRtLmTokenUnion* GetTokenAt(const LiteRtLmTokenUnions* tokens,
+                               size_t index) {
+  LiteRtLmTokenUnion* token = nullptr;
+  const int status = litert_lm_token_unions_get_token_at(tokens, index, &token);
+  return HandleOrNull(status, token);
+}
+
+// Returns the engine's start token, or NULL if none is configured. Expects the
+// call to succeed.
+LiteRtLmTokenUnion* GetStartToken(LiteRtLmEngine* engine) {
+  LiteRtLmTokenUnion* token = nullptr;
+  EXPECT_EQ(litert_lm_engine_get_start_token(engine, &token),
+            kLiteRtLmStatusOk);
+  return token;
+}
+
+// Returns the engine's stop tokens, or NULL if none are configured. Expects
+// the call to succeed.
+LiteRtLmTokenUnions* GetStopTokens(LiteRtLmEngine* engine) {
+  LiteRtLmTokenUnions* tokens = nullptr;
+  EXPECT_EQ(litert_lm_engine_get_stop_tokens(engine, &tokens),
+            kLiteRtLmStatusOk);
+  return tokens;
+}
+
 TEST(EngineCTest, CreateSettingsWithNoVisionAndAudioBackend) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
@@ -1072,9 +1142,8 @@ TEST(EngineCTest, TokenizerTest) {
   ASSERT_NE(engine, nullptr);
 
   const char* text = "hello";
-  TokenizeResultPtr tokenize_result(
-      litert_lm_engine_tokenize(engine.get(), text),
-      &litert_lm_tokenize_result_delete);
+  TokenizeResultPtr tokenize_result(Tokenize(engine.get(), text),
+                                    &litert_lm_tokenize_result_delete);
   ASSERT_NE(tokenize_result, nullptr);
   size_t num_tokens =
       litert_lm_tokenize_result_get_num_tokens(tokenize_result.get());
@@ -1083,13 +1152,13 @@ TEST(EngineCTest, TokenizerTest) {
   const int* tokens =
       litert_lm_tokenize_result_get_tokens(tokenize_result.get());
   DetokenizeResultPtr detokenize_result(
-      litert_lm_engine_detokenize(engine.get(), tokens, num_tokens),
+      Detokenize(engine.get(), tokens, num_tokens),
       &litert_lm_detokenize_result_delete);
   ASSERT_NE(detokenize_result, nullptr);
   EXPECT_STREQ(litert_lm_detokenize_result_get_string(detokenize_result.get()),
                text);
 
-  TokenUnionPtr start_token(litert_lm_engine_get_start_token(engine.get()),
+  TokenUnionPtr start_token(GetStartToken(engine.get()),
                             &litert_lm_token_union_delete);
   if (start_token != nullptr) {
     if (litert_lm_token_union_get_type(start_token.get()) ==
@@ -1105,15 +1174,14 @@ TEST(EngineCTest, TokenizerTest) {
     }
   }
 
-  TokenUnionsPtr stop_tokens(litert_lm_engine_get_stop_tokens(engine.get()),
+  TokenUnionsPtr stop_tokens(GetStopTokens(engine.get()),
                              &litert_lm_token_unions_delete);
   if (stop_tokens != nullptr) {
     size_t num_tokens =
         litert_lm_token_unions_get_num_tokens(stop_tokens.get());
     for (size_t i = 0; i < num_tokens; ++i) {
-      TokenUnionPtr stop_token(
-          litert_lm_token_unions_get_token_at(stop_tokens.get(), i),
-          &litert_lm_token_union_delete);
+      TokenUnionPtr stop_token(GetTokenAt(stop_tokens.get(), i),
+                               &litert_lm_token_union_delete);
       ASSERT_NE(stop_token, nullptr);
       if (litert_lm_token_union_get_type(stop_token.get()) ==
           kLiteRtLmTokenUnionTypeIds) {
@@ -1155,9 +1223,8 @@ TEST(EngineCTest, GenerateContent) {
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
-  ResponsesPtr responses(
-      litert_lm_session_generate_content(session.get(), inputs, 1),
-      &litert_lm_responses_delete);
+  ResponsesPtr responses(GenerateContent(session.get(), inputs, 1),
+                         &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
   EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
@@ -1199,9 +1266,8 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
         &litert_lm_input_data_delete);
     ASSERT_NE(input_data, nullptr);
     const LiteRtLmInputData* inputs[] = {input_data.get()};
-    ResponsesPtr responses(
-        litert_lm_session_generate_content(session.get(), inputs, 1),
-        &litert_lm_responses_delete);
+    ResponsesPtr responses(GenerateContent(session.get(), inputs, 1),
+                           &litert_lm_responses_delete);
     ASSERT_NE(responses, nullptr);
 
     EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
@@ -1228,9 +1294,8 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
         &litert_lm_input_data_delete);
     ASSERT_NE(input_data, nullptr);
     const LiteRtLmInputData* inputs[] = {input_data.get()};
-    ResponsesPtr responses(
-        litert_lm_session_generate_content(session.get(), inputs, 1),
-        &litert_lm_responses_delete);
+    ResponsesPtr responses(GenerateContent(session.get(), inputs, 1),
+                           &litert_lm_responses_delete);
     ASSERT_NE(responses, nullptr);
 
     EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
@@ -2021,14 +2086,12 @@ TEST(EngineCTest, Benchmark) {
       &litert_lm_input_data_delete);
   ASSERT_NE(input_data, nullptr);
   const LiteRtLmInputData* inputs[] = {input_data.get()};
-  ResponsesPtr responses(
-      litert_lm_session_generate_content(session.get(), inputs, 1),
-      &litert_lm_responses_delete);
+  ResponsesPtr responses(GenerateContent(session.get(), inputs, 1),
+                         &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  BenchmarkInfoPtr benchmark_info(
-      litert_lm_session_get_benchmark_info(session.get()),
-      &litert_lm_benchmark_info_delete);
+  BenchmarkInfoPtr benchmark_info(GetBenchmarkInfo(session.get()),
+                                  &litert_lm_benchmark_info_delete);
   ASSERT_NE(benchmark_info, nullptr);
 
   EXPECT_GT(
@@ -2121,8 +2184,7 @@ TEST(EngineCTest, RunPrefillAndDecode) {
 
   litert_lm_session_run_prefill(session.get(), inputs, 1);
 
-  ResponsesPtr responses(litert_lm_session_run_decode(session.get()),
-                         &litert_lm_responses_delete);
+  ResponsesPtr responses(RunDecode(session.get()), &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
   EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
@@ -2161,10 +2223,9 @@ TEST(EngineCTest, TextScoringBasic) {
   litert_lm_session_run_prefill(session.get(), inputs, 1);
 
   const char* target_texts[] = {"apple"};
-  ResponsesPtr responses(
-      litert_lm_session_run_text_scoring(session.get(), target_texts, 1,
-                                         /*store_token_lengths=*/true),
-      &litert_lm_responses_delete);
+  ResponsesPtr responses(RunTextScoring(session.get(), target_texts, 1,
+                                        /*store_token_lengths=*/true),
+                         &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
   EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
@@ -2199,10 +2260,9 @@ TEST(EngineCTest, TextScoringVerifyScores) {
   litert_lm_session_run_prefill(session.get(), inputs, 1);
 
   const char* target_texts[] = {"apple"};
-  ResponsesPtr responses(
-      litert_lm_session_run_text_scoring(session.get(), target_texts, 1,
-                                         /*store_token_lengths=*/true),
-      &litert_lm_responses_delete);
+  ResponsesPtr responses(RunTextScoring(session.get(), target_texts, 1,
+                                        /*store_token_lengths=*/true),
+                         &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
   EXPECT_TRUE(litert_lm_responses_has_score_at(responses.get(), 0));
@@ -2237,10 +2297,9 @@ TEST(EngineCTest, TextScoringVerifyTokenLengths) {
   litert_lm_session_run_prefill(session.get(), inputs, 1);
 
   const char* target_texts[] = {"apple"};
-  ResponsesPtr responses(
-      litert_lm_session_run_text_scoring(session.get(), target_texts, 1,
-                                         /*store_token_lengths=*/true),
-      &litert_lm_responses_delete);
+  ResponsesPtr responses(RunTextScoring(session.get(), target_texts, 1,
+                                        /*store_token_lengths=*/true),
+                         &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
   EXPECT_TRUE(litert_lm_responses_has_token_length_at(responses.get(), 0));
@@ -2418,6 +2477,172 @@ TEST(EngineCErrorTest, EngineCreateSessionWithNullEngineReturnsError) {
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(session, nullptr);
+}
+
+TEST(EngineCErrorTest, ResultProducersWithNullOutParamReturnInvalidArgument) {
+  const auto expect_invalid_out_param = [](int status) {
+    EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                testing::HasSubstr("must not be NULL"));
+    litert_lm_clear_last_error();
+  };
+  const char* target_text[] = {"a"};
+  const int tokens[] = {1};
+  LiteRtLmTokenUnions token_unions;
+  token_unions.tokens.emplace_back();
+  litert_lm_clear_last_error();
+  expect_invalid_out_param(litert_lm_session_run_decode(
+      /*session=*/nullptr, /*out_responses=*/nullptr));
+  expect_invalid_out_param(litert_lm_session_run_text_scoring(
+      /*session=*/nullptr, target_text, 1, /*store_token_lengths=*/false,
+      /*out_responses=*/nullptr));
+  expect_invalid_out_param(litert_lm_session_generate_content(
+      /*session=*/nullptr, /*inputs=*/nullptr, 0, /*out_responses=*/nullptr));
+  expect_invalid_out_param(litert_lm_session_get_benchmark_info(
+      /*session=*/nullptr, /*out_benchmark_info=*/nullptr));
+  expect_invalid_out_param(litert_lm_engine_tokenize(
+      /*engine=*/nullptr, "a", /*out_result=*/nullptr));
+  expect_invalid_out_param(litert_lm_engine_detokenize(
+      /*engine=*/nullptr, tokens, 1, /*out_result=*/nullptr));
+  expect_invalid_out_param(litert_lm_engine_get_start_token(
+      /*engine=*/nullptr, /*out_token=*/nullptr));
+  expect_invalid_out_param(litert_lm_engine_get_stop_tokens(
+      /*engine=*/nullptr, /*out_tokens=*/nullptr));
+  // A valid collection and index still fail without an out-parameter.
+  expect_invalid_out_param(litert_lm_token_unions_get_token_at(
+      &token_unions, 0, /*out_token=*/nullptr));
+}
+
+// Calls `call` with an out-parameter holding a non-NULL sentinel and expects
+// kLiteRtLmStatusInvalidArgument, a matching last error, and the out-parameter
+// reset to NULL.
+template <typename T>
+void ExpectInvalidArgumentResetsOut(const char* name,
+                                    const std::function<int(T**)>& call) {
+  SCOPED_TRACE(name);
+  litert_lm_clear_last_error();
+  T* out = reinterpret_cast<T*>(0x1);
+  const int status = call(&out);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(out, nullptr);
+}
+
+TEST(EngineCErrorTest, ResultProducersWithNullHandleResetOutParam) {
+  const char* target_text[] = {"a"};
+  const int tokens[] = {1};
+  ExpectInvalidArgumentResetsOut<LiteRtLmResponses>(
+      "session_run_decode", [](LiteRtLmResponses** out) {
+        return litert_lm_session_run_decode(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmResponses>(
+      "session_run_text_scoring", [&](LiteRtLmResponses** out) {
+        return litert_lm_session_run_text_scoring(
+            nullptr, target_text, 1, /*store_token_lengths=*/false, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmResponses>(
+      "session_generate_content", [](LiteRtLmResponses** out) {
+        return litert_lm_session_generate_content(nullptr, nullptr, 0, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmBenchmarkInfo>(
+      "session_get_benchmark_info", [](LiteRtLmBenchmarkInfo** out) {
+        return litert_lm_session_get_benchmark_info(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmTokenizeResult>(
+      "engine_tokenize", [](LiteRtLmTokenizeResult** out) {
+        return litert_lm_engine_tokenize(nullptr, "a", out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmDetokenizeResult>(
+      "engine_detokenize", [&](LiteRtLmDetokenizeResult** out) {
+        return litert_lm_engine_detokenize(nullptr, tokens, 1, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmTokenUnion>(
+      "engine_get_start_token", [](LiteRtLmTokenUnion** out) {
+        return litert_lm_engine_get_start_token(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmTokenUnions>(
+      "engine_get_stop_tokens", [](LiteRtLmTokenUnions** out) {
+        return litert_lm_engine_get_stop_tokens(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmTokenUnion>(
+      "token_unions_get_token_at", [](LiteRtLmTokenUnion** out) {
+        return litert_lm_token_unions_get_token_at(nullptr, 0, out);
+      });
+}
+
+TEST(EngineCErrorTest, TokenUnionsGetTokenAt) {
+  LiteRtLmTokenUnions token_unions;
+  token_unions.tokens.emplace_back().mutable_token_ids()->add_ids(7);
+
+  LiteRtLmTokenUnion* token = nullptr;
+  ASSERT_EQ(litert_lm_token_unions_get_token_at(&token_unions, 0, &token),
+            kLiteRtLmStatusOk);
+  TokenUnionPtr token_ptr(token, &litert_lm_token_union_delete);
+  ASSERT_NE(token_ptr, nullptr);
+  const int* ids = nullptr;
+  size_t num_ids = 0;
+  ASSERT_EQ(litert_lm_token_union_get_ids(token_ptr.get(), &ids, &num_ids),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(num_ids, 1);
+  EXPECT_EQ(ids[0], 7);
+
+  litert_lm_clear_last_error();
+  token = reinterpret_cast<LiteRtLmTokenUnion*>(0x1);
+  const int status =
+      litert_lm_token_unions_get_token_at(&token_unions, 1, &token);
+  EXPECT_EQ(status, kLiteRtLmStatusOutOfRange);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("out of range"));
+  EXPECT_EQ(token, nullptr);
+}
+
+TEST(EngineCErrorTest, SessionResultProducersFailureReturnsLastErrorCode) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  // Text scoring requires at least one target.
+  litert_lm_clear_last_error();
+  const char* target_text[] = {"a"};
+  LiteRtLmResponses* responses = reinterpret_cast<LiteRtLmResponses*>(0x1);
+  int status = litert_lm_session_run_text_scoring(
+      session.get(), target_text, 0, /*store_token_lengths=*/false, &responses);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(responses, nullptr);
+
+  // Benchmarking is not enabled for this engine. The exact code is determined
+  // by the runtime; it must be a failure code that matches the last error.
+  litert_lm_clear_last_error();
+  LiteRtLmBenchmarkInfo* benchmark_info =
+      reinterpret_cast<LiteRtLmBenchmarkInfo*>(0x1);
+  status = litert_lm_session_get_benchmark_info(session.get(), &benchmark_info);
+  EXPECT_GT(status, kLiteRtLmStatusOk);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(benchmark_info, nullptr);
+
+  // Tokenizing requires text.
+  litert_lm_clear_last_error();
+  LiteRtLmTokenizeResult* tokenize_result =
+      reinterpret_cast<LiteRtLmTokenizeResult*>(0x1);
+  status = litert_lm_engine_tokenize(engine.get(), /*text=*/nullptr,
+                                     &tokenize_result);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(tokenize_result, nullptr);
 }
 
 TEST(EngineCErrorTest, SuppressTokensNullWithCountSetsError) {
@@ -2801,7 +3026,10 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
               testing::HasSubstr("benchmark_info must not be NULL"));
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_token_unions_get_token_at(nullptr, 0), nullptr);
+  LiteRtLmTokenUnion* token = reinterpret_cast<LiteRtLmTokenUnion*>(0x1);
+  EXPECT_EQ(litert_lm_token_unions_get_token_at(nullptr, 0, &token),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(token, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("tokens must not be NULL"));
@@ -3179,7 +3407,7 @@ TEST(EngineCStatusTest, SessionRuntimeFailuresReturnCanonicalCode) {
       litert_lm_session_run_prefill(session.get(), nullptr, 0),
       kLiteRtLmStatusInvalidArgument);
 
-  TokenUnionPtr start_token(litert_lm_engine_get_start_token(engine.get()),
+  TokenUnionPtr start_token(GetStartToken(engine.get()),
                             &litert_lm_token_union_delete);
   if (start_token != nullptr) {
     litert_lm_clear_last_error();

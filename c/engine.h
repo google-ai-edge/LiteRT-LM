@@ -1165,12 +1165,18 @@ LiteRtLmStatusCode litert_lm_session_run_prefill(
 // process is done.
 //
 // @param session The session to use.
-// @return A pointer to the responses, or NULL on failure. The caller is
-//   responsible for deleting the responses using `litert_lm_responses_delete`.
+// @param out_responses On success, receives the responses, owned by the
+//   caller; release with `litert_lm_responses_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `session` or `out_responses` is NULL; otherwise the runtime error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_responses.
 LITERT_LM_C_API_EXPORT
-LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session);
+LiteRtLmStatusCode litert_lm_session_run_decode(
+    LiteRtLmSession* session, LiteRtLmResponses** out_responses);
 
 // Scores the target text after the prefill process is done.
 //
@@ -1179,15 +1185,20 @@ LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session);
 // @param num_targets The number of strings in the target_text array.
 // @param store_token_lengths Whether to store the token lengths of the target
 //   texts in the responses.
-// @return A pointer to the responses, or NULL on failure. The caller is
-//   responsible for deleting the responses using `litert_lm_responses_delete`.
+// @param out_responses On success, receives the responses, owned by the
+//   caller; release with `litert_lm_responses_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `session`, `target_text` or `out_responses` is NULL or `num_targets` is 0;
+//   otherwise the runtime error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_responses.
 LITERT_LM_C_API_EXPORT
-LiteRtLmResponses* litert_lm_session_run_text_scoring(LiteRtLmSession* session,
-                                                      const char** target_text,
-                                                      size_t num_targets,
-                                                      bool store_token_lengths);
+LiteRtLmStatusCode litert_lm_session_run_text_scoring(
+    LiteRtLmSession* session, const char** target_text, size_t num_targets,
+    bool store_token_lengths, LiteRtLmResponses** out_responses);
 
 // Generates content from the input prompt.
 //
@@ -1196,14 +1207,21 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(LiteRtLmSession* session,
 // multimodal
 //   input.
 // @param num_inputs The number of LiteRtLmInputData structs in the array.
-// @return A pointer to the responses, or NULL on failure. The caller is
-//   responsible for deleting the responses using `litert_lm_responses_delete`.
+// @param out_responses On success, receives the responses, owned by the
+//   caller; release with `litert_lm_responses_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `session` or `out_responses` is NULL; otherwise the code of the error
+//   encountered while copying the inputs or generating content.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_responses.
 LITERT_LM_C_API_EXPORT
-LiteRtLmResponses* litert_lm_session_generate_content(
+LiteRtLmStatusCode litert_lm_session_generate_content(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
-    size_t num_inputs);
+    size_t num_inputs, LiteRtLmResponses** out_responses);
+
 // Destroys a LiteRT LM Responses object.
 //
 // @param responses The responses to destroy.
@@ -1318,17 +1336,23 @@ LITERT_LM_C_API_EXPORT
 const float* litert_lm_responses_get_token_scores_at(
     const LiteRtLmResponses* responses, int index);
 
-// Retrieves the benchmark information from the session. The caller is
-// responsible for destroying the benchmark info using
-// `litert_lm_benchmark_info_delete`.
+// Retrieves the benchmark information from the session.
 //
 // @param session The session to get the benchmark info from.
-// @return A pointer to the benchmark info, or NULL on failure.
+// @param out_benchmark_info On success, receives the benchmark info, owned by
+//   the caller; release with `litert_lm_benchmark_info_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `session` or `out_benchmark_info` is NULL; otherwise the runtime error
+//   (e.g. if benchmarking is not enabled).
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_benchmark_info.
 LITERT_LM_C_API_EXPORT
-LiteRtLmBenchmarkInfo* litert_lm_session_get_benchmark_info(
-    LiteRtLmSession* session);
+LiteRtLmStatusCode litert_lm_session_get_benchmark_info(
+    LiteRtLmSession* session, LiteRtLmBenchmarkInfo** out_benchmark_info);
 
 // Destroys a LiteRT LM Benchmark Info object.
 //
@@ -1517,14 +1541,21 @@ LiteRtLmStatusCode litert_lm_session_generate_content_stream(
 //
 // @param engine The engine instance.
 // @param text The UTF-8 string to tokenize.
-// @return A pointer to the tokenize result, or NULL on failure.
-//   The caller is responsible for deleting the result using
-//   `litert_lm_tokenize_result_delete`.
+// @param out_result On success, receives the tokenize result, owned by the
+//   caller; release with `litert_lm_tokenize_result_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `engine`, `text` or `out_result` is NULL; otherwise the code of the
+//   tokenizer error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_result.
 LITERT_LM_C_API_EXPORT
-LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
-                                                  const char* text);
+LiteRtLmStatusCode litert_lm_engine_tokenize(
+    LiteRtLmEngine* engine, const char* text,
+    LiteRtLmTokenizeResult** out_result);
 
 // Destroys a LiteRT LM Tokenize Result.
 //
@@ -1560,15 +1591,21 @@ size_t litert_lm_tokenize_result_get_num_tokens(
 // @param engine The engine instance.
 // @param tokens An array of token ids to detokenize.
 // @param num_tokens The number of token ids in the array.
-// @return A pointer to the detokenize result, or NULL on failure.
-//   The caller is responsible for deleting the result using
-//   `litert_lm_detokenize_result_delete`.
+// @param out_result On success, receives the detokenize result, owned by the
+//   caller; release with `litert_lm_detokenize_result_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `engine`, `tokens` or `out_result` is NULL; otherwise the code of the
+//   tokenizer error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_result.
 LITERT_LM_C_API_EXPORT
-LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
-                                                      const int* tokens,
-                                                      size_t num_tokens);
+LiteRtLmStatusCode litert_lm_engine_detokenize(
+    LiteRtLmEngine* engine, const int* tokens, size_t num_tokens,
+    LiteRtLmDetokenizeResult** out_result);
 
 // Destroys a LiteRT LM Detokenize Result.
 //
@@ -1656,40 +1693,62 @@ void litert_lm_token_unions_delete(LiteRtLmTokenUnions* tokens);
 LITERT_LM_C_API_EXPORT
 size_t litert_lm_token_unions_get_num_tokens(const LiteRtLmTokenUnions* tokens);
 
-// Returns the token union at a given index from a collection.
+// Returns a copy of the token union at a given index from a collection.
 //
 // @param tokens The token unions collection.
 // @param index The index of the token union.
-// @return A pointer to the token union at the given index, or NULL if the index
-//   is out of bounds. The caller is responsible for deleting the result using
-//   `litert_lm_token_union_delete`.
+// @param out_token On success, receives a new copy of the token union at
+//   `index`, owned by the caller; release with `litert_lm_token_union_delete`.
+//   Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `tokens`
+//   or `out_token` is NULL; kLiteRtLmStatusOutOfRange if `index` is out of
+//   bounds.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_token.
 LITERT_LM_C_API_EXPORT
-LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
-    const LiteRtLmTokenUnions* tokens, size_t index);
+LiteRtLmStatusCode litert_lm_token_unions_get_token_at(
+    const LiteRtLmTokenUnions* tokens, size_t index,
+    LiteRtLmTokenUnion** out_token);
 
 // Returns the configured start token (BOS), if any.
 //
 // @param engine The engine instance.
-// @return A pointer to the start token, or NULL if none configured. The caller
-//   is responsible for deleting the result using
-//   `litert_lm_token_union_delete`.
+// @param out_token On success, receives the start token, owned by the caller;
+//   release with `litert_lm_token_union_delete`. Receives NULL on success if
+//   the engine has no start token configured. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success (including when no start token is
+//   configured), or another LiteRtLmStatusCode on failure (see
+//   error_reporter.h). kLiteRtLmStatusInvalidArgument if `engine` or
+//   `out_token` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_token.
 LITERT_LM_C_API_EXPORT
-LiteRtLmTokenUnion* litert_lm_engine_get_start_token(LiteRtLmEngine* engine);
+LiteRtLmStatusCode litert_lm_engine_get_start_token(
+    LiteRtLmEngine* engine, LiteRtLmTokenUnion** out_token);
 
 // Returns the configured stop tokens (EOS).
 //
 // @param engine The engine instance.
-// @return A pointer to the stop tokens collection, or NULL if none configured.
-//   The caller is responsible for deleting the result using
-//   `litert_lm_token_unions_delete`.
+// @param out_tokens On success, receives the stop tokens collection, owned by
+//   the caller; release with `litert_lm_token_unions_delete`. Receives NULL on
+//   success if the engine has no stop tokens configured. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success (including when no stop tokens are
+//   configured), or another LiteRtLmStatusCode on failure (see
+//   error_reporter.h). kLiteRtLmStatusInvalidArgument if `engine` or
+//   `out_tokens` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_tokens.
 LITERT_LM_C_API_EXPORT
-LiteRtLmTokenUnions* litert_lm_engine_get_stop_tokens(LiteRtLmEngine* engine);
+LiteRtLmStatusCode litert_lm_engine_get_stop_tokens(
+    LiteRtLmEngine* engine, LiteRtLmTokenUnions** out_tokens);
 
 #ifdef __cplusplus
 }  // extern "C"

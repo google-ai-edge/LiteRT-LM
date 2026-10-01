@@ -154,17 +154,19 @@ class Benchmark(interfaces.AbstractBenchmark):
     inputs = (ctypes.c_void_p * 1)(input_ptr)
 
     try:
-      responses = lib.litert_lm_session_generate_content(session_ptr, inputs, 1)
-      if responses:
-        lib.litert_lm_responses_delete(responses)
-    finally:
-      lib.litert_lm_input_data_delete(input_ptr)
-
-    info_ptr = lib.litert_lm_session_get_benchmark_info(session_ptr)
-    if not info_ptr:
+      responses = create_checked(
+          lib, "litert_lm_session_generate_content", session_ptr, inputs, 1
+      )
+      lib.litert_lm_responses_delete(responses)
+      info_ptr = create_checked(
+          lib, "litert_lm_session_get_benchmark_info", session_ptr
+      )
+    except RuntimeError:
       lib.litert_lm_session_delete(session_ptr)
       lib.litert_lm_engine_delete(engine_ptr)
-      raise RuntimeError("Failed to get benchmark info")
+      raise
+    finally:
+      lib.litert_lm_input_data_delete(input_ptr)
 
     info = interfaces.create_benchmark_info(lib, info_ptr)
     lib.litert_lm_benchmark_info_delete(info_ptr)

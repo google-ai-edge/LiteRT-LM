@@ -27,6 +27,7 @@ from ._ffi import _get_lib
 from ._ffi import ActivationDataType
 from ._ffi import call_checked
 from ._ffi import create_checked
+from ._ffi import create_optional_checked
 from ._messages import Message
 from .conversation import Conversation
 from .session import Session
@@ -570,7 +571,9 @@ class Engine(interfaces.AbstractEngine):
 
   @property
   def bos_token_id(self) -> int | None:
-    u_ptr = self._lib.litert_lm_engine_get_start_token(self._engine_ptr)
+    u_ptr = create_optional_checked(
+        self._lib, "litert_lm_engine_get_start_token", self._engine_ptr
+    )
     val = _parse_token_union(self._lib, u_ptr)
     if isinstance(val, int):
       return val
@@ -580,14 +583,18 @@ class Engine(interfaces.AbstractEngine):
 
   @property
   def eos_token_ids(self) -> list[list[int]]:
-    unions_ptr = self._lib.litert_lm_engine_get_stop_tokens(self._engine_ptr)
+    unions_ptr = create_optional_checked(
+        self._lib, "litert_lm_engine_get_stop_tokens", self._engine_ptr
+    )
     if not unions_ptr:
       return []
     try:
       num = self._lib.litert_lm_token_unions_get_num_tokens(unions_ptr)
       all_ids = []
       for i in range(num):
-        u_ptr = self._lib.litert_lm_token_unions_get_token_at(unions_ptr, i)
+        u_ptr = create_checked(
+            self._lib, "litert_lm_token_unions_get_token_at", unions_ptr, i
+        )
         # _parse_token_union handles deleting the owned LiteRtLmTokenUnion
         # pointer.
         val = _parse_token_union(self._lib, u_ptr)
@@ -600,9 +607,9 @@ class Engine(interfaces.AbstractEngine):
       self._lib.litert_lm_token_unions_delete(unions_ptr)
 
   def tokenize(self, text: str) -> list[int]:
-    res_ptr = self._lib.litert_lm_engine_tokenize(self._engine_ptr, text)
-    if not res_ptr:
-      raise RuntimeError("Tokenization failed")
+    res_ptr = create_checked(
+        self._lib, "litert_lm_engine_tokenize", self._engine_ptr, text
+    )
     try:
       num = self._lib.litert_lm_tokenize_result_get_num_tokens(res_ptr)
       tokens = self._lib.litert_lm_tokenize_result_get_tokens(res_ptr)
@@ -614,11 +621,13 @@ class Engine(interfaces.AbstractEngine):
     num_tokens = len(token_ids)
     c_ids = (ctypes.c_int * num_tokens)(*token_ids)
 
-    res_ptr = self._lib.litert_lm_engine_detokenize(
-        self._engine_ptr, c_ids, num_tokens
+    res_ptr = create_checked(
+        self._lib,
+        "litert_lm_engine_detokenize",
+        self._engine_ptr,
+        c_ids,
+        num_tokens,
     )
-    if not res_ptr:
-      raise RuntimeError("Detokenization failed")
 
     try:
       resp_str = self._lib.litert_lm_detokenize_result_get_string(res_ptr)

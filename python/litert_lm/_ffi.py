@@ -428,26 +428,31 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_void_p),
       ctypes.c_size_t,
   ]
-  lib.litert_lm_session_run_decode.restype = ctypes.c_void_p
-  lib.litert_lm_session_run_decode.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_session_run_decode.restype = ctypes.c_int
+  lib.litert_lm_session_run_decode.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_session_run_decode_async.restype = ctypes.c_int
   lib.litert_lm_session_run_decode_async.argtypes = [
       ctypes.c_void_p,
       STREAM_CALLBACK_TYPE,
       ctypes.c_void_p,
   ]
-  lib.litert_lm_session_run_text_scoring.restype = ctypes.c_void_p
+  lib.litert_lm_session_run_text_scoring.restype = ctypes.c_int
   lib.litert_lm_session_run_text_scoring.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_char_p),
       ctypes.c_size_t,
       ctypes.c_bool,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
-  lib.litert_lm_session_generate_content.restype = ctypes.c_void_p
+  lib.litert_lm_session_generate_content.restype = ctypes.c_int
   lib.litert_lm_session_generate_content.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_void_p),
       ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_session_generate_content_stream.restype = ctypes.c_int
   lib.litert_lm_session_generate_content_stream.argtypes = [
@@ -745,8 +750,11 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_json_response_get_string.argtypes = [ctypes.c_void_p]
 
   # Benchmark Info
-  lib.litert_lm_session_get_benchmark_info.restype = ctypes.c_void_p
-  lib.litert_lm_session_get_benchmark_info.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_session_get_benchmark_info.restype = ctypes.c_int
+  lib.litert_lm_session_get_benchmark_info.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_conversation_get_benchmark_info.restype = ctypes.c_void_p
   lib.litert_lm_conversation_get_benchmark_info.argtypes = [ctypes.c_void_p]
   lib.litert_lm_benchmark_info_delete.argtypes = [ctypes.c_void_p]
@@ -792,8 +800,12 @@ def _setup_lib_signatures(lib):
   ]
 
   # Tokenizer
-  lib.litert_lm_engine_tokenize.restype = ctypes.c_void_p
-  lib.litert_lm_engine_tokenize.argtypes = [ctypes.c_void_p, c_string_p]
+  lib.litert_lm_engine_tokenize.restype = ctypes.c_int
+  lib.litert_lm_engine_tokenize.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_tokenize_result_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_tokenize_result_get_tokens.restype = ctypes.POINTER(
       ctypes.c_int
@@ -802,11 +814,12 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_tokenize_result_get_num_tokens.restype = ctypes.c_size_t
   lib.litert_lm_tokenize_result_get_num_tokens.argtypes = [ctypes.c_void_p]
 
-  lib.litert_lm_engine_detokenize.restype = ctypes.c_void_p
+  lib.litert_lm_engine_detokenize.restype = ctypes.c_int
   lib.litert_lm_engine_detokenize.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int),
       ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_detokenize_result_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_detokenize_result_get_string.restype = ctypes.c_char_p
@@ -828,16 +841,23 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_token_unions_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_token_unions_get_num_tokens.restype = ctypes.c_size_t
   lib.litert_lm_token_unions_get_num_tokens.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_token_unions_get_token_at.restype = ctypes.c_void_p
+  lib.litert_lm_token_unions_get_token_at.restype = ctypes.c_int
   lib.litert_lm_token_unions_get_token_at.argtypes = [
       ctypes.c_void_p,
       ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
 
-  lib.litert_lm_engine_get_start_token.restype = ctypes.c_void_p
-  lib.litert_lm_engine_get_start_token.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_engine_get_stop_tokens.restype = ctypes.c_void_p
-  lib.litert_lm_engine_get_stop_tokens.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_engine_get_start_token.restype = ctypes.c_int
+  lib.litert_lm_engine_get_start_token.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
+  lib.litert_lm_engine_get_stop_tokens.restype = ctypes.c_int
+  lib.litert_lm_engine_get_stop_tokens.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
 
   # Stream Chunk
   lib.litert_lm_stream_chunk_get_text.restype = ctypes.c_char_p
@@ -1185,6 +1205,33 @@ def create_checked(lib: ctypes.CDLL, func_name: str, *args) -> int:
   call_checked(lib, func_name, *args, ctypes.byref(out))
   if out.value is None:
     raise RuntimeError(f"{func_name} returned a null handle")
+  return out.value
+
+
+def create_optional_checked(
+    lib: ctypes.CDLL, func_name: str, *args
+) -> int | None:
+  """Like `create_checked`, but a NULL result on success means "absent".
+
+  For C API functions whose result is legitimately optional (e.g. no start
+  token configured): they return `kLiteRtLmStatusOk` and set the trailing
+  `out_*` parameter to NULL.
+
+  Args:
+    lib: The loaded C library instance.
+    func_name: Name of a C API function that takes a trailing `void**`
+      out-parameter and returns a `LiteRtLmStatusCode`.
+    *args: Arguments forwarded to the C API function, excluding the
+      out-parameter.
+
+  Returns:
+    The produced handle, owned by the caller, or None if the value is absent.
+
+  Raises:
+    RuntimeError: If the call does not return `kLiteRtLmStatusOk`.
+  """
+  out = ctypes.c_void_p()
+  call_checked(lib, func_name, *args, ctypes.byref(out))
   return out.value
 
 

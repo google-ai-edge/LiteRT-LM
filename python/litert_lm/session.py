@@ -79,9 +79,9 @@ class Session(interfaces.AbstractSession):
         self._lib.litert_lm_input_data_delete(input_ptr)
 
   def run_decode(self) -> interfaces.Responses:
-    resp_ptr = self._lib.litert_lm_session_run_decode(self._ptr)
-    if not resp_ptr:
-      raise RuntimeError("litert_lm_session_run_decode failed")
+    resp_ptr = create_checked(
+        self._lib, "litert_lm_session_run_decode", self._ptr
+    )
     return self._wrap_responses(resp_ptr)
 
   def run_decode_async(self) -> collections.abc.Iterator[interfaces.Responses]:
@@ -125,11 +125,14 @@ class Session(interfaces.AbstractSession):
     for i, t in enumerate(target_text):
       c_targets[i] = t.encode("utf-8")
 
-    resp_ptr = self._lib.litert_lm_session_run_text_scoring(
-        self._ptr, c_targets, num_targets, store_token_lengths
+    resp_ptr = create_checked(
+        self._lib,
+        "litert_lm_session_run_text_scoring",
+        self._ptr,
+        c_targets,
+        num_targets,
+        store_token_lengths,
     )
-    if not resp_ptr:
-      raise RuntimeError("litert_lm_session_run_text_scoring failed")
     return self._wrap_responses(resp_ptr)
 
   def _wrap_responses(self, resp_ptr) -> interfaces.Responses:
@@ -171,9 +174,9 @@ class Session(interfaces.AbstractSession):
     """See base class."""
     if not self._ptr:
       raise RuntimeError("Session is closed.")
-    info_ptr = self._lib.litert_lm_session_get_benchmark_info(self._ptr)
-    if not info_ptr:
-      raise RuntimeError("Failed to get benchmark info.")
+    info_ptr = create_checked(
+        self._lib, "litert_lm_session_get_benchmark_info", self._ptr
+    )
     try:
       return interfaces.create_benchmark_info(self._lib, info_ptr)
     finally:

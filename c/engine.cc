@@ -1069,13 +1069,14 @@ LiteRtLmStatusCode litert_lm_session_rewind_to_step(LiteRtLmSession* session,
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmResponses* litert_lm_session_run_text_scoring(
+LiteRtLmStatusCode litert_lm_session_run_text_scoring(
     LiteRtLmSession* session, const char** target_text, size_t num_targets,
-    bool store_token_lengths) {
+    bool store_token_lengths, LiteRtLmResponses** out_responses) {
+  LITERT_LM_C_RETURN_IF_NULL(out_responses);
+  *out_responses = nullptr;
   if (!session || !session->session || !target_text || num_targets <= 0) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session or target texts.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session or target texts.");
   }
   std::vector<absl::string_view> target_text_views;
   target_text_views.reserve(num_targets);
@@ -1086,10 +1087,9 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
       session->session->RunTextScoring(target_text_views, store_token_lengths);
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to run text scoring: " << responses.status();
-    litert::lm::c::SetLastError(responses.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(responses.status());
   }
-  auto* c_responses = new LiteRtLmResponses{std::move(*responses)};
+  auto c_responses = std::make_unique<LiteRtLmResponses>(std::move(*responses));
   if (c_responses->responses.GetTexts().empty()) {
     auto& mutable_texts = c_responses->responses.GetMutableTexts();
     mutable_texts.reserve(num_targets);
@@ -1097,7 +1097,8 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
       mutable_texts.emplace_back(target_text[i]);
     }
   }
-  return c_responses;
+  *out_responses = c_responses.release();
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_run_prefill(
@@ -1120,19 +1121,21 @@ LiteRtLmStatusCode litert_lm_session_run_prefill(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
+LiteRtLmStatusCode litert_lm_session_run_decode(
+    LiteRtLmSession* session, LiteRtLmResponses** out_responses) {
+  LITERT_LM_C_RETURN_IF_NULL(out_responses);
+  *out_responses = nullptr;
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto responses = session->session->RunDecode();
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to run decode: " << responses.status();
-    litert::lm::c::SetLastError(responses.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(responses.status());
   }
-  return new LiteRtLmResponses{std::move(*responses)};
+  *out_responses = new LiteRtLmResponses{std::move(*responses)};
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_run_decode_async(
@@ -1151,29 +1154,28 @@ LiteRtLmStatusCode litert_lm_session_run_decode_async(
   return kLiteRtLmStatusOk;
 }
 
-LiteRtLmResponses* litert_lm_session_generate_content(
+LiteRtLmStatusCode litert_lm_session_generate_content(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
-    size_t num_inputs) {
+    size_t num_inputs, LiteRtLmResponses** out_responses) {
+  LITERT_LM_C_RETURN_IF_NULL(out_responses);
+  *out_responses = nullptr;
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
-    litert::lm::c::SetLastError(engine_inputs.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(engine_inputs.status());
   }
   auto responses = session->session->GenerateContent(std::move(*engine_inputs));
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to generate content: " << responses.status();
-    litert::lm::c::SetLastError(responses.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(responses.status());
   }
 
-  auto* c_responses = new LiteRtLmResponses{std::move(*responses)};
-  return c_responses;
+  *out_responses = new LiteRtLmResponses{std::move(*responses)};
+  return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_generate_content_stream(
@@ -1292,21 +1294,22 @@ const float* litert_lm_responses_get_token_scores_at(
   return (*responses->responses.GetTokenScores())[index].data();
 }
 
-LiteRtLmBenchmarkInfo* litert_lm_session_get_benchmark_info(
-    LiteRtLmSession* session) {
+LiteRtLmStatusCode litert_lm_session_get_benchmark_info(
+    LiteRtLmSession* session, LiteRtLmBenchmarkInfo** out_benchmark_info) {
+  LITERT_LM_C_RETURN_IF_NULL(out_benchmark_info);
+  *out_benchmark_info = nullptr;
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto benchmark_info = session->session->GetBenchmarkInfo();
   if (!benchmark_info.ok()) {
     ABSL_LOG(ERROR) << "Failed to get benchmark info: "
                     << benchmark_info.status();
-    litert::lm::c::SetLastError(benchmark_info.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(benchmark_info.status());
   }
-  return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
+  *out_benchmark_info = new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_benchmark_info_delete(LiteRtLmBenchmarkInfo* benchmark_info) {
@@ -1391,22 +1394,24 @@ double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
   return benchmark_info->benchmark_info.GetDecodeTokensPerSec(index);
 }
 
-LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
-                                                  const char* text) {
+LiteRtLmStatusCode litert_lm_engine_tokenize(
+    LiteRtLmEngine* engine, const char* text,
+    LiteRtLmTokenizeResult** out_result) {
+  LITERT_LM_C_RETURN_IF_NULL(out_result);
+  *out_result = nullptr;
   if (!engine || !engine->engine || !text) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine or text.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine or text.");
   }
   const auto& tokenizer = engine->engine->GetTokenizer();
   auto token_ids =
       const_cast<litert::support::Tokenizer&>(tokenizer).TextToTokenIds(text);
   if (!token_ids.ok()) {
     ABSL_LOG(ERROR) << "Failed to tokenize: " << token_ids.status();
-    litert::lm::c::SetLastError(token_ids.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(token_ids.status());
   }
-  return new LiteRtLmTokenizeResult{std::move(*token_ids)};
+  *out_result = new LiteRtLmTokenizeResult{std::move(*token_ids)};
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_tokenize_result_delete(LiteRtLmTokenizeResult* result) {
@@ -1429,13 +1434,14 @@ size_t litert_lm_tokenize_result_get_num_tokens(
   return result->tokens.size();
 }
 
-LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
-                                                      const int* tokens,
-                                                      size_t num_tokens) {
+LiteRtLmStatusCode litert_lm_engine_detokenize(
+    LiteRtLmEngine* engine, const int* tokens, size_t num_tokens,
+    LiteRtLmDetokenizeResult** out_result) {
+  LITERT_LM_C_RETURN_IF_NULL(out_result);
+  *out_result = nullptr;
   if (!engine || !engine->engine || !tokens) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine or tokens.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine or tokens.");
   }
   const auto& tokenizer = engine->engine->GetTokenizer();
   std::vector<int> token_ids(tokens, tokens + num_tokens);
@@ -1443,10 +1449,10 @@ LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
       token_ids);
   if (!text.ok()) {
     ABSL_LOG(ERROR) << "Failed to detokenize: " << text.status();
-    litert::lm::c::SetLastError(text.status());
-    return nullptr;
+    return litert::lm::c::ToCStatus(text.status());
   }
-  return new LiteRtLmDetokenizeResult{std::move(*text)};
+  *out_result = new LiteRtLmDetokenizeResult{std::move(*text)};
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_detokenize_result_delete(LiteRtLmDetokenizeResult* result) {
@@ -1511,48 +1517,57 @@ size_t litert_lm_token_unions_get_num_tokens(
   return tokens->tokens.size();
 }
 
-LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
-    const LiteRtLmTokenUnions* tokens, size_t index) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(tokens)) {
-    return nullptr;
-  }
+LiteRtLmStatusCode litert_lm_token_unions_get_token_at(
+    const LiteRtLmTokenUnions* tokens, size_t index,
+    LiteRtLmTokenUnion** out_token) {
+  LITERT_LM_C_RETURN_IF_NULL(out_token);
+  *out_token = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(tokens);
   if (index >= tokens->tokens.size()) {
-    litert::lm::c::SetLastError(absl::StatusCode::kOutOfRange,
-                                "Token index out of range.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kOutOfRange,
+                                      "Token index out of range.");
   }
-  auto* result = new LiteRtLmTokenUnion();
+  auto result = std::make_unique<LiteRtLmTokenUnion>();
   result->token_union = tokens->tokens[index];
-  return result;
+  *out_token = result.release();
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmTokenUnion* litert_lm_engine_get_start_token(LiteRtLmEngine* engine) {
+LiteRtLmStatusCode litert_lm_engine_get_start_token(
+    LiteRtLmEngine* engine, LiteRtLmTokenUnion** out_token) {
+  LITERT_LM_C_RETURN_IF_NULL(out_token);
+  *out_token = nullptr;
   if (!engine || !engine->engine) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine.");
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
   if (!metadata.has_value() || !metadata->has_start_token()) {
-    return nullptr;
+    // No start token configured: success with a NULL result.
+    return kLiteRtLmStatusOk;
   }
-  return new LiteRtLmTokenUnion{metadata->start_token()};
+  *out_token = new LiteRtLmTokenUnion{metadata->start_token()};
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmTokenUnions* litert_lm_engine_get_stop_tokens(LiteRtLmEngine* engine) {
+LiteRtLmStatusCode litert_lm_engine_get_stop_tokens(
+    LiteRtLmEngine* engine, LiteRtLmTokenUnions** out_tokens) {
+  LITERT_LM_C_RETURN_IF_NULL(out_tokens);
+  *out_tokens = nullptr;
   if (!engine || !engine->engine) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid engine.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine.");
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
   if (!metadata.has_value() || metadata->stop_tokens_size() == 0) {
-    return nullptr;
+    // No stop tokens configured: success with a NULL result.
+    return kLiteRtLmStatusOk;
   }
-  auto* c_tokens = new LiteRtLmTokenUnions;
+  auto c_tokens = std::make_unique<LiteRtLmTokenUnions>();
   c_tokens->tokens.assign(metadata->stop_tokens().begin(),
                           metadata->stop_tokens().end());
-  return c_tokens;
+  *out_tokens = c_tokens.release();
+  return kLiteRtLmStatusOk;
 }
 
 const char* litert_lm_stream_chunk_get_text(const LiteRtLmStreamChunk* chunk) {
