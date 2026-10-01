@@ -671,6 +671,7 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       EngineSettings engine_settings,
       EngineSettings::CreateDefault(std::move(model_assets), backend,
                                     vision_backend, audio_backend));
+  backend = engine_settings.GetMainExecutorSettings().GetBackend();
   if (settings.max_num_tokens > 0) {
     engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
         settings.max_num_tokens);
@@ -754,6 +755,13 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
         auto gpu_artisan_settings,
         executor_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>());
     gpu_artisan_settings.use_submodel = settings.use_submodel;
+    if (settings.use_ringbuffers) {
+      gpu_artisan_settings.use_autosized_ringbuffers = true;
+    }
+    if (settings.benchmark) {
+      gpu_artisan_settings.wait_for_weight_uploads =
+          settings.wait_for_weights_conversion_complete_in_benchmark;
+    }
     executor_settings.SetBackendConfig(gpu_artisan_settings);
   }
   if (backend == Backend::NPU) {
