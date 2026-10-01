@@ -1232,109 +1232,178 @@ void litert_lm_responses_delete(LiteRtLmResponses* responses);
 
 // Returns the number of response candidates.
 //
+// The number of candidates is the number of response texts or, if there are
+// none (e.g. for text scoring), the number of scores or token lengths. Valid
+// candidate indices for the `litert_lm_responses_*_at` functions are
+// `[0, *out_num_candidates)`, although individual values may still be absent
+// at a valid index (see the `has_*_at` predicates).
+//
 // @param responses The responses object.
-// @return The number of candidates.
+// @param out_num_candidates On success, receives the number of candidates; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_num_candidates` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_num_candidates.
 LITERT_LM_C_API_EXPORT
-int litert_lm_responses_get_num_candidates(const LiteRtLmResponses* responses);
+LiteRtLmStatusCode litert_lm_responses_get_num_candidates(
+    const LiteRtLmResponses* responses, int* out_num_candidates);
 
 // Returns the response text at a given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return The response text. The returned string is owned by the `responses`
-//   object and is valid only for its lifetime. Returns NULL if index is out of
-//   bounds.
+// @param out_text On success, receives the response text. The string is owned
+//   by the `responses` object and is valid only for its lifetime. Set to NULL
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_text` is NULL; kLiteRtLmStatusOutOfRange if `index` is
+//   out of bounds of the candidates; kLiteRtLmStatusNotFound if there is no
+//   response text at `index`.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the text is returned
+// through out_text.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_responses_get_response_text_at(
-    const LiteRtLmResponses* responses, int index);
+LiteRtLmStatusCode litert_lm_responses_get_response_text_at(
+    const LiteRtLmResponses* responses, int index, const char** out_text);
 
 // Returns whether the response contains a score at the given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return true if the score is available at the given index, false otherwise.
+// @param out_has_score On success, receives true if a score is available at
+//   `index`, false otherwise; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_has_score` is NULL; kLiteRtLmStatusOutOfRange if
+//   `index` is out of bounds of the candidates.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_has_score.
 LITERT_LM_C_API_EXPORT
-bool litert_lm_responses_has_score_at(const LiteRtLmResponses* responses,
-                                      int index);
+LiteRtLmStatusCode litert_lm_responses_has_score_at(
+    const LiteRtLmResponses* responses, int index, bool* out_has_score);
 
 // Returns the score at a given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return The score. Returns 0.0f if index is out of bounds or no score is
-//   present.
+// @param out_score On success, receives the score; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_score` is NULL; kLiteRtLmStatusOutOfRange if `index`
+//   is out of bounds of the candidates; kLiteRtLmStatusNotFound if no score is
+//   available at `index`.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the score is returned
+// through out_score.
 LITERT_LM_C_API_EXPORT
-float litert_lm_responses_get_score_at(const LiteRtLmResponses* responses,
-                                       int index);
+LiteRtLmStatusCode litert_lm_responses_get_score_at(
+    const LiteRtLmResponses* responses, int index, float* out_score);
 
 // Returns whether the response contains a token length at the given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return true if the token length is available at the given index, false
-//   otherwise.
+// @param out_has_token_length On success, receives true if a token length is
+//   available at `index`, false otherwise; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_has_token_length` is NULL; kLiteRtLmStatusOutOfRange
+//   if `index` is out of bounds of the candidates.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_has_token_length.
 LITERT_LM_C_API_EXPORT
-bool litert_lm_responses_has_token_length_at(const LiteRtLmResponses* responses,
-                                             int index);
+LiteRtLmStatusCode litert_lm_responses_has_token_length_at(
+    const LiteRtLmResponses* responses, int index, bool* out_has_token_length);
 
 // Returns the token length at a given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return The token length. Returns 0 if index is out of bounds or no token
-//   length is present.
+// @param out_token_length On success, receives the token length; not written
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_token_length` is NULL; kLiteRtLmStatusOutOfRange if
+//   `index` is out of bounds of the candidates; kLiteRtLmStatusNotFound if no
+//   token length is available at `index`.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the token length is
+// returned through out_token_length.
 LITERT_LM_C_API_EXPORT
-int litert_lm_responses_get_token_length_at(const LiteRtLmResponses* responses,
-                                            int index);
+LiteRtLmStatusCode litert_lm_responses_get_token_length_at(
+    const LiteRtLmResponses* responses, int index, int* out_token_length);
 
 // Returns whether the response contains token scores at the given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return true if token scores are available at the given index, false
-// otherwise.
+// @param out_has_token_scores On success, receives true if token scores are
+//   available at `index`, false otherwise; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_has_token_scores` is NULL; kLiteRtLmStatusOutOfRange
+//   if `index` is out of bounds of the candidates.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_has_token_scores.
 LITERT_LM_C_API_EXPORT
-bool litert_lm_responses_has_token_scores_at(const LiteRtLmResponses* responses,
-                                             int index);
+LiteRtLmStatusCode litert_lm_responses_has_token_scores_at(
+    const LiteRtLmResponses* responses, int index, bool* out_has_token_scores);
 
 // Returns the number of tokens for which scores are present at a given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return The number of token scores. Returns 0 if index is out of bounds or no
-//   token scores are present.
+// @param out_num_token_scores On success, receives the number of token scores;
+//   not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_num_token_scores` is NULL; kLiteRtLmStatusOutOfRange
+//   if `index` is out of bounds of the candidates; kLiteRtLmStatusNotFound if
+//   no token scores are available at `index`.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_num_token_scores.
 LITERT_LM_C_API_EXPORT
-int litert_lm_responses_get_num_token_scores_at(
-    const LiteRtLmResponses* responses, int index);
+LiteRtLmStatusCode litert_lm_responses_get_num_token_scores_at(
+    const LiteRtLmResponses* responses, int index, int* out_num_token_scores);
 
 // Returns the token scores at a given index.
 //
 // @param responses The responses object.
 // @param index The index of the response.
-// @return A pointer to the internal array of token scores. Returns NULL if
-// index
-//   is out of bounds or no token scores are present.
+// @param out_token_scores On success, receives a pointer to the internal array
+//   of token scores, whose length is given by
+//   `litert_lm_responses_get_num_token_scores_at`. The array is owned by the
+//   `responses` object and is valid only for its lifetime. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `responses` or `out_token_scores` is NULL; kLiteRtLmStatusOutOfRange if
+//   `index` is out of bounds of the candidates; kLiteRtLmStatusNotFound if no
+//   token scores are available at `index`.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the array is returned
+// through out_token_scores.
 LITERT_LM_C_API_EXPORT
-const float* litert_lm_responses_get_token_scores_at(
-    const LiteRtLmResponses* responses, int index);
+LiteRtLmStatusCode litert_lm_responses_get_token_scores_at(
+    const LiteRtLmResponses* responses, int index,
+    const float** out_token_scores);
 
 // Retrieves the benchmark information from the session.
 //
@@ -1369,86 +1438,142 @@ void litert_lm_benchmark_info_delete(LiteRtLmBenchmarkInfo* benchmark_info);
 // the time spent for decoding the first token.
 //
 // @param benchmark_info The benchmark info object.
-// @return The time to the first token in seconds.
+// @param out_seconds On success, receives the time to the first token in
+//   seconds; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_seconds` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_seconds.
 LITERT_LM_C_API_EXPORT
-double litert_lm_benchmark_info_get_time_to_first_token(
-    const LiteRtLmBenchmarkInfo* benchmark_info);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_time_to_first_token(
+    const LiteRtLmBenchmarkInfo* benchmark_info, double* out_seconds);
 
 // Returns the total initialization time in seconds.
 //
 // @param benchmark_info The benchmark info object.
-// @return The total initialization time in seconds.
+// @param out_seconds On success, receives the total initialization time in
+//   seconds; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_seconds` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_seconds.
 LITERT_LM_C_API_EXPORT
-double litert_lm_benchmark_info_get_total_init_time_in_second(
-    const LiteRtLmBenchmarkInfo* benchmark_info);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_total_init_time_in_second(
+    const LiteRtLmBenchmarkInfo* benchmark_info, double* out_seconds);
 
 // Returns the number of prefill turns.
 //
 // @param benchmark_info The benchmark info object.
-// @return The number of prefill turns.
+// @param out_num_turns On success, receives the number of prefill turns; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_num_turns` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_num_turns.
 LITERT_LM_C_API_EXPORT
-int litert_lm_benchmark_info_get_num_prefill_turns(
-    const LiteRtLmBenchmarkInfo* benchmark_info);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_num_prefill_turns(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_num_turns);
 
 // Returns the number of decode turns.
 //
 // @param benchmark_info The benchmark info object.
-// @return The number of decode turns.
+// @param out_num_turns On success, receives the number of decode turns; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_num_turns` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_num_turns.
 LITERT_LM_C_API_EXPORT
-int litert_lm_benchmark_info_get_num_decode_turns(
-    const LiteRtLmBenchmarkInfo* benchmark_info);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_num_decode_turns(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_num_turns);
 
 // Returns the prefill token count at a given turn index.
 //
 // @param benchmark_info The benchmark info object.
 // @param index The index of the prefill turn.
-// @return The prefill token count.
+// @param out_token_count On success, receives the prefill token count; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_token_count` is NULL; kLiteRtLmStatusOutOfRange
+//   if `index` is out of bounds of the prefill turns.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_token_count.
 LITERT_LM_C_API_EXPORT
-int litert_lm_benchmark_info_get_prefill_token_count_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_token_count_at(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    int* out_token_count);
 
 // Returns the decode token count at a given turn index.
 //
 // @param benchmark_info The benchmark info object.
 // @param index The index of the decode turn.
-// @return The decode token count.
+// @param out_token_count On success, receives the decode token count; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_token_count` is NULL; kLiteRtLmStatusOutOfRange
+//   if `index` is out of bounds of the decode turns.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_token_count.
 LITERT_LM_C_API_EXPORT
-int litert_lm_benchmark_info_get_decode_token_count_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_token_count_at(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    int* out_token_count);
 
 // Returns the prefill tokens per second at a given turn index.
 //
 // @param benchmark_info The benchmark info object.
 // @param index The index of the prefill turn.
-// @return The prefill tokens per second.
+// @param out_tokens_per_sec On success, receives the prefill tokens per
+//   second (0 if the turn has no measurable duration); not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_tokens_per_sec` is NULL;
+//   kLiteRtLmStatusOutOfRange if `index` is out of bounds of the prefill turns.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_tokens_per_sec.
 LITERT_LM_C_API_EXPORT
-double litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    double* out_tokens_per_sec);
 
 // Returns the decode tokens per second at a given turn index.
 //
 // @param benchmark_info The benchmark info object.
 // @param index The index of the decode turn.
-// @return The decode tokens per second.
+// @param out_tokens_per_sec On success, receives the decode tokens per second
+//   (0 if the turn has no measurable duration); not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_tokens_per_sec` is NULL;
+//   kLiteRtLmStatusOutOfRange if `index` is out of bounds of the decode turns.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the value is returned
+// through out_tokens_per_sec.
 LITERT_LM_C_API_EXPORT
-double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index);
+LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    double* out_tokens_per_sec);
 
 // Opaque pointer for LiteRT LM Stream Chunk.
 // This object represents a single chunk of data returned during streaming.
@@ -1459,26 +1584,55 @@ double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
 typedef struct LiteRtLmStreamChunk LiteRtLmStreamChunk;
 
 // Gets the text content of the chunk.
-// The returned string is owned by the chunk and is only valid as long as the
-// chunk is valid. Returns NULL if there is no text content in this chunk (e.g.
-// if it is an error or metadata-only chunk).
+//
+// @param chunk The stream chunk.
+// @param out_text On success, receives the text content of the chunk, or NULL
+//   if the chunk has no text content (e.g. if it is an error or final
+//   metadata-only chunk). The string is owned by the chunk and is only valid
+//   as long as the chunk is valid. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success (including when the chunk has no text),
+//   or another LiteRtLmStatusCode on failure (see error_reporter.h).
+//   kLiteRtLmStatusInvalidArgument if `chunk` or `out_text` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the text is returned
+// through out_text.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_stream_chunk_get_text(const LiteRtLmStreamChunk* chunk);
+LiteRtLmStatusCode litert_lm_stream_chunk_get_text(
+    const LiteRtLmStreamChunk* chunk, const char** out_text);
 
-// Returns true if this is the final chunk of the stream.
+// Returns whether this is the final chunk of the stream.
+//
+// @param chunk The stream chunk.
+// @param out_is_final On success, receives true if this is the final chunk of
+//   the stream, false otherwise; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `chunk`
+//   or `out_is_final` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the result is returned
+// through out_is_final.
 LITERT_LM_C_API_EXPORT
-bool litert_lm_stream_chunk_is_final(const LiteRtLmStreamChunk* chunk);
+LiteRtLmStatusCode litert_lm_stream_chunk_is_final(
+    const LiteRtLmStreamChunk* chunk, bool* out_is_final);
 
 // Gets the error message associated with this chunk, if any.
-// Returns NULL if there is no error.
+//
+// @param chunk The stream chunk.
+// @param out_error On success, receives the error message of the chunk, or
+//   NULL if the chunk carries no error. The string is owned by the chunk and
+//   is only valid as long as the chunk is valid. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success (including when the chunk carries no
+//   error), or another LiteRtLmStatusCode on failure (see error_reporter.h).
+//   kLiteRtLmStatusInvalidArgument if `chunk` or `out_error` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the message is returned
+// through out_error.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_stream_chunk_get_error(const LiteRtLmStreamChunk* chunk);
+LiteRtLmStatusCode litert_lm_stream_chunk_get_error(
+    const LiteRtLmStreamChunk* chunk, const char** out_error);
 
 // Callback for streaming responses.
 // `callback_data` is a pointer to user-defined data passed to the stream
@@ -1568,23 +1722,37 @@ void litert_lm_tokenize_result_delete(LiteRtLmTokenizeResult* result);
 // Returns the token ids from a tokenize result.
 //
 // @param result The tokenize result.
-// @return A pointer to the internal array of token ids. The returned pointer
-//   is valid only for the lifetime of the `result` object.
+// @param out_tokens On success, receives a pointer to the internal array of
+//   token ids, whose length is given by
+//   `litert_lm_tokenize_result_get_num_tokens`. The pointer is valid only for
+//   the lifetime of the `result` object, and may be NULL if the result holds
+//   no tokens. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `result`
+//   or `out_tokens` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the array is returned
+// through out_tokens.
 LITERT_LM_C_API_EXPORT
-const int* litert_lm_tokenize_result_get_tokens(
-    const LiteRtLmTokenizeResult* result);
+LiteRtLmStatusCode litert_lm_tokenize_result_get_tokens(
+    const LiteRtLmTokenizeResult* result, const int** out_tokens);
 
 // Returns the number of token ids from a tokenize result.
 //
 // @param result The tokenize result.
-// @return The number of token ids.
+// @param out_num_tokens On success, receives the number of token ids; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `result`
+//   or `out_num_tokens` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_num_tokens.
 LITERT_LM_C_API_EXPORT
-size_t litert_lm_tokenize_result_get_num_tokens(
-    const LiteRtLmTokenizeResult* result);
+LiteRtLmStatusCode litert_lm_tokenize_result_get_num_tokens(
+    const LiteRtLmTokenizeResult* result, size_t* out_num_tokens);
 
 // Detokenizes token ids using the engine's tokenizer.
 //
@@ -1618,13 +1786,19 @@ void litert_lm_detokenize_result_delete(LiteRtLmDetokenizeResult* result);
 // Returns the string from a detokenize result.
 //
 // @param result The detokenize result.
-// @return The detokenized UTF-8 string. The returned string is owned by the
-//   `result` object and is valid only for its lifetime.
+// @param out_text On success, receives the detokenized UTF-8 string. The
+//   string is owned by the `result` object and is valid only for its lifetime.
+//   Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `result`
+//   or `out_text` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the string is returned
+// through out_text.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_detokenize_result_get_string(
-    const LiteRtLmDetokenizeResult* result);
+LiteRtLmStatusCode litert_lm_detokenize_result_get_string(
+    const LiteRtLmDetokenizeResult* result, const char** out_text);
 
 // Destroys a LiteRT LM Token Union.
 //
@@ -1637,24 +1811,36 @@ void litert_lm_token_union_delete(LiteRtLmTokenUnion* token_union);
 // Returns the type of the token union.
 //
 // @param token_union The token union.
-// @return The type of the token union.
+// @param out_type On success, receives the type of the token union; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `token_union` or `out_type` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the type is returned
+// through out_type.
 LITERT_LM_C_API_EXPORT
-LiteRtLmTokenUnionType litert_lm_token_union_get_type(
-    const LiteRtLmTokenUnion* token_union);
+LiteRtLmStatusCode litert_lm_token_union_get_type(
+    const LiteRtLmTokenUnion* token_union, LiteRtLmTokenUnionType* out_type);
 
 // Returns the string value from a token union.
 //
 // @param token_union The token union.
-// @return The string value, or NULL if the type is not
-//   kLiteRtLmTokenUnionTypeString. The returned string is owned by the
-//   `token_union` object and is valid only for its lifetime.
+// @param out_string On success, receives the string value. The string is owned
+//   by the `token_union` object and is valid only for its lifetime. Set to
+//   NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `token_union` or `out_string` is NULL, or if the type of `token_union` is
+//   not kLiteRtLmTokenUnionTypeString.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the string is returned
+// through out_string.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_token_union_get_string(
-    const LiteRtLmTokenUnion* token_union);
+LiteRtLmStatusCode litert_lm_token_union_get_string(
+    const LiteRtLmTokenUnion* token_union, const char** out_string);
 
 // Returns the token ids from a token union.
 //
@@ -1687,11 +1873,18 @@ void litert_lm_token_unions_delete(LiteRtLmTokenUnions* tokens);
 // Returns the number of token unions in the collection.
 //
 // @param tokens The token unions object.
-// @return The number of token unions.
+// @param out_num_tokens On success, receives the number of token unions; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `tokens`
+//   or `out_num_tokens` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the count is returned
+// through out_num_tokens.
 LITERT_LM_C_API_EXPORT
-size_t litert_lm_token_unions_get_num_tokens(const LiteRtLmTokenUnions* tokens);
+LiteRtLmStatusCode litert_lm_token_unions_get_num_tokens(
+    const LiteRtLmTokenUnions* tokens, size_t* out_num_tokens);
 
 // Returns a copy of the token union at a given index from a collection.
 //

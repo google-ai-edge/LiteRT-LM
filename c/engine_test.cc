@@ -39,6 +39,7 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -246,6 +247,15 @@ LiteRtLmTokenUnion* GetTokenAt(const LiteRtLmTokenUnions* tokens,
   LiteRtLmTokenUnion* token = nullptr;
   const int status = litert_lm_token_unions_get_token_at(tokens, index, &token);
   return HandleOrNull(status, token);
+}
+
+// Calls a C API getter that delivers its result through a trailing
+// out-parameter of type `T*`, expects it to succeed, and returns the result.
+template <typename T, typename Getter, typename... Args>
+T GetOk(Getter getter, Args... args) {
+  T out{};
+  EXPECT_EQ(getter(args..., &out), kLiteRtLmStatusOk);
+  return out;
 }
 
 // Returns the engine's start token, or NULL if none is configured. Expects the
@@ -1145,23 +1155,25 @@ TEST(EngineCTest, TokenizerTest) {
   TokenizeResultPtr tokenize_result(Tokenize(engine.get(), text),
                                     &litert_lm_tokenize_result_delete);
   ASSERT_NE(tokenize_result, nullptr);
-  size_t num_tokens =
-      litert_lm_tokenize_result_get_num_tokens(tokenize_result.get());
+  size_t num_tokens = GetOk<size_t>(litert_lm_tokenize_result_get_num_tokens,
+                                    tokenize_result.get());
   EXPECT_GT(num_tokens, 0);
 
-  const int* tokens =
-      litert_lm_tokenize_result_get_tokens(tokenize_result.get());
+  const int* tokens = GetOk<const int*>(litert_lm_tokenize_result_get_tokens,
+                                        tokenize_result.get());
   DetokenizeResultPtr detokenize_result(
       Detokenize(engine.get(), tokens, num_tokens),
       &litert_lm_detokenize_result_delete);
   ASSERT_NE(detokenize_result, nullptr);
-  EXPECT_STREQ(litert_lm_detokenize_result_get_string(detokenize_result.get()),
+  EXPECT_STREQ(GetOk<const char*>(litert_lm_detokenize_result_get_string,
+                                  detokenize_result.get()),
                text);
 
   TokenUnionPtr start_token(GetStartToken(engine.get()),
                             &litert_lm_token_union_delete);
   if (start_token != nullptr) {
-    if (litert_lm_token_union_get_type(start_token.get()) ==
+    if (GetOk<LiteRtLmTokenUnionType>(litert_lm_token_union_get_type,
+                                      start_token.get()) ==
         kLiteRtLmTokenUnionTypeIds) {
       const int* ids;
       size_t num_ids;
@@ -1170,7 +1182,9 @@ TEST(EngineCTest, TokenizerTest) {
           kLiteRtLmStatusOk);
       EXPECT_GT(num_ids, 0);
     } else {
-      EXPECT_NE(litert_lm_token_union_get_string(start_token.get()), nullptr);
+      EXPECT_NE(GetOk<const char*>(litert_lm_token_union_get_string,
+                                   start_token.get()),
+                nullptr);
     }
   }
 
@@ -1178,12 +1192,13 @@ TEST(EngineCTest, TokenizerTest) {
                              &litert_lm_token_unions_delete);
   if (stop_tokens != nullptr) {
     size_t num_tokens =
-        litert_lm_token_unions_get_num_tokens(stop_tokens.get());
+        GetOk<size_t>(litert_lm_token_unions_get_num_tokens, stop_tokens.get());
     for (size_t i = 0; i < num_tokens; ++i) {
       TokenUnionPtr stop_token(GetTokenAt(stop_tokens.get(), i),
                                &litert_lm_token_union_delete);
       ASSERT_NE(stop_token, nullptr);
-      if (litert_lm_token_union_get_type(stop_token.get()) ==
+      if (GetOk<LiteRtLmTokenUnionType>(litert_lm_token_union_get_type,
+                                        stop_token.get()) ==
           kLiteRtLmTokenUnionTypeIds) {
         const int* ids;
         size_t num_ids;
@@ -1192,7 +1207,9 @@ TEST(EngineCTest, TokenizerTest) {
             kLiteRtLmStatusOk);
         EXPECT_GT(num_ids, 0);
       } else {
-        EXPECT_NE(litert_lm_token_union_get_string(stop_token.get()), nullptr);
+        EXPECT_NE(GetOk<const char*>(litert_lm_token_union_get_string,
+                                     stop_token.get()),
+                  nullptr);
       }
     }
   }
@@ -1227,9 +1244,10 @@ TEST(EngineCTest, GenerateContent) {
                          &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
-  const char* response_text =
-      litert_lm_responses_get_response_text_at(responses.get(), 0);
+  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()),
+            1);
+  const char* response_text = GetOk<const char*>(
+      litert_lm_responses_get_response_text_at, responses.get(), 0);
   ASSERT_NE(response_text, nullptr);
   EXPECT_GT(strlen(response_text), 0);
 }
@@ -1270,9 +1288,10 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
                            &litert_lm_responses_delete);
     ASSERT_NE(responses, nullptr);
 
-    EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
-    const char* response_text =
-        litert_lm_responses_get_response_text_at(responses.get(), 0);
+    EXPECT_EQ(
+        GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()), 1);
+    const char* response_text = GetOk<const char*>(
+        litert_lm_responses_get_response_text_at, responses.get(), 0);
     ASSERT_NE(response_text, nullptr);
     EXPECT_GT(strlen(response_text), 0);
     EXPECT_LT(strlen(response_text), 10);
@@ -1298,9 +1317,10 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
                            &litert_lm_responses_delete);
     ASSERT_NE(responses, nullptr);
 
-    EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
-    const char* response_text =
-        litert_lm_responses_get_response_text_at(responses.get(), 0);
+    EXPECT_EQ(
+        GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()), 1);
+    const char* response_text = GetOk<const char*>(
+        litert_lm_responses_get_response_text_at, responses.get(), 0);
     ASSERT_NE(response_text, nullptr);
     EXPECT_GT(strlen(response_text), 10);
   }
@@ -1685,15 +1705,16 @@ struct StreamCallbackData {
 
 void StreamCallback(void* callback_data, const LiteRtLmStreamChunk* chunk) {
   auto* data = static_cast<StreamCallbackData*>(callback_data);
-  const char* error_msg = litert_lm_stream_chunk_get_error(chunk);
+  const char* error_msg =
+      GetOk<const char*>(litert_lm_stream_chunk_get_error, chunk);
   if (error_msg) {
     data->status = absl::InternalError(error_msg);
   }
-  const char* text = litert_lm_stream_chunk_get_text(chunk);
+  const char* text = GetOk<const char*>(litert_lm_stream_chunk_get_text, chunk);
   if (text) {
     data->response.append(text);
   }
-  if (litert_lm_stream_chunk_is_final(chunk)) {
+  if (GetOk<bool>(litert_lm_stream_chunk_is_final, chunk)) {
     data->done.Notify();
   }
 }
@@ -2094,36 +2115,70 @@ TEST(EngineCTest, Benchmark) {
                                   &litert_lm_benchmark_info_delete);
   ASSERT_NE(benchmark_info, nullptr);
 
-  EXPECT_GT(
-      litert_lm_benchmark_info_get_time_to_first_token(benchmark_info.get()),
-      0.0);
-  EXPECT_GT(litert_lm_benchmark_info_get_total_init_time_in_second(
-                benchmark_info.get()),
+  EXPECT_GT(GetOk<double>(litert_lm_benchmark_info_get_time_to_first_token,
+                          benchmark_info.get()),
             0.0);
-  int num_prefill_turns =
-      litert_lm_benchmark_info_get_num_prefill_turns(benchmark_info.get());
+  EXPECT_GT(
+      GetOk<double>(litert_lm_benchmark_info_get_total_init_time_in_second,
+                    benchmark_info.get()),
+      0.0);
+  int num_prefill_turns = GetOk<int>(
+      litert_lm_benchmark_info_get_num_prefill_turns, benchmark_info.get());
   EXPECT_GT(num_prefill_turns, 0);
   for (int i = 0; i < num_prefill_turns; ++i) {
-    EXPECT_GT(litert_lm_benchmark_info_get_prefill_token_count_at(
-                  benchmark_info.get(), i),
+    EXPECT_GT(GetOk<int>(litert_lm_benchmark_info_get_prefill_token_count_at,
+                         benchmark_info.get(), i),
               0);
 
-    EXPECT_GT(litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-                  benchmark_info.get(), i),
-              0.0);
+    EXPECT_GT(
+        GetOk<double>(litert_lm_benchmark_info_get_prefill_tokens_per_sec_at,
+                      benchmark_info.get(), i),
+        0.0);
   }
-  int num_decode_turns =
-      litert_lm_benchmark_info_get_num_decode_turns(benchmark_info.get());
+  int num_decode_turns = GetOk<int>(
+      litert_lm_benchmark_info_get_num_decode_turns, benchmark_info.get());
   EXPECT_GT(num_decode_turns, 0);
   for (int i = 0; i < num_decode_turns; ++i) {
-    EXPECT_GT(litert_lm_benchmark_info_get_decode_token_count_at(
-                  benchmark_info.get(), i),
+    EXPECT_GT(GetOk<int>(litert_lm_benchmark_info_get_decode_token_count_at,
+                         benchmark_info.get(), i),
               0);
 
-    EXPECT_GT(litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-                  benchmark_info.get(), i),
-              0.0);
+    EXPECT_GT(
+        GetOk<double>(litert_lm_benchmark_info_get_decode_tokens_per_sec_at,
+                      benchmark_info.get(), i),
+        0.0);
   }
+
+  // Turn indices past the end are rejected, and scalar out-parameters are left
+  // untouched.
+  const auto expect_out_of_range = [](const char* name, int status) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(status, kLiteRtLmStatusOutOfRange);
+    EXPECT_EQ(status, litert_lm_get_last_error_code());
+  };
+  int token_count = -7;
+  double tokens_per_sec = -7.0;
+  litert_lm_clear_last_error();
+  expect_out_of_range(
+      "prefill_token_count_at",
+      litert_lm_benchmark_info_get_prefill_token_count_at(
+          benchmark_info.get(), num_prefill_turns, &token_count));
+  litert_lm_clear_last_error();
+  expect_out_of_range(
+      "prefill_tokens_per_sec_at",
+      litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+          benchmark_info.get(), num_prefill_turns, &tokens_per_sec));
+  litert_lm_clear_last_error();
+  expect_out_of_range(
+      "decode_token_count_at",
+      litert_lm_benchmark_info_get_decode_token_count_at(
+          benchmark_info.get(), num_decode_turns, &token_count));
+  litert_lm_clear_last_error();
+  expect_out_of_range("decode_tokens_per_sec_at",
+                      litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+                          benchmark_info.get(), -1, &tokens_per_sec));
+  EXPECT_EQ(token_count, -7);
+  EXPECT_EQ(tokens_per_sec, -7.0);
 }
 
 TEST(EngineCTest, RunPrefillSuccess) {
@@ -2187,9 +2242,10 @@ TEST(EngineCTest, RunPrefillAndDecode) {
   ResponsesPtr responses(RunDecode(session.get()), &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
-  const char* response_text =
-      litert_lm_responses_get_response_text_at(responses.get(), 0);
+  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()),
+            1);
+  const char* response_text = GetOk<const char*>(
+      litert_lm_responses_get_response_text_at, responses.get(), 0);
   ASSERT_NE(response_text, nullptr);
   EXPECT_GT(strlen(response_text), 0);
 }
@@ -2228,7 +2284,8 @@ TEST(EngineCTest, TextScoringBasic) {
                          &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
+  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()),
+            1);
 }
 
 TEST(EngineCTest, TextScoringVerifyScores) {
@@ -2265,7 +2322,11 @@ TEST(EngineCTest, TextScoringVerifyScores) {
                          &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_TRUE(litert_lm_responses_has_score_at(responses.get(), 0));
+  EXPECT_TRUE(
+      GetOk<bool>(litert_lm_responses_has_score_at, responses.get(), 0));
+  float score = 0.0f;
+  EXPECT_EQ(litert_lm_responses_get_score_at(responses.get(), 0, &score),
+            kLiteRtLmStatusOk);
 }
 
 TEST(EngineCTest, TextScoringVerifyTokenLengths) {
@@ -2302,8 +2363,11 @@ TEST(EngineCTest, TextScoringVerifyTokenLengths) {
                          &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_TRUE(litert_lm_responses_has_token_length_at(responses.get(), 0));
-  EXPECT_GT(litert_lm_responses_get_token_length_at(responses.get(), 0), 0);
+  EXPECT_TRUE(
+      GetOk<bool>(litert_lm_responses_has_token_length_at, responses.get(), 0));
+  EXPECT_GT(
+      GetOk<int>(litert_lm_responses_get_token_length_at, responses.get(), 0),
+      0);
 }
 
 TEST(EngineCTest, ConversationOptionalArgsTest) {
@@ -3008,19 +3072,28 @@ TEST(EngineCStatusTest, SetMinLogLevelReturnsStatus) {
 
 TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_responses_get_num_candidates(nullptr), 0);
+  int num_candidates = -7;
+  EXPECT_EQ(litert_lm_responses_get_num_candidates(nullptr, &num_candidates),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(num_candidates, -7);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("responses must not be NULL"));
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_tokenize_result_get_tokens(nullptr), nullptr);
+  const int* tokens = reinterpret_cast<const int*>(0x1);
+  EXPECT_EQ(litert_lm_tokenize_result_get_tokens(nullptr, &tokens),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(tokens, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("result must not be NULL"));
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_benchmark_info_get_num_decode_turns(nullptr), 0);
+  int num_turns = -7;
+  EXPECT_EQ(litert_lm_benchmark_info_get_num_decode_turns(nullptr, &num_turns),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(num_turns, -7);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("benchmark_info must not be NULL"));
@@ -3033,6 +3106,539 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("tokens must not be NULL"));
+}
+
+// A named C API call that returns a LiteRtLmStatusCode.
+struct NamedCall {
+  const char* name;
+  std::function<int()> call;
+};
+
+// Runs every call and expects it to return `expected_code`, to record the same
+// code as the thread's last error, and (if non-empty) to record a message
+// containing `expected_message`.
+void ExpectAllReturn(const std::vector<NamedCall>& calls, int expected_code,
+                     const std::string& expected_message = "") {
+  for (const NamedCall& named_call : calls) {
+    SCOPED_TRACE(named_call.name);
+    litert_lm_clear_last_error();
+    const int status = named_call.call();
+    EXPECT_EQ(status, expected_code);
+    EXPECT_EQ(status, litert_lm_get_last_error_code());
+    if (!expected_message.empty()) {
+      EXPECT_THAT(litert_lm_get_last_error_message(),
+                  testing::HasSubstr(expected_message));
+    }
+  }
+}
+
+TEST(EngineCErrorTest, AccessorsWithNullOutParamReturnInvalidArgument) {
+  // Handles are valid (or NULL, which must not matter): the out-parameter is
+  // validated first.
+  LiteRtLmResponses responses{
+      litert::lm::Responses(litert::lm::TaskState::kDone, {"a"}, {0.5f})};
+  LiteRtLmStreamChunk chunk;
+  LiteRtLmTokenizeResult tokenize_result;
+  LiteRtLmDetokenizeResult detokenize_result;
+  LiteRtLmTokenUnion token_union;
+  LiteRtLmTokenUnions token_unions;
+  const LiteRtLmBenchmarkInfo* benchmark_info = nullptr;
+  ExpectAllReturn(
+      {
+          {"responses_get_num_candidates",
+           [&] {
+             return litert_lm_responses_get_num_candidates(&responses, nullptr);
+           }},
+          {"responses_get_response_text_at",
+           [&] {
+             return litert_lm_responses_get_response_text_at(&responses, 0,
+                                                             nullptr);
+           }},
+          {"responses_has_score_at",
+           [&] {
+             return litert_lm_responses_has_score_at(&responses, 0, nullptr);
+           }},
+          {"responses_get_score_at",
+           [&] {
+             return litert_lm_responses_get_score_at(&responses, 0, nullptr);
+           }},
+          {"responses_has_token_length_at",
+           [&] {
+             return litert_lm_responses_has_token_length_at(&responses, 0,
+                                                            nullptr);
+           }},
+          {"responses_get_token_length_at",
+           [&] {
+             return litert_lm_responses_get_token_length_at(&responses, 0,
+                                                            nullptr);
+           }},
+          {"responses_has_token_scores_at",
+           [&] {
+             return litert_lm_responses_has_token_scores_at(&responses, 0,
+                                                            nullptr);
+           }},
+          {"responses_get_num_token_scores_at",
+           [&] {
+             return litert_lm_responses_get_num_token_scores_at(&responses, 0,
+                                                                nullptr);
+           }},
+          {"responses_get_token_scores_at",
+           [&] {
+             return litert_lm_responses_get_token_scores_at(&responses, 0,
+                                                            nullptr);
+           }},
+          {"benchmark_info_get_time_to_first_token",
+           [&] {
+             return litert_lm_benchmark_info_get_time_to_first_token(
+                 benchmark_info, nullptr);
+           }},
+          {"benchmark_info_get_total_init_time_in_second",
+           [&] {
+             return litert_lm_benchmark_info_get_total_init_time_in_second(
+                 benchmark_info, nullptr);
+           }},
+          {"benchmark_info_get_num_prefill_turns",
+           [&] {
+             return litert_lm_benchmark_info_get_num_prefill_turns(
+                 benchmark_info, nullptr);
+           }},
+          {"benchmark_info_get_num_decode_turns",
+           [&] {
+             return litert_lm_benchmark_info_get_num_decode_turns(
+                 benchmark_info, nullptr);
+           }},
+          {"benchmark_info_get_prefill_token_count_at",
+           [&] {
+             return litert_lm_benchmark_info_get_prefill_token_count_at(
+                 benchmark_info, 0, nullptr);
+           }},
+          {"benchmark_info_get_decode_token_count_at",
+           [&] {
+             return litert_lm_benchmark_info_get_decode_token_count_at(
+                 benchmark_info, 0, nullptr);
+           }},
+          {"benchmark_info_get_prefill_tokens_per_sec_at",
+           [&] {
+             return litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+                 benchmark_info, 0, nullptr);
+           }},
+          {"benchmark_info_get_decode_tokens_per_sec_at",
+           [&] {
+             return litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+                 benchmark_info, 0, nullptr);
+           }},
+          {"stream_chunk_get_text",
+           [&] { return litert_lm_stream_chunk_get_text(&chunk, nullptr); }},
+          {"stream_chunk_is_final",
+           [&] { return litert_lm_stream_chunk_is_final(&chunk, nullptr); }},
+          {"stream_chunk_get_error",
+           [&] { return litert_lm_stream_chunk_get_error(&chunk, nullptr); }},
+          {"tokenize_result_get_tokens",
+           [&] {
+             return litert_lm_tokenize_result_get_tokens(&tokenize_result,
+                                                         nullptr);
+           }},
+          {"tokenize_result_get_num_tokens",
+           [&] {
+             return litert_lm_tokenize_result_get_num_tokens(&tokenize_result,
+                                                             nullptr);
+           }},
+          {"detokenize_result_get_string",
+           [&] {
+             return litert_lm_detokenize_result_get_string(&detokenize_result,
+                                                           nullptr);
+           }},
+          {"token_union_get_type",
+           [&] {
+             return litert_lm_token_union_get_type(&token_union, nullptr);
+           }},
+          {"token_union_get_string",
+           [&] {
+             return litert_lm_token_union_get_string(&token_union, nullptr);
+           }},
+          {"token_unions_get_num_tokens",
+           [&] {
+             return litert_lm_token_unions_get_num_tokens(&token_unions,
+                                                          nullptr);
+           }},
+      },
+      kLiteRtLmStatusInvalidArgument, "must not be NULL");
+}
+
+TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
+  // Scalar out-parameters must be left untouched and pointer out-parameters
+  // must be reset to NULL.
+  constexpr int kIntSentinel = -7;
+  constexpr float kFloatSentinel = -7.0f;
+  constexpr double kDoubleSentinel = -7.0;
+  constexpr size_t kSizeSentinel = 77;
+  int out_int = kIntSentinel;
+  bool out_bool = true;
+  float out_float = kFloatSentinel;
+  double out_double = kDoubleSentinel;
+  size_t out_size = kSizeSentinel;
+  LiteRtLmTokenUnionType out_type = kLiteRtLmTokenUnionTypeString;
+  const char* out_text = "sentinel";
+  const float* out_floats = &kFloatSentinel;
+  const int* out_ints = &kIntSentinel;
+  ExpectAllReturn(
+      {
+          {"responses_get_num_candidates",
+           [&] {
+             return litert_lm_responses_get_num_candidates(nullptr, &out_int);
+           }},
+          {"responses_get_response_text_at",
+           [&] {
+             return litert_lm_responses_get_response_text_at(nullptr, 0,
+                                                             &out_text);
+           }},
+          {"responses_has_score_at",
+           [&] {
+             return litert_lm_responses_has_score_at(nullptr, 0, &out_bool);
+           }},
+          {"responses_get_score_at",
+           [&] {
+             return litert_lm_responses_get_score_at(nullptr, 0, &out_float);
+           }},
+          {"responses_has_token_length_at",
+           [&] {
+             return litert_lm_responses_has_token_length_at(nullptr, 0,
+                                                            &out_bool);
+           }},
+          {"responses_get_token_length_at",
+           [&] {
+             return litert_lm_responses_get_token_length_at(nullptr, 0,
+                                                            &out_int);
+           }},
+          {"responses_has_token_scores_at",
+           [&] {
+             return litert_lm_responses_has_token_scores_at(nullptr, 0,
+                                                            &out_bool);
+           }},
+          {"responses_get_num_token_scores_at",
+           [&] {
+             return litert_lm_responses_get_num_token_scores_at(nullptr, 0,
+                                                                &out_int);
+           }},
+          {"responses_get_token_scores_at",
+           [&] {
+             return litert_lm_responses_get_token_scores_at(nullptr, 0,
+                                                            &out_floats);
+           }},
+          {"benchmark_info_get_time_to_first_token",
+           [&] {
+             return litert_lm_benchmark_info_get_time_to_first_token(
+                 nullptr, &out_double);
+           }},
+          {"benchmark_info_get_total_init_time_in_second",
+           [&] {
+             return litert_lm_benchmark_info_get_total_init_time_in_second(
+                 nullptr, &out_double);
+           }},
+          {"benchmark_info_get_num_prefill_turns",
+           [&] {
+             return litert_lm_benchmark_info_get_num_prefill_turns(nullptr,
+                                                                   &out_int);
+           }},
+          {"benchmark_info_get_num_decode_turns",
+           [&] {
+             return litert_lm_benchmark_info_get_num_decode_turns(nullptr,
+                                                                  &out_int);
+           }},
+          {"benchmark_info_get_prefill_token_count_at",
+           [&] {
+             return litert_lm_benchmark_info_get_prefill_token_count_at(
+                 nullptr, 0, &out_int);
+           }},
+          {"benchmark_info_get_decode_token_count_at",
+           [&] {
+             return litert_lm_benchmark_info_get_decode_token_count_at(
+                 nullptr, 0, &out_int);
+           }},
+          {"benchmark_info_get_prefill_tokens_per_sec_at",
+           [&] {
+             return litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+                 nullptr, 0, &out_double);
+           }},
+          {"benchmark_info_get_decode_tokens_per_sec_at",
+           [&] {
+             return litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+                 nullptr, 0, &out_double);
+           }},
+          {"stream_chunk_get_text",
+           [&] { return litert_lm_stream_chunk_get_text(nullptr, &out_text); }},
+          {"stream_chunk_is_final",
+           [&] { return litert_lm_stream_chunk_is_final(nullptr, &out_bool); }},
+          {"stream_chunk_get_error",
+           [&] {
+             return litert_lm_stream_chunk_get_error(nullptr, &out_text);
+           }},
+          {"tokenize_result_get_tokens",
+           [&] {
+             return litert_lm_tokenize_result_get_tokens(nullptr, &out_ints);
+           }},
+          {"tokenize_result_get_num_tokens",
+           [&] {
+             return litert_lm_tokenize_result_get_num_tokens(nullptr,
+                                                             &out_size);
+           }},
+          {"detokenize_result_get_string",
+           [&] {
+             return litert_lm_detokenize_result_get_string(nullptr, &out_text);
+           }},
+          {"token_union_get_type",
+           [&] { return litert_lm_token_union_get_type(nullptr, &out_type); }},
+          {"token_union_get_string",
+           [&] {
+             return litert_lm_token_union_get_string(nullptr, &out_text);
+           }},
+          {"token_unions_get_num_tokens",
+           [&] {
+             return litert_lm_token_unions_get_num_tokens(nullptr, &out_size);
+           }},
+      },
+      kLiteRtLmStatusInvalidArgument, "must not be NULL");
+  EXPECT_EQ(out_int, kIntSentinel);
+  EXPECT_TRUE(out_bool);
+  EXPECT_EQ(out_float, kFloatSentinel);
+  EXPECT_EQ(out_double, kDoubleSentinel);
+  EXPECT_EQ(out_size, kSizeSentinel);
+  EXPECT_EQ(out_type, kLiteRtLmTokenUnionTypeString);
+  EXPECT_EQ(out_text, nullptr);
+  EXPECT_EQ(out_floats, nullptr);
+  EXPECT_EQ(out_ints, nullptr);
+}
+
+// Returns responses with two candidates. Candidate 0 has a score, a token
+// length and token scores; candidate 1 has none of them.
+LiteRtLmResponses MakeTwoCandidateResponses() {
+  LiteRtLmResponses responses{litert::lm::Responses(
+      litert::lm::TaskState::kDone, {"first", "second"}, {0.5f}, {3})};
+  responses.responses.GetMutableTokenScores() =
+      std::vector<std::vector<float>>{{0.25f, 0.75f}};
+  return responses;
+}
+
+TEST(EngineCErrorTest, ResponsesAccessorsReturnValuesAtValidIndex) {
+  const LiteRtLmResponses responses = MakeTwoCandidateResponses();
+  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, &responses), 2);
+  EXPECT_STREQ(GetOk<const char*>(litert_lm_responses_get_response_text_at,
+                                  &responses, 0),
+               "first");
+  EXPECT_STREQ(GetOk<const char*>(litert_lm_responses_get_response_text_at,
+                                  &responses, 1),
+               "second");
+  EXPECT_TRUE(GetOk<bool>(litert_lm_responses_has_score_at, &responses, 0));
+  EXPECT_FALSE(GetOk<bool>(litert_lm_responses_has_score_at, &responses, 1));
+  EXPECT_EQ(GetOk<float>(litert_lm_responses_get_score_at, &responses, 0),
+            0.5f);
+  EXPECT_TRUE(
+      GetOk<bool>(litert_lm_responses_has_token_length_at, &responses, 0));
+  EXPECT_FALSE(
+      GetOk<bool>(litert_lm_responses_has_token_length_at, &responses, 1));
+  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_token_length_at, &responses, 0),
+            3);
+  EXPECT_TRUE(
+      GetOk<bool>(litert_lm_responses_has_token_scores_at, &responses, 0));
+  EXPECT_FALSE(
+      GetOk<bool>(litert_lm_responses_has_token_scores_at, &responses, 1));
+  ASSERT_EQ(
+      GetOk<int>(litert_lm_responses_get_num_token_scores_at, &responses, 0),
+      2);
+  const float* token_scores = GetOk<const float*>(
+      litert_lm_responses_get_token_scores_at, &responses, 0);
+  ASSERT_NE(token_scores, nullptr);
+  EXPECT_EQ(token_scores[0], 0.25f);
+  EXPECT_EQ(token_scores[1], 0.75f);
+}
+
+TEST(EngineCErrorTest, ResponsesAccessorsWithIndexOutOfRangeReturnOutOfRange) {
+  const LiteRtLmResponses responses = MakeTwoCandidateResponses();
+  for (const int index : {-1, 2}) {
+    SCOPED_TRACE(index);
+    bool out_bool = true;
+    int out_int = -7;
+    float out_float = -7.0f;
+    const char* out_text = "sentinel";
+    const float* out_floats = &out_float;
+    ExpectAllReturn(
+        {
+            {"responses_get_response_text_at",
+             [&] {
+               return litert_lm_responses_get_response_text_at(
+                   &responses, index, &out_text);
+             }},
+            {"responses_has_score_at",
+             [&] {
+               return litert_lm_responses_has_score_at(&responses, index,
+                                                       &out_bool);
+             }},
+            {"responses_get_score_at",
+             [&] {
+               return litert_lm_responses_get_score_at(&responses, index,
+                                                       &out_float);
+             }},
+            {"responses_has_token_length_at",
+             [&] {
+               return litert_lm_responses_has_token_length_at(&responses, index,
+                                                              &out_bool);
+             }},
+            {"responses_get_token_length_at",
+             [&] {
+               return litert_lm_responses_get_token_length_at(&responses, index,
+                                                              &out_int);
+             }},
+            {"responses_has_token_scores_at",
+             [&] {
+               return litert_lm_responses_has_token_scores_at(&responses, index,
+                                                              &out_bool);
+             }},
+            {"responses_get_num_token_scores_at",
+             [&] {
+               return litert_lm_responses_get_num_token_scores_at(
+                   &responses, index, &out_int);
+             }},
+            {"responses_get_token_scores_at",
+             [&] {
+               return litert_lm_responses_get_token_scores_at(&responses, index,
+                                                              &out_floats);
+             }},
+        },
+        kLiteRtLmStatusOutOfRange, "out of range");
+    EXPECT_TRUE(out_bool);
+    EXPECT_EQ(out_int, -7);
+    EXPECT_EQ(out_float, -7.0f);
+    EXPECT_EQ(out_text, nullptr);
+    EXPECT_EQ(out_floats, nullptr);
+  }
+}
+
+TEST(EngineCErrorTest, ResponsesAccessorsWithAbsentValueReturnNotFound) {
+  const LiteRtLmResponses responses = MakeTwoCandidateResponses();
+  int out_int = -7;
+  float out_float = -7.0f;
+  const float* out_floats = &out_float;
+  ExpectAllReturn(
+      {
+          {"responses_get_score_at",
+           [&] {
+             return litert_lm_responses_get_score_at(&responses, 1, &out_float);
+           }},
+          {"responses_get_token_length_at",
+           [&] {
+             return litert_lm_responses_get_token_length_at(&responses, 1,
+                                                            &out_int);
+           }},
+          {"responses_get_num_token_scores_at",
+           [&] {
+             return litert_lm_responses_get_num_token_scores_at(&responses, 1,
+                                                                &out_int);
+           }},
+          {"responses_get_token_scores_at",
+           [&] {
+             return litert_lm_responses_get_token_scores_at(&responses, 1,
+                                                            &out_floats);
+           }},
+      },
+      kLiteRtLmStatusNotFound, "at response index 1");
+  EXPECT_EQ(out_int, -7);
+  EXPECT_EQ(out_float, -7.0f);
+  EXPECT_EQ(out_floats, nullptr);
+
+  // Scoring-only responses have candidates but no response texts.
+  const LiteRtLmResponses scores_only{litert::lm::Responses(
+      litert::lm::TaskState::kDone, /*response_texts=*/{}, {0.1f, 0.2f})};
+  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, &scores_only),
+            2);
+  const char* out_text = "sentinel";
+  ExpectAllReturn({{"responses_get_response_text_at",
+                    [&] {
+                      return litert_lm_responses_get_response_text_at(
+                          &scores_only, 0, &out_text);
+                    }}},
+                  kLiteRtLmStatusNotFound, "No response text");
+  EXPECT_EQ(out_text, nullptr);
+}
+
+TEST(EngineCErrorTest, StreamChunkAccessorsReturnAbsentValuesAsNull) {
+  LiteRtLmStreamChunk final_chunk;
+  final_chunk.is_final = true;
+  // Absent text / error are successes with a NULL result, even if the
+  // out-parameter held a stale value.
+  const char* text = "sentinel";
+  EXPECT_EQ(litert_lm_stream_chunk_get_text(&final_chunk, &text),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(text, nullptr);
+  const char* error = "sentinel";
+  EXPECT_EQ(litert_lm_stream_chunk_get_error(&final_chunk, &error),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(error, nullptr);
+  EXPECT_TRUE(GetOk<bool>(litert_lm_stream_chunk_is_final, &final_chunk));
+
+  LiteRtLmStreamChunk chunk;
+  chunk.text = "hello";
+  chunk.error_msg = "boom";
+  EXPECT_STREQ(GetOk<const char*>(litert_lm_stream_chunk_get_text, &chunk),
+               "hello");
+  EXPECT_STREQ(GetOk<const char*>(litert_lm_stream_chunk_get_error, &chunk),
+               "boom");
+  EXPECT_FALSE(GetOk<bool>(litert_lm_stream_chunk_is_final, &chunk));
+}
+
+TEST(EngineCErrorTest, TokenResultAccessors) {
+  LiteRtLmTokenizeResult tokenize_result{{5, 6, 7}};
+  EXPECT_EQ(
+      GetOk<size_t>(litert_lm_tokenize_result_get_num_tokens, &tokenize_result),
+      3);
+  const int* tokens =
+      GetOk<const int*>(litert_lm_tokenize_result_get_tokens, &tokenize_result);
+  ASSERT_NE(tokens, nullptr);
+  EXPECT_EQ(tokens[2], 7);
+
+  LiteRtLmDetokenizeResult detokenize_result{"text"};
+  EXPECT_STREQ(GetOk<const char*>(litert_lm_detokenize_result_get_string,
+                                  &detokenize_result),
+               "text");
+
+  LiteRtLmTokenUnions token_unions;
+  token_unions.tokens.emplace_back().set_token_str("<eos>");
+  token_unions.tokens.emplace_back().mutable_token_ids()->add_ids(1);
+  EXPECT_EQ(GetOk<size_t>(litert_lm_token_unions_get_num_tokens, &token_unions),
+            2);
+}
+
+TEST(EngineCErrorTest, TokenUnionAccessorsRejectWrongVariant) {
+  LiteRtLmTokenUnion string_union;
+  string_union.token_union.set_token_str("<eos>");
+  EXPECT_EQ(GetOk<LiteRtLmTokenUnionType>(litert_lm_token_union_get_type,
+                                          &string_union),
+            kLiteRtLmTokenUnionTypeString);
+  EXPECT_STREQ(
+      GetOk<const char*>(litert_lm_token_union_get_string, &string_union),
+      "<eos>");
+
+  LiteRtLmTokenUnion ids_union;
+  ids_union.token_union.mutable_token_ids()->add_ids(1);
+  EXPECT_EQ(
+      GetOk<LiteRtLmTokenUnionType>(litert_lm_token_union_get_type, &ids_union),
+      kLiteRtLmTokenUnionTypeIds);
+  const char* out_string = "sentinel";
+  const int* out_ids = nullptr;
+  size_t out_num_ids = 0;
+  ExpectAllReturn(
+      {
+          {"token_union_get_string on ids",
+           [&] {
+             return litert_lm_token_union_get_string(&ids_union, &out_string);
+           }},
+          {"token_union_get_ids on string",
+           [&] {
+             return litert_lm_token_union_get_ids(&string_union, &out_ids,
+                                                  &out_num_ids);
+           }},
+      },
+      kLiteRtLmStatusInvalidArgument, "does not contain");
+  EXPECT_EQ(out_string, nullptr);
 }
 
 TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {

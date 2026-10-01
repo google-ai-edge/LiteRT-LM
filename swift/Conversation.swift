@@ -612,32 +612,60 @@ public final class Conversation: Sendable {
     }
     defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
 
-    let numPrefillTurns = litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr)
-    let numDecodeTurns = litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr)
+    let makeError: (String) -> LiteRTLMError = { details in
+      self.logger.error("Failed to read benchmark info: \(details)")
+      return LiteRTLMError.conversation(.benchmarkInfoUnavailable)
+    }
 
-    let initTimeInSecond = litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr)
-    let timeToFirstTokenInSecond = litert_lm_benchmark_info_get_time_to_first_token(
-      benchmarkInfoPtr)
+    let numPrefillTurns = try LiteRTLMError.get(
+      Int32(0), "litert_lm_benchmark_info_get_num_prefill_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr, $0) }
+    let numDecodeTurns = try LiteRTLMError.get(
+      Int32(0), "litert_lm_benchmark_info_get_num_decode_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr, $0) }
 
-    let lastPrefillTokenCount: Int =
-      numPrefillTurns > 0
-      ? Int(
-        litert_lm_benchmark_info_get_prefill_token_count_at(
-          benchmarkInfoPtr, numPrefillTurns - 1)) : 0
-    let lastPrefillTokensPerSec: Double =
-      numPrefillTurns > 0
-      ? litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-        benchmarkInfoPtr, numPrefillTurns - 1) : 0.0
+    let initTimeInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_total_init_time_in_second", makeError
+    ) { litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr, $0) }
+    let timeToFirstTokenInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_time_to_first_token", makeError
+    ) { litert_lm_benchmark_info_get_time_to_first_token(benchmarkInfoPtr, $0) }
 
-    let lastDecodeTokenCount: Int =
-      numDecodeTurns > 0
-      ? Int(
-        litert_lm_benchmark_info_get_decode_token_count_at(
-          benchmarkInfoPtr, numDecodeTurns - 1)) : 0
-    let lastDecodeTokensPerSec: Double =
-      numDecodeTurns > 0
-      ? litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-        benchmarkInfoPtr, numDecodeTurns - 1) : 0.0
+    var lastPrefillTokenCount = 0
+    var lastPrefillTokensPerSec = 0.0
+    if numPrefillTurns > 0 {
+      lastPrefillTokenCount = try Int(
+        LiteRTLMError.get(
+          Int32(0), "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_prefill_token_count_at(
+            benchmarkInfoPtr, numPrefillTurns - 1, $0)
+        })
+      lastPrefillTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_prefill_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+          benchmarkInfoPtr, numPrefillTurns - 1, $0)
+      }
+    }
+
+    var lastDecodeTokenCount = 0
+    var lastDecodeTokensPerSec = 0.0
+    if numDecodeTurns > 0 {
+      lastDecodeTokenCount = try Int(
+        LiteRTLMError.get(
+          Int32(0), "litert_lm_benchmark_info_get_decode_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_decode_token_count_at(
+            benchmarkInfoPtr, numDecodeTurns - 1, $0)
+        })
+      lastDecodeTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_decode_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+          benchmarkInfoPtr, numDecodeTurns - 1, $0)
+      }
+    }
 
     return BenchmarkInfo(
       initTimeInSecond: initTimeInSecond,
@@ -777,8 +805,26 @@ private func streamCallback(
 
   let context = Unmanaged<Conversation.StreamContext>.fromOpaque(userData).takeUnretainedValue()
 
-  let isFinal = litert_lm_stream_chunk_is_final(chunk)
-  let errorMessage = litert_lm_stream_chunk_get_error(chunk)
+  let isFinal: Bool
+  let errorMessage: UnsafePointer<CChar>?
+  let responseJson: UnsafePointer<CChar>?
+  do {
+    let makeError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    isFinal = try LiteRTLMError.get(false, "litert_lm_stream_chunk_is_final", makeError) {
+      litert_lm_stream_chunk_is_final(chunk, $0)
+    }
+    // A chunk without an error or text yields a nil result.
+    errorMessage = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_error", makeError) {
+      litert_lm_stream_chunk_get_error(chunk, $0)
+    }
+    responseJson = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_text", makeError) {
+      litert_lm_stream_chunk_get_text(chunk, $0)
+    }
+  } catch {
+    context.continuation.finish(throwing: error)
+    Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+    return
+  }
 
   if let errorMessage = errorMessage {
     let errorString = String(cString: errorMessage)
@@ -789,7 +835,7 @@ private func streamCallback(
     return
   }
 
-  if let responseJson = litert_lm_stream_chunk_get_text(chunk) {
+  if let responseJson = responseJson {
     let responseString = String(cString: responseJson)
     do {
       guard let responseData = responseString.data(using: .utf8),

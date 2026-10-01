@@ -17,6 +17,7 @@ import ctypes
 from . import interfaces
 from ._ffi import call_checked
 from ._ffi import create_checked
+from ._ffi import get_checked
 from ._ffi import SamplerType
 from ._ffi import TokenUnionType
 
@@ -108,9 +109,13 @@ def _parse_token_union(lib, union_ptr):
   if not union_ptr:
     return None
   try:
-    u_type = lib.litert_lm_token_union_get_type(union_ptr)
+    u_type = get_checked(
+        lib, "litert_lm_token_union_get_type", ctypes.c_int, union_ptr
+    )
     if u_type == TokenUnionType.STRING:
-      s = lib.litert_lm_token_union_get_string(union_ptr)
+      s = get_checked(
+          lib, "litert_lm_token_union_get_string", ctypes.c_char_p, union_ptr
+      )
       return s.decode("utf-8") if s else None
     elif u_type == TokenUnionType.IDS:
       ids_ptr = ctypes.POINTER(ctypes.c_int)()

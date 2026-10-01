@@ -123,6 +123,28 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     return handle
   }
 
+  /// Calls a native accessor that returns a status code and writes its result to an
+  /// out-parameter, and returns the result.
+  ///
+  /// `body` must make the native call synchronously on the calling thread, passing its argument
+  /// as the out-parameter.
+  ///
+  /// - Parameters:
+  ///   - initialValue: The value the out-parameter holds before the call.
+  ///   - functionName: The name of the native function, used in the error details.
+  ///   - makeError: Builds the error to throw from a description of the failure.
+  ///   - body: Calls the native accessor with the given out-parameter and returns its status.
+  /// - Returns: The value written to the out-parameter.
+  /// - Throws: The error built by `makeError` if the call fails.
+  static func get<T>(
+    _ initialValue: T, _ functionName: String, _ makeError: (String) -> LiteRTLMError,
+    _ body: (UnsafeMutablePointer<T>) -> LiteRtLmStatusCode
+  ) throws -> T {
+    var value = initialValue
+    try check(body(&value), functionName, makeError)
+    return value
+  }
+
   /// Specific errors related to the `Engine`.
   public enum EngineError: Error, LocalizedError, Equatable {
     case alreadyInitialized

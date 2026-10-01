@@ -20,8 +20,11 @@ import queue
 import warnings
 from . import interfaces
 from ._ffi import call_checked
+from ._ffi import check_status
 from ._ffi import create_checked
+from ._ffi import get_checked
 from ._ffi import InputDataType
+from ._ffi import StatusCode
 from ._ffi import STREAM_CALLBACK_TYPE
 
 
@@ -88,13 +91,32 @@ class Session(interfaces.AbstractSession):
     q = queue.Queue()
 
     def callback(unused_data, chunk_ptr):
-      error_msg = self._lib.litert_lm_stream_chunk_get_error(chunk_ptr)
-      if error_msg:
-        q.put(RuntimeError(error_msg.decode("utf-8")))
-      else:
-        chunk = self._lib.litert_lm_stream_chunk_get_text(chunk_ptr)
-        is_final = self._lib.litert_lm_stream_chunk_is_final(chunk_ptr)
-        q.put((chunk.decode("utf-8") if chunk else "", is_final))
+      # Runs on a C++ thread: report failures through the queue, not by raising.
+      try:
+        error_msg = get_checked(
+            self._lib,
+            "litert_lm_stream_chunk_get_error",
+            ctypes.c_char_p,
+            chunk_ptr,
+        )
+        if error_msg:
+          q.put(RuntimeError(error_msg.decode("utf-8")))
+        else:
+          chunk = get_checked(
+              self._lib,
+              "litert_lm_stream_chunk_get_text",
+              ctypes.c_char_p,
+              chunk_ptr,
+          )
+          is_final = get_checked(
+              self._lib,
+              "litert_lm_stream_chunk_is_final",
+              ctypes.c_bool,
+              chunk_ptr,
+          )
+          q.put((chunk.decode("utf-8") if chunk else "", is_final))
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        q.put(e)
 
     c_callback = STREAM_CALLBACK_TYPE(callback)
     self._current_callback = c_callback
@@ -135,29 +157,79 @@ class Session(interfaces.AbstractSession):
     )
     return self._wrap_responses(resp_ptr)
 
+  def _get_response_text_at(self, resp_ptr, index: int) -> str | None:
+    """Returns the response text at `index`, or None if there is none."""
+    text = ctypes.c_char_p()
+    status = self._lib.litert_lm_responses_get_response_text_at(
+        resp_ptr, index, ctypes.byref(text)
+    )
+    if status == StatusCode.NOT_FOUND:
+      return None
+    check_status(self._lib, "litert_lm_responses_get_response_text_at", status)
+    return text.value.decode("utf-8") if text.value is not None else None
+
   def _wrap_responses(self, resp_ptr) -> interfaces.Responses:
     try:
-      num = self._lib.litert_lm_responses_get_num_candidates(resp_ptr)
+      lib = self._lib
+      num = get_checked(
+          lib, "litert_lm_responses_get_num_candidates", ctypes.c_int, resp_ptr
+      )
       texts = []
       scores = []
       lengths = []
       token_scores = []
       for i in range(num):
-        t = self._lib.litert_lm_responses_get_response_text_at(resp_ptr, i)
+        t = self._get_response_text_at(resp_ptr, i)
         if t is not None:
-          texts.append(t.decode("utf-8"))
-        if self._lib.litert_lm_responses_has_score_at(resp_ptr, i):
-          scores.append(self._lib.litert_lm_responses_get_score_at(resp_ptr, i))
-        if self._lib.litert_lm_responses_has_token_length_at(resp_ptr, i):
+          texts.append(t)
+        if get_checked(
+            lib, "litert_lm_responses_has_score_at", ctypes.c_bool, resp_ptr, i
+        ):
+          scores.append(
+              get_checked(
+                  lib,
+                  "litert_lm_responses_get_score_at",
+                  ctypes.c_float,
+                  resp_ptr,
+                  i,
+              )
+          )
+        if get_checked(
+            lib,
+            "litert_lm_responses_has_token_length_at",
+            ctypes.c_bool,
+            resp_ptr,
+            i,
+        ):
           lengths.append(
-              self._lib.litert_lm_responses_get_token_length_at(resp_ptr, i)
+              get_checked(
+                  lib,
+                  "litert_lm_responses_get_token_length_at",
+                  ctypes.c_int,
+                  resp_ptr,
+                  i,
+              )
           )
-        if self._lib.litert_lm_responses_has_token_scores_at(resp_ptr, i):
-          num_scores = self._lib.litert_lm_responses_get_num_token_scores_at(
-              resp_ptr, i
+        if get_checked(
+            lib,
+            "litert_lm_responses_has_token_scores_at",
+            ctypes.c_bool,
+            resp_ptr,
+            i,
+        ):
+          num_scores = get_checked(
+              lib,
+              "litert_lm_responses_get_num_token_scores_at",
+              ctypes.c_int,
+              resp_ptr,
+              i,
           )
-          scores_ptr = self._lib.litert_lm_responses_get_token_scores_at(
-              resp_ptr, i
+          scores_ptr = get_checked(
+              lib,
+              "litert_lm_responses_get_token_scores_at",
+              ctypes.POINTER(ctypes.c_float),
+              resp_ptr,
+              i,
           )
           if scores_ptr:
             token_scores.append([scores_ptr[j] for j in range(num_scores)])

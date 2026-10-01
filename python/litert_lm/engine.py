@@ -28,6 +28,7 @@ from ._ffi import ActivationDataType
 from ._ffi import call_checked
 from ._ffi import create_checked
 from ._ffi import create_optional_checked
+from ._ffi import get_checked
 from ._messages import Message
 from .conversation import Conversation
 from .session import Session
@@ -589,7 +590,12 @@ class Engine(interfaces.AbstractEngine):
     if not unions_ptr:
       return []
     try:
-      num = self._lib.litert_lm_token_unions_get_num_tokens(unions_ptr)
+      num = get_checked(
+          self._lib,
+          "litert_lm_token_unions_get_num_tokens",
+          ctypes.c_size_t,
+          unions_ptr,
+      )
       all_ids = []
       for i in range(num):
         u_ptr = create_checked(
@@ -611,8 +617,18 @@ class Engine(interfaces.AbstractEngine):
         self._lib, "litert_lm_engine_tokenize", self._engine_ptr, text
     )
     try:
-      num = self._lib.litert_lm_tokenize_result_get_num_tokens(res_ptr)
-      tokens = self._lib.litert_lm_tokenize_result_get_tokens(res_ptr)
+      num = get_checked(
+          self._lib,
+          "litert_lm_tokenize_result_get_num_tokens",
+          ctypes.c_size_t,
+          res_ptr,
+      )
+      tokens = get_checked(
+          self._lib,
+          "litert_lm_tokenize_result_get_tokens",
+          ctypes.POINTER(ctypes.c_int),
+          res_ptr,
+      )
       return [tokens[i] for i in range(num)]
     finally:
       self._lib.litert_lm_tokenize_result_delete(res_ptr)
@@ -630,7 +646,12 @@ class Engine(interfaces.AbstractEngine):
     )
 
     try:
-      resp_str = self._lib.litert_lm_detokenize_result_get_string(res_ptr)
+      resp_str = get_checked(
+          self._lib,
+          "litert_lm_detokenize_result_get_string",
+          ctypes.c_char_p,
+          res_ptr,
+      )
       return resp_str.decode("utf-8") if resp_str else ""
     finally:
       self._lib.litert_lm_detokenize_result_delete(res_ptr)

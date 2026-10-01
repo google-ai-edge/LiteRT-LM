@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import abc
 import collections.abc
+import ctypes
 import dataclasses
 from importlib import resources
 import json
@@ -28,6 +29,7 @@ import sys
 from typing import Any
 
 from ._ffi import ActivationDataType
+from ._ffi import get_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._messages import Contents
 from ._messages import Message
@@ -802,42 +804,68 @@ class BenchmarkInfo:
 
 def create_benchmark_info(lib: Any, info_ptr: Any) -> BenchmarkInfo:
   """Creates a BenchmarkInfo object from a C API pointer."""
-  num_prefill_turns = lib.litert_lm_benchmark_info_get_num_prefill_turns(
-      info_ptr
+  num_prefill_turns = get_checked(
+      lib,
+      "litert_lm_benchmark_info_get_num_prefill_turns",
+      ctypes.c_int,
+      info_ptr,
   )
   if num_prefill_turns > 0:
-    last_prefill_count = (
-        lib.litert_lm_benchmark_info_get_prefill_token_count_at(
-            info_ptr, num_prefill_turns - 1
-        )
+    last_prefill_count = get_checked(
+        lib,
+        "litert_lm_benchmark_info_get_prefill_token_count_at",
+        ctypes.c_int,
+        info_ptr,
+        num_prefill_turns - 1,
     )
-    last_prefill_tps = (
-        lib.litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-            info_ptr, num_prefill_turns - 1
-        )
+    last_prefill_tps = get_checked(
+        lib,
+        "litert_lm_benchmark_info_get_prefill_tokens_per_sec_at",
+        ctypes.c_double,
+        info_ptr,
+        num_prefill_turns - 1,
     )
   else:
     last_prefill_count = 0
     last_prefill_tps = 0.0
 
-  num_decode_turns = lib.litert_lm_benchmark_info_get_num_decode_turns(info_ptr)
+  num_decode_turns = get_checked(
+      lib,
+      "litert_lm_benchmark_info_get_num_decode_turns",
+      ctypes.c_int,
+      info_ptr,
+  )
   if num_decode_turns > 0:
-    last_decode_count = lib.litert_lm_benchmark_info_get_decode_token_count_at(
-        info_ptr, num_decode_turns - 1
+    last_decode_count = get_checked(
+        lib,
+        "litert_lm_benchmark_info_get_decode_token_count_at",
+        ctypes.c_int,
+        info_ptr,
+        num_decode_turns - 1,
     )
-    last_decode_tps = lib.litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-        info_ptr, num_decode_turns - 1
+    last_decode_tps = get_checked(
+        lib,
+        "litert_lm_benchmark_info_get_decode_tokens_per_sec_at",
+        ctypes.c_double,
+        info_ptr,
+        num_decode_turns - 1,
     )
   else:
     last_decode_count = 0
     last_decode_tps = 0.0
 
   return BenchmarkInfo(
-      init_time_in_second=lib.litert_lm_benchmark_info_get_total_init_time_in_second(
-          info_ptr
+      init_time_in_second=get_checked(
+          lib,
+          "litert_lm_benchmark_info_get_total_init_time_in_second",
+          ctypes.c_double,
+          info_ptr,
       ),
-      time_to_first_token_in_second=lib.litert_lm_benchmark_info_get_time_to_first_token(
-          info_ptr
+      time_to_first_token_in_second=get_checked(
+          lib,
+          "litert_lm_benchmark_info_get_time_to_first_token",
+          ctypes.c_double,
+          info_ptr,
       ),
       last_prefill_token_count=last_prefill_count,
       last_prefill_tokens_per_second=last_prefill_tps,

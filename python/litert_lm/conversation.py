@@ -27,6 +27,7 @@ import warnings
 from . import interfaces
 from ._ffi import call_checked
 from ._ffi import create_checked
+from ._ffi import get_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmConstraintType
 from ._ffi import STREAM_CALLBACK_TYPE
@@ -443,13 +444,33 @@ class Conversation(interfaces.AbstractConversation):
       q = queue.Queue()
 
       def callback(unused_data, chunk_ptr):
-        error_msg = self._lib.litert_lm_stream_chunk_get_error(chunk_ptr)
-        if error_msg:
-          q.put(RuntimeError(error_msg.decode("utf-8")))
-        else:
-          chunk = self._lib.litert_lm_stream_chunk_get_text(chunk_ptr)
-          is_final = self._lib.litert_lm_stream_chunk_is_final(chunk_ptr)
-          q.put((chunk.decode("utf-8") if chunk else "", is_final))
+        # Runs on a C++ thread: report failures through the queue instead of
+        # raising.
+        try:
+          error_msg = get_checked(
+              self._lib,
+              "litert_lm_stream_chunk_get_error",
+              ctypes.c_char_p,
+              chunk_ptr,
+          )
+          if error_msg:
+            q.put(RuntimeError(error_msg.decode("utf-8")))
+          else:
+            chunk = get_checked(
+                self._lib,
+                "litert_lm_stream_chunk_get_text",
+                ctypes.c_char_p,
+                chunk_ptr,
+            )
+            is_final = get_checked(
+                self._lib,
+                "litert_lm_stream_chunk_is_final",
+                ctypes.c_bool,
+                chunk_ptr,
+            )
+            q.put((chunk.decode("utf-8") if chunk else "", is_final))
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          q.put(e)
 
       c_callback = STREAM_CALLBACK_TYPE(callback)
       self._current_callback = c_callback
