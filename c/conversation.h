@@ -74,13 +74,20 @@ typedef enum {
 } LiteRtLmConstraintProviderType;
 
 // Creates a LiteRT LM Conversation Config.
-// The caller is responsible for destroying the config using
-// `litert_lm_conversation_config_delete`.
-// @return A pointer to the created config, or NULL on failure.
+//
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_conversation_config_delete`. Set to NULL
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the config is returned
+// through out_config.
 LITERT_LM_C_API_EXPORT
-LiteRtLmConversationConfig* litert_lm_conversation_config_create();
+LiteRtLmStatusCode litert_lm_conversation_config_create(
+    LiteRtLmConversationConfig** out_config);
 
 // Sets the session config for this conversation config.
 // @param config The config to modify.
@@ -214,13 +221,21 @@ LiteRtLmStatusCode litert_lm_conversation_config_set_stream_tool_calls(
     const char* channel_name);
 
 // Creates a default LiteRT LM Thinking Config (enabled with infinite budget
-// -1). The caller is responsible for destroying the config using
-// `litert_lm_thinking_config_delete`.
-// @return A pointer to the created config, or NULL on failure.
+// -1).
+//
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_thinking_config_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the config is returned
+// through out_config.
 LITERT_LM_C_API_EXPORT
-LiteRtLmThinkingConfig* litert_lm_thinking_config_create();
+LiteRtLmStatusCode litert_lm_thinking_config_create(
+    LiteRtLmThinkingConfig** out_config);
 
 // Destroys a LiteRT LM Thinking Config.
 // @param config The config to destroy.
@@ -275,14 +290,21 @@ LiteRtLmStatusCode litert_lm_conversation_config_set_thinking_config(
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_config_delete(LiteRtLmConversationConfig* config);
 
-// Creates a LiteRT LM Conversation Optional Args. The caller is responsible
-// for destroying the optional args using
-// `litert_lm_conversation_optional_args_delete`.
-// @return A pointer to the created optional args, or NULL on failure.
+// Creates a LiteRT LM Conversation Optional Args.
+//
+// @param out_optional_args On success, receives the created optional args,
+//   owned by the caller; release with
+//   `litert_lm_conversation_optional_args_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_optional_args` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the optional args are
+// returned through out_optional_args.
 LITERT_LM_C_API_EXPORT
-LiteRtLmConversationOptionalArgs* litert_lm_conversation_optional_args_create();
+LiteRtLmStatusCode litert_lm_conversation_optional_args_create(
+    LiteRtLmConversationOptionalArgs** out_optional_args);
 
 // Destroys a LiteRT LM Conversation Optional Args.
 // @param optional_args The optional args to destroy.
@@ -423,18 +445,26 @@ LiteRtLmStatusCode litert_lm_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmConstraintType constraint_type, const char* constraint_string);
 
-// Creates a LiteRT LM Conversation. The caller is responsible for destroying
-// the conversation using `litert_lm_conversation_delete`.
+// Creates a LiteRT LM Conversation.
 //
 // @param engine The engine to create the conversation from.
 // @param config The conversation config to use. If NULL, the default config
 //   will be used.
-// @return A pointer to the created conversation, or NULL on failure.
+// @param out_conversation On success, receives the created conversation, owned
+//   by the caller; release with `litert_lm_conversation_delete`. Set to NULL
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `engine` or `out_conversation` is NULL; otherwise the code of the error
+//   that prevented the conversation from being created.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the conversation is
+// returned through out_conversation.
 LITERT_LM_C_API_EXPORT
-LiteRtLmConversation* litert_lm_conversation_create(
-    LiteRtLmEngine* engine, LiteRtLmConversationConfig* config);
+LiteRtLmStatusCode litert_lm_conversation_create(
+    LiteRtLmEngine* engine, LiteRtLmConversationConfig* config,
+    LiteRtLmConversation** out_conversation);
 
 // Destroys a LiteRT LM Conversation.
 //
@@ -445,16 +475,23 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_delete(LiteRtLmConversation* conversation);
 
 // Clones a LiteRT LM Conversation, duplicating its prefilled state.
-// The caller is responsible for destroying the cloned conversation using
-// `litert_lm_conversation_delete`.
 //
 // @param conversation The conversation to clone.
-// @return A pointer to the cloned conversation, or NULL on failure.
+// @param out_conversation On success, receives the cloned conversation, owned
+//   by the caller; release with `litert_lm_conversation_delete`. Set to NULL
+//   on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation` or `out_conversation` is NULL; otherwise the code of the
+//   error that prevented the clone.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the clone is returned
+// through out_conversation.
 LITERT_LM_C_API_EXPORT
-LiteRtLmConversation* litert_lm_conversation_clone(
-    LiteRtLmConversation* conversation);
+LiteRtLmStatusCode litert_lm_conversation_clone(
+    LiteRtLmConversation* conversation,
+    LiteRtLmConversation** out_conversation);
 
 // Sends a message to the conversation and returns the response.
 // This is a blocking call.
@@ -463,16 +500,24 @@ LiteRtLmConversation* litert_lm_conversation_clone(
 // @param message_json A JSON string representing the message to send.
 // @param extra_context A JSON string representing the extra context to use.
 // @param optional_args A pointer to the optional arguments to use.
-// @return A pointer to the JSON response, or NULL on failure. The caller is
-//   responsible for deleting the response using
-//   `litert_lm_json_response_delete`.
+// @param out_response On success, receives the JSON response, owned by the
+//   caller; release with `litert_lm_json_response_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation`, `message_json` or `out_response` is NULL or
+//   `message_json` is not valid JSON; otherwise the code of the generation
+//   error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the response is returned
+// through out_response.
 LITERT_LM_C_API_EXPORT
-LiteRtLmJsonResponse* litert_lm_conversation_send_message(
+LiteRtLmStatusCode litert_lm_conversation_send_message(
     LiteRtLmConversation* conversation, const char* message_json,
     const char* extra_context,
-    const LiteRtLmConversationOptionalArgs* optional_args);
+    const LiteRtLmConversationOptionalArgs* optional_args,
+    LiteRtLmJsonResponse** out_response);
 
 // Destroys a LiteRT LM Json Response object.
 //
@@ -485,14 +530,19 @@ void litert_lm_json_response_delete(LiteRtLmJsonResponse* response);
 // Returns the JSON response string from a response object.
 //
 // @param response The response object.
-// @return The response JSON string. The returned string is owned by the
-//   `response` object and is valid only for its lifetime. Returns NULL if
-//   response is NULL.
+// @param out_json On success, receives the response JSON string. The string
+//   is owned by the `response` object and is valid only for its lifetime. Set
+//   to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `response` or `out_json` is NULL.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the string is returned
+// through out_json.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_json_response_get_string(
-    const LiteRtLmJsonResponse* response);
+LiteRtLmStatusCode litert_lm_json_response_get_string(
+    const LiteRtLmJsonResponse* response, const char** out_json);
 
 // Sends a message to the conversation and streams the response via a
 // callback. This is a non-blocking call that will invoke the callback from a
@@ -531,26 +581,41 @@ LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
 //
 // @param conversation The conversation instance.
 // @param message_json A JSON string representing the message to render.
-// @return A pointer to the rendered string, or NULL on failure. The returned
-//   string is owned by the `conversation` object and is valid until the next
-//   call to this function or until the conversation is deleted.
+// @param out_text On success, receives the rendered string. The string is
+//   owned by the `conversation` object and is valid until the next call to
+//   this function or until the conversation is deleted. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation`, `message_json` or `out_text` is NULL or `message_json` is
+//   not valid JSON; otherwise the code of the rendering error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the rendered string is
+// returned through out_text.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_conversation_render_message_to_string(
-    LiteRtLmConversation* conversation, const char* message_json);
+LiteRtLmStatusCode litert_lm_conversation_render_message_to_string(
+    LiteRtLmConversation* conversation, const char* message_json,
+    const char** out_text);
 
 // Renders the preface into a string according to the template.
 //
 // @param conversation The conversation instance.
-// @return A pointer to the rendered string, or NULL on failure. The returned
-//   string is owned by the `conversation` object and is valid until the next
-//   call to this function or until the conversation is deleted.
+// @param out_text On success, receives the rendered string. The string is
+//   owned by the `conversation` object and is valid until the next call to
+//   this function or until the conversation is deleted. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation` or `out_text` is NULL; otherwise the code of the rendering
+//   error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the rendered string is
+// returned through out_text.
 LITERT_LM_C_API_EXPORT
-const char* litert_lm_conversation_render_preface_to_string(
-    LiteRtLmConversation* conversation);
+LiteRtLmStatusCode litert_lm_conversation_render_preface_to_string(
+    LiteRtLmConversation* conversation, const char** out_text);
 
 // Cancels the ongoing inference process, for asynchronous inference.
 //
@@ -583,24 +648,41 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_conversation_wait_until_done(
     LiteRtLmConversation* conversation);
 
-// Retrieves the benchmark information from the conversation. The caller is
-// responsible for destroying the benchmark info using
-// `litert_lm_benchmark_info_delete`.
+// Retrieves the benchmark information from the conversation.
 //
 // @param conversation The conversation to get the benchmark info from.
-// @return A pointer to the benchmark info, or NULL on failure.
+// @param out_benchmark_info On success, receives the benchmark info, owned by
+//   the caller; release with `litert_lm_benchmark_info_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation` or `out_benchmark_info` is NULL; otherwise the code of the
+//   runtime error (e.g. if benchmarking is not enabled).
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code; the benchmark info is
+// returned through out_benchmark_info.
 LITERT_LM_C_API_EXPORT
-LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
-    LiteRtLmConversation* conversation);
+LiteRtLmStatusCode litert_lm_conversation_get_benchmark_info(
+    LiteRtLmConversation* conversation,
+    LiteRtLmBenchmarkInfo** out_benchmark_info);
 
 // Gets the number of tokens in the conversation KV Cache (prefill + decode).
-// Returns the number of tokens, or a negative value on failure.
+//
+// @param conversation The conversation instance.
+// @param out_count On success, receives the number of tokens; not written on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation` or `out_count` is NULL; otherwise the code of the runtime
+//   error.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: returns a status code instead of a negative value
+// on failure; the count is returned through out_count.
 LITERT_LM_C_API_EXPORT
-int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation);
+LiteRtLmStatusCode litert_lm_conversation_get_token_count(
+    LiteRtLmConversation* conversation, int* out_count);
 
 #ifdef __cplusplus
 }  // extern "C"

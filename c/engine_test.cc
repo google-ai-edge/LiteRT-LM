@@ -249,6 +249,74 @@ LiteRtLmTokenUnion* GetTokenAt(const LiteRtLmTokenUnions* tokens,
   return HandleOrNull(status, token);
 }
 
+LiteRtLmConversationConfig* CreateConversationConfig() {
+  LiteRtLmConversationConfig* config = nullptr;
+  const int status = litert_lm_conversation_config_create(&config);
+  return HandleOrNull(status, config);
+}
+
+LiteRtLmThinkingConfig* CreateThinkingConfig() {
+  LiteRtLmThinkingConfig* config = nullptr;
+  const int status = litert_lm_thinking_config_create(&config);
+  return HandleOrNull(status, config);
+}
+
+LiteRtLmConversationOptionalArgs* CreateConversationOptionalArgs() {
+  LiteRtLmConversationOptionalArgs* optional_args = nullptr;
+  const int status =
+      litert_lm_conversation_optional_args_create(&optional_args);
+  return HandleOrNull(status, optional_args);
+}
+
+LiteRtLmConversation* CreateConversation(LiteRtLmEngine* engine,
+                                         LiteRtLmConversationConfig* config) {
+  LiteRtLmConversation* conversation = nullptr;
+  const int status =
+      litert_lm_conversation_create(engine, config, &conversation);
+  return HandleOrNull(status, conversation);
+}
+
+LiteRtLmConversation* CloneConversation(LiteRtLmConversation* conversation) {
+  LiteRtLmConversation* cloned = nullptr;
+  const int status = litert_lm_conversation_clone(conversation, &cloned);
+  return HandleOrNull(status, cloned);
+}
+
+LiteRtLmJsonResponse* ConversationSendMessage(
+    LiteRtLmConversation* conversation, const char* message_json,
+    const char* extra_context,
+    const LiteRtLmConversationOptionalArgs* optional_args) {
+  LiteRtLmJsonResponse* response = nullptr;
+  const int status = litert_lm_conversation_send_message(
+      conversation, message_json, extra_context, optional_args, &response);
+  return HandleOrNull(status, response);
+}
+
+// Returns the response JSON string. Expects the call to succeed.
+const char* GetResponseString(const LiteRtLmJsonResponse* response) {
+  const char* json = nullptr;
+  EXPECT_EQ(litert_lm_json_response_get_string(response, &json),
+            kLiteRtLmStatusOk);
+  return json;
+}
+
+// Returns the rendered preface, or NULL on failure.
+const char* RenderPreface(LiteRtLmConversation* conversation) {
+  const char* text = nullptr;
+  const int status =
+      litert_lm_conversation_render_preface_to_string(conversation, &text);
+  return HandleOrNull(status, text);
+}
+
+// Returns the rendered message, or NULL on failure.
+const char* RenderMessage(LiteRtLmConversation* conversation,
+                          const char* message_json) {
+  const char* text = nullptr;
+  const int status = litert_lm_conversation_render_message_to_string(
+      conversation, message_json, &text);
+  return HandleOrNull(status, text);
+}
+
 // Calls a C API getter that delivers its result through a trailing
 // out-parameter of type `T*`, expects it to succeed, and returns the result.
 template <typename T, typename Getter, typename... Args>
@@ -652,8 +720,7 @@ TEST(EngineCTest, CreateConversationConfig) {
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_session_config(conversation_config.get(),
                                                    session_config.get());
@@ -662,7 +729,7 @@ TEST(EngineCTest, CreateConversationConfig) {
 
   // 4. Test to see if the Conversation has the Sampler Params.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -714,15 +781,14 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_system_message(conversation_config.get(),
                                                    system_message.c_str());
 
   // 3. Test to see if the Conversation has the correct System Message.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -752,15 +818,14 @@ TEST(EngineCTest, CreateConversationConfigWithPromptTemplate) {
   ASSERT_NE(engine, nullptr);
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   const std::string custom_template = "custom template content";
   litert_lm_conversation_config_set_prompt_template(conversation_config.get(),
                                                     custom_template.c_str());
 
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 }
@@ -786,15 +851,14 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_session_config(conversation_config.get(),
                                                    session_config.get());
 
   // 4. Test to see if the Conversation has the correct System Message.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -824,14 +888,13 @@ TEST(EngineCTest, CreateConversationConfigWithSamplerBackend) {
   session_config->config->SetSamplerBackend(litert::lm::Backend::GPU);
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_session_config(conversation_config.get(),
                                                    session_config.get());
 
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -876,15 +939,14 @@ TEST(EngineCTest, CreateConversationConfigWithTools) {
   ])";
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_tools(conversation_config.get(),
                                           tools_json.c_str());
 
   // 3. Test to see if the Conversation has the correct tools.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -913,15 +975,14 @@ TEST(EngineCTest, CreateConversationConfigWithInvalidTools) {
   const std::string tools_json = R"({"type": "function"})";  // Not an array
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_tools(conversation_config.get(),
                                           tools_json.c_str());
 
   // 3. Test to see if the Conversation has no tools.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -950,15 +1011,14 @@ TEST(EngineCTest, CreateConversationConfigWithEmptyToolsArray) {
   const std::string tools_json = R"([])";
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_tools(conversation_config.get(),
                                           tools_json.c_str());
 
   // 3. Test to see if the Conversation has empty tools.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -988,15 +1048,14 @@ TEST(EngineCTest, CreateConversationConfigWithMalformedToolsJson) {
   const std::string tools_json = R"([{"type": "function", ...}])";
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_tools(conversation_config.get(),
                                           tools_json.c_str());
 
   // 3. Test to see if the Conversation has no tools.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -1037,15 +1096,14 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
 
   // 3. Create a Conversation Config with the Session Config.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_session_config(conversation_config.get(),
                                                    session_config.get());
 
   // 4. Test to see if the Conversation has the default Sampler Params.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -1079,14 +1137,13 @@ TEST(EngineCTest, ThinkingConfig) {
   ASSERT_NE(session_config, nullptr);
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_session_config(conversation_config.get(),
                                                    session_config.get());
 
   // Set thinking_config on conversation config.
-  LiteRtLmThinkingConfig* thinking_config = litert_lm_thinking_config_create();
+  LiteRtLmThinkingConfig* thinking_config = CreateThinkingConfig();
   ASSERT_NE(thinking_config, nullptr);
   litert_lm_thinking_config_set_enable_thinking(thinking_config, true);
   litert_lm_thinking_config_set_thinking_token_budget(thinking_config, 42);
@@ -1095,7 +1152,7 @@ TEST(EngineCTest, ThinkingConfig) {
   litert_lm_thinking_config_delete(thinking_config);
 
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -1117,10 +1174,10 @@ TEST(EngineCTest, ThinkingConfig) {
 
 TEST(EngineCTest, OptionalArgsThinkingConfig) {
   LiteRtLmConversationOptionalArgs* optional_args =
-      litert_lm_conversation_optional_args_create();
+      CreateConversationOptionalArgs();
   ASSERT_NE(optional_args, nullptr);
 
-  LiteRtLmThinkingConfig* thinking_config = litert_lm_thinking_config_create();
+  LiteRtLmThinkingConfig* thinking_config = CreateThinkingConfig();
   ASSERT_NE(thinking_config, nullptr);
   litert_lm_thinking_config_set_enable_thinking(thinking_config, false);
   litert_lm_thinking_config_set_thinking_token_budget(thinking_config, 0);
@@ -1341,22 +1398,21 @@ TEST(EngineCTest, ConversationSendMessage) {
   EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
   JsonResponsePtr response(
-      litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /*extra_context=*/nullptr,
-                                          /*optional_args=*/nullptr),
+      ConversationSendMessage(conversation.get(), message_json,
+                              /*extra_context=*/nullptr,
+                              /*optional_args=*/nullptr),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
-  const char* response_str = litert_lm_json_response_get_string(response.get());
+  const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
 }
@@ -1377,8 +1433,7 @@ TEST(EngineCTest, ConversationRenderPreface) {
   ASSERT_NE(engine, nullptr);
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
   const char* messages_json =
@@ -1387,12 +1442,11 @@ TEST(EngineCTest, ConversationRenderPreface) {
                                              messages_json);
 
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
-  const char* rendered =
-      litert_lm_conversation_render_preface_to_string(conversation.get());
+  const char* rendered = RenderPreface(conversation.get());
   ASSERT_NE(rendered, nullptr);
   EXPECT_THAT(rendered, HasSubstr("You are a helpful assistant."));
 }
@@ -1432,8 +1486,7 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   litert_lm_conversation_config_set_session_config(conversation_config.get(),
                                                    session_config.get());
@@ -1442,7 +1495,7 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
 
   // 4. Create a Conversation with the Conversation Config.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -1450,13 +1503,13 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
   JsonResponsePtr response(
-      litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /*extra_context=*/nullptr,
-                                          /*optional_args=*/nullptr),
+      ConversationSendMessage(conversation.get(), message_json,
+                              /*extra_context=*/nullptr,
+                              /*optional_args=*/nullptr),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
-  const char* response_str = litert_lm_json_response_get_string(response.get());
+  const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
 }
@@ -1479,13 +1532,12 @@ TEST(EngineCTest, ConversationSendMessageWithExtraContext) {
 
   // 2. Create a Conversation Config.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
   // 3. Create a Conversation with the Conversation Config.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -1494,13 +1546,13 @@ TEST(EngineCTest, ConversationSendMessageWithExtraContext) {
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
   const char* extra_context = R"({"key": "value"})";
   JsonResponsePtr response(
-      litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /*extra_context=*/extra_context,
-                                          /*optional_args=*/nullptr),
+      ConversationSendMessage(conversation.get(), message_json,
+                              /*extra_context=*/extra_context,
+                              /*optional_args=*/nullptr),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
-  const char* response_str = litert_lm_json_response_get_string(response.get());
+  const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
 }
@@ -1523,13 +1575,12 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
 
   // 2. Create a Conversation Config.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
   // 3. Create a Conversation with the Conversation Config.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
@@ -1547,7 +1598,7 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
   litert_lm_repetition_penalty_config_set_window_size(
       repetition_penalty_config.get(), 10);
 
-  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+  OptionalArgsPtr optional_args(CreateConversationOptionalArgs(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
 
@@ -1578,13 +1629,13 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
   // 5. Send a message to the conversation with optional args.
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
-  JsonResponsePtr response(litert_lm_conversation_send_message(
-                               conversation.get(), message_json,
-                               /*extra_context=*/nullptr, optional_args.get()),
-                           &litert_lm_json_response_delete);
+  JsonResponsePtr response(
+      ConversationSendMessage(conversation.get(), message_json,
+                              /*extra_context=*/nullptr, optional_args.get()),
+      &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
-  const char* response_str = litert_lm_json_response_get_string(response.get());
+  const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
 }
@@ -1607,8 +1658,7 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
 
   // 2. Create a Conversation Config with constrained decoding enabled.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
   LiteRtLmConstraintProviderType provider =
       kLiteRtLmConstraintProviderTypeLlGuidance;
@@ -1623,12 +1673,12 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
 
   // 3. Create a Conversation with the Conversation Config.
   ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      CreateConversation(engine.get(), conversation_config.get()),
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   // 4. Create Optional Args with constraint.
-  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+  OptionalArgsPtr optional_args(CreateConversationOptionalArgs(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
 
@@ -1640,13 +1690,12 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
 
   JsonResponsePtr response(
-      litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /* extra_context */ nullptr,
-                                          optional_args.get()),
+      ConversationSendMessage(conversation.get(), message_json,
+                              /* extra_context */ nullptr, optional_args.get()),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
-  const char* response_str = litert_lm_json_response_get_string(response.get());
+  const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
 
   auto response_json = nlohmann::ordered_json::parse(response_str);
@@ -1658,7 +1707,12 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
 }
 
 TEST(EngineCTest, ConversationCloneNull) {
-  EXPECT_EQ(litert_lm_conversation_clone(nullptr), nullptr);
+  litert_lm_clear_last_error();
+  LiteRtLmConversation* cloned = reinterpret_cast<LiteRtLmConversation*>(0x1);
+  const int status = litert_lm_conversation_clone(nullptr, &cloned);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(cloned, nullptr);
 }
 
 TEST(EngineCTest, ConversationCloneSuccess) {
@@ -1678,15 +1732,13 @@ TEST(EngineCTest, ConversationCloneSuccess) {
   ASSERT_NE(engine, nullptr);
 
   // 2. Create a Conversation.
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   // 3. Clone the conversation.
-  LiteRtLmConversation* cloned_raw =
-      litert_lm_conversation_clone(conversation.get());
+  LiteRtLmConversation* cloned_raw = CloneConversation(conversation.get());
   if (cloned_raw == nullptr) {
     if (absl::IsUnimplemented(conversation->conversation->Clone().status())) {
       GTEST_SKIP() << "Clone is not supported by this engine.";
@@ -1814,10 +1866,9 @@ TEST(EngineCTest, ConversationSendMessageStream) {
   EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   const char* message_json =
@@ -1847,10 +1898,9 @@ TEST(EngineCTest, ConversationSendMessageStreamWithExtraContext) {
   EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   const char* message_json =
@@ -1881,10 +1931,9 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   const char* message_json =
@@ -1903,7 +1952,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   litert_lm_repetition_penalty_config_set_window_size(
       repetition_penalty_config.get(), 10);
 
-  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+  OptionalArgsPtr optional_args(CreateConversationOptionalArgs(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
 
@@ -1956,10 +2005,9 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
   EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
   const char* message_json =
@@ -2001,11 +2049,10 @@ EngineAndConversation CreateTestEngineAndConversation(
   EnginePtr engine(settings ? CreateEngine(settings.get()) : nullptr,
                    &litert_lm_engine_delete);
 
-  ConversationPtr conversation(
-      engine ? litert_lm_conversation_create(engine.get(),
-                                             /*conversation_config=*/nullptr)
-             : nullptr,
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(engine ? CreateConversation(engine.get(),
+                                                           /*config=*/nullptr)
+                                      : nullptr,
+                               &litert_lm_conversation_delete);
 
   return {std::move(engine), std::move(conversation)};
 }
@@ -2055,8 +2102,7 @@ TEST(EngineCTest, ConversationWaitUntilDonePropagatesError) {
     EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
     ASSERT_NE(engine, nullptr);
 
-    conversation.reset(litert_lm_conversation_create(
-        engine.get(), /*conversation_config=*/nullptr));
+    conversation.reset(CreateConversation(engine.get(), /*config=*/nullptr));
     ASSERT_NE(conversation, nullptr);
   }
   // The engine has been deleted, so the underlying execution manager is no
@@ -2385,13 +2431,12 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(),
-                                    /*conversation_config=*/nullptr),
-      &litert_lm_conversation_delete);
+  ConversationPtr conversation(CreateConversation(engine.get(),
+                                                  /*config=*/nullptr),
+                               &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
-  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+  OptionalArgsPtr optional_args(CreateConversationOptionalArgs(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
   litert_lm_conversation_optional_args_set_max_output_tokens(
@@ -2399,13 +2444,13 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
 
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
-  JsonResponsePtr response(litert_lm_conversation_send_message(
-                               conversation.get(), message_json,
-                               /*extra_context=*/nullptr, optional_args.get()),
-                           &litert_lm_json_response_delete);
+  JsonResponsePtr response(
+      ConversationSendMessage(conversation.get(), message_json,
+                              /*extra_context=*/nullptr, optional_args.get()),
+      &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
-  const char* response_str = litert_lm_json_response_get_string(response.get());
+  const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
   // Since max_output_tokens is 1, the response should be very short.
@@ -3649,7 +3694,7 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("config must not be NULL"));
 
-  ConversationConfigPtr config(litert_lm_conversation_config_create(),
+  ConversationConfigPtr config(CreateConversationConfig(),
                                &litert_lm_conversation_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
@@ -3668,7 +3713,10 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
               testing::HasSubstr("args must not be NULL"));
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_json_response_get_string(nullptr), nullptr);
+  const char* json = "sentinel";
+  EXPECT_EQ(litert_lm_json_response_get_string(nullptr, &json),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(json, nullptr);
   EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("response must not be NULL"));
@@ -3682,7 +3730,7 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
 }
 
 TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
-  ConversationConfigPtr config(litert_lm_conversation_config_create(),
+  ConversationConfigPtr config(CreateConversationConfig(),
                                &litert_lm_conversation_config_delete);
   ASSERT_NE(config, nullptr);
   SessionConfigPtr session_config(CreateSessionConfig(),
@@ -3690,7 +3738,7 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
   ASSERT_NE(session_config, nullptr);
   std::unique_ptr<LiteRtLmThinkingConfig,
                   decltype(&litert_lm_thinking_config_delete)>
-      thinking_config(litert_lm_thinking_config_create(),
+      thinking_config(CreateThinkingConfig(),
                       &litert_lm_thinking_config_delete);
   ASSERT_NE(thinking_config, nullptr);
   const LiteRtLmSessionConfig* session = session_config.get();
@@ -3774,7 +3822,7 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
 }
 
 TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
-  OptionalArgsPtr args(litert_lm_conversation_optional_args_create(),
+  OptionalArgsPtr args(CreateConversationOptionalArgs(),
                        &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(args, nullptr);
   RepetitionPenaltyConfigPtr repetition_config(
@@ -3825,7 +3873,7 @@ TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
 }
 
 TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
-  ConversationConfigPtr config(litert_lm_conversation_config_create(),
+  ConversationConfigPtr config(CreateConversationConfig(),
                                &litert_lm_conversation_config_delete);
   ASSERT_NE(config, nullptr);
   litert_lm_clear_last_error();
@@ -3838,7 +3886,7 @@ TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmConstraintProviderType"));
 
-  OptionalArgsPtr args(litert_lm_conversation_optional_args_create(),
+  OptionalArgsPtr args(CreateConversationOptionalArgs(),
                        &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(args, nullptr);
   litert_lm_clear_last_error();
@@ -4021,6 +4069,193 @@ TEST(EngineCStatusTest, SessionRuntimeFailuresReturnCanonicalCode) {
         litert_lm_token_union_get_ids(start_token.get(), nullptr, nullptr),
         kLiteRtLmStatusInvalidArgument);
   }
+}
+
+TEST(EngineCErrorTest, ConversationCreatorsReturnHandleThroughOutParam) {
+  LiteRtLmConversationConfig* config = nullptr;
+  ASSERT_EQ(litert_lm_conversation_config_create(&config), kLiteRtLmStatusOk);
+  EXPECT_NE(config, nullptr);
+  litert_lm_conversation_config_delete(config);
+
+  LiteRtLmThinkingConfig* thinking_config = nullptr;
+  ASSERT_EQ(litert_lm_thinking_config_create(&thinking_config),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(thinking_config, nullptr);
+  litert_lm_thinking_config_delete(thinking_config);
+
+  LiteRtLmConversationOptionalArgs* optional_args = nullptr;
+  ASSERT_EQ(litert_lm_conversation_optional_args_create(&optional_args),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(optional_args, nullptr);
+  litert_lm_conversation_optional_args_delete(optional_args);
+}
+
+TEST(EngineCErrorTest, ConversationFunctionsWithNullOutParamReturnError) {
+  LiteRtLmJsonResponse response;
+  ExpectAllReturn(
+      {
+          {"conversation_config_create",
+           [] { return litert_lm_conversation_config_create(nullptr); }},
+          {"thinking_config_create",
+           [] { return litert_lm_thinking_config_create(nullptr); }},
+          {"conversation_optional_args_create",
+           [] { return litert_lm_conversation_optional_args_create(nullptr); }},
+          {"conversation_create",
+           [] {
+             return litert_lm_conversation_create(nullptr, nullptr, nullptr);
+           }},
+          {"conversation_clone",
+           [] { return litert_lm_conversation_clone(nullptr, nullptr); }},
+          {"conversation_send_message",
+           [] {
+             return litert_lm_conversation_send_message(
+                 nullptr, "{}", nullptr, nullptr, /*out_response=*/nullptr);
+           }},
+          // A valid response still fails without an out-parameter.
+          {"json_response_get_string",
+           [&] {
+             return litert_lm_json_response_get_string(&response, nullptr);
+           }},
+          {"conversation_render_message_to_string",
+           [] {
+             return litert_lm_conversation_render_message_to_string(
+                 nullptr, "{}", /*out_text=*/nullptr);
+           }},
+          {"conversation_render_preface_to_string",
+           [] {
+             return litert_lm_conversation_render_preface_to_string(nullptr,
+                                                                    nullptr);
+           }},
+          {"conversation_get_benchmark_info",
+           [] {
+             return litert_lm_conversation_get_benchmark_info(nullptr, nullptr);
+           }},
+          {"conversation_get_token_count",
+           [] {
+             return litert_lm_conversation_get_token_count(nullptr, nullptr);
+           }},
+      },
+      kLiteRtLmStatusInvalidArgument, "must not be NULL");
+}
+
+TEST(EngineCErrorTest, ConversationFunctionsWithNullHandleResetOutParam) {
+  ExpectInvalidArgumentResetsOut<LiteRtLmConversation>(
+      "conversation_create", [](LiteRtLmConversation** out) {
+        return litert_lm_conversation_create(nullptr, nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmConversation>(
+      "conversation_clone", [](LiteRtLmConversation** out) {
+        return litert_lm_conversation_clone(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmJsonResponse>(
+      "conversation_send_message", [](LiteRtLmJsonResponse** out) {
+        return litert_lm_conversation_send_message(nullptr, "{}", nullptr,
+                                                   nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<const char>(
+      "json_response_get_string", [](const char** out) {
+        return litert_lm_json_response_get_string(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<const char>(
+      "conversation_render_message_to_string", [](const char** out) {
+        return litert_lm_conversation_render_message_to_string(nullptr, "{}",
+                                                               out);
+      });
+  ExpectInvalidArgumentResetsOut<const char>(
+      "conversation_render_preface_to_string", [](const char** out) {
+        return litert_lm_conversation_render_preface_to_string(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<LiteRtLmBenchmarkInfo>(
+      "conversation_get_benchmark_info", [](LiteRtLmBenchmarkInfo** out) {
+        return litert_lm_conversation_get_benchmark_info(nullptr, out);
+      });
+
+  // Scalar out-parameters are not written on failure.
+  litert_lm_clear_last_error();
+  int count = 42;
+  const int status = litert_lm_conversation_get_token_count(nullptr, &count);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid conversation"));
+  EXPECT_EQ(count, 42);
+}
+
+TEST(EngineCErrorTest, JsonResponseGetStringReturnsOwnedString) {
+  LiteRtLmJsonResponse response;
+  response.json_string = R"({"role":"model"})";
+  const char* json = nullptr;
+  ASSERT_EQ(litert_lm_json_response_get_string(&response, &json),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(json, response.json_string.c_str());
+}
+
+TEST(EngineCStatusTest, ConversationResultProducers) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  ConversationPtr conversation(
+      CreateConversation(engine.get(), /*config=*/nullptr),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // Token count succeeds and is delivered through the out-parameter.
+  litert_lm_clear_last_error();
+  int count = -1;
+  const int count_status =
+      litert_lm_conversation_get_token_count(conversation.get(), &count);
+  if (count_status == kLiteRtLmStatusUnimplemented) {
+    GTEST_SKIP() << "Token count is not supported by this engine.";
+  }
+  ASSERT_EQ(count_status, kLiteRtLmStatusOk);
+  EXPECT_GE(count, 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
+
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+  const char* rendered = RenderMessage(conversation.get(), message_json);
+  ASSERT_NE(rendered, nullptr);
+  EXPECT_GT(strlen(rendered), 0);
+
+  // Malformed message JSON is rejected and leaves the out-parameters NULL.
+  const char* bad_json = "{not json";
+  litert_lm_clear_last_error();
+  LiteRtLmJsonResponse* response = reinterpret_cast<LiteRtLmJsonResponse*>(0x1);
+  int status = litert_lm_conversation_send_message(conversation.get(), bad_json,
+                                                   nullptr, nullptr, &response);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(response, nullptr);
+
+  litert_lm_clear_last_error();
+  const char* text = "sentinel";
+  status = litert_lm_conversation_render_message_to_string(conversation.get(),
+                                                           bad_json, &text);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(text, nullptr);
+
+  // Benchmarking is not enabled for this engine. The exact code is determined
+  // by the runtime; it must be a failure code that matches the last error.
+  litert_lm_clear_last_error();
+  LiteRtLmBenchmarkInfo* benchmark_info =
+      reinterpret_cast<LiteRtLmBenchmarkInfo*>(0x1);
+  status = litert_lm_conversation_get_benchmark_info(conversation.get(),
+                                                     &benchmark_info);
+  EXPECT_GT(status, kLiteRtLmStatusOk);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_EQ(benchmark_info, nullptr);
 }
 
 }  // namespace

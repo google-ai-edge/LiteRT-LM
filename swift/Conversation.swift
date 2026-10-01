@@ -196,21 +196,23 @@ public final class Conversation: Sendable {
     )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
 
-    guard
-      let responsePtr = litert_lm_conversation_send_message(
-        handle, messageString, extraContextString, optionalArgs)
-    else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? "Native sendMessage returned null."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let responseError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let responsePtr = try LiteRTLMError.create(
+      "litert_lm_conversation_send_message", responseError
+    ) { out in
+      litert_lm_conversation_send_message(
+        handle, messageString, extraContextString, optionalArgs, out)
     }
     // Delete the response pointer at the end of each iteration. Handled by defer block.
     let responsePtrRef = responsePtr
     defer { litert_lm_json_response_delete(responsePtrRef) }
 
-    guard let responseChars = litert_lm_json_response_get_string(responsePtr) else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Native get string for response returned null."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let responseChars: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_json_response_get_string", responseError
+    ) { litert_lm_json_response_get_string(responsePtr, $0) }
+    guard let responseChars else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_json_response_get_string returned a null string"))
     }
     let responseString = String(cString: responseChars)
 
@@ -245,13 +247,13 @@ public final class Conversation: Sendable {
     thinkingConfig: ThinkingConfig?,
     responseFormat: ResponseFormat?
   ) throws -> OpaquePointer {
-    guard let optionalArgs = litert_lm_conversation_optional_args_create() else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Failed to create native optional args."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let optionalArgsError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let optionalArgs = try LiteRTLMError.create(
+      "litert_lm_conversation_optional_args_create", optionalArgsError
+    ) { out in
+      litert_lm_conversation_optional_args_create(out)
     }
     do {
-      let optionalArgsError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
       if let visualTokenBudget = self.visualTokenBudget ?? ExperimentalFlags.visualTokenBudget {
         try LiteRTLMError.check(
           litert_lm_conversation_optional_args_set_visual_token_budget(
@@ -348,10 +350,10 @@ public final class Conversation: Sendable {
           "litert_lm_conversation_optional_args_set_max_output_tokens", optionalArgsError)
       }
       if let thinkingConfig = thinkingConfig {
-        guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-          let errorMsg =
-            LiteRTLMError.consumeLastError() ?? "Failed to create native thinking config."
-          throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+        let cThinkingConfig = try LiteRTLMError.create(
+          "litert_lm_thinking_config_create", optionalArgsError
+        ) { out in
+          litert_lm_thinking_config_create(out)
         }
         defer { litert_lm_thinking_config_delete(cThinkingConfig) }
         try LiteRTLMError.check(
@@ -565,11 +567,13 @@ public final class Conversation: Sendable {
       throw LiteRTLMError.conversation(.failedToSerializeMessage)
     }
 
-    guard let cString = litert_lm_conversation_render_message_to_string(handle, messageString)
-    else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Failed to render message into string."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let renderError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let cString: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_conversation_render_message_to_string", renderError
+    ) { litert_lm_conversation_render_message_to_string(handle, messageString, $0) }
+    guard let cString else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_conversation_render_message_to_string returned a null string"))
     }
     return String(cString: cString)
   }
@@ -580,20 +584,27 @@ public final class Conversation: Sendable {
   /// - Throws: A `LiteRTLMError` if the conversation is not alive, or rendering fails.
   public func renderPrefaceIntoString() throws -> String {
     let handle = try checkIsAlive()
-    guard let cString = litert_lm_conversation_render_preface_to_string(handle) else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Failed to render preface into string."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let renderError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let cString: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_conversation_render_preface_to_string", renderError
+    ) { litert_lm_conversation_render_preface_to_string(handle, $0) }
+    guard let cString else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_conversation_render_preface_to_string returned a null string"))
     }
     return String(cString: cString)
   }
 
   /// Gets the number of tokens in the conversation KV Cache (prefill + decode).
   ///
-  /// - Throws: A `LiteRTLMError` if the conversation is not alive.
+  /// - Throws: A `LiteRTLMError` if the conversation is not alive or the native call fails.
   public func getTokenCount() throws -> Int {
     let handle = try checkIsAlive()
-    return Int(litert_lm_conversation_get_token_count(handle))
+    let tokenCount = try LiteRTLMError.get(
+      Int32(0), "litert_lm_conversation_get_token_count",
+      { .conversation(.invalidResponse($0)) }
+    ) { litert_lm_conversation_get_token_count(handle, $0) }
+    return Int(tokenCount)
   }
 
   /// Retrieves the benchmark information from the conversation.
@@ -607,15 +618,17 @@ public final class Conversation: Sendable {
       throw LiteRTLMError.conversation(.benchmarkNotEnabled)
     }
 
-    guard let benchmarkInfoPtr = litert_lm_conversation_get_benchmark_info(handle) else {
-      throw LiteRTLMError.conversation(.benchmarkInfoUnavailable)
-    }
-    defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
-
     let makeError: (String) -> LiteRTLMError = { details in
       self.logger.error("Failed to read benchmark info: \(details)")
       return LiteRTLMError.conversation(.benchmarkInfoUnavailable)
     }
+
+    let benchmarkInfoPtr = try LiteRTLMError.create(
+      "litert_lm_conversation_get_benchmark_info", makeError
+    ) { out in
+      litert_lm_conversation_get_benchmark_info(handle, out)
+    }
+    defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
 
     let numPrefillTurns = try LiteRTLMError.get(
       Int32(0), "litert_lm_benchmark_info_get_num_prefill_turns", makeError

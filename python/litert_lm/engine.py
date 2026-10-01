@@ -306,10 +306,13 @@ class Engine(interfaces.AbstractEngine):
         enable_speculative_decoding=enable_speculative_decoding,
     )
 
-    conv_config = self._lib.litert_lm_conversation_config_create()
-    if not conv_config:
+    try:
+      conv_config = create_checked(
+          self._lib, "litert_lm_conversation_config_create"
+      )
+    except BaseException:
       self._lib.litert_lm_session_config_delete(session_config)
-      raise RuntimeError("Failed to create conversation config")
+      raise
 
     try:
       try:
@@ -421,14 +424,14 @@ class Engine(interfaces.AbstractEngine):
           if tc_ptr:
             self._lib.litert_lm_thinking_config_delete(tc_ptr)
 
-      conv_ptr = self._lib.litert_lm_conversation_create(
-          self._engine_ptr, conv_config
+      conv_ptr = create_checked(
+          self._lib,
+          "litert_lm_conversation_create",
+          self._engine_ptr,
+          conv_config,
       )
     finally:
       self._lib.litert_lm_conversation_config_delete(conv_config)
-
-    if not conv_ptr:
-      raise RuntimeError("Failed to create conversation")
 
     return Conversation(
         self._lib,

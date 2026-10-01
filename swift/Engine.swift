@@ -292,15 +292,16 @@ public actor Engine {
         "litert_lm_session_config_set_enable_speculative_decoding", sessionConfigError)
     }
 
-    guard let cConversationConfig = litert_lm_conversation_config_create() else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.engine(.failedToCreateConversationConfig(errorMsg))
-    }
-    defer { litert_lm_conversation_config_delete(cConversationConfig) }
-
     let conversationConfigError: (String) -> LiteRTLMError = {
       .engine(.failedToCreateConversationConfig($0))
     }
+
+    let cConversationConfig = try LiteRTLMError.create(
+      "litert_lm_conversation_config_create", conversationConfigError
+    ) { out in
+      litert_lm_conversation_config_create(out)
+    }
+    defer { litert_lm_conversation_config_delete(cConversationConfig) }
 
     try LiteRTLMError.check(
       litert_lm_conversation_config_set_session_config(cConversationConfig, cSessionConfig),
@@ -359,9 +360,10 @@ public actor Engine {
     }
 
     if let thinkingConfig = conversationConfig.thinkingConfig {
-      guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.engine(.failedToCreateConversationConfig(errorMsg))
+      let cThinkingConfig = try LiteRTLMError.create(
+        "litert_lm_thinking_config_create", conversationConfigError
+      ) { out in
+        litert_lm_thinking_config_create(out)
       }
       defer { litert_lm_thinking_config_delete(cThinkingConfig) }
       try LiteRTLMError.check(
@@ -377,12 +379,10 @@ public actor Engine {
         "litert_lm_conversation_config_set_thinking_config", conversationConfigError)
     }
 
-    guard
-      let conversationHandle = litert_lm_conversation_create(
-        engineHandle, cConversationConfig)
-    else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.engine(.failedToCreateConversation(errorMsg))
+    let conversationHandle = try LiteRTLMError.create(
+      "litert_lm_conversation_create", { .engine(.failedToCreateConversation($0)) }
+    ) { out in
+      litert_lm_conversation_create(engineHandle, cConversationConfig, out)
     }
 
     return Conversation(

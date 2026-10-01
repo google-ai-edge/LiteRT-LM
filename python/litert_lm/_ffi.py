@@ -465,8 +465,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # Conversation Config
-  lib.litert_lm_conversation_config_create.restype = ctypes.c_void_p
-  lib.litert_lm_conversation_config_create.argtypes = []
+  lib.litert_lm_conversation_config_create.restype = ctypes.c_int
+  lib.litert_lm_conversation_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_conversation_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_conversation_config_set_session_config.restype = ctypes.c_int
   lib.litert_lm_conversation_config_set_session_config.argtypes = [
@@ -593,8 +595,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # Thinking Config
-  lib.litert_lm_thinking_config_create.restype = ctypes.c_void_p
-  lib.litert_lm_thinking_config_create.argtypes = []
+  lib.litert_lm_thinking_config_create.restype = ctypes.c_int
+  lib.litert_lm_thinking_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_thinking_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_thinking_config_set_enable_thinking.restype = ctypes.c_int
   lib.litert_lm_thinking_config_set_enable_thinking.argtypes = [
@@ -608,8 +612,10 @@ def _setup_lib_signatures(lib):
   ]
 
   # Conversation Optional Args
-  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
-  lib.litert_lm_conversation_optional_args_create.argtypes = []
+  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_int
+  lib.litert_lm_conversation_optional_args_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_conversation_optional_args_set_repetition_penalty_config.restype = (
       ctypes.c_int
@@ -655,18 +661,20 @@ def _setup_lib_signatures(lib):
   ]
 
   # Conversation
-  lib.litert_lm_conversation_create.restype = ctypes.c_void_p
+  lib.litert_lm_conversation_create.restype = ctypes.c_int
   lib.litert_lm_conversation_create.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_conversation_delete.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_conversation_send_message.restype = ctypes.c_void_p
+  lib.litert_lm_conversation_send_message.restype = ctypes.c_int
   lib.litert_lm_conversation_send_message.argtypes = [
       ctypes.c_void_p,
       c_string_p,
       c_string_p,
       ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_conversation_send_message_stream.restype = ctypes.c_int
   lib.litert_lm_conversation_send_message_stream.argtypes = [
@@ -679,17 +687,23 @@ def _setup_lib_signatures(lib):
   ]
   lib.litert_lm_conversation_cancel_process.restype = ctypes.c_int
   lib.litert_lm_conversation_cancel_process.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_conversation_render_message_to_string.restype = ctypes.c_char_p
+  lib.litert_lm_conversation_render_message_to_string.restype = ctypes.c_int
   lib.litert_lm_conversation_render_message_to_string.argtypes = [
       ctypes.c_void_p,
       c_string_p,
+      ctypes.POINTER(ctypes.c_char_p),
   ]
   lib.litert_lm_conversation_get_token_count.restype = ctypes.c_int
-  lib.litert_lm_conversation_get_token_count.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_get_token_count.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
+  ]
 
   # Conversation Optional Args
-  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
-  lib.litert_lm_conversation_optional_args_create.argtypes = []
+  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_int
+  lib.litert_lm_conversation_optional_args_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_conversation_optional_args_set_constraint.restype = ctypes.c_int
   lib.litert_lm_conversation_optional_args_set_constraint.argtypes = [
@@ -756,8 +770,11 @@ def _setup_lib_signatures(lib):
 
   # JSON Response
   lib.litert_lm_json_response_delete.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_json_response_get_string.restype = ctypes.c_char_p
-  lib.litert_lm_json_response_get_string.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_json_response_get_string.restype = ctypes.c_int
+  lib.litert_lm_json_response_get_string.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_char_p),
+  ]
 
   # Benchmark Info
   lib.litert_lm_session_get_benchmark_info.restype = ctypes.c_int
@@ -765,8 +782,11 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_void_p),
   ]
-  lib.litert_lm_conversation_get_benchmark_info.restype = ctypes.c_void_p
-  lib.litert_lm_conversation_get_benchmark_info.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_get_benchmark_info.restype = ctypes.c_int
+  lib.litert_lm_conversation_get_benchmark_info.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_benchmark_info_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_benchmark_info_get_time_to_first_token.restype = ctypes.c_int
   lib.litert_lm_benchmark_info_get_time_to_first_token.argtypes = [

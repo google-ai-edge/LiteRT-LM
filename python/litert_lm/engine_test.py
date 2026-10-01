@@ -818,6 +818,63 @@ class EngineTest(LiteRtLmTestBase):
       self.assertGreater(info.last_prefill_token_count, 0)
       self.assertGreater(info.last_decode_token_count, 0)
 
+  def test_conversation_get_benchmark_info_without_benchmark_raises(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      with self.assertRaisesRegex(
+          RuntimeError,
+          r"litert_lm_conversation_get_benchmark_info failed with status",
+      ):
+        conversation.get_benchmark_info()
+
+  def test_create_conversation_failure_raises_and_frees_config(self):
+    engine = self._create_engine()
+    lib = litert_lm._ffi._get_lib()
+    orig_config_delete = lib.litert_lm_conversation_config_delete
+    self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_create",
+            autospec=True,
+            return_value=litert_lm._ffi.StatusCode.INTERNAL,
+        )
+    )
+    mock_config_delete = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_config_delete",
+            autospec=True,
+            side_effect=orig_config_delete,
+        )
+    )
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_conversation_create failed with status INTERNAL \(13\)",
+    ):
+      engine.create_conversation()
+    mock_config_delete.assert_called_once()
+
+  def test_conversation_token_count_failure_raises(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      lib = litert_lm._ffi._get_lib()
+      with mock.patch.object(
+          lib,
+          "litert_lm_conversation_get_token_count",
+          autospec=True,
+          return_value=litert_lm._ffi.StatusCode.INTERNAL,
+      ):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"litert_lm_conversation_get_token_count failed with status"
+            r" INTERNAL \(13\)",
+        ):
+          _ = conversation.token_count
+
   def test_create_conversation_with_extra_context(self):
     extra_context = {"key": "value"}
     with (

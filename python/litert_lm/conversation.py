@@ -173,7 +173,7 @@ class Conversation(interfaces.AbstractConversation):
           | list[collections.abc.Mapping[str, Any]]
       ) | None = None,
       response_format: interfaces.ResponseFormat | None = None,
-  ) -> ctypes.c_void_p | None:
+  ) -> int | None:
     """Creates a C pointer for ConversationOptionalArgs if needed."""
     if (
         repetition_penalty_config is None
@@ -185,9 +185,9 @@ class Conversation(interfaces.AbstractConversation):
         and self._visual_token_budget is None
     ):
       return None
-    optional_args_ptr = self._lib.litert_lm_conversation_optional_args_create()
-    if not optional_args_ptr:
-      raise RuntimeError("Failed to create optional args")
+    optional_args_ptr = create_checked(
+        self._lib, "litert_lm_conversation_optional_args_create"
+    )
 
     try:
       if repetition_penalty_config is not None:
@@ -328,7 +328,7 @@ class Conversation(interfaces.AbstractConversation):
       self._lib.litert_lm_conversation_optional_args_delete(optional_args_ptr)
       raise e
 
-  def _delete_optional_args(self, ptr: ctypes.c_void_p | None) -> None:
+  def _delete_optional_args(self, ptr: int | None) -> None:
     """Deletes the ConversationOptionalArgs C pointer."""
     if ptr:
       self._lib.litert_lm_conversation_optional_args_delete(ptr)
@@ -380,17 +380,22 @@ class Conversation(interfaces.AbstractConversation):
           response_format=active_response_format,
       )
       try:
-        resp_ptr = self._lib.litert_lm_conversation_send_message(
+        resp_ptr = create_checked(
+            self._lib,
+            "litert_lm_conversation_send_message",
             self._ptr,
             msg_json,
             ctx_json,
             optional_args_ptr,
         )
-        if not resp_ptr:
-          raise RuntimeError("litert_lm_conversation_send_message failed")
 
         try:
-          resp_str = self._lib.litert_lm_json_response_get_string(resp_ptr)
+          resp_str = get_checked(
+              self._lib,
+              "litert_lm_json_response_get_string",
+              ctypes.c_char_p,
+              resp_ptr,
+          )
           response_dict = (
               json.loads(resp_str.decode("utf-8")) if resp_str else {}
           )
@@ -559,8 +564,12 @@ class Conversation(interfaces.AbstractConversation):
     if not self._ptr:
       return ""
     msg_json = normalize_message(message)
-    res_str = self._lib.litert_lm_conversation_render_message_to_string(
-        self._ptr, json.dumps(msg_json)
+    res_str = get_checked(
+        self._lib,
+        "litert_lm_conversation_render_message_to_string",
+        ctypes.c_char_p,
+        self._ptr,
+        json.dumps(msg_json),
     )
     return res_str.decode("utf-8") if res_str else ""
 
@@ -568,9 +577,9 @@ class Conversation(interfaces.AbstractConversation):
     """See base class."""
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
-    info_ptr = self._lib.litert_lm_conversation_get_benchmark_info(self._ptr)
-    if not info_ptr:
-      raise RuntimeError("Failed to get benchmark info.")
+    info_ptr = create_checked(
+        self._lib, "litert_lm_conversation_get_benchmark_info", self._ptr
+    )
     try:
       return interfaces.create_benchmark_info(self._lib, info_ptr)
     finally:
@@ -587,10 +596,12 @@ class Conversation(interfaces.AbstractConversation):
     """See base class."""
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
-    res = self._lib.litert_lm_conversation_get_token_count(self._ptr)
-    if res == -1:
-      raise RuntimeError("Failed to get token count.")
-    return res
+    return get_checked(
+        self._lib,
+        "litert_lm_conversation_get_token_count",
+        ctypes.c_int,
+        self._ptr,
+    )
 
   def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
     """See base class."""

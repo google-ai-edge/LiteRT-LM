@@ -66,7 +66,7 @@ def _sampler_config_to_params(
 def thinking_config_to_params(
     lib,
     config: interfaces.ThinkingConfig | None,
-) -> ctypes.c_void_p | None:
+) -> int | None:
   """Converts a ThinkingConfig to a LiteRtLmThinkingConfig opaque pointer.
 
   Args:
@@ -82,9 +82,7 @@ def thinking_config_to_params(
   """
   if config is None:
     return None
-  params = lib.litert_lm_thinking_config_create()
-  if not params:
-    raise RuntimeError("Failed to create LiteRtLmThinkingConfig")
+  params = create_checked(lib, "litert_lm_thinking_config_create")
   try:
     call_checked(
         lib,
