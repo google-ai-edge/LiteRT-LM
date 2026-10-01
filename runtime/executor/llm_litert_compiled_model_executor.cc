@@ -548,10 +548,17 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
                 prefill_input_buffers.contains(*signatures_.input_attn_mask)
             ? &prefill_input_buffers[*signatures_.input_attn_mask]
             : nullptr;
+    const TensorBuffer* prefill_attn_mask_local_buffer =
+        signatures_.input_attn_mask_local.has_value() &&
+                prefill_input_buffers.contains(
+                    *signatures_.input_attn_mask_local)
+            ? &prefill_input_buffers[*signatures_.input_attn_mask_local]
+            : nullptr;
     const bool skip_cpu_global_causal_mask =
         ShouldSkipGlobalCausalAttentionMask(
             executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
-            signatures_, prefill_attn_params, prefill_attn_mask_buffer);
+            signatures_, prefill_attn_params, prefill_attn_mask_buffer,
+            prefill_attn_mask_local_buffer);
 
     if (signatures_.input_attn_mask.has_value() &&
         !skip_cpu_global_causal_mask) {
@@ -1041,9 +1048,15 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
               decode_input_buffers_.contains(*signatures_.input_attn_mask)
           ? &decode_input_buffers_[*signatures_.input_attn_mask]
           : nullptr;
+  const TensorBuffer* decode_attn_mask_local_buffer =
+      signatures_.input_attn_mask_local.has_value() &&
+              decode_input_buffers_.contains(*signatures_.input_attn_mask_local)
+          ? &decode_input_buffers_[*signatures_.input_attn_mask_local]
+          : nullptr;
   const bool skip_cpu_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
       executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
-      signatures_, decode_attn_params, decode_attn_mask_buffer);
+      signatures_, decode_attn_params, decode_attn_mask_buffer,
+      decode_attn_mask_local_buffer);
 
   if (signatures_.input_attn_mask.has_value() && !skip_cpu_global_causal_mask) {
     ABSL_RETURN_IF_ERROR(InitializeAttentionMask(

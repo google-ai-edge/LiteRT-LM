@@ -2178,12 +2178,38 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
       Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
       vision_bidirectional_params, &bool_host_mask));
 
-  // Models with a separate local attention mask must not skip.
+  // Models with a separate local attention mask only skip when the local mask
+  // buffer is also a pruned boolean causal mask on host memory.
   ModelSignatures local_mask_signatures = signatures;
   local_mask_signatures.input_attn_mask_local = "local_mask";
   EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
       Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
-      local_mask_signatures, causal_params, &bool_host_mask));
+      local_mask_signatures, causal_params, &bool_host_mask,
+      /*attn_mask_local_buffer=*/nullptr));
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask, &float_host_mask));
+  EXPECT_TRUE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask, &bool_host_mask));
+
+  // Non-causal local_type must prevent skipping even when global_type is causal
+  // and both masks are boolean host buffers.
+  AttentionMaskParams local_bidirectional_params = causal_params;
+  local_bidirectional_params.local_type =
+      proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, local_bidirectional_params, &bool_host_mask,
+      &bool_host_mask));
+
+  AttentionMaskParams local_vision_bidirectional_params = causal_params;
+  local_vision_bidirectional_params.local_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, local_vision_bidirectional_params, &bool_host_mask,
+      &bool_host_mask));
 }
 
 }  // namespace

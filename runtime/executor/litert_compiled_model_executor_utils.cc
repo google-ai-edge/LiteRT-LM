@@ -701,27 +701,40 @@ AttentionMaskParams GetAttentionMaskParams(
   return params;
 }
 
-bool ShouldSkipGlobalCausalAttentionMask(
-    Backend backend, bool gpu_optimized_single_buffer_cache,
-    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
-    const ::litert::TensorBuffer* attn_mask_buffer) {
-  if (backend != Backend::GPU || !gpu_optimized_single_buffer_cache ||
-      !signatures.input_attn_mask.has_value() ||
-      !signatures.input_int32_param.has_value() ||
-      signatures.input_attn_mask_local.has_value() ||
-      attn_params.global_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL ||
-      attn_params.global_type ==
-          proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL ||
-      attn_mask_buffer == nullptr || !*attn_mask_buffer) {
+namespace {
+
+// Returns true if `buffer` is a boolean mask that fell back to host memory,
+// i.e. no GPU consumer registered buffer requirements for it.
+bool IsPrunedBoolHostMask(const ::litert::TensorBuffer* buffer) {
+  if (buffer == nullptr || !*buffer) {
     return false;
   }
-  auto tensor_type = attn_mask_buffer->TensorType();
+  auto tensor_type = buffer->TensorType();
   if (!tensor_type.HasValue() ||
       tensor_type->ElementType() != ::litert::ElementType::Bool) {
     return false;
   }
-  auto buffer_type = attn_mask_buffer->BufferType();
-  if (!buffer_type.HasValue()) {
+  auto buffer_type = buffer->BufferType();
+  return buffer_type.HasValue() &&
+         *buffer_type == ::litert::TensorBufferType::kHostMemory;
+}
+
+bool IsBidirectionalMaskType(proto::AttentionMaskType type) {
+  return type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL ||
+         type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+}
+
+}  // namespace
+
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer,
+    const ::litert::TensorBuffer* attn_mask_local_buffer) {
+  if (backend != Backend::GPU || !gpu_optimized_single_buffer_cache ||
+      !signatures.input_attn_mask.has_value() ||
+      !signatures.input_int32_param.has_value() ||
+      IsBidirectionalMaskType(attn_params.global_type)) {
     return false;
   }
   // When the GPU delegate consumes the attention mask, it registers GPU buffer
@@ -738,7 +751,19 @@ bool ShouldSkipGlobalCausalAttentionMask(
   // memory. Previously the same buffer was zeroed and filled on every prefill
   // chunk and decode step (e.g. 1024 x 32768 bytes = 32 MB per prefill call),
   // which did commit it.
-  return *buffer_type == ::litert::TensorBufferType::kHostMemory;
+  if (!IsPrunedBoolHostMask(attn_mask_buffer)) {
+    return false;
+  }
+  // Models without a local mask leave `input_attn_mask_local` unset and pass
+  // `attn_mask_local_buffer == nullptr`, which still skips the global mask.
+  // When `input_attn_mask_local` is present, the executor initializes and fills
+  // both masks under the same guard, so the local mask must also be causal and
+  // pruned from the GPU graph.
+  if (signatures.input_attn_mask_local.has_value()) {
+    return !IsBidirectionalMaskType(attn_params.local_type) &&
+           IsPrunedBoolHostMask(attn_mask_local_buffer);
+  }
+  return true;
 }
 
 absl::Status FillAttentionMask(
