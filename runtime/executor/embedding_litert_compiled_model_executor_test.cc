@@ -69,6 +69,17 @@ using ::testing::status::StatusIs;
 
 // Builds a minimal TFLite model FlatBuffer with given signature key and tensor
 // shapes.
+//
+// The model computes `output = input + zeros`, where `zeros` is a constant of
+// shape `output_dims`. ADD broadcasts its operands, so the output shape that
+// the runtime computes when tensors are allocated is the broadcast of
+// `input_dims` and `output_dims`. This lets a model expand a small input (e.g.
+// a single token id of shape [1]) into a larger output (e.g. an embedding of
+// shape [1, 1, 8]) whose runtime shape matches the declared `output_dims`.
+//
+// `input_type` and `output_type` must be the same 4-byte type (e.g. FLOAT32),
+// since ADD requires matching operand types and the zero constant is sized
+// with 4 bytes per element.
 std::vector<uint8_t> BuildDummyTfLiteModelBuffer(
     absl::string_view signature_key, const std::vector<int32_t>& input_dims,
     tflite::TensorType input_type, const std::vector<int32_t>& output_dims,
@@ -76,38 +87,54 @@ std::vector<uint8_t> BuildDummyTfLiteModelBuffer(
   flatbuffers::FlatBufferBuilder builder;
 
   auto opcode =
-      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
   auto opcodes_vec = builder.CreateVector({opcode});
+
+  // Buffer 0 is the conventional empty buffer for non-constant tensors, and
+  // buffer 1 holds the all-zero data of the constant ADD operand.
+  size_t num_output_elements = 1;
+  for (int32_t dim : output_dims) {
+    num_output_elements *= dim;
+  }
+  const std::vector<uint8_t> zero_bytes(num_output_elements * sizeof(float),
+                                        0);
+  auto empty_buffer = tflite::CreateBuffer(builder);
+  auto zeros_buffer =
+      tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes));
+  auto buffers_vec = builder.CreateVector({empty_buffer, zeros_buffer});
 
   auto input_tensor = tflite::CreateTensor(
       builder, builder.CreateVector(input_dims), input_type,
       /*buffer=*/0, builder.CreateString("input_tensor"));
+  auto zeros_tensor = tflite::CreateTensor(
+      builder, builder.CreateVector(output_dims), output_type,
+      /*buffer=*/1, builder.CreateString("zeros_tensor"));
   auto output_tensor = tflite::CreateTensor(
       builder, builder.CreateVector(output_dims), output_type,
       /*buffer=*/0, builder.CreateString("output_tensor"));
-  auto tensors_vec = builder.CreateVector({input_tensor, output_tensor});
+  auto tensors_vec =
+      builder.CreateVector({input_tensor, zeros_tensor, output_tensor});
 
-  std::vector<int32_t> op_inputs = {0};
-  std::vector<int32_t> op_outputs = {1};
+  std::vector<int32_t> op_inputs = {0, 1};
+  std::vector<int32_t> op_outputs = {2};
   auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
                                    builder.CreateVector(op_inputs),
                                    builder.CreateVector(op_outputs));
   auto ops_vec = builder.CreateVector({op});
 
+  // Only the input is a subgraph input; the zero constant is baked into the
+  // model.
   std::vector<int32_t> sg_inputs = {0};
-  std::vector<int32_t> sg_outputs = {1};
+  std::vector<int32_t> sg_outputs = {2};
   auto subgraph = tflite::CreateSubGraph(
       builder, tensors_vec, builder.CreateVector(sg_inputs),
       builder.CreateVector(sg_outputs), ops_vec, builder.CreateString("main"));
   auto subgraphs_vec = builder.CreateVector({subgraph});
 
-  auto buffer = tflite::CreateBuffer(builder);
-  auto buffers_vec = builder.CreateVector({buffer});
-
   auto input_map =
       tflite::CreateTensorMap(builder, builder.CreateString("input"), 0);
   auto output_map =
-      tflite::CreateTensorMap(builder, builder.CreateString("output"), 1);
+      tflite::CreateTensorMap(builder, builder.CreateString("output"), 2);
   auto inputs_map_vec = builder.CreateVector({input_map});
   auto outputs_map_vec = builder.CreateVector({output_map});
   auto sig_def = tflite::CreateSignatureDef(
