@@ -116,6 +116,8 @@ constexpr char cache_k25[] = "kv_cache_k_25";
 constexpr char cache_v25[] = "kv_cache_v_25";
 constexpr char cache_k23[] = "kv_cache_k_23";
 constexpr char cache_v23[] = "kv_cache_v_23";
+constexpr char cache_k17[] = "kv_cache_k_17";
+constexpr char cache_v17[] = "kv_cache_v_17";
 
 // Dynamic (resizable) KV cache allocation settings. These only apply to models
 // exported with a dynamic KV cache and are ignored for static models.
@@ -2089,6 +2091,23 @@ absl::Status ApplyLegacyKvCacheWorkarounds(
                                   kDecodeSignature, cache_v25));
       LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
       text_decoder_inference_context.decode_input_buffers[cache_v25] =
+          std::move(buffer_v);
+    } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                   cache_k17)) {
+      // Gemma3 270M specific fix:
+      ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+          << "Applying Gemma3 layer 17 KV cache workaround.";
+      LITERT_ASSIGN_OR_RETURN(auto buffer_k,
+                              text_decoder_compiled_model.CreateInputBuffer(
+                                  kDecodeSignature, cache_k17));
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
+      text_decoder_inference_context.decode_input_buffers[cache_k17] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(auto buffer_v,
+                              text_decoder_compiled_model.CreateInputBuffer(
+                                  kDecodeSignature, cache_v17));
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
+      text_decoder_inference_context.decode_input_buffers[cache_v17] =
           std::move(buffer_v);
     }
   } else if (is_gemma3n) {
