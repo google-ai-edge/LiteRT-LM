@@ -177,7 +177,10 @@ cc_library(
     name = "model_info_headers",
     hdrs = ["model_info.h"],
     visibility = ["//visibility:public"],
-    deps = [":engine_headers"],
+    deps = [
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
 )
 
 # Header library for embedding engine C API.

@@ -1145,81 +1145,109 @@ def _setup_lib_signatures(lib):
   ]
 
   # Loaded File / Model Info API
-  lib.litert_lm_loaded_file_create.restype = ctypes.c_void_p
-  lib.litert_lm_loaded_file_create.argtypes = [c_string_p]
+  lib.litert_lm_loaded_file_create.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_create.argtypes = [
+      c_string_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_loaded_file_delete.restype = None
   lib.litert_lm_loaded_file_delete.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_has_speculative_decoding_support.restype = (
-      ctypes.c_bool
-  )
-  lib.litert_lm_loaded_file_has_speculative_decoding_support.argtypes = [
-      ctypes.c_void_p
-  ]
-  lib.litert_lm_loaded_file_supports_thinking.restype = ctypes.c_bool
-  lib.litert_lm_loaded_file_supports_thinking.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_supports_function_calling.restype = ctypes.c_bool
-  lib.litert_lm_loaded_file_supports_function_calling.argtypes = [
-      ctypes.c_void_p
-  ]
+  for bool_getter in (
+      lib.litert_lm_loaded_file_has_speculative_decoding_support,
+      lib.litert_lm_loaded_file_supports_thinking,
+      lib.litert_lm_loaded_file_supports_function_calling,
+      lib.litert_lm_loaded_file_is_dynamic_context,
+  ):
+    bool_getter.restype = ctypes.c_int
+    bool_getter.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
   lib.litert_lm_loaded_file_sampler_type.restype = ctypes.c_int
-  lib.litert_lm_loaded_file_sampler_type.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_sampler_temperature.restype = ctypes.c_float
-  lib.litert_lm_loaded_file_sampler_temperature.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_sampler_top_k.restype = ctypes.c_int32
-  lib.litert_lm_loaded_file_sampler_top_k.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_sampler_top_p.restype = ctypes.c_float
-  lib.litert_lm_loaded_file_sampler_top_p.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_supports_input_modality.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_sampler_type.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
+  ]
+  lib.litert_lm_loaded_file_sampler_temperature.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_sampler_temperature.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_float),
+  ]
+  lib.litert_lm_loaded_file_sampler_top_k.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_sampler_top_k.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int32),
+  ]
+  lib.litert_lm_loaded_file_sampler_top_p.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_sampler_top_p.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_float),
+  ]
+  lib.litert_lm_loaded_file_supports_input_modality.restype = ctypes.c_int
   lib.litert_lm_loaded_file_supports_input_modality.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+      ctypes.POINTER(ctypes.c_bool),
   ]
-  lib.litert_lm_loaded_file_max_vision_token_budget.restype = ctypes.c_int32
-  lib.litert_lm_loaded_file_max_vision_token_budget.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_vision_signature_selection.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_max_vision_token_budget.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_max_vision_token_budget.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int32),
+  ]
+  lib.litert_lm_loaded_file_vision_signature_selection.restype = ctypes.c_int
   lib.litert_lm_loaded_file_vision_signature_selection.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int32),
       ctypes.c_int32,
+      ctypes.POINTER(ctypes.c_int32),
   ]
 
-  lib.litert_lm_loaded_file_max_context_tokens.restype = ctypes.c_uint32
-  lib.litert_lm_loaded_file_max_context_tokens.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_is_dynamic_context.restype = ctypes.c_bool
-  lib.litert_lm_loaded_file_is_dynamic_context.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_max_context_tokens.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_max_context_tokens.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_uint32),
+  ]
 
-  lib.litert_lm_loaded_file_min_runtime_version.restype = ctypes.c_char_p
-  lib.litert_lm_loaded_file_min_runtime_version.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_min_runtime_version.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_min_runtime_version.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_char_p),
+  ]
 
-  lib.litert_lm_loaded_file_modality_supported_backends.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_modality_supported_backends.restype = ctypes.c_int
   lib.litert_lm_loaded_file_modality_supported_backends.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
       ctypes.POINTER(ctypes.c_int),
       ctypes.c_int32,
+      ctypes.POINTER(ctypes.c_int32),
   ]
   lib.litert_lm_loaded_file_model_type.restype = ctypes.c_int
-  lib.litert_lm_loaded_file_model_type.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_embedding_dimension.restype = ctypes.c_int32
-  lib.litert_lm_loaded_file_embedding_dimension.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_embedding_signature_selection.restype = (
-      ctypes.c_int32
-  )
+  lib.litert_lm_loaded_file_model_type.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
+  ]
+  lib.litert_lm_loaded_file_embedding_dimension.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_embedding_dimension.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int32),
+  ]
+  lib.litert_lm_loaded_file_embedding_signature_selection.restype = ctypes.c_int
   lib.litert_lm_loaded_file_embedding_signature_selection.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int32),
       ctypes.c_int32,
+      ctypes.POINTER(ctypes.c_int32),
   ]
 
   lib.litert_lm_loaded_file_modality_npu_brand.restype = ctypes.c_int
   lib.litert_lm_loaded_file_modality_npu_brand.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+      ctypes.POINTER(ctypes.c_int),
   ]
-  lib.litert_lm_loaded_file_modality_soc_name.restype = ctypes.c_char_p
+  lib.litert_lm_loaded_file_modality_soc_name.restype = ctypes.c_int
   lib.litert_lm_loaded_file_modality_soc_name.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+      ctypes.POINTER(ctypes.c_char_p),
   ]
 
 
@@ -1348,6 +1376,38 @@ def get_checked(lib: ctypes.CDLL, func_name: str, out_type: type[Any], *args):
   """
   out = out_type()
   call_checked(lib, func_name, *args, ctypes.byref(out))
+  return getattr(out, "value", out)
+
+
+def get_optional_checked(
+    lib: ctypes.CDLL, func_name: str, out_type: type[Any], *args
+):
+  """Like `get_checked`, but `kLiteRtLmStatusNotFound` means "absent".
+
+  For C API accessors of optional values: they return `kLiteRtLmStatusNotFound`
+  (and leave the out-parameter unwritten) when the value is not defined.
+
+  Args:
+    lib: The loaded C library instance.
+    func_name: Name of a C API function that takes a trailing out-parameter of
+      type `out_type*` and returns a `LiteRtLmStatusCode`.
+    out_type: The ctypes type of the out-parameter's pointee.
+    *args: Arguments forwarded to the C API function, excluding the
+      out-parameter.
+
+  Returns:
+    The value written to the out-parameter (see `get_checked`), or None if the
+    call returned `kLiteRtLmStatusNotFound`.
+
+  Raises:
+    RuntimeError: If the call returns a status other than `kLiteRtLmStatusOk`
+      or `kLiteRtLmStatusNotFound`.
+  """
+  out = out_type()
+  status = getattr(lib, func_name)(*args, ctypes.byref(out))
+  if status == StatusCode.NOT_FOUND:
+    return None
+  check_status(lib, func_name, status)
   return getattr(out, "value", out)
 
 
