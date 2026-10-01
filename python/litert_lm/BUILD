@@ -359,11 +359,31 @@ genrule(
     """,
 )
 
-copy_file(
-    name = "copy_prebuilt_litert_lm_dll",
-    src = "//prebuilt/windows_x86_64:litert-lm.dll",
-    out = "litert-lm.dll",
-    tags = ["manual"],
+filegroup(
+    name = "prebuilt_litert_lm_dll_sources",
+    srcs = select({
+        ":wheel_platform_windows_x86_64": ["//prebuilt/windows_x86_64:litert-lm.dll"],
+        ":wheel_platform_windows_arm64": ["//prebuilt/windows_arm64:litert-lm.dll"],
+        "//conditions:default": [],
+    }),
+)
+
+genrule(
+    name = "copy_litert_lm_dll",
+    srcs = select({
+        ":use_prebuilt_c_api": [":prebuilt_litert_lm_dll_sources"],
+        "//conditions:default": ["//c:litert-lm"],
+    }),
+    outs = ["litert-lm.dll"],
+    cmd = """
+        SRCS_ARRAY=($(SRCS))
+        OUTS_ARRAY=($(OUTS))
+        if [ $${#SRCS_ARRAY[@]} -gt 0 ]; then
+            cp $${SRCS_ARRAY[0]} $${OUTS_ARRAY[0]}
+        else
+            touch $${OUTS_ARRAY[0]}
+        fi
+    """,
 )
 
 filegroup(
@@ -373,10 +393,13 @@ filegroup(
         # no native binaries is built.
         ":wheel_platform_macos_arm64": [":copy_litert_lm_dylib"],
         ":wheel_platform_windows_x86_64": [
-            ":copy_prebuilt_litert_lm_dll",
+            ":copy_litert_lm_dll",
             ":copy_dxcompiler_dll",
             ":copy_dxil_dll",
             ":copy_openvino_dispatch_dll",
+        ],
+        ":wheel_platform_windows_arm64": [
+            ":copy_litert_lm_dll",
         ],
         ":wheel_platform_linux_x86_64": [":copy_litert_lm_so"],
         ":wheel_platform_linux_arm64": [":copy_litert_lm_so"],
@@ -429,6 +452,11 @@ config_setting(
 )
 
 config_setting(
+    name = "wheel_platform_windows_arm64",
+    define_values = {"wheel_platform": "windows_arm64"},
+)
+
+config_setting(
     name = "wheel_platform_macos_arm64",
     define_values = {"wheel_platform": "macos_arm64"},
 )
@@ -472,6 +500,7 @@ py_wheel(
         ":wheel_platform_linux_arm64": "manylinux_2_27_aarch64",
         ":wheel_platform_macos_arm64": "macosx_12_0_arm64",
         ":wheel_platform_windows_x86_64": "win_amd64",
+        ":wheel_platform_windows_arm64": "win_arm64",
         ":wheel_platform_android_arm64": "android_23_arm64_v8a",
         ":wheel_platform_android_x86_64": "android_23_x86_64",
         "//conditions:default": "any",

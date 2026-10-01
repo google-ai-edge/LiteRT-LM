@@ -11,6 +11,7 @@ Note that `bazel` is the recommended build system. The `CMake` build system is
 added recently and still under active development.
 
 *   [Build and Run using Bazel](./getting-started/build-and-run.md)
+    *   [Windows ARM64 (Snapdragon), including NPU](./getting-started/build-windows-arm64.md)
 *   [(preliminary) CMake](./getting-started/cmake.md)
 
 ## API Reference
