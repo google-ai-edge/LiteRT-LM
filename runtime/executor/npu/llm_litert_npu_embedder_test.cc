@@ -271,6 +271,90 @@ TEST_F(NpuEmbedderTest, HWPerLayerEmbeddingLookupInt8Float32WithScale) {
   }
 }
 
+TEST_F(NpuEmbedderTest,
+       HWPerLayerEmbeddingLookupOutOfBoundsTokenIdsDefaultToZero) {
+  constexpr int kNumTables = 2;
+  constexpr int kColSize = 4;
+
+  std::vector<int8_t> table0_unpacked = {0, 1, 2, 3, -1, -2, -3, -4,
+                                         4, 5, 6, 7, -5, -6, -7, -8};
+  std::vector<int8_t> table1_unpacked = {0,  -1, -2, -3, 4, 5, 6, 7,
+                                         -4, -5, -6, -7, 1, 2, 3, -8};
+
+  std::vector<uint8_t> table0_packed = PackInt4(table0_unpacked);
+  std::vector<uint8_t> table1_packed = PackInt4(table1_unpacked);
+
+  std::vector<const uint8_t*> table_ptrs = {table0_packed.data(),
+                                            table1_packed.data()};
+
+  std::vector<float> scales0 = {1.0f, 2.0f, 0.5f, 1.0f};
+  std::vector<float> scales1 = {0.5f};
+
+  HWQuantizationParams qp[kNumTables];
+  qp[0].scales = scales0.data();
+  qp[0].is_per_channel = true;
+  qp[1].scales = scales1.data();
+  qp[1].is_per_channel = false;
+
+  // Token 0 is valid. Out-of-bounds tokens (-1, 262144, 300000) should default
+  // to id = 0.
+  std::vector<int32_t> token_ids = {0, -1, 262144, 300000};
+  int num_tokens = token_ids.size();
+
+  std::vector<float> output(num_tokens * kNumTables * kColSize, 0.0f);
+
+  auto status = HWPerLayerEmbeddingLookup(
+      token_ids.data(), num_tokens, table_ptrs.data(), qp, kNumTables, kColSize,
+      output.data(), litert::ElementType::Float32, litert::ElementType::Int4);
+
+  ASSERT_TRUE(status.ok());
+
+  std::vector<float> expected_single_token = {0.0f, 1.0f,  2.0f,  3.0f,
+                                              0.0f, -0.5f, -1.0f, -1.5f};
+  for (int t = 0; t < num_tokens; ++t) {
+    for (int i = 0; i < kNumTables * kColSize; ++i) {
+      EXPECT_NEAR(output[t * kNumTables * kColSize + i],
+                  expected_single_token[i], 1e-5)
+          << "Token " << t << " Index " << i;
+    }
+  }
+}
+
+TEST_F(NpuEmbedderTest, HWPerLayerEmbeddingLookupLargeRowOffsetNoOverflow) {
+  constexpr int kNumTables = 1;
+  constexpr int kColSize = 16384;
+  constexpr int32_t kLargeTokenId = 200000;
+
+  // token_id * row_size_bytes = 200000 * 16384 = 3,276,800,000 > INT32_MAX.
+  // Verify that the row_offset calculation does not suffer 32-bit signed
+  // integer overflow.
+  std::vector<int8_t> row_data(kColSize, 7);
+  uintptr_t row_addr = reinterpret_cast<uintptr_t>(row_data.data());
+  size_t expected_offset = static_cast<size_t>(kLargeTokenId) * kColSize;
+  const uint8_t* fake_table_base =
+      reinterpret_cast<const uint8_t*>(row_addr - expected_offset);
+  std::vector<const uint8_t*> table_ptrs = {fake_table_base};
+
+  HWQuantizationParams qp[kNumTables];
+  qp[0].scales = nullptr;
+  qp[0].is_per_channel = false;
+
+  std::vector<int32_t> token_ids = {kLargeTokenId};
+  int num_tokens = token_ids.size();
+
+  std::vector<float> output(num_tokens * kNumTables * kColSize, 0.0f);
+
+  auto status = HWPerLayerEmbeddingLookup(
+      token_ids.data(), num_tokens, table_ptrs.data(), qp, kNumTables, kColSize,
+      output.data(), litert::ElementType::Float32, litert::ElementType::Int8);
+
+  ASSERT_TRUE(status.ok());
+
+  for (size_t i = 0; i < output.size(); ++i) {
+    EXPECT_NEAR(output[i], 7.0f, 1e-5) << "Index " << i;
+  }
+}
+
 TEST_F(NpuEmbedderTest, WritePleEmbeddingsFloat32) {
   std::vector<float> ple_embeddings = {1.0f, 2.0f, 3.0f, 4.0f};
   TensorBuffer buffer =
