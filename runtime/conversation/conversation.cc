@@ -14,6 +14,7 @@
 
 #include "runtime/conversation/conversation.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -619,10 +620,11 @@ absl::Status Conversation::SendMessageAsync(
   std::vector<InputData> refill_session_inputs;
   if (config_.filter_channel_content_from_kv_cache() &&
       IsUserMessage(message) && !is_appending_message) {
-    if (channel_content_since_last_user_message_) {
+    if (channel_content_since_last_user_message_.load()) {
       ABSL_ASSIGN_OR_RETURN(refill_session_inputs,
                             RewindAndGetInputDataVector(optional_args));
-      channel_content_since_last_user_message_ = false;
+      channel_content_since_last_user_message_.store(false);
+      pending_channel_token_count_.store(0);
     }
 
     if (refill_session_inputs.empty()) {
@@ -633,6 +635,38 @@ absl::Status Conversation::SendMessageAsync(
     absl::MutexLock lock(history_mutex_);
     checkpoint_message_index_ = history_.size() - 1;
   }
+
+  int prev_pending_channel_token_count = pending_channel_token_count_.load();
+  bool prev_channel_content_since_last_user_message =
+      channel_content_since_last_user_message_.load();
+  if (config_.filter_channel_content_from_kv_cache() &&
+      open_channel_name.has_value() && !is_appending_message) {
+    for (const auto& channel : config_.GetChannels()) {
+      if (channel.channel_name == *open_channel_name &&
+          !channel.start.empty()) {
+        ABSL_ASSIGN_OR_RETURN(auto start_token_ids,
+                              const_cast<Tokenizer&>(engine_.GetTokenizer())
+                                  .TextToTokenIds(channel.start));
+        pending_channel_token_count_ +=
+            static_cast<int>(start_token_ids.size());
+        channel_content_since_last_user_message_.store(true);
+        break;
+      }
+    }
+  }
+
+  cancel_callback = [this, num_messages_added, prev_is_appending_message,
+                     prev_pending_channel_token_count,
+                     prev_channel_content_since_last_user_message]() {
+    absl::MutexLock lock(history_mutex_);
+    for (size_t i = 0; i < num_messages_added && !history_.empty(); ++i) {
+      history_.pop_back();
+    }
+    is_appending_message_ = prev_is_appending_message;
+    pending_channel_token_count_.store(prev_pending_channel_token_count);
+    channel_content_since_last_user_message_.store(
+        prev_channel_content_since_last_user_message);
+  };
 
   nlohmann::ordered_json messages_for_conversion;
   if (was_history_empty && !config_.prefill_preface_on_init()) {
@@ -713,7 +747,15 @@ absl::Status Conversation::SendMessageAsync(
         // message.
         if (config_.filter_channel_content_from_kv_cache() &&
             complete_message.contains(kChannelsKey)) {
-          channel_content_since_last_user_message_ = true;
+          channel_content_since_last_user_message_.store(true);
+        }
+      };
+
+  absl::AnyInvocable<void(int)> on_channel_tokens_callback =
+      [this](int channel_tokens) {
+        if (config_.filter_channel_content_from_kv_cache()) {
+          pending_channel_token_count_ += channel_tokens;
+          channel_content_since_last_user_message_.store(true);
         }
       };
 
@@ -726,7 +768,8 @@ absl::Status Conversation::SendMessageAsync(
               std::move(cancel_callback), std::move(complete_message_callback),
               open_channel_name, config_.return_error_on_max_tokens_reached(),
               config_.stream_tool_calls(),
-              config_.stream_tool_calls_channel_name()));
+              config_.stream_tool_calls_channel_name(),
+              std::move(on_channel_tokens_callback)));
 
   ABSL_ASSIGN_OR_RETURN(
       auto decode_config,
@@ -866,8 +909,15 @@ absl::Status Conversation::RunTextScoringAsync(
   return absl::OkStatus();
 }
 
-absl::StatusOr<int> Conversation::GetTokenCount() const {
-  return session_->GetCurrentStep();
+absl::StatusOr<int> Conversation::GetTokenCount(
+    bool include_channel_content) const {
+  ABSL_ASSIGN_OR_RETURN(int current_step, session_->GetCurrentStep());
+  if (include_channel_content ||
+      !config_.filter_channel_content_from_kv_cache() ||
+      !channel_content_since_last_user_message_.load()) {
+    return current_step;
+  }
+  return std::max(0, current_step - pending_channel_token_count_.load());
 }
 
 absl::StatusOr<BenchmarkInfo> Conversation::GetBenchmarkInfo() {
@@ -921,6 +971,11 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     new_conversation->is_appending_message_ = is_appending_message_;
     new_conversation->history_ = history_;
+    new_conversation->checkpoint_message_index_ = checkpoint_message_index_;
+    new_conversation->channel_content_since_last_user_message_.store(
+        channel_content_since_last_user_message_.load());
+    new_conversation->pending_channel_token_count_.store(
+        pending_channel_token_count_.load());
   }
   return new_conversation;
 }
