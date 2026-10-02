@@ -147,7 +147,7 @@ typedef struct LiteRtLmSamplerParams LiteRtLmSamplerParams;
 //   failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
-//   `out_params` is NULL.
+//   `out_params` is NULL or `type` is not a recognized LiteRtLmSamplerType.
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the parameters are returned
@@ -1653,9 +1653,9 @@ typedef void (*LiteRtLmStreamCallback)(void* callback_data,
 // callback.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
-//   is NULL; otherwise the code of the error that prevented the stream from
-//   starting. Errors that occur after the stream has started are reported
-//   through the callback.
+//   or `callback` is NULL; otherwise the code of the error that prevented the
+//   stream from starting. Errors that occur after the stream has started are
+//   reported through the callback.
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
@@ -1679,9 +1679,9 @@ LiteRtLmStatusCode litert_lm_session_run_decode_async(
 // callback.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
-//   is NULL; otherwise the code of the error that prevented the stream from
-//   starting. Errors that occur after the stream has started are reported
-//   through the callback.
+//   or `callback` is NULL; otherwise the code of the error that prevented the
+//   stream from starting. Errors that occur after the stream has started are
+//   reported through the callback.
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
@@ -1845,10 +1845,11 @@ LiteRtLmStatusCode litert_lm_token_union_get_string(
 // Returns the token ids from a token union.
 //
 // @param token_union The token union.
-// @param out_tokens A pointer to receive the internal array of token ids.
-//   The received pointer is valid only for the lifetime of the `token_union`
-//   object.
-// @param out_num_tokens A pointer to receive the number of token ids.
+// @param out_tokens On success, receives a pointer to the internal array of
+//   token ids. The received pointer is valid only for the lifetime of the
+//   `token_union` object. Set to NULL on failure.
+// @param out_num_tokens On success, receives the number of token ids; not
+//   written on failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if any
 //   argument is NULL or the type of `token_union` is not

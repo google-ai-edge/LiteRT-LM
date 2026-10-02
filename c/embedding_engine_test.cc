@@ -973,6 +973,31 @@ TEST(EmbeddingEngineCStatusTest, NullHandleReturnsInvalidArgument) {
         kLiteRtLmStatusInvalidArgument);
     EXPECT_EQ(size, 42);
   }
+
+  SettingsPtr settings = CreateSettings();
+  ASSERT_NE(settings, nullptr);
+  EnginePtr valid_engine = CreateEngine(settings.get());
+  ASSERT_NE(valid_engine, nullptr);
+  {
+    litert_lm_clear_last_error();
+    auto* response = static_cast<LiteRtLmEmbeddingResponse*>(kSentinel);
+    ExpectFailureMatchesLastError(litert_lm_embedding_engine_compute_embedding(
+                                      valid_engine.get(), /*inputs=*/nullptr,
+                                      /*num_inputs=*/1, nullptr, &response),
+                                  kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(response, nullptr);
+  }
+  {
+    litert_lm_clear_last_error();
+    auto* responses = static_cast<LiteRtLmEmbeddingResponses*>(kSentinel);
+    ExpectFailureMatchesLastError(
+        litert_lm_embedding_engine_compute_embedding_batch(
+            valid_engine.get(), /*inputs_batch=*/nullptr,
+            /*num_inputs_per_batch=*/nullptr, /*batch_size=*/1, nullptr,
+            &responses),
+        kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(responses, nullptr);
+  }
 }
 
 }  // namespace

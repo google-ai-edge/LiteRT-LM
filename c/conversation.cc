@@ -176,8 +176,10 @@ LiteRtLmStatusCode litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config) {
   LITERT_LM_C_RETURN_IF_NULL(config);
-  LITERT_LM_C_RETURN_IF_NULL(session_config);
-  LITERT_LM_C_RETURN_IF_NULL(session_config->config);
+  if (!session_config || !session_config->config) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session config.");
+  }
   config->session_config = *session_config->config;
   return kLiteRtLmStatusOk;
 }
@@ -645,6 +647,7 @@ LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
                                       "Invalid conversation.");
   }
   LITERT_LM_C_RETURN_IF_NULL(message_json);
+  LITERT_LM_C_RETURN_IF_NULL(callback);
   nlohmann::json json_message =
       nlohmann::json::parse(message_json, /*cb=*/nullptr,
                             /*allow_exceptions=*/false);

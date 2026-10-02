@@ -3280,6 +3280,18 @@ TEST(EngineCErrorTest, AccessorsWithNullOutParamReturnInvalidArgument) {
            [&] {
              return litert_lm_token_union_get_string(&token_union, nullptr);
            }},
+          {"token_union_get_ids_null_tokens",
+           [&] {
+             size_t num_tokens = 0;
+             return litert_lm_token_union_get_ids(&token_union, nullptr,
+                                                  &num_tokens);
+           }},
+          {"token_union_get_ids_null_num_tokens",
+           [&] {
+             const int* tokens = nullptr;
+             return litert_lm_token_union_get_ids(&token_union, &tokens,
+                                                  nullptr);
+           }},
           {"token_unions_get_num_tokens",
            [&] {
              return litert_lm_token_unions_get_num_tokens(&token_unions,
@@ -3305,6 +3317,7 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
   const char* out_text = "sentinel";
   const float* out_floats = &kFloatSentinel;
   const int* out_ints = &kIntSentinel;
+  const int* out_union_ids = &kIntSentinel;
   ExpectAllReturn(
       {
           {"responses_get_num_candidates",
@@ -3416,6 +3429,11 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
            [&] {
              return litert_lm_token_union_get_string(nullptr, &out_text);
            }},
+          {"token_union_get_ids",
+           [&] {
+             return litert_lm_token_union_get_ids(nullptr, &out_union_ids,
+                                                  &out_size);
+           }},
           {"token_unions_get_num_tokens",
            [&] {
              return litert_lm_token_unions_get_num_tokens(nullptr, &out_size);
@@ -3431,6 +3449,7 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
   EXPECT_EQ(out_text, nullptr);
   EXPECT_EQ(out_floats, nullptr);
   EXPECT_EQ(out_ints, nullptr);
+  EXPECT_EQ(out_union_ids, nullptr);
 }
 
 // Returns responses with two candidates. Candidate 0 has a score, a token
@@ -3646,9 +3665,10 @@ TEST(EngineCErrorTest, TokenUnionAccessorsRejectWrongVariant) {
   EXPECT_EQ(
       GetOk<LiteRtLmTokenUnionType>(litert_lm_token_union_get_type, &ids_union),
       kLiteRtLmTokenUnionTypeIds);
+  constexpr int kIntSentinel = -7;
   const char* out_string = "sentinel";
-  const int* out_ids = nullptr;
-  size_t out_num_ids = 0;
+  const int* out_ids = &kIntSentinel;
+  size_t out_num_ids = 77;
   ExpectAllReturn(
       {
           {"token_union_get_string on ids",
@@ -3663,6 +3683,8 @@ TEST(EngineCErrorTest, TokenUnionAccessorsRejectWrongVariant) {
       },
       kLiteRtLmStatusInvalidArgument, "does not contain");
   EXPECT_EQ(out_string, nullptr);
+  EXPECT_EQ(out_ids, nullptr);
+  EXPECT_EQ(out_num_ids, 77);
 }
 
 TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
@@ -4147,6 +4169,38 @@ TEST(EngineCStatusTest, SessionRuntimeFailuresReturnCanonicalCode) {
       litert_lm_session_run_prefill(session.get(), nullptr, 0),
       kLiteRtLmStatusInvalidArgument);
 
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(
+      litert_lm_session_run_decode_async(session.get(), nullptr, nullptr),
+      kLiteRtLmStatusInvalidArgument);
+
+  litert_lm_clear_last_error();
+  LiteRtLmResponses* out_responses = reinterpret_cast<LiteRtLmResponses*>(0x1);
+  ExpectCanonicalFailure(litert_lm_session_generate_content(
+                             session.get(), nullptr, 1, &out_responses),
+                         kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(out_responses, nullptr);
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(litert_lm_session_generate_content_stream(
+                             session.get(), nullptr, 0, nullptr, nullptr),
+                         kLiteRtLmStatusInvalidArgument);
+
+  litert_lm_clear_last_error();
+  ExpectCanonicalFailure(
+      litert_lm_session_generate_content_stream(session.get(), nullptr, 1,
+                                                &StreamCallback, nullptr),
+      kLiteRtLmStatusInvalidArgument);
+
+  litert_lm_clear_last_error();
+  const char* null_target[] = {nullptr};
+  out_responses = reinterpret_cast<LiteRtLmResponses*>(0x1);
+  ExpectCanonicalFailure(
+      litert_lm_session_run_text_scoring(session.get(), null_target, 1, false,
+                                         &out_responses),
+      kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(out_responses, nullptr);
+
   TokenUnionPtr start_token(GetStartToken(engine.get()),
                             &litert_lm_token_union_delete);
   if (start_token != nullptr) {
@@ -4312,6 +4366,14 @@ TEST(EngineCStatusTest, ConversationResultProducers) {
   const char* rendered = RenderMessage(conversation.get(), message_json);
   ASSERT_NE(rendered, nullptr);
   EXPECT_GT(strlen(rendered), 0);
+
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_conversation_send_message_stream(
+                conversation.get(), message_json, nullptr, nullptr,
+                /*callback=*/nullptr, nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("callback must not be NULL"));
 
   // Malformed message JSON is rejected and leaves the out-parameters NULL.
   const char* bad_json = "{not json";

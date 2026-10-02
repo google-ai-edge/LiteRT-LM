@@ -44,6 +44,10 @@ namespace {
 
 absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
     const LiteRtLmInputData* const* inputs, size_t num_inputs) {
+  if (inputs == nullptr && num_inputs > 0) {
+    return absl::InvalidArgumentError(
+        "inputs must not be NULL when num_inputs is non-zero.");
+  }
   std::vector<litert::lm::InputData> engine_inputs;
   if (inputs == nullptr || num_inputs == 0) {
     return engine_inputs;
@@ -567,14 +571,20 @@ LiteRtLmStatusCode litert_lm_embedding_engine_compute_embedding_batch(
                                       "EmbeddingEngine is null.");
   }
 
+  if (batch_size > 0 &&
+      (inputs_batch == nullptr || num_inputs_per_batch == nullptr)) {
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "inputs_batch and num_inputs_per_batch must not be NULL when "
+        "batch_size is non-zero.");
+  }
+
   std::vector<std::vector<litert::lm::InputData>> contents_batch;
   contents_batch.reserve(batch_size);
 
   for (size_t i = 0; i < batch_size; ++i) {
-    size_t num_inputs = num_inputs_per_batch ? num_inputs_per_batch[i] : 0;
-    const LiteRtLmInputData* const* inputs =
-        inputs_batch ? inputs_batch[i] : nullptr;
-    auto engine_inputs = ToEngineInputData(inputs, num_inputs);
+    auto engine_inputs =
+        ToEngineInputData(inputs_batch[i], num_inputs_per_batch[i]);
     if (!engine_inputs.ok()) {
       ABSL_LOG(ERROR) << "Failed to convert input data for batch index " << i
                       << ": " << engine_inputs.status();

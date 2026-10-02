@@ -557,10 +557,10 @@ LiteRtLmStatusCode litert_lm_json_response_get_string(
 // callback.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
-//   `conversation` or `message_json` is NULL or `message_json` is not valid
-//   JSON; otherwise the code of the error that prevented the stream from
-//   starting. Errors that occur after the stream has started are reported
-//   through the callback.
+//   `conversation`, `message_json`, or `callback` is NULL, or `message_json`
+//   is not valid JSON; otherwise the code of the error that prevented the
+//   stream from starting. Errors that occur after the stream has started are
+//   reported through the callback.
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns LiteRtLmStatusCode and failures return a

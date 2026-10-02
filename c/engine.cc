@@ -102,6 +102,10 @@ absl::AnyInvocable<void(absl::StatusOr<litert::lm::Responses>)> CreateCallback(
 
 absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
     const LiteRtLmInputData* const* inputs, size_t num_inputs) {
+  if (inputs == nullptr && num_inputs > 0) {
+    return absl::InvalidArgumentError(
+        "inputs must not be NULL when num_inputs is non-zero.");
+  }
   std::vector<litert::lm::InputData> engine_inputs;
   engine_inputs.reserve(num_inputs);
   for (size_t i = 0; i < num_inputs; ++i) {
@@ -147,6 +151,17 @@ bool IsValidLogSeverity(LiteRtLmLogSeverity level) {
     case kLiteRtLmLogSeverityError:
     case kLiteRtLmLogSeverityFatal:
     case kLiteRtLmLogSeveritySilent:
+      return true;
+  }
+  return false;
+}
+
+bool IsValidSamplerType(LiteRtLmSamplerType type) {
+  switch (type) {
+    case kLiteRtLmSamplerTypeUnspecified:
+    case kLiteRtLmSamplerTypeTopK:
+    case kLiteRtLmSamplerTypeTopP:
+    case kLiteRtLmSamplerTypeGreedy:
       return true;
   }
   return false;
@@ -332,6 +347,10 @@ LiteRtLmStatusCode litert_lm_sampler_params_create(
     LiteRtLmSamplerType type, LiteRtLmSamplerParams** out_params) {
   LITERT_LM_C_RETURN_IF_NULL(out_params);
   *out_params = nullptr;
+  if (!IsValidSamplerType(type)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmSamplerType.");
+  }
   auto params = std::make_unique<LiteRtLmSamplerParams>();
   params->type = type;
   params->top_k = 0;
@@ -419,6 +438,10 @@ LiteRtLmStatusCode litert_lm_session_config_set_sampler_params(
     return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(sampler_params);
+  if (!IsValidSamplerType(sampler_params->type)) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Unknown LiteRtLmSamplerType.");
+  }
   SamplerParameters& params = config->config->GetMutableSamplerParams();
 
   params.set_type(ToSamplerParametersType(sampler_params->type));
@@ -1123,6 +1146,11 @@ LiteRtLmStatusCode litert_lm_session_run_text_scoring(
   std::vector<absl::string_view> target_text_views;
   target_text_views.reserve(num_targets);
   for (size_t i = 0; i < num_targets; ++i) {
+    if (target_text[i] == nullptr) {
+      return litert::lm::c::ReturnError(
+          absl::StatusCode::kInvalidArgument,
+          "target_text elements must not be NULL.");
+    }
     target_text_views.push_back(target_text[i]);
   }
   auto responses =
@@ -1187,6 +1215,7 @@ LiteRtLmStatusCode litert_lm_session_run_decode_async(
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
                                       "Invalid session.");
   }
+  LITERT_LM_C_RETURN_IF_NULL(callback);
   auto status =
       session->session->RunDecodeAsync(CreateCallback(callback, callback_data));
   if (!status.ok()) {
@@ -1227,6 +1256,7 @@ LiteRtLmStatusCode litert_lm_session_generate_content_stream(
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
                                       "Invalid session.");
   }
+  LITERT_LM_C_RETURN_IF_NULL(callback);
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
@@ -1572,9 +1602,10 @@ LiteRtLmStatusCode litert_lm_token_union_get_string(
 LiteRtLmStatusCode litert_lm_token_union_get_ids(
     const LiteRtLmTokenUnion* token_union, const int** out_tokens,
     size_t* out_num_tokens) {
-  LITERT_LM_C_RETURN_IF_NULL(token_union);
   LITERT_LM_C_RETURN_IF_NULL(out_tokens);
+  *out_tokens = nullptr;
   LITERT_LM_C_RETURN_IF_NULL(out_num_tokens);
+  LITERT_LM_C_RETURN_IF_NULL(token_union);
   if (!token_union->token_union.has_token_ids()) {
     return litert::lm::c::ReturnError(
         absl::StatusCode::kInvalidArgument,
