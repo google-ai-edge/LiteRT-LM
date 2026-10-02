@@ -215,7 +215,19 @@ public struct ExperimentalFlags {
   /// This feature requires build-time flag "--define=litert_enable_ynnpack=true". The release
   /// version might not have it.
   public static var enableYnnpack: Bool? {
-    get { return _enableYnnpack }
+    get {
+      if let ynnpack = _enableYnnpack {
+        return ynnpack
+      }
+      let env = ProcessInfo.processInfo.environment
+      if env["ENABLE_YNNPACK"] == "true" || env["enable_ynnpack"] == "true" {
+        return true
+      }
+      if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("enable_ynnpack=true") }) {
+        return true
+      }
+      return nil
+    }
     set {
       guard optedIn else {
         logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
