@@ -29,6 +29,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
@@ -123,6 +124,33 @@ bool IsLinearAttentionStateName(absl::string_view name);
 // existing behavior.
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures = {});
+
+// Gets a set of prefill signature runners from an already compiled model.
+//
+// This is equivalent to the `::litert::Model` overload above, but inspects the
+// signatures exposed by the `CompiledModel` instead of the flatbuffer model.
+// Use this when only the CompiledModel is available (e.g. the model was
+// compiled from streamed weights and no `::litert::Model` is retained).
+//
+// Arguments:
+// - model: The compiled model whose signatures are inspected.
+// - signature_name_base: Prefix of the prefill signature names, e.g.
+//   "prefill". Signatures whose key does not start with this prefix are
+//   ignored.
+// - input_positions_name: Name of the input positions tensor in each prefill
+//   signature, e.g. "input_pos". Its shape ([seq_len] or
+//   [batch_size, seq_len]) determines the prefill length of the signature.
+// - selected_signatures: If nonempty, only signatures whose key is in this
+//   list are considered. If empty, all signatures are considered.
+//
+// Returns a map from prefill length to signature name, sorted by prefill
+// length in descending order. Returns an error if a matching signature does
+// not have an `input_positions_name` input, or if that input has an
+// unsupported rank.
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
     absl::string_view input_positions_name,
     absl::Span<const std::string> selected_signatures = {});
 

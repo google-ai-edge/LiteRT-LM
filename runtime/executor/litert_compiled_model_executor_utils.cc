@@ -49,6 +49,7 @@
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -446,13 +447,15 @@ bool IsLinearAttentionStateName(absl::string_view name) {
   return false;
 }
 
-absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
-    const ::litert::Model& model, absl::string_view signature_name_base,
+namespace {
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromSignatures(
+    absl::Span<const SimpleSignature> signatures,
+    absl::string_view signature_name_base,
     absl::string_view input_positions_name,
     absl::Span<const std::string> selected_signatures) {
   SortedPrefillSignatureMap prefill_runner_set;
-  auto signatures = model.GetSignatures();
-  for (auto& signature : *signatures) {
+  for (const auto& signature : signatures) {
     if (!selected_signatures.empty() &&
         absl::c_find(selected_signatures, signature.Key()) ==
             selected_signatures.end()) {
@@ -460,10 +463,8 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     }
     if (auto signature_key = signature.Key();
         absl::StartsWith(signature_key, signature_name_base)) {
-      LITERT_ASSIGN_OR_RETURN(auto input_positions_tensor,
-                              signature.InputTensor(input_positions_name));
       LITERT_ASSIGN_OR_RETURN(auto ranked_tensor_type,
-                              input_positions_tensor.RankedTensorType());
+                              signature.InputTensorType(input_positions_name));
       if (ranked_tensor_type.Layout().Rank() == 2) {
         // [batch_size, max_seq_len]
         prefill_runner_set[ranked_tensor_type.Layout().Dimensions()[1]] =
@@ -479,6 +480,28 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     }
   }
   return prefill_runner_set;
+}
+
+}  // namespace
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    const ::litert::Model& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures) {
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  return GetPrefillRunnerSetFromSignatures(signatures, signature_name_base,
+                                           input_positions_name,
+                                           selected_signatures);
+}
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures) {
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  return GetPrefillRunnerSetFromSignatures(signatures, signature_name_base,
+                                           input_positions_name,
+                                           selected_signatures);
 }
 
 absl::StatusOr<std::vector<std::pair<std::string, int>>>

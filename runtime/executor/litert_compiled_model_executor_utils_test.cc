@@ -39,6 +39,8 @@
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -555,6 +557,103 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
       GetPrefillRunnerSetFromModel(*litert_model, "prefill",
                                    /*input_positions_name=*/"input_pos"));
   EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+class GetPrefillRunnerSetFromCompiledModelTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    auto model_path =
+        std::filesystem::path(::testing::SrcDir()) /
+        "litert_lm/runtime/testdata/test_lm.task";
+    ASSERT_OK_AND_ASSIGN(auto model_assets,
+                         ModelAssets::Create(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(model_resources_,
+                         BuildLiteRtCompiledModelResources(model_assets));
+    ASSERT_NE(model_resources_, nullptr);
+    ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                         model_resources_->GetTFLiteModelBuffer(
+                             ModelType::kTfLitePrefillDecode));
+    ::litert::BufferRef<uint8_t> model_buffer(
+        reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
+        model_buffer_view.size());
+
+    LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+    env_.emplace(std::move(env));
+    LITERT_ASSERT_OK_AND_ASSIGN(::litert::Options compilation_options,
+                                ::litert::Options::Create());
+    compilation_options.SetHardwareAccelerators(::litert::HwAccelerators::kCpu);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto compiled_model,
+                                ::litert::CompiledModel::Create(
+                                    *env_, model_buffer, compilation_options));
+    compiled_model_.emplace(std::move(compiled_model));
+  }
+
+  std::unique_ptr<ModelResources> model_resources_;
+  std::optional<::litert::Environment> env_;
+  std::optional<::litert::CompiledModel> compiled_model_;
+};
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest, ReturnsPrefillSignatures) {
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos"));
+  EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MatchesFlatbufferModelOverload) {
+  ASSERT_OK_AND_ASSIGN(auto litert_model, model_resources_->GetTFLiteModel(
+                                              ModelType::kTfLitePrefillDecode));
+  ASSERT_NE(litert_model, nullptr);
+  ASSERT_OK_AND_ASSIGN(
+      auto expected,
+      GetPrefillRunnerSetFromModel(*litert_model, "prefill",
+                                   /*input_positions_name=*/"input_pos"));
+  ASSERT_OK_AND_ASSIGN(auto actual, GetPrefillRunnerSetFromModel(
+                                        *compiled_model_, "prefill",
+                                        /*input_positions_name=*/"input_pos"));
+  EXPECT_EQ(actual, expected);
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MatchingSelectedSignatureIsKept) {
+  const std::vector<std::string> selected_signatures = {"prefill"};
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos",
+                                   selected_signatures));
+  EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       NonMatchingSelectedSignatureFiltersAll) {
+  // A non-matching selected signature filters out all prefill runners.
+  const std::vector<std::string> selected_signatures = {"decode"};
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos",
+                                   selected_signatures));
+  EXPECT_TRUE(prefill_runner_set.empty());
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       NonMatchingSignatureNameBaseReturnsEmpty) {
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "nonexistent_prefix",
+                                   /*input_positions_name=*/"input_pos"));
+  EXPECT_TRUE(prefill_runner_set.empty());
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MissingInputPositionsTensorReturnsError) {
+  EXPECT_FALSE(
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"nonexistent_input")
+          .ok());
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, InitializeAttentionMask_Float32) {
