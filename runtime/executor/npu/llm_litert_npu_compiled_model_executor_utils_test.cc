@@ -662,5 +662,59 @@ TEST_F(ExecutorUtilsTest, ResolveModelGeometry_UniformNoRingbuffer) {
   EXPECT_EQ(geometry.sliding_window_size, 512);
 }
 
+// A K cache laid out [batch, heads, head_dim, seq] (sequence axis 3, as
+// Qwen3-0.6B's NPU export does). When the prefill length equals head_dim the
+// slice [1, 1, head_dim, prefill] is square in its last two axes, and the
+// slice's sequence axis has to come from the metadata, not from its shape.
+TEST_F(ExecutorUtilsTest,
+       ExtractKVCacheBufferInfoMap_SliceUsesMetadataAxisWhenSquare) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> cache(1 * 1 * 4 * 16, 0.0f);
+  std::vector<float> slice(1 * 1 * 4 * 4, 0.0f);
+  buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                      cache, ElementType::Float32,
+                                      {1, 1, 4, 16}));
+  buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                      slice, ElementType::Float32,
+                                      {1, 1, 4, 4}));
+
+  proto::ExecutorMetadata metadata;
+  auto* sb = metadata.mutable_llm_executor_metadata()->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE);
+  sb->set_decode_input_name("kv_cache_k_0");
+  sb->set_sequence_axis(3);
+
+  auto info = ExtractKVCacheBufferInfoMap(buffers, 16, &metadata);
+  ASSERT_TRUE(info.contains("kv_cache_k_0"));
+  ASSERT_TRUE(info.contains("kv_slice_k_0"));
+  EXPECT_EQ(info["kv_cache_k_0"].sequence_axis, 3);
+  EXPECT_EQ(info["kv_slice_k_0"].sequence_axis, 3);
+}
+
+// Control: the same layout with a prefill shorter than head_dim. The slice is
+// unambiguous, so the shape rule and the metadata agree.
+TEST_F(ExecutorUtilsTest,
+       ExtractKVCacheBufferInfoMap_SliceAxisWhenUnambiguous) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> cache(1 * 1 * 4 * 16, 0.0f);
+  std::vector<float> slice(1 * 1 * 4 * 2, 0.0f);
+  buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                      cache, ElementType::Float32,
+                                      {1, 1, 4, 16}));
+  buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                      slice, ElementType::Float32,
+                                      {1, 1, 4, 2}));
+
+  proto::ExecutorMetadata metadata;
+  auto* sb = metadata.mutable_llm_executor_metadata()->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE);
+  sb->set_decode_input_name("kv_cache_k_0");
+  sb->set_sequence_axis(3);
+
+  auto info = ExtractKVCacheBufferInfoMap(buffers, 16, &metadata);
+  ASSERT_TRUE(info.contains("kv_slice_k_0"));
+  EXPECT_EQ(info["kv_slice_k_0"].sequence_axis, 3);
+}
+
 }  // namespace
 }  // namespace litert::lm

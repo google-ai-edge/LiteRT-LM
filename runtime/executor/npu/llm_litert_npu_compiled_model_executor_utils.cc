@@ -840,6 +840,10 @@ absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
           }
           auto make_slice_info = [&](absl::string_view slice_name) {
             KVCacheBufferInfo slice_info = info;
+            // A slice is laid out like its cache. When the metadata names the
+            // cache sequence axis, the slice has the same one; inferring it
+            // from the slice shape is ambiguous when prefill == head_dim.
+            if (sb.has_sequence_axis()) return slice_info;
             auto it = input_kv_cache_buffers.find(slice_name);
             if (it != input_kv_cache_buffers.end()) {
               auto type = it->second.TensorType();
