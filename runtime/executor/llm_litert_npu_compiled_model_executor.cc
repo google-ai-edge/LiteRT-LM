@@ -485,7 +485,9 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
     ::litert::CompiledModel& compiled_model_auxiliary,
     const InferenceContext& rope_inference_context,
     const InferenceContext& mask_inference_context,
-    const InferenceContext& cache_update_inference_context) {
+    const InferenceContext& cache_update_inference_context,
+    MaskUpdateMethod mask_update_method,
+    KVCacheUpdateMethod cache_update_method) {
   // We need to fill the embedding input buffers with non-zero values because
   // some of the Gemma3 models contain embedding lookup preprocessing that
   // quantize a float embedding tensor into a quantized embedding tensor and use
@@ -544,7 +546,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
           << result.Error().Message();
     }
 
-    if (compiled_model_auxiliary.FindSignature(group.prefill_signatures.mask)) {
+    if (mask_update_method != MaskUpdateMethod::kWH &&
+        compiled_model_auxiliary.FindSignature(group.prefill_signatures.mask)) {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> mask_out;
       for (const auto& [k, v] : mask_inference_context.prefill_output_buffers) {
         if (group.text_decoder_inference_context.prefill_input_buffers.contains(
@@ -565,7 +568,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
           << result.Error().Message();
     }
 
-    if (compiled_model_auxiliary.FindSignature(
+    if (cache_update_method != KVCacheUpdateMethod::kWH &&
+        compiled_model_auxiliary.FindSignature(
             group.prefill_signatures.cache_update)) {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> cu_in;
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> cu_out;
@@ -617,7 +621,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
           << result.Error().Message();
     }
 
-    if (compiled_model_auxiliary.FindSignature(
+    if (mask_update_method != MaskUpdateMethod::kWH &&
+        compiled_model_auxiliary.FindSignature(
             group.decode_aux_signatures.mask)) {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> mask_out;
       for (const auto& [k, v] : mask_inference_context.decode_output_buffers) {
@@ -639,7 +644,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
           << result.Error().Message();
     }
 
-    if (compiled_model_auxiliary.FindSignature(
+    if (cache_update_method != KVCacheUpdateMethod::kWH &&
+        compiled_model_auxiliary.FindSignature(
             group.decode_aux_signatures.cache_update)) {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> cu_in;
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> cu_out;
@@ -689,7 +695,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
         << result.Error().Message();
   }
 
-  if (compiled_model_auxiliary.FindSignature(MaskSignatures::kVerifyMask)) {
+  if (mask_update_method != MaskUpdateMethod::kWH &&
+      compiled_model_auxiliary.FindSignature(MaskSignatures::kVerifyMask)) {
     auto result = compiled_model_auxiliary.Run(
         MaskSignatures::kVerifyMask,
         mask_inference_context.verify_input_buffers,
@@ -699,7 +706,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
         << result.Error().Message();
   }
 
-  if (compiled_model_auxiliary.FindSignature(
+  if (cache_update_method != KVCacheUpdateMethod::kWH &&
+      compiled_model_auxiliary.FindSignature(
           CacheUpdateSignatures::kVerifyCacheUpdate)) {
     auto result = compiled_model_auxiliary.Run(
         CacheUpdateSignatures::kVerifyCacheUpdate,
@@ -3103,7 +3111,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   LITERT_RETURN_IF_ERROR(WarmupInference(
       text_decoder_compiled_model, context_groups,
       npu_auxiliary_context.npu_auxiliary_compiled_model, main_rope.Context(),
-      main_mask.Context(), main_cache.Context()));
+      main_mask.Context(), main_cache.Context(), mask_update_method,
+      cache_update_method));
 
   NpuModelGeometry initial_geometry = context_groups[0].geometry;
   return absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(

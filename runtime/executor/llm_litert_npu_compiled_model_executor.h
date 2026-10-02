@@ -466,7 +466,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       ::litert::CompiledModel& compiled_model_auxiliary,
       const InferenceContext& rope_inference_context,
       const InferenceContext& mask_inference_context,
-      const InferenceContext& cache_update_inference_context);
+      const InferenceContext& cache_update_inference_context,
+      MaskUpdateMethod mask_update_method = MaskUpdateMethod::kModel,
+      KVCacheUpdateMethod cache_update_method = KVCacheUpdateMethod::kModel);
 
   // Run a 'warmup' inference on the drafter model.  This is intended to be
   // called before the first actual inference.
