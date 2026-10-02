@@ -281,5 +281,42 @@ TEST(TimestampTextMergerTest, RepeatedWordsHandlingWithTimestamps) {
   EXPECT_EQ(res_flush->unconfirmed_text, "");
 }
 
+TEST(TimestampTextMergerTest,
+     EmptyChunkWithEndOfChunkSentinelRetainsUnconfirmedWords) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"hello", 500}, {"world", 1000}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res1 = merger.GetOutput();
+  ASSERT_OK(res1);
+  EXPECT_EQ(res1->unconfirmed_text, "hello world");
+
+  // Chunk 2 has only the end-of-chunk sentinel (no spoken words).
+  word_stage.PushWordsWithEndOfChunkTimestamp({}, /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = merger.GetOutput();
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "");
+  EXPECT_EQ(res2->unconfirmed_text, "hello world");
+}
+
+TEST(TimestampTextMergerTest, SequentialMergeFlowWithoutTimestamps) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  auto res1 =
+      ProcessWords(word_stage, merger, {"hello", "world", "this", "is"});
+  ASSERT_OK(res1);
+  EXPECT_EQ(res1->confirmed_text, "");
+  EXPECT_EQ(res1->unconfirmed_text, "hello world this is");
+
+  auto res2 = ProcessWords(word_stage, merger, {"this", "is", "a", "test"});
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "hello world");
+  EXPECT_EQ(res2->unconfirmed_text, "this is a test");
+}
+
 }  // namespace
 }  // namespace litert::omni::asr
