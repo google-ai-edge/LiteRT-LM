@@ -327,7 +327,6 @@ class EmbeddingEngineTest(parameterized.TestCase):
           out = ctypes.c_int(42)
           status = getattr(lib, name)(options_ptr, ctypes.byref(out))
           self.assertEqual(status, litert_lm._ffi.StatusCode.NOT_FOUND)
-          self.assertEqual(lib.litert_lm_get_last_error_code(), status)
           self.assertEqual(out.value, 42)
     finally:
       lib.litert_lm_embedding_options_delete(options_ptr)
@@ -337,7 +336,6 @@ class EmbeddingEngineTest(parameterized.TestCase):
     out = ctypes.c_size_t(42)
     status = lib.litert_lm_embedding_response_get_size(None, ctypes.byref(out))
     self.assertEqual(status, litert_lm._ffi.StatusCode.INVALID_ARGUMENT)
-    self.assertEqual(lib.litert_lm_get_last_error_code(), status)
     self.assertEqual(out.value, 42)
     with self.assertRaisesRegex(RuntimeError, "INVALID_ARGUMENT"):
       litert_lm._ffi.get_checked(
@@ -383,7 +381,6 @@ class EmbeddingEngineTest(parameterized.TestCase):
             responses_ptr, 1, ctypes.byref(out)
         )
         self.assertEqual(status, litert_lm._ffi.StatusCode.OUT_OF_RANGE)
-        self.assertEqual(lib.litert_lm_get_last_error_code(), status)
         self.assertIsNone(out.value)
       finally:
         lib.litert_lm_embedding_responses_delete(responses_ptr)

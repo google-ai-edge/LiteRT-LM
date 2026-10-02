@@ -195,8 +195,6 @@ def _setup_lib_signatures(lib):
   # Error reporting
   lib.litert_lm_get_last_error_message.restype = ctypes.c_char_p
   lib.litert_lm_get_last_error_message.argtypes = []
-  lib.litert_lm_get_last_error_code.restype = ctypes.c_int
-  lib.litert_lm_get_last_error_code.argtypes = []
 
   # Log level
   lib.litert_lm_set_min_log_level.restype = ctypes.c_int

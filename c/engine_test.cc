@@ -116,14 +116,14 @@ using TokenUnionsPtr =
 // The C API constructors return a status code and deliver the new handle
 // through a trailing out-parameter. The helpers below return the handle (or
 // NULL on failure) so that it can be adopted directly by a smart pointer. On
-// failure they also check that the returned status matches the last error.
+// failure they also check that a last error message was recorded.
 template <typename T>
 T* HandleOrNull(int status, T* handle) {
   if (status == kLiteRtLmStatusOk) {
     EXPECT_NE(handle, nullptr);
   } else {
     EXPECT_EQ(handle, nullptr);
-    EXPECT_EQ(status, litert_lm_get_last_error_code());
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   }
   return handle;
 }
@@ -1712,7 +1712,7 @@ TEST(EngineCTest, ConversationCloneNull) {
   LiteRtLmConversation* cloned = reinterpret_cast<LiteRtLmConversation*>(0x1);
   const int status = litert_lm_conversation_clone(nullptr, &cloned);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(cloned, nullptr);
 }
 
@@ -2082,7 +2082,6 @@ TEST(EngineCTest, ConversationSendMessageStreamAndWaitUntilDone) {
 TEST(EngineCTest, ConversationWaitUntilDoneWithInvalidConversationFails) {
   EXPECT_EQ(litert_lm_conversation_wait_until_done(/*conversation=*/nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_STREQ(litert_lm_get_last_error_message(), "Invalid conversation.");
 }
 
@@ -2110,7 +2109,6 @@ TEST(EngineCTest, ConversationWaitUntilDonePropagatesError) {
   // longer available. WaitUntilDone() must propagate this error.
   EXPECT_EQ(litert_lm_conversation_wait_until_done(conversation.get()),
             kLiteRtLmStatusFailedPrecondition);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusFailedPrecondition);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("Execution manager is not available."));
 }
@@ -2201,7 +2199,7 @@ TEST(EngineCTest, Benchmark) {
   const auto expect_out_of_range = [](const char* name, int status) {
     SCOPED_TRACE(name);
     EXPECT_EQ(status, kLiteRtLmStatusOutOfRange);
-    EXPECT_EQ(status, litert_lm_get_last_error_code());
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   };
   int token_count = -7;
   double tokens_per_sec = -7.0;
@@ -2470,7 +2468,6 @@ TEST(EngineCErrorTest, InputDataCreateUnknownTypeSetsError) {
                                         "a", 1, &input_data),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(input_data, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmInputDataType"));
 }
@@ -2482,7 +2479,6 @@ TEST(EngineCErrorTest, InputDataCreateNullDataWithSizeSetsError) {
                                         &input_data),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(input_data, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("data must not be NULL"));
 }
@@ -2514,7 +2510,6 @@ TEST(EngineCErrorTest, CreateSucceedsAndReturnsHandleThroughOutParam) {
 TEST(EngineCErrorTest, CreateWithNullOutParamReturnsInvalidArgument) {
   const auto expect_invalid_out_param = [](int status) {
     EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 testing::HasSubstr("must not be NULL"));
     litert_lm_clear_last_error();
@@ -2541,7 +2536,7 @@ TEST(EngineCErrorTest, CreateWithNullOutParamReturnsInvalidArgument) {
       /*engine=*/nullptr, /*config=*/nullptr, /*out_session=*/nullptr));
 }
 
-TEST(EngineCErrorTest, EngineSettingsCreateFailureReturnsLastErrorCode) {
+TEST(EngineCErrorTest, EngineSettingsCreateFailureSetsLastError) {
   litert_lm_clear_last_error();
   LiteRtLmEngineSettings* settings =
       reinterpret_cast<LiteRtLmEngineSettings*>(0x1);
@@ -2549,7 +2544,7 @@ TEST(EngineCErrorTest, EngineSettingsCreateFailureReturnsLastErrorCode) {
       "test_model_path_1", "not_a_backend", /*vision_backend_str=*/nullptr,
       /*audio_backend_str=*/nullptr, &settings);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(settings, nullptr);
 
   litert_lm_clear_last_error();
@@ -2558,11 +2553,11 @@ TEST(EngineCErrorTest, EngineSettingsCreateFailureReturnsLastErrorCode) {
                 /*fd=*/-1, "cpu", /*vision_backend_str=*/nullptr,
                 /*audio_backend_str=*/nullptr, &settings),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(settings, nullptr);
 }
 
-TEST(EngineCErrorTest, EngineCreateWithBadModelPathReturnsLastErrorCode) {
+TEST(EngineCErrorTest, EngineCreateWithBadModelPathSetsLastError) {
   EngineSettingsPtr settings(
       CreateEngineSettings("/nonexistent/model.litertlm", "cpu",
                            /*vision_backend_str=*/nullptr,
@@ -2574,7 +2569,6 @@ TEST(EngineCErrorTest, EngineCreateWithBadModelPathReturnsLastErrorCode) {
   LiteRtLmEngine* engine = reinterpret_cast<LiteRtLmEngine*>(0x1);
   const int status = litert_lm_engine_create(settings.get(), &engine);
   EXPECT_NE(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(engine, nullptr);
 }
@@ -2585,14 +2579,13 @@ TEST(EngineCErrorTest, EngineCreateSessionWithNullEngineReturnsError) {
   EXPECT_EQ(litert_lm_engine_create_session(/*engine=*/nullptr,
                                             /*config=*/nullptr, &session),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(session, nullptr);
 }
 
 TEST(EngineCErrorTest, ResultProducersWithNullOutParamReturnInvalidArgument) {
   const auto expect_invalid_out_param = [](int status) {
     EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 testing::HasSubstr("must not be NULL"));
     litert_lm_clear_last_error();
@@ -2625,8 +2618,8 @@ TEST(EngineCErrorTest, ResultProducersWithNullOutParamReturnInvalidArgument) {
 }
 
 // Calls `call` with an out-parameter holding a non-NULL sentinel and expects
-// kLiteRtLmStatusInvalidArgument, a matching last error, and the out-parameter
-// reset to NULL.
+// kLiteRtLmStatusInvalidArgument, a recorded error message, and the
+// out-parameter reset to NULL.
 template <typename T>
 void ExpectInvalidArgumentResetsOut(const char* name,
                                     const std::function<int(T**)>& call) {
@@ -2635,7 +2628,7 @@ void ExpectInvalidArgumentResetsOut(const char* name,
   T* out = reinterpret_cast<T*>(0x1);
   const int status = call(&out);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(out, nullptr);
 }
 
@@ -2702,13 +2695,12 @@ TEST(EngineCErrorTest, TokenUnionsGetTokenAt) {
   const int status =
       litert_lm_token_unions_get_token_at(&token_unions, 1, &token);
   EXPECT_EQ(status, kLiteRtLmStatusOutOfRange);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("out of range"));
   EXPECT_EQ(token, nullptr);
 }
 
-TEST(EngineCErrorTest, SessionResultProducersFailureReturnsLastErrorCode) {
+TEST(EngineCErrorTest, SessionResultProducersFailureSetsLastError) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
   EngineSettingsPtr settings(
@@ -2731,17 +2723,17 @@ TEST(EngineCErrorTest, SessionResultProducersFailureReturnsLastErrorCode) {
   int status = litert_lm_session_run_text_scoring(
       session.get(), target_text, 0, /*store_token_lengths=*/false, &responses);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(responses, nullptr);
 
   // Benchmarking is not enabled for this engine. The exact code is determined
-  // by the runtime; it must be a failure code that matches the last error.
+  // by the runtime; it must be a failure code and record a last error message.
   litert_lm_clear_last_error();
   LiteRtLmBenchmarkInfo* benchmark_info =
       reinterpret_cast<LiteRtLmBenchmarkInfo*>(0x1);
   status = litert_lm_session_get_benchmark_info(session.get(), &benchmark_info);
   EXPECT_GT(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(benchmark_info, nullptr);
 
   // Tokenizing requires text.
@@ -2751,7 +2743,7 @@ TEST(EngineCErrorTest, SessionResultProducersFailureReturnsLastErrorCode) {
   status = litert_lm_engine_tokenize(engine.get(), /*text=*/nullptr,
                                      &tokenize_result);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(tokenize_result, nullptr);
 }
 
@@ -2763,7 +2755,6 @@ TEST(EngineCErrorTest, SuppressTokensNullWithCountSetsError) {
   EXPECT_EQ(litert_lm_suppress_tokens_config_set_suppress_tokens(config.get(),
                                                                  nullptr, 3),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("suppress_tokens must not be NULL"));
 }
@@ -2772,35 +2763,30 @@ TEST(EngineCErrorTest, VoidSettersWithNullHandleSetError) {
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_engine_settings_set_max_num_tokens(nullptr, 16),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid engine settings"));
 
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_session_config_set_max_output_tokens(nullptr, 16),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid session config"));
 
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_sampler_params_set_top_k(nullptr, 1),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("params must not be NULL"));
 
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_repetition_penalty_config_set_window_size(nullptr, 1),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("config must not be NULL"));
 
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_session_cancel_process(nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid session"));
 }
@@ -2812,13 +2798,12 @@ TEST(EngineCErrorTest, SessionConfigNullSamplerParamsSetsError) {
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_session_config_set_sampler_params(config.get(), nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("sampler_params must not be NULL"));
 }
 
 // Runs every setter in `setters` against `handle` (expecting OK) and against
-// NULL (expecting kLiteRtLmStatusInvalidArgument, mirrored in the last error).
+// NULL (expecting kLiteRtLmStatusInvalidArgument and a recorded error message).
 template <typename T>
 void ExpectSettersReturnStatus(
     T* handle,
@@ -2829,7 +2814,7 @@ void ExpectSettersReturnStatus(
     EXPECT_EQ(setter(handle), kLiteRtLmStatusOk);
     litert_lm_clear_last_error();
     EXPECT_EQ(setter(nullptr), kLiteRtLmStatusInvalidArgument);
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   }
 }
 
@@ -3090,7 +3075,6 @@ TEST(EngineCStatusTest, EngineSettingsNullStringArgumentsReturnError) {
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_engine_settings_set_cache_dir(settings.get(), nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("cache_dir must not be NULL"));
 
@@ -3098,7 +3082,6 @@ TEST(EngineCStatusTest, EngineSettingsNullStringArgumentsReturnError) {
   EXPECT_EQ(litert_lm_engine_settings_set_litert_dispatch_lib_dir(
                 settings.get(), nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("lib_dir must not be NULL"));
 }
@@ -3111,7 +3094,6 @@ TEST(EngineCStatusTest, SetMinLogLevelReturnsStatus) {
   // 6 is within the enum's value range but is not a declared enumerator.
   EXPECT_EQ(litert_lm_set_min_log_level(static_cast<LiteRtLmLogSeverity>(6)),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmLogSeverity"));
 }
@@ -3122,7 +3104,6 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   EXPECT_EQ(litert_lm_responses_get_num_candidates(nullptr, &num_candidates),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(num_candidates, -7);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("responses must not be NULL"));
 
@@ -3131,7 +3112,6 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   EXPECT_EQ(litert_lm_tokenize_result_get_tokens(nullptr, &tokens),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(tokens, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("result must not be NULL"));
 
@@ -3140,7 +3120,6 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   EXPECT_EQ(litert_lm_benchmark_info_get_num_decode_turns(nullptr, &num_turns),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(num_turns, -7);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("benchmark_info must not be NULL"));
 
@@ -3149,7 +3128,6 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   EXPECT_EQ(litert_lm_token_unions_get_token_at(nullptr, 0, &token),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(token, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("tokens must not be NULL"));
 }
@@ -3160,9 +3138,9 @@ struct NamedCall {
   std::function<int()> call;
 };
 
-// Runs every call and expects it to return `expected_code`, to record the same
-// code as the thread's last error, and (if non-empty) to record a message
-// containing `expected_message`.
+// Runs every call and expects it to return `expected_code`, to record a last
+// error message, and (if non-empty) for that message to contain
+// `expected_message`.
 void ExpectAllReturn(const std::vector<NamedCall>& calls, int expected_code,
                      const std::string& expected_message = "") {
   for (const NamedCall& named_call : calls) {
@@ -3170,7 +3148,7 @@ void ExpectAllReturn(const std::vector<NamedCall>& calls, int expected_code,
     litert_lm_clear_last_error();
     const int status = named_call.call();
     EXPECT_EQ(status, expected_code);
-    EXPECT_EQ(status, litert_lm_get_last_error_code());
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
     if (!expected_message.empty()) {
       EXPECT_THAT(litert_lm_get_last_error_message(),
                   testing::HasSubstr(expected_message));
@@ -3691,7 +3669,6 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_conversation_config_set_system_message(nullptr, "{}"),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("config must not be NULL"));
 
@@ -3701,7 +3678,6 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_conversation_config_set_tools(config.get(), nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("tools_json must not be NULL"));
 
@@ -3709,7 +3685,6 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
   EXPECT_EQ(
       litert_lm_conversation_optional_args_set_max_output_tokens(nullptr, 1),
       kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("args must not be NULL"));
 
@@ -3718,14 +3693,12 @@ TEST(EngineCErrorTest, ConversationNullArgumentsSetError) {
   EXPECT_EQ(litert_lm_json_response_get_string(nullptr, &json),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(json, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("response must not be NULL"));
 
   litert_lm_clear_last_error();
   EXPECT_EQ(litert_lm_conversation_cancel_process(nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid conversation"));
 }
@@ -3883,7 +3856,6 @@ TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
   EXPECT_EQ(litert_lm_conversation_config_set_constraint_provider(config.get(),
                                                                   &provider),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmConstraintProviderType"));
 
@@ -3895,7 +3867,6 @@ TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
   EXPECT_EQ(litert_lm_conversation_optional_args_set_constraint(
                 args.get(), static_cast<LiteRtLmConstraintType>(3), "a+"),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmConstraintType"));
 }
@@ -3912,7 +3883,6 @@ TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
   int status = litert_lm_experimental_session_get_debug_info(
       /*session=*/nullptr, &debug_info);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid session"));
   EXPECT_EQ(debug_info, nullptr);
@@ -3922,7 +3892,6 @@ TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
   status = litert_lm_experimental_conversation_get_session_debug_info(
       /*conversation=*/nullptr, &debug_info);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid conversation"));
   EXPECT_EQ(debug_info, nullptr);
@@ -3932,7 +3901,6 @@ TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
   status = litert_lm_experimental_session_debug_info_get_capture_dir(
       /*debug_info=*/nullptr, &capture_dir);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("debug_info must not be NULL"));
   EXPECT_EQ(capture_dir, nullptr);
@@ -3963,7 +3931,6 @@ TEST(EngineCErrorTest, ExperimentalNullOutParamsReturnInvalidArgument) {
     litert_lm_clear_last_error();
     const int status = call();
     EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-    EXPECT_EQ(status, litert_lm_get_last_error_code());
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 testing::HasSubstr("must not be NULL"));
   }
@@ -4034,11 +4001,10 @@ TEST(EngineCTest, ExperimentalDebugInfo) {
   litert_lm_experimental_session_debug_info_delete(conversation_debug_info);
 }
 
-// Asserts that `status` is a canonical failure code that equals the calling
-// thread's last error code.
+// Asserts that `status` is `expected_code` and a thread-local last error
+// message was recorded.
 void ExpectCanonicalFailure(int status, int expected_code) {
   EXPECT_EQ(status, expected_code);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
 }
 
@@ -4119,7 +4085,7 @@ TEST(EngineCStatusTest, SessionConfigSetLoraPathMissingFileReturnsCode) {
   int status = litert_lm_session_config_set_lora_path(
       config.get(), "/nonexistent/litert_lm/lora.tflite");
   EXPECT_GT(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
 }
 
 TEST(EngineCStatusTest, SupportedAudioLoraRanksWithoutAudioFailsPrecondition) {
@@ -4163,13 +4129,13 @@ TEST(EngineCStatusTest, SessionRuntimeFailuresReturnCanonicalCode) {
   ASSERT_NE(session, nullptr);
 
   // A checkpoint that was never saved cannot be rewound to. The exact code is
-  // determined by the runtime; it must be a canonical failure code that
-  // matches the recorded last error.
+  // determined by the runtime; it must be a canonical failure code and record
+  // a last error message.
   litert_lm_clear_last_error();
   int status = litert_lm_session_rewind_to_checkpoint(session.get(),
                                                       "no_such_checkpoint");
   EXPECT_GT(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
 
   litert_lm_clear_last_error();
   ExpectCanonicalFailure(
@@ -4295,7 +4261,6 @@ TEST(EngineCErrorTest, ConversationFunctionsWithNullHandleResetOutParam) {
   int count = 42;
   const int status = litert_lm_conversation_get_token_count(nullptr, &count);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid conversation"));
   EXPECT_EQ(count, 42);
@@ -4340,7 +4305,7 @@ TEST(EngineCStatusTest, ConversationResultProducers) {
   }
   ASSERT_EQ(count_status, kLiteRtLmStatusOk);
   EXPECT_GE(count, 0);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
@@ -4355,7 +4320,7 @@ TEST(EngineCStatusTest, ConversationResultProducers) {
   int status = litert_lm_conversation_send_message(conversation.get(), bad_json,
                                                    nullptr, nullptr, &response);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(response, nullptr);
 
   litert_lm_clear_last_error();
@@ -4363,18 +4328,18 @@ TEST(EngineCStatusTest, ConversationResultProducers) {
   status = litert_lm_conversation_render_message_to_string(conversation.get(),
                                                            bad_json, &text);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(text, nullptr);
 
   // Benchmarking is not enabled for this engine. The exact code is determined
-  // by the runtime; it must be a failure code that matches the last error.
+  // by the runtime; it must be a failure code and record a last error message.
   litert_lm_clear_last_error();
   LiteRtLmBenchmarkInfo* benchmark_info =
       reinterpret_cast<LiteRtLmBenchmarkInfo*>(0x1);
   status = litert_lm_conversation_get_benchmark_info(conversation.get(),
                                                      &benchmark_info);
   EXPECT_GT(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(benchmark_info, nullptr);
 }
 

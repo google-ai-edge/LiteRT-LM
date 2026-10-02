@@ -53,17 +53,8 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     return String(cString: cString)
   }
 
-  /// Returns the last integer error code recorded by the native LiteRT-LM C API on the calling
-  /// thread, or 0 (kOk) if no error has occurred or the error state has been cleared.
-  ///
-  /// - Note: The native C API uses thread-local storage. For `async` Swift methods, prefer
-  ///   inspecting the thrown `LiteRTLMError`.
-  public static func getLastErrorCode() -> Int {
-    return Int(litert_lm_get_last_error_code())
-  }
-
   /// Clears the last error recorded by the native LiteRT-LM C API on the calling thread,
-  /// resetting the error message to `nil` and the error code to 0.
+  /// resetting the error message to `nil`.
   public static func clearLastError() {
     litert_lm_clear_last_error()
   }

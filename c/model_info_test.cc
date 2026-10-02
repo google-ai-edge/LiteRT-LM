@@ -68,12 +68,11 @@ LoadedFilePtr LoadTestFile(const std::string& file_name) {
   return LoadedFilePtr(file);
 }
 
-// Expects that `status` is `expected_code`, that it agrees with the thread's
-// last error code, and that the last error message contains `message`.
+// Expects that `status` is `expected_code` and that the last error message
+// contains `message`.
 void ExpectError(int status, LiteRtLmStatusCode expected_code,
                  const std::string& message) {
   EXPECT_EQ(status, expected_code);
-  EXPECT_EQ(litert_lm_get_last_error_code(), status);
   ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr(message));
 }
@@ -245,7 +244,6 @@ TEST(ModelInfoCTest, CreateInvalidPathFails) {
   int status =
       litert_lm_loaded_file_create("/invalid/path/that/does/not/exist", &file);
   EXPECT_NE(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(litert_lm_get_last_error_code(), status);
   EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(file, nullptr);
 }

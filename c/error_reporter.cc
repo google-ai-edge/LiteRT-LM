@@ -23,7 +23,6 @@
 namespace {
 
 struct ThreadLocalError {
-  LiteRtLmStatusCode code = kLiteRtLmStatusOk;
   std::string message;
 };
 
@@ -36,7 +35,6 @@ ThreadLocalError& GetThreadLocalError() {
 // that once reported a large error message does not hold onto that allocation
 // for its entire lifetime. `litert_lm_clear_last_error` documents this.
 void ResetThreadLocalError(ThreadLocalError& error) {
-  error.code = kLiteRtLmStatusOk;
   std::string().swap(error.message);
 }
 
@@ -100,13 +98,12 @@ void SetLastError(const absl::Status& status) {
     ResetThreadLocalError(error);
     return;
   }
-  error.code = ToLiteRtLmStatusCode(status.code());
   error.message = status.ToString();
 }
 
 void SetLastError(absl::StatusCode code, absl::string_view message) {
+  (void)code;
   auto& error = GetThreadLocalError();
-  error.code = ToLiteRtLmStatusCode(code);
   error.message = std::string(message);
 }
 
@@ -135,8 +132,6 @@ const char* litert_lm_get_last_error_message(void) {
   }
   return error.message.c_str();
 }
-
-int litert_lm_get_last_error_code(void) { return GetThreadLocalError().code; }
 
 void litert_lm_clear_last_error(void) {
   ResetThreadLocalError(GetThreadLocalError());

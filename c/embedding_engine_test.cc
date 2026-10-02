@@ -187,7 +187,6 @@ std::optional<int> GetOptionalInt(const std::function<int(int*)>& getter,
   int value = kUntouchedOutValue;
   int status = getter(&value);
   if (status == kLiteRtLmStatusNotFound) {
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusNotFound);
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 ::testing::HasSubstr(not_set_error));
     EXPECT_EQ(value, kUntouchedOutValue);
@@ -215,11 +214,11 @@ std::optional<int> GetVisionTokensPerImage(
       "vision_tokens_per_image is not set");
 }
 
-// Expects `status` to be `expected_code` and to match the thread-local last
-// error code.
+// Expects `status` to be `expected_code` and a thread-local last error message
+// to be recorded.
 void ExpectFailureMatchesLastError(int status, int expected_code) {
   EXPECT_EQ(status, expected_code);
-  EXPECT_EQ(litert_lm_get_last_error_code(), status);
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
 }
 
 TEST(EmbeddingEngineCTest, CreateSettingsSuccess) {
@@ -272,7 +271,7 @@ TEST(EmbeddingEngineCTest, CreateSettingsInvalidBackend) {
   const int status = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "invalid_backend", nullptr, nullptr, &settings);
   EXPECT_NE(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(litert_lm_get_last_error_code(), status);
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(settings, nullptr);
 }
 
@@ -467,7 +466,7 @@ TEST(EmbeddingEngineCTest,
   auto* engine = reinterpret_cast<LiteRtLmEmbeddingEngine*>(&dummy);
   const int status = litert_lm_embedding_engine_create(settings.get(), &engine);
   EXPECT_NE(status, kLiteRtLmStatusOk);
-  EXPECT_EQ(litert_lm_get_last_error_code(), status);
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(engine, nullptr);
 }
 
@@ -601,7 +600,6 @@ TEST(EmbeddingEngineCTest, NullArgumentsSetError) {
   EXPECT_EQ(
       litert_lm_embedding_engine_settings_set_max_input_length(nullptr, 16),
       kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("Invalid embedding engine settings"));
 
@@ -609,7 +607,6 @@ TEST(EmbeddingEngineCTest, NullArgumentsSetError) {
   bool normalize = true;
   EXPECT_EQ(litert_lm_embedding_options_get_normalize(nullptr, &normalize),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("options must not be NULL"));
 
@@ -617,7 +614,6 @@ TEST(EmbeddingEngineCTest, NullArgumentsSetError) {
   const LiteRtLmEmbeddingResponse* response = nullptr;
   EXPECT_EQ(litert_lm_embedding_responses_get_at(nullptr, 0, &response),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("responses must not be NULL"));
 }
@@ -629,13 +625,12 @@ TEST(EmbeddingEngineCTest, SetCacheDirNullSetsError) {
   EXPECT_EQ(litert_lm_embedding_engine_settings_set_cache_dir(settings.get(),
                                                               nullptr),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("cache_dir must not be NULL"));
 }
 
 // Runs every setter in `setters` against `handle` (expecting OK) and against
-// NULL (expecting kLiteRtLmStatusInvalidArgument, mirrored in the last error).
+// NULL (expecting kLiteRtLmStatusInvalidArgument and a recorded error message).
 template <typename T>
 void ExpectSettersReturnStatus(
     T* handle,
@@ -646,7 +641,7 @@ void ExpectSettersReturnStatus(
     EXPECT_EQ(setter(handle), kLiteRtLmStatusOk);
     litert_lm_clear_last_error();
     EXPECT_EQ(setter(nullptr), kLiteRtLmStatusInvalidArgument);
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   }
 }
 
@@ -758,7 +753,6 @@ TEST(EmbeddingEngineCStatusTest, OptionsSettersReturnStatus) {
   EXPECT_EQ(litert_lm_embedding_options_set_input_overflow_strategy(
                 options.get(), static_cast<LiteRtLmInputOverflowStrategy>(3)),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               ::testing::HasSubstr("Unknown LiteRtLmInputOverflowStrategy"));
   EXPECT_EQ(GetInputOverflowStrategy(options.get()),
@@ -766,7 +760,7 @@ TEST(EmbeddingEngineCStatusTest, OptionsSettersReturnStatus) {
 }
 
 // Every status-returning producer rejects a NULL out-parameter with
-// kLiteRtLmStatusInvalidArgument, mirrored in the last error.
+// kLiteRtLmStatusInvalidArgument and records an error message.
 TEST(EmbeddingEngineCStatusTest, NullOutParamReturnsInvalidArgument) {
   SettingsPtr settings = CreateSettings();
   ASSERT_NE(settings, nullptr);

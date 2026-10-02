@@ -227,7 +227,6 @@ class EmbeddingEngineTests: XCTestCase {
       XCTAssertFalse(message.isEmpty, "Expected non-empty error message from native layer")
       XCTAssertTrue(error.localizedDescription.contains(message))
       XCTAssertNil(LiteRTLMError.getLastErrorMessage())
-      XCTAssertEqual(LiteRTLMError.getLastErrorCode(), 0)
     } catch {
       XCTFail("Unexpected error: \(error)")
     }

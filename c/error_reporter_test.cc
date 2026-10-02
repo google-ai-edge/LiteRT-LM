@@ -31,7 +31,6 @@ using ::testing::HasSubstr;
 
 TEST(ErrorReporterTest, InitialStateOrClearedState) {
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
@@ -39,23 +38,19 @@ TEST(ErrorReporterTest, SetAndGetErrorInternal) {
   litert_lm_clear_last_error();
   litert::lm::c::SetLastError(
       absl::InvalidArgumentError("test argument error"));
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("test argument error"));
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
 TEST(ErrorReporterTest, SetLastErrorOkClearsError) {
   litert::lm::c::SetLastError(absl::InternalError("internal failure"));
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInternal);
   EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
 
   litert::lm::c::SetLastError(absl::OkStatus());
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
@@ -70,7 +65,6 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
                                        nullptr, &invalid_settings),
       kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(invalid_settings, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("model_path must not be NULL"));
@@ -82,13 +76,11 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
                                              nullptr, &valid_settings),
             kLiteRtLmStatusOk);
   ASSERT_NE(valid_settings, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("model_path must not be NULL"));
 
   // litert_lm_clear_last_error explicitly clears the error.
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   litert_lm_engine_settings_delete(valid_settings);
@@ -96,15 +88,12 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
 
 TEST(ErrorReporterTest, ThreadIsolation) {
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   std::thread worker([]() {
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
     EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
     litert::lm::c::SetLastError(absl::NotFoundError("error on worker thread"));
-    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusNotFound);
     ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 HasSubstr("error on worker thread"));
@@ -114,7 +103,6 @@ TEST(ErrorReporterTest, ThreadIsolation) {
 
   // Main thread's error state should remain clean / unaffected by worker
   // thread.
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
@@ -122,14 +110,12 @@ TEST(ErrorReporterTest, ToCStatusRecordsErrorAndReturnsCode) {
   litert_lm_clear_last_error();
   EXPECT_EQ(litert::lm::c::ToCStatus(absl::NotFoundError("missing file")),
             kLiteRtLmStatusNotFound);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusNotFound);
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("missing file"));
 }
 
 TEST(ErrorReporterTest, ToCStatusOkDoesNotClearPriorError) {
   litert::lm::c::SetLastError(absl::InternalError("earlier failure"));
   EXPECT_EQ(litert::lm::c::ToCStatus(absl::OkStatus()), kLiteRtLmStatusOk);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInternal);
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("earlier failure"));
 }
 
@@ -138,7 +124,6 @@ TEST(ErrorReporterTest, ReturnErrorRecordsErrorAndReturnsCode) {
   EXPECT_EQ(litert::lm::c::ReturnError(absl::StatusCode::kOutOfRange,
                                        "index 3 out of range"),
             kLiteRtLmStatusOutOfRange);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOutOfRange);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("index 3 out of range"));
 }
@@ -152,10 +137,9 @@ TEST(ErrorReporterTest, ReturnIfNullMacro) {
   litert_lm_clear_last_error();
   int value = 0;
   EXPECT_EQ(ReturnIfNullEntryPoint(&value), kLiteRtLmStatusOk);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   EXPECT_EQ(ReturnIfNullEntryPoint(nullptr), kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("arg must not be NULL"));
 }
@@ -179,7 +163,6 @@ TEST(ErrorReporterTest, ReturnIfErrorMacro) {
       ReturnIfErrorEntryPoint(absl::UnavailableError("busy"), &reached_end),
       kLiteRtLmStatusUnavailable);
   EXPECT_FALSE(reached_end);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusUnavailable);
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("busy"));
 }
 
@@ -201,7 +184,6 @@ TEST(ErrorReporterTest, AssignOrReturnMacro) {
   EXPECT_EQ(AssignOrReturnEntryPoint(absl::DataLossError("corrupt"), &out),
             kLiteRtLmStatusDataLoss);
   EXPECT_TRUE(out.empty());
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusDataLoss);
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("corrupt"));
 }
 

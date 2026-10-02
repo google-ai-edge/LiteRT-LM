@@ -36,8 +36,8 @@ extern "C" {
 //
 // 1. Thread Locality:
 //    Errors are stored in thread-local storage. Each thread maintains its own
-//    independent error code and message. Concurrent calls across different
-//    threads do not overwrite or interfere with each other's error state.
+//    independent error message. Concurrent calls across different threads do
+//    not overwrite or interfere with each other's error state.
 //
 // 2. Error Setting on Failure Only:
 //    The error state is updated ONLY when an API function fails. Functions
@@ -47,10 +47,9 @@ extern "C" {
 //    - Callers MUST check the status code returned by an API function first
 //      (see "Return Shape" below) to determine whether an operation actually
 //      failed.
-//    - Callers MUST NOT rely on `litert_lm_get_last_error_code() != 0` or
-//      `litert_lm_get_last_error_message() != NULL` to infer failure, because
-//      a successful call following a failed one will leave the prior error
-//      intact in thread-local storage.
+//    - Callers MUST NOT rely on `litert_lm_get_last_error_message() != NULL`
+//      to infer failure, because a successful call following a failed one will
+//      leave the prior error message intact in thread-local storage.
 //    - Error retrieval must be performed on the SAME thread that called the
 //      failing API function before that thread encounters another failure or
 //      clears the error.
@@ -68,7 +67,7 @@ extern "C" {
 //
 // 5. Error Clearing Logic (Optional / Defensive):
 //    - Calling `litert_lm_clear_last_error` explicitly resets the calling
-//      thread's error state (code = 0 / kOk, message = NULL).
+//      thread's error state (message = NULL).
 //    - Calling this function is NOT required during normal error handling:
 //      callers determine failure from API return values, and subsequent
 //      errors will automatically overwrite previous error state.
@@ -90,9 +89,9 @@ extern "C" {
 //    - A value that is legitimately absent is a success: the function returns
 //      `kLiteRtLmStatusOk` and writes NULL to the out-parameter (for example,
 //      an engine without a configured start token).
-//    - Every non-OK return also records the calling thread's last error, so
-//      the returned code equals `litert_lm_get_last_error_code()` immediately
-//      afterwards, and `litert_lm_get_last_error_message()` carries details.
+//    - Every non-OK return also records the calling thread's last error
+//      message, which can be retrieved immediately afterwards via
+//      `litert_lm_get_last_error_message()`.
 //    - The only functions that do not return a status are the NULL-safe
 //      `litert_lm_*_delete` destructors and the error-reporter functions
 //      declared in this header.
@@ -113,7 +112,7 @@ extern "C" {
 // Status Codes
 // =============================================================================
 //
-// Canonical status codes returned by `litert_lm_get_last_error_code()`.
+// Canonical status codes returned by LiteRT LM C API functions.
 //
 // These values are 1:1 identical to Google canonical error codes
 // (`absl::StatusCode` / `google.rpc.Code`).
@@ -188,35 +187,8 @@ typedef enum LiteRtLmStatusCode {
 LITERT_LM_C_API_EXPORT
 const char* litert_lm_get_last_error_message(void);
 
-// Returns the last error code recorded on the calling thread.
-//
-// Extraction Precondition & Expectations:
-// Callers should only call this function AFTER an API function has signaled
-// failure by returning a status code other than `kLiteRtLmStatusOk`.
-// Following standard C conventions, functions that succeed DO NOT clear or
-// modify the error state; inspecting this function without verifying a return
-// failure may return a stale error code from an earlier failure.
-//
-// Thread Locality:
-// The error code is stored in thread-local storage and must be retrieved
-// from the same thread that executed the failed API function.
-//
-// Returns:
-// The status code for the last failure on the calling thread, or
-// `kLiteRtLmStatusOk` (0) if no error has occurred on this thread or if the
-// error state has been cleared. The returned value is always one of the
-// `LiteRtLmStatusCode` enumerators.
-//
-// The return type is `int` rather than `LiteRtLmStatusCode` so that the ABI
-// does not depend on the compiler's choice of underlying type for the enum,
-// which keeps this function easy to bind from other languages.
-//
-// Added in version 0.2.0.
-LITERT_LM_C_API_EXPORT
-int litert_lm_get_last_error_code(void);
-
 // Clears the last error recorded on the calling thread, resetting the error
-// message to NULL and the error code to `kLiteRtLmStatusOk` (0).
+// message to NULL.
 //
 // Clearing Logic & Expectations:
 // Calling this function is optional during normal API usage since return
