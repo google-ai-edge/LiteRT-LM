@@ -205,17 +205,4 @@ TEST(ErrorReporterTest, AssignOrReturnMacro) {
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("corrupt"));
 }
 
-TEST(ErrorReporterTest, CheckNotNull) {
-  litert_lm_clear_last_error();
-  int value = 0;
-  EXPECT_TRUE(LITERT_LM_C_CHECK_NOT_NULL(&value));
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
-
-  int* handle = nullptr;
-  EXPECT_FALSE(LITERT_LM_C_CHECK_NOT_NULL(handle));
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
-  EXPECT_THAT(litert_lm_get_last_error_message(),
-              HasSubstr("handle must not be NULL."));
-}
-
 }  // namespace

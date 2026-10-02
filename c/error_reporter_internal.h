@@ -54,23 +54,7 @@ LiteRtLmStatusCode ToCStatus(const absl::Status& status);
 LiteRtLmStatusCode ReturnError(absl::StatusCode code,
                                absl::string_view message);
 
-// Returns true if `ptr` is non-NULL. Otherwise records a `kInvalidArgument`
-// last error of the form "<name> must not be NULL." and returns false.
-//
-// For entry points that cannot return a status code (e.g. void setters and
-// value getters), so that a NULL argument is still observable through
-// `litert_lm_get_last_error_code()`. Prefer the `LITERT_LM_C_CHECK_NOT_NULL`
-// macro below. `LiteRtLmStatusCode`-returning entry points should use
-// `LITERT_LM_C_RETURN_IF_NULL` instead.
-bool CheckNotNull(const void* ptr, absl::string_view name);
-
 }  // namespace litert::lm::c
-
-// Evaluates `arg` once and returns true if it is non-NULL; otherwise records a
-// `kInvalidArgument` last error naming `arg` ("<arg> must not be NULL.") and
-// returns false. For entry points that cannot return a `LiteRtLmStatusCode`.
-#define LITERT_LM_C_CHECK_NOT_NULL(arg) \
-  ::litert::lm::c::CheckNotNull((arg), #arg)
 
 // The macros below are for use inside `LiteRtLmStatusCode`-returning C API
 // entry points only.

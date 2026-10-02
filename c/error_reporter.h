@@ -44,9 +44,9 @@ extern "C" {
 //    that succeed DO NOT clear, reset, or modify the existing error state.
 //
 // 3. User Expectations & Error Extraction Logic:
-//    - Callers MUST check the return value of an API function first (such as
-//      verifying if a returned pointer is NULL or an operation returns a
-//      failure indicator) to determine whether an operation actually failed.
+//    - Callers MUST check the status code returned by an API function first
+//      (see "Return Shape" below) to determine whether an operation actually
+//      failed.
 //    - Callers MUST NOT rely on `litert_lm_get_last_error_code() != 0` or
 //      `litert_lm_get_last_error_message() != NULL` to infer failure, because
 //      a successful call following a failed one will leave the prior error
@@ -82,8 +82,11 @@ extern "C" {
 //      `kLiteRtLmStatusOk` (0) on success, or another (positive) code on
 //      failure. Negative values are never returned.
 //    - Results are delivered through trailing out-parameters named `out_*`.
-//      Out-parameters are written only on success. Passing NULL for an
-//      out-parameter yields `kLiteRtLmStatusInvalidArgument`.
+//      Passing NULL for an out-parameter yields
+//      `kLiteRtLmStatusInvalidArgument`. Pointer out-parameters (`T**`,
+//      `const char**`) are set to NULL on failure. Scalar out-parameters
+//      (`int*`, `bool*`, `float*`, `size_t*`, enums) are written only on
+//      success and are left untouched on failure.
 //    - A value that is legitimately absent is a success: the function returns
 //      `kLiteRtLmStatusOk` and writes NULL to the out-parameter (for example,
 //      an engine without a configured start token).
@@ -159,7 +162,7 @@ typedef enum LiteRtLmStatusCode {
 //
 // Extraction Precondition & Expectations:
 // Callers should only call this function AFTER an API function has signaled
-// failure via its return value (such as returning NULL or an error status).
+// failure by returning a status code other than `kLiteRtLmStatusOk`.
 // Following standard C conventions, functions that succeed DO NOT clear or
 // modify the error state; inspecting this function without verifying a return
 // failure may return stale error messages from an earlier failure.
@@ -189,7 +192,7 @@ const char* litert_lm_get_last_error_message(void);
 //
 // Extraction Precondition & Expectations:
 // Callers should only call this function AFTER an API function has signaled
-// failure via its return value (such as returning NULL or an error status).
+// failure by returning a status code other than `kLiteRtLmStatusOk`.
 // Following standard C conventions, functions that succeed DO NOT clear or
 // modify the error state; inspecting this function without verifying a return
 // failure may return a stale error code from an earlier failure.
