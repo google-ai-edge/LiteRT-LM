@@ -50,41 +50,46 @@ litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
 
 // TODO(b/549220913): Migrate debugger from build-time macro to runtime
 // configuration in EngineSettings / SessionConfig.
-int litert_lm_experimental_is_debugger_enabled() {
+LiteRtLmStatusCode litert_lm_experimental_is_debugger_enabled(
+    bool* out_enabled) {
+  LITERT_LM_C_RETURN_IF_NULL(out_enabled);
 #if defined(LITERT_LM_DEBUGGER_ENABLED)
-  return 1;
+  *out_enabled = true;
 #else
-  return 0;
+  *out_enabled = false;
 #endif
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmSessionDebugInfo* litert_lm_experimental_session_get_debug_info(
-    LiteRtLmSession* session) {
+LiteRtLmStatusCode litert_lm_experimental_session_get_debug_info(
+    LiteRtLmSession* session, LiteRtLmSessionDebugInfo** out_debug_info) {
+  LITERT_LM_C_RETURN_IF_NULL(out_debug_info);
+  *out_debug_info = nullptr;
   if (!session || !session->session) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid session.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
   }
   auto debug_info = session->session->GetSessionDebugInfo();
-  if (!debug_info.has_value()) {
-    return nullptr;
+  if (debug_info.has_value()) {
+    *out_debug_info = new LiteRtLmSessionDebugInfo{std::move(*debug_info)};
   }
-  return new LiteRtLmSessionDebugInfo{std::move(*debug_info)};
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmSessionDebugInfo*
-litert_lm_experimental_conversation_get_session_debug_info(
-    LiteRtLmConversation* conversation) {
+LiteRtLmStatusCode litert_lm_experimental_conversation_get_session_debug_info(
+    LiteRtLmConversation* conversation,
+    LiteRtLmSessionDebugInfo** out_debug_info) {
+  LITERT_LM_C_RETURN_IF_NULL(out_debug_info);
+  *out_debug_info = nullptr;
   if (!conversation || !conversation->conversation) {
-    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                                "Invalid conversation.");
-    return nullptr;
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid conversation.");
   }
   auto debug_info = conversation->conversation->GetSessionDebugInfo();
-  if (!debug_info.has_value()) {
-    return nullptr;
+  if (debug_info.has_value()) {
+    *out_debug_info = new LiteRtLmSessionDebugInfo{std::move(*debug_info)};
   }
-  return new LiteRtLmSessionDebugInfo{std::move(*debug_info)};
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_experimental_session_debug_info_delete(
@@ -92,12 +97,13 @@ void litert_lm_experimental_session_debug_info_delete(
   delete debug_info;
 }
 
-const char* litert_lm_experimental_session_debug_info_get_capture_dir(
-    const LiteRtLmSessionDebugInfo* debug_info) {
-  if (!LITERT_LM_C_CHECK_NOT_NULL(debug_info)) {
-    return nullptr;
-  }
-  return debug_info->debug_info.capture_dir.c_str();
+LiteRtLmStatusCode litert_lm_experimental_session_debug_info_get_capture_dir(
+    const LiteRtLmSessionDebugInfo* debug_info, const char** out_capture_dir) {
+  LITERT_LM_C_RETURN_IF_NULL(out_capture_dir);
+  *out_capture_dir = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(debug_info);
+  *out_capture_dir = debug_info->debug_info.capture_dir.c_str();
+  return kLiteRtLmStatusOk;
 }
 
 }  // extern "C"

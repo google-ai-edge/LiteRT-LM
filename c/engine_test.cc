@@ -35,6 +35,7 @@
 #include "c/engine_internal.h"
 #include "c/error_reporter.h"
 #include "c/experimental.h"
+#include "c/experimental_internal.h"  // IWYU pragma: keep
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
@@ -3900,18 +3901,137 @@ TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
 }
 
 TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
-  litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_experimental_session_get_debug_info(nullptr), nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
-  EXPECT_THAT(litert_lm_get_last_error_message(),
-              testing::HasSubstr("Invalid session"));
+  // A non-NULL sentinel, to check that pointer out-parameters are reset to
+  // NULL on failure.
+  auto* const kSentinelDebugInfo =
+      reinterpret_cast<LiteRtLmSessionDebugInfo*>(0x1);
+  const char kSentinelString[] = "sentinel";
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_experimental_session_debug_info_get_capture_dir(nullptr),
-            nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  LiteRtLmSessionDebugInfo* debug_info = kSentinelDebugInfo;
+  int status = litert_lm_experimental_session_get_debug_info(
+      /*session=*/nullptr, &debug_info);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid session"));
+  EXPECT_EQ(debug_info, nullptr);
+
+  litert_lm_clear_last_error();
+  debug_info = kSentinelDebugInfo;
+  status = litert_lm_experimental_conversation_get_session_debug_info(
+      /*conversation=*/nullptr, &debug_info);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::HasSubstr("Invalid conversation"));
+  EXPECT_EQ(debug_info, nullptr);
+
+  litert_lm_clear_last_error();
+  const char* capture_dir = kSentinelString;
+  status = litert_lm_experimental_session_debug_info_get_capture_dir(
+      /*debug_info=*/nullptr, &capture_dir);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(status, litert_lm_get_last_error_code());
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("debug_info must not be NULL"));
+  EXPECT_EQ(capture_dir, nullptr);
+}
+
+TEST(EngineCErrorTest, ExperimentalNullOutParamsReturnInvalidArgument) {
+  LiteRtLmSessionDebugInfo debug_info;
+  const std::vector<std::pair<std::string, std::function<int()>>> calls = {
+      {"experimental_is_debugger_enabled",
+       [] { return litert_lm_experimental_is_debugger_enabled(nullptr); }},
+      {"experimental_session_get_debug_info",
+       [] {
+         return litert_lm_experimental_session_get_debug_info(nullptr, nullptr);
+       }},
+      {"experimental_conversation_get_session_debug_info",
+       [] {
+         return litert_lm_experimental_conversation_get_session_debug_info(
+             nullptr, nullptr);
+       }},
+      {"experimental_session_debug_info_get_capture_dir",
+       [&debug_info] {
+         return litert_lm_experimental_session_debug_info_get_capture_dir(
+             &debug_info, nullptr);
+       }},
+  };
+  for (const auto& [name, call] : calls) {
+    SCOPED_TRACE(name);
+    litert_lm_clear_last_error();
+    const int status = call();
+    EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(status, litert_lm_get_last_error_code());
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                testing::HasSubstr("must not be NULL"));
+  }
+}
+
+TEST(EngineCTest, ExperimentalSessionDebugInfoGetCaptureDir) {
+  LiteRtLmSessionDebugInfo debug_info;
+  debug_info.debug_info.capture_dir = "litert_lm_debugger/7";
+  const char* capture_dir = nullptr;
+  EXPECT_EQ(litert_lm_experimental_session_debug_info_get_capture_dir(
+                &debug_info, &capture_dir),
+            kLiteRtLmStatusOk);
+  EXPECT_STREQ(capture_dir, "litert_lm_debugger/7");
+}
+
+TEST(EngineCTest, ExperimentalDebugInfo) {
+  bool enabled = false;
+  ASSERT_EQ(litert_lm_experimental_is_debugger_enabled(&enabled),
+            kLiteRtLmStatusOk);
+
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  auto* const kSentinelDebugInfo =
+      reinterpret_cast<LiteRtLmSessionDebugInfo*>(0x1);
+
+  // Some engines support only one session at a time, so query the session
+  // before creating the conversation.
+  SessionPtr session(CreateSession(engine.get(), /*config=*/nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+  LiteRtLmSessionDebugInfo* session_debug_info = kSentinelDebugInfo;
+  ASSERT_EQ(litert_lm_experimental_session_get_debug_info(session.get(),
+                                                          &session_debug_info),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(session_debug_info, kSentinelDebugInfo);
+  if (!enabled) {
+    // Debug info is absent when the debugger is disabled: success + NULL.
+    EXPECT_EQ(session_debug_info, nullptr);
+  }
+  litert_lm_experimental_session_debug_info_delete(session_debug_info);
+  session.reset();
+
+  ConversationConfigPtr conversation_config(
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  ConversationPtr conversation(
+      CreateConversation(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+  LiteRtLmSessionDebugInfo* conversation_debug_info = kSentinelDebugInfo;
+  ASSERT_EQ(litert_lm_experimental_conversation_get_session_debug_info(
+                conversation.get(), &conversation_debug_info),
+            kLiteRtLmStatusOk);
+  EXPECT_NE(conversation_debug_info, kSentinelDebugInfo);
+  if (!enabled) {
+    EXPECT_EQ(conversation_debug_info, nullptr);
+  }
+  litert_lm_experimental_session_debug_info_delete(conversation_debug_info);
 }
 
 // Asserts that `status` is a canonical failure code that equals the calling

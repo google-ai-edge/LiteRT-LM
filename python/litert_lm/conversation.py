@@ -27,6 +27,7 @@ import warnings
 from . import interfaces
 from ._ffi import call_checked
 from ._ffi import create_checked
+from ._ffi import create_optional_checked
 from ._ffi import get_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmConstraintType
@@ -605,7 +606,9 @@ class Conversation(interfaces.AbstractConversation):
 
   def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
     """See base class."""
-    if not self._lib.litert_lm_experimental_is_debugger_enabled():
+    if not get_checked(
+        self._lib, "litert_lm_experimental_is_debugger_enabled", ctypes.c_bool
+    ):
       warnings.warn(
           "LiteRT-LM Debugger is disabled in this runtime build. "
           "To enable artifact tracing, re-compile using "
@@ -621,19 +624,20 @@ class Conversation(interfaces.AbstractConversation):
     if not self._ptr:
       return None
 
-    debug_info_ptr = (
-        self._lib.litert_lm_experimental_conversation_get_session_debug_info(
-            self._ptr
-        )
+    debug_info_ptr = create_optional_checked(
+        self._lib,
+        "litert_lm_experimental_conversation_get_session_debug_info",
+        self._ptr,
     )
     if not debug_info_ptr:
       return None
 
     try:
-      capture_dir_bytes = (
-          self._lib.litert_lm_experimental_session_debug_info_get_capture_dir(
-              debug_info_ptr
-          )
+      capture_dir_bytes = get_checked(
+          self._lib,
+          "litert_lm_experimental_session_debug_info_get_capture_dir",
+          ctypes.c_char_p,
+          debug_info_ptr,
       )
       if not capture_dir_bytes:
         return None
