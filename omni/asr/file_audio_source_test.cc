@@ -228,5 +228,46 @@ TEST_F(FileAudioSourceTest, Reset_ClearsStateAndRestarts) {
   EXPECT_NEAR(chunk[0], 1000.0f / 32768.0f, 1e-4f);
 }
 
+TEST_F(FileAudioSourceTest,
+       Schedule_RingBufferWrapAroundHitsEofZeroPadsRemaining) {
+  int sample_rate = 16000;
+  // Total 2880 samples:
+  // interval = 100ms (1600 samples), overlap = 40ms (640 samples), step = 960.
+  // Chunk 0 reads 1600 samples (ring_pos_ = 0).
+  // Chunk 1 reads 960 samples (ring_pos_ = 960, samples 0..2559).
+  // Chunk 2 needs 960 samples starting at ring_pos_ = 960:
+  //   - read1 reads 640 samples (1600 - 960), leaving 320 samples in the file
+  //     (2560 + 320 = 2880), so read1 succeeds!
+  //   - read2 tries to read 320 samples at the wrapped start of ring_buffer_,
+  //     hitting EOF (0 frames read). It must zero-pad those 320 frames instead
+  //     of leaving stale samples from Chunk 0.
+  std::vector<int16_t> samples(2880, 4096);
+  std::string path = GetTempWavPath("test_wrap_eof.wav");
+  WriteWavFile(path, samples, sample_rate);
+
+  ASSERT_OK_AND_ASSIGN(auto source,
+                       FileAudioSource::Create(
+                           path, /*interval=*/absl::Milliseconds(100),
+                           /*overlap=*/absl::Milliseconds(40), sample_rate, 1));
+  std::vector<std::vector<float>> chunks;
+  while (source->NeedSchedule()) {
+    absl::Status status = source->Schedule();
+    if (absl::IsOutOfRange(status)) {
+      break;
+    }
+    ASSERT_OK(status);
+    ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
+    chunks.push_back(std::move(chunk));
+  }
+
+  ASSERT_THAT(chunks, SizeIs(3));
+  // Chunk 2 has 640 overlap + 320 newly read = 960 valid samples, followed by
+  // 640 zero-padded samples.
+  EXPECT_NEAR(chunks[2][959], 4096.0f / 32768.0f, 1e-4f);
+  for (int i = 960; i < 1600; ++i) {
+    EXPECT_THAT(chunks[2][i], Eq(0.0f));
+  }
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

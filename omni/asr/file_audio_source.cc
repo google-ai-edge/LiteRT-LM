@@ -138,8 +138,12 @@ absl::Status FileAudioSource::ScheduleInternal() {
         ReadFrames(decoder, ring_buffer_.data() + ring_pos_, read_len);
     if (second_read_len.ok()) {
       frames_read += *second_read_len;
-    } else if (second_read_len.status().code() !=
+    } else if (second_read_len.status().code() ==
                absl::StatusCode::kOutOfRange) {
+      std::fill_n(ring_buffer_.begin() + ring_pos_, read_len, 0.0f);
+      ring_pos_ = (ring_pos_ + read_len) % samples_per_interval_;
+      current_frame_ += read_len;
+    } else {
       return second_read_len.status();
     }
   }
