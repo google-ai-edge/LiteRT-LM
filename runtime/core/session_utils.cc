@@ -170,6 +170,27 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
     const std::vector<InputData>& contents, const SessionConfig& session_config,
     support::Tokenizer& tokenizer,
     const std::optional<BenchmarkInfo>& benchmark_info) {
+  // When benchmarking multimodal inputs, ApplyPromptTemplates splits the turn
+  // into multiple InputText chunks around the image/audio (e.g., BOS token,
+  // user turn prefix, and the prompt + turn suffix). Pass `benchmark_info` only
+  // to the last non-empty raw InputText chunk so that only the main prompt text
+  // is resized to `num_prefill_tokens` and timed by `TimeTextToTokenIds`,
+  // rather than padding every delimiter text chunk to `num_prefill_tokens`.
+  int last_text_index = -1;
+  if (benchmark_info.has_value()) {
+    for (int i = static_cast<int>(contents.size()) - 1; i >= 0; --i) {
+      if (const auto* input_text = std::get_if<InputText>(&contents[i])) {
+        if (!input_text->IsTensorBuffer()) {
+          ABSL_ASSIGN_OR_RETURN(auto raw_text, input_text->GetRawTextString());
+          if (!raw_text.empty()) {
+            last_text_index = i;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   std::vector<InputData> preprocessed_contents;
   for (int i = 0; i < contents.size(); ++i) {
     const auto& content = contents[i];
@@ -187,8 +208,9 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
         }
         ABSL_ASSIGN_OR_RETURN(
             auto processed_input_text,
-            StringToProcessedInputText(templated_text, session_config,
-                                       tokenizer, benchmark_info));
+            StringToProcessedInputText(
+                templated_text, session_config, tokenizer,
+                i == last_text_index ? benchmark_info : std::nullopt));
         preprocessed_contents.emplace_back(std::move(processed_input_text));
       }
     } else if (const auto* input_image = std::get_if<InputImage>(&content)) {

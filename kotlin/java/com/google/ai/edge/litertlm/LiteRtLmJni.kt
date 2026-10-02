@@ -78,10 +78,16 @@ internal object LiteRtLmJni {
    *
    * @param modelPath The path to the model file.
    * @param backend The backend to use for the engine.
+   * @param visionBackend The backend to use for the vision executor. If empty, the vision executor
+   *   will not be initialized.
+   * @param audioBackend The backend to use for the audio executor. If empty, the audio executor
+   *   will not be initialized.
    * @param prefillTokens The number of tokens to prefill.
    * @param decodeTokens The number of tokens to decode.
    * @param cacheDir The directory for cache files.
    * @param mainNpuNativeLibraryDir The directory for the main backend NPU libraries.
+   * @param visionNpuNativeLibraryDir The directory for the vision backend NPU libraries.
+   * @param audioNpuNativeLibraryDir The directory for the audio backend NPU libraries.
    * @param enableSpeculativeDecoding Whether to enable speculative decoding.
    * @param enableYnnpack Whether to enable YNNPACK. When null, use the engine's default.
    * @return A pointer to the native engine instance.
@@ -89,10 +95,14 @@ internal object LiteRtLmJni {
   external fun nativeCreateBenchmark(
     modelPath: String,
     backend: String,
+    visionBackend: String,
+    audioBackend: String,
     prefillTokens: Int,
     decodeTokens: Int,
     cacheDir: String,
     mainNpuNativeLibraryDir: String,
+    visionNpuNativeLibraryDir: String,
+    audioNpuNativeLibraryDir: String,
     enableSpeculativeDecoding: Boolean?,
     enableYnnpack: Boolean? = null,
   ): Long

@@ -105,6 +105,7 @@ using litert::lm::proto::SamplerParameters;
 
 using litert::lm::jni::GetJniEnvAndAttach;
 using litert::lm::jni::NewStringStandardUTF;
+using litert::lm::jni::ScopedLocalRef;
 
 void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
   jclass exClass =
@@ -160,10 +161,31 @@ jobject CreateBenchmarkInfoJni(
   double last_decode_tokens_per_second = benchmark_info.GetDecodeTokensPerSec(
       benchmark_info.GetTotalDecodeTurns() - 1);
 
-  jclass benchmark_info_cls =
-      env->FindClass("com/google/ai/edge/litertlm/BenchmarkInfo");
-  jmethodID benchmark_info_ctor =
-      env->GetMethodID(benchmark_info_cls, "<init>", "(DDIIDD)V");
+  ScopedLocalRef<jclass> hash_map_cls(env, env->FindClass("java/util/HashMap"));
+  jmethodID hash_map_ctor =
+      env->GetMethodID(hash_map_cls.get(), "<init>", "()V");
+  jmethodID hash_map_put = env->GetMethodID(
+      hash_map_cls.get(), "put",
+      "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+  ScopedLocalRef<jobject> mark_durations_map(
+      env, env->NewObject(hash_map_cls.get(), hash_map_ctor));
+
+  ScopedLocalRef<jclass> double_cls(env, env->FindClass("java/lang/Double"));
+  jmethodID double_ctor = env->GetMethodID(double_cls.get(), "<init>", "(D)V");
+  for (const auto& [mark_name, duration] : benchmark_info.GetMarkDurations()) {
+    ScopedLocalRef<jstring> key(env, NewStringStandardUTF(env, mark_name));
+    ScopedLocalRef<jobject> val(
+        env, env->NewObject(double_cls.get(), double_ctor,
+                            absl::ToDoubleSeconds(duration)));
+    ScopedLocalRef<jobject> prev(
+        env, env->CallObjectMethod(mark_durations_map.get(), hash_map_put,
+                                   key.get(), val.get()));
+  }
+
+  ScopedLocalRef<jclass> benchmark_info_cls(
+      env, env->FindClass("com/google/ai/edge/litertlm/BenchmarkInfo"));
+  jmethodID benchmark_info_ctor = env->GetMethodID(
+      benchmark_info_cls.get(), "<init>", "(DDIIDDLjava/util/Map;)V");
 
   double total_init_time_ms = 0.0;
   for (const auto& phase : benchmark_info.GetInitPhases()) {
@@ -173,10 +195,11 @@ jobject CreateBenchmarkInfoJni(
   }
 
   return env->NewObject(
-      benchmark_info_cls, benchmark_info_ctor, total_init_time_ms / 1000.0,
-      benchmark_info.GetTimeToFirstToken(), last_prefill_token_count,
-      last_decode_token_count, last_prefill_tokens_per_second,
-      last_decode_tokens_per_second);
+      benchmark_info_cls.get(), benchmark_info_ctor,
+      total_init_time_ms / 1000.0, benchmark_info.GetTimeToFirstToken(),
+      last_prefill_token_count, last_decode_token_count,
+      last_prefill_tokens_per_second, last_decode_tokens_per_second,
+      mark_durations_map.get());
 }
 
 // Converts a Java InputData array to a C++ vector of InputData.
@@ -706,9 +729,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
-    jint prefill_tokens, jint decode_tokens, jstring cache_dir,
-    jstring main_npu_native_library_dir, jobject enable_speculative_decoding,
-    jobject enable_ynnpack) {
+    jstring vision_backend, jstring audio_backend, jint prefill_tokens,
+    jint decode_tokens, jstring cache_dir, jstring main_npu_native_library_dir,
+    jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
+    jobject enable_speculative_decoding, jobject enable_ynnpack) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -735,7 +759,43 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     return 0;
   }
 
-  auto settings = EngineSettings::CreateDefault(*model_assets, *backend_enum);
+  const char* vision_backend_chars =
+      env->GetStringUTFChars(vision_backend, nullptr);
+  std::string vision_backend_str(vision_backend_chars);
+  env->ReleaseStringUTFChars(vision_backend, vision_backend_chars);
+
+  std::optional<Backend> vision_backend_optional = std::nullopt;
+  if (!vision_backend_str.empty()) {
+    auto vision_backend_enum =
+        litert::lm::GetBackendFromString(vision_backend_str);
+    if (!vision_backend_enum.ok()) {
+      ThrowLiteRtLmJniException(env, vision_backend_enum.status().ToString());
+      return 0;
+    }
+
+    vision_backend_optional = vision_backend_enum.value();
+  }
+
+  const char* audio_backend_chars =
+      env->GetStringUTFChars(audio_backend, nullptr);
+  std::string audio_backend_str(audio_backend_chars);
+  env->ReleaseStringUTFChars(audio_backend, audio_backend_chars);
+
+  std::optional<Backend> audio_backend_optional = std::nullopt;
+  if (!audio_backend_str.empty()) {
+    auto audio_backend_enum =
+        litert::lm::GetBackendFromString(audio_backend_str);
+    if (!audio_backend_enum.ok()) {
+      ThrowLiteRtLmJniException(env, audio_backend_enum.status().ToString());
+      return 0;
+    }
+
+    audio_backend_optional = audio_backend_enum.value();
+  }
+
+  auto settings = EngineSettings::CreateDefault(*model_assets, *backend_enum,
+                                                vision_backend_optional,
+                                                audio_backend_optional);
   if (!settings.ok()) {
     ThrowLiteRtLmJniException(env, "Failed to create engine settings: " +
                                        settings.status().ToString());
@@ -747,6 +807,12 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   env->ReleaseStringUTFChars(cache_dir, cache_dir_chars);
   if (!cache_dir_str.empty()) {
     settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir_str);
+    if (vision_backend_optional.has_value()) {
+      settings->GetMutableVisionExecutorSettings()->SetCacheDir(cache_dir_str);
+    }
+    if (audio_backend_optional.has_value()) {
+      settings->GetMutableAudioExecutorSettings()->SetCacheDir(cache_dir_str);
+    }
   }
 
   const char* main_npu_native_library_dir_chars =
@@ -758,6 +824,30 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   if (!main_npu_native_library_dir_str.empty()) {
     settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
         main_npu_native_library_dir_str);
+  }
+
+  const char* vision_npu_native_library_dir_chars =
+      env->GetStringUTFChars(vision_npu_native_library_dir, nullptr);
+  std::string vision_npu_native_library_dir_str(
+      vision_npu_native_library_dir_chars);
+  env->ReleaseStringUTFChars(vision_npu_native_library_dir,
+                             vision_npu_native_library_dir_chars);
+  if (!vision_npu_native_library_dir_str.empty() &&
+      vision_backend_optional.has_value()) {
+    settings->GetMutableVisionExecutorSettings()->SetLitertDispatchLibDir(
+        vision_npu_native_library_dir_str);
+  }
+
+  const char* audio_npu_native_library_dir_chars =
+      env->GetStringUTFChars(audio_npu_native_library_dir, nullptr);
+  std::string audio_npu_native_library_dir_str(
+      audio_npu_native_library_dir_chars);
+  env->ReleaseStringUTFChars(audio_npu_native_library_dir,
+                             audio_npu_native_library_dir_chars);
+  if (!audio_npu_native_library_dir_str.empty() &&
+      audio_backend_optional.has_value()) {
+    settings->GetMutableAudioExecutorSettings()->SetLitertDispatchLibDir(
+        audio_npu_native_library_dir_str);
   }
 
   auto advanced_settings =

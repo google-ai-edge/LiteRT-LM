@@ -573,5 +573,51 @@ TEST_F(SessionUtilsTest, PreprocessContentsWithEmptyInputText) {
   EXPECT_TRUE(preprocessed_contents.empty());
 }
 
+TEST_F(SessionUtilsTest, PreprocessContentsMultimodalWithBenchmark) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetStartTokenId(2);
+  std::vector<InputData> contents;
+  contents.emplace_back(InputText("</s>Hello"));
+
+  std::vector<float> dummy_image_data = {0.1f, 0.2f, 0.3f};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto image_tensor,
+      CopyToTensorBuffer<float>(dummy_image_data, {1, 1, 1, 3}));
+  contents.emplace_back(InputImage(std::move(image_tensor)));
+  contents.emplace_back(InputImageEnd());
+  contents.emplace_back(InputText("World!"));
+
+  proto::BenchmarkParams benchmark_params;
+  benchmark_params.set_num_prefill_tokens(10);
+  std::optional<BenchmarkInfo> benchmark_info{BenchmarkInfo(benchmark_params)};
+
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_contents,
+                       PreprocessContents(contents, session_config, *tokenizer_,
+                                          benchmark_info));
+  ASSERT_EQ(preprocessed_contents.size(), 4);
+
+  // The first InputText chunk ("</s>Hello") should not be resized to
+  // num_prefill_tokens.
+  ASSERT_TRUE(std::holds_alternative<InputText>(preprocessed_contents[0]));
+  const auto& first_text_data = std::get<InputText>(preprocessed_contents[0]);
+  ASSERT_OK_AND_ASSIGN(auto first_text_tensor,
+                       first_text_data.GetPreprocessedTextTensor());
+  LITERT_ASSERT_OK_AND_ASSIGN(auto first_token_ids_span,
+                              ReferTensorBufferAsSpan<int>(*first_text_tensor));
+  EXPECT_THAT(std::vector<int>(first_token_ids_span.begin(),
+                               first_token_ids_span.end()),
+              testing::ElementsAre(2, 90, 547, 58));
+
+  // The last InputText chunk ("World!") should be resized to
+  // num_prefill_tokens (10).
+  ASSERT_TRUE(std::holds_alternative<InputText>(preprocessed_contents[3]));
+  const auto& last_text_data = std::get<InputText>(preprocessed_contents[3]);
+  ASSERT_OK_AND_ASSIGN(auto last_text_tensor,
+                       last_text_data.GetPreprocessedTextTensor());
+  LITERT_ASSERT_OK_AND_ASSIGN(auto last_token_ids_span,
+                              ReferTensorBufferAsSpan<int>(*last_text_tensor));
+  EXPECT_EQ(last_token_ids_span.size(), 10);
+}
+
 }  // namespace
 }  // namespace litert::lm
