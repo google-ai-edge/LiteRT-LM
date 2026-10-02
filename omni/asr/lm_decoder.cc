@@ -31,6 +31,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/asr/decoder_utils.h"
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_utils.h"
@@ -106,8 +107,14 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
   ABSL_RETURN_IF_ERROR(lm_runner_->Prefill(prefill_inputs));
 
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
-  int32_t current_token =
-      decode_start_token_id_ >= 0 ? decode_start_token_id_ : 0;
+  // LlmLiteRtCompiledModelExecutorBase::Prefill processes all prompt tokens
+  // except the last one and records that final prompt token (e.g. '\n' after
+  // `<asr_text>` for qwen3-asr-0.6b) in `ProcessedTokens` via
+  // `AddPendingInputToken`. When `decode_start_token_id_ < 0`, passing a
+  // negative token ID on step 0 instructs Decode to consume that pending
+  // input token rather than invalidating it via `InvalidatePendingInputToken`
+  // and replacing it with an explicit start token ID.
+  int32_t current_token = decode_start_token_id_;
   bool seen_skip_until_token_id = decode_skip_until_token_id_ < 0;
 
   LITERT_ASSIGN_OR_RETURN(auto token_buf,
@@ -139,6 +146,9 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
     }
 
     if (seen_skip_until_token_id) {
+      if (TruncateOnTrailingRepetition(decoded_tokens, token_id)) {
+        break;
+      }
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = std::nullopt});
     } else if (token_id == decode_skip_until_token_id_) {

@@ -134,6 +134,23 @@ cc_library(
 )
 
 cc_library(
+    name = "decoder_utils",
+    srcs = ["decoder_utils.cc"],
+    hdrs = ["decoder_utils.h"],
+    deps = [":speech_recognizer"],
+)
+
+cc_test(
+    name = "decoder_utils_test",
+    srcs = ["decoder_utils_test.cc"],
+    deps = [
+        ":decoder_utils",
+        ":speech_recognizer",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "ctc_decoder",
     srcs = ["ctc_decoder.cc"],
     hdrs = ["ctc_decoder.h"],
@@ -243,6 +260,7 @@ cc_library(
     srcs = ["lm_decoder.cc"],
     hdrs = ["lm_decoder.h"],
     deps = [
+        ":decoder_utils",
         ":litert_speech_recognizer",
         ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
@@ -278,6 +296,7 @@ cc_test(
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:mock_litert_lm_runner",
+        "//runtime/executor:llm_executor_io_types",
         "//support/util:test_utils",
     ],
 )

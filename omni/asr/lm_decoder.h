@@ -39,7 +39,9 @@ class LmDecoder : public LiteRtSpeechRecognizer::Decoder {
   // Args:
   //   lm_runner: Non-null pointer to LiteRtLmRunner managing model execution.
   //   decode_start_token_id: Optional initial prompt token ID fed into the
-  //     decoder at step 0 (e.g. BOS or language token). Defaults to 0 if < 0.
+  //     decoder at step 0 (e.g. BOS or language token). If < 0, step 0 passes
+  //     the negative value so the executor consumes the pending input token
+  //     held back at the end of Prefill.
   //   decode_stop_token_id: Optional explicit stop token ID to terminate
   //     decoding (e.g. EOS), in addition to any stop tokens configured in the
   //     model's LLM metadata.

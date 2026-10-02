@@ -31,6 +31,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/mock_litert_lm_runner.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
@@ -73,6 +74,16 @@ using ::testing::Return;
   return buf;
 }
 
+void ExpectInputTokenId(const lm::ExecutorInputs& inputs,
+                        int32_t expected_token_id) {
+  auto token_ids_ptr = inputs.GetTextTokenIdsPtr();
+  ASSERT_OK(token_ids_ptr);
+  auto dup = (*token_ids_ptr)->Duplicate();
+  ASSERT_TRUE(dup);
+  int32_t token_id = 0;
+  ASSERT_TRUE(dup->Read<int32_t>(absl::MakeSpan(&token_id, 1)));
+  EXPECT_EQ(token_id, expected_token_id);
+}
 
 TEST(LmDecoderTest, CreateWithInvalidMaxDecodeStepsReturnsError) {
   MockLiteRtLmRunner runner;
@@ -198,6 +209,78 @@ TEST(LmDecoderTest, DecodeWithDecodeSkipUntilTokenId) {
       ElementsAre(
           Field(&SpeechRecognizer::DecodedToken::token_id, 3),
           Field(&SpeechRecognizer::DecodedToken::token_id, 4)));
+}
+
+TEST(LmDecoderTest, DecodeTruncatesTrailingRepetitionLoop) {
+  MockLiteRtLmRunner runner;
+  EXPECT_CALL(runner, Reset()).WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
+
+  // Verifies step 0 passes -1 when decode_start_token_id = -1, then yields
+  // token 1 followed by token 4 repeated 4 times (triggers early break and
+  // truncates the 3 extra repeats).
+  EXPECT_CALL(runner, Decode(_))
+      .WillOnce([](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, -1);
+        return CreateLogitsBuffer(1);
+      })
+      .WillOnce([](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, 1);
+        return CreateLogitsBuffer(4);
+      })
+      .WillOnce(Return(CreateLogitsBuffer(4)))
+      .WillOnce(Return(CreateLogitsBuffer(4)))
+      .WillOnce(Return(CreateLogitsBuffer(4)));
+
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       LmDecoder::Create(&runner, /*decode_start_token_id=*/-1,
+                                         /*decode_stop_token_id=*/9,
+                                         /*decode_skip_until_token_id=*/-1,
+                                         /*max_decode_steps=*/20));
+
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer({1, 10, 16}));
+
+  auto decoded = decoder->Decode(encoder_outputs);
+  ASSERT_OK(decoded);
+  EXPECT_THAT(*decoded,
+              ElementsAre(Field(&SpeechRecognizer::DecodedToken::token_id, 1),
+                          Field(&SpeechRecognizer::DecodedToken::token_id, 4)));
+}
+
+TEST(LmDecoderTest, DecodeTruncatesTrailingMultiTokenRepetitionLoop) {
+  MockLiteRtLmRunner runner;
+  EXPECT_CALL(runner, Reset()).WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
+
+  // Yields token 1, then 2-gram [2, 3] repeated 4 times (triggers early break
+  // on the 4th [2, 3] and truncates the 3 extra repeats).
+  EXPECT_CALL(runner, Decode(_))
+      .WillOnce(Return(CreateLogitsBuffer(1)))
+      .WillOnce(Return(CreateLogitsBuffer(2)))
+      .WillOnce(Return(CreateLogitsBuffer(3)))
+      .WillOnce(Return(CreateLogitsBuffer(2)))
+      .WillOnce(Return(CreateLogitsBuffer(3)))
+      .WillOnce(Return(CreateLogitsBuffer(2)))
+      .WillOnce(Return(CreateLogitsBuffer(3)))
+      .WillOnce(Return(CreateLogitsBuffer(2)))
+      .WillOnce(Return(CreateLogitsBuffer(3)));
+
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       LmDecoder::Create(&runner, /*decode_start_token_id=*/-1,
+                                         /*decode_stop_token_id=*/9,
+                                         /*decode_skip_until_token_id=*/-1,
+                                         /*max_decode_steps=*/20));
+
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer({1, 10, 16}));
+
+  auto decoded = decoder->Decode(encoder_outputs);
+  ASSERT_OK(decoded);
+  EXPECT_THAT(*decoded,
+              ElementsAre(Field(&SpeechRecognizer::DecodedToken::token_id, 1),
+                          Field(&SpeechRecognizer::DecodedToken::token_id, 2),
+                          Field(&SpeechRecognizer::DecodedToken::token_id, 3)));
 }
 
 }  // namespace
