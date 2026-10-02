@@ -31,8 +31,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/asr/decoder_utils.h"
 #include "omni/asr/speech_recognizer.h"
+#include "omni/asr/utils.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_utils.h"
 #include "runtime/proto/token.pb.h"

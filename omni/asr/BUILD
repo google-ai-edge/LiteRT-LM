@@ -81,6 +81,7 @@ cc_library(
     hdrs = ["log_mel_spectrogram_processor.h"],
     deps = [
         ":audio_preprocessor",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/memory",
@@ -103,6 +104,7 @@ cc_library(
     hdrs = ["dummy_preprocessor.h"],
     deps = [
         ":audio_preprocessor",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
@@ -134,18 +136,21 @@ cc_library(
 )
 
 cc_library(
-    name = "decoder_utils",
-    srcs = ["decoder_utils.cc"],
-    hdrs = ["decoder_utils.h"],
-    deps = [":speech_recognizer"],
+    name = "utils",
+    srcs = ["utils.cc"],
+    hdrs = ["utils.h"],
+    deps = [
+        ":speech_recognizer",
+        "@com_google_absl//absl/types:span",
+    ],
 )
 
 cc_test(
-    name = "decoder_utils_test",
-    srcs = ["decoder_utils_test.cc"],
+    name = "utils_test",
+    srcs = ["utils_test.cc"],
     deps = [
-        ":decoder_utils",
         ":speech_recognizer",
+        ":utils",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -187,6 +192,7 @@ cc_library(
     deps = [
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -260,9 +266,9 @@ cc_library(
     srcs = ["lm_decoder.cc"],
     hdrs = ["lm_decoder.h"],
     deps = [
-        ":decoder_utils",
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",

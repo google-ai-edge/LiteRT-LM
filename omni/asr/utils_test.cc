@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/asr/decoder_utils.h"
+#include "omni/asr/utils.h"
 
 #include <optional>
 #include <vector>
@@ -39,13 +39,32 @@ std::vector<SpeechRecognizer::DecodedToken> MakeTokens(
   return tokens;
 }
 
-TEST(DecoderUtilsTest, EmptyTokensReturnsFalse) {
+TEST(UtilsTest, IsSilentAudioReturnsTrueForEmptyAndZeroAudio) {
+  EXPECT_TRUE(IsSilentAudio({}));
+  EXPECT_TRUE(IsSilentAudio(std::vector<float>(1600, 0.0f)));
+}
+
+TEST(UtilsTest, IsSilentAudioReturnsTrueBelowRmsAndPeakThresholds) {
+  EXPECT_TRUE(IsSilentAudio(std::vector<float>(1600, 5e-4f)));
+}
+
+TEST(UtilsTest, IsSilentAudioReturnsFalseWhenRmsExceedsThreshold) {
+  EXPECT_FALSE(IsSilentAudio(std::vector<float>(1600, 2e-3f)));
+}
+
+TEST(UtilsTest, IsSilentAudioReturnsFalseWhenPeakExceedsThreshold) {
+  std::vector<float> samples(1600, 0.0f);
+  samples[0] = 6e-3f;
+  EXPECT_FALSE(IsSilentAudio(samples));
+}
+
+TEST(UtilsTest, EmptyTokensReturnsFalse) {
   std::vector<SpeechRecognizer::DecodedToken> tokens;
   EXPECT_FALSE(TruncateOnTrailingRepetition(tokens, 1));
   EXPECT_THAT(tokens, IsEmpty());
 }
 
-TEST(DecoderUtilsTest, FewerThanFourRepeatsReturnsFalseAndPreservesTokens) {
+TEST(UtilsTest, FewerThanFourRepeatsReturnsFalseAndPreservesTokens) {
   auto tokens = MakeTokens({1, 4, 4});
   EXPECT_FALSE(TruncateOnTrailingRepetition(tokens, 4));
   EXPECT_THAT(tokens,
@@ -54,7 +73,7 @@ TEST(DecoderUtilsTest, FewerThanFourRepeatsReturnsFalseAndPreservesTokens) {
                           Field(&SpeechRecognizer::DecodedToken::token_id, 4)));
 }
 
-TEST(DecoderUtilsTest, SingleTokenRepeatedFourTimesTruncatesExtraCopies) {
+TEST(UtilsTest, SingleTokenRepeatedFourTimesTruncatesExtraCopies) {
   auto tokens = MakeTokens({1, 4, 4, 4});
   EXPECT_TRUE(TruncateOnTrailingRepetition(tokens, 4));
   EXPECT_THAT(tokens,
@@ -62,7 +81,7 @@ TEST(DecoderUtilsTest, SingleTokenRepeatedFourTimesTruncatesExtraCopies) {
                           Field(&SpeechRecognizer::DecodedToken::token_id, 4)));
 }
 
-TEST(DecoderUtilsTest, TwoGramRepeatedFourTimesTruncatesExtraCopies) {
+TEST(UtilsTest, TwoGramRepeatedFourTimesTruncatesExtraCopies) {
   auto tokens = MakeTokens({1, 2, 3, 2, 3, 2, 3, 2});
   EXPECT_TRUE(TruncateOnTrailingRepetition(tokens, 3));
   EXPECT_THAT(tokens,
@@ -71,7 +90,7 @@ TEST(DecoderUtilsTest, TwoGramRepeatedFourTimesTruncatesExtraCopies) {
                           Field(&SpeechRecognizer::DecodedToken::token_id, 3)));
 }
 
-TEST(DecoderUtilsTest, ThreeGramRepeatedFourTimesTruncatesExtraCopies) {
+TEST(UtilsTest, ThreeGramRepeatedFourTimesTruncatesExtraCopies) {
   auto tokens = MakeTokens({9, 5, 6, 7, 5, 6, 7, 5, 6, 7, 5, 6});
   EXPECT_TRUE(TruncateOnTrailingRepetition(tokens, 7));
   EXPECT_THAT(tokens,
@@ -81,7 +100,7 @@ TEST(DecoderUtilsTest, ThreeGramRepeatedFourTimesTruncatesExtraCopies) {
                           Field(&SpeechRecognizer::DecodedToken::token_id, 7)));
 }
 
-TEST(DecoderUtilsTest, SixteenGramRepeatedFourTimesTruncatesExtraCopies) {
+TEST(UtilsTest, SixteenGramRepeatedFourTimesTruncatesExtraCopies) {
   std::vector<int> ids;
   for (int r = 0; r < 4; ++r) {
     for (int i = 0; i < 16; ++i) {
@@ -97,7 +116,7 @@ TEST(DecoderUtilsTest, SixteenGramRepeatedFourTimesTruncatesExtraCopies) {
   }
 }
 
-TEST(DecoderUtilsTest, SeventeenGramRepeatedFourTimesIsNotTruncated) {
+TEST(UtilsTest, SeventeenGramRepeatedFourTimesIsNotTruncated) {
   std::vector<int> ids;
   for (int r = 0; r < 4; ++r) {
     for (int i = 0; i < 17; ++i) {

@@ -222,5 +222,39 @@ TEST(LiteRtSpeechRecognizerTest, ScheduleFailsWhenDecodeFails) {
   EXPECT_FALSE(recognizer->Schedule().ok());
 }
 
+TEST(LiteRtSpeechRecognizerTest,
+     ScheduleEmptyMelFeaturesReturnsEndOfChunkTokenWithoutRunningEncoder) {
+  auto mock_runner = std::make_unique<MockLiteRtRunner>();
+  EXPECT_CALL(*mock_runner, CreateInputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(*mock_runner, CreateOutputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(*mock_runner, Run("encode", _, _)).Times(0);
+
+  DummyAudioPreprocessor preprocessor;
+  preprocessor.PushFeatures({});
+
+  auto dummy_decoder = std::make_unique<DummyDecoder>();
+  ASSERT_OK_AND_ASSIGN(
+      auto recognizer,
+      LiteRtSpeechRecognizer::Create(std::move(mock_runner), &preprocessor,
+                                     std::move(dummy_decoder)));
+
+  ASSERT_OK(recognizer->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto tokens, recognizer->GetOutput());
+  ASSERT_EQ(tokens.size(), 1);
+  EXPECT_EQ(tokens[0].token_id,
+            SpeechRecognizer::DecodedToken::kEndOfChunkTokenId);
+  EXPECT_EQ(tokens[0].timestamp_ms, std::nullopt);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

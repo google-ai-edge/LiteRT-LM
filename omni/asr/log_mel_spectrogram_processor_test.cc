@@ -57,6 +57,20 @@ TEST(LogMelSpectrogramProcessorTest, ProcessEmptyAudioReturnsEmptyVector) {
   EXPECT_TRUE(result.empty());
 }
 
+TEST(LogMelSpectrogramProcessorTest, ProcessSilenceAudioReturnsEmptyVector) {
+  DummyAudioSource dummy_source;
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
+          &dummy_source));
+  dummy_source.PushChunk(std::vector<float>(16000, 0.0f));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  EXPECT_TRUE(result.empty());
+}
+
 TEST(LogMelSpectrogramProcessorTest, ProcessDummyAudioReturnsCorrectShape) {
   DummyAudioSource dummy_source;
   ASSERT_OK_AND_ASSIGN(

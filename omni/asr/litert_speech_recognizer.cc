@@ -67,6 +67,14 @@ LiteRtSpeechRecognizer::LiteRtSpeechRecognizer(
 absl::Status LiteRtSpeechRecognizer::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
   ABSL_ASSIGN_OR_RETURN(auto mel_features, audio_preprocessor_.GetOutput());
+  if (mel_features.empty()) {
+    // Audio preprocessors emit an empty feature vector for silent chunks. Push
+    // an end-of-chunk token without running the encoder or decoder so
+    // downstream stages (Detokenizer and TextMerger) still advance by one
+    // chunk for this schedule step.
+    PushOutput({DecodedToken{.token_id = DecodedToken::kEndOfChunkTokenId}});
+    return absl::OkStatus();
+  }
   LITERT_RETURN_IF_ERROR(
       encode_input_buffers_[0].Write<float>(absl::MakeConstSpan(mel_features)));
   LITERT_RETURN_IF_ERROR(runner_->Run(

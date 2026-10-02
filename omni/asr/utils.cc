@@ -12,15 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/asr/decoder_utils.h"
+#include "omni/asr/utils.h"
 
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
+#include "absl/types/span.h"  // from @com_google_absl
 #include "omni/asr/speech_recognizer.h"
 
 namespace litert::omni::asr {
 namespace {
+
+// Maximum RMS energy (~-60 dBFS) for an audio chunk to be classified as silent.
+constexpr double kSilenceMaxRms = 1e-3;
+
+// Maximum peak amplitude (~-46 dBFS) for an audio chunk to be classified as
+// silent, preventing short transient clicks or very quiet consonant onsets in
+// mostly-silent windows from being dropped.
+constexpr float kSilenceMaxPeak = 5e-3f;
 
 // Minimum number of consecutive repetitions of a k-gram required to classify a
 // trailing sequence as a degenerate repetition loop.
@@ -34,6 +44,21 @@ constexpr size_t kMinRepeats = 4;
 constexpr size_t kMaxRepetitionNgramLength = 16;
 
 }  // namespace
+
+bool IsSilentAudio(absl::Span<const float> raw_speech) {
+  if (raw_speech.empty()) {
+    return true;
+  }
+  double sum_sq = 0.0;
+  float peak = 0.0f;
+  for (float s : raw_speech) {
+    float abs_s = std::abs(s);
+    if (abs_s > peak) peak = abs_s;
+    sum_sq += static_cast<double>(s) * s;
+  }
+  double rms = std::sqrt(sum_sq / raw_speech.size());
+  return rms < kSilenceMaxRms && peak < kSilenceMaxPeak;
+}
 
 bool TruncateOnTrailingRepetition(
     std::vector<SpeechRecognizer::DecodedToken>& tokens, int new_token) {

@@ -33,6 +33,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/speech_recognizer.h"
+#include "omni/asr/utils.h"
 #include "omni/base/litert_runner.h"
 
 namespace litert::omni::asr {
@@ -43,7 +44,6 @@ constexpr int kMaskInputIndex = -1;
 constexpr float kMaskedInFloatValue = 0.0f;
 constexpr float kMaskedOutFloatValue =
     -0.7f * std::numeric_limits<float>::max();
-
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<StatelessDecoder>> StatelessDecoder::Create(
@@ -156,6 +156,9 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
     }
 
     if (seen_skip_until_token_id) {
+      if (TruncateOnTrailingRepetition(decoded_tokens, token_id)) {
+        break;
+      }
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = std::nullopt});
     } else if (token_id == decode_skip_until_token_id_) {
