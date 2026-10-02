@@ -43,6 +43,28 @@
 
 namespace litert::lm {
 
+absl::Status ModelResourcesStreaming::AddTFLiteModelBuffer(
+    ModelType model_type, const std::string& buffer) {
+  models_.erase(model_type);
+  model_buffers_.erase(model_type);
+  string_model_buffers_[model_type] = buffer;
+  return absl::OkStatus();
+}
+
+absl::Status ModelResourcesStreaming::AddTFLiteModelBuffer(
+    ModelType model_type, std::string&& buffer) {
+  models_.erase(model_type);
+  model_buffers_.erase(model_type);
+  string_model_buffers_[model_type] = std::move(buffer);
+  return absl::OkStatus();
+}
+
+void ModelResourcesStreaming::ReleaseTFLiteModelBuffer(ModelType model_type) {
+  models_.erase(model_type);
+  string_model_buffers_.erase(model_type);
+  model_buffers_.erase(model_type);
+}
+
 absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
     ModelType model_type) {
   auto it = models_.find(model_type);
@@ -50,16 +72,25 @@ absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
     return it->second.get();
   }
 
-  auto buf_it = model_buffers_.find(model_type);
-  if (buf_it == model_buffers_.end()) {
-    return absl::NotFoundError(absl::StrCat("Model buffer not found for type: ",
-                                            static_cast<int>(model_type)));
+  const uint8_t* data = nullptr;
+  size_t size = 0;
+
+  auto str_it = string_model_buffers_.find(model_type);
+  if (str_it != string_model_buffers_.end()) {
+    data = reinterpret_cast<const uint8_t*>(str_it->second.data());
+    size = str_it->second.size();
+  } else {
+    auto buf_it = model_buffers_.find(model_type);
+    if (buf_it == model_buffers_.end()) {
+      return absl::NotFoundError(absl::StrCat(
+          "Model buffer not found for type: ", static_cast<int>(model_type)));
+    }
+    data = reinterpret_cast<const uint8_t*>(buf_it->second.data());
+    size = buf_it->second.size();
   }
 
   auto expected_model =
-      litert::Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
-          reinterpret_cast<uint8_t*>(buf_it->second.data()),
-          buf_it->second.size()));
+      litert::Model::CreateFromBuffer(litert::BufferRef<uint8_t>(data, size));
   if (!expected_model.HasValue()) {
     return absl::InternalError(
         absl::StrCat("Failed to create model from buffer for type: ",
@@ -73,6 +104,10 @@ absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
 
 absl::StatusOr<absl::string_view> ModelResourcesStreaming::GetTFLiteModelBuffer(
     ModelType model_type) {
+  auto str_it = string_model_buffers_.find(model_type);
+  if (str_it != string_model_buffers_.end()) {
+    return absl::string_view(str_it->second.data(), str_it->second.size());
+  }
   auto it = model_buffers_.find(model_type);
   if (it == model_buffers_.end()) {
     return absl::NotFoundError(absl::StrCat("Model buffer not found for type: ",
