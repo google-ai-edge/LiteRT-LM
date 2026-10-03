@@ -432,6 +432,8 @@ cc_library(
     defines = select({
         "@platforms//os:ios": ["LITERT_DISABLE_NPU"],
         "//conditions:default": [],
+    }) + select({
+        "//conditions:default": [],
     }),
     deps = [
         ":executor_settings_base",
@@ -460,6 +462,8 @@ cc_library(
     ] + select({
         "@platforms//os:ios": [],
         "//conditions:default": [":llm_litert_npu_compiled_model_executor"],
+    }) + select({
+        "//conditions:default": [],
     }),
 )
 
