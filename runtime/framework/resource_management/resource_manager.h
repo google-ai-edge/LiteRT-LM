@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
@@ -177,6 +178,10 @@ class ResourceManager {
   // Map lora id from hash. If lora is provided by lora path, lora path will be
   // treated as the hash key.
   absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_;
+
+  // Retains scoped LoRA files whose addresses are used as keys in
+  // lora_hash_to_id_, preventing pointer recycling while ResourceManager lives.
+  std::vector<std::shared_ptr<const ScopedFile>> loaded_scoped_lora_files_;
 
   // The mutex lock for the vision executor.
   absl::Mutex vision_executor_mutex_;
