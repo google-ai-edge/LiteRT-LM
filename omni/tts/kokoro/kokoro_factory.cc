@@ -152,23 +152,6 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
   }
   CompiledModel acoustic = std::move(*acoustic_opt);
   CompiledModel vocoder = std::move(*vocoder_opt);
-
-  // Verify that acoustic and vocoder models agree on frame capacity.
-  auto acoustic_type = acoustic.GetOutputTensorType("acoustic_features");
-  auto vocoder_type = vocoder.GetInputTensorType("acoustic_features");
-  if (acoustic_type && vocoder_type) {
-    auto acoustic_dims = acoustic_type->Layout().Dimensions();
-    auto vocoder_dims = vocoder_type->Layout().Dimensions();
-    if (!acoustic_dims.empty() && !vocoder_dims.empty() &&
-        acoustic_dims.back() != vocoder_dims.back()) {
-      return absl::FailedPreconditionError(absl::StrFormat(
-          "Kokoro acoustic model frame capacity (%d) does not match vocoder "
-          "frame capacity (%d). Both models must be exported with the same "
-          "frame capacity.",
-          acoustic_dims.back(), vocoder_dims.back()));
-    }
-  }
-
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "kokoro_acoustic", std::make_shared<CompiledModel>(std::move(acoustic))));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(

@@ -225,54 +225,18 @@ absl::Status KokoroVocoderStage::ScheduleInternal() {
   }
   KokoroAcousticOutput payload = std::move(*acoustic_res);
 
-  // Step 1: Write input acoustic representation, pitch, energy, style, and
-  // length tensors.
-  LITERT_RETURN_IF_ERROR(
-      vocoder_input_buffers_[input_indices_.acoustic_features].Write<float>(
-          absl::MakeConstSpan(payload.asr_data)));
-  LITERT_RETURN_IF_ERROR(
-      vocoder_input_buffers_[input_indices_.pitch_contour].Write<float>(
-          absl::MakeConstSpan(payload.f0_n_data)));
-  LITERT_RETURN_IF_ERROR(
-      vocoder_input_buffers_[input_indices_.energy_contour].Write<float>(
-          absl::MakeConstSpan(payload.n_aux_data)));
-  LITERT_RETURN_IF_ERROR(
-      vocoder_input_buffers_[input_indices_.speaker_style].Write<float>(
-          absl::MakeConstSpan(payload.ref_s_decoder)));
+  // Step 1: Determine acoustic output frame stride (`t_acoustic`) vs. vocoder
+  // input frame capacity (`t_vocoder`) for tensors of shape [1, C, T].
+  LITERT_ASSIGN_OR_RETURN(
+      auto voc_asr_bytes,
+      vocoder_input_buffers_[input_indices_.acoustic_features].PackedSize());
+  const int t_vocoder =
+      std::max<int>(1, kokoro::FrameCapacityFromPackedSize(voc_asr_bytes));
+  const int t_acoustic = std::max<int>(
+      1,
+      static_cast<int>(payload.asr_data.size() / kokoro::kAcousticFeatureDim));
+  const int total_speech_frames = std::clamp(payload.l_speech, 1, t_acoustic);
 
-  if (speech_frame_length_is_int32_) {
-    std::vector<int32_t> speech_len_vec = {
-        static_cast<int32_t>(payload.l_speech)};
-    LITERT_RETURN_IF_ERROR(
-        vocoder_input_buffers_[input_indices_.speech_frame_length]
-            .Write<int32_t>(absl::MakeConstSpan(speech_len_vec)));
-  } else {
-    std::vector<int64_t> speech_len_vec = {
-        static_cast<int64_t>(payload.l_speech)};
-    LITERT_RETURN_IF_ERROR(
-        vocoder_input_buffers_[input_indices_.speech_frame_length]
-            .Write<int64_t>(absl::MakeConstSpan(speech_len_vec)));
-  }
-
-  // Step 2: Execute neural vocoder inference.
-  LITERT_RETURN_IF_ERROR(
-      vocoder_model_->Run(vocoder_input_buffers_, vocoder_output_buffers_));
-
-  // Step 3: Extract spectrogram representations and synthesize time-domain PCM
-  // samples.
-  //
-  // Bound the output by the vocoder's own frame capacity, recovered from the
-  // static shape of `acoustic_features` ([1, kAcousticFeatureDim, max_frames]).
-  // A hard-coded ceiling would silently truncate any model exported with a
-  // larger frame budget.
-  std::vector<float> pcm_output;
-  size_t target_samples = std::min<size_t>(
-      static_cast<size_t>(frame_capacity_ * kokoro::kAudioHop),
-      static_cast<size_t>(payload.l_speech * kokoro::kAudioHop));
-  if (target_samples == 0) target_samples = kokoro::kAudioHop;
-
-  // Query output tensor buffer sizes dynamically to avoid overflow or
-  // mismatch with model output dimensions.
   LITERT_ASSIGN_OR_RETURN(
       auto mag_packed_size,
       vocoder_output_buffers_[output_indices_.magnitude_spectrogram]
@@ -285,33 +249,121 @@ absl::Status KokoroVocoderStage::ScheduleInternal() {
                                            0.0f);
   std::vector<float> phase_spectrogram(phase_packed_size / sizeof(float), 0.0f);
 
-  LITERT_RETURN_IF_ERROR(
-      vocoder_output_buffers_[output_indices_.magnitude_spectrogram]
-          .Read<float>(absl::MakeSpan(magnitude_spectrogram)));
-  LITERT_RETURN_IF_ERROR(
-      vocoder_output_buffers_[output_indices_.phase_spectrogram].Read<float>(
-          absl::MakeSpan(phase_spectrogram)));
+  LITERT_ASSIGN_OR_RETURN(
+      auto voc_f0_bytes,
+      vocoder_input_buffers_[input_indices_.pitch_contour].PackedSize());
+  LITERT_ASSIGN_OR_RETURN(
+      auto voc_n_bytes,
+      vocoder_input_buffers_[input_indices_.energy_contour].PackedSize());
+  const int f0_subframes_per_frame = std::max<int>(
+      1, static_cast<int>(voc_f0_bytes / sizeof(float)) / t_vocoder);
 
-  const int active_subframes = static_cast<int>(
-      payload.l_speech * (kokoro::kAudioHop / kokoro::kIstftHop) + 1);
+  std::vector<float> voc_asr_buf(kokoro::kAcousticFeatureDim * t_vocoder, 0.0f);
+  std::vector<float> voc_f0_buf(voc_f0_bytes / sizeof(float), 0.0f);
+  std::vector<float> voc_n_buf(voc_n_bytes / sizeof(float), 0.0f);
 
-  ABSL_ASSIGN_OR_RETURN(
-      pcm_output, SynthesizeIstftAudio(magnitude_spectrogram, phase_spectrogram,
-                                       active_subframes));
-  pcm_output.resize(target_samples, 0.0f);
+  // Slice `total_speech_frames` into chunks of at most `t_vocoder` frames so
+  // compact bucketed vocoders (e.g. `kokoro_vocoder_64.tflite`) can synthesize
+  // utterances of any length without buffer mismatch or truncation.
+  for (int frame_start = 0; frame_start < total_speech_frames;
+       frame_start += t_vocoder) {
+    const int chunk_frames =
+        std::min(t_vocoder, total_speech_frames - frame_start);
 
-  // A slice join is not a sentence end, even though the model synthesized it as
-  // one. Cap the silence it contributes so a capacity-forced split does not
-  // stall mid-phrase, while the real chunk boundaries keep their pauses.
-  kokoro::TrimSliceJoinSilence(pcm_output, payload.join_before,
-                               payload.join_after);
+    std::fill(voc_asr_buf.begin(), voc_asr_buf.end(), 0.0f);
+    std::fill(voc_f0_buf.begin(), voc_f0_buf.end(), 0.0f);
+    std::fill(voc_n_buf.begin(), voc_n_buf.end(), 0.0f);
 
-  // Step 4: Package synthesized audio payload and push downstream.
-  AudioOutput output;
-  output.pcm_samples = std::move(pcm_output);
-  output.sample_rate_hz = kokoro::kSampleRate;
+    for (int c = 0; c < kokoro::kAcousticFeatureDim; ++c) {
+      const float* src = payload.asr_data.data() + c * t_acoustic + frame_start;
+      float* dst = voc_asr_buf.data() + c * t_vocoder;
+      std::copy(src, src + chunk_frames, dst);
+    }
 
-  PushOutput(std::move(output));
+    const int f0_start = frame_start * f0_subframes_per_frame;
+    const int f0_count = std::min<int>(
+        chunk_frames * f0_subframes_per_frame,
+        std::min<int>(static_cast<int>(voc_f0_buf.size()),
+                      static_cast<int>(payload.f0_n_data.size()) - f0_start));
+    if (f0_count > 0) {
+      std::copy(payload.f0_n_data.data() + f0_start,
+                payload.f0_n_data.data() + f0_start + f0_count,
+                voc_f0_buf.data());
+    }
+
+    const int n_count = std::min<int>(
+        chunk_frames * f0_subframes_per_frame,
+        std::min<int>(static_cast<int>(voc_n_buf.size()),
+                      static_cast<int>(payload.n_aux_data.size()) - f0_start));
+    if (n_count > 0) {
+      std::copy(payload.n_aux_data.data() + f0_start,
+                payload.n_aux_data.data() + f0_start + n_count,
+                voc_n_buf.data());
+    }
+
+    LITERT_RETURN_IF_ERROR(
+        vocoder_input_buffers_[input_indices_.acoustic_features].Write<float>(
+            absl::MakeConstSpan(voc_asr_buf)));
+    LITERT_RETURN_IF_ERROR(
+        vocoder_input_buffers_[input_indices_.pitch_contour].Write<float>(
+            absl::MakeConstSpan(voc_f0_buf)));
+    LITERT_RETURN_IF_ERROR(
+        vocoder_input_buffers_[input_indices_.energy_contour].Write<float>(
+            absl::MakeConstSpan(voc_n_buf)));
+    LITERT_RETURN_IF_ERROR(
+        vocoder_input_buffers_[input_indices_.speaker_style].Write<float>(
+            absl::MakeConstSpan(payload.ref_s_decoder)));
+
+    if (speech_frame_length_is_int32_) {
+      std::vector<int32_t> speech_len_vec = {
+          static_cast<int32_t>(chunk_frames)};
+      LITERT_RETURN_IF_ERROR(
+          vocoder_input_buffers_[input_indices_.speech_frame_length]
+              .Write<int32_t>(absl::MakeConstSpan(speech_len_vec)));
+    } else {
+      std::vector<int64_t> speech_len_vec = {
+          static_cast<int64_t>(chunk_frames)};
+      LITERT_RETURN_IF_ERROR(
+          vocoder_input_buffers_[input_indices_.speech_frame_length]
+              .Write<int64_t>(absl::MakeConstSpan(speech_len_vec)));
+    }
+
+    // Step 2: Execute neural vocoder inference for this frame slice.
+    LITERT_RETURN_IF_ERROR(
+        vocoder_model_->Run(vocoder_input_buffers_, vocoder_output_buffers_));
+
+    // Step 3: Extract spectrogram representations and synthesize time-domain
+    // PCM samples.
+    size_t target_samples =
+        static_cast<size_t>(chunk_frames) * kokoro::kAudioHop;
+    if (target_samples == 0) target_samples = kokoro::kAudioHop;
+
+    LITERT_RETURN_IF_ERROR(
+        vocoder_output_buffers_[output_indices_.magnitude_spectrogram]
+            .Read<float>(absl::MakeSpan(magnitude_spectrogram)));
+    LITERT_RETURN_IF_ERROR(
+        vocoder_output_buffers_[output_indices_.phase_spectrogram].Read<float>(
+            absl::MakeSpan(phase_spectrogram)));
+
+    const int active_subframes = static_cast<int>(
+        chunk_frames * (kokoro::kAudioHop / kokoro::kIstftHop) + 1);
+
+    std::vector<float> pcm_output;
+    ABSL_ASSIGN_OR_RETURN(
+        pcm_output, SynthesizeIstftAudio(magnitude_spectrogram,
+                                         phase_spectrogram, active_subframes));
+    pcm_output.resize(target_samples, 0.0f);
+
+    kokoro::TrimSliceJoinSilence(pcm_output, payload.join_before,
+                                 payload.join_after);
+
+    // Step 4: Package synthesized audio payload and push downstream.
+    AudioOutput output;
+    output.pcm_samples = std::move(pcm_output);
+    output.sample_rate_hz = kokoro::kSampleRate;
+
+    PushOutput(std::move(output));
+  }
   return absl::OkStatus();
 }
 
