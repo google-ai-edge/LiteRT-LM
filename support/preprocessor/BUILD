@@ -87,6 +87,15 @@ cc_test(
 )
 
 cc_library(
+    name = "kissfft_impl",
+    srcs = ["kissfft_impl.cc"],
+    deps = [
+        "@kissfft",
+        "@kissfft//:kissfftr",
+    ],
+)
+
+cc_library(
     name = "audio_preprocessor_miniaudio",
     srcs = ["audio_preprocessor_miniaudio.cc"],
     hdrs = ["audio_preprocessor_miniaudio.h"],
