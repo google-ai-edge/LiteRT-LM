@@ -1,0 +1,16 @@
+<|im_start|>system
+<|im_end|>
+<|im_start|>user
+Which matters more on a phone: prefill speed or decode speed? Answer briefly.<|im_end|>
+<|im_start|>assistant
+<think></think>
+
+Decode speed matters more, because it sets how quickly the user sees each word.<|im_end|>
+<|im_start|>user
+And for a 2B model?<|im_end|>
+<|im_start|>assistant
+<think></think><|im_end|>
+<|im_start|>user
+Summarize our conversation in one sentence.<|im_end|>
+<|im_start|>assistant
+<think></think>
