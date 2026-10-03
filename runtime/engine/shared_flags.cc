@@ -197,6 +197,13 @@ ABSL_FLAG(bool, use_hw_cache_update_for_npu, true,
 ABSL_FLAG(bool, use_hw_ple_for_npu, true, "If true, use HW PLE for NPU.");
 ABSL_FLAG(bool, enable_npu_debug_logging, false,
           "If true, enable debug logging for NPU.");
+ABSL_FLAG(int, npu_dynamic_kv_cache_initial_size, 0,
+          "NPU models with a dynamic KV cache only. Number of tokens to "
+          "allocate the KV cache for at creation time; the cache grows on "
+          "demand up to max_num_tokens. 0 allocates max_num_tokens up front.");
+ABSL_FLAG(int, npu_dynamic_kv_cache_growth_step, 512,
+          "NPU models with a dynamic KV cache only. Minimum number of tokens "
+          "to grow the KV cache by when it runs out of capacity.");
 ABSL_FLAG(
     bool, disable_input_prompt_as_hint, false,
     "If true, disable the input prompt as a hint when creating the engine. "
