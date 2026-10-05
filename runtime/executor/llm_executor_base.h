@@ -148,10 +148,17 @@ class LlmExecutorBase {
                      ExecutorBackendName()));
   };
 
+  // Validates that the provided executor settings are supported by this
+  // executor.
+  virtual absl::Status ValidateConfig(
+      const LlmExecutorSettings& executor_settings) const {
+    return absl::OkStatus();
+  }
+
   // Updates the executor settings.
   virtual absl::Status UpdateExecutorSettings(
       const LlmExecutorSettings& executor_settings) {
-    return absl::OkStatus();
+    return ValidateConfig(executor_settings);
   }
 
   // Gets the runtime configuration.
