@@ -96,7 +96,7 @@ class EngineTest(LiteRtLmTestBase):
     ):
       # 6 is within the value range of LiteRtLmLogSeverity but is not a named
       # enumerator. Values outside the range are undefined behavior in C++.
-      litert_lm._ffi.set_min_log_severity(6)  # pytype: disable=wrong-arg-types
+      litert_lm._ffi.set_min_log_severity(6)  # pyrefly: ignore[bad-argument-type]
 
   def test_check_status_unknown_code(self):
     lib = litert_lm._ffi._get_lib()

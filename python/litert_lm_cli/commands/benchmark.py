@@ -27,7 +27,7 @@ from litert_lm_cli import model
 
 try:
   # pylint: disable=g-import-not-at-top
-  from litert_lm.adb import adb_benchmark  # pytype: disable=import-error
+  from litert_lm.adb import adb_benchmark  # pyrefly: ignore[missing-import]
 
   _HAS_ADB = True
 except ImportError:

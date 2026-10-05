@@ -118,7 +118,7 @@ class NPU(Backend):
         )
 
       try:
-        import openvino as ov  # pylint: disable=g-import-not-at-top  # pytype: disable=import-error
+        import openvino as ov  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
       except ImportError as e:
         raise RuntimeError(
             "NPU is supported only for Intel OpenVINO on Windows. Failed to"
