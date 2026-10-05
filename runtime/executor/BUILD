@@ -993,6 +993,7 @@ cc_library(
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
+        "@litert//litert/tools/flags:options_parser_registry",
         "//runtime/components:model_resources",
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/util:convert_tensor_buffer",
