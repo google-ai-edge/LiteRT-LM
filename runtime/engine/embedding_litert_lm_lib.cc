@@ -272,7 +272,8 @@ absl::Status SetEmbeddingFlag(EmbeddingLiteRtLmSettings* settings,
   } else if (name == "num_warmup" || name == "num_iterations" ||
              name == "min_input_length" || name == "max_input_length" ||
              name == "benchmark_prefill_tokens" ||
-             name == "visual_token_budget" || name == "num_cpu_threads") {
+             name == "visual_token_budget" || name == "num_cpu_threads" ||
+             name == "output_size") {
     int parsed = 0;
     if (!absl::SimpleAtoi(value, &parsed)) {
       return absl::InvalidArgumentError(
@@ -290,6 +291,8 @@ absl::Status SetEmbeddingFlag(EmbeddingLiteRtLmSettings* settings,
       settings->benchmark_prefill_tokens = parsed;
     } else if (name == "visual_token_budget") {
       settings->visual_token_budget = parsed;
+    } else if (name == "output_size") {
+      settings->output_size = parsed;
     } else {
       settings->num_cpu_threads = parsed;
     }
@@ -510,6 +513,15 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       .normalize = run_settings.normalize,
       .input_overflow_strategy = overflow_strategy,
   };
+
+  if (run_settings.visual_token_budget > 0) {
+    options.vision_tokens_per_image = run_settings.visual_token_budget;
+  }
+  // 0 keeps the model's default output size. Any other value (including
+  // negatives) is forwarded so the engine can validate and report it.
+  if (run_settings.output_size != 0) {
+    options.output_size = run_settings.output_size;
+  }
 
   if (is_benchmark) {
     const int num_warmup = run_settings.num_warmup;
