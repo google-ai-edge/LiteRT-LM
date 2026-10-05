@@ -47,6 +47,9 @@ TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagSuccess) {
   EXPECT_TRUE(SetEmbeddingFlag(&settings, "visual_token_budget", "70").ok());
   EXPECT_EQ(settings.visual_token_budget, 70);
 
+  EXPECT_TRUE(SetEmbeddingFlag(&settings, "output_size", "256").ok());
+  EXPECT_EQ(settings.output_size, 256);
+
   EXPECT_TRUE(
       SetEmbeddingFlag(&settings, "report_peak_memory_footprint", "true").ok());
   EXPECT_TRUE(settings.report_peak_memory_footprint);
@@ -76,6 +79,7 @@ TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagInvalidInteger) {
   EXPECT_FALSE(
       SetEmbeddingFlag(&settings, "visual_token_budget", "invalid").ok());
   EXPECT_FALSE(SetEmbeddingFlag(&settings, "num_iterations", "abc").ok());
+  EXPECT_FALSE(SetEmbeddingFlag(&settings, "output_size", "big").ok());
 }
 
 TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagUnknownFlag) {

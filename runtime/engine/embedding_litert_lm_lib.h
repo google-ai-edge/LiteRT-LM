@@ -38,6 +38,9 @@ struct EmbeddingLiteRtLmSettings {
   std::string output_embedding_path;
   std::string compare_embedding_path;
   bool normalize = true;
+  // Output embedding size to truncate the embedding to. 0 means the model's
+  // default output size.
+  int output_size = 0;
   bool use_mmap = false;
   std::string dispatch_library_dir;
   int num_warmup = 2;

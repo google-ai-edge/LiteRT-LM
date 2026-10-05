@@ -49,6 +49,10 @@ ABSL_FLAG(
     "and display Cosine Similarity against the current run's output vector.");
 ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
+ABSL_FLAG(int, output_size, 0,
+          "Output embedding size to truncate the embedding to (Matryoshka "
+          "truncation). If 0, the model's default output size is used. Must "
+          "not exceed the model's default output size.");
 ABSL_FLAG(bool, use_mmap, false,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
@@ -94,6 +98,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.output_embedding_path = absl::GetFlag(FLAGS_output_embedding_path);
   settings.compare_embedding_path = absl::GetFlag(FLAGS_compare_embedding_path);
   settings.normalize = absl::GetFlag(FLAGS_normalize);
+  settings.output_size = absl::GetFlag(FLAGS_output_size);
   settings.use_mmap = absl::GetFlag(FLAGS_use_mmap);
   settings.dispatch_library_dir = absl::GetFlag(FLAGS_dispatch_library_dir);
   settings.num_warmup = absl::GetFlag(FLAGS_num_warmup);
