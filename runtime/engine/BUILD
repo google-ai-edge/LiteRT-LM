@@ -448,6 +448,7 @@ cc_binary(
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/tools/flags/vendors:intel_openvino_flags",
         "//runtime/executor:default_gpu_accelerator",
         "//runtime/executor:executor_settings_base",
     ],
