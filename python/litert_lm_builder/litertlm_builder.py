@@ -407,6 +407,10 @@ class LitertLmFileBuilder:
 
   _VISION_TRANSFORMER_MODEL_TYPES = frozenset({"gemma4", "lfm2"})
 
+  _EMBEDDING_VISION_TRANSFORMER_MODEL_TYPES = frozenset({
+      "embedding_gemma_v2",
+  })
+
   @property
   def is_vision_model(self) -> bool:
     """Returns True if the builder contains a vision adapter/encoder model."""
@@ -440,10 +444,35 @@ class LitertLmFileBuilder:
     return False
 
   @property
+  def is_embedding_vision_transformer_model(self) -> bool:
+    """Returns True if the embedding model is a vision transformer model."""
+    if not self.is_vision_model or self._embedding_metadata is None:
+      return False
+    active_type = self._embedding_metadata.embedding_model_type.WhichOneof(
+        "model_type"
+    )
+    if active_type in self._EMBEDDING_VISION_TRANSFORMER_MODEL_TYPES:
+      eg = self._embedding_metadata.embedding_model_type.embedding_gemma_v2
+      has_vision_fields = (
+          eg.HasField("start_of_image_token")
+          or eg.HasField("end_of_image_token")
+          or eg.patch_width > 0
+          or eg.patch_height > 0
+          or eg.max_num_patches > 0
+          or eg.pooling_kernel_size > 0
+      )
+      if has_vision_fields:
+        return True
+      if not self.is_llm_model:
+        return True
+    return False
+
+  @property
   def is_vision_transformer_model(self) -> bool:
     """Returns True if the model is a vision transformer (patch-based) model."""
     return (
         self.is_llm_vision_transformer_model
+        or self.is_embedding_vision_transformer_model
     )
 
   def validate_metadata(self) -> None:
@@ -479,6 +508,26 @@ class LitertLmFileBuilder:
               "Vision model conversion error: `pooling_kernel_size` is"
               " mandatory when vision transformer model is present."
           )
+
+    if (
+        self._has_embedding_metadata
+        and self.is_embedding_vision_transformer_model
+    ):
+      if self._embedding_metadata is not None:
+        if self._embedding_metadata.embedding_model_type.HasField(
+            "embedding_gemma_v2"
+        ):
+          eg = self._embedding_metadata.embedding_model_type.embedding_gemma_v2
+          if eg.max_num_patches <= 0:
+            raise ValueError(
+                "Vision model conversion error: `max_num_patches` is mandatory"
+                " when vision transformer model is present."
+            )
+          if eg.pooling_kernel_size <= 0:
+            raise ValueError(
+                "Vision model conversion error: `pooling_kernel_size` is"
+                " mandatory when vision transformer model is present."
+            )
 
   @classmethod
   def from_toml_str(

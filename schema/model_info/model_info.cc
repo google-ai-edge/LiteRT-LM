@@ -868,6 +868,15 @@ int CalculateMaxVisionTokenBudget(const proto::LlmModelType& model_type) {
 // Calculates max vision token budget for Embedding models.
 int CalculateMaxVisionTokenBudget(
     const proto::EmbeddingModelType& model_type) {
+  if (model_type.has_embedding_gemma_v2()) {
+    const auto& gemma_v2 = model_type.embedding_gemma_v2();
+    if (gemma_v2.max_num_patches() > 0) {
+      int pool = gemma_v2.pooling_kernel_size() > 0
+                     ? gemma_v2.pooling_kernel_size()
+                     : 3;
+      return gemma_v2.max_num_patches() / (pool * pool);
+    }
+  }
   return -1;
 }
 

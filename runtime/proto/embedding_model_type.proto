@@ -16,10 +16,10 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
+import "runtime/proto/token.proto";
+
 option java_multiple_files = true;
 option java_outer_classname = "EmbeddingModelTypeOuterClass";
-
-import "runtime/proto/token.proto";
 
 // The model type of the embedding model.
 message EmbeddingModelType {
@@ -27,8 +27,43 @@ message EmbeddingModelType {
   // supports.
   oneof model_type {
     GenericEmbeddingModel generic_model = 1;
+    EmbeddingGemmaV2 embedding_gemma_v2 = 2;
   }
 }
 
 // The default model type for the generic embedding model.
 message GenericEmbeddingModel {}
+
+// Google's EmbeddingGemmaV2 model.
+message EmbeddingGemmaV2 {
+  // Vision modality.
+  // The start of image token indicates the start of image in the prompt.
+  TokenUnion start_of_image_token = 1;
+  // The end of image token indicates the end of image in the prompt.
+  TokenUnion end_of_image_token = 2;
+
+  // The patch width that the image preprocessor should patchify the image to.
+  int32 patch_width = 3;
+  // The patch height that the image preprocessor should patchify the image to.
+  int32 patch_height = 4;
+
+  // The maximum number of patches that the image preprocessor should patchify
+  // the image to. If the number of patches that the patchified input image
+  // would produce is more than this, the input image will be downsampled to the
+  // max size that can fit the max number of patches, with respect to the aspect
+  // ratio, before patchifying.
+  int32 max_num_patches = 5;
+
+  // The pooling kernel size that the image preprocessor should use for
+  // patchifying the image.
+  int32 pooling_kernel_size = 6;
+
+  // Audio modality.
+  // The start of audio token indicates the start of audio in the prompt.
+  TokenUnion start_of_audio_token = 7;
+  // The end of audio token indicates the end of audio in the prompt.
+  TokenUnion end_of_audio_token = 8;
+
+  // Whether to skip the Mel spectrogram extraction.
+  bool skip_mel_spectrogram_extraction = 9;
+}

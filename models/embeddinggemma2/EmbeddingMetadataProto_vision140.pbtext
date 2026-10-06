@@ -1,0 +1,56 @@
+# proto-file: runtime/proto/embedding_metadata.proto
+# proto-message: EmbeddingMetadata
+bos_token {
+  token_ids {
+    ids: 2
+  }
+}
+eos_token {
+  token_ids {
+    ids: 1
+  }
+}
+embedding_model_type {
+  embedding_gemma_v2 {
+    start_of_image_token {
+      token_str: "<|image>"
+    }
+    end_of_image_token {
+      token_str: "<image|>"
+    }
+    patch_width: 16
+    patch_height: 16
+    max_num_patches: 1260
+    pooling_kernel_size: 3
+    start_of_audio_token {
+      token_str: "<|audio>"
+    }
+    end_of_audio_token {
+      token_str: "<audio|>"
+    }
+    skip_mel_spectrogram_extraction: false
+  }
+}
+audio_preprocessor {
+  miniaudio {
+    sample_rate_hz: 16000
+    num_channels: 1
+    frame_length: 320
+    hop_length: 160
+    fft_length: 512
+    input_scale: 1.0
+    pre_emphasis_factor: 0.0
+    num_mel_bins: 128
+    mel_low_hz: 0.0
+    mel_high_hz: 8000.0
+    mel_floor: 1e-3
+    normalize_mel: false
+    add_floor_to_mel_before_log: true
+    semicausal_padding: true
+    non_zero_hanning: false
+    periodic_hanning: true
+    fft_padding_type: FFT_PADDING_TYPE_CENTER
+    skip_mel_spectrogram_extraction: false
+  }
+}
+max_input_length: 1024
