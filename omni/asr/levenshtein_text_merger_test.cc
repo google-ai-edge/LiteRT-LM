@@ -52,7 +52,8 @@ absl::StatusOr<TextMerger::MergeResult> ProcessWords(
     const std::vector<std::string>& strings) {
   word_stage.PushWords(strings);
   LITERT_RETURN_IF_ERROR(merger.Schedule());
-  return merger.GetOutput();
+  LITERT_ASSIGN_OR_RETURN(auto out, merger.GetOutput());
+  return std::get<TextMerger::MergeResult>(std::move(out));
 }
 
 TEST(LevenshteinTextMergerTest, InitialChunkReturnsUnconfirmedOnly) {
@@ -99,8 +100,9 @@ TEST(LevenshteinTextMergerTest, SequentialMergeFlow) {
   auto res_flush = merger.GetOutput();
   ASSERT_TRUE(res_flush.ok());
   if (!res_flush.ok()) return;
-  EXPECT_EQ(res_flush->confirmed_text, "a test of streaming");
-  EXPECT_EQ(res_flush->unconfirmed_text, "");
+  const auto& flush_text = std::get<TextMerger::MergeResult>(*res_flush);
+  EXPECT_EQ(flush_text.confirmed_text, "a test of streaming");
+  EXPECT_EQ(flush_text.unconfirmed_text, "");
 }
 
 TEST(LevenshteinTextMergerTest, ResetClearsState) {

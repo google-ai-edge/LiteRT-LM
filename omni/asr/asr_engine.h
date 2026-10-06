@@ -25,11 +25,11 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
-#include "omni/asr/asr_session.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/log_mel_spectrogram_processor.h"
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "omni/multi_staged_session.h"
 #include "omni/omni_engine.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
@@ -99,8 +99,8 @@ class AsrEngine {
   ~AsrEngine() = default;
 
   // Instantiates components based on configuration and returns a new
-  // AsrSession.
-  absl::StatusOr<std::unique_ptr<AsrSession>> CreateSession(
+  // MultiStagedSession.
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateSession(
       std::unique_ptr<AudioSource> audio_source);
 
   const AsrEngineConfig& config() const { return config_; }

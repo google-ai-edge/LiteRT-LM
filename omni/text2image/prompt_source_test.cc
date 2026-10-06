@@ -35,8 +35,6 @@ class FakeImageDecoder : public ImageDecoder {
   explicit FakeImageDecoder(PromptSource* prompt_source)
       : prompt_source_(prompt_source) {}
 
-  absl::Status Flush() override { return absl::OkStatus(); }
-
  protected:
   bool NeedScheduleInternal() const override {
     return prompt_source_->HasOutput();

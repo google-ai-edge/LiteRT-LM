@@ -17,9 +17,13 @@
 
 #include <cstdint>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace litert::omni {
+
+// Sentinel input indicating the end of the input stream.
+struct EndOfInput {};
 
 // Text input payload for TTS synthesis or image generation prompts.
 struct TextInput {
@@ -47,6 +51,27 @@ struct ImageGenInputMetadata {
   uint64_t seed = 42;
 };
 
+// Unified input variant for InputSource. Note that `EndOfInput` is the first
+// alternative, so a default-constructed `Input` represents `EndOfInput`.
+using Input = std::variant<EndOfInput, TextInput, AudioInputMetadata,
+                           AudioInput, ImageGenInputMetadata>;
+
+// Sentinel output indicating the end of the output stream.
+// TODO(b/538727793): Define synchronous/streaming `EndOfOutput` semantics.
+// Currently sessions signal end-of-stream via `absl::OutOfRangeError`. Note
+// that `EndOfOutput` is the first alternative of `Output`, so a
+// default-constructed `Output` represents `EndOfOutput`.
+struct EndOfOutput {};
+
+// Generic text output payload for ASR transcription or text generation.
+struct TextOutput {
+  // Stable text that will no longer change. Only contains newly confirmed
+  // text since the last output.
+  std::string confirmed_text;
+  // Unstable hypothesis text from the tail of the current window.
+  std::string unconfirmed_text;
+};
+
 // Generic audio synthesis output payload for vocoder and audio output.
 struct AudioOutput {
   std::vector<float> pcm_samples;
@@ -61,6 +86,9 @@ struct ImageOutput {
   int height = 0;
   int channels = 3;
 };
+
+// Unified output variant for OmniSession and output stages.
+using Output = std::variant<EndOfOutput, TextOutput, AudioOutput, ImageOutput>;
 
 }  // namespace litert::omni
 

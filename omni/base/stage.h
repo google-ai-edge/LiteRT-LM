@@ -57,6 +57,10 @@ class StageBase {
   // thread-safe manner.
   virtual bool HasOutput() const = 0;
 
+  // Flushes any remaining buffered state into the stage's output queue at the
+  // end of a stream.
+  virtual absl::Status Flush() = 0;
+
   // Resets internal cached state and clears outputs for a new stream/session.
   virtual void Reset() = 0;
 };
@@ -123,6 +127,13 @@ class SingleThreadedStageWithDeque : public Stage<T> {
     return item;
   }
 
+  absl::Status Flush() override {
+    WaitForStateThenSetState(State::kIdle, State::kRunning);
+    absl::Status status = FlushInternal();
+    SetState(State::kIdle);
+    return status;
+  }
+
   void Reset() override {
     WaitForStateThenSetState(State::kIdle, State::kRunning);
     ResetInternal();
@@ -147,6 +158,9 @@ class SingleThreadedStageWithDeque : public Stage<T> {
   //
   // This method is called by Schedule() on the calling thread.
   virtual absl::Status ScheduleInternal() = 0;
+
+  // Subclasses can override this method to flush subclass-specific state.
+  virtual absl::Status FlushInternal() { return absl::OkStatus(); }
 
   void SetState(State state) {
     absl::MutexLock lock(mutex_);

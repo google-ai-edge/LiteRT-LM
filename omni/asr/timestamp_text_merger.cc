@@ -286,12 +286,7 @@ absl::Status TimestampTextMerger::Execute() {
   return absl::OkStatus();
 }
 
-absl::Status TimestampTextMerger::Flush() {
-  if (!SetStateIfState(State::kIdle, State::kRunning)) {
-    return absl::FailedPreconditionError(
-        "Flush() called while Schedule() is in progress.");
-  }
-
+absl::Status TimestampTextMerger::FlushInternal() {
   if (!prev_words_.empty()) {
     MergeResult result = {absl::StrJoin(prev_words_, " "), ""};
     prev_words_.clear();
@@ -301,8 +296,6 @@ absl::Status TimestampTextMerger::Flush() {
     prev_word_index_of_pivot_ = -1;
     LogAndPushOutput(std::move(result));
   }
-
-  SetState(State::kIdle);
   return absl::OkStatus();
 }
 

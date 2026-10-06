@@ -53,13 +53,13 @@ class Qwen3TtsVocoderStage : public Vocoder {
 
   ~Qwen3TtsVocoderStage() override = default;
 
+ protected:
   // Flushes remaining buffered audio frames and synthesizes audio.
   //
   // returns
   // - absl::OkStatus() on success, or error status on failure.
-  absl::Status Flush() override;
+  absl::Status FlushInternal() override;
 
- protected:
   void ResetInternal() override;
 
   bool NeedScheduleInternal() const override {

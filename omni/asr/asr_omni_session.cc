@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO(b/524681030): Move to asr_session.cc.
+
 #include "omni/asr/asr_omni_session.h"
 
 #include <algorithm>
@@ -34,7 +36,7 @@ namespace litert::omni::asr {
 namespace {
 
 // AudioSource implementation that pulls `AudioInput` buffers from an
-// `OmniSession::InputSource` and yields PCM audio chunks to an `AsrSession`.
+// `OmniSession::InputSource` and yields PCM audio chunks to an `OmniSession`.
 class AudioInputSource : public AudioSource {
  public:
   AudioInputSource(
@@ -73,66 +75,107 @@ class AudioInputSource : public AudioSource {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
     while (buffer_.size() < samples_per_interval_) {
-      if (input_source_->NeedSchedule()) {
-        ABSL_RETURN_IF_ERROR(input_source_->Schedule());
-      }
-      if (!input_source_->HasOutput()) {
-        return absl::OutOfRangeError("End of audio stream reached.");
-      }
-      ABSL_ASSIGN_OR_RETURN(OmniSession::Input input,
-                            input_source_->GetOutput());
-      if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+      ABSL_ASSIGN_OR_RETURN(bool has_more, PullNextInput());
+      if (!has_more) {
         if (buffer_.empty()) {
           return absl::OutOfRangeError("End of audio stream reached.");
         }
-        // Zero-pad any remaining samples in `buffer_` (including retained
-        // overlap samples from the previous chunk) to `samples_per_interval_`
-        // and emit a final chunk so the recognizer can process the tail with
-        // trailing silence context.
-        buffer_.resize(samples_per_interval_, 0.0f);
-        std::vector<float> output;
-        std::swap(output, buffer_);
-        PushOutput(std::move(output));
+        PushPaddedRemainder();
         return absl::OkStatus();
-      }
-      if (const auto* metadata =
-              std::get_if<OmniSession::AudioInputMetadata>(&input)) {
-        if (metadata->sample_rate_hz > 0 &&
-            metadata->sample_rate_hz != sample_rate_hz_) {
-          return absl::InvalidArgumentError(
-              "AudioInputMetadata sample_rate_hz does not match "
-              "AudioInputSource.");
-        }
-        if (metadata->num_channels > 0 &&
-            metadata->num_channels != num_channels_) {
-          return absl::InvalidArgumentError(
-              "AudioInputMetadata num_channels does not match "
-              "AudioInputSource.");
-        }
-        continue;
-      }
-      auto* audio_input = std::get_if<OmniSession::AudioInput>(&input);
-      if (audio_input == nullptr) {
-        return absl::InvalidArgumentError("ASR Session requires AudioInput.");
-      }
-      if (buffer_.empty()) {
-        std::swap(buffer_, audio_input->pcm_samples);
-      } else {
-        buffer_.insert(buffer_.end(), audio_input->pcm_samples.begin(),
-                       audio_input->pcm_samples.end());
       }
     }
 
+    PushNextInterval();
+    return absl::OkStatus();
+  }
+
+  absl::Status FlushInternal() override {
+    ABSL_RETURN_IF_ERROR(input_source_->Flush());
+    while (input_source_->NeedSchedule() || input_source_->HasOutput()) {
+      absl::StatusOr<bool> has_more = PullNextInput();
+      if (absl::IsOutOfRange(has_more.status())) {
+        break;
+      }
+      ABSL_RETURN_IF_ERROR(has_more.status());
+      if (!*has_more) {
+        break;
+      }
+    }
+
+    while (buffer_.size() >= samples_per_interval_) {
+      PushNextInterval();
+    }
+
+    if (!buffer_.empty()) {
+      PushPaddedRemainder();
+    }
+    return absl::OkStatus();
+  }
+
+ private:
+  // Pulls and processes the next input from `input_source_`.
+  // Returns `true` if an input was processed, `false` if `EndOfInput` was
+  // reached, or `OutOfRangeError` if `input_source_` has no more output.
+  absl::StatusOr<bool> PullNextInput() {
+    if (input_source_->NeedSchedule()) {
+      ABSL_RETURN_IF_ERROR(input_source_->Schedule());
+    }
+    if (!input_source_->HasOutput()) {
+      return absl::OutOfRangeError("End of audio stream reached.");
+    }
+    ABSL_ASSIGN_OR_RETURN(OmniSession::Input input, input_source_->GetOutput());
+    if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+      return false;
+    }
+    if (const auto* metadata =
+            std::get_if<OmniSession::AudioInputMetadata>(&input)) {
+      if (metadata->sample_rate_hz > 0 &&
+          metadata->sample_rate_hz != sample_rate_hz_) {
+        return absl::InvalidArgumentError(
+            "AudioInputMetadata sample_rate_hz does not match "
+            "AudioInputSource.");
+      }
+      if (metadata->num_channels > 0 &&
+          metadata->num_channels != num_channels_) {
+        return absl::InvalidArgumentError(
+            "AudioInputMetadata num_channels does not match "
+            "AudioInputSource.");
+      }
+      return true;
+    }
+    auto* audio_input = std::get_if<OmniSession::AudioInput>(&input);
+    if (audio_input == nullptr) {
+      return absl::InvalidArgumentError("ASR Session requires AudioInput.");
+    }
+    if (buffer_.empty()) {
+      std::swap(buffer_, audio_input->pcm_samples);
+    } else {
+      buffer_.insert(buffer_.end(), audio_input->pcm_samples.begin(),
+                     audio_input->pcm_samples.end());
+    }
+    return true;
+  }
+
+  void PushNextInterval() {
     const size_t step = samples_per_interval_ - overlap_samples_;
     // Copy remaining content into output first, then swap to reduce data copy.
     std::vector<float> output(buffer_.begin() + step, buffer_.end());
     std::swap(output, buffer_);
     output.resize(samples_per_interval_);
     PushOutput(std::move(output));
-    return absl::OkStatus();
   }
 
- private:
+  void PushPaddedRemainder() {
+    // Zero-pad any remaining samples in `buffer_` (including retained
+    // overlap samples from the previous chunk) to `samples_per_interval_`
+    // and emit a final chunk so the recognizer can process the tail with
+    // trailing silence context.
+    buffer_.resize(samples_per_interval_, 0.0f);
+    std::vector<float> output;
+    std::swap(output, buffer_);
+    PushOutput(std::move(output));
+  }
+
   std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;
   const int sample_rate_hz_;
   const int num_channels_;
@@ -143,7 +186,7 @@ class AudioInputSource : public AudioSource {
 
 }  // namespace
 
-std::unique_ptr<AudioSource> AsrOmniSessionFactory::CreateAudioInputSource(
+std::unique_ptr<AudioSource> AsrSessionFactory::CreateAudioInputSource(
     std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
     int sample_rate_hz, int num_channels, int samples_per_interval,
     int overlap_samples) {
@@ -153,17 +196,19 @@ std::unique_ptr<AudioSource> AsrOmniSessionFactory::CreateAudioInputSource(
 }
 
 absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
-AsrOmniSessionFactory::CreateFactory(AsrEngineConfig config) {
+AsrSessionFactory::CreateFactory(AsrEngineConfig config) {
   ABSL_ASSIGN_OR_RETURN(auto asr_engine, AsrEngine::Create(std::move(config)));
   return std::unique_ptr<OmniSessionFactory>(
-      new AsrOmniSessionFactory(std::move(asr_engine)));
+      new AsrSessionFactory(std::move(asr_engine)));
 }
 
-AsrOmniSessionFactory::AsrOmniSessionFactory(
+AsrSessionFactory::AsrSessionFactory(
     std::unique_ptr<AsrEngine> absl_nonnull asr_engine)
     : asr_engine_(std::move(asr_engine)) {}
 
-absl::StatusOr<std::unique_ptr<OmniSession>> AsrOmniSessionFactory::Create(
+AsrSessionFactory::~AsrSessionFactory() = default;
+
+absl::StatusOr<std::unique_ptr<OmniSession>> AsrSessionFactory::Create(
     std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) {
   const auto& config = asr_engine_->config();
   int samples_per_interval = static_cast<int>(

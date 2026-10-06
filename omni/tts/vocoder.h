@@ -15,19 +15,15 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_VOCODER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_VOCODER_H_
 
-#include "absl/status/status.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::tts {
 
 // Abstract interface for Stage 4: Audio waveform synthesis.
-class Vocoder : public SingleThreadedStageWithDeque<AudioOutput> {
+class Vocoder : public SingleThreadedStageWithDeque<Output> {
  public:
   ~Vocoder() override = default;
-
-  // Flushes remaining synthesized audio at end of stream.
-  virtual absl::Status Flush() = 0;
 };
 
 }  // namespace litert::omni::tts

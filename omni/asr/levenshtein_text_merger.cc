@@ -53,14 +53,14 @@ absl::Status LevenshteinTextMerger::Execute() {
   }
 
   if (curr_strings.empty()) {
-    PushOutput({"", absl::StrJoin(unconfirmed_words_, " ")});
+    PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
     return absl::OkStatus();
   }
 
   if (unconfirmed_words_.empty()) {
     // Initial chunk: cache words as unconfirmed state.
     unconfirmed_words_ = std::move(curr_strings);
-    PushOutput({"", absl::StrJoin(unconfirmed_words_, " ")});
+    PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
     return absl::OkStatus();
   }
 
@@ -134,24 +134,17 @@ absl::Status LevenshteinTextMerger::Execute() {
   }
 
   unconfirmed_words_ = std::move(new_unconfirmed);
-  PushOutput(
-      {absl::StrJoin(confirmed, " "), absl::StrJoin(unconfirmed_words_, " ")});
+  PushOutput(MergeResult{absl::StrJoin(confirmed, " "),
+                         absl::StrJoin(unconfirmed_words_, " ")});
   return absl::OkStatus();
 }
 
-absl::Status LevenshteinTextMerger::Flush() {
-  if (!SetStateIfState(State::kIdle, State::kRunning)) {
-    return absl::FailedPreconditionError(
-        "Flush() called while Schedule() is in progress.");
-  }
-
+absl::Status LevenshteinTextMerger::FlushInternal() {
   if (!unconfirmed_words_.empty()) {
     MergeResult result = {absl::StrJoin(unconfirmed_words_, " "), ""};
     unconfirmed_words_.clear();
     PushOutput(std::move(result));
   }
-
-  SetState(State::kIdle);
   return absl::OkStatus();
 }
 

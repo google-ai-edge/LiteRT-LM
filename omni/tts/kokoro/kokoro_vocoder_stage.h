@@ -57,12 +57,6 @@ class KokoroVocoderStage : public Vocoder {
   // Model-static frame capacity derived in Create() from tensor buffers.
   int frame_capacity() const { return frame_capacity_; }
 
-  // Flushes remaining buffered audio frames and synthesizes audio.
-  //
-  // returns
-  // - absl::OkStatus() on success, or error status on failure.
-  absl::Status Flush() override;
-
  protected:
   bool NeedScheduleInternal() const override {
     return acoustic_predictor_.HasOutput();

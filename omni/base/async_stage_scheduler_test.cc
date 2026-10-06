@@ -239,5 +239,57 @@ TEST(AsyncStageSchedulerTest, StopWaitsForInFlightTaskCompletion) {
   EXPECT_TRUE(stage1.IsTaskFinished());
 }
 
+class FailingOutOfRangeIntermediateStage
+    : public SingleThreadedStageWithDeque<int> {
+ public:
+  explicit FailingOutOfRangeIntermediateStage(Stage<int>* input_stage)
+      : input_stage_(*input_stage) {}
+
+ protected:
+  bool NeedScheduleInternal() const override {
+    return input_stage_.HasOutput();
+  }
+
+  absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+    auto item = input_stage_.GetOutput();
+    if (!item.ok()) {
+      return item.status();
+    }
+    return absl::OutOfRangeError("Intermediate stage index out of bounds");
+  }
+
+ private:
+  Stage<int>& input_stage_;
+};
+
+TEST(AsyncStageSchedulerTest, IntermediateStageOutOfRangeErrorIsForwarded) {
+  TestSourceStage stage1({10, 20});
+  FailingOutOfRangeIntermediateStage stage2(&stage1);
+  TestTransformStage stage3(&stage2);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  absl::Status final_status;
+  absl::Notification done;
+
+  std::vector<internal::StageBase*> stages = {&stage1, &stage2, &stage3};
+  AsyncStageScheduler<std::string> scheduler(
+      stages, &stage3, &pool,
+      [&final_status, &done](absl::StatusOr<std::string> res) -> absl::Status {
+        if (!res.ok()) {
+          final_status = res.status();
+          done.Notify();
+          return res.status();
+        }
+        return absl::OkStatus();
+      });
+
+  ASSERT_TRUE(scheduler.Start().ok());
+  done.WaitForNotification();
+
+  EXPECT_TRUE(absl::IsOutOfRange(final_status));
+  EXPECT_EQ(final_status.message(), "Intermediate stage index out of bounds");
+}
+
 }  // namespace
 }  // namespace litert::omni

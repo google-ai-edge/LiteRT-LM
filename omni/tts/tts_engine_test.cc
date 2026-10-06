@@ -34,12 +34,12 @@
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
+#include "omni/multi_staged_session.h"
 #include "omni/omni_session.h"
 #include "omni/tts/kokoro/kokoro_factory.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/stream_text_source.h"
-#include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
@@ -167,14 +167,6 @@ class DummyVocoder : public Vocoder {
   explicit DummyVocoder(Stage<DummyLatentOutput>* latent_decoder)
       : latent_decoder_(*latent_decoder) {}
 
-  absl::Status Flush() override {
-    if (has_pending_audio_) {
-      PushOutput({{0.5f, -0.5f}, 24000});
-      has_pending_audio_ = false;
-    }
-    return absl::OkStatus();
-  }
-
  protected:
   void ResetInternal() override { has_pending_audio_ = false; }
 
@@ -198,26 +190,41 @@ class DummyVocoder : public Vocoder {
     return absl::OkStatus();
   }
 
+  absl::Status FlushInternal() override {
+    if (has_pending_audio_) {
+      PushOutput(
+          AudioOutput{.pcm_samples = {0.5f, -0.5f}, .sample_rate_hz = 24000});
+      has_pending_audio_ = false;
+    }
+    return absl::OkStatus();
+  }
+
  private:
   Stage<DummyLatentOutput>& latent_decoder_;
   bool has_pending_audio_ = false;
 };
 
-TtsSession::Components CreateDummyComponents() {
-  TtsSession::Components components;
-  components.text_source = std::make_unique<StreamTextSource>();
-  auto frontend =
-      std::make_unique<DummyTextFrontend>(components.text_source.get());
+absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateDummySession(
+    ::litert::lm::ThreadPool* pool = nullptr) {
+  auto text_source = std::make_unique<StreamTextSource>();
+  auto frontend = std::make_unique<DummyTextFrontend>(text_source.get());
   auto acoustic = std::make_unique<DummyAcousticPredictor>(frontend.get());
   auto latent = std::make_unique<DummyLatentDecoder>(acoustic.get());
   auto vocoder = std::make_unique<DummyVocoder>(latent.get());
+  Stage<Output>* raw_output_stage = vocoder.get();
 
-  components.intermediate_stages.push_back(std::move(frontend));
-  components.intermediate_stages.push_back(std::move(acoustic));
-  components.intermediate_stages.push_back(std::move(latent));
-  components.vocoder = std::move(vocoder);
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  // The first stage must be `StreamTextSource`.
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(frontend));
+  stages.push_back(std::move(acoustic));
+  stages.push_back(std::move(latent));
+  stages.push_back(std::move(vocoder));
+  return MultiStagedSession::Create(std::move(stages), raw_output_stage, pool);
+}
 
-  return components;
+StreamTextSource& GetTextSource(MultiStagedSession& session) {
+  return *static_cast<StreamTextSource*>(session.stages()[0].get());
 }
 
 // Creates a temporary directory holding the given (empty) model files.
@@ -295,11 +302,10 @@ TEST(TtsEngineTest, CreateFailsWhenModelTypeCannotBeDetected) {
 
 TEST(TtsEngineTest, SynthesizeSyncForceFlushOnSession) {
   lm::ThreadPool thread_pool("test_pool", 2);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
+  ASSERT_OK_AND_ASSIGN(auto session, CreateDummySession(&thread_pool));
 
-  ASSERT_OK(session->text_source().PushText("Hello world "));
-  ASSERT_OK_AND_ASSIGN(auto out, session->ProcessNext());
+  ASSERT_OK(GetTextSource(*session).PushText("Hello world "));
+  ASSERT_OK_AND_ASSIGN(auto out, session->Flush());
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(out));
   const auto& audio = std::get<AudioOutput>(out);
   EXPECT_EQ(audio.sample_rate_hz, 24000);
@@ -308,15 +314,14 @@ TEST(TtsEngineTest, SynthesizeSyncForceFlushOnSession) {
 
 TEST(TtsEngineTest, SynthesizeAsyncStreamingOnSession) {
   lm::ThreadPool thread_pool("test_pool", 4);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
+  ASSERT_OK_AND_ASSIGN(auto session, CreateDummySession(&thread_pool));
 
   absl::Notification done;
   int chunk_count = 0;
   absl::Status final_status;
 
-  ASSERT_OK(session->text_source().PushText("Hello world."));
-  session->text_source().Finish();
+  ASSERT_OK(GetTextSource(*session).PushText("Hello world."));
+  GetTextSource(*session).Finish();
   absl::Status status = session->ProcessAsync(
       [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
         if (!result.ok()) {
@@ -340,15 +345,14 @@ TEST(TtsEngineTest, SynthesizeAsyncStreamingOnSession) {
 
 TEST(TtsEngineTest, SequentialSynthesizeCallsOnSession) {
   lm::ThreadPool thread_pool("test_pool", 2);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
+  ASSERT_OK_AND_ASSIGN(auto session, CreateDummySession(&thread_pool));
 
-  ASSERT_OK(session->text_source().PushText("First chunk "));
+  ASSERT_OK(GetTextSource(*session).PushText("First chunk."));
   ASSERT_OK_AND_ASSIGN(auto out1, session->ProcessNext());
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(out1));
   EXPECT_GE(std::get<AudioOutput>(out1).pcm_samples.size(), 3);
 
-  ASSERT_OK(session->text_source().PushText("Second chunk "));
+  ASSERT_OK(GetTextSource(*session).PushText("Second chunk."));
   ASSERT_OK_AND_ASSIGN(auto out2, session->ProcessNext());
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(out2));
   EXPECT_GE(std::get<AudioOutput>(out2).pcm_samples.size(), 3);

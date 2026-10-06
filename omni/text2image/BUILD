@@ -37,7 +37,6 @@ cc_library(
     name = "image_decoder",
     hdrs = ["image_decoder.h"],
     deps = [
-        "@com_google_absl//absl/status",
         "//omni/base:io_types",
         "//omni/base:stage",
     ],

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO(b/524681030): Move to asr_session.h.
+
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
 
@@ -30,11 +32,11 @@ class OmniSessionTest;
 namespace litert::omni::asr {
 
 // `OmniSessionFactory` implementation backed by `AsrEngine`.
-class AsrOmniSessionFactory : public OmniSessionFactory {
+class AsrSessionFactory : public OmniSessionFactory {
  public:
   static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
       AsrEngineConfig config);
-  ~AsrOmniSessionFactory() override = default;
+  ~AsrSessionFactory() override;
 
   absl::StatusOr<std::unique_ptr<OmniSession>> Create(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
@@ -42,13 +44,14 @@ class AsrOmniSessionFactory : public OmniSessionFactory {
 
  private:
   friend class ::litert::omni::OmniSessionTest;
+  friend class AsrOmniSessionTest;
 
   static std::unique_ptr<AudioSource> CreateAudioInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       int sample_rate_hz, int num_channels, int samples_per_interval,
       int overlap_samples);
 
-  explicit AsrOmniSessionFactory(
+  explicit AsrSessionFactory(
       std::unique_ptr<AsrEngine> absl_nonnull asr_engine);
 
   std::unique_ptr<AsrEngine> asr_engine_;

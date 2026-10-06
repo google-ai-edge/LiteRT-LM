@@ -37,7 +37,6 @@
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
-#include "omni/asr/asr_session.h"
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/ctc_decoder.h"
@@ -56,6 +55,8 @@
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/model_utils.h"
+#include "omni/base/stage.h"
+#include "omni/multi_staged_session.h"
 #include "omni/omni_engine.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -327,7 +328,7 @@ AsrEngine::AsrEngine(
       lm_runner_(std::move(lm_runner)),
       lm_engine_runner_(std::move(lm_engine_runner)) {}
 
-absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
+absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
     std::unique_ptr<AudioSource> audio_source) {
   std::unique_ptr<LiteRtRunner> runner;
   if (compiled_model_ != nullptr) {
@@ -421,14 +422,17 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
       break;
   }
 
-  AsrSession::Components components;
-  components.audio_source = std::move(audio_source);
-  components.preprocessor = std::move(preprocessor);
-  components.speech_recognizer = std::move(speech_recognizer);
-  components.detokenizer = std::move(detokenizer);
-  components.text_merger = std::move(text_merger);
+  TextMerger* raw_text_merger = text_merger.get();
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.reserve(5);
+  stages.push_back(std::move(audio_source));
+  stages.push_back(std::move(preprocessor));
+  stages.push_back(std::move(speech_recognizer));
+  stages.push_back(std::move(detokenizer));
+  stages.push_back(std::move(text_merger));
 
-  return AsrSession::Create(std::move(components), thread_pool_.get());
+  return MultiStagedSession::Create(std::move(stages), raw_text_merger,
+                                    thread_pool_.get());
 }
 
 }  // namespace litert::omni::asr

@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_IMAGE_DECODER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_IMAGE_DECODER_H_
 
-#include "absl/status/status.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 
@@ -26,9 +25,6 @@ namespace litert::omni::text2image {
 class ImageDecoder : public SingleThreadedStageWithDeque<ImageOutput> {
  public:
   ~ImageDecoder() override = default;
-
-  // Flushes any buffered state at the end of a stream.
-  virtual absl::Status Flush() = 0;
 };
 
 }  // namespace litert::omni::text2image

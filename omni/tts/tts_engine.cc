@@ -33,15 +33,17 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
+#include "omni/base/stage.h"
+#include "omni/multi_staged_session.h"
 #include "omni/tts/kokoro/kokoro_factory.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_factory.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
-#include "omni/tts/tts_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/proto/tts_metadata.pb.h"
@@ -336,7 +338,7 @@ TextChunkConfig TtsEngine::ResolveTextChunkConfig(
   return session_config.text_chunk_config;
 }
 
-absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
+absl::StatusOr<std::unique_ptr<MultiStagedSession>> TtsEngine::CreateSession(
     const TtsSessionConfig& session_config,
     std::unique_ptr<StreamTextSource> absl_nullable text_source) {
   if (session_config.language.empty()) {
@@ -354,7 +356,8 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
         ResolveTextChunkConfig(session_config));
   }
 
-  TtsSession::Components components;
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  Stage<Output>* output_stage = nullptr;
   if (auto* config = std::get_if<KokoroModelConfig>(&settings_.model_config)) {
     KokoroModelConfig session_model_config = *config;
     std::string resolved_voice = session_config.voice.value_or("");
@@ -388,10 +391,9 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     session_model_config.voice_name = resolved_voice;
     session_model_config.language = kokoro_lang;
 
-    LITERT_ASSIGN_OR_RETURN(
-        components,
-        CreateKokoroComponents(session_model_config, settings_.model_folder,
-                               std::move(text_source), model_resources_));
+    LITERT_RETURN_IF_ERROR(CreateKokoroComponents(
+        session_model_config, settings_.model_folder, std::move(text_source),
+        model_resources_, stages, &output_stage));
   } else if (auto* config =
                  std::get_if<Qwen3TtsModelConfig>(&settings_.model_config)) {
     Qwen3TtsModelConfig session_model_config = *config;
@@ -407,17 +409,21 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     if (!resolved_voice.empty()) {
       session_model_config.speaker_file = resolved_voice;
     }
-    LITERT_ASSIGN_OR_RETURN(
-        components,
-        CreateQwen3TtsComponents(session_model_config, settings_.model_folder,
-                                 std::move(text_source), model_resources_));
+    LITERT_RETURN_IF_ERROR(CreateQwen3TtsComponents(
+        session_model_config, settings_.model_folder, std::move(text_source),
+        model_resources_, stages, &output_stage));
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported model_config in TtsEngineSettings: ",
                      static_cast<int>(settings_.GetModelType())));
   }
 
-  return TtsSession::Create(std::move(components), thread_pool_.get());
+  if (output_stage == nullptr) {
+    return absl::InternalError("Output stage must not be null.");
+  }
+  // The first stage (`stages[0]`) must be `StreamTextSource`.
+  return MultiStagedSession::Create(std::move(stages), output_stage,
+                                    thread_pool_.get());
 }
 
 }  // namespace litert::omni::tts

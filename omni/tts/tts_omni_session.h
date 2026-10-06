@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO(b/524681030): Move to tts_session.h.
+
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_OMNI_SESSION_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_OMNI_SESSION_H_
 
@@ -31,11 +33,11 @@ class OmniSessionTest;
 namespace litert::omni::tts {
 
 // `OmniSessionFactory` implementation backed by `TtsEngine`.
-class TtsOmniSessionFactory : public OmniSessionFactory {
+class TtsSessionFactory : public OmniSessionFactory {
  public:
   static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
       TtsEngineSettings settings);
-  ~TtsOmniSessionFactory() override = default;
+  ~TtsSessionFactory() override;
 
   absl::StatusOr<std::unique_ptr<OmniSession>> Create(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
@@ -43,12 +45,13 @@ class TtsOmniSessionFactory : public OmniSessionFactory {
 
  private:
   friend class ::litert::omni::OmniSessionTest;
+  friend class TtsOmniSessionTest;
 
   static std::unique_ptr<StreamTextSource> CreateTextInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       TextChunkConfig config = {});
 
-  explicit TtsOmniSessionFactory(
+  explicit TtsSessionFactory(
       std::unique_ptr<TtsEngine> absl_nonnull tts_engine);
 
   std::unique_ptr<TtsEngine> tts_engine_;

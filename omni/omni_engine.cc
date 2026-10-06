@@ -103,7 +103,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
                                           asr_config)
           .ok()) {
     ApplyOptionsToAsrConfig(options, asr_config);
-    return asr::AsrOmniSessionFactory::CreateFactory(std::move(asr_config));
+    return asr::AsrSessionFactory::CreateFactory(std::move(asr_config));
   }
 
   // 2. Check if `model_name` is a known TTS model name.
@@ -114,11 +114,11 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
           : (std::filesystem::path(options.cache_dir) / std::string(model_name))
                 .string();
   if (lower_name == "kokoro" || lower_name == "kokoro-82m") {
-    return tts::TtsOmniSessionFactory::CreateFactory(
+    return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_folder, tts::KokoroModelConfig{}, options));
   }
   if (lower_name == "qwen3-tts" || lower_name == "qwen3") {
-    return tts::TtsOmniSessionFactory::CreateFactory(
+    return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_folder, tts::Qwen3TtsModelConfig{}, options));
   }
 
@@ -132,7 +132,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
     } else if (*detected_tts == tts::ModelType::QWEN3_TTS) {
       model_config = tts::Qwen3TtsModelConfig{};
     }
-    return tts::TtsOmniSessionFactory::CreateFactory(
+    return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_name, std::move(model_config), options));
   }
 

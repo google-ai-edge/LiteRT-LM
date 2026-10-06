@@ -37,10 +37,6 @@ class TimestampTextMerger : public TextMerger {
       float overlap_ratio = 0.5f, int search_window = 4,
       int max_levenshtein_distance = 3, float pivot_factor = 0.6f);
 
-  // Flushes remaining unconfirmed text into output queue at end of stream.
-  // Returns error if called when Schedule() is in progress.
-  absl::Status Flush() override;
-
   // Returns cached unconfirmed words.
   // It's only used for testing. Not thread-safe.
   absl::Span<const std::string> unconfirmed_words_for_testing() const {
@@ -48,6 +44,7 @@ class TimestampTextMerger : public TextMerger {
   }
 
  private:
+  absl::Status FlushInternal() override;
   void ResetInternal() override;
   absl::Status ScheduleInternal() override;
 
