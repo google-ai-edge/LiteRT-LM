@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -50,6 +51,13 @@ std::string GetLoraFilePath() {
 std::string GetModelFilePath() {
   auto path = std::filesystem::path(::testing::SrcDir()) /
               "litert_lm/runtime/testdata/litert_dummy_lora32_f16_model.tflite";
+  return path.string();
+}
+
+std::string GetLoRAParamModelFilePath() {
+  auto path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/litert_dummy_lora_param_tensor_model.tflite";
   return path.string();
 }
 
@@ -149,6 +157,38 @@ TEST_F(LoraTest, GetLoRABuffersSuccess) {
   EXPECT_TRUE(buffers.contains("value_w_prime_right_15"));
   EXPECT_TRUE(buffers.contains("key_w_prime_left_0"));
   EXPECT_TRUE(buffers.contains("post_w_prime_right_30"));
+}
+
+TEST_F(LoraTest, NoLoRAParamTensorForModelWithoutIt) {
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               *compiled_model_, "decode"));
+  EXPECT_THAT(lora->GetLoRABuffer("lora_param_tensor"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(LoraTest, FillsLoRAParamTensor) {
+  // Model inputs: key_w_prime_left_99 [32, 4, 16], query_w_prime_right_99
+  // [48, 32] and lora_param_tensor [1, 1, 1, 7].
+  LITERT_ASSERT_OK_AND_ASSIGN(Options options, litert::Options::Create());
+  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      CompiledModel::Create(*env_, GetLoRAParamModelFilePath(), options));
+
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               compiled_model,
+                                               "serving_default"));
+  ASSERT_OK_AND_ASSIGN(auto buffer, lora->GetLoRABuffer("lora_param_tensor"));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_ptr, litert::TensorBufferScopedLock::Create<const int32_t>(
+                             buffer, litert::TensorBuffer::LockMode::kRead));
+  auto& [lock, data_ptr] = lock_and_ptr;
+  // Element 0 is the start index. The others are the largest non-rank extent
+  // over LoRA inputs. The rank is 32, the only dimension both inputs have (not
+  // the smallest dimension 4): max(4 * 16, 48) = 64.
+  EXPECT_THAT(std::vector<int32_t>(data_ptr, data_ptr + 7),
+              ::testing::ElementsAre(0, 64, 64, 64, 64, 64, 64));
 }
 
 }  // namespace

@@ -14,6 +14,7 @@
 
 #include "runtime/components/lora.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -49,6 +50,11 @@ namespace {
 // interpreter.
 // TODO: b/450616365 - Consolidate constant definitions.
 constexpr char kDecodeSignatureRunner[] = "decode";
+
+// Input of GPU models exported with runtime-BMM LoRA. It holds the channel
+// range of the LoRA BMM ops (see ml_drift::LlmRuntimeParams) and is not a LoRA
+// weight.
+constexpr absl::string_view kLoRAParamTensorName = "lora_param_tensor";
 
 }  // namespace
 
@@ -100,6 +106,79 @@ absl::Status LoRA::Init() {
     }
 
     lora_buffers_[input_name] = std::move(tensor_buffer);
+  }
+
+  // GPU models exported with runtime-BMM LoRA read the channel range of every
+  // LoRA BMM op from `lora_param_tensor`: element 0 is the start index and the
+  // others are end indices. Without this the range is unset, so the LoRA ops
+  // compute on garbage ranges (no effect, wrong output or out-of-bounds
+  // access). Set the ends to the largest non-rank extent of any LoRA input
+  // (all dimensions but the rank, multiplied, since the ops may reshape e.g.
+  // [rank, heads, head_dim] to [rank, heads * head_dim]), so that every op
+  // covers all of its channels. The rank is the model's LoRA rank (a LoRA with
+  // a smaller rank is zero padded to it), i.e. the dimension that every LoRA
+  // input has.
+  if (std::find(input_names.begin(), input_names.end(),
+                kLoRAParamTensorName) != input_names.end()) {
+    std::vector<std::vector<int32_t>> lora_dims;
+    for (const auto& input_name : input_names) {
+      if (!IsLoRAInputName(input_name)) {
+        continue;
+      }
+      LITERT_ASSIGN_OR_RETURN(
+          auto tensor_type,
+          compiled_model_.GetInputTensorType(signature_name_, input_name));
+      const auto dims = tensor_type.Layout().Dimensions();
+      lora_dims.emplace_back(dims.begin(), dims.end());
+    }
+    RET_CHECK(!lora_dims.empty())
+        << kLoRAParamTensorName << " is an input but there are no LoRA inputs.";
+
+    // Candidates for the rank: dimensions of the first input that every other
+    // input also has. Use the smallest one.
+    int32_t model_rank = 0;
+    for (int32_t candidate : lora_dims[0]) {
+      if (candidate <= 0 || (model_rank > 0 && candidate >= model_rank)) {
+        continue;
+      }
+      if (std::all_of(lora_dims.begin(), lora_dims.end(),
+                      [candidate](const std::vector<int32_t>& dims) {
+                        return std::find(dims.begin(), dims.end(),
+                                         candidate) != dims.end();
+                      })) {
+        model_rank = candidate;
+      }
+    }
+    RET_CHECK_GT(model_rank, 0)
+        << "Could not find a LoRA rank shared by all LoRA inputs.";
+
+    int64_t max_extent = 0;
+    for (const auto& dims : lora_dims) {
+      int64_t num_elements = 1;
+      for (int32_t dim : dims) {
+        num_elements *= dim;
+      }
+      max_extent = std::max(max_extent, num_elements / model_rank);
+    }
+
+    LITERT_ASSIGN_OR_RETURN(TensorBuffer param_buffer,
+                            compiled_model_.CreateInputBuffer(
+                                signature_name_, kLoRAParamTensorName));
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock_and_addr,
+          litert::TensorBufferScopedLock::Create(
+              param_buffer, TensorBuffer::LockMode::kWrite));
+      LITERT_ASSIGN_OR_RETURN(auto param_size, param_buffer.PackedSize());
+      // Element 0 is the start index; at least one end index must follow.
+      RET_CHECK_GE(param_size, 2 * sizeof(int32_t))
+          << "Unexpected size of " << kLoRAParamTensorName;
+      int32_t* params = static_cast<int32_t*>(lock_and_addr.second);
+      std::fill(params, params + param_size / sizeof(int32_t),
+                static_cast<int32_t>(max_extent));
+      params[0] = 0;
+    }
+    lora_buffers_[kLoRAParamTensorName] = std::move(param_buffer);
   }
   return absl::OkStatus();
 }
