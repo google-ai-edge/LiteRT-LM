@@ -254,7 +254,8 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
     absl::AnyInvocable<void(Message)> complete_message_callback,
     const std::optional<std::string>& open_channel_name,
     bool return_error_on_max_tokens_reached, bool stream_tool_calls,
-    absl::string_view tool_call_channel_name) {
+    absl::string_view tool_call_channel_name,
+    absl::AnyInvocable<void(int)> on_channel_tokens_callback) {
   auto channels = GetChannels(model_data_processor, custom_channels);
 
   bool initial_inside_channel = false;
@@ -277,6 +278,7 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
           user_callback = std::move(user_callback),
           cancel_callback = std::move(cancel_callback),
           complete_message_callback = std::move(complete_message_callback),
+          on_channel_tokens_callback = std::move(on_channel_tokens_callback),
           accumulated_response_text = std::string(), cursor = size_t(0),
           channels = std::move(channels),
           inside_channel = initial_inside_channel,
@@ -287,8 +289,8 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
           open_channel_name, return_error_on_max_tokens_reached,
           stream_tool_calls,
           tool_call_channel_name = std::string(tool_call_channel_name),
-          tool_call_stream_cursor =
-              size_t(0)](absl::StatusOr<Responses> responses) mutable {
+          tool_call_stream_cursor = size_t(0), pending_overlap_tokens = 0](
+             absl::StatusOr<Responses> responses) mutable {
     if (!responses.ok()) {
       // If the error is due to cancellation, then we should trigger the cancel
       // callback for removing the last message from the history.
@@ -351,6 +353,14 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
         return;
       }
 
+      int step_tokens =
+          (!responses->GetTokenIds().empty() &&
+           !responses->GetTokenIds()[0].empty())
+              ? static_cast<int>(responses->GetTokenIds()[0].size())
+              : 1;
+      int channel_tokens_in_step = 0;
+      bool step_counted_as_channel = false;
+
       // Append the new response text to the accumulated text.
       accumulated_response_text += responses->GetTexts()[0];
 
@@ -370,6 +380,17 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
                         absl::string_view(accumulated_response_text)
                             .substr(cursor, channel_start_pos - cursor),
                         model_data_processor, processor_args);
+
+            if (!next_channel->channel_name.empty()) {
+              if (channel_start_pos == cursor) {
+                channel_tokens_in_step += pending_overlap_tokens;
+              }
+              if (!step_counted_as_channel) {
+                channel_tokens_in_step += step_tokens;
+                step_counted_as_channel = true;
+              }
+            }
+            pending_overlap_tokens = 0;
 
             // Move cursor up to channel start.
             cursor = channel_start_pos;
@@ -404,6 +425,13 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
               // string.
               size_t possible_start_pos =
                   accumulated_response_text.size() - max_overlap;
+              if (possible_start_pos > cursor) {
+                pending_overlap_tokens = 0;
+              }
+              if (!step_counted_as_channel) {
+                pending_overlap_tokens += step_tokens;
+                step_counted_as_channel = true;
+              }
 
               // Call the callback with text up to the potential start of the
               // channel.
@@ -418,6 +446,7 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
               // Break for the next token.
               break;
             } else {
+              pending_overlap_tokens = 0;
               // Remaining string is text.
               SendMessage(user_callback,
                           accumulated_response_text.substr(cursor),
@@ -429,6 +458,10 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
         }
 
         if (inside_channel) {
+          if (!active_channel_name.empty() && !step_counted_as_channel) {
+            channel_tokens_in_step += step_tokens;
+            step_counted_as_channel = true;
+          }
           // Look for channel end.
           size_t search_start =
               std::max(static_cast<size_t>(cursor),
@@ -492,6 +525,10 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
             break;
           }
         }
+      }
+
+      if (channel_tokens_in_step > 0 && on_channel_tokens_callback) {
+        on_channel_tokens_callback(channel_tokens_in_step);
       }
     }
   };
