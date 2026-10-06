@@ -207,6 +207,16 @@ TEST_F(IsLoRAInputNameTest, RejectsPartialOrIncompleteMatches) {
   EXPECT_FALSE(IsLoRAInputName("not_the_start_query_w_prime_left_0"));
 }
 
+TEST_F(IsLoRAInputNameTest, MatchesAudioEncoderPattern) {
+  // The audio encoder names its LoRA inputs without "_" before the layer.
+  EXPECT_TRUE(IsLoRAInputName("query_w_prime_left0"));
+  EXPECT_TRUE(IsLoRAInputName("key_w_prime_right11"));
+  EXPECT_TRUE(IsLoRAInputName("value_w_prime_left5"));
+  EXPECT_TRUE(IsLoRAInputName("post_w_prime_right23"));
+  EXPECT_FALSE(IsLoRAInputName("query_w_prime_left__0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_prime_weight0"));
+}
+
 TEST_F(IsLoRAInputNameTest, RejectsEmptyAndMalformedStrings) {
   EXPECT_FALSE(IsLoRAInputName(""));
   EXPECT_FALSE(IsLoRAInputName("____"));
