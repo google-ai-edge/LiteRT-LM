@@ -143,6 +143,7 @@ cc_library(
         "//runtime/conversation/model_data_processor",
         "//runtime/conversation/model_data_processor:config_registry",
         "//runtime/conversation/model_data_processor:model_data_processor_factory",
+        "//runtime/core:session_utils",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
