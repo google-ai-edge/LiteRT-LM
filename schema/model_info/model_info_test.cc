@@ -1369,6 +1369,81 @@ TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_TextOnly_GenericModel) {
   EXPECT_EQ(embed.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
+TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_Multimodal) {
+  proto::EmbeddingMetadata embed_meta;
+  embed_meta.set_min_runtime_version("0.12.0");
+  auto* gemma_v2 =
+      embed_meta.mutable_embedding_model_type()->mutable_embedding_gemma_v2();
+  gemma_v2->set_max_num_patches(2520);
+  gemma_v2->set_pooling_kernel_size(3);
+
+  std::string encoder_model =
+      CreateMinimalEmbeddingTFLiteModel(/*embedding_dim=*/256,
+                                        /*input_lengths=*/{256});
+  std::string vision_model = CreateMinimalTFLiteModel({280});
+  std::string aux_payload = CreateMockNpuTfliteModel("qnn_partition_0");
+
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"EMBEDDING",
+      /*tf_hub_model_id=*/"google/embedding-multimodal-256",
+      {
+          {.model_type = "tf_lite_text_encoder",
+           .backend_constraint = "cpu",
+           .payload = encoder_model},
+          {.model_type = "tf_lite_vision_encoder",
+           .backend_constraint = "gpu",
+           .payload = vision_model},
+          {.model_type = "tf_lite_audio_encoder_hw",
+           .backend_constraint = "npu",
+           .payload = std::string(100, '\0')},
+          {.model_type = "tf_lite_aux", .payload = aux_payload},
+      },
+      /*llm_metadata_proto=*/nullptr,
+      /*extra_system_entries=*/{}, &embed_meta);
+
+  std::istringstream stream(litertlm_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ModelInfo result = std::move(*result_or);
+
+  EXPECT_FALSE(result.llm_capability.has_value());
+  ASSERT_TRUE(result.embedding_capability.has_value());
+
+  const auto& embed = *result.embedding_capability;
+  EXPECT_EQ(embed.embedding_dimension, 256);
+  EXPECT_EQ(embed.max_context_tokens, 256);
+  EXPECT_EQ(embed.max_vision_token_budget, 280);
+  ASSERT_TRUE(embed.vision_signature_selection.has_value());
+  EXPECT_THAT(*embed.vision_signature_selection, ::testing::ElementsAre(280));
+  EXPECT_EQ(embed.min_runtime_version, "0.12.0");
+  ASSERT_TRUE(embed.supported_signature_lengths.has_value());
+  EXPECT_THAT(*embed.supported_signature_lengths, ::testing::ElementsAre(256));
+
+  EXPECT_TRUE(embed.input_modalities.text);
+  EXPECT_TRUE(embed.input_modalities.vision);
+  EXPECT_TRUE(embed.input_modalities.audio);
+
+  // Text backend
+  EXPECT_TRUE(embed.text_supported_backends.cpu);
+  EXPECT_FALSE(embed.text_supported_backends.gpu);
+  EXPECT_TRUE(embed.text_supported_backends.npu);
+  EXPECT_EQ(embed.text_supported_backends.npu_brand, NpuBrand::kQualcomm);
+  EXPECT_EQ(embed.text_supported_backends.default_backend, BackendType::kCpu);
+
+  // Vision backend
+  EXPECT_FALSE(embed.vision_supported_backends.cpu);
+  EXPECT_TRUE(embed.vision_supported_backends.gpu);
+  EXPECT_FALSE(embed.vision_supported_backends.npu);
+  EXPECT_EQ(embed.vision_supported_backends.default_backend, BackendType::kGpu);
+
+  // Audio backend
+  EXPECT_FALSE(embed.audio_supported_backends.cpu);
+  EXPECT_FALSE(embed.audio_supported_backends.gpu);
+  EXPECT_TRUE(embed.audio_supported_backends.npu);
+  EXPECT_EQ(embed.audio_supported_backends.npu_brand, NpuBrand::kQualcomm);
+  EXPECT_EQ(embed.audio_supported_backends.default_backend, BackendType::kNpu);
+}
+
 TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_WithNpuStamp) {
   std::string encoder_model =
       CreateMinimalEmbeddingTFLiteModel(/*embedding_dim=*/3072,

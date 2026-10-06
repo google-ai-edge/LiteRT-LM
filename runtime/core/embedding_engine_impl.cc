@@ -116,6 +116,33 @@ absl::StatusOr<SpecialTokens> ExtractSpecialTokens(
     return special_tokens;
   }
   const auto& model_type = metadata.embedding_model_type();
+  if (model_type.has_embedding_gemma_v2()) {
+    const auto& embedding_gemma_v2 = model_type.embedding_gemma_v2();
+    if (embedding_gemma_v2.has_start_of_image_token()) {
+      LITERT_ASSIGN_OR_RETURN(
+          special_tokens.start_of_image_token_ids,
+          TokenUnionToTokenIds(embedding_gemma_v2.start_of_image_token(),
+                               tokenizer));
+    }
+    if (embedding_gemma_v2.has_end_of_image_token()) {
+      LITERT_ASSIGN_OR_RETURN(
+          special_tokens.end_of_image_token_ids,
+          TokenUnionToTokenIds(embedding_gemma_v2.end_of_image_token(),
+                               tokenizer));
+    }
+    if (embedding_gemma_v2.has_start_of_audio_token()) {
+      LITERT_ASSIGN_OR_RETURN(
+          special_tokens.start_of_audio_token_ids,
+          TokenUnionToTokenIds(embedding_gemma_v2.start_of_audio_token(),
+                               tokenizer));
+    }
+    if (embedding_gemma_v2.has_end_of_audio_token()) {
+      LITERT_ASSIGN_OR_RETURN(
+          special_tokens.end_of_audio_token_ids,
+          TokenUnionToTokenIds(embedding_gemma_v2.end_of_audio_token(),
+                               tokenizer));
+    }
+  }
   return special_tokens;
 }
 
@@ -125,6 +152,26 @@ ExtractImagePreprocessParameter(const proto::EmbeddingMetadata& metadata) {
     return std::nullopt;
   }
   const auto& model_type = metadata.embedding_model_type();
+  if (model_type.has_embedding_gemma_v2()) {
+    const auto& embedding_gemma_v2 = model_type.embedding_gemma_v2();
+    if (embedding_gemma_v2.patch_width() > 0 ||
+        embedding_gemma_v2.patch_height() > 0 ||
+        embedding_gemma_v2.max_num_patches() > 0 ||
+        embedding_gemma_v2.pooling_kernel_size() > 0) {
+      ::litert::support::ImagePreprocessParameter parameter;
+      parameter.SetPatchifyConfig(
+          ::litert::support::ImagePreprocessParameter::PatchifyConfig{
+              .patch_width = embedding_gemma_v2.patch_width(),
+              .patch_height = embedding_gemma_v2.patch_height(),
+              .max_num_patches = embedding_gemma_v2.max_num_patches(),
+              .pooling_kernel_size =
+                  embedding_gemma_v2.pooling_kernel_size() > 0
+                      ? embedding_gemma_v2.pooling_kernel_size()
+                      : 3,
+          });
+      return parameter;
+    }
+  }
   return std::nullopt;
 }
 
@@ -134,6 +181,18 @@ std::optional<int> GetVisionTokensPerImageFromMetadata(
     return std::nullopt;
   }
   const auto& model_type = metadata.embedding_model_type();
+  if (model_type.has_embedding_gemma_v2()) {
+    const auto& embedding_gemma_v2 = model_type.embedding_gemma_v2();
+    if (embedding_gemma_v2.max_num_patches() > 0) {
+      const int pooling_kernel_size =
+          embedding_gemma_v2.pooling_kernel_size() > 0
+              ? embedding_gemma_v2.pooling_kernel_size()
+              : 3;
+      const int patch_num_shrink_factor =
+          pooling_kernel_size * pooling_kernel_size;
+      return embedding_gemma_v2.max_num_patches() / patch_num_shrink_factor;
+    }
+  }
   return std::nullopt;
 }
 
@@ -167,6 +226,17 @@ ExtractAudioPreprocessor(const proto::EmbeddingMetadata& metadata) {
       case proto::AudioPreprocessorConfig::PREPROCESSOR_NOT_SET:
         break;
     }
+  }
+
+  // For backward compatibility: if the model type is embedding_gemma_v2 and no
+  // audio preprocessor config was explicitly set in metadata, use the default
+  // Gemma4 audio preprocessor configuration.
+  if (metadata.embedding_model_type().has_embedding_gemma_v2()) {
+    const auto& embedding_gemma_v2 =
+        metadata.embedding_model_type().embedding_gemma_v2();
+    return ::litert::support::AudioPreprocessorMiniAudio::Create(
+        ::litert::support::AudioPreprocessorConfig::CreateDefaultGemma4Config(
+            embedding_gemma_v2.skip_mel_spectrogram_extraction()));
   }
 
   return nullptr;
@@ -385,10 +455,30 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
     // Configure vision patch metadata.
     int pooling_kernel_size = 1;
+    if (metadata.has_value() && metadata->has_embedding_model_type() &&
+        metadata->embedding_model_type().has_embedding_gemma_v2()) {
+      const auto& gemma_v2 =
+          metadata->embedding_model_type().embedding_gemma_v2();
+      pooling_kernel_size = gemma_v2.pooling_kernel_size() > 0
+                                ? gemma_v2.pooling_kernel_size()
+                                : 3;
+    }
 
     const int patch_num_shrink_factor =
         pooling_kernel_size * pooling_kernel_size;
     vision_max_num_patches = vision_tokens_per_image * patch_num_shrink_factor;
+
+    if (!metadata.has_value()) {
+      metadata = proto::EmbeddingMetadata();
+    }
+    metadata->mutable_embedding_model_type()
+        ->mutable_embedding_gemma_v2()
+        ->set_max_num_patches(vision_max_num_patches);
+    if (pooling_kernel_size > 1) {
+      metadata->mutable_embedding_model_type()
+          ->mutable_embedding_gemma_v2()
+          ->set_pooling_kernel_size(pooling_kernel_size);
+    }
 
     // Selecting the signatures requires reading the vision encoder model. When
     // lazy loading is enabled this is deferred to the first image input, and
@@ -842,11 +932,37 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     }
 
     int pooling_kernel_size = 1;
+    if (settings.GetEmbeddingMetadata().has_value() &&
+        settings.GetEmbeddingMetadata()->has_embedding_model_type() &&
+        settings.GetEmbeddingMetadata()
+            ->embedding_model_type()
+            .has_embedding_gemma_v2()) {
+      const auto& gemma_v2 = settings.GetEmbeddingMetadata()
+                                 ->embedding_model_type()
+                                 .embedding_gemma_v2();
+      pooling_kernel_size = gemma_v2.pooling_kernel_size() > 0
+                                ? gemma_v2.pooling_kernel_size()
+                                : 3;
+    }
 
     const int patch_num_shrink_factor =
         pooling_kernel_size * pooling_kernel_size;
     const int max_num_patches =
         vision_tokens_per_image * patch_num_shrink_factor;
+
+    if (!settings.GetEmbeddingMetadata().has_value()) {
+      settings.GetMutableEmbeddingMetadata() = proto::EmbeddingMetadata();
+    }
+    settings.GetMutableEmbeddingMetadata()
+        .mutable_embedding_model_type()
+        ->mutable_embedding_gemma_v2()
+        ->set_max_num_patches(max_num_patches);
+    if (pooling_kernel_size > 1) {
+      settings.GetMutableEmbeddingMetadata()
+          .mutable_embedding_model_type()
+          ->mutable_embedding_gemma_v2()
+          ->set_pooling_kernel_size(pooling_kernel_size);
+    }
 
     LITERT_ASSIGN_OR_RETURN(
         selected_vision_signature_info,
