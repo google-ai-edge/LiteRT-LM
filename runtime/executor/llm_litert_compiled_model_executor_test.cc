@@ -1242,6 +1242,67 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
               StatusIs(absl::StatusCode::kInternal));
 }
 
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     Decode_MtpPrimedIsInvalidatedByNonMtpSteps) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources, TfLiteModelResources::Create(
+                                                 model_assets,
+                                                 /*with_mtp_drafter=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
+  ASSERT_TRUE(executor);
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // This model has no MTP drafter, so the flag never becomes true on its own.
+  // Set it before each operation to check that the operation clears it.
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  auto input_tokens_buffer =
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
+  ASSERT_TRUE(input_tokens_buffer);
+  inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
+  executor->set_mtp_primed_for_testing(true);
+  ASSERT_OK(executor->Prefill(inputs));
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // Plain decode.
+  ExecutorDecodeParams decode_params_disabled;
+  decode_params_disabled.SetEnableSpeculativeDecoding(false);
+  executor->set_mtp_primed_for_testing(true);
+  ASSERT_OK(executor->Decode(decode_params_disabled));
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // Failed MTP attempt.
+  ExecutorDecodeParams decode_params_enabled;
+  decode_params_enabled.SetEnableSpeculativeDecoding(true);
+  executor->set_mtp_primed_for_testing(true);
+  EXPECT_THAT(executor->Decode(decode_params_enabled),
+              StatusIs(absl::StatusCode::kInternal));
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // Setting the unchanged step keeps the flag; a step change clears it.
+  ASSERT_OK_AND_ASSIGN(int current_step, executor->GetCurrentStep());
+  executor->set_mtp_primed_for_testing(true);
+  ASSERT_OK(executor->SetCurrentStep(current_step));
+  EXPECT_TRUE(executor->mtp_primed_for_testing());
+  ASSERT_OK(executor->SetCurrentStep(3));
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // Reset.
+  executor->set_mtp_primed_for_testing(true);
+  ASSERT_OK(executor->Reset());
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+}
+
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
   const std::filesystem::path model_path =
       std::filesystem::path(::testing::SrcDir()) /

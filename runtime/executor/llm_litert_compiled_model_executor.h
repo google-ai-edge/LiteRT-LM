@@ -171,6 +171,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   using LogitsDataType = ActivationDataType;
 
+  // For testing only: Returns whether the MTP drafter holds valid state for the
+  // next speculative round.
+  bool mtp_primed_for_testing() const { return mtp_primed_; }
+  // For testing only: Overrides the primed state so that tests can check that
+  // non-speculative steps invalidate it.
+  void set_mtp_primed_for_testing(bool primed) { mtp_primed_ = primed; }
+
   const ProcessedTokens& processed_tokens_for_testing() const {
     return llm_context_->processed_context().processed_tokens();
   }
@@ -443,6 +450,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Pointer to model resources for lazy loading of components (e.g. MTP
   // drafter).
   ModelResources* resources_ = nullptr;
+
+  // Whether the MTP drafter's internal state (the verifier activations of the
+  // last verified token) is valid for the next speculative round. It is only
+  // true right after a successful MTP round; any plain decode step, prefill,
+  // state/context restore, step change or failed round invalidates it, and the
+  // next MTP round then goes through the priming path.
+  bool mtp_primed_ = false;
 };
 
 // The static executor for the prefill-decode compiled model.

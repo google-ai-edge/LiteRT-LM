@@ -536,6 +536,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RollBackProcessedTokens() {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
     int token_index_to_reduce) {
+  mtp_primed_ = false;
   if (!llm_context_->runtime_state().ran_decode && !force_prepare_needed_) {
     return absl::OkStatus();
   }
@@ -1285,6 +1286,13 @@ absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
 
+  // The drafter can only continue from its own last verified state if the
+  // previous step was a successful MTP round. Invalidate the flag up front so
+  // that every error exit below leaves it cleared; it is set again only after
+  // a fully committed speculative round.
+  const bool was_mtp_primed = mtp_primed_;
+  mtp_primed_ = false;
+
   bool enable_mtp_drafter = false;
   if (decode_params.GetEnableSpeculativeDecoding().has_value()) {
     enable_mtp_drafter = *decode_params.GetEnableSpeculativeDecoding();
@@ -1314,6 +1322,10 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
                             CopyFromTensorBuffer2D<int>(*output_tokens));
   } else {
+    // Re-prime the drafter with a plain decode step unless the previous step
+    // was a successful MTP round.
+    const bool drafter_is_primed =
+        llm_context_->runtime_state().ran_decode && was_mtp_primed;
     // MTP keeps an internal state of the last time it was called and will
     // use those projected activations to kick off the next draft steps. As
     // such, we need to do a single decode step on the first decode call after
@@ -1328,8 +1340,7 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
                                  ? constrained_decoder->GetConstraint()
                                  : nullptr;
 
-    bool last_run_is_decode = llm_context_->runtime_state().ran_decode;
-    if (last_run_is_decode) {
+    if (drafter_is_primed) {
       ABSL_ASSIGN_OR_RETURN(auto step_and_token,
                             GetTokenToDecode(ExecutorInputs()));
       ABSL_RETURN_IF_ERROR(
@@ -1428,11 +1439,13 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
       llm_context_->processed_context().processed_tokens().AddPendingInputToken(
           pending_tokens));
 
+  mtp_primed_ = enable_mtp_drafter;
   return output_tokens_vector;
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorInputs& inputs, TensorBuffer& output_logits) {
+  mtp_primed_ = false;
   ABSL_RETURN_IF_ERROR(PrepareFirstDecode());
   ABSL_ASSIGN_OR_RETURN(auto step_and_token, GetTokenToDecode(inputs));
   ABSL_RETURN_IF_ERROR(DecodeInternal(step_and_token.token, output_logits));
@@ -1453,6 +1466,7 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
       decode_output_buffers_[signatures_.output_logits].Duplicate());
 
   bool last_run_is_decode = llm_context_->runtime_state().ran_decode;
+  mtp_primed_ = false;
   ABSL_RETURN_IF_ERROR(PrepareFirstDecode());
   ABSL_ASSIGN_OR_RETURN(auto step_and_token, GetTokenToDecode(inputs));
   ABSL_RETURN_IF_ERROR(DecodeInternal(step_and_token.token, output_logits));
@@ -1495,8 +1509,7 @@ LlmLiteRtCompiledModelExecutorBase::GetPrefillSignatureKey() const {
     LITERT_ASSIGN_OR_RETURN(auto sig, compiled_model_->GetSignature(i));
     absl::string_view key = sig.Key();
     if (absl::StartsWith(key, kPrefillSignatureRunner) &&
-        (selected.empty() ||
-         absl::c_find(selected, key) != selected.end())) {
+        (selected.empty() || absl::c_find(selected, key) != selected.end())) {
       prefill_signature_key = key;
       break;
     }
@@ -1521,6 +1534,7 @@ LlmLiteRtCompiledModelExecutorBase::CloneState() const {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
     std::unique_ptr<StateInterface> state) {
+  mtp_primed_ = false;
   if (state == nullptr) {
     return absl::OkStatus();
   }
@@ -1572,6 +1586,7 @@ LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   llm_context_ = std::move(context_data);
+  mtp_primed_ = false;
 
   // We can keep our kv cache buffers if this is the first step. This lets us
   // restore from LlmContexts at step 0 with an empty kv cache.
@@ -1700,9 +1715,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetSamplerInputHandling(
                                                      nullptr, nullptr, nullptr);
   }
 
-  bool has_input_attn_mask =
-      signatures_.input_attn_mask.has_value() &&
-      static_cast<bool>(decode_prev_mask_);
+  bool has_input_attn_mask = signatures_.input_attn_mask.has_value() &&
+                             static_cast<bool>(decode_prev_mask_);
   bool has_input_int32_param = signatures_.input_int32_param.has_value();
   return sampler_->SetInferenceFuncAndInputTensors(
       BindTensorsAndRunDecodeStatic, this,
@@ -1770,6 +1784,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
   if (old_step == new_step) {
     return absl::OkStatus();
   }
+  // Moving the step (e.g. rewinding) invalidates the MTP drafter state.
+  mtp_primed_ = false;
 
   int max_step = old_step;
   ABSL_ASSIGN_OR_RETURN(auto processed_tokens, GetProcessedTokens());
@@ -1797,6 +1813,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
   llm_context_->runtime_state().current_step = 0;
+  mtp_primed_ = false;
   return absl::OkStatus();
 }
 
