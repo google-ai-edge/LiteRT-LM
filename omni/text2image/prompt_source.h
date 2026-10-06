@@ -27,7 +27,8 @@
 namespace litert::omni::text2image {
 
 // Prompt request payload for a text-to-image generation pipeline.
-struct Text2ImagePrompt : public ImageGenInputMetadata {
+struct Text2ImagePrompt {
+  ImageGenInputMetadata metadata;
   std::string text;
 };
 

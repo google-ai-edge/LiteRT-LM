@@ -31,7 +31,8 @@ absl::Status PushPromptSource::PushPrompt(absl::string_view text) {
     return absl::FailedPreconditionError(
         "Cannot push prompt after Finish() has been called.");
   }
-  outputs_.push_back(Text2ImagePrompt{metadata_, std::string(text)});
+  outputs_.push_back(
+      Text2ImagePrompt{.metadata = metadata_, .text = std::string(text)});
   return absl::OkStatus();
 }
 

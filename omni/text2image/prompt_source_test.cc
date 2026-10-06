@@ -44,18 +44,18 @@ class FakeImageDecoder : public ImageDecoder {
 
   absl::Status ScheduleInternal() override {
     SetState(State::kIdle);
-    auto prompt_or = prompt_source_->GetOutput();
-    if (absl::IsNotFound(prompt_or.status())) {
+    auto prompt = prompt_source_->GetOutput();
+    if (absl::IsNotFound(prompt.status())) {
       return absl::OkStatus();
-    } else if (!prompt_or.ok()) {
-      return prompt_or.status();
+    } else if (!prompt.ok()) {
+      return prompt.status();
     }
     ImageOutput out;
-    out.width = prompt_or->width;
-    out.height = prompt_or->height;
+    out.width = prompt->metadata.width;
+    out.height = prompt->metadata.height;
     out.channels = 3;
     out.rgb_data.assign(out.width * out.height * out.channels,
-                        static_cast<uint8_t>(prompt_or->seed & 0xFF));
+                        static_cast<uint8_t>(prompt->metadata.seed & 0xFF));
     PushOutput(std::move(out));
     return absl::OkStatus();
   }
@@ -77,10 +77,10 @@ TEST(PushPromptSourceTest, PushScheduleAndFinish) {
   auto p = source.GetOutput();
   ASSERT_OK(p);
   EXPECT_EQ(p->text, "A futuristic city");
-  EXPECT_EQ(p->width, 256);
-  EXPECT_EQ(p->height, 256);
-  EXPECT_EQ(p->num_inference_steps, 4);
-  EXPECT_EQ(p->seed, 99);
+  EXPECT_EQ(p->metadata.width, 256);
+  EXPECT_EQ(p->metadata.height, 256);
+  EXPECT_EQ(p->metadata.num_inference_steps, 4);
+  EXPECT_EQ(p->metadata.seed, 99);
 
   source.Finish();
   EXPECT_THAT(source.PushPrompt("After finish"),
@@ -115,13 +115,13 @@ TEST(ImageDecoderTest, DecodesFromPromptSourceAndFlushes) {
   ASSERT_OK(decoder.Schedule());
   ASSERT_TRUE(decoder.HasOutput());
 
-  auto out_or = decoder.GetOutput();
-  ASSERT_OK(out_or);
-  EXPECT_EQ(out_or->width, 8);
-  EXPECT_EQ(out_or->height, 8);
-  EXPECT_EQ(out_or->channels, 3);
-  EXPECT_EQ(out_or->rgb_data.size(), 8 * 8 * 3);
-  EXPECT_EQ(out_or->rgb_data[0], 123);
+  auto out = decoder.GetOutput();
+  ASSERT_OK(out);
+  EXPECT_EQ(out->width, 8);
+  EXPECT_EQ(out->height, 8);
+  EXPECT_EQ(out->channels, 3);
+  EXPECT_EQ(out->rgb_data.size(), 8 * 8 * 3);
+  EXPECT_EQ(out->rgb_data[0], 123);
 
   ASSERT_OK(decoder.Flush());
 }
