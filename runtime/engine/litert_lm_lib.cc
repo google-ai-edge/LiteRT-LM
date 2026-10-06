@@ -1183,6 +1183,8 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
         metric.peak_dmabuf_mb = static_cast<float>(
             static_cast<double>(dmabuf_summary->total_bytes) /
             (1024.0 * 1024.0));
+        metric.dmabuf_buffer_count =
+            static_cast<int64_t>(dmabuf_summary->entries.size());
       }
 #endif
       LogMemoryUsage(settings, peak_mem_mb, peak_private_mb,

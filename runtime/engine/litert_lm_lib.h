@@ -157,6 +157,7 @@ struct LitertLmMetrics {
   float peak_mem_mb = 0.0f;
   float peak_private_mb = 0.0f;
   float peak_dmabuf_mb = 0.0f;
+  int64_t dmabuf_buffer_count = 0;
 };
 
 // Aggregated (median) statistics of the metrics collected over multiple
