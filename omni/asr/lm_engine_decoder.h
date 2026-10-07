@@ -64,7 +64,7 @@ class LmEngineDecoder : public LiteRtSpeechRecognizer::Decoder {
                   int decode_skip_until_token_id,
                   absl::flat_hash_set<int> stop_tokens);
 
-  LiteRtLmEngineRunner* const absl_nonnull engine_runner_;
+  LiteRtLmEngineRunner& engine_runner_;
   const std::string prompt_;
   const lm::DecodeConfig decode_config_;
   const int decode_start_token_id_;

@@ -44,17 +44,17 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<TensorBuffer>& encoder_outputs) override;
 
  private:
-  TdtDecoder(LiteRtRunner* absl_nonnull runner,
-             std::unique_ptr<StatefulLiteRtRunner> stateful_runner,
-             std::vector<TensorBuffer> decode_input_buffers,
-             std::vector<TensorBuffer> decode_output_buffers,
-             std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
-             size_t max_time_index, size_t num_token_ids,
-             size_t num_logits_per_token, int decode_start_token_id,
-             int decode_statefully_after);
+  TdtDecoder(
+      LiteRtRunner* absl_nonnull runner,
+      std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner,
+      std::vector<TensorBuffer> decode_input_buffers,
+      std::vector<TensorBuffer> decode_output_buffers,
+      std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
+      size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
+      int decode_start_token_id, int decode_statefully_after);
 
-  LiteRtRunner* runner_;
-  std::unique_ptr<StatefulLiteRtRunner> stateful_runner_;
+  LiteRtRunner& runner_;
+  std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner_;
   std::vector<TensorBuffer> decode_input_buffers_;
   std::vector<TensorBuffer> decode_output_buffers_;
   std::optional<TensorBuffer> stateful_decode_token_ids_buffer_;

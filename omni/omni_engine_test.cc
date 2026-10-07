@@ -27,7 +27,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
-#include "omni/asr/asr_omni_session.h"
+#include "omni/asr/asr_session.h"
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
@@ -40,7 +40,7 @@
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
-#include "omni/tts/tts_omni_session.h"
+#include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK

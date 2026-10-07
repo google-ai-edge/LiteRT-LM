@@ -28,6 +28,7 @@ cc_library(
     hdrs = ["model_resources.h"],
     deps = [
         ":litert_lm_runner",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

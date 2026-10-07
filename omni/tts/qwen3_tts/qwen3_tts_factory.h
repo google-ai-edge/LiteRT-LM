@@ -22,6 +22,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
@@ -48,8 +49,8 @@ namespace litert::omni::tts {
 // returns
 // - absl::OkStatus on success, or error status on failure.
 absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
-                                   const std::string& model_folder,
-                                   const std::string& cache_dir,
+                                   absl::string_view model_folder,
+                                   absl::string_view cache_dir,
                                    lm::Backend backend, int num_threads,
                                    Environment& env, ModelResources& resources);
 
@@ -67,9 +68,9 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
 // returns
 // - absl::OkStatus on success, or error status on failure.
 absl::Status CreateQwen3TtsComponents(
-    const Qwen3TtsModelConfig& config, const std::string& model_folder,
+    const Qwen3TtsModelConfig& config, absl::string_view model_folder,
     std::unique_ptr<StreamTextSource> absl_nonnull text_source,
-    std::shared_ptr<ModelResources> resources,
+    std::shared_ptr<ModelResources> absl_nonnull resources,
     std::vector<std::unique_ptr<internal::StageBase>>& stages,
     Stage<Output>* absl_nullable* absl_nonnull output_stage);
 

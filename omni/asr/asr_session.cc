@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO(b/524681030): Move to asr_session.cc.
-
-#include "omni/asr/asr_omni_session.h"
+#include "omni/asr/asr_session.h"
 
 #include <algorithm>
 #include <cstddef>

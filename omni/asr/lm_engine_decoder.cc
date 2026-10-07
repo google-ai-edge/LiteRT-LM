@@ -91,7 +91,7 @@ LmEngineDecoder::LmEngineDecoder(
     lm::DecodeConfig decode_config, int decode_start_token_id,
     int decode_stop_token_id, int decode_skip_until_token_id,
     absl::flat_hash_set<int> stop_tokens)
-    : engine_runner_(engine_runner),
+    : engine_runner_(*engine_runner),
       prompt_(std::move(prompt)),
       decode_config_(std::move(decode_config)),
       decode_start_token_id_(decode_start_token_id),
@@ -105,7 +105,7 @@ LmEngineDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
     return absl::InvalidArgumentError("Encoder outputs cannot be empty.");
   }
 
-  ABSL_RETURN_IF_ERROR(engine_runner_->Reset());
+  ABSL_RETURN_IF_ERROR(engine_runner_.Reset());
 
   std::vector<lm::InputData> contents;
   if (!prompt_.empty()) {
@@ -151,8 +151,8 @@ LmEngineDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
   contents.emplace_back(lm::InputAudio(std::move(final_audio_buf)));
   contents.emplace_back(lm::InputAudioEnd());
 
-  ABSL_RETURN_IF_ERROR(engine_runner_->Prefill(std::move(contents)));
-  ABSL_ASSIGN_OR_RETURN(auto responses, engine_runner_->Decode(decode_config_));
+  ABSL_RETURN_IF_ERROR(engine_runner_.Prefill(std::move(contents)));
+  ABSL_ASSIGN_OR_RETURN(auto responses, engine_runner_.Decode(decode_config_));
 
   std::vector<int> token_ids;
   if (!responses.GetTokenIds().empty() &&
@@ -160,7 +160,7 @@ LmEngineDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
     token_ids = responses.GetTokenIds()[0];
   } else if (!responses.GetTexts().empty() &&
              !responses.GetTexts()[0].empty()) {
-    if (auto* res = engine_runner_->mutable_model_resources(); res != nullptr) {
+    if (auto* res = engine_runner_.mutable_model_resources(); res != nullptr) {
       auto tok_status = res->GetTokenizer();
       if (tok_status.ok() && *tok_status != nullptr) {
         auto tok_res = (*tok_status)->TextToTokenIds(responses.GetTexts()[0]);

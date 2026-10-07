@@ -103,9 +103,9 @@ cc_library(
 )
 
 cc_library(
-    name = "tts_omni_session",
-    srcs = ["tts_omni_session.cc"],
-    hdrs = ["tts_omni_session.h"],
+    name = "tts_session",
+    srcs = ["tts_session.cc"],
+    hdrs = ["tts_session.h"],
     deps = [
         ":stream_text_source",
         ":text_chunk_utils",
@@ -121,13 +121,13 @@ cc_library(
 )
 
 cc_test(
-    name = "tts_omni_session_test",
-    srcs = ["tts_omni_session_test.cc"],
+    name = "tts_session_test",
+    srcs = ["tts_session_test.cc"],
     deps = [
         ":stream_text_source",
         ":text_chunk_utils",
         ":text_source",
-        ":tts_omni_session",
+        ":tts_session",
         ":vocoder",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/base:nullability",

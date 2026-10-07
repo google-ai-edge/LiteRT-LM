@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -101,17 +102,20 @@ class AsrEngine {
   // Instantiates components based on configuration and returns a new
   // MultiStagedSession.
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateSession(
-      std::unique_ptr<AudioSource> audio_source);
+      std::unique_ptr<AudioSource> absl_nonnull audio_source);
 
   const AsrEngineConfig& config() const { return config_; }
 
  private:
   AsrEngine(AsrEngineConfig config,
-            std::shared_ptr<::litert::lm::ModelResources> model_resources,
-            std::unique_ptr<::litert::support::Tokenizer> tokenizer,
-            std::unique_ptr<::litert::Environment> environment,
-            std::unique_ptr<::litert::CompiledModel> compiled_model,
-            std::unique_ptr<::litert::lm::ThreadPool> thread_pool,
+            std::shared_ptr<::litert::lm::ModelResources> absl_nullable
+                model_resources,
+            std::unique_ptr<::litert::support::Tokenizer> absl_nonnull
+                tokenizer,
+            std::unique_ptr<::litert::Environment> absl_nonnull environment,
+            std::unique_ptr<::litert::CompiledModel> absl_nullable
+                compiled_model,
+            std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool,
             std::unique_ptr<LiteRtLmRunner> lm_runner = nullptr,
             std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner = nullptr);
 
@@ -119,13 +123,13 @@ class AsrEngine {
                                             const FileDownloader& downloader);
 
   AsrEngineConfig config_;
-  std::shared_ptr<::litert::lm::ModelResources> model_resources_;
-  std::unique_ptr<::litert::support::Tokenizer> tokenizer_;
-  std::unique_ptr<::litert::Environment> environment_;
-  std::unique_ptr<::litert::CompiledModel> compiled_model_;
-  std::unique_ptr<::litert::lm::ThreadPool> thread_pool_;
-  std::unique_ptr<LiteRtLmRunner> lm_runner_;
-  std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner_;
+  std::shared_ptr<::litert::lm::ModelResources> absl_nullable model_resources_;
+  std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer_;
+  std::unique_ptr<::litert::Environment> absl_nonnull environment_;
+  std::unique_ptr<::litert::CompiledModel> absl_nullable compiled_model_;
+  std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool_;
+  std::unique_ptr<LiteRtLmRunner> absl_nullable lm_runner_;
+  std::unique_ptr<LiteRtLmEngineRunner> absl_nullable lm_engine_runner_;
 };
 
 }  // namespace litert::omni::asr

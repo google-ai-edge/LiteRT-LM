@@ -165,8 +165,8 @@ class TtsEngine {
 
   TtsEngine(const TtsEngineSettings& settings,
             std::vector<std::string> available_voices,
-            std::shared_ptr<ModelResources> resources,
-            std::unique_ptr<lm::ThreadPool> thread_pool)
+            std::shared_ptr<ModelResources> absl_nonnull resources,
+            std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool)
       : settings_(settings),
         available_voices_(std::move(available_voices)),
         model_resources_(std::move(resources)),
@@ -174,8 +174,8 @@ class TtsEngine {
 
   TtsEngineSettings settings_;
   std::vector<std::string> available_voices_;
-  std::shared_ptr<ModelResources> model_resources_;
-  std::unique_ptr<lm::ThreadPool> thread_pool_;
+  std::shared_ptr<ModelResources> absl_nonnull model_resources_;
+  std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool_;
 };
 
 }  // namespace litert::omni::tts

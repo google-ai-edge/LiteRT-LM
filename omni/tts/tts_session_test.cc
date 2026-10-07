@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/tts/tts_omni_session.h"
+#include "omni/tts/tts_session.h"
 
 #include <memory>
 #include <string>
@@ -40,7 +40,7 @@
 
 namespace litert::omni::tts {
 
-class TtsOmniSessionTest : public ::testing::Test {
+class TtsSessionTest : public ::testing::Test {
  public:
   static std::unique_ptr<StreamTextSource> CreateTextInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
@@ -90,7 +90,7 @@ class FakeLengthVocoder : public Vocoder {
   TextSource& text_source_;
 };
 
-TEST_F(TtsOmniSessionTest, SequentialSynthesizeCallsWithResetAndFlush) {
+TEST_F(TtsSessionTest, SequentialSynthesizeCallsWithResetAndFlush) {
   auto text_source = std::make_unique<StreamTextSource>();
   StreamTextSource* raw_text_source = text_source.get();
   auto vocoder = std::make_unique<FakeLengthVocoder>(raw_text_source);
@@ -118,7 +118,7 @@ TEST_F(TtsOmniSessionTest, SequentialSynthesizeCallsWithResetAndFlush) {
   EXPECT_THAT(std::get<AudioOutput>(out2).pcm_samples, ElementsAre(12.0f));
 }
 
-TEST_F(TtsOmniSessionTest, TextInputSourceProcessNextFlushAndReset) {
+TEST_F(TtsSessionTest, TextInputSourceProcessNextFlushAndReset) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input_source = input_source.get();
   auto text_source = CreateTextInputSource(std::move(input_source));
@@ -159,7 +159,7 @@ TEST_F(TtsOmniSessionTest, TextInputSourceProcessNextFlushAndReset) {
   EXPECT_THAT(std::get<AudioOutput>(flushed2).pcm_samples, ElementsAre(5.0f));
 }
 
-TEST_F(TtsOmniSessionTest, TextInputSourceProcessAsyncStreamsAndFlushesTail) {
+TEST_F(TtsSessionTest, TextInputSourceProcessAsyncStreamsAndFlushesTail) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input_source = input_source.get();
   auto text_source = CreateTextInputSource(std::move(input_source));

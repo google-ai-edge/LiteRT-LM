@@ -27,13 +27,13 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/asr/asr_engine.h"
-#include "omni/asr/asr_omni_session.h"
+#include "omni/asr/asr_session.h"
 #include "omni/asr/model_metadata.h"
 #include "omni/omni_session.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/tts_engine.h"
-#include "omni/tts/tts_omni_session.h"
+#include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni {

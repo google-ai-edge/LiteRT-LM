@@ -87,7 +87,7 @@ LmDecoder::LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner,
                      int decode_start_token_id, int decode_stop_token_id,
                      int decode_skip_until_token_id, int max_decode_steps,
                      absl::flat_hash_set<int> stop_tokens)
-    : lm_runner_(lm_runner),
+    : lm_runner_(*lm_runner),
       decode_start_token_id_(decode_start_token_id),
       decode_stop_token_id_(decode_stop_token_id),
       decode_skip_until_token_id_(decode_skip_until_token_id),
@@ -100,11 +100,11 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
     return absl::InvalidArgumentError("Encoder outputs cannot be empty.");
   }
 
-  ABSL_RETURN_IF_ERROR(lm_runner_->Reset());
+  ABSL_RETURN_IF_ERROR(lm_runner_.Reset());
 
   ABSL_ASSIGN_OR_RETURN(auto prefill_inputs,
                         CreateExecutorInputsWithAudio(encoder_outputs[0]));
-  ABSL_RETURN_IF_ERROR(lm_runner_->Prefill(prefill_inputs));
+  ABSL_RETURN_IF_ERROR(lm_runner_.Prefill(prefill_inputs));
 
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
   // LlmLiteRtCompiledModelExecutorBase::Prefill processes all prompt tokens
@@ -125,8 +125,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
         token_buf.Write<int32_t>(absl::MakeConstSpan(&current_token, 1)));
     ABSL_ASSIGN_OR_RETURN(auto decode_inputs,
                           CreateExecutorInputsWithText(token_buf));
-    ABSL_ASSIGN_OR_RETURN(auto logits_buf,
-                          lm_runner_->Decode(decode_inputs));
+    ABSL_ASSIGN_OR_RETURN(auto logits_buf, lm_runner_.Decode(decode_inputs));
 
     LITERT_ASSIGN_OR_RETURN(auto num_bytes, logits_buf.PackedSize());
     size_t num_logits = num_bytes / sizeof(float);

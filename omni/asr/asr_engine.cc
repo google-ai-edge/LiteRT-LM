@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -312,11 +313,11 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
 
 AsrEngine::AsrEngine(
     AsrEngineConfig config,
-    std::shared_ptr<::litert::lm::ModelResources> model_resources,
-    std::unique_ptr<::litert::support::Tokenizer> tokenizer,
-    std::unique_ptr<::litert::Environment> environment,
-    std::unique_ptr<::litert::CompiledModel> compiled_model,
-    std::unique_ptr<::litert::lm::ThreadPool> thread_pool,
+    std::shared_ptr<::litert::lm::ModelResources> absl_nullable model_resources,
+    std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer,
+    std::unique_ptr<::litert::Environment> absl_nonnull environment,
+    std::unique_ptr<::litert::CompiledModel> absl_nullable compiled_model,
+    std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool,
     std::unique_ptr<LiteRtLmRunner> lm_runner,
     std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner)
     : config_(std::move(config)),
@@ -329,7 +330,7 @@ AsrEngine::AsrEngine(
       lm_engine_runner_(std::move(lm_engine_runner)) {}
 
 absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
-    std::unique_ptr<AudioSource> audio_source) {
+    std::unique_ptr<AudioSource> absl_nonnull audio_source) {
   std::unique_ptr<LiteRtRunner> runner;
   if (compiled_model_ != nullptr) {
     runner = std::make_unique<LiteRtRunnerImpl>(compiled_model_.get());

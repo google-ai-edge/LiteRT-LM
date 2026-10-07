@@ -12,31 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO(b/524681030): Move to asr_session.h.
-
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_
 
 #include <memory>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
-#include "omni/asr/audio_source.h"
 #include "omni/omni_session.h"
+#include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/tts_engine.h"
 
 namespace litert::omni {
 class OmniSessionTest;
 }  // namespace litert::omni
 
-namespace litert::omni::asr {
+namespace litert::omni::tts {
 
-// `OmniSessionFactory` implementation backed by `AsrEngine`.
-class AsrSessionFactory : public OmniSessionFactory {
+// `OmniSessionFactory` implementation backed by `TtsEngine`.
+class TtsSessionFactory : public OmniSessionFactory {
  public:
   static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
-      AsrEngineConfig config);
-  ~AsrSessionFactory() override;
+      TtsEngineSettings settings);
+  ~TtsSessionFactory() override;
 
   absl::StatusOr<std::unique_ptr<OmniSession>> Create(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
@@ -44,19 +43,18 @@ class AsrSessionFactory : public OmniSessionFactory {
 
  private:
   friend class ::litert::omni::OmniSessionTest;
-  friend class AsrOmniSessionTest;
+  friend class TtsSessionTest;
 
-  static std::unique_ptr<AudioSource> CreateAudioInputSource(
+  static std::unique_ptr<StreamTextSource> CreateTextInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
-      int sample_rate_hz, int num_channels, int samples_per_interval,
-      int overlap_samples);
+      TextChunkConfig config = {});
 
-  explicit AsrSessionFactory(
-      std::unique_ptr<AsrEngine> absl_nonnull asr_engine);
+  explicit TtsSessionFactory(
+      std::unique_ptr<TtsEngine> absl_nonnull tts_engine);
 
-  std::unique_ptr<AsrEngine> asr_engine_;
+  std::unique_ptr<TtsEngine> tts_engine_;
 };
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni::tts
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_

@@ -23,6 +23,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -53,7 +54,7 @@ class Qwen3TtsFrontendStage
   //   status on failure.
   static absl::StatusOr<std::unique_ptr<Qwen3TtsFrontendStage>> Create(
       Stage<std::string>* absl_nonnull text_source,
-      const std::string& model_dir,
+      absl::string_view model_dir,
       const Qwen3TtsModelConfig& config,
       std::shared_ptr<ModelResources> absl_nonnull resources);
 

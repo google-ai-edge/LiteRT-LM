@@ -66,7 +66,7 @@ class LmDecoder : public LiteRtSpeechRecognizer::Decoder {
             int decode_stop_token_id, int decode_skip_until_token_id,
             int max_decode_steps, absl::flat_hash_set<int> stop_tokens);
 
-  LiteRtLmRunner* const absl_nonnull lm_runner_;
+  LiteRtLmRunner& lm_runner_;
   const int decode_start_token_id_;
   const int decode_stop_token_id_;
   const int decode_skip_until_token_id_;

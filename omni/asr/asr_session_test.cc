@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/asr/asr_omni_session.h"
+#include "omni/asr/asr_session.h"
 
 #include <memory>
 #include <string>
@@ -41,7 +41,7 @@
 
 namespace litert::omni::asr {
 
-class AsrOmniSessionTest : public ::testing::Test {
+class AsrSessionTest : public ::testing::Test {
  public:
   static std::unique_ptr<AudioSource> CreateAudioInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
@@ -153,7 +153,7 @@ absl::StatusOr<std::unique_ptr<MultiStagedSession>> BuildFakeAsrSession(
   return MultiStagedSession::Create(std::move(stages), raw_merger, pool);
 }
 
-TEST_F(AsrOmniSessionTest, AudioInputSourceValidatesMetadataAndInputTypes) {
+TEST_F(AsrSessionTest, AudioInputSourceValidatesMetadataAndInputTypes) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input = input_source.get();
   auto audio_source = CreateAudioInputSource(
@@ -180,7 +180,7 @@ TEST_F(AsrOmniSessionTest, AudioInputSourceValidatesMetadataAndInputTypes) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(AsrOmniSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
+TEST_F(AsrSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input = input_source.get();
   // Interval = 3 samples, overlap = 1 sample (step = 2 samples).
@@ -214,7 +214,7 @@ TEST_F(AsrOmniSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
             "w_7 w_8 w_9 w_0 w_0");
 }
 
-TEST_F(AsrOmniSessionTest, ProcessAsyncWithEndOfInputAndRemainderPadding) {
+TEST_F(AsrSessionTest, ProcessAsyncWithEndOfInputAndRemainderPadding) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input = input_source.get();
   auto audio_source = CreateAudioInputSource(

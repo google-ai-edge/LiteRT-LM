@@ -19,6 +19,7 @@
 #include <memory>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -49,22 +50,22 @@ class FileAudioSource : public AudioSource {
 
  private:
   struct MaDecoderDeleter {
-    void operator()(struct ma_decoder* decoder) const;
+    void operator()(struct ma_decoder* absl_nullable decoder) const;
   };
 
-  FileAudioSource(std::unique_ptr<struct ma_decoder, MaDecoderDeleter> decoder,
-                  int sample_rate_hz, int num_channels,
-                  int samples_per_interval, int overlap_samples, int step,
-                  int64_t total_frames);
+  FileAudioSource(
+      std::unique_ptr<struct ma_decoder, MaDecoderDeleter> absl_nonnull decoder,
+      int sample_rate_hz, int num_channels, int samples_per_interval,
+      int overlap_samples, int step, int64_t total_frames);
 
-  // Reads up to num_frames_to_read from the decoder into the buffer.
+  // Reads up to num_frames_to_read from the decoder into the ring buffer.
   // Returns the number of frames actually read, or an error status.
   // Pads the buffer with zeros if the read is shorter than the requested
   // number of frames.
-  absl::StatusOr<ma_uint64> ReadFrames(ma_decoder* decoder, float* buffer,
-                                       int num_frames_to_read);
+  absl::StatusOr<ma_uint64> ReadFrames(int num_frames_to_read);
 
-  const std::unique_ptr<struct ma_decoder, MaDecoderDeleter> decoder_;
+  const std::unique_ptr<struct ma_decoder, MaDecoderDeleter> absl_nonnull
+      decoder_;
   const int sample_rate_hz_;
   const int num_channels_;
   const int samples_per_interval_;

@@ -95,7 +95,7 @@ TextChunkConfig ReviseTextChunkConfigForKokoro(
 absl::Status CreateKokoroComponents(
     const KokoroModelConfig& config, absl::string_view model_folder,
     std::unique_ptr<StreamTextSource> absl_nonnull text_source,
-    std::shared_ptr<ModelResources> resources,
+    std::shared_ptr<ModelResources> absl_nonnull resources,
     std::vector<std::unique_ptr<internal::StageBase>>& stages,
     Stage<Output>* absl_nullable* absl_nonnull output_stage);
 

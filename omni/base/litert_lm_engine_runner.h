@@ -55,10 +55,11 @@ class LiteRtLmEngineRunner {
 // handled by the LiteRT-LM Engine.
 class LiteRtLmEngineRunnerImpl : public LiteRtLmEngineRunner {
  public:
-  LiteRtLmEngineRunnerImpl(std::unique_ptr<lm::Engine> engine,
-                           std::unique_ptr<lm::SessionInterface> session,
-                           const lm::SessionConfig& session_config,
-                           std::unique_ptr<lm::ModelResources> model_resources);
+  LiteRtLmEngineRunnerImpl(
+      std::unique_ptr<lm::Engine> absl_nullable engine,
+      std::unique_ptr<lm::SessionInterface> absl_nonnull session,
+      const lm::SessionConfig& session_config,
+      std::unique_ptr<lm::ModelResources> absl_nullable model_resources);
 
   ~LiteRtLmEngineRunnerImpl() override = default;
 
@@ -79,10 +80,10 @@ class LiteRtLmEngineRunnerImpl : public LiteRtLmEngineRunner {
   const lm::SessionConfig& session_config() const { return session_config_; }
 
  private:
-  std::unique_ptr<lm::Engine> engine_;
-  std::unique_ptr<lm::SessionInterface> session_;
+  std::unique_ptr<lm::Engine> absl_nullable engine_;
+  std::unique_ptr<lm::SessionInterface> absl_nonnull session_;
   lm::SessionConfig session_config_;
-  std::unique_ptr<lm::ModelResources> model_resources_;
+  std::unique_ptr<lm::ModelResources> absl_nullable model_resources_;
 };
 
 }  // namespace litert::omni

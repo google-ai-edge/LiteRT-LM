@@ -71,8 +71,8 @@ class LiteRtLmRunnerImpl : public LiteRtLmRunner {
   }
 
  private:
-  std::unique_ptr<lm::ModelResources> model_resources_;
-  std::unique_ptr<lm::LlmExecutorBase> owned_executor_;
+  std::unique_ptr<lm::ModelResources> absl_nullable model_resources_;
+  std::unique_ptr<lm::LlmExecutorBase> absl_nonnull owned_executor_;
 };
 
 }  // namespace litert::omni

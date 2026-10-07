@@ -87,9 +87,9 @@ class KokoroAcousticStage
     size_t speech_frame_length = 3;
   };
 
-  KokoroAcousticStage(Stage<std::string>* text_source, KokoroModelConfig config,
-                      absl::string_view model_folder,
-                      std::shared_ptr<ModelResources> resources)
+  KokoroAcousticStage(Stage<std::string>* absl_nonnull text_source,
+                      KokoroModelConfig config, absl::string_view model_folder,
+                      std::shared_ptr<ModelResources> absl_nonnull resources)
       : text_source_(*text_source),
         config_(std::move(config)),
         model_folder_(std::move(model_folder)),
@@ -98,7 +98,7 @@ class KokoroAcousticStage
   Stage<std::string>& text_source_;
   KokoroModelConfig config_;
   std::string model_folder_;
-  std::shared_ptr<ModelResources> resources_;
+  std::shared_ptr<ModelResources> absl_nonnull resources_;
 
   std::shared_ptr<CompiledModel> acoustic_model_;
   std::vector<float> voice_pack_;

@@ -31,6 +31,7 @@ cc_library(
     deps = [
         ":audio_source",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -525,9 +526,9 @@ cc_test(
 )
 
 cc_library(
-    name = "asr_omni_session",
-    srcs = ["asr_omni_session.cc"],
-    hdrs = ["asr_omni_session.h"],
+    name = "asr_session",
+    srcs = ["asr_session.cc"],
+    hdrs = ["asr_session.h"],
     deps = [
         ":asr_engine",
         ":audio_source",
@@ -541,10 +542,10 @@ cc_library(
 )
 
 cc_test(
-    name = "asr_omni_session_test",
-    srcs = ["asr_omni_session_test.cc"],
+    name = "asr_session_test",
+    srcs = ["asr_session_test.cc"],
     deps = [
-        ":asr_omni_session",
+        ":asr_session",
         ":audio_preprocessor",
         ":audio_source",
         ":detokenizer",
@@ -585,6 +586,7 @@ cc_library(
         ":text_merger",
         ":timestamp_text_merger",
         ":tokenizer_detokenizer",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",

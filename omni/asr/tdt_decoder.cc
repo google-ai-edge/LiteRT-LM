@@ -124,13 +124,13 @@ absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
 
 TdtDecoder::TdtDecoder(
     LiteRtRunner* absl_nonnull runner,
-    std::unique_ptr<StatefulLiteRtRunner> stateful_runner,
+    std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner,
     std::vector<TensorBuffer> decode_input_buffers,
     std::vector<TensorBuffer> decode_output_buffers,
     std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
     size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
     int decode_start_token_id, int decode_statefully_after)
-    : runner_(runner),
+    : runner_(*runner),
       stateful_runner_(std::move(stateful_runner)),
       decode_input_buffers_(std::move(decode_input_buffers)),
       decode_output_buffers_(std::move(decode_output_buffers)),
@@ -178,8 +178,8 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
           GetInputBuffersForInference(
               encoder_outputs, *current_token_ids_buffer,
               absl::MakeSpan(decode_input_buffers_).subspan(2)));
-      LITERT_RETURN_IF_ERROR(runner_->Run(kDecodeSignatureName, step_inputs,
-                                          decode_output_buffers_));
+      LITERT_RETURN_IF_ERROR(runner_.Run(kDecodeSignatureName, step_inputs,
+                                         decode_output_buffers_));
       current_logits_buffer = &decode_output_buffers_[0];
     } else {
       // Stateful decode using StatefulLiteRtRunner

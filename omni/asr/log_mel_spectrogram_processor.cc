@@ -141,7 +141,8 @@ LogMelSpectrogramProcessor::Create(
 LogMelSpectrogramProcessor::LogMelSpectrogramProcessor(
     int sample_rate_hz, const LogMelSpectrogramConfig& config,
     Stage<std::vector<float>>* absl_nonnull audio_source,
-    std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> preprocessor)
+    std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
+        preprocessor)
     : AudioPreprocessor(audio_source),
       sample_rate_hz_(sample_rate_hz),
       config_(config),

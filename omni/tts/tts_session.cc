@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO(b/524681030): Move to tts_session.cc.
-
-#include "omni/tts/tts_omni_session.h"
+#include "omni/tts/tts_session.h"
 
 #include <memory>
 #include <utility>
