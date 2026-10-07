@@ -1008,6 +1008,24 @@ class EngineTest(LiteRtLmTestBase):
       for score in scoring_responses.token_scores[0]:
         self.assertIsInstance(score, float)
 
+  def test_session_api_scoring_matches_prefill(self):
+    with self._create_engine(max_num_tokens=16) as engine:
+      # Case A: Prefill "Hello", score " world again"
+      with engine.create_session() as s1:
+        s1.run_prefill(["Hello"])
+        res1 = s1.run_text_scoring([" world again"], store_token_lengths=True)
+        token_scores1 = res1.token_scores[0]
+        score_again_case_a = token_scores1[-1]
+
+      # Case B: Prefill "Hello world", score " again"
+      with engine.create_session() as s2:
+        s2.run_prefill(["Hello world"])
+        res2 = s2.run_text_scoring([" again"], store_token_lengths=True)
+        token_scores2 = res2.token_scores[0]
+        score_again_case_b = token_scores2[-1]
+
+      self.assertAlmostEqual(score_again_case_a, score_again_case_b, places=3)
+
   def test_session_api_run_decode_async(self):
     with (
         self._create_engine() as engine,
