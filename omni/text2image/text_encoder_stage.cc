@@ -37,7 +37,6 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "omni/base/io_types.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
@@ -153,7 +152,7 @@ absl::Status ValidateTokenInputBuffer(const TensorBuffer& buffer, int seq_len,
   return absl::OkStatus();
 }
 
-absl::Status ValidateFirstRunnerInputBuffersAndIndices(
+absl::Status ValidateInputBuffersAndIndices(
     const std::vector<TensorBuffer>& input_buffers,
     const TextEncoderStage::Config& config) {
   const auto& input_indices = config.input_indices;
@@ -189,111 +188,55 @@ absl::Status ValidateFirstRunnerInputBuffersAndIndices(
 absl::StatusOr<std::unique_ptr<TextEncoderStage>> TextEncoderStage::Create(
     Stage<Text2ImagePrompt>* absl_nonnull prompt_source,
     std::unique_ptr<support::Tokenizer> absl_nonnull tokenizer,
-    std::vector<std::unique_ptr<LiteRtRunner>> runners, const Config& config) {
+    std::unique_ptr<LiteRtRunner> absl_nonnull runner, const Config& config) {
   ABSL_RETURN_IF_ERROR(ValidateSeqLen(config));
-  if (runners.empty()) {
+  if (runner == nullptr) {
     return absl::InvalidArgumentError(
-        "TextEncoderStage requires at least 1 LiteRtRunner.");
+        "TextEncoderStage runner must not be null.");
   }
 
-  std::vector<RunnerData> runner_data;
-  runner_data.reserve(runners.size());
-  for (size_t i = 0; i < runners.size(); ++i) {
-    if (runners[i] == nullptr) {
-      return absl::InvalidArgumentError(
-          "TextEncoderStage runner must not be null.");
-    }
-    ABSL_ASSIGN_OR_RETURN(std::vector<TensorBuffer> in_bufs,
-                          runners[i]->CreateInputBuffers(""));
-    ABSL_ASSIGN_OR_RETURN(std::vector<TensorBuffer> out_bufs,
-                          runners[i]->CreateOutputBuffers(""));
-    if (out_bufs.empty()) {
-      return absl::InvalidArgumentError(absl::StrFormat(
-          "TextEncoderStage runner %d expected at least 1 output buffer, got 0",
-          i));
-    }
-    if (i == 0) {
-      ABSL_RETURN_IF_ERROR(
-          ValidateFirstRunnerInputBuffersAndIndices(in_bufs, config));
-    } else {
-      // Wire outputs of runner i - 1 positionally (output j -> input j) to
-      // inputs of runner i using TensorBuffer::Duplicate() to avoid data copies
-      // between stages.
-      // TODO: b/568027544 - Support custom argument mapping between chained
-      // runners when required.
-      const auto& prev_outputs = runner_data[i - 1].output_buffers;
-      if (in_bufs.size() != prev_outputs.size()) {
-        return absl::InvalidArgumentError(absl::StrFormat(
-            "TextEncoderStage runner %d input buffer count (%d) does not match "
-            "runner %d output buffer count (%d).",
-            i, in_bufs.size(), i - 1, prev_outputs.size()));
-      }
-      for (size_t j = 0; j < in_bufs.size(); ++j) {
-        LITERT_ASSIGN_OR_RETURN(const TensorBufferType prev_buffer_type,
-                                prev_outputs[j].BufferType());
-        LITERT_ASSIGN_OR_RETURN(const TensorBufferType in_buffer_type,
-                                in_bufs[j].BufferType());
-        LITERT_ASSIGN_OR_RETURN(const RankedTensorType prev_tensor_type,
-                                prev_outputs[j].TensorType());
-        LITERT_ASSIGN_OR_RETURN(const RankedTensorType in_tensor_type,
-                                in_bufs[j].TensorType());
-        LITERT_ASSIGN_OR_RETURN(const size_t prev_packed_size,
-                                prev_outputs[j].PackedSize());
-        LITERT_ASSIGN_OR_RETURN(const size_t in_packed_size,
-                                in_bufs[j].PackedSize());
-        LITERT_ASSIGN_OR_RETURN(const size_t prev_size, prev_outputs[j].Size());
-        LITERT_ASSIGN_OR_RETURN(const size_t in_size, in_bufs[j].Size());
-        if (prev_buffer_type != in_buffer_type ||
-            prev_tensor_type != in_tensor_type ||
-            prev_packed_size != in_packed_size || prev_size < in_size) {
-          return absl::InvalidArgumentError(absl::StrFormat(
-              "TextEncoderStage runner %d input buffer %d is incompatible with "
-              "runner %d output buffer %d.",
-              i, j, i - 1, j));
-        }
-        LITERT_ASSIGN_OR_RETURN(in_bufs[j], prev_outputs[j].Duplicate());
-      }
-    }
-    if (i + 1 == runners.size()) {
-      if (out_bufs.size() != 1) {
-        return absl::InvalidArgumentError(absl::StrFormat(
-            "TextEncoderStage final runner expected 1 output buffer, got %d.",
-            out_bufs.size()));
-      }
-      LITERT_ASSIGN_OR_RETURN(const RankedTensorType final_out_type,
-                              out_bufs[0].TensorType());
-      if (final_out_type.ElementType() != ElementType::Float32) {
-        return absl::InvalidArgumentError(
-            "TextEncoderStage final runner output buffer element type must be "
-            "Float32.");
-      }
-      LITERT_ASSIGN_OR_RETURN(const size_t final_out_bytes,
-                              out_bufs[0].PackedSize());
-      if (final_out_bytes < sizeof(float) ||
-          final_out_bytes % sizeof(float) != 0) {
-        return absl::InvalidArgumentError(
-            "TextEncoderStage final runner output buffer is empty or not a "
-            "multiple of sizeof(float).");
-      }
-    }
-    runner_data.push_back(RunnerData{
-        .runner = std::move(runners[i]),
-        .input_buffers = std::move(in_bufs),
-        .output_buffers = std::move(out_bufs),
-    });
+  ABSL_ASSIGN_OR_RETURN(std::vector<TensorBuffer> input_buffers,
+                        runner->CreateInputBuffers(""));
+  ABSL_ASSIGN_OR_RETURN(std::vector<TensorBuffer> output_buffers,
+                        runner->CreateOutputBuffers(""));
+
+  ABSL_RETURN_IF_ERROR(ValidateInputBuffersAndIndices(input_buffers, config));
+
+  if (output_buffers.size() != 1) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("TextEncoderStage expected 1 output buffer, got %d.",
+                        output_buffers.size()));
+  }
+  LITERT_ASSIGN_OR_RETURN(const RankedTensorType out_type,
+                          output_buffers[0].TensorType());
+  if (out_type.ElementType() != ElementType::Float32) {
+    return absl::InvalidArgumentError(
+        "TextEncoderStage output buffer element type must be Float32.");
+  }
+  LITERT_ASSIGN_OR_RETURN(const size_t out_bytes,
+                          output_buffers[0].PackedSize());
+  if (out_bytes < sizeof(float) || out_bytes % sizeof(float) != 0) {
+    return absl::InvalidArgumentError(
+        "TextEncoderStage output buffer is empty or not a multiple of "
+        "sizeof(float).");
   }
 
   return absl::WrapUnique(new TextEncoderStage(
-      prompt_source, std::move(tokenizer), std::move(runner_data), config));
+      prompt_source, std::move(tokenizer), std::move(runner),
+      std::move(input_buffers), std::move(output_buffers), config));
 }
 
 TextEncoderStage::TextEncoderStage(
     Stage<Text2ImagePrompt>* absl_nonnull prompt_source,
     std::unique_ptr<support::Tokenizer> absl_nonnull tokenizer,
-    std::vector<RunnerData> runners, Config config)
+    std::unique_ptr<LiteRtRunner> absl_nonnull runner,
+    std::vector<TensorBuffer> input_buffers,
+    std::vector<TensorBuffer> output_buffers, Config config)
     : prompt_source_(*prompt_source),
       tokenizer_(std::move(tokenizer)),
-      runners_(std::move(runners)),
+      runner_(std::move(runner)),
+      input_buffers_(std::move(input_buffers)),
+      output_buffers_(std::move(output_buffers)),
       config_(std::move(config)) {}
 
 bool TextEncoderStage::NeedScheduleInternal() const {
@@ -318,21 +261,18 @@ absl::Status TextEncoderStage::ScheduleInternal() {
   ABSL_ASSIGN_OR_RETURN(FramedTokens framed,
                         FrameAndPadPromptTokens(user_tokens, config_));
 
-  ABSL_RETURN_IF_ERROR(WriteIntTensorBuffer(
-      runners_[0].input_buffers[config_.input_indices.input_ids],
-      absl::MakeConstSpan(framed.input_ids)));
-  ABSL_RETURN_IF_ERROR(WriteIntTensorBuffer(
-      runners_[0].input_buffers[config_.input_indices.attention_mask],
-      absl::MakeConstSpan(framed.attention_mask)));
+  ABSL_RETURN_IF_ERROR(
+      WriteIntTensorBuffer(input_buffers_[config_.input_indices.input_ids],
+                           absl::MakeConstSpan(framed.input_ids)));
+  ABSL_RETURN_IF_ERROR(
+      WriteIntTensorBuffer(input_buffers_[config_.input_indices.attention_mask],
+                           absl::MakeConstSpan(framed.attention_mask)));
 
-  for (const RunnerData& runner_data : runners_) {
-    ABSL_RETURN_IF_ERROR(runner_data.runner->Run("", runner_data.input_buffers,
-                                                 runner_data.output_buffers));
-  }
+  ABSL_RETURN_IF_ERROR(runner_->Run("", input_buffers_, output_buffers_));
 
-  // Final runner output buffer count, Float32 element type, and non-empty
-  // float-aligned size were validated in Create().
-  TensorBuffer& final_output = runners_.back().output_buffers[0];
+  // Output buffer count, Float32 element type, and non-empty float-aligned size
+  // were validated in Create().
+  TensorBuffer& final_output = output_buffers_[0];
   LITERT_ASSIGN_OR_RETURN(const size_t out_bytes, final_output.PackedSize());
   ABSL_DCHECK_GE(out_bytes, sizeof(float));
   ABSL_DCHECK_EQ(out_bytes % sizeof(float), 0u);

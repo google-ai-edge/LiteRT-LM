@@ -206,16 +206,13 @@ TEST_F(TextEncoderStageTest, EncodesAndPadsPromptWithDefaultConfig) {
         return absl::OkStatus();
       });
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(textenc_runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage = TextEncoderStage::Create(
       &prompt_source,
       std::make_unique<FakeTokenizer>(
           support::TokenIds{872, 198, 101, 102, 103}, &tokenized_text),
-      std::move(runners), config);
+      std::move(textenc_runner), config);
   ASSERT_OK(textenc_stage);
 
   ASSERT_OK(prompt_source.PushPrompt("a sunset over mountains"));
@@ -274,16 +271,13 @@ TEST_F(TextEncoderStageTest, EncodesAndPadsPromptWithInt64InputBuffers) {
         return absl::OkStatus();
       });
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(textenc_runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage =
       TextEncoderStage::Create(&prompt_source,
                                std::make_unique<FakeTokenizer>(
                                    support::TokenIds{872, 198, 101, 102, 103}),
-                               std::move(runners), config);
+                               std::move(textenc_runner), config);
   ASSERT_OK(textenc_stage);
 
   ASSERT_OK(prompt_source.PushPrompt("int64 prompt"));
@@ -328,9 +322,6 @@ TEST_F(TextEncoderStageTest, TruncatesLongPromptWithCustomConfig) {
         return absl::OkStatus();
       });
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(textenc_runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   config.pad_token_id = 0;
@@ -342,7 +333,7 @@ TEST_F(TextEncoderStageTest, TruncatesLongPromptWithCustomConfig) {
       &prompt_source,
       std::make_unique<FakeTokenizer>(support::TokenIds{1, 2, 3, 4, 5},
                                       &tokenized_text),
-      std::move(runners), config);
+      std::move(textenc_runner), config);
   ASSERT_OK(textenc_stage);
 
   ASSERT_OK(prompt_source.PushPrompt("hello"));
@@ -367,14 +358,11 @@ TEST_F(TextEncoderStageTest, ScheduleWithEmptySourceIsNoOp) {
                 {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
   EXPECT_CALL(*runner, Run(absl::string_view(""), _, _)).Times(0);
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage = TextEncoderStage::Create(
       &prompt_source, std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-      std::move(runners), config);
+      std::move(runner), config);
   ASSERT_OK(textenc_stage);
 
   EXPECT_FALSE((*textenc_stage)->NeedSchedule());
@@ -409,13 +397,10 @@ TEST_F(TextEncoderStageTest, PropagatesRuntimeErrorsAndRecoversToIdle) {
         return absl::OkStatus();
       });
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage = TextEncoderStage::Create(
-      &prompt_source, std::move(tokenizer), std::move(runners), config);
+      &prompt_source, std::move(tokenizer), std::move(runner), config);
   ASSERT_OK(textenc_stage);
 
   // 1. Tokenizer error -> returns error, no output, returns to idle.
@@ -444,69 +429,6 @@ TEST_F(TextEncoderStageTest, PropagatesRuntimeErrorsAndRecoversToIdle) {
   EXPECT_FLOAT_EQ(out->prompt_embeds[0], 1.25f);
 }
 
-TEST_F(TextEncoderStageTest, ChainsMultipleRunnersWithoutDataCopy) {
-  constexpr int kSeqLen = 16;
-  constexpr int kHiddenDim = 4;
-  constexpr int kPromptDim = 8;
-
-  PushPromptSource prompt_source;
-
-  auto runner0 = std::make_unique<MockLiteRtRunner>();
-  ExpectBuffers(*runner0,
-                {{ElementType::Int32, {1, kSeqLen}, 4},
-                 {ElementType::Int32, {1, kSeqLen}, 4}},
-                {{ElementType::Float32, {1, kSeqLen, kHiddenDim}, 4}});
-  EXPECT_CALL(*runner0, Run(absl::string_view(""), _, _))
-      .WillOnce([](absl::string_view, absl::Span<const TensorBuffer> inputs,
-                   absl::Span<const TensorBuffer> outputs) {
-        EXPECT_EQ(inputs.size(), 2);
-        EXPECT_EQ(outputs.size(), 1);
-        std::vector<float> hidden(kSeqLen * kHiddenDim, 1.5f);
-        auto& out = const_cast<TensorBuffer&>(outputs[0]);
-        EXPECT_TRUE(out.Write<float>(hidden).HasValue());
-        return absl::OkStatus();
-      });
-
-  auto runner1 = std::make_unique<MockLiteRtRunner>();
-  ExpectBuffers(*runner1, {{ElementType::Float32, {1, kSeqLen, kHiddenDim}, 4}},
-                {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
-  EXPECT_CALL(*runner1, Run(absl::string_view(""), _, _))
-      .WillOnce([](absl::string_view, absl::Span<const TensorBuffer> inputs,
-                   absl::Span<const TensorBuffer> outputs) {
-        EXPECT_EQ(inputs.size(), 1);
-        EXPECT_EQ(outputs.size(), 1);
-        std::vector<float> hidden(kSeqLen * kHiddenDim, 0.0f);
-        auto& in0 = const_cast<TensorBuffer&>(inputs[0]);
-        EXPECT_TRUE(in0.Read<float>(absl::MakeSpan(hidden)).HasValue());
-        EXPECT_FLOAT_EQ(hidden[0], 1.5f);
-
-        std::vector<float> final_embeds(kSeqLen * kPromptDim, hidden[0] * 2.0f);
-        auto& out = const_cast<TensorBuffer&>(outputs[0]);
-        EXPECT_TRUE(out.Write<float>(final_embeds).HasValue());
-        return absl::OkStatus();
-      });
-
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner0));
-  runners.push_back(std::move(runner1));
-
-  TextEncoderStage::Config config;
-  config.seq_len = kSeqLen;
-  auto textenc_stage = TextEncoderStage::Create(
-      &prompt_source,
-      std::make_unique<FakeTokenizer>(support::TokenIds{872, 198, 101}),
-      std::move(runners), config);
-  ASSERT_OK(textenc_stage);
-
-  ASSERT_OK(prompt_source.PushPrompt("chained runners"));
-  ASSERT_OK((*textenc_stage)->Schedule());
-  ASSERT_TRUE((*textenc_stage)->HasOutput());
-  auto out = (*textenc_stage)->GetOutput();
-  ASSERT_OK(out);
-  EXPECT_EQ(out->prompt_embeds.size(), kSeqLen * kPromptDim);
-  EXPECT_FLOAT_EQ(out->prompt_embeds[0], 3.0f);
-}
-
 TEST_F(TextEncoderStageTest, RejectsInvalidCreateArguments) {
   constexpr int kSeqLen = 16;
   constexpr int kPromptDim = 8;
@@ -515,77 +437,58 @@ TEST_F(TextEncoderStageTest, RejectsInvalidCreateArguments) {
 
   // 1. seq_len <= prefix + suffix (default prefix + suffix is 10 tokens).
   {
-    std::vector<std::unique_ptr<LiteRtRunner>> runners;
-    runners.push_back(std::make_unique<MockLiteRtRunner>());
     TextEncoderStage::Config config;
     config.seq_len = 10;
     EXPECT_THAT(TextEncoderStage::Create(
                     &prompt_source,
                     std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-                    std::move(runners), config),
+                    std::make_unique<MockLiteRtRunner>(), config),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
 
-  // 2. Empty runners vector.
+  // 2. Null runner.
   {
-    std::vector<std::unique_ptr<LiteRtRunner>> runners;
+    std::unique_ptr<LiteRtRunner> null_runner;
     TextEncoderStage::Config config;
     config.seq_len = kSeqLen;
     EXPECT_THAT(TextEncoderStage::Create(
                     &prompt_source,
                     std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-                    std::move(runners), config),
+                    std::move(null_runner), config),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
 
-  // 3. Null runner.
-  {
-    std::vector<std::unique_ptr<LiteRtRunner>> runners;
-    runners.push_back(nullptr);
-    TextEncoderStage::Config config;
-    config.seq_len = kSeqLen;
-    EXPECT_THAT(TextEncoderStage::Create(
-                    &prompt_source,
-                    std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-                    std::move(runners), config),
-                StatusIs(absl::StatusCode::kInvalidArgument));
-  }
-
-  // 4. Fewer than 2 input buffers on first runner.
+  // 3. Fewer than 2 input buffers on runner.
   {
     auto runner = std::make_unique<MockLiteRtRunner>();
     ExpectBuffers(*runner, {{ElementType::Int32, {1, kSeqLen}, 4}},
                   {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
-    std::vector<std::unique_ptr<LiteRtRunner>> runners;
-    runners.push_back(std::move(runner));
     TextEncoderStage::Config config;
     config.seq_len = kSeqLen;
     EXPECT_THAT(TextEncoderStage::Create(
                     &prompt_source,
                     std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-                    std::move(runners), config),
+                    std::move(runner), config),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
 
-  // 5. Runner with 0 output buffers.
+  // 4. Runner with 0 output buffers.
   {
     auto runner = std::make_unique<MockLiteRtRunner>();
     ExpectBuffers(*runner,
                   {{ElementType::Int32, {1, kSeqLen}, 4},
                    {ElementType::Int32, {1, kSeqLen}, 4}},
                   {});
-    std::vector<std::unique_ptr<LiteRtRunner>> runners;
-    runners.push_back(std::move(runner));
     TextEncoderStage::Config config;
     config.seq_len = kSeqLen;
     EXPECT_THAT(TextEncoderStage::Create(
                     &prompt_source,
                     std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-                    std::move(runners), config),
+                    std::move(runner), config),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
 
-  // 6. Final runner with >1 output buffers.
+  // 5. Runner with >1 output buffers.
   {
     auto runner = std::make_unique<MockLiteRtRunner>();
     ExpectBuffers(*runner,
@@ -593,14 +496,12 @@ TEST_F(TextEncoderStageTest, RejectsInvalidCreateArguments) {
                    {ElementType::Int32, {1, kSeqLen}, 4}},
                   {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4},
                    {ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
-    std::vector<std::unique_ptr<LiteRtRunner>> runners;
-    runners.push_back(std::move(runner));
     TextEncoderStage::Config config;
     config.seq_len = kSeqLen;
     EXPECT_THAT(TextEncoderStage::Create(
                     &prompt_source,
                     std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-                    std::move(runners), config),
+                    std::move(runner), config),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
 }
@@ -616,44 +517,12 @@ TEST_F(TextEncoderStageTest, RejectsIdenticalInputIdsAndAttentionMaskIndices) {
                  {ElementType::Int32, {1, kSeqLen}, 4}},
                 {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   config.input_indices = {.input_ids = 0, .attention_mask = 0};
   auto textenc_stage = TextEncoderStage::Create(
       &prompt_source, std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-      std::move(runners), config);
-  EXPECT_THAT(textenc_stage, StatusIs(absl::StatusCode::kInvalidArgument));
-}
-
-TEST_F(TextEncoderStageTest, RejectsIncompatibleChainedRunnerBuffers) {
-  constexpr int kSeqLen = 16;
-  constexpr int kHiddenDim = 4;
-  constexpr int kPromptDim = 8;
-
-  PushPromptSource prompt_source;
-  auto runner0 = std::make_unique<MockLiteRtRunner>();
-  ExpectBuffers(*runner0,
-                {{ElementType::Int32, {1, kSeqLen}, 4},
-                 {ElementType::Int32, {1, kSeqLen}, 4}},
-                {{ElementType::Float32, {1, kSeqLen, kHiddenDim}, 4}});
-
-  auto runner1 = std::make_unique<MockLiteRtRunner>();
-  // Mismatched dimension (kPromptDim instead of kHiddenDim).
-  ExpectBuffers(*runner1, {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}},
-                {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
-
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner0));
-  runners.push_back(std::move(runner1));
-
-  TextEncoderStage::Config config;
-  config.seq_len = kSeqLen;
-  auto textenc_stage = TextEncoderStage::Create(
-      &prompt_source, std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-      std::move(runners), config);
+      std::move(runner), config);
   EXPECT_THAT(textenc_stage, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -668,14 +537,11 @@ TEST_F(TextEncoderStageTest, RejectsInvalidInputBufferElementType) {
                  {ElementType::Int32, {1, kSeqLen}, 4}},
                 {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage = TextEncoderStage::Create(
       &prompt_source, std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-      std::move(runners), config);
+      std::move(runner), config);
   EXPECT_THAT(textenc_stage, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -690,14 +556,11 @@ TEST_F(TextEncoderStageTest, RejectsMismatchedInputBufferSeqLen) {
                  {ElementType::Int32, {1, kSeqLen}, 4}},
                 {{ElementType::Float32, {1, kSeqLen, kPromptDim}, 4}});
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage = TextEncoderStage::Create(
       &prompt_source, std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-      std::move(runners), config);
+      std::move(runner), config);
   EXPECT_THAT(textenc_stage, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -712,14 +575,11 @@ TEST_F(TextEncoderStageTest, RejectsNonFloat32OutputBuffer) {
                  {ElementType::Int32, {1, kSeqLen}, 4}},
                 {{ElementType::Int32, {1, kSeqLen, kPromptDim}, 4}});
 
-  std::vector<std::unique_ptr<LiteRtRunner>> runners;
-  runners.push_back(std::move(runner));
-
   TextEncoderStage::Config config;
   config.seq_len = kSeqLen;
   auto textenc_stage = TextEncoderStage::Create(
       &prompt_source, std::make_unique<FakeTokenizer>(support::TokenIds{1}),
-      std::move(runners), config);
+      std::move(runner), config);
   EXPECT_THAT(textenc_stage, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 

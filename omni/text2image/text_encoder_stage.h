@@ -70,30 +70,24 @@ struct TextEncoderConfig {
   // 151668 = `</think>`.
   std::vector<int32_t> suffix_token_ids = {151645, 198, 151644, 77091, 198,
                                            151667, 271, 151668, 271};
-  // Input buffer indices for the first runner.
+  // Input buffer indices for the runner.
   InputIndices input_indices;
 };
 
 // Text frontend and prompt encoder stage for text-to-image pipelines.
 // Tokenizes the input prompt, applies configured prefix/suffix token framing
-// and padding, and runs the text encoder `LiteRtRunner`(s) to produce
-// conditioning embeddings.
+// and padding, and runs the text encoder `LiteRtRunner` to produce conditioning
+// embeddings.
 class TextEncoderStage
     : public SingleThreadedStageWithDeque<TextEncoderOutput> {
  public:
   using Config = TextEncoderConfig;
   using InputIndices = TextEncoderConfig::InputIndices;
 
-  // Creates a `TextEncoderStage` that runs `runners` sequentially. When
-  // multiple runners are provided, outputs of runner `i - 1` are wired
-  // positionally (output `j` -> input `j`) to inputs of runner `i`. The final
-  // runner must produce a single `Float32` output buffer.
-  // TODO: b/568027544 - Support custom argument mapping between chained runners
-  // when required.
   static absl::StatusOr<std::unique_ptr<TextEncoderStage>> Create(
       Stage<Text2ImagePrompt>* absl_nonnull prompt_source,
       std::unique_ptr<support::Tokenizer> absl_nonnull tokenizer,
-      std::vector<std::unique_ptr<LiteRtRunner>> runners,
+      std::unique_ptr<LiteRtRunner> absl_nonnull runner,
       const Config& config = {});
 
   ~TextEncoderStage() override = default;
@@ -104,19 +98,17 @@ class TextEncoderStage
   absl::Status ScheduleInternal() override;
 
  private:
-  struct RunnerData {
-    std::unique_ptr<LiteRtRunner> absl_nonnull runner;
-    std::vector<TensorBuffer> input_buffers;
-    std::vector<TensorBuffer> output_buffers;
-  };
-
   TextEncoderStage(Stage<Text2ImagePrompt>* absl_nonnull prompt_source,
                    std::unique_ptr<support::Tokenizer> absl_nonnull tokenizer,
-                   std::vector<RunnerData> runners, Config config);
+                   std::unique_ptr<LiteRtRunner> absl_nonnull runner,
+                   std::vector<TensorBuffer> input_buffers,
+                   std::vector<TensorBuffer> output_buffers, Config config);
 
   Stage<Text2ImagePrompt>& prompt_source_;
   const std::unique_ptr<support::Tokenizer> absl_nonnull tokenizer_;
-  std::vector<RunnerData> runners_;
+  const std::unique_ptr<LiteRtRunner> absl_nonnull runner_;
+  std::vector<TensorBuffer> input_buffers_;
+  std::vector<TensorBuffer> output_buffers_;
   const Config config_;
 };
 
