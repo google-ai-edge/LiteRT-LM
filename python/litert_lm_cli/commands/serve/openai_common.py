@@ -229,11 +229,16 @@ def compute_token_usage(
   """Computes token usage statistics for the completed conversation turn."""
   prompt_tokens = 0
   completion_tokens = 0
+  cached_tokens = 0
 
   try:
     info = conv.get_benchmark_info()
-    prompt_tokens = info.last_prefill_token_count
+    prefill_tokens = info.last_prefill_token_count
     completion_tokens = info.last_decode_token_count
+    token_count = getattr(conv, "token_count", None)
+    if isinstance(token_count, int) and not isinstance(token_count, bool):
+      cached_tokens = max(0, token_count - prefill_tokens - completion_tokens)
+    prompt_tokens = cached_tokens + prefill_tokens
   except Exception:  # pylint: disable=broad-exception-caught
     pass
 
@@ -243,6 +248,9 @@ def compute_token_usage(
       "prompt_tokens": prompt_tokens,
       "completion_tokens": completion_tokens,
       "total_tokens": total_tokens,
+      "prompt_tokens_details": {
+          "cached_tokens": cached_tokens,
+      },
       "completion_tokens_details": {
           "reasoning_tokens": reasoning_tokens,
       },
@@ -387,7 +395,7 @@ def translate_openai_message(
         }],
     }
 
-  if role == "assistant" and "tool_calls" in msg:
+  if role == "assistant" and msg.get("tool_calls"):
     openai_tool_calls = msg.get("tool_calls", [])
     litert_tool_calls = [
         {
@@ -408,6 +416,11 @@ def translate_openai_message(
     }
 
   if not isinstance(content, list):
+    if role == "assistant":
+      return {
+          "role": "assistant",
+          "content": "" if content is None else content,
+      }
     return msg
 
   translated_content = []
@@ -476,3 +489,22 @@ def translate_openai_message(
       "role": role,
       "content": translated_content,
   }
+
+
+def translate_openai_messages(
+    messages: Sequence[Any],
+    name_by_tool_call_id: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+  """Translates OpenAI messages and merges consecutive tool response messages."""
+  translated: list[dict[str, Any]] = []
+  for msg in messages:
+    translated_msg = translate_openai_message(msg, name_by_tool_call_id)
+    if (
+        translated
+        and translated[-1].get("role") == "tool"
+        and translated_msg.get("role") == "tool"
+    ):
+      translated[-1]["content"].extend(translated_msg.get("content", []))
+    else:
+      translated.append(translated_msg)
+  return translated

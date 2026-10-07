@@ -28,6 +28,7 @@ from typing_extensions import override
 
 import litert_lm
 from litert_lm_cli.commands.serve import openai_common
+from litert_lm_cli.commands.serve import util
 
 
 def parse_sampler_config(
@@ -200,7 +201,7 @@ def _handle_chat_completions(
     max_completion_tokens: int | None = None,
     stream_options: dict[str, Any] | None = None,
     response_format: litert_lm.ResponseFormat | None = None,
-) -> None:
+) -> dict[str, Any] | None:
   """Generates responses for the OpenAI Chat Completions endpoint.
 
   Endpoint: `/v1/chat/completions` (and `/chat/completions`).
@@ -225,6 +226,10 @@ def _handle_chat_completions(
     max_completion_tokens: The maximum number of tokens to generate.
     stream_options: Options for streaming, such as include_usage.
     response_format: Optional response format for constrained decoding.
+
+  Returns:
+    The generated LiteRT-LM assistant message dictionary on success, or None if
+    an error occurred during streaming.
   """
   if not stream:
     text_parts = []
@@ -284,7 +289,13 @@ def _handle_chat_completions(
     handler.wfile.write(
         (openai_common.dump_json(resp_body, indent=2) + "\n").encode("utf-8")
     )
-    return
+    if tool_calls:
+      return {
+          "role": "assistant",
+          "tool_calls": [tc.to_json() for tc in tool_calls],
+          **({"content": text_output} if text_output else {}),
+      }
+    return {"role": "assistant", "content": text_output or None}
 
   include_usage = bool(
       stream_options and stream_options.get("include_usage", False)
@@ -292,7 +303,7 @@ def _handle_chat_completions(
   formatter = _OpenAIChatCompletionsFormatter(
       now_str, created_ts, model_id, include_usage=include_usage
   )
-  handler.stream_response(
+  return handler.stream_response(
       conv,
       prompt,
       formatter,
@@ -328,10 +339,9 @@ def handle_post_chat_completions(handler: Any) -> None:
     )
 
     try:
-      translated_messages = [
-          openai_common.translate_openai_message(m, name_by_tool_call_id)
-          for m in messages
-      ]
+      translated_messages = openai_common.translate_openai_messages(
+          messages, name_by_tool_call_id
+      )
     except ValueError as e:
       handler.send_error(400, f"Invalid messages: {e}")
       return
@@ -414,11 +424,12 @@ def handle_post_chat_completions(handler: Any) -> None:
 
   # Parse tools if this is a chat completions request.
   tools_data = body.get("tools")
-  tools = (
-      [_ProxyTool(t) for t in tools_data if t.get("type") == "function"]
+  tool_defs = (
+      [t for t in tools_data if t.get("type") == "function"]
       if tools_data
       else []
   )
+  tools = [_ProxyTool(t) for t in tool_defs]
 
   try:
     context_messages = translated_messages[:-1] if translated_messages else []
@@ -431,14 +442,16 @@ def handle_post_chat_completions(handler: Any) -> None:
         enable=True,
         provider=provider,
     )
-    with engine.create_conversation(
-        messages=context_messages,
+    with util.get_or_create_server_conversation(
+        getattr(handler, "server", None),
+        engine,
+        context_messages=context_messages,
+        prompt=prompt,
         tools=tools or None,
-        automatic_tool_calling=False,
         sampler_config=sampler_config,
         thinking_config=thinking_config,
         constrained_decoding_config=constrained_decoding_config,
-    ) as conv:
+    ) as (conv, save_assistant):
       now = datetime.datetime.now(datetime.timezone.utc)
       now_str = now.strftime("%Y%m%d%H%M%S%f")
       created_ts = int(now.timestamp())
@@ -447,7 +460,7 @@ def handle_post_chat_completions(handler: Any) -> None:
       if not isinstance(stream_options, dict):
         stream_options = {}
 
-      _handle_chat_completions(
+      assistant_message = _handle_chat_completions(
           handler,
           conv,  # pyrefly: ignore[bad-argument-type]
           prompt,
@@ -459,5 +472,6 @@ def handle_post_chat_completions(handler: Any) -> None:
           stream_options=stream_options,
           response_format=response_format,
       )
+      save_assistant(assistant_message)
   except Exception as e:  # pylint: disable=broad-exception-caught
     handler.handle_inference_error(e, raw_model_str, prompt)
