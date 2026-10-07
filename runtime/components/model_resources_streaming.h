@@ -44,7 +44,8 @@ namespace litert::lm {
 // Implementation of ModelResources for streaming model loading (e.g. from
 // .litertlm container streams). Lazily constructs models from in-memory
 // buffers, holds LLM or Embedding metadata, and manages both file-based
-// (ScopedFile) and in-memory external weights for submodels.
+// (ScopedFile) and in-memory external weights for submodels. Auxiliary
+// sub-models (vision, MTP, audio) can be buffered in-memory.
 class ModelResourcesStreaming : public ModelResources {
  public:
   // Creates an empty ModelResourcesStreaming instance.
@@ -61,6 +62,13 @@ class ModelResourcesStreaming : public ModelResources {
       : embedding_metadata_(embedding_metadata) {}
 
   ~ModelResourcesStreaming() override = default;
+
+  // Stores a copy of `buffer` as the TFLite model for `model_type`, replacing
+  // any previously added buffer or model for that type.
+  absl::Status AddTFLiteModelBuffer(ModelType model_type,
+                                    absl::string_view buffer);
+
+  void ReleaseTFLiteModelBuffer(ModelType model_type);
 
   // Returns the litert::Model for the specified `model_type`.
   // Lazily creates and caches the model from the in-memory flatbuffer stored
@@ -117,7 +125,6 @@ class ModelResourcesStreaming : public ModelResources {
   // file regions on disk.
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
       ModelType model_type) override;
-
   // Returns a pointer to the map of external weight section names to 64-byte
   // aligned in-memory byte spans for `model_type`, or `nullptr` if no weights
   // have been loaded into memory for that model type.
@@ -138,6 +145,7 @@ class ModelResourcesStreaming : public ModelResources {
   // raw flatbuffer in memory so that `GetTFLiteModel` can lazily construct the
   // `litert::Model` without relying on a persistent stream or file.
   void SetModelBuffer(ModelType model_type, std::vector<char> buffer) {
+    models_.erase(model_type);
     model_buffers_[model_type] = std::move(buffer);
   }
 

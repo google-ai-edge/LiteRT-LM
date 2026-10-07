@@ -506,6 +506,7 @@ cc_test(
         ":model_resources_streaming",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@litert//litert/cc:litert_model",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
