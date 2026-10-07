@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -74,14 +75,14 @@ absl::Status LoRA::Init() {
       auto input_names,
       compiled_model_.GetSignatureInputNames(signature_name_));
 
-  for (const auto& input_name : input_names) {
-    if (!IsLoRAInputName(input_name)) {
-      continue;
-    }
-    // Create the input buffer for the LoRA tensor.
+  // Creates a TensorBuffer for `input_name` of `signature` and fills it with
+  // the LoRA weights for that input.
+  auto create_filled_buffer =
+      [&](absl::string_view signature,
+          absl::string_view input_name) -> absl::StatusOr<TensorBuffer> {
     LITERT_ASSIGN_OR_RETURN(
-        litert::TensorBuffer tensor_buffer,
-        compiled_model_.CreateInputBuffer(signature_name_, input_name));
+        TensorBuffer tensor_buffer,
+        compiled_model_.CreateInputBuffer(signature, input_name));
 
     LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
                             litert::TensorBufferScopedLock::Create(
@@ -104,9 +105,8 @@ absl::Status LoRA::Init() {
       // Fill the buffer with zeros if the tensor is not in LoraData.
       std::memset(lock_and_addr.second, 0, tensor_buffer_size);
     }
-
-    lora_buffers_[input_name] = std::move(tensor_buffer);
-  }
+    return tensor_buffer;
+  };
 
   // GPU models exported with runtime-BMM LoRA read the channel range of every
   // LoRA BMM op from `lora_param_tensor`: element 0 is the start index and the
@@ -118,6 +118,7 @@ absl::Status LoRA::Init() {
   // covers all of its channels. The rank is the model's LoRA rank (a LoRA with
   // a smaller rank is zero padded to it), i.e. the dimension that every LoRA
   // input has.
+  int64_t lora_param_end = 0;
   if (std::find(input_names.begin(), input_names.end(),
                 kLoRAParamTensorName) != input_names.end()) {
     std::vector<std::vector<int32_t>> lora_dims;
@@ -152,18 +153,26 @@ absl::Status LoRA::Init() {
     RET_CHECK_GT(model_rank, 0)
         << "Could not find a LoRA rank shared by all LoRA inputs.";
 
-    int64_t max_extent = 0;
     for (const auto& dims : lora_dims) {
       int64_t num_elements = 1;
       for (int32_t dim : dims) {
         num_elements *= dim;
       }
-      max_extent = std::max(max_extent, num_elements / model_rank);
+      lora_param_end = std::max(lora_param_end, num_elements / model_rank);
     }
+  }
 
-    LITERT_ASSIGN_OR_RETURN(TensorBuffer param_buffer,
-                            compiled_model_.CreateInputBuffer(
-                                signature_name_, kLoRAParamTensorName));
+  // Creates a TensorBuffer for `input_name` of `signature`: the channel range
+  // for `lora_param_tensor`, the LoRA weights otherwise.
+  auto create_buffer =
+      [&](absl::string_view signature,
+          absl::string_view input_name) -> absl::StatusOr<TensorBuffer> {
+    if (input_name != kLoRAParamTensorName) {
+      return create_filled_buffer(signature, input_name);
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        TensorBuffer param_buffer,
+        compiled_model_.CreateInputBuffer(signature, kLoRAParamTensorName));
     {
       LITERT_ASSIGN_OR_RETURN(
           auto lock_and_addr,
@@ -175,18 +184,112 @@ absl::Status LoRA::Init() {
           << "Unexpected size of " << kLoRAParamTensorName;
       int32_t* params = static_cast<int32_t*>(lock_and_addr.second);
       std::fill(params, params + param_size / sizeof(int32_t),
-                static_cast<int32_t>(max_extent));
+                static_cast<int32_t>(lora_param_end));
       params[0] = 0;
     }
-    lora_buffers_[kLoRAParamTensorName] = std::move(param_buffer);
+    return param_buffer;
+  };
+
+  // Whether `input_name` gets a buffer from this class.
+  auto is_lora_buffer_input = [](absl::string_view input_name) {
+    return IsLoRAInputName(input_name) || input_name == kLoRAParamTensorName;
+  };
+
+  // Create the buffers for the signature the LoRA was created with. These are
+  // kept in a local map and moved into `lora_buffers_by_signature_` at the end:
+  // inserting other signatures below may rehash `lora_buffers_by_signature_`,
+  // which would invalidate a reference into it.
+  absl::flat_hash_map<std::string, TensorBuffer> primary_buffers;
+  for (const auto& input_name : input_names) {
+    if (!is_lora_buffer_input(input_name)) {
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(primary_buffers[input_name],
+                            create_buffer(signature_name_, input_name));
   }
+
+  // Other signatures may require different buffer types for the same LoRA
+  // input. For example, on GPU a LoRA input that has no consumer in "prefill"
+  // only accepts host memory there, while "decode" uses a GPU buffer. Reuse an
+  // existing buffer when its type is supported, otherwise create one of a
+  // supported type holding the same weights.
+  // LoRA input name -> buffers created for signatures other than the primary.
+  absl::flat_hash_map<std::string, std::vector<TensorBuffer>> extra_buffers;
+  LITERT_ASSIGN_OR_RETURN(auto signature_keys,
+                          compiled_model_.GetSignatureKeys());
+  for (const auto& signature_key : signature_keys) {
+    if (signature_key == signature_name_) {
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto signature_input_names,
+        compiled_model_.GetSignatureInputNames(signature_key));
+    absl::flat_hash_map<std::string, TensorBuffer> signature_buffers;
+    bool signature_runnable = true;
+    for (const auto& input_name : signature_input_names) {
+      if (!is_lora_buffer_input(input_name)) {
+        continue;
+      }
+      auto requirements =
+          compiled_model_.GetInputBufferRequirements(signature_key, input_name);
+      if (!requirements) {
+        // Requirements are unavailable for signatures that are not active in
+        // the compiled model; such signatures cannot be run, so skip them.
+        // GetLoRABuffers() returns NotFound for a skipped signature, so log
+        // why it was skipped.
+        ABSL_LOG(WARNING) << "No LoRA buffers for signature '" << signature_key
+                          << "': buffer requirements of input '" << input_name
+                          << "' are unavailable: "
+                          << requirements.Error().Message();
+        signature_runnable = false;
+        break;
+      }
+      LITERT_ASSIGN_OR_RETURN(auto supported_types,
+                              requirements->SupportedTypes());
+      auto is_supported = [&supported_types](const TensorBuffer& buffer) {
+        auto buffer_type = buffer.BufferType();
+        return buffer_type &&
+               std::find(supported_types.begin(), supported_types.end(),
+                         *buffer_type) != supported_types.end();
+      };
+
+      const TensorBuffer* reusable = nullptr;
+      if (auto it = primary_buffers.find(input_name);
+          it != primary_buffers.end() && is_supported(it->second)) {
+        reusable = &it->second;
+      } else {
+        for (const auto& buffer : extra_buffers[input_name]) {
+          if (is_supported(buffer)) {
+            reusable = &buffer;
+            break;
+          }
+        }
+      }
+      if (reusable == nullptr) {
+        LITERT_ASSIGN_OR_RETURN(auto buffer,
+                                create_buffer(signature_key, input_name));
+        auto& buffers = extra_buffers[input_name];
+        buffers.push_back(std::move(buffer));
+        // Only valid until the next push_back into `buffers`; it is duplicated
+        // right below, before any other buffer is added.
+        reusable = &buffers.back();
+      }
+      LITERT_ASSIGN_OR_RETURN(signature_buffers[input_name],
+                              reusable->Duplicate());
+    }
+    if (signature_runnable) {
+      lora_buffers_by_signature_[signature_key] = std::move(signature_buffers);
+    }
+  }
+  lora_buffers_by_signature_[signature_name_] = std::move(primary_buffers);
   return absl::OkStatus();
 }
 
 absl::StatusOr<litert::TensorBuffer> LoRA::GetLoRABuffer(
     const std::string& name) const {
-  auto it = lora_buffers_.find(name);
-  if (it == lora_buffers_.end()) {
+  const auto& buffers = lora_buffers_by_signature_.at(signature_name_);
+  auto it = buffers.find(name);
+  if (it == buffers.end()) {
     return absl::NotFoundError("LoRA tensor not found.");
   }
   LITERT_ASSIGN_OR_RETURN(auto duplicated_buffer, it->second.Duplicate());
@@ -195,8 +298,18 @@ absl::StatusOr<litert::TensorBuffer> LoRA::GetLoRABuffer(
 
 absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
 LoRA::GetLoRABuffers() const {
+  return GetLoRABuffers(signature_name_);
+}
+
+absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
+LoRA::GetLoRABuffers(absl::string_view signature_name) const {
+  auto signature_it = lora_buffers_by_signature_.find(signature_name);
+  if (signature_it == lora_buffers_by_signature_.end()) {
+    return absl::NotFoundError(
+        absl::StrFormat("No LoRA buffers for signature: %s", signature_name));
+  }
   absl::flat_hash_map<absl::string_view, litert::TensorBuffer> buffers;
-  for (const auto& [name, buffer] : lora_buffers_) {
+  for (const auto& [name, buffer] : signature_it->second) {
     LITERT_ASSIGN_OR_RETURN(buffers[name], buffer.Duplicate());
   }
   return buffers;

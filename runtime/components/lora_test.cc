@@ -191,5 +191,90 @@ TEST_F(LoraTest, FillsLoRAParamTensor) {
               ::testing::ElementsAre(0, 64, 64, 64, 64, 64, 64));
 }
 
+TEST_F(LoraTest, GetLoRABuffersForOtherSignatureSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               *compiled_model_, "decode"));
+  ASSERT_OK_AND_ASSIGN(auto prefill_buffers, lora->GetLoRABuffers("prefill"));
+  EXPECT_EQ(prefill_buffers.size(), 280);
+
+  auto it = prefill_buffers.find("query_w_prime_left_20");
+  ASSERT_NE(it, prefill_buffers.end());
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t buffer_size, it->second.PackedSize());
+  EXPECT_GT(buffer_size, 0);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_ptr,
+      litert::TensorBufferScopedLock::Create<const uint16_t>(
+          it->second, litert::TensorBuffer::LockMode::kRead));
+  auto& [lock, data_ptr] = lock_and_ptr;
+  const uint16_t fp16_one = 0x3C00;
+  for (size_t i = 0; i < buffer_size / sizeof(uint16_t); ++i) {
+    EXPECT_EQ(data_ptr[i], fp16_one);
+  }
+}
+
+TEST_F(LoraTest, GetLoRABuffersReusesBuffersWhenTypesMatch) {
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               *compiled_model_, "decode"));
+  ASSERT_OK_AND_ASSIGN(auto decode_buffers, lora->GetLoRABuffers("decode"));
+  ASSERT_OK_AND_ASSIGN(auto prefill_buffers, lora->GetLoRABuffers("prefill"));
+  ASSERT_EQ(decode_buffers.size(), prefill_buffers.size());
+
+  // On CPU both signatures accept host memory, so no extra buffers are created
+  // and both signatures share the same underlying buffers.
+  for (const auto& [name, decode_buffer] : decode_buffers) {
+    auto it = prefill_buffers.find(name);
+    ASSERT_NE(it, prefill_buffers.end()) << name;
+    EXPECT_EQ(it->second.Get(), decode_buffer.Get()) << name;
+  }
+}
+
+TEST_F(LoraTest, GetLoRABuffersDefaultsToCreationSignature) {
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               *compiled_model_, "decode"));
+  ASSERT_OK_AND_ASSIGN(auto default_buffers, lora->GetLoRABuffers());
+  ASSERT_OK_AND_ASSIGN(auto decode_buffers, lora->GetLoRABuffers("decode"));
+  ASSERT_EQ(default_buffers.size(), decode_buffers.size());
+  for (const auto& [name, buffer] : default_buffers) {
+    auto it = decode_buffers.find(name);
+    ASSERT_NE(it, decode_buffers.end()) << name;
+    EXPECT_EQ(it->second.Get(), buffer.Get()) << name;
+  }
+}
+
+TEST_F(LoraTest, GetLoRABuffersIncludesLoRAParamTensor) {
+  // Model inputs: key_w_prime_left_99 [32, 4, 16], query_w_prime_right_99
+  // [48, 32] and lora_param_tensor [1, 1, 1, 7]. The model only has the
+  // "serving_default" signature.
+  LITERT_ASSERT_OK_AND_ASSIGN(Options options, litert::Options::Create());
+  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      CompiledModel::Create(*env_, GetLoRAParamModelFilePath(), options));
+
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               compiled_model,
+                                               "serving_default"));
+  ASSERT_OK_AND_ASSIGN(auto buffers, lora->GetLoRABuffers("serving_default"));
+  EXPECT_EQ(buffers.size(), 3);
+  auto it = buffers.find("lora_param_tensor");
+  ASSERT_NE(it, buffers.end());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_ptr,
+      litert::TensorBufferScopedLock::Create<const int32_t>(
+          it->second, litert::TensorBuffer::LockMode::kRead));
+  auto& [lock, data_ptr] = lock_and_ptr;
+  // Same values as in FillsLoRAParamTensor: start 0, then max(4 * 16, 48).
+  EXPECT_THAT(std::vector<int32_t>(data_ptr, data_ptr + 7),
+              ::testing::ElementsAre(0, 64, 64, 64, 64, 64, 64));
+}
+
+TEST_F(LoraTest, GetLoRABuffersReturnsErrorForUnknownSignature) {
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+                                               *compiled_model_, "decode"));
+  EXPECT_THAT(lora->GetLoRABuffers("unknown_signature"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
 }  // namespace
 }  // namespace litert::lm

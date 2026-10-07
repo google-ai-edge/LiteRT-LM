@@ -65,6 +65,12 @@ class LoraManager {
   absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
   GetLoRABuffers() const;
 
+  // Returns a map of all the LoRA input names of `signature_name` to their
+  // duplicated TensorBuffers for the current LoRA ID, with buffer types
+  // supported by `signature_name`. See LoRA::GetLoRABuffers(signature_name).
+  absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
+  GetLoRABuffers(absl::string_view signature_name) const;
+
  private:
   LoraManager(const litert::CompiledModel& compiled_model,
               absl::string_view signature_name);
