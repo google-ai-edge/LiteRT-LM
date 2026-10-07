@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,14 +31,55 @@ namespace litert::support {
 
 namespace {
 
+constexpr uint8_t kUtf8HighBitMask = 0x80;
+constexpr uint8_t kUtf8ContinuationMask = 0xC0;
+constexpr uint8_t kUtf8ContinuationPrefix = 0x80;
+constexpr uint8_t kUtf8TwoByteMask = 0xE0;
+constexpr uint8_t kUtf8TwoBytePrefix = 0xC0;
+constexpr uint8_t kUtf8ThreeByteMask = 0xF0;
+constexpr uint8_t kUtf8ThreeBytePrefix = 0xE0;
+constexpr uint8_t kUtf8FourByteMask = 0xF8;
+constexpr uint8_t kUtf8FourBytePrefix = 0xF0;
+constexpr size_t kUtf8MaxContinuationBytes = 3;
+
 size_t GetLongestCommonPrefixLength(std::string_view a, std::string_view b) {
   size_t min_len = std::min(a.length(), b.length());
+  size_t prefix_len = min_len;
   for (size_t i = 0; i < min_len; ++i) {
     if (a[i] != b[i]) {
-      return i;
+      prefix_len = i;
+      break;
     }
   }
-  return min_len;
+  // Ensure we do not split a multi-byte UTF-8 codepoint. If the common prefix
+  // ends in the middle of a valid multi-byte sequence, back up to the start of
+  // that sequence. Orphaned continuation bytes and invalid lead bytes can never
+  // complete into a valid codepoint, so they are not held back.
+  if (prefix_len > 0 &&
+      (static_cast<uint8_t>(a[prefix_len - 1]) & kUtf8HighBitMask) != 0) {
+    size_t char_start = prefix_len - 1;
+    size_t num_continuation_bytes = 0;
+    while (char_start > 0 &&
+           num_continuation_bytes < kUtf8MaxContinuationBytes &&
+           (static_cast<uint8_t>(a[char_start]) & kUtf8ContinuationMask) ==
+               kUtf8ContinuationPrefix) {
+      --char_start;
+      ++num_continuation_bytes;
+    }
+    uint8_t lead = static_cast<uint8_t>(a[char_start]);
+    size_t expected_len = 0;
+    if ((lead & kUtf8TwoByteMask) == kUtf8TwoBytePrefix) {
+      expected_len = 2;
+    } else if ((lead & kUtf8ThreeByteMask) == kUtf8ThreeBytePrefix) {
+      expected_len = 3;
+    } else if ((lead & kUtf8FourByteMask) == kUtf8FourBytePrefix) {
+      expected_len = 4;
+    }
+    if (expected_len > prefix_len - char_start) {
+      prefix_len = char_start;
+    }
+  }
+  return prefix_len;
 }
 
 std::string_view TrimTrailingReplacement(std::string_view text) {
@@ -81,15 +123,17 @@ BufferedStreamingDetokenizer::ProcessStep(
       ABSL_ASSIGN_OR_RETURN(
           decoded, tokenizer_->TokenIdsToText(accumulated_token_ids_[i]));
     }
+    std::string_view prev_decoded_trimmed =
+        TrimTrailingReplacement(last_decoded_texts_[i]);
+    std::string_view decoded_trimmed = TrimTrailingReplacement(decoded);
 
     std::string released_text;
-    if (last_decoded_texts_[i].empty()) {
+    if (prev_decoded_trimmed.empty()) {
       // First valid decode. We don't release anything yet to lag by 1 step.
       released_text = "";
     } else {
-      std::string_view decoded_trimmed = TrimTrailingReplacement(decoded);
       size_t stable_length =
-          GetLongestCommonPrefixLength(last_decoded_texts_[i], decoded_trimmed);
+          GetLongestCommonPrefixLength(prev_decoded_trimmed, decoded_trimmed);
       size_t released_len = released_lengths_[i];
       if (stable_length < released_len) {
         // This shouldn't happen assuming detokenization is monotonic after
@@ -127,11 +171,15 @@ BufferedStreamingDetokenizer::ProcessStep(
       ABSL_ASSIGN_OR_RETURN(
           std::string new_decoded,
           tokenizer_->TokenIdsToText(accumulated_token_ids_[i]));
+      std::string_view new_decoded_trimmed =
+          TrimTrailingReplacement(new_decoded);
 
-      size_t unreleased_text_len = decoded.length() - released_lengths_[i];
-      size_t new_released_len = new_decoded.length() > unreleased_text_len
-                                    ? new_decoded.length() - unreleased_text_len
-                                    : 0;
+      size_t unreleased_text_len =
+          decoded_trimmed.length() - released_lengths_[i];
+      size_t new_released_len =
+          new_decoded_trimmed.length() > unreleased_text_len
+              ? new_decoded_trimmed.length() - unreleased_text_len
+              : 0;
 
       last_decoded_texts_[i] = new_decoded;
       released_lengths_[i] = new_released_len;
