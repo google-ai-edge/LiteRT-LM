@@ -916,6 +916,18 @@ class AbstractBenchmark(abc.ABC):
   use_ringbuffers_local_attention: bool | None = None
   enable_ynnpack: bool | None = None
 
+  def __enter__(self) -> AbstractBenchmark:
+    """Initializes the benchmark resources."""
+    return self
+
+  def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    """Releases the benchmark resources."""
+    del exc_type, exc_val, exc_tb
+    self.close()
+
+  def close(self) -> None:
+    """Releases any underlying benchmark resources."""
+
   @abc.abstractmethod
   def run(self) -> BenchmarkInfo:
     """Runs the benchmark and returns the result."""

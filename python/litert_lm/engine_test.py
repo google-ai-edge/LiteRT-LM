@@ -563,22 +563,72 @@ class EngineTest(LiteRtLmTestBase):
       # signal is processed by the background thread.
 
   def test_benchmark_class(self):
-    benchmark = litert_lm.Benchmark(
+    with litert_lm.Benchmark(
         self.model_path,
         litert_lm.Backend.CPU(),
         prefill_tokens=10,
         decode_tokens=10,
         cache_dir=":nocache",
-    )
-    self.assertIsInstance(benchmark, litert_lm.AbstractBenchmark)
-    result = benchmark.run()
-    self.assertIsInstance(result, litert_lm.BenchmarkInfo)
-    self.assertGreater(result.init_time_in_second, 0)
-    self.assertGreater(result.time_to_first_token_in_second, 0)
-    self.assertGreater(result.last_prefill_token_count, 0)
-    self.assertGreater(result.last_prefill_tokens_per_second, 0)
-    self.assertGreater(result.last_decode_token_count, 0)
-    self.assertGreater(result.last_decode_tokens_per_second, 0)
+    ) as benchmark:
+      self.assertIsInstance(benchmark, litert_lm.AbstractBenchmark)
+      result = benchmark.run()
+      self.assertIsInstance(result, litert_lm.BenchmarkInfo)
+      self.assertGreater(result.init_time_in_second, 0)
+      self.assertGreater(result.time_to_first_token_in_second, 0)
+      self.assertGreater(result.last_prefill_token_count, 0)
+      self.assertGreater(result.last_prefill_tokens_per_second, 0)
+      self.assertGreater(result.last_decode_token_count, 0)
+      self.assertGreater(result.last_decode_tokens_per_second, 0)
+
+  def test_benchmark_reuses_engine_across_runs(self):
+    lib = litert_lm._ffi._get_lib()
+    with (
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_create",
+            wraps=lib.litert_lm_engine_create,
+        ) as mock_engine_create,
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_delete",
+            wraps=lib.litert_lm_engine_delete,
+        ) as mock_engine_delete,
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_create_session",
+            wraps=lib.litert_lm_engine_create_session,
+        ) as mock_create_session,
+        mock.patch.object(
+            lib,
+            "litert_lm_session_delete",
+            wraps=lib.litert_lm_session_delete,
+        ) as mock_session_delete,
+    ):
+      with litert_lm.Benchmark(
+          self.model_path,
+          litert_lm.Backend.CPU(),
+          prefill_tokens=10,
+          decode_tokens=10,
+          cache_dir=":nocache",
+      ) as benchmark:
+        warmup_result = benchmark.run()
+        iter_result = benchmark.run()
+        self.assertIsInstance(warmup_result, litert_lm.BenchmarkInfo)
+        self.assertIsInstance(iter_result, litert_lm.BenchmarkInfo)
+        mock_engine_create.assert_called_once()
+        mock_engine_delete.assert_not_called()
+        self.assertEqual(mock_create_session.call_count, 2)
+        self.assertEqual(mock_session_delete.call_count, 2)
+
+      mock_engine_delete.assert_called_once()
+      benchmark.close()
+      mock_engine_delete.assert_called_once()
+
+      # Calling run() outside a context manager deterministically deletes the
+      # engine on completion.
+      benchmark.run()
+      self.assertEqual(mock_engine_create.call_count, 2)
+      self.assertEqual(mock_engine_delete.call_count, 2)
 
   def test_benchmark_class_with_thread_count(self):
     lib = litert_lm._ffi._get_lib()
