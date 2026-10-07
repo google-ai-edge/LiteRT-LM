@@ -21,11 +21,16 @@
 
 namespace litert::lm {
 
-// Checks if the device is a Google Pixel with a supported Tensor SoC.
-bool IsPixelTensorDevice();
+// Checks if the device is a supported device with known high-performance cores
+// (e.g. Google Pixel with Tensor SoC, or Qualcomm Snapdragon 8 Elite / Gen 4).
+bool HasPerformanceCores();
 
 // Returns the hardcoded performance zero indexed core IDs for the detected
-// Pixel Tensor SoC.
+// SoC.
+std::vector<int> GetPerformanceCores();
+
+// Backward-compatible functions.
+bool IsPixelTensorDevice();
 std::vector<int> GetPixelPerformanceCores();
 
 // Sets the CPU affinity to the given cores for the current thread and any child
