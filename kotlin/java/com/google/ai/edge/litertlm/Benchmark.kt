@@ -31,18 +31,18 @@ package com.google.ai.edge.litertlm
  *   `BenchmarkInfo::TimeMarkDelta(mark_name)` calls in the C++ runtime) to the duration in seconds
  *   of the most recent measured interval for that stage. Common keys recorded during `benchmark()`
  *   execution include:
- *   - `"vision_executor"`: Time spent encoding an input image into vision embeddings via the vision
- *     executor during prefill (present when `visionBackend` is configured and an image input is
- *     provided).
- *   - `"audio_executor"`: Time spent encoding an input audio clip into audio embeddings via the
- *     audio executor during prefill (present when `audioBackend` is configured and an audio input
- *     is provided).
- *   - `"executor_decode"`: Time spent in the LLM executor `Decode` call for the last decoded token
- *     (when using an external sampler).
- *   - `"sampling"`: Time spent sampling the next token from logits for the last decoded token (when
- *     using an external sampler).
- *   - `"executor_decode_and_sample"`: Time spent in the combined `Decode` and sampling call for the
- *     last decoded token (when the executor performs sampling internally).
+ *     - `"vision_executor"`: Time spent encoding an input image into vision embeddings via the
+ *       vision executor during prefill (present when `visionBackend` is configured and an image
+ *       input is provided).
+ *     - `"audio_executor"`: Time spent encoding an input audio clip into audio embeddings via the
+ *       audio executor during prefill (present when `audioBackend` is configured and an audio input
+ *       is provided).
+ *     - `"executor_decode"`: Time spent in the LLM executor `Decode` call for the last decoded
+ *       token (when using an external sampler).
+ *     - `"sampling"`: Time spent sampling the next token from logits for the last decoded token
+ *       (when using an external sampler).
+ *     - `"executor_decode_and_sample"`: Time spent in the combined `Decode` and sampling call for
+ *       the last decoded token (when the executor performs sampling internally).
  */
 data class BenchmarkInfo(
   val initTimeInSecond: Double,
@@ -81,6 +81,7 @@ data class BenchmarkInfo(
  *   decode step. This installs a `RepetitionPenaltyConstraint`, whose sparse mask goes through the
  *   same logit-mask runner as grammar constraints, so it is a cheap way to make a benchmark
  *   exercise the masking path. `null` disables the penalties.
+ * @param loraConfig Configuration for LoRA weights. If `null`, no LoRA weights are loaded.
  * @return The benchmark info.
  */
 @ExperimentalApi
@@ -94,6 +95,7 @@ fun benchmark(
   cacheDir: String? = null,
   contents: Contents = Contents.of("How are you"),
   repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+  loraConfig: LoraConfig? = null,
 ): BenchmarkInfo {
   val enginePointer =
     LiteRtLmJni.nativeCreateBenchmark(
@@ -126,8 +128,8 @@ fun benchmark(
         ExperimentalFlags.enableConversationConstrainedDecoding,
         ExperimentalFlags.filterChannelContentFromKvCache,
         ExperimentalFlags.overwritePromptTemplate,
-        null, // loraPath
-        null, // audioLoraPath
+        loraConfig?.loraPath,
+        loraConfig?.audioLoraPath,
         false, // prefillPrefaceOnInit
         -1, // maxOutputToken
         null, // thinkingConfig
