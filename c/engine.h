@@ -1049,7 +1049,21 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings, LiteRtLmEngine** out_engine);
 
+// Ownership and lifetime
+// ----------------------
+// An engine owns the resources shared by every session and conversation
+// created from it. Handles are NOT reference counted across the C boundary
+// and are NOT reparented.
+//
+// The caller MUST destroy every session and conversation created from an
+// engine before destroying the engine itself. Destroying an engine with
+// live children, or using a child after its engine has been destroyed, is
+// undefined behavior.
+
 // Destroys a LiteRT LM Engine.
+//
+// Every session and conversation created from `engine` MUST be destroyed
+// before calling this function; see "Ownership and lifetime" above.
 //
 // @param engine The engine to destroy.
 //
