@@ -15,7 +15,12 @@
 #include "runtime/executor/audio_litert_compiled_model_executor.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT
+#include <fstream>
+#include <ios>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -32,10 +37,8 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/scoped_file.h"
@@ -735,6 +738,130 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   // Flush again after restore -> processes restored 5 buffered frames.
   ASSERT_OK_AND_ASSIGN(auto flush_data2, audio_executor->Flush());
   EXPECT_EQ(flush_data1.GetValidTokens(), flush_data2.GetValidTokens());
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       ContextManagement_StreamingEncoder_CreateNewContextResetsStateIsolated) {
+  const std::filesystem::path src_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      std::string(kTestAudioStreamingModelPath);
+  std::ifstream src_file(src_model_path, std::ios::binary);
+  ASSERT_TRUE(src_file.is_open());
+  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
+                          std::istreambuf_iterator<char>());
+  // Rename the FlatBuffer signature input "prev_key_0" (length 10) to
+  // "prev_mask" (length 9 + 1 trailing null byte) so we can exercise both
+  // kPrevMaskName (initialized to 1s) and other state buffers (initialized to
+  // 0s) in CreateNewContext().
+  const std::string from_name("\x0a\x00\x00\x00prev_key_0", 14);
+  const std::string to_name("\x09\x00\x00\x00prev_mask\x00", 14);
+  const size_t pos = model_bytes.find(from_name);
+  ASSERT_NE(pos, std::string::npos);
+  model_bytes.replace(pos, from_name.size(), to_name);
+
+  const std::filesystem::path temp_model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      "dummy_audio_streaming_prev_mask.litertlm";
+  {
+    std::ofstream dst_file(temp_model_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(dst_file.is_open());
+    dst_file.write(model_bytes.data(), model_bytes.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, temp_model_path.string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+
+  // Buffer 5 frames in the active session.
+  std::vector<float> partial_chunk_data(5 * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_chunk_buffer,
+      CreateTensorBuffer<const float>(
+          partial_chunk_data,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
+  ASSERT_OK_AND_ASSIGN(auto encode_partial,
+                       audio_executor->Encode(partial_chunk_buffer));
+  EXPECT_EQ(encode_partial.GetValidTokens(), 0);
+
+  // Mutate prev_mask (to all 0s) and feature_state_0 (to all 1.0f) in the
+  // active session's state before creating a new context for another session.
+  ASSERT_OK_AND_ASSIGN(auto mutated_active_context,
+                       audio_executor->CloneContext());
+  auto* mutated_streaming_context =
+      static_cast<AudioStreamingContext*>(mutated_active_context.get());
+  ASSERT_TRUE(mutated_streaming_context->state_buffers().contains("prev_mask"));
+  ASSERT_OK_AND_ASSIGN(
+      auto initial_prev_mask_data,
+      GetDataAsVector<uint8_t>(
+          mutated_streaming_context->state_buffers().at("prev_mask")));
+  EXPECT_THAT(initial_prev_mask_data, ::testing::Each(uint8_t{1}));
+  std::vector<uint8_t> all_zeros(initial_prev_mask_data.size(), 0);
+  ASSERT_TRUE(mutated_streaming_context->state_buffers()
+                  .at("prev_mask")
+                  .Write<uint8_t>(absl::MakeSpan(all_zeros))
+                  .HasValue());
+  ASSERT_TRUE(
+      mutated_streaming_context->state_buffers().contains("feature_state_0"));
+  ASSERT_OK_AND_ASSIGN(
+      auto initial_feature_state_data,
+      GetDataAsVector<float>(
+          mutated_streaming_context->state_buffers().at("feature_state_0")));
+  std::vector<float> all_ones_float(initial_feature_state_data.size(), 1.0f);
+  ASSERT_TRUE(mutated_streaming_context->state_buffers()
+                  .at("feature_state_0")
+                  .Write<float>(absl::MakeSpan(all_ones_float))
+                  .HasValue());
+  ASSERT_OK(audio_executor->RestoreContext(std::move(mutated_active_context)));
+
+  // Create a brand-new context for another session while the active session
+  // has mutated state buffers and 5 buffered frames in the encoder.
+  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
+  ASSERT_NE(new_context, nullptr);
+  auto* new_streaming_context =
+      static_cast<AudioStreamingContext*>(new_context.get());
+  EXPECT_TRUE(new_streaming_context->buffered_spectrogram().empty());
+  ASSERT_TRUE(new_streaming_context->state_buffers().contains("prev_mask"));
+  ASSERT_OK_AND_ASSIGN(
+      auto new_prev_mask_data,
+      GetDataAsVector<uint8_t>(
+          new_streaming_context->state_buffers().at("prev_mask")));
+  EXPECT_THAT(new_prev_mask_data, ::testing::Each(uint8_t{1}));
+
+  ASSERT_TRUE(
+      new_streaming_context->state_buffers().contains("feature_state_0"));
+  ASSERT_OK_AND_ASSIGN(
+      auto new_feature_state_data,
+      GetDataAsVector<float>(
+          new_streaming_context->state_buffers().at("feature_state_0")));
+  EXPECT_THAT(new_feature_state_data, ::testing::Each(0.0f));
+
+  // Verify the active session's buffered spectrogram and state buffers in the
+  // encoder were NOT cleared or overwritten by CreateNewContext().
+  ASSERT_OK_AND_ASSIGN(auto active_cloned_context,
+                       audio_executor->CloneContext());
+  auto* active_streaming_context =
+      static_cast<AudioStreamingContext*>(active_cloned_context.get());
+  EXPECT_EQ(active_streaming_context->buffered_spectrogram().size(),
+            5 * kSpectrogramFrequencySlots);
+  ASSERT_OK_AND_ASSIGN(
+      auto active_prev_mask_data,
+      GetDataAsVector<uint8_t>(
+          active_streaming_context->state_buffers().at("prev_mask")));
+  EXPECT_THAT(active_prev_mask_data, ::testing::Each(uint8_t{0}));
+  ASSERT_OK_AND_ASSIGN(
+      auto active_feature_state_data,
+      GetDataAsVector<float>(
+          active_streaming_context->state_buffers().at("feature_state_0")));
+  EXPECT_THAT(active_feature_state_data, ::testing::Each(1.0f));
+
+  // Restoring the new context should clear the encoder's buffered spectrogram.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
+  ASSERT_OK_AND_ASSIGN(auto flush_after_new_restore, audio_executor->Flush());
+  EXPECT_EQ(flush_after_new_restore.GetValidTokens(), 0);
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)

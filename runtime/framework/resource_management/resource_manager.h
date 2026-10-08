@@ -84,14 +84,16 @@ class ResourceManager {
   // assign a unique, custom lora_path. This lora_path serves as the identifier
   // for the LoRA across all sessions referencing that scoped file.
   std::optional<uint32_t> AssignLoraId(std::string lora_path,
-                                       bool has_scoped_lora_file);
+                                       bool has_scoped_lora_file)
+      ABSL_LOCKS_EXCLUDED(lora_mutex_);
 
   // Creates a new context handler from the provided session config struct.
   // If a session specific lora is provided, the lora will be loaded and the
   // corresponding lora id will be assigned.
   absl::StatusOr<std::unique_ptr<ContextHandler>> CreateContextHandler(
-      const SessionConfig& session_config) ABSL_LOCKS_EXCLUDED(executor_mutex_)
-      ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
+      const SessionConfig& session_config) ABSL_LOCKS_EXCLUDED(lora_mutex_)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_)
+          ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Clones the context handler.
   // The cloned context handler will have the same shared processed context as
@@ -164,6 +166,10 @@ class ResourceManager {
   // Creates the litert environment if it is not created yet.
   absl::Status MaybeCreateLitertEnv();
 
+  std::optional<uint32_t> AssignLoraIdLocked(std::string lora_path,
+                                             bool has_scoped_lora_file)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(lora_mutex_);
+
   // Guards the llm_executor_.
   absl::Mutex executor_mutex_;
 
@@ -174,9 +180,14 @@ class ResourceManager {
   std::shared_ptr<ContextHandler> current_handler_
       ABSL_GUARDED_BY(executor_mutex_);
 
+  // Guards lora_hash_to_id_.
+  absl::Mutex lora_mutex_ ABSL_ACQUIRED_BEFORE(executor_mutex_,
+                                               audio_executor_mutex_);
+
   // Map lora id from hash. If lora is provided by lora path, lora path will be
   // treated as the hash key.
-  absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_;
+  absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_
+      ABSL_GUARDED_BY(lora_mutex_);
 
   // The mutex lock for the vision executor.
   absl::Mutex vision_executor_mutex_;

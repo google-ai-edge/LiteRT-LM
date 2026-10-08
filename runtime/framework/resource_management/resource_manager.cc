@@ -14,6 +14,10 @@
 
 #include "runtime/framework/resource_management/resource_manager.h"
 
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -54,10 +58,35 @@
 #include "runtime/framework/resource_management/utils/resource_manager_utils.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/logging.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {
+
+std::string GetScopedLoraKey(
+    absl::string_view prefix,
+    const std::shared_ptr<const ScopedFile>& scoped_file) {
+  if (scoped_file == nullptr || !scoped_file->IsValid()) {
+    return "";
+  }
+#if defined(_WIN32)
+  BY_HANDLE_FILE_INFORMATION file_info;
+  if (::GetFileInformationByHandle(scoped_file->file(), &file_info)) {
+    return absl::StrCat(
+        prefix, "vol:", file_info.dwVolumeSerialNumber,
+        ":idx:", file_info.nFileIndexHigh, ":", file_info.nFileIndexLow,
+        ":size:", file_info.nFileSizeHigh, ":", file_info.nFileSizeLow);
+  }
+#else
+  struct stat st;
+  if (fstat(scoped_file->file(), &st) == 0 && st.st_ino != 0) {
+    return absl::StrCat(prefix, "dev:", st.st_dev, ":ino:", st.st_ino,
+                        ":size:", st.st_size, ":mtime:", st.st_mtime);
+  }
+#endif
+  return "";
+}
 
 // Saves the current processed context within the llm_executor to the previous
 // handler's shared_processed_context, and link the current handler to an
@@ -499,6 +528,12 @@ ResourceManager::ResourceManager(
 
 std::optional<uint32_t> ResourceManager::AssignLoraId(
     std::string lora_path, bool has_scoped_lora_file) {
+  absl::MutexLock lock(lora_mutex_);
+  return AssignLoraIdLocked(std::move(lora_path), has_scoped_lora_file);
+}
+
+std::optional<uint32_t> ResourceManager::AssignLoraIdLocked(
+    std::string lora_path, bool has_scoped_lora_file) {
   if (lora_path.empty() && !has_scoped_lora_file) {
     return std::nullopt;
   }
@@ -511,7 +546,8 @@ std::optional<uint32_t> ResourceManager::AssignLoraId(
     // reference key if provided.
     if (lora_hash_to_id_.find(lora_path) == lora_hash_to_id_.end()) {
       // If the lora is new, assign the id.
-      lora_hash_to_id_[lora_path] = lora_hash_to_id_.size();
+      const uint32_t next_id = lora_hash_to_id_.size();
+      lora_hash_to_id_[lora_path] = next_id;
     }
     lora_id = lora_hash_to_id_[lora_path];
   } else if (has_scoped_lora_file) {
@@ -519,9 +555,9 @@ std::optional<uint32_t> ResourceManager::AssignLoraId(
     // be used only once. Assign a unique id for this session only.
     // TODO: b/346421150 - Extend support to map from scoped file to hash
     // key, for multiple same scoped file use case.
-    lora_id = lora_hash_to_id_.size();
-    lora_hash_to_id_["scoped_lora:" + absl::StrCat(lora_hash_to_id_.size())] =
-        lora_id.value();
+    const uint32_t next_id = lora_hash_to_id_.size();
+    lora_id = next_id;
+    lora_hash_to_id_[absl::StrCat("scoped_lora:", next_id)] = next_id;
   }
   return lora_id;
 }
@@ -547,46 +583,51 @@ absl::Status ResourceManager::MaybeCreateLitertEnv() {
 
 absl::StatusOr<std::unique_ptr<ContextHandler>>
 ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
-  // TODO: b/462499294 -
-  //   1. Check if lora is loaded or not.
-  //   2. Get the lora id.
-  //   3. If lora is not loaded, load the lora.
-
-  // Check if the lora is already loaded.
-  // TODO: b/462499294 - Use the real lora path.
-  bool lora_is_loaded =
-      lora_hash_to_id_.find("fake_lora_path") != lora_hash_to_id_.end();
-
-  // Find the lora id. If lora_id is not nullopt, it means the lora is used.
-  std::optional<uint32_t> lora_id = AssignLoraId(
-      /*lora_path=*/"",
-      /*has_scoped_lora_file=*/session_config.GetScopedLoraFile() != nullptr);
-
-  // If lora is used and not loaded, load the lora.
-  if (lora_id.has_value() && !lora_is_loaded) {
-    RET_CHECK(session_config.GetScopedLoraFile() != nullptr);
-    ABSL_ASSIGN_OR_RETURN(
-        ModelAssets model_assets,
-        ModelAssets::Create(session_config.GetScopedLoraFile(),
-                            /*model_path=*/""));
-    return absl::InvalidArgumentError("Lora is not supported.");
+  std::optional<uint32_t> lora_id;
+  if (session_config.GetScopedLoraFile() != nullptr) {
+    absl::MutexLock lora_lock(lora_mutex_);
+    const std::string lora_key =
+        GetScopedLoraKey("scoped_lora:", session_config.GetScopedLoraFile());
+    const bool lora_is_loaded =
+        !lora_key.empty() && lora_hash_to_id_.contains(lora_key);
+    const uint32_t candidate_lora_id = lora_is_loaded
+                                           ? lora_hash_to_id_.at(lora_key)
+                                           : lora_hash_to_id_.size();
+    if (!lora_is_loaded) {
+      ABSL_ASSIGN_OR_RETURN(
+          ModelAssets model_assets,
+          ModelAssets::Create(session_config.GetScopedLoraFile(),
+                              /*model_path=*/""));
+      return absl::InvalidArgumentError("Lora is not supported.");
+    }
+    lora_id = AssignLoraIdLocked(
+        /*lora_path=*/lora_key,
+        /*has_scoped_lora_file=*/true);
   }
 
   // Find the audio lora id.
-  std::optional<uint32_t> audio_lora_id = AssignLoraId(
-      /*lora_path=*/"",
-      /*has_scoped_lora_file=*/session_config.GetAudioScopedLoraFile() !=
-          nullptr);
-  if (audio_lora_id.has_value()) {
-    RET_CHECK(session_config.GetAudioScopedLoraFile() != nullptr);
-    ABSL_ASSIGN_OR_RETURN(
-        ModelAssets lora_model_assets,
-        ModelAssets::Create(session_config.GetAudioScopedLoraFile(),
-                            /*model_path=*/""));
+  if (session_config.GetAudioScopedLoraFile() != nullptr) {
     ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
+    absl::MutexLock lora_lock(lora_mutex_);
     ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-    ABSL_RETURN_IF_ERROR(
-        audio_executor->LoadLoRA(audio_lora_id.value(), lora_model_assets));
+    const std::string audio_lora_key = GetScopedLoraKey(
+        "scoped_audio_lora:", session_config.GetAudioScopedLoraFile());
+    const bool audio_lora_is_loaded =
+        !audio_lora_key.empty() && lora_hash_to_id_.contains(audio_lora_key);
+    const uint32_t candidate_audio_lora_id =
+        audio_lora_is_loaded ? lora_hash_to_id_.at(audio_lora_key)
+                             : lora_hash_to_id_.size();
+    if (!audio_lora_is_loaded) {
+      ABSL_ASSIGN_OR_RETURN(
+          ModelAssets lora_model_assets,
+          ModelAssets::Create(session_config.GetAudioScopedLoraFile(),
+                              /*model_path=*/""));
+      ABSL_RETURN_IF_ERROR(
+          audio_executor->LoadLoRA(candidate_audio_lora_id, lora_model_assets));
+    }
+    std::optional<uint32_t> audio_lora_id = AssignLoraIdLocked(
+        /*lora_path=*/audio_lora_key,
+        /*has_scoped_lora_file=*/true);
     ABSL_RETURN_IF_ERROR(audio_executor->UseLoRA(audio_lora_id.value()));
   }
 
@@ -759,28 +800,25 @@ ResourceManager::AcquireExecutorWithContextHandler(
     ABSL_RETURN_IF_ERROR(llm_executor_->RestoreContext(std::move(llm_context)));
   }
 
-  // If the current handler has an audio context, update and save the audio
-  // context to the current handler.
-  if (current_handler_ != nullptr) {
-    // If the current handler has an audio context, update it from audio
-    // executor and save it back to the current handler.
-    if (current_handler_->HasAudioContext()) {
-      ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-      ABSL_ASSIGN_OR_RETURN(auto current_audio_context,
-                            audio_executor->CloneContext());
-      ABSL_RETURN_IF_ERROR(
-          current_handler_->SetAudioContext(std::move(current_audio_context)));
-    }
-    // If the new handler has an audio context, audio executor will restore
-    // the audio context from the new handler.
-    if (new_context_handler->HasAudioContext()) {
-      ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-      ABSL_ASSIGN_OR_RETURN(
-          auto audio_context_cloned,
-          audio_executor->CloneContext(new_context_handler->GetAudioContext()));
-      ABSL_RETURN_IF_ERROR(
-          audio_executor->RestoreContext(std::move(audio_context_cloned)));
-    }
+  // If the current handler has an audio context, update it from audio
+  // executor and save it back to the current handler.
+  if (current_handler_ != nullptr && current_handler_->HasAudioContext()) {
+    ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    ABSL_ASSIGN_OR_RETURN(auto current_audio_context,
+                          audio_executor->CloneContext());
+    ABSL_RETURN_IF_ERROR(
+        current_handler_->SetAudioContext(std::move(current_audio_context)));
+  }
+
+  // If the new handler has an audio context, audio executor will restore
+  // the audio context from the new handler.
+  if (new_context_handler->HasAudioContext()) {
+    ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    ABSL_ASSIGN_OR_RETURN(
+        auto audio_context_cloned,
+        audio_executor->CloneContext(new_context_handler->GetAudioContext()));
+    ABSL_RETURN_IF_ERROR(
+        audio_executor->RestoreContext(std::move(audio_context_cloned)));
   }
 
   current_handler_ = new_context_handler;
@@ -799,6 +837,7 @@ absl::Status ResourceManager::TryLoadingVisionExecutor() {
   }
 
   ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
+  RET_CHECK_NE(litert_env_, nullptr);
   ABSL_ASSIGN_OR_RETURN(vision_executor_,
                         VisionLiteRtCompiledModelExecutor::Create(
                             *vision_executor_settings_, *litert_env_));

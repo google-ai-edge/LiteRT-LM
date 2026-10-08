@@ -196,9 +196,11 @@ cc_test(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor_io_types",
+        "//runtime/executor:llm_executor_settings",
         "//runtime/proto:token_cc",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
+        "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
         "//support/tokenizer",
     ],
@@ -235,6 +237,7 @@ RESOURCE_MANAGER_DEPS = [
     "//runtime/util:convert_tensor_buffer",
     "//runtime/util:litert_status_util",
     "//runtime/util:logging",
+    "//runtime/util:scoped_file",
 ]
 
 cc_library(
