@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <variant>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -115,11 +116,13 @@ TEST(ImageDecoderTest, DecodesFromPromptSourceAndFlushes) {
 
   auto out = decoder.GetOutput();
   ASSERT_OK(out);
-  EXPECT_EQ(out->width, 8);
-  EXPECT_EQ(out->height, 8);
-  EXPECT_EQ(out->channels, 3);
-  EXPECT_EQ(out->rgb_data.size(), 8 * 8 * 3);
-  EXPECT_EQ(out->rgb_data[0], 123);
+  ASSERT_TRUE(std::holds_alternative<ImageOutput>(*out));
+  const auto& img = std::get<ImageOutput>(*out);
+  EXPECT_EQ(img.width, 8);
+  EXPECT_EQ(img.height, 8);
+  EXPECT_EQ(img.channels, 3);
+  EXPECT_EQ(img.rgb_data.size(), 8 * 8 * 3);
+  EXPECT_EQ(img.rgb_data[0], 123);
 
   ASSERT_OK(decoder.Flush());
 }

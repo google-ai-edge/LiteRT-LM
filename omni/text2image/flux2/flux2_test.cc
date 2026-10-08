@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -37,12 +38,16 @@
 #include "omni/base/io_types.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/mock_litert_runner.h"
+#include "omni/base/model_resources.h"
+#include "omni/base/stage.h"
 #include "omni/text2image/flux2/flux2_denoiser_stage.h"
+#include "omni/text2image/flux2/flux2_factory.h"
 #include "omni/text2image/flux2/flux2_math.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
 #include "omni/text2image/flux2/flux2_vae_decoder_stage.h"
 #include "omni/text2image/prompt_source.h"
 #include "omni/text2image/text_encoder_stage.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -484,13 +489,15 @@ TEST_F(Flux2StagesTest, EndToEndStagesWithMockRunners) {
   ASSERT_OK((*vae_stage)->Schedule());
 
   ASSERT_TRUE((*vae_stage)->HasOutput());
-  auto img = (*vae_stage)->GetOutput();
-  ASSERT_OK(img);
-  EXPECT_EQ(img->width, 16);
-  EXPECT_EQ(img->height, 16);
-  EXPECT_EQ(img->channels, 3);
-  EXPECT_EQ(img->rgb_data.size(), 16 * 16 * 3);
-  EXPECT_EQ(img->rgb_data[0], 128);
+  auto out = (*vae_stage)->GetOutput();
+  ASSERT_OK(out);
+  ASSERT_TRUE(std::holds_alternative<ImageOutput>(*out));
+  const auto& img = std::get<ImageOutput>(*out);
+  EXPECT_EQ(img.width, 16);
+  EXPECT_EQ(img.height, 16);
+  EXPECT_EQ(img.channels, 3);
+  EXPECT_EQ(img.rgb_data.size(), 16 * 16 * 3);
+  EXPECT_EQ(img.rgb_data[0], 128);
 }
 
 TEST_F(Flux2StagesTest, DenoiserVerifiesCustomInputIndicesAndEulerUpdate) {
@@ -978,6 +985,24 @@ TEST_F(Flux2StagesTest, RejectsInvalidDenoiserAndVaeConfigs) {
                                              std::move(vae_runner_bad_cap)),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
+}
+
+TEST_F(Flux2StagesTest, FactoryRejectsMissingLmModelResources) {
+  auto shared_env = std::make_shared<Environment>(std::move(*env_));
+  auto resources = std::make_shared<ModelResources>(shared_env);
+  Flux2ModelConfig config;
+
+  EXPECT_THAT(
+      InitFlux2Resources(config, "/nonexistent/folder", "", lm::Backend::CPU,
+                         /*num_threads=*/2, *shared_env, *resources),
+      StatusIs(absl::StatusCode::kNotFound));
+
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  Stage<Output>* output_stage = nullptr;
+  EXPECT_THAT(CreateFlux2Components(config, "/nonexistent/folder",
+                                    std::make_unique<PushPromptSource>(),
+                                    resources, stages, &output_stage),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

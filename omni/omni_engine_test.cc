@@ -250,6 +250,17 @@ TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {
                        HasSubstr("/custom/tts_cache/kokoro")));
 }
 
+TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
+  OmniEngine::Options options{
+      .backend = OmniEngine::Options::Backend::kGpu,
+      .cache_dir = "/custom/text2image_cache",
+      .num_threads = 4,
+  };
+  EXPECT_THAT(OmniEngine::Create("bonsai-flux2", options),
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("/custom/text2image_cache/bonsai-flux2")));
+}
+
 TEST(OmniEngineTest, RejectsUnknownModel) {
   EXPECT_THAT(
       OmniEngine::Create("unknown-model-xyz"),

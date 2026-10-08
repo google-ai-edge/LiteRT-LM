@@ -26,6 +26,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>  // NOLINT
 #include <utility>
 #include <variant>
 #include <vector>
@@ -240,6 +241,25 @@ absl::Status DownloadFileWithCurl(absl::string_view url,
   }
   return absl::OkStatus();
 #endif
+}
+
+std::string ResolveLitertLmPath(absl::string_view model_folder) {
+  constexpr absl::string_view kLitertLmExtension = ".litertlm";
+  std::filesystem::path path{std::string(model_folder)};
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(path, ec) &&
+      path.extension().string() == kLitertLmExtension) {
+    return path.string();
+  }
+  if (std::filesystem::is_directory(path, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
+      if (entry.is_regular_file(ec) &&
+          entry.path().extension().string() == kLitertLmExtension) {
+        return entry.path().string();
+      }
+    }
+  }
+  return "";
 }
 
 absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(

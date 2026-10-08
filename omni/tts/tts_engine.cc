@@ -54,32 +54,12 @@ namespace {
 
 // Extension shared by all LiteRT model files.
 constexpr absl::string_view kTfLiteExtension = ".tflite";
-// Extension of single-file LiteRT-LM container files.
-constexpr absl::string_view kLitertLmExtension = ".litertlm";
 // Filename prefix of the Kokoro model files (e.g. "kokoro_acoustic.tflite").
 constexpr absl::string_view kKokoroFilePrefix = "kokoro";
 // Filename prefixes of the Qwen3-TTS model files (e.g. "talker_int4.tflite",
 // "codec_decoder_fp32.tflite").
 constexpr absl::string_view kQwen3TalkerFilePrefix = "talker";
 constexpr absl::string_view kQwen3CodecFilePrefix = "codec_";
-
-std::string ResolveLitertLmPath(absl::string_view model_folder) {
-  std::filesystem::path path{std::string(model_folder)};
-  std::error_code ec;
-  if (std::filesystem::is_regular_file(path, ec) &&
-      path.extension().string() == kLitertLmExtension) {
-    return path.string();
-  }
-  if (std::filesystem::is_directory(path, ec)) {
-    for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
-      if (entry.is_regular_file(ec) &&
-          entry.path().extension().string() == kLitertLmExtension) {
-        return entry.path().string();
-      }
-    }
-  }
-  return "";
-}
 
 absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
     lm::ModelResources& lm_resources) {

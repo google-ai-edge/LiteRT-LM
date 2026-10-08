@@ -15,6 +15,8 @@
 #include "omni/base/model_utils.h"
 
 #include <cstdint>
+#include <filesystem>  // NOLINT
+#include <fstream>
 #include <string>
 
 #include <gmock/gmock.h>
@@ -35,6 +37,23 @@ namespace {
 
 using ::absl_testing::IsOk;
 using ::absl_testing::StatusIs;
+
+TEST(ModelUtilsTest, ResolveLitertLmPathFromFileAndDirectory) {
+  std::filesystem::path temp_dir =
+      std::filesystem::path(::testing::TempDir()) / "resolve_litertlm_test";
+  std::filesystem::create_directories(temp_dir);
+  EXPECT_EQ(ResolveLitertLmPath(temp_dir.string()), "");
+  EXPECT_EQ(ResolveLitertLmPath("/non/existent/path"), "");
+
+  std::filesystem::path model_file = temp_dir / "test_model.litertlm";
+  {
+    std::ofstream out(model_file);
+    out << "dummy";
+  }
+  EXPECT_EQ(ResolveLitertLmPath(model_file.string()), model_file.string());
+  EXPECT_EQ(ResolveLitertLmPath(temp_dir.string()), model_file.string());
+  std::filesystem::remove_all(temp_dir);
+}
 
 TEST(ModelUtilsTest, CheckFileReadableNonExistent) {
   EXPECT_THAT(CheckFileReadable("/non/existent/file.bin"),

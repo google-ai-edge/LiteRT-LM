@@ -20,9 +20,9 @@
 
 namespace litert::omni::text2image {
 
-// Base stage that decodes denoised latent representations into ImageOutput
-// (interleaved RGB888 pixel data).
-class ImageDecoder : public SingleThreadedStageWithDeque<ImageOutput> {
+// Base stage that decodes denoised latent representations into `Output`
+// (`ImageOutput` with interleaved RGB888 pixel data).
+class ImageDecoder : public SingleThreadedStageWithDeque<Output> {
  public:
   ~ImageDecoder() override = default;
 };

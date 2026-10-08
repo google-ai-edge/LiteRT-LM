@@ -16,6 +16,7 @@
 
 #include <string>
 
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -37,8 +38,12 @@ absl::Status PushPromptSource::PushPrompt(absl::string_view text) {
 }
 
 void PushPromptSource::Finish() {
-  absl::MutexLock lock(mutex_);
-  is_finished_ = true;
+  {
+    absl::MutexLock lock(mutex_);
+    is_finished_ = true;
+  }
+  // TODO(b/568027544): Return absl::Status from Finish().
+  ABSL_CHECK_OK(Flush());
 }
 
 void PushPromptSource::ResetInternal() {
