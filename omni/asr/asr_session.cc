@@ -61,47 +61,42 @@ class AudioInputSource : public AudioSource {
   void ResetInternal() override {
     input_source_->Reset();
     buffer_.clear();
+    is_finished_ = false;
   }
 
   bool NeedScheduleInternal() const override {
-    return input_source_->NeedSchedule() || input_source_->HasOutput() ||
-           buffer_.size() >= samples_per_interval_;
+    return (!is_finished_ &&
+            (input_source_->NeedSchedule() || input_source_->HasOutput())) ||
+           buffer_.size() >= samples_per_interval_ ||
+           (is_finished_ && !buffer_.empty());
   }
 
   absl::Status ScheduleInternal() override {
     SetState(State::kRunning);
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-    while (buffer_.size() < samples_per_interval_) {
-      ABSL_ASSIGN_OR_RETURN(bool has_more, PullNextInput());
-      if (!has_more) {
-        if (buffer_.empty()) {
-          return absl::OutOfRangeError("End of audio stream reached.");
-        }
-        PushPaddedRemainder();
-        return absl::OkStatus();
-      }
+    ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
+    if (buffer_.size() >= samples_per_interval_) {
+      PushNextInterval();
+      return absl::OkStatus();
     }
-
-    PushNextInterval();
-    return absl::OkStatus();
+    if (is_finished_) {
+      if (buffer_.empty()) {
+        return absl::OutOfRangeError("End of audio stream reached.");
+      }
+      PushPaddedRemainder();
+      return absl::OkStatus();
+    }
+    return absl::NotFoundError("Not enough audio samples for an interval.");
   }
 
   absl::Status FlushInternal() override {
     ABSL_RETURN_IF_ERROR(input_source_->Flush());
-    while (input_source_->NeedSchedule() || input_source_->HasOutput()) {
-      absl::StatusOr<bool> has_more = PullNextInput();
-      if (absl::IsOutOfRange(has_more.status())) {
-        break;
-      }
-      ABSL_RETURN_IF_ERROR(has_more.status());
-      if (!*has_more) {
-        break;
-      }
-    }
+    ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
 
     while (buffer_.size() >= samples_per_interval_) {
       PushNextInterval();
+      ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
     }
 
     if (!buffer_.empty()) {
@@ -111,47 +106,66 @@ class AudioInputSource : public AudioSource {
   }
 
  private:
-  // Pulls and processes the next input from `input_source_`.
-  // Returns `true` if an input was processed, `false` if `EndOfInput` was
-  // reached, or `OutOfRangeError` if `input_source_` has no more output.
-  absl::StatusOr<bool> PullNextInput() {
-    if (input_source_->NeedSchedule()) {
-      ABSL_RETURN_IF_ERROR(input_source_->Schedule());
-    }
-    if (!input_source_->HasOutput()) {
-      return absl::OutOfRangeError("End of audio stream reached.");
-    }
-    ABSL_ASSIGN_OR_RETURN(OmniSession::Input input, input_source_->GetOutput());
-    if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
-      return false;
-    }
-    if (const auto* metadata =
-            std::get_if<OmniSession::AudioInputMetadata>(&input)) {
-      if (metadata->sample_rate_hz > 0 &&
-          metadata->sample_rate_hz != sample_rate_hz_) {
-        return absl::InvalidArgumentError(
-            "AudioInputMetadata sample_rate_hz does not match "
-            "AudioInputSource.");
+  // Drains available inputs from `input_source_` into `buffer_` until at least
+  // `samples_per_interval_` samples are buffered, coalescing consecutive
+  // `AudioInput` chunks and marking `is_finished_` when `EndOfInput` or source
+  // `OutOfRangeError` is reached.
+  absl::Status DrainAvailableInputs() {
+    while (!is_finished_) {
+      if (buffer_.size() >= samples_per_interval_) {
+        break;
       }
-      if (metadata->num_channels > 0 &&
-          metadata->num_channels != num_channels_) {
-        return absl::InvalidArgumentError(
-            "AudioInputMetadata num_channels does not match "
-            "AudioInputSource.");
+      if (!input_source_->HasOutput()) {
+        if (!input_source_->NeedSchedule()) {
+          break;
+        }
+        absl::Status status = input_source_->Schedule();
+        if (absl::IsOutOfRange(status)) {
+          is_finished_ = true;
+          break;
+        }
+        if (absl::IsNotFound(status)) {
+          break;
+        }
+        ABSL_RETURN_IF_ERROR(status);
+        if (!input_source_->HasOutput()) {
+          break;
+        }
       }
-      return true;
+      ABSL_ASSIGN_OR_RETURN(OmniSession::Input input,
+                            input_source_->GetOutput());
+      if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+        is_finished_ = true;
+        break;
+      }
+      if (const auto* metadata =
+              std::get_if<OmniSession::AudioInputMetadata>(&input)) {
+        if (metadata->sample_rate_hz > 0 &&
+            metadata->sample_rate_hz != sample_rate_hz_) {
+          return absl::InvalidArgumentError(
+              "AudioInputMetadata sample_rate_hz does not match "
+              "AudioInputSource.");
+        }
+        if (metadata->num_channels > 0 &&
+            metadata->num_channels != num_channels_) {
+          return absl::InvalidArgumentError(
+              "AudioInputMetadata num_channels does not match "
+              "AudioInputSource.");
+        }
+        continue;
+      }
+      auto* audio_input = std::get_if<OmniSession::AudioInput>(&input);
+      if (audio_input == nullptr) {
+        return absl::InvalidArgumentError("ASR Session requires AudioInput.");
+      }
+      if (buffer_.empty()) {
+        std::swap(buffer_, audio_input->pcm_samples);
+      } else {
+        buffer_.insert(buffer_.end(), audio_input->pcm_samples.begin(),
+                       audio_input->pcm_samples.end());
+      }
     }
-    auto* audio_input = std::get_if<OmniSession::AudioInput>(&input);
-    if (audio_input == nullptr) {
-      return absl::InvalidArgumentError("ASR Session requires AudioInput.");
-    }
-    if (buffer_.empty()) {
-      std::swap(buffer_, audio_input->pcm_samples);
-    } else {
-      buffer_.insert(buffer_.end(), audio_input->pcm_samples.begin(),
-                     audio_input->pcm_samples.end());
-    }
-    return true;
+    return absl::OkStatus();
   }
 
   void PushNextInterval() {
@@ -180,6 +194,7 @@ class AudioInputSource : public AudioSource {
   const size_t samples_per_interval_;
   const size_t overlap_samples_;
   std::vector<float> buffer_;
+  bool is_finished_ = false;
 };
 
 }  // namespace

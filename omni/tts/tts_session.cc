@@ -52,7 +52,8 @@ class TextInputSource : public StreamTextSource {
 
   bool NeedScheduleInternal() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) override {
-    return input_source_->NeedSchedule() || input_source_->HasOutput() ||
+    return (!IsFinishedLocked() &&
+            (input_source_->NeedSchedule() || input_source_->HasOutput())) ||
            StreamTextSource::NeedScheduleInternal();
   }
 
@@ -60,63 +61,52 @@ class TextInputSource : public StreamTextSource {
     SetState(State::kRunning);
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-    // TODO(b/538727793): Handle two edge cases between `TextInputSource` and
-    // `StreamTextSource`:
-    // 1. Streaming partial fragments in `ProcessAsync()` without a sentence
-    //    delimiter before `EndOfInput` is pushed, so
-    //    `!input_source_->HasOutput()` waits for more `TextInput`s instead of
-    //    returning `OutOfRangeError`.
-    // 2. Coalescing multiple consecutive `TextInput`s before `ProcessNext()`.
-    while (!StreamTextSource::NeedScheduleInternal()) {
-      ABSL_ASSIGN_OR_RETURN(bool has_more, PullNextInput());
-      if (!has_more) {
-        Finish();
-        if (!StreamTextSource::NeedScheduleInternal()) {
-          return absl::OutOfRangeError("End of text stream reached.");
-        }
-        break;
-      }
-    }
-
+    ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
     return StreamTextSource::ScheduleInternal();
   }
 
   absl::Status FlushInternal() ABSL_NO_THREAD_SAFETY_ANALYSIS override {
     ABSL_RETURN_IF_ERROR(input_source_->Flush());
-    while (input_source_->NeedSchedule() || input_source_->HasOutput()) {
-      absl::StatusOr<bool> has_more = PullNextInput();
-      if (absl::IsOutOfRange(has_more.status())) {
-        break;
-      }
-      ABSL_RETURN_IF_ERROR(has_more.status());
-      if (!*has_more) {
-        break;
-      }
-    }
+    ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
     return StreamTextSource::FlushInternal();
   }
 
  private:
-  // Pulls and processes the next input from `input_source_`.
-  // Returns `true` if a `TextInput` was processed, `false` if `EndOfInput` was
-  // reached, or `OutOfRangeError` if `input_source_` has no more output.
-  absl::StatusOr<bool> PullNextInput() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    if (input_source_->NeedSchedule()) {
-      ABSL_RETURN_IF_ERROR(input_source_->Schedule());
+  // Drains all currently available inputs from `input_source_` into
+  // `StreamTextSource`, coalescing consecutive `TextInput`s and calling
+  // `Finish()` when `EndOfInput` or source `OutOfRangeError` is reached.
+  absl::Status DrainAvailableInputs() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    while (!IsFinished()) {
+      if (!input_source_->HasOutput()) {
+        if (!input_source_->NeedSchedule()) {
+          break;
+        }
+        absl::Status status = input_source_->Schedule();
+        if (absl::IsOutOfRange(status)) {
+          Finish();
+          break;
+        }
+        if (absl::IsNotFound(status)) {
+          break;
+        }
+        ABSL_RETURN_IF_ERROR(status);
+        if (!input_source_->HasOutput()) {
+          break;
+        }
+      }
+      ABSL_ASSIGN_OR_RETURN(OmniSession::Input input,
+                            input_source_->GetOutput());
+      if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+        Finish();
+        break;
+      }
+      const auto* text_input = std::get_if<OmniSession::TextInput>(&input);
+      if (text_input == nullptr) {
+        return absl::InvalidArgumentError("TTS Session requires TextInput.");
+      }
+      AppendText(text_input->text);
     }
-    if (!input_source_->HasOutput()) {
-      return absl::OutOfRangeError("End of text stream reached.");
-    }
-    ABSL_ASSIGN_OR_RETURN(OmniSession::Input input, input_source_->GetOutput());
-    if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
-      return false;
-    }
-    const auto* text_input = std::get_if<OmniSession::TextInput>(&input);
-    if (text_input == nullptr) {
-      return absl::InvalidArgumentError("TTS Session requires TextInput.");
-    }
-    AppendText(text_input->text);
-    return true;
+    return absl::OkStatus();
   }
 
   std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;

@@ -90,7 +90,7 @@ absl::Status StreamTextSource::ScheduleInternal() {
     buffer_start_index_ = 0;
     return absl::OutOfRangeError("End of text stream reached.");
   }
-  return absl::OkStatus();
+  return absl::NotFoundError("Not enough text for a chunk.");
 }
 
 }  // namespace litert::omni::tts

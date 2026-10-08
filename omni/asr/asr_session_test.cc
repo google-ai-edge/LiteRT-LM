@@ -198,13 +198,25 @@ TEST_F(AsrSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
   ASSERT_TRUE(std::holds_alternative<TextOutput>(out1));
   EXPECT_EQ(std::get<TextOutput>(out1).unconfirmed_text, "w_1 w_2 w_3");
 
-  // Flush() zero-pads the remaining [3, 4] to [3, 4, 0] and flushes the merger.
+  // Flush() zero-pads the remaining [3, 4] to [3, 4, 0] and flushes the merger,
+  // without marking the stream finished if EndOfInput was not sent.
   ASSERT_OK_AND_ASSIGN(OmniSession::Output flushed, session->Flush());
   ASSERT_TRUE(std::holds_alternative<TextOutput>(flushed));
   EXPECT_EQ(std::get<TextOutput>(flushed).confirmed_text,
             "w_1 w_2 w_3 w_4 w_0");
 
-  // Reset() allows a new stream on the same session.
+  // Pushing more audio after Flush() continues to work without Reset().
+  ASSERT_OK(raw_input->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {5.0f, 6.0f, 7.0f}}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out2, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(out2));
+  EXPECT_EQ(std::get<TextOutput>(out2).unconfirmed_text, "w_5 w_6 w_7");
+
+  // Reset() allows a new stream on the same session even after Finish().
+  raw_input->Finish();
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output flushed_after_finish,
+                       session->Flush());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(flushed_after_finish));
   session->Reset();
   ASSERT_OK(raw_input->PushInput(
       OmniSession::AudioInput{.pcm_samples = {7.0f, 8.0f, 9.0f}}));
@@ -212,6 +224,48 @@ TEST_F(AsrSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
   ASSERT_TRUE(std::holds_alternative<TextOutput>(flushed2));
   EXPECT_EQ(std::get<TextOutput>(flushed2).confirmed_text,
             "w_7 w_8 w_9 w_0 w_0");
+}
+
+TEST_F(AsrSessionTest,
+       PartialFragmentsAndCoalescedInputsWaitUntilIntervalOrEndOfInput) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input = input_source.get();
+  auto audio_source = CreateAudioInputSource(
+      std::move(input_source), /*sample_rate_hz=*/16000, /*num_channels=*/1,
+      /*samples_per_interval=*/3, /*overlap_samples=*/0);
+  ASSERT_OK_AND_ASSIGN(auto session,
+                       BuildFakeAsrSession(std::move(audio_source)));
+
+  // Partial chunk (< 3 samples) before EndOfInput returns NotFoundError rather
+  // than prematurely padding or returning OutOfRangeError.
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {1.0f}}));
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+
+  // Multiple consecutive chunks pushed before ProcessNext() are coalesced up to
+  // samples_per_interval_ without eagerly draining subsequent queued chunks.
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {2.0f}}));
+  ASSERT_OK(raw_input->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {3.0f, 4.0f}}));
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {5.0f}}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out1, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(out1));
+  EXPECT_EQ(std::get<TextOutput>(out1).unconfirmed_text, "w_1 w_2 w_3");
+  EXPECT_TRUE(raw_input->HasOutput());
+
+  // Remaining [4.0f] + [5.0f] (< 3 samples) still waits for more input until
+  // Finish().
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_FALSE(raw_input->HasOutput());
+
+  raw_input->Finish();
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out2, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(out2));
+  EXPECT_EQ(std::get<TextOutput>(out2).unconfirmed_text, "w_4 w_5 w_0");
+
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kOutOfRange));
 }
 
 TEST_F(AsrSessionTest, ProcessAsyncWithEndOfInputAndRemainderPadding) {

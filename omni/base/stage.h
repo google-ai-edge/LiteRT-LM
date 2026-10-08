@@ -50,7 +50,11 @@ class StageBase {
   virtual bool NeedSchedule() const = 0;
 
   // Schedules and executes jobs of this stage on the current calling thread.
-  // Returns absl::NotFoundError if there are no jobs to execute.
+  // Returns `absl::NotFoundError` if there are currently no jobs ready to
+  // execute (e.g., the stage is already running, or buffered streaming inputs
+  // are not yet sufficient to form a complete chunk before end-of-stream), or
+  // `absl::OutOfRangeError` if a source stage has reached the end of the input
+  // stream and has no more outputs to produce.
   virtual absl::Status Schedule() = 0;
 
   // Indicates whether the stage's output queue contains 1 or more outputs in a

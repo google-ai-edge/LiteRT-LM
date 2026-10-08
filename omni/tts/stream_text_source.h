@@ -63,6 +63,12 @@ class StreamTextSource : public TextSource {
   // Appends a text fragment directly to the internal buffer for subclasses.
   void AppendText(absl::string_view text) { buffer_.append(text); }
 
+  // Returns true if Finish() has been called, assuming `mutex_` is already
+  // held.
+  bool IsFinishedLocked() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
+    return is_finished_;
+  }
+
   // Marks the end of the text input stream so any buffered text can be
   // scheduled and flushed.
   absl::Status FlushInternal() override;

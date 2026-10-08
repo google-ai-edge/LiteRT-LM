@@ -25,6 +25,7 @@ namespace litert::omni::tts {
 namespace {
 
 using ::absl_testing::IsOk;
+using ::absl_testing::StatusIs;
 
 TEST(StreamTextSourceTest, PushTextAndSchedule) {
   StreamTextSource source;
@@ -32,6 +33,7 @@ TEST(StreamTextSourceTest, PushTextAndSchedule) {
   EXPECT_FALSE(source.NeedSchedule());
   ASSERT_THAT(source.PushText("Hello "), IsOk());
   EXPECT_FALSE(source.NeedSchedule());
+  EXPECT_THAT(source.Schedule(), StatusIs(absl::StatusCode::kNotFound));
 
   ASSERT_THAT(source.PushText("world. "), IsOk());
   EXPECT_TRUE(source.NeedSchedule());

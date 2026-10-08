@@ -159,6 +159,49 @@ TEST_F(TtsSessionTest, TextInputSourceProcessNextFlushAndReset) {
   EXPECT_THAT(std::get<AudioOutput>(flushed2).pcm_samples, ElementsAre(5.0f));
 }
 
+TEST_F(TtsSessionTest,
+       PartialFragmentsAndCoalescedInputsWaitUntilDelimiterOrEndOfInput) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto text_source = CreateTextInputSource(std::move(input_source));
+  auto vocoder = std::make_unique<FakeLengthVocoder>(text_source.get());
+  Stage<Output>* raw_vocoder = vocoder.get();
+
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto session, MultiStagedSession::Create(std::move(stages), raw_vocoder));
+
+  // Partial fragment without sentence delimiter before EndOfInput returns
+  // NotFoundError rather than prematurely finishing or returning OutOfRange.
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "Hello "}));
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+
+  // Multiple consecutive TextInputs pushed before ProcessNext() are coalesced.
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "world"}));
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "! Tail"}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output chunk1, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(chunk1));
+  // "Hello world!" has 12 characters.
+  EXPECT_THAT(std::get<AudioOutput>(chunk1).pcm_samples, ElementsAre(12.0f));
+
+  // Remaining " Tail" has no delimiter yet and waits for more input or Finish.
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+
+  raw_input_source->Finish();
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output chunk2, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(chunk2));
+  // " Tail" has 5 characters.
+  EXPECT_THAT(std::get<AudioOutput>(chunk2).pcm_samples, ElementsAre(5.0f));
+
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kOutOfRange));
+}
+
 TEST_F(TtsSessionTest, TextInputSourceProcessAsyncStreamsAndFlushesTail) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input_source = input_source.get();
