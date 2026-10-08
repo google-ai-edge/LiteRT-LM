@@ -14,16 +14,75 @@
 
 #include "runtime/components/constrained_decoding/thinking_budget_constraint.h"
 
+#include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/bitmap.h"
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/util/status_macros.h"
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
+
+namespace {
+
+// Wraps a Bitmap and additionally allows `extra_token_id_`.
+class OverlayTokenBitmap : public Bitmap {
+ public:
+  OverlayTokenBitmap(std::unique_ptr<Bitmap> base, int extra_token_id,
+                     int vocab_size)
+      : base_(std::move(base)),
+        extra_token_id_(extra_token_id),
+        vocab_size_(vocab_size) {}
+  bool Get(int index) const override {
+    if (index < 0 || index >= vocab_size_) return false;
+    return index == extra_token_id_ || base_ == nullptr || base_->Get(index);
+  }
+
+ private:
+  const std::unique_ptr<Bitmap> base_;
+  const int extra_token_id_;
+  const int vocab_size_;
+};
+
+// Wraps a non-bitmap LogitMask and restores the original logit for
+// `extra_token_id_` so that token stays allowed even if `base_` masks it.
+class OverlayTokenLogitMask : public LogitMask {
+ public:
+  OverlayTokenLogitMask(std::unique_ptr<LogitMask> base, int extra_token_id)
+      : base_(std::move(base)), extra_token_id_(extra_token_id) {}
+  absl::Status Apply(absl::Span<float> logits) const override {
+    return ApplyImpl(logits);
+  }
+  absl::Status Apply(absl::Span<tflite::half> logits) const override {
+    return ApplyImpl(logits);
+  }
+
+ private:
+  template <typename T>
+  absl::Status ApplyImpl(absl::Span<T> logits) const {
+    if (extra_token_id_ < 0 ||
+        extra_token_id_ >= static_cast<int>(logits.size())) {
+      return base_->Apply(logits);
+    }
+    const T saved = logits[extra_token_id_];
+    ABSL_RETURN_IF_ERROR(base_->Apply(logits));
+    logits[extra_token_id_] = saved;
+    return absl::OkStatus();
+  }
+
+  const std::unique_ptr<LogitMask> base_;
+  const int extra_token_id_;
+};
+
+}  // namespace
 
 std::unique_ptr<Constraint::State> ThinkingBudgetConstraint::Start() const {
   auto state = std::make_unique<ThinkingState>();
@@ -37,6 +96,11 @@ std::unique_ptr<Constraint::State> ThinkingBudgetConstraint::Start() const {
   } else {
     state->in_thinking = false;
     state->matching_start_index = 0;
+    // Initialize user_state so step-0 masks and skipped-thinking commits share
+    // the same state.
+    if (user_constraint_ != nullptr) {
+      state->user_state = user_constraint_->Start();
+    }
   }
   state->natural_end_match_index = 0;
   state->forced_end_token_index = -1;
@@ -75,8 +139,8 @@ ThinkingBudgetConstraint::ComputeNext(const Constraint::State& state,
   const bool in_content_phase = !s.in_thinking && s.matching_start_index == -1;
 
   if (in_content_phase && user_constraint_ != nullptr) {
-    ASSIGN_OR_RETURN(next_s->user_state,
-                     user_constraint_->ComputeNext(*s.user_state, token));
+    ABSL_ASSIGN_OR_RETURN(next_s->user_state,
+                          user_constraint_->ComputeNext(*s.user_state, token));
   }
 
   int natural_end_match_index = s.natural_end_match_index;
@@ -85,12 +149,15 @@ ThinkingBudgetConstraint::ComputeNext(const Constraint::State& state,
   if (next_s->matching_start_index >= 0) {
     if (ProcessStartMatching(*next_s, token)) {
       // Mismatch: skipped thinking. Transition to content phase.
+      RET_CHECK_EQ(s.matching_start_index, 0)
+          << "Start-of-thought mismatch after partial match at index "
+          << s.matching_start_index;
       next_s->in_thinking = false;
       next_s->matching_start_index = -1;
       if (user_constraint_ != nullptr) {
-        auto user_start = user_constraint_->Start();
-        ASSIGN_OR_RETURN(next_s->user_state,
-                         user_constraint_->ComputeNext(*user_start, token));
+        RET_CHECK(s.user_state != nullptr) << "User constraint state is null.";
+        ABSL_ASSIGN_OR_RETURN(next_s->user_state, user_constraint_->ComputeNext(
+                                                      *s.user_state, token));
       }
     }
   } else if (next_s->in_thinking) {
@@ -119,8 +186,37 @@ absl::StatusOr<std::unique_ptr<LogitMask>>
 ThinkingBudgetConstraint::ComputeMask(const Constraint::State& state) const {
   const auto& s = static_cast<const ThinkingState&>(state);
 
-  // Suspend user constraint during start matching and thinking.
-  if (s.in_thinking || s.matching_start_index >= 0) {
+  // Force the rest of the start sequence after a partial match.
+  if (s.matching_start_index > 0) {
+    return BitmapLogitMask::CreateSingleAllowedToken(
+        vocab_size_, start_token_ids_[s.matching_start_index]);
+  }
+
+  // On step 0, allow either start_token_ids_[0] or valid user_constraint_
+  // tokens.
+  if (s.matching_start_index == 0) {
+    if (user_constraint_ == nullptr) {
+      return BitmapLogitMask::CreateAllAllowed(vocab_size_);
+    }
+    RET_CHECK(s.user_state != nullptr) << "User constraint state is null.";
+    const int start_token = start_token_ids_[0];
+    RET_CHECK(start_token >= 0 && start_token < vocab_size_)
+        << "Start token out of vocabulary range: " << start_token;
+    ABSL_ASSIGN_OR_RETURN(auto user_mask,
+                          user_constraint_->ComputeMask(*s.user_state));
+    if (user_mask->GetType() != MaskType::kBitmap) {
+      return std::make_unique<OverlayTokenLogitMask>(std::move(user_mask),
+                                                     start_token);
+    }
+    const auto& bitmap = static_cast<const BitmapLogitMask&>(*user_mask);
+    RET_CHECK_EQ(bitmap.vocab_size(), vocab_size_);
+    std::vector<uint64_t> words(bitmap.words().begin(), bitmap.words().end());
+    words[start_token / 64] |= (uint64_t{1} << (start_token % 64));
+    return std::make_unique<BitmapLogitMask>(vocab_size_, std::move(words));
+  }
+
+  // Suspend user constraint during thinking.
+  if (s.in_thinking) {
     if (s.forced_end_token_index >= 0) {
       return BitmapLogitMask::CreateSingleAllowedToken(
           vocab_size_, end_token_ids_[s.forced_end_token_index]);
@@ -140,8 +236,27 @@ absl::StatusOr<std::unique_ptr<Bitmap>> ThinkingBudgetConstraint::ComputeBitmap(
     const Constraint::State& state) const {
   const auto& s = static_cast<const ThinkingState&>(state);
 
-  // Suspend user constraint during start matching and thinking.
-  if (s.in_thinking || s.matching_start_index >= 0) {
+  if (s.matching_start_index > 0) {
+    return std::make_unique<SingleAllowedTokenBitmap>(
+        start_token_ids_[s.matching_start_index]);
+  }
+
+  if (s.matching_start_index == 0) {
+    if (user_constraint_ == nullptr) {
+      return std::make_unique<AllAllowedBitmap>();
+    }
+    RET_CHECK(s.user_state != nullptr) << "User constraint state is null.";
+    const int start_token = start_token_ids_[0];
+    RET_CHECK(start_token >= 0 && start_token < vocab_size_)
+        << "Start token out of vocabulary range: " << start_token;
+    ABSL_ASSIGN_OR_RETURN(auto user_bitmap,
+                          user_constraint_->ComputeBitmap(*s.user_state));
+    return std::make_unique<OverlayTokenBitmap>(std::move(user_bitmap),
+                                                start_token, vocab_size_);
+  }
+
+  // Suspend user constraint during thinking.
+  if (s.in_thinking) {
     if (s.forced_end_token_index >= 0) {
       return std::make_unique<SingleAllowedTokenBitmap>(
           end_token_ids_[s.forced_end_token_index]);
@@ -219,4 +334,5 @@ void ThinkingBudgetConstraint::CheckBudget(ThinkingState& state) const {
     state.forced_end_token_index = 0;
   }
 }
+
 }  // namespace litert::lm

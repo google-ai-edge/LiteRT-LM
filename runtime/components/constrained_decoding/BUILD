@@ -556,8 +556,12 @@ cc_library(
         ":bitmap",
         ":constraint",
         ":logit_mask",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
         "//runtime/util:litert_status_util",
+        "@litert//tflite/types:half",
     ],
 )
 
@@ -566,11 +570,19 @@ cc_test(
     srcs = ["thinking_budget_constraint_test.cc"],
     deps = [
         ":bitmap",
+        ":constraint",
+        ":constraint_provider",
         ":fake_constraint",
+        ":llg_constraint_config",
+        ":llg_constraint_provider",
         ":logit_mask",
         ":thinking_budget_constraint",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 

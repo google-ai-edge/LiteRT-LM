@@ -391,7 +391,7 @@ TEST_F(CompositeConstraintParamTest,
   EXPECT_FALSE(composite->IsEnded(*state));
 
   // --- Step 0: Start-of-thought matching ---
-  // Mask allows all tokens for start matching.
+  // The mask allows the start token and the tokens the JSON schema allows.
   ASSERT_OK_AND_ASSIGN(auto mask0, composite->ComputeMask(*state));
   std::vector<float> logits0(kVocabSize, 4.0f);
   EXPECT_OK(mask0->Apply(absl::MakeSpan(logits0)));
