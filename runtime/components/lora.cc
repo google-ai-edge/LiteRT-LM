@@ -30,6 +30,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -75,6 +76,11 @@ absl::Status LoRA::Init() {
       auto input_names,
       compiled_model_.GetSignatureInputNames(signature_name_));
 
+  // LoRA inputs of the model that have no matching tensor in the LoRA data.
+  // They are filled with zeros, i.e. the LoRA has no effect on them. Only
+  // collected for the signature the LoRA was created with.
+  std::vector<std::string> unmatched_input_names;
+
   // Creates a TensorBuffer for `input_name` of `signature` and fills it with
   // the LoRA weights for that input.
   auto create_filled_buffer =
@@ -104,6 +110,9 @@ absl::Status LoRA::Init() {
     } else {
       // Fill the buffer with zeros if the tensor is not in LoraData.
       std::memset(lock_and_addr.second, 0, tensor_buffer_size);
+      if (signature == signature_name_) {
+        unmatched_input_names.push_back(std::string(input_name));
+      }
     }
     return tensor_buffer;
   };
@@ -206,6 +215,40 @@ absl::Status LoRA::Init() {
     }
     LITERT_ASSIGN_OR_RETURN(primary_buffers[input_name],
                             create_buffer(signature_name_, input_name));
+  }
+
+  // A LoRA that matches none of the model's LoRA inputs has no effect at all,
+  // which is almost certainly a naming mismatch between the LoRA file and the
+  // model (e.g. a LoRA converted for a different model or backend).
+  int num_lora_inputs = 0;
+  for (const auto& input_name : input_names) {
+    if (IsLoRAInputName(input_name)) {
+      ++num_lora_inputs;
+    }
+  }
+  if (num_lora_inputs > 0 &&
+      unmatched_input_names.size() == static_cast<size_t>(num_lora_inputs)) {
+    const std::vector<std::string> lora_tensor_names_in_data =
+        lora_data_->GetAllTensorNames();
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "None of the %d LoRA inputs of signature '%s' has a matching tensor "
+        "in the LoRA data (e.g. model input '%s', LoRA tensor '%s'). Check "
+        "that the LoRA was converted with tensor names for this model.",
+        num_lora_inputs, signature_name_, unmatched_input_names.front(),
+        lora_tensor_names_in_data.empty() ? "<none>"
+                                          : lora_tensor_names_in_data.front()));
+  }
+  if (!unmatched_input_names.empty()) {
+    constexpr int kMaxNamesToLog = 5;
+    ABSL_LOG(WARNING)
+        << unmatched_input_names.size() << " of " << num_lora_inputs
+        << " LoRA inputs of signature '" << signature_name_
+        << "' have no matching tensor in the LoRA data and are filled with "
+           "zeros, e.g. "
+        << absl::StrJoin(
+               absl::MakeConstSpan(unmatched_input_names)
+                   .subspan(0, kMaxNamesToLog),
+               ", ");
   }
 
   // Other signatures may require different buffer types for the same LoRA

@@ -17,7 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,9 +27,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/strip.h"  // from @com_google_absl
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
@@ -59,6 +67,125 @@ std::string GetLoRAParamModelFilePath() {
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/litert_dummy_lora_param_tensor_model.tflite";
   return path.string();
+}
+
+// Wraps a LoraData and adds a prefix to all of its tensor names, to simulate a
+// LoRA converted with tensor names that don't match the model's inputs.
+class RenamedLoraData : public LoraData {
+ public:
+  explicit RenamedLoraData(std::unique_ptr<LoraData> lora_data)
+      : lora_data_(std::move(lora_data)) {}
+
+  absl::StatusOr<int> GetLoRARank() override {
+    return lora_data_->GetLoRARank();
+  }
+
+  absl::StatusOr<std::unique_ptr<BufferRef<uint8_t>>> ReadTensor(
+      absl::string_view name) override {
+    if (!absl::ConsumePrefix(&name, kPrefix)) {
+      return absl::NotFoundError(absl::StrCat("No tensor: ", name));
+    }
+    return lora_data_->ReadTensor(name);
+  }
+
+  bool HasTensor(absl::string_view name) const override {
+    return absl::ConsumePrefix(&name, kPrefix) && lora_data_->HasTensor(name);
+  }
+
+  std::vector<std::string> GetAllTensorNames() const override {
+    std::vector<std::string> names = lora_data_->GetAllTensorNames();
+    for (std::string& name : names) {
+      name = absl::StrCat(kPrefix, name);
+    }
+    return names;
+  }
+
+ private:
+  static constexpr absl::string_view kPrefix = "renamed_";
+  std::unique_ptr<LoraData> lora_data_;
+};
+
+// Wraps a LoraData and only exposes the tensors in `names`, to simulate a LoRA
+// that covers only some of the model's LoRA inputs.
+class SubsetLoraData : public LoraData {
+ public:
+  SubsetLoraData(std::unique_ptr<LoraData> lora_data,
+                 std::set<std::string> names)
+      : lora_data_(std::move(lora_data)), names_(std::move(names)) {}
+
+  absl::StatusOr<int> GetLoRARank() override {
+    return lora_data_->GetLoRARank();
+  }
+
+  absl::StatusOr<std::unique_ptr<BufferRef<uint8_t>>> ReadTensor(
+      absl::string_view name) override {
+    if (!HasTensor(name)) {
+      return absl::NotFoundError(absl::StrCat("No tensor: ", name));
+    }
+    return lora_data_->ReadTensor(name);
+  }
+
+  bool HasTensor(absl::string_view name) const override {
+    return names_.contains(std::string(name)) && lora_data_->HasTensor(name);
+  }
+
+  std::vector<std::string> GetAllTensorNames() const override {
+    return std::vector<std::string>(names_.begin(), names_.end());
+  }
+
+ private:
+  std::unique_ptr<LoraData> lora_data_;
+  std::set<std::string> names_;
+};
+
+// A rank 32 LoraData whose tensors are all zeros, with the given names and
+// sizes in bytes.
+class ZerosLoraData : public LoraData {
+ public:
+  explicit ZerosLoraData(std::map<std::string, size_t> sizes)
+      : sizes_(std::move(sizes)) {}
+
+  absl::StatusOr<int> GetLoRARank() override { return 32; }
+
+  absl::StatusOr<std::unique_ptr<BufferRef<uint8_t>>> ReadTensor(
+      absl::string_view name) override {
+    auto it = sizes_.find(std::string(name));
+    if (it == sizes_.end()) {
+      return absl::NotFoundError(absl::StrCat("No tensor: ", name));
+    }
+    const std::vector<uint8_t> zeros(it->second, 0);
+    // The const pointer overload copies the data.
+    return std::make_unique<OwningBufferRef<uint8_t>>(
+        static_cast<const uint8_t*>(zeros.data()), zeros.size());
+  }
+
+  bool HasTensor(absl::string_view name) const override {
+    return sizes_.contains(std::string(name));
+  }
+
+  std::vector<std::string> GetAllTensorNames() const override {
+    std::vector<std::string> names;
+    for (const auto& [name, size] : sizes_) {
+      names.push_back(name);
+    }
+    return names;
+  }
+
+ private:
+  std::map<std::string, size_t> sizes_;
+};
+
+// Returns a LoraData matching the LoRA inputs of the `lora_param_tensor` test
+// model, so that LoRA::Create accepts it.
+absl::StatusOr<std::unique_ptr<LoraData>> CreateLoRAParamModelLoraData(
+    const CompiledModel& compiled_model) {
+  std::map<std::string, size_t> sizes;
+  for (const char* name : {"key_w_prime_left_99", "query_w_prime_right_99"}) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto buffer, compiled_model.CreateInputBuffer("serving_default", name));
+    LITERT_ASSIGN_OR_RETURN(sizes[name], buffer.PackedSize());
+  }
+  return std::make_unique<ZerosLoraData>(std::move(sizes));
 }
 
 class LoraTest : public ::testing::Test {
@@ -175,7 +302,9 @@ TEST_F(LoraTest, FillsLoRAParamTensor) {
       auto compiled_model,
       CompiledModel::Create(*env_, GetLoRAParamModelFilePath(), options));
 
-  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+  ASSERT_OK_AND_ASSIGN(auto lora_data,
+                       CreateLoRAParamModelLoraData(compiled_model));
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data),
                                                compiled_model,
                                                "serving_default"));
   ASSERT_OK_AND_ASSIGN(auto buffer, lora->GetLoRABuffer("lora_param_tensor"));
@@ -251,7 +380,9 @@ TEST_F(LoraTest, GetLoRABuffersIncludesLoRAParamTensor) {
       auto compiled_model,
       CompiledModel::Create(*env_, GetLoRAParamModelFilePath(), options));
 
-  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data_),
+  ASSERT_OK_AND_ASSIGN(auto lora_data,
+                       CreateLoRAParamModelLoraData(compiled_model));
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(lora_data),
                                                compiled_model,
                                                "serving_default"));
   ASSERT_OK_AND_ASSIGN(auto buffers, lora->GetLoRABuffers("serving_default"));
@@ -274,6 +405,46 @@ TEST_F(LoraTest, GetLoRABuffersReturnsErrorForUnknownSignature) {
                                                *compiled_model_, "decode"));
   EXPECT_THAT(lora->GetLoRABuffers("unknown_signature"),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(LoraTest, CreateLoRAFailsWhenNoTensorMatchesModelInputs) {
+  auto renamed_lora_data =
+      std::make_unique<RenamedLoraData>(std::move(lora_data_));
+  EXPECT_THAT(
+      LoRA::Create(std::move(renamed_lora_data), *compiled_model_, "decode"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               ::testing::HasSubstr("None of the 280 LoRA inputs")));
+}
+
+TEST_F(LoraTest, CreateLoRAZeroFillsInputsMissingFromPartialLoRA) {
+  // Only one of the 280 LoRA inputs has a tensor in the LoRA data.
+  auto subset_lora_data = std::make_unique<SubsetLoraData>(
+      std::move(lora_data_), std::set<std::string>{"query_w_prime_left_20"});
+  ASSERT_OK_AND_ASSIGN(auto lora, LoRA::Create(std::move(subset_lora_data),
+                                               *compiled_model_, "decode"));
+
+  ASSERT_OK_AND_ASSIGN(auto matched,
+                       lora->GetLoRABuffer("query_w_prime_left_20"));
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t matched_size, matched.PackedSize());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto matched_lock,
+      litert::TensorBufferScopedLock::Create<const uint16_t>(
+          matched, litert::TensorBuffer::LockMode::kRead));
+  const uint16_t fp16_one = 0x3C00;
+  for (size_t i = 0; i < matched_size / sizeof(uint16_t); ++i) {
+    EXPECT_EQ(matched_lock.second[i], fp16_one);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto missing,
+                       lora->GetLoRABuffer("query_w_prime_left_10"));
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t missing_size, missing.PackedSize());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto missing_lock,
+      litert::TensorBufferScopedLock::Create<const uint8_t>(
+          missing, litert::TensorBuffer::LockMode::kRead));
+  for (size_t i = 0; i < missing_size; ++i) {
+    EXPECT_EQ(missing_lock.second[i], 0);
+  }
 }
 
 }  // namespace
