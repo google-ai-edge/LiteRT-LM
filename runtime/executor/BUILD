@@ -298,6 +298,7 @@ cc_library(
     deps = [
         ":common_utils",
         ":executor_settings_base",
+        ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor",
         ":llm_executor_io_types",
@@ -320,6 +321,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",  # buildcleaner: keep
         "@litert//litert/c/internal:litert_external_litert_buffer_context",  # buildcleaner: keep
@@ -378,6 +380,7 @@ cc_test(
     deps = [
         ":default_static_gpu_accelerator",
         ":executor_settings_base",
+        ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
         ":llm_executor_settings",
@@ -391,6 +394,7 @@ cc_test(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_common",
@@ -557,6 +561,7 @@ cc_library(
     name = "llm_executor_base",
     hdrs = ["llm_executor_base.h"],
     deps = [
+        ":executor_stats",
         ":llm_executor_io_types",
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
@@ -1276,6 +1281,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",

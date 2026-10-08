@@ -212,5 +212,50 @@ TEST(LlmLiteRtMtpDrafterTest, UpdateCompilationOptions) {
   EXPECT_OK(UpdateCompilationOptions(settings_cpu, options));
 }
 
+TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixAllAccepted) {
+  const std::vector<int> drafted = {10, 20, 30};
+  const std::vector<int> verifier_ids = {10, 20, 30, 99};
+  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
+  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
+  EXPECT_EQ(accepted, 3);
+  EXPECT_EQ(verifier_ids[accepted], 99);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixNoneAccepted) {
+  const std::vector<int> drafted = {10, 20, 30};
+  const std::vector<int> verifier_ids = {11, 20, 30, 99};
+  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
+  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
+  EXPECT_EQ(accepted, 0);
+  EXPECT_EQ(verifier_ids[accepted], 11);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixMismatchInMiddle) {
+  const std::vector<int> drafted = {10, 20, 30};
+  const std::vector<int> verifier_ids = {10, 25, 30, 99};
+  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
+  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
+  EXPECT_EQ(accepted, 1);
+  EXPECT_EQ(verifier_ids[accepted], 25);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixEmptyDraftedWithBonusOnly) {
+  const std::vector<int> drafted = {};
+  const std::vector<int> verifier_ids = {42};
+  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
+  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
+  EXPECT_EQ(accepted, 0);
+  EXPECT_EQ(verifier_ids[accepted], 42);
+}
+
+TEST(LlmLiteRtMtpDrafterTest,
+     CountAcceptedPrefixDefensivelyClampsIfVerifierShorterThanDrafted) {
+  // Callers enforce verifier_ids.size() == drafted.size() + 1 via RET_CHECK,
+  // but CountAcceptedPrefix safely avoids out-of-bounds reads if misused.
+  const std::vector<int> drafted = {10, 20, 30};
+  const std::vector<int> short_verifier = {10, 20};
+  EXPECT_EQ(CountAcceptedPrefix(short_verifier, drafted), 2);
+}
+
 }  // namespace
 }  // namespace litert::lm

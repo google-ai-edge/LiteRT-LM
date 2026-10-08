@@ -138,5 +138,59 @@ TEST(ExecutorStatsTest, StreamOperatorFormatting) {
   EXPECT_THAT(output, HasSubstr("Vision num images: 1"));
 }
 
+TEST(ExecutorStatsTest, AccumulateLogitsStepIsSeparateFromPlainStep) {
+  ExecutorStats stats;
+  EXPECT_EQ(stats.logits_steps(), 0);
+  EXPECT_EQ(stats.logits_step_time(), absl::ZeroDuration());
+
+  stats.AccumulateLogitsStep(absl::Milliseconds(8));
+  stats.AccumulateLogitsStep(absl::Milliseconds(9));
+
+  EXPECT_EQ(stats.logits_steps(), 2);
+  EXPECT_EQ(stats.logits_step_time(), absl::Milliseconds(17));
+  EXPECT_EQ(stats.plain_steps(), 0);
+  EXPECT_EQ(stats.plain_step_time(), absl::ZeroDuration());
+}
+
+TEST(ExecutorStatsTest, AccumulateMtpRoundAndPlainStep) {
+  ExecutorStats stats;
+  EXPECT_EQ(stats.mtp_rounds(), 0);
+  EXPECT_EQ(stats.mtp_num_draft_tokens(), 0);
+  EXPECT_EQ(stats.mtp_num_accepted_tokens(), 0);
+  EXPECT_EQ(stats.mtp_emitted_tokens(), 0);
+  EXPECT_EQ(stats.plain_steps(), 0);
+  EXPECT_EQ(stats.mtp_drafting_time(), absl::ZeroDuration());
+  EXPECT_EQ(stats.mtp_verify_time(), absl::ZeroDuration());
+  EXPECT_EQ(stats.mtp_round_time(), absl::ZeroDuration());
+  EXPECT_EQ(stats.plain_step_time(), absl::ZeroDuration());
+
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3,
+                           /*drafting_time=*/absl::Milliseconds(11),
+                           /*verify_time=*/absl::Milliseconds(10),
+                           /*round_time=*/absl::Milliseconds(21));
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/3,
+                           /*emitted_tokens=*/5,
+                           /*drafting_time=*/absl::Milliseconds(12),
+                           /*verify_time=*/absl::Milliseconds(10),
+                           /*round_time=*/absl::Milliseconds(32));
+  stats.AccumulatePlainStep(absl::Milliseconds(10));
+  stats.AccumulatePlainStep(absl::Milliseconds(11));
+
+  EXPECT_EQ(stats.mtp_rounds(), 2);
+  EXPECT_EQ(stats.mtp_num_draft_tokens(), 6);
+  EXPECT_EQ(stats.mtp_num_accepted_tokens(), 5);
+  EXPECT_EQ(stats.mtp_emitted_tokens(), 8);
+  EXPECT_EQ(stats.plain_steps(), 2);
+  EXPECT_EQ(stats.mtp_drafting_time(), absl::Milliseconds(23));
+  EXPECT_EQ(stats.mtp_verify_time(), absl::Milliseconds(20));
+  EXPECT_EQ(stats.mtp_round_time(), absl::Milliseconds(53));
+  EXPECT_EQ(stats.plain_step_time(), absl::Milliseconds(21));
+
+  EXPECT_EQ(stats.GetMetricAsInt64("missing", -1), -1);
+  EXPECT_DOUBLE_EQ(stats.GetMetricAsDouble(kMtpRoundsMetric), 2.0);
+  EXPECT_DOUBLE_EQ(stats.GetMetricAsDouble("missing", -2.5), -2.5);
+}
+
 }  // namespace
 }  // namespace litert::lm

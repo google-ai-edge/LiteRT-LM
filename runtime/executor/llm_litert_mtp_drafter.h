@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 
+#include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,6 +28,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -42,6 +45,31 @@
 #include "runtime/executor/state_interface.h"
 
 namespace litert::lm {
+
+// Returns the number of accepted draft tokens (longest matching prefix between
+// `verifier_ids` and `drafted`). The bonus token is `verifier_ids[result]`.
+//
+// Precondition: `verifier_ids.size() == drafted.size() + 1`. Safe (never reads
+// out of bounds) if the precondition is violated.
+inline int CountAcceptedPrefix(absl::Span<const int> verifier_ids,
+                               absl::Span<const int> drafted) {
+  const int limit =
+      static_cast<int>(std::min(verifier_ids.size(), drafted.size()));
+  int accepted = 0;
+  while (accepted < limit && verifier_ids[accepted] == drafted[accepted]) {
+    ++accepted;
+  }
+  return accepted;
+}
+
+// Statistics of the last successful `LlmLiteRtMtpDrafter::Draft()` call.
+struct MtpRoundStats {
+  int drafted_tokens = 0;        // Number of draft steps (γ).
+  int accepted_tokens = 0;       // Accepted drafted tokens.
+  int emitted_tokens = 0;        // accepted + 1 bonus
+  absl::Duration drafting_time;  // RunDraftingLoop wall time
+  absl::Duration verify_time;    // PrepareVerifier* + RunVerification wall time
+};
 
 class LlmLiteRtMtpDrafter {
  public:
@@ -91,6 +119,8 @@ class LlmLiteRtMtpDrafter {
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
       StateInterface& state, const Constraint* constraint = nullptr);
+
+  const MtpRoundStats& last_round_stats() const { return last_round_stats_; }
 
  private:
   LlmLiteRtMtpDrafter(
@@ -252,10 +282,12 @@ class LlmLiteRtMtpDrafter {
   // Misc statistics for the MTP drafter.
   // The number of tokens drafted by the MTP drafter model, regardless of
   // whether they are verified or not - does not include the bonus token.
-  int num_drafted_tokens_ = 0;
+  int64_t num_drafted_tokens_ = 0;
   // The number of tokens verified by the base model (i.e., accepted) - does not
   // include the bonus token.
-  int num_verified_tokens_ = 0;
+  int64_t num_verified_tokens_ = 0;
+
+  MtpRoundStats last_round_stats_;
 
   // The vocabulary size for logits masking.
   int vocab_size_ = 0;

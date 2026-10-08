@@ -27,6 +27,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -234,6 +235,17 @@ class LlmExecutorBase {
         absl::StrCat("GetProfileSummary not implemented for backend: ",
                      ExecutorBackendName()));
   }
+
+  // Gets the accumulated executor statistics if supported by the underlying
+  // executor/backend. The statistics are executor-wide: an executor shared by
+  // several sessions accumulates the steps of all of them.
+  virtual std::optional<ExecutorStats> GetExecutorStats() const {
+    return std::nullopt;
+  }
+
+  // Resets the accumulated executor statistics if supported by the underlying
+  // executor/backend.
+  virtual void ResetExecutorStats() {}
 };
 
 }  // namespace litert::lm

@@ -30,6 +30,7 @@ target_link_libraries(runtime_core_tasks
   PUBLIC
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Engine::IoTypes
+    LiteRTLM::Runtime::Executor::ExecutorStats
     LiteRTLM::Runtime::Executor::LlmExecutorInterface
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorSettings

@@ -34,6 +34,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
@@ -47,6 +48,14 @@ namespace {
 absl::Duration ToAbslDuration(std::chrono::steady_clock::duration duration) {
   return absl::Nanoseconds(
       std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+}
+
+// Prints one "    <label>: <value>" line of a BenchmarkInfo summary section,
+// padding the label so that the values of a section line up.
+void PrintSummaryLine(std::ostream& os, absl::string_view label,
+                      absl::string_view value) {
+  os << absl::StrFormat("    %-19s%s", absl::StrCat(label, ":"), value)
+     << std::endl;
 }
 
 }  // namespace
@@ -457,9 +466,8 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
     }
   }
 
-  os << "--------------------------------------------------" << std::endl;
-
   if (!info.GetMarkDurations().empty()) {
+    os << "--------------------------------------------------" << std::endl;
     os << "  Mark Durations (" << info.GetMarkDurations().size()
        << "):" << std::endl;
     for (const auto& [mark_name, duration] : info.GetMarkDurations()) {
@@ -472,9 +480,62 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
     os << info.GetProfileSummary() << std::endl;
   }
   if (info.GetExecutorStats().has_value()) {
-    os << "--------------------------------------------------" << std::endl;
-    os << "  Executor Stats:" << std::endl;
-    os << *info.GetExecutorStats() << std::endl;
+    const ExecutorStats& stats = *info.GetExecutorStats();
+    const int64_t mtp_rounds = stats.mtp_rounds();
+    const int64_t plain_steps = stats.plain_steps();
+    if (mtp_rounds > 0) {
+      const int64_t drafted = stats.mtp_num_draft_tokens();
+      const int64_t accepted = stats.mtp_num_accepted_tokens();
+      const int64_t emitted = stats.mtp_emitted_tokens();
+      const double acceptance =
+          drafted > 0 ? static_cast<double>(accepted) / drafted : 0.0;
+      const double tokens_per_round = static_cast<double>(emitted) / mtp_rounds;
+      const double ms_per_round =
+          absl::ToDoubleMilliseconds(stats.mtp_round_time()) / mtp_rounds;
+      const double draft_ms =
+          absl::ToDoubleMilliseconds(stats.mtp_drafting_time()) / mtp_rounds;
+      const double verify_ms =
+          absl::ToDoubleMilliseconds(stats.mtp_verify_time()) / mtp_rounds;
+      // Re-priming decodes count as plain decodes, so the round share is below
+      // 100% even when every Decode() call speculates.
+      const double round_pct =
+          100.0 * mtp_rounds / static_cast<double>(mtp_rounds + plain_steps);
+      os << "--------------------------------------------------" << std::endl;
+      os << "  Speculative Decoding (MTP):" << std::endl;
+      PrintSummaryLine(os, "Rounds",
+                       absl::StrFormat("%d (%.1f%% of decode steps)",
+                                       mtp_rounds, round_pct));
+      PrintSummaryLine(os, "Acceptance rate",
+                       absl::StrFormat("%.1f%% (%d of %d drafted tokens)",
+                                       100.0 * acceptance, accepted, drafted));
+      PrintSummaryLine(os, "Tokens per round",
+                       absl::StrFormat("%.2f (%d emitted)", tokens_per_round,
+                                       emitted));
+      PrintSummaryLine(
+          os, "Time per round",
+          absl::StrFormat("%.2f ms (draft %.2f ms, verify %.2f ms)",
+                          ms_per_round, draft_ms, verify_ms));
+      PrintSummaryLine(
+          os, "Plain decodes",
+          plain_steps > 0
+              ? absl::StrFormat(
+                    "%d (incl. re-priming), %.2f ms/step", plain_steps,
+                    absl::ToDoubleMilliseconds(stats.plain_step_time()) /
+                        plain_steps)
+              : "0");
+    }
+    // Logits-only decodes (external sampling, scoring) exclude sampling, so
+    // they are reported separately from plain steps.
+    if (const int64_t logits_steps = stats.logits_steps(); logits_steps > 0) {
+      const double logits_ms =
+          absl::ToDoubleMilliseconds(stats.logits_step_time()) / logits_steps;
+      os << "--------------------------------------------------" << std::endl;
+      os << absl::StrFormat(
+                "  Logits-only Decode Steps: %d (%.2f ms/step, excl. "
+                "sampling)",
+                logits_steps, logits_ms)
+         << std::endl;
+    }
   }
   os << "--------------------------------------------------" << std::endl;
   return os;

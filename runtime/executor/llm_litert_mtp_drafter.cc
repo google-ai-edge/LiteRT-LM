@@ -34,6 +34,8 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -727,10 +729,13 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
     }
   }
 
+  const absl::Time draft_start = absl::Now();
   ABSL_ASSIGN_OR_RETURN(DraftingResult drafting_result,
                         RunDraftingLoop(token_id, activations, constraint_,
                                         constraint_state_.get()));
+  const absl::Duration drafting_time = absl::Now() - draft_start;
 
+  const absl::Time verify_start = absl::Now();
   ABSL_RETURN_IF_ERROR(PrepareVerifierInputBuffers(
       position, token_id, drafting_result.drafted_tokens,
       state_buffers.input_buffers));
@@ -740,13 +745,12 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   ABSL_ASSIGN_OR_RETURN(
       std::vector<int> verifier_id_vector,
       RunVerification(drafting_result.draft_constraint_states));
+  const absl::Duration verify_time = absl::Now() - verify_start;
 
-  int num_correct_tokens = 0;
-  while (num_correct_tokens < num_draft_steps_ &&
-         verifier_id_vector[num_correct_tokens] ==
-             drafting_result.drafted_tokens[num_correct_tokens]) {
-    ++num_correct_tokens;
-  }
+  RET_CHECK_EQ(verifier_id_vector.size(),
+               drafting_result.drafted_tokens.size() + 1);
+  int num_correct_tokens =
+      CountAcceptedPrefix(verifier_id_vector, drafting_result.drafted_tokens);
   int bonus_token = verifier_id_vector[num_correct_tokens];
   last_verified_token_id_idx_ = num_correct_tokens;
 
@@ -779,6 +783,13 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   output_tokens.push_back(bonus_token);
   num_drafted_tokens_ += num_draft_steps_;
   num_verified_tokens_ += num_correct_tokens;
+  last_round_stats_ = MtpRoundStats{
+      .drafted_tokens = num_draft_steps_,
+      .accepted_tokens = num_correct_tokens,
+      .emitted_tokens = num_correct_tokens + 1,
+      .drafting_time = drafting_time,
+      .verify_time = verify_time,
+  };
 
   MTP_DRAFTER_LOG() << "drafter output: " << absl::StrJoin(output_tokens, ", ");
   MTP_DRAFTER_LOG() << "--------------------------------------------------";

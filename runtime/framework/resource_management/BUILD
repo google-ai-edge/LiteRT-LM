@@ -223,6 +223,7 @@ RESOURCE_MANAGER_DEPS = [
     "//runtime/executor:audio_executor_settings",
     "//runtime/executor:audio_litert_compiled_model_executor",
     "//runtime/executor:executor_settings_base",
+    "//runtime/executor:executor_stats",
     "//runtime/executor:litert_compiled_model_executor_utils",
     "//runtime/executor:llm_executor",
     "//runtime/executor:llm_executor_io_types",
@@ -250,5 +251,19 @@ cc_library(
         "@litert//litert/cc:litert_environment_options",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "resource_manager_test",
+    srcs = ["resource_manager_test.cc"],
+    deps = [
+        ":resource_manager",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/time",
+        "//runtime/executor:executor_stats",
+        "//runtime/executor:fake_llm_executor",
+        "//runtime/executor:llm_executor",
+        "//runtime/util:test_utils",
     ],
 )

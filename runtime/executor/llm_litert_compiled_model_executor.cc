@@ -38,6 +38,8 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/internal/litert_handle.h"  // from @litert
@@ -64,6 +66,7 @@
 #include "runtime/components/sampler_factory.h"
 #include "runtime/executor/common_utils.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -1305,8 +1308,9 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
 
   std::vector<std::vector<int>> output_tokens_vector;
   if (!enable_mtp_drafter) {
+    const absl::Time plain_start = absl::Now();
     ABSL_ASSIGN_OR_RETURN(auto decoded_logits,
-                          DecodeLogits(ExecutorInputs(), decode_params));
+                          DecodeLogitsImpl(ExecutorInputs(), decode_params));
     std::optional<TensorBuffer> output_tokens;
     {
       LITERT_ASSIGN_OR_RETURN(auto decoded_logits_type,
@@ -1321,7 +1325,10 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     ABSL_RETURN_IF_ERROR(SampleLogits(decoded_logits, *output_tokens));
     LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
                             CopyFromTensorBuffer2D<int>(*output_tokens));
+    executor_stats_.AccumulatePlainStep(absl::Now() - plain_start);
   } else {
+    const absl::Time round_start = absl::Now();
+    absl::Duration priming_time = absl::ZeroDuration();
     // Re-prime the drafter with a plain decode step unless the previous step
     // was a successful MTP round.
     const bool drafter_is_primed =
@@ -1356,9 +1363,13 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens_vector[0].size();
     } else {
       int token_id = -1;
+      // The priming decode is a plain step: it is recorded as one so that the
+      // MTP round stats below cover only the speculative round itself.
+      const absl::Time priming_start = absl::Now();
       {
-        ABSL_ASSIGN_OR_RETURN(auto decoded_logits,
-                              DecodeLogits(ExecutorInputs(), decode_params));
+        ABSL_ASSIGN_OR_RETURN(
+            auto decoded_logits,
+            DecodeLogitsImpl(ExecutorInputs(), decode_params));
         LITERT_ASSIGN_OR_RETURN(auto decoded_logits_type,
                                 decoded_logits.TensorType());
         auto dimensions = decoded_logits_type.Layout().Dimensions();
@@ -1374,6 +1385,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
         RET_CHECK_EQ(output_tokens_vector[0].size(), 1);
         token_id = output_tokens_vector[0][0];
       }
+      priming_time = absl::Now() - priming_start;
+      executor_stats_.AccumulatePlainStep(priming_time);
 
       RET_CHECK(decode_output_buffers_.contains("activations"));
       LITERT_ASSIGN_OR_RETURN(
@@ -1390,6 +1403,12 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens_vector[0].size();
       output_tokens_vector[0].insert(output_tokens_vector[0].begin(), token_id);
     }
+    const absl::Duration round_elapsed = absl::Now() - round_start;
+    const auto& round_stats = mtp_drafter_->last_round_stats();
+    executor_stats_.AccumulateMtpRound(
+        round_stats.drafted_tokens, round_stats.accepted_tokens,
+        round_stats.emitted_tokens, round_stats.drafting_time,
+        round_stats.verify_time, round_elapsed - priming_time);
   }
 
   // Check for any invalid token ids and set them to zero, if any.
@@ -1445,12 +1464,14 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorInputs& inputs, TensorBuffer& output_logits) {
+  const absl::Time start = absl::Now();
   mtp_primed_ = false;
   ABSL_RETURN_IF_ERROR(PrepareFirstDecode());
   ABSL_ASSIGN_OR_RETURN(auto step_and_token, GetTokenToDecode(inputs));
   ABSL_RETURN_IF_ERROR(DecodeInternal(step_and_token.token, output_logits));
   ABSL_RETURN_IF_ERROR(ConsumePendingOrAddProcessedToken(step_and_token.token));
   ++llm_context_->runtime_state().current_step;
+  executor_stats_.AccumulateLogitsStep(absl::Now() - start);
   return absl::OkStatus();
 }
 
@@ -1460,6 +1481,16 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
 }
 
 absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
+    const ExecutorInputs& inputs, const ExecutorDecodeParams& decode_params) {
+  const absl::Time start = absl::Now();
+  ABSL_ASSIGN_OR_RETURN(auto output_logits,
+                        DecodeLogitsImpl(inputs, decode_params));
+  executor_stats_.AccumulateLogitsStep(absl::Now() - start);
+  return output_logits;
+}
+
+absl::StatusOr<TensorBuffer>
+LlmLiteRtCompiledModelExecutorBase::DecodeLogitsImpl(
     const ExecutorInputs& inputs, const ExecutorDecodeParams& decode_params) {
   LITERT_ASSIGN_OR_RETURN(
       auto output_logits,

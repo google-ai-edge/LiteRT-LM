@@ -52,6 +52,7 @@
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -625,6 +626,11 @@ absl::StatusOr<Responses> Decode(
 
   int benchmark_decode_token_count = 0;
   if (benchmark_info.has_value()) {
+    if (benchmark_info->GetTotalDecodeTurns() == 0) {
+      // Stats are executor-wide; this also clears steps of other sessions
+      // sharing the executor. Benchmarks are expected to run single-session.
+      executor.ResetExecutorStats();
+    }
     // Initialize sampler early if the executor supports it.
     auto* compiled_model_executor =
         dynamic_cast<LlmLiteRtCompiledModelExecutorBase*>(&executor);
@@ -650,6 +656,28 @@ absl::StatusOr<Responses> Decode(
   ABSL_ASSIGN_OR_RETURN(int executor_step_before_decode,
                         executor.GetCurrentStep());
   const int max_num_tokens = TryGetMaxNumTokens(executor);
+
+  // Copies the executor's profile summary and stats into `benchmark_info` at
+  // the end of a decode turn, whether it completed or was cancelled.
+  auto record_executor_benchmark_info = [&]() {
+    auto profile_summary = executor.GetProfileSummary();
+    if (profile_summary.ok()) {
+      if (profile_summary->empty()) {
+        ABSL_LOG(WARNING) << "Decode profile summary is empty!";
+      } else {
+        benchmark_info->SetProfileSummary(*profile_summary);
+      }
+    } else if (profile_summary.status().code() ==
+               absl::StatusCode::kFailedPrecondition) {
+      ABSL_VLOG(1) << "Profiling is not enabled.";
+    } else {
+      ABSL_LOG(WARNING) << "Failed to get decode profile summary: "
+                        << profile_summary.status();
+    }
+    if (auto stats = executor.GetExecutorStats(); stats.has_value()) {
+      benchmark_info->SetExecutorStats(*std::move(stats));
+    }
+  };
 
   std::unique_ptr<Constraint> thinking_budget_constraint;
   int vocab_size = tokenizer.GetTokens().size();
@@ -685,10 +713,7 @@ absl::StatusOr<Responses> Decode(
         // If the process is cancelled, we need to end this benchmark phase.
         ABSL_RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(
             num_decode_steps * num_output_candidates));
-        auto profile_summary = executor.GetProfileSummary();
-        if (profile_summary.ok() && !profile_summary->empty()) {
-          benchmark_info->SetProfileSummary(*profile_summary);
-        }
+        record_executor_benchmark_info();
       }
       if (is_custom_sampling) {
         // For external sampling, the sampled tokens are provided by the
@@ -807,20 +832,7 @@ absl::StatusOr<Responses> Decode(
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(
         num_decode_steps * num_output_candidates));
-    auto profile_summary = executor.GetProfileSummary();
-    if (profile_summary.ok()) {
-      if (profile_summary->empty()) {
-        ABSL_LOG(WARNING) << "Decode profile summary is empty!";
-      } else {
-        benchmark_info->SetProfileSummary(*profile_summary);
-      }
-    } else if (profile_summary.status().code() ==
-               absl::StatusCode::kFailedPrecondition) {
-      ABSL_VLOG(1) << "Profiling is not enabled.";
-    } else {
-      ABSL_LOG(WARNING) << "Failed to get decode profile summary: "
-                        << profile_summary.status();
-    }
+    record_executor_benchmark_info();
   }
 
   if (is_custom_sampling) {

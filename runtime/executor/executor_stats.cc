@@ -14,6 +14,7 @@
 
 #include "runtime/executor/executor_stats.h"
 
+#include <cstdint>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -84,6 +85,58 @@ std::optional<MetricValue> ExecutorStats::GetMetric(
     if (key == name) return val;
   }
   return std::nullopt;
+}
+
+int64_t ExecutorStats::GetMetricAsInt64(absl::string_view name,
+                                        int64_t default_value) const {
+  auto metric = GetMetric(name);
+  if (!metric.has_value()) {
+    return default_value;
+  }
+  if (const auto* int_val = std::get_if<int64_t>(&*metric)) {
+    return *int_val;
+  }
+  return default_value;
+}
+
+double ExecutorStats::GetMetricAsDouble(absl::string_view name,
+                                        double default_value) const {
+  auto metric = GetMetric(name);
+  if (!metric.has_value()) {
+    return default_value;
+  }
+  if (const auto* double_val = std::get_if<double>(&*metric)) {
+    return *double_val;
+  }
+  if (const auto* int_val = std::get_if<int64_t>(&*metric)) {
+    return static_cast<double>(*int_val);
+  }
+  return default_value;
+}
+
+void ExecutorStats::AccumulateMtpRound(int64_t drafted_tokens,
+                                       int64_t accepted_tokens,
+                                       int64_t emitted_tokens,
+                                       absl::Duration drafting_time,
+                                       absl::Duration verify_time,
+                                       absl::Duration round_time) {
+  Accumulate(kMtpRoundsMetric, int64_t{1});
+  Accumulate(kMtpNumDraftTokensMetric, drafted_tokens);
+  Accumulate(kMtpNumAcceptedTokensMetric, accepted_tokens);
+  Accumulate(kMtpEmittedTokensMetric, emitted_tokens);
+  Accumulate(kMtpDraftingTimeLatency, drafting_time);
+  Accumulate(kMtpVerifyTimeLatency, verify_time);
+  Accumulate(kMtpRoundTimeLatency, round_time);
+}
+
+void ExecutorStats::AccumulatePlainStep(absl::Duration step_time) {
+  Accumulate(kPlainStepsMetric, int64_t{1});
+  Accumulate(kPlainStepTimeLatency, step_time);
+}
+
+void ExecutorStats::AccumulateLogitsStep(absl::Duration step_time) {
+  Accumulate(kLogitsStepsMetric, int64_t{1});
+  Accumulate(kLogitsStepTimeLatency, step_time);
 }
 
 std::ostream& operator<<(std::ostream& os, const ExecutorStats& stats) {

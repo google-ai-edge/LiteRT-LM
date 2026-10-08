@@ -40,6 +40,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
@@ -57,6 +58,7 @@
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -1301,6 +1303,117 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   executor->set_mtp_primed_for_testing(true);
   ASSERT_OK(executor->Reset());
   EXPECT_FALSE(executor->mtp_primed_for_testing());
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     Decode_AccumulatesExecutorStats) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources, TfLiteModelResources::Create(
+                                                 model_assets,
+                                                 /*with_mtp_drafter=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
+  ASSERT_TRUE(executor);
+  EXPECT_FALSE(executor->GetExecutorStats().has_value());
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  auto input_tokens_buffer =
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
+  ASSERT_TRUE(input_tokens_buffer);
+  inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+  // Prefill records no decode stats.
+  EXPECT_FALSE(executor->GetExecutorStats().has_value());
+
+  ExecutorDecodeParams decode_params_disabled;
+  decode_params_disabled.SetEnableSpeculativeDecoding(false);
+  ASSERT_OK(executor->Decode(decode_params_disabled));
+  ASSERT_OK(executor->Decode(decode_params_disabled));
+
+  std::optional<ExecutorStats> stats = executor->GetExecutorStats();
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->module_name, kLlmModuleName);
+  EXPECT_EQ(stats->plain_steps(), 2);
+  EXPECT_EQ(stats->mtp_rounds(), 0);
+  EXPECT_GE(stats->plain_step_time(), absl::ZeroDuration());
+
+  // A failed MTP attempt (no drafter in this model) records nothing.
+  ExecutorDecodeParams decode_params_enabled;
+  decode_params_enabled.SetEnableSpeculativeDecoding(true);
+  EXPECT_THAT(executor->Decode(decode_params_enabled),
+              StatusIs(absl::StatusCode::kInternal));
+  stats = executor->GetExecutorStats();
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->plain_steps(), 2);
+  EXPECT_EQ(stats->mtp_rounds(), 0);
+
+  executor->ResetExecutorStats();
+  EXPECT_FALSE(executor->GetExecutorStats().has_value());
+
+  // The stats are executor-wide, so Reset() (called when a session is
+  // released) keeps them.
+  ASSERT_OK(executor->Decode(decode_params_disabled));
+  ASSERT_OK(executor->Reset());
+  stats = executor->GetExecutorStats();
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->plain_steps(), 1);
+  // `Decode(params)` decodes its logits internally; that is not also counted
+  // as a logits step.
+  EXPECT_EQ(stats->logits_steps(), 0);
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     DecodeLogits_AccumulatesLogitsSteps) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources, TfLiteModelResources::Create(
+                                                 model_assets,
+                                                 /*with_mtp_drafter=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
+  ASSERT_TRUE(executor);
+
+  const auto make_inputs = [](const std::vector<int>& tokens,
+                              int sequence_length) -> ExecutorInputs {
+    auto buffer = CopyToTensorBuffer<int>(absl::MakeConstSpan(tokens),
+                                          {1, sequence_length});
+    ExecutorInputs inputs;
+    inputs.SetTextData(ExecutorTextData(std::move(*buffer)));
+    return inputs;
+  };
+  ASSERT_OK(executor->Prefill(make_inputs({1, 2, 3, 4, 5}, 5)));
+
+  ASSERT_OK_AND_ASSIGN(auto logits,
+                       executor->DecodeLogits(make_inputs({6}, 1)));
+  ASSERT_OK(
+      executor->DecodeLogits(make_inputs({7}, 1), ExecutorDecodeParams()));
+  ASSERT_OK(executor->Decode(make_inputs({8}, 1), logits));
+
+  std::optional<ExecutorStats> stats = executor->GetExecutorStats();
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->logits_steps(), 3);
+  EXPECT_GE(stats->logits_step_time(), absl::ZeroDuration());
+  // Logits-only decodes exclude sampling and are kept out of the plain steps.
+  EXPECT_EQ(stats->plain_steps(), 0);
+  EXPECT_EQ(stats->mtp_rounds(), 0);
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {

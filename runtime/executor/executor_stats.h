@@ -30,6 +30,31 @@
 namespace litert::lm {
 
 inline constexpr absl::string_view kTotalLatency = "Total";
+inline constexpr absl::string_view kLlmModuleName = "LLM";
+
+// Speculative decoding / LLM decode metric names. An MTP round covers drafting
+// plus verification only; the plain decode that re-primes the drafter before a
+// round is counted as a plain step. Plain steps and MTP rounds include
+// sampling. A logits step is a decode that returns logits to the caller
+// without sampling (e.g. external sampling or scoring); it excludes sampling,
+// so it is tracked separately from plain steps.
+inline constexpr absl::string_view kMtpRoundsMetric = "mtp_rounds";
+inline constexpr absl::string_view kMtpNumDraftTokensMetric =
+    "mtp_num_draft_tokens";
+inline constexpr absl::string_view kMtpNumAcceptedTokensMetric =
+    "mtp_num_accepted_tokens";
+inline constexpr absl::string_view kMtpEmittedTokensMetric =
+    "mtp_emitted_tokens";
+inline constexpr absl::string_view kPlainStepsMetric = "plain_steps";
+inline constexpr absl::string_view kLogitsStepsMetric = "logits_steps";
+
+// Speculative decoding / LLM decode latency names.
+inline constexpr absl::string_view kMtpDraftingTimeLatency =
+    "mtp_drafting_time";
+inline constexpr absl::string_view kMtpVerifyTimeLatency = "mtp_verify_time";
+inline constexpr absl::string_view kMtpRoundTimeLatency = "mtp_round_time";
+inline constexpr absl::string_view kPlainStepTimeLatency = "plain_step_time";
+inline constexpr absl::string_view kLogitsStepTimeLatency = "logits_step_time";
 
 using MetricValue = std::variant<int64_t, double>;
 
@@ -55,9 +80,55 @@ struct ExecutorStats {
   std::optional<absl::Duration> GetLatency(absl::string_view name) const;
   std::optional<MetricValue> GetMetric(absl::string_view name) const;
 
+  // Typed convenience accessors returning `default_value` when absent or
+  // recorded with a different type.
+  int64_t GetMetricAsInt64(absl::string_view name,
+                           int64_t default_value = 0) const;
+  double GetMetricAsDouble(absl::string_view name,
+                           double default_value = 0.0) const;
+  absl::Duration GetLatencyOrZero(absl::string_view name) const {
+    return GetLatency(name).value_or(absl::ZeroDuration());
+  }
+
   // Convenience accessor for total latency.
   absl::Duration GetTotalLatency() const {
-    return GetLatency(kTotalLatency).value_or(absl::ZeroDuration());
+    return GetLatencyOrZero(kTotalLatency);
+  }
+
+  // Convenience helpers for LLM decode and speculative decoding stats.
+  void AccumulateMtpRound(int64_t drafted_tokens, int64_t accepted_tokens,
+                          int64_t emitted_tokens, absl::Duration drafting_time,
+                          absl::Duration verify_time,
+                          absl::Duration round_time);
+  void AccumulatePlainStep(absl::Duration step_time);
+  void AccumulateLogitsStep(absl::Duration step_time);
+
+  int64_t mtp_rounds() const { return GetMetricAsInt64(kMtpRoundsMetric); }
+  int64_t mtp_num_draft_tokens() const {
+    return GetMetricAsInt64(kMtpNumDraftTokensMetric);
+  }
+  int64_t mtp_num_accepted_tokens() const {
+    return GetMetricAsInt64(kMtpNumAcceptedTokensMetric);
+  }
+  int64_t mtp_emitted_tokens() const {
+    return GetMetricAsInt64(kMtpEmittedTokensMetric);
+  }
+  int64_t plain_steps() const { return GetMetricAsInt64(kPlainStepsMetric); }
+  int64_t logits_steps() const { return GetMetricAsInt64(kLogitsStepsMetric); }
+  absl::Duration mtp_drafting_time() const {
+    return GetLatencyOrZero(kMtpDraftingTimeLatency);
+  }
+  absl::Duration mtp_verify_time() const {
+    return GetLatencyOrZero(kMtpVerifyTimeLatency);
+  }
+  absl::Duration mtp_round_time() const {
+    return GetLatencyOrZero(kMtpRoundTimeLatency);
+  }
+  absl::Duration plain_step_time() const {
+    return GetLatencyOrZero(kPlainStepTimeLatency);
+  }
+  absl::Duration logits_step_time() const {
+    return GetLatencyOrZero(kLogitsStepTimeLatency);
   }
 };
 

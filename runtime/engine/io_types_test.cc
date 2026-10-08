@@ -35,6 +35,7 @@ namespace {
 
 using ::testing::ContainsRegex;
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::status::StatusIs;
 
 TEST(ResponsesTest, GetTaskState) {
@@ -496,7 +497,6 @@ TEST(BenchmarkInfoTests, OperatorOutputWithData) {
   TextToTokenIds Turns \(Total 1 turns\):
     Turn 1: .*, 50 tokens
 --------------------------------------------------
---------------------------------------------------
 )";
   EXPECT_THAT(ss.str(), ContainsRegex(expected_output));
 }
@@ -572,12 +572,81 @@ TEST(BenchmarkInfoTest, SetAndGetExecutorStats) {
   EXPECT_EQ(benchmark_info.GetExecutorStats()->GetTotalLatency(),
             absl::Milliseconds(15));
 
+  // The raw stats are available through the getter but are not printed.
   std::stringstream ss;
   ss << benchmark_info;
-  EXPECT_THAT(ss.str(), ContainsRegex("Executor Stats:"));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Executor Stats")));
   EXPECT_THAT(ss.str(),
-              ContainsRegex("Total Embedding latency \\[us\\]: 15000"));
-  EXPECT_THAT(ss.str(), ContainsRegex("hardware_execution_time_us: 15000"));
+              ::testing::Not(HasSubstr("hardware_execution_time_us")));
+}
+
+TEST(BenchmarkInfoTest, SpeculativeDecodingBlockPrintedWhenMtpRoundsExist) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3,
+                           /*drafting_time=*/absl::Microseconds(11800),
+                           /*verify_time=*/absl::Microseconds(10200),
+                           /*round_time=*/absl::Microseconds(22000));
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3,
+                           /*drafting_time=*/absl::Microseconds(11800),
+                           /*verify_time=*/absl::Microseconds(10200),
+                           /*round_time=*/absl::Microseconds(22000));
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(
+      ss.str(),
+      HasSubstr("  Speculative Decoding (MTP):\n"
+                "    Rounds:            2 (100.0% of decode steps)\n"
+                "    Acceptance rate:   66.7% (4 of 6 drafted tokens)\n"
+                "    Tokens per round:  3.00 (6 emitted)\n"
+                "    Time per round:    22.00 ms (draft 11.80 ms, verify "
+                "10.20 ms)\n"
+                "    Plain decodes:     0\n"));
+}
+
+TEST(BenchmarkInfoTest, SpeculativeDecodingBlockOmittedWhenNoMtpRounds) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulatePlainStep(absl::Milliseconds(10));
+  stats.AccumulatePlainStep(absl::Milliseconds(10));
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Speculative Decoding")));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Logits-only Decode Steps")));
+  // Plain-only decoding prints no summary; the Decode Turns section already
+  // reports its speed. The raw stats are not printed either.
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Plain Decode Steps")));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("plain_steps")));
+  // Each section prints its own leading separator, so none is doubled.
+  const std::string separator =
+      "--------------------------------------------------\n";
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr(separator + separator)));
+}
+
+TEST(BenchmarkInfoTest, LogitsOnlyDecodeStepsPrintedSeparately) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateLogitsStep(absl::Milliseconds(8));
+  stats.AccumulateLogitsStep(absl::Milliseconds(9));
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Speculative Decoding")));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Plain Decode Steps")));
+  EXPECT_THAT(ss.str(),
+              HasSubstr("  Logits-only Decode Steps: 2 (8.50 ms/step, "
+                        "excl. sampling)\n"));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("logits_steps")));
 }
 
 }  // namespace

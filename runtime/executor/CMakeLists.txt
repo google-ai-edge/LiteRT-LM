@@ -210,6 +210,7 @@ target_include_directories(runtime_executor_llm_executor_base
 
 target_link_libraries(runtime_executor_llm_executor_base
   INTERFACE
+    LiteRTLM::Runtime::Executor::ExecutorStats
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LITERTLM_DEPS
@@ -408,6 +409,7 @@ target_include_directories(runtime_executor_llm_litert_compiled_model_executor
 target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
   PUBLIC
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::ExecutorStats
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Executor::LlmExecutorSettingsUtils
