@@ -29,6 +29,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
@@ -106,6 +107,13 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
                                  std::string& k_root_name,
                                  std::string& v_root_name);
 
+// Returns true if `name` is the name of a linear attention / convolution
+// recurrent state tensor (e.g. "kv_cache_c_0" for conv state, "kv_cache_r_0"
+// for recurrent state) of a hybrid model such as LFM2 or Qwen3.5. Unlike the
+// standard KV cache, these states are overwritten every step and must always
+// be fed as inputs.
+bool IsLinearAttentionStateName(absl::string_view name);
+
 // Gets a set of prefill signature runners from the interpreter.
 // The signature runners are sorted by the input tokens dimension.
 // signature_name_base is the prefix of the prefill signature names, e.g.
@@ -116,6 +124,33 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
 // existing behavior.
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures = {});
+
+// Gets a set of prefill signature runners from an already compiled model.
+//
+// This is equivalent to the `::litert::Model` overload above, but inspects the
+// signatures exposed by the `CompiledModel` instead of the flatbuffer model.
+// Use this when only the CompiledModel is available (e.g. the model was
+// compiled from streamed weights and no `::litert::Model` is retained).
+//
+// Arguments:
+// - model: The compiled model whose signatures are inspected.
+// - signature_name_base: Prefix of the prefill signature names, e.g.
+//   "prefill". Signatures whose key does not start with this prefix are
+//   ignored.
+// - input_positions_name: Name of the input positions tensor in each prefill
+//   signature, e.g. "input_pos". Its shape ([seq_len] or
+//   [batch_size, seq_len]) determines the prefill length of the signature.
+// - selected_signatures: If nonempty, only signatures whose key is in this
+//   list are considered. If empty, all signatures are considered.
+//
+// Returns a map from prefill length to signature name, sorted by prefill
+// length in descending order. Returns an error if a matching signature does
+// not have an `input_positions_name` input, or if that input has an
+// unsupported rank.
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
     absl::string_view input_positions_name,
     absl::Span<const std::string> selected_signatures = {});
 
@@ -174,6 +209,19 @@ struct AttentionMaskParams {
 // If metadata is null or does not specify types, defaults to causal type.
 AttentionMaskParams GetAttentionMaskParams(
     const proto::ExecutorMetadata* executor_metadata);
+
+// Returns true if host-side attention mask initialization and filling can be
+// skipped because the GPU compiled model pruned the boolean causal mask
+// input(s) (e.g., when FlashAttention / FlashDecode SDPA computes causal
+// masking directly on the GPU from `param_tensor`). When
+// `signatures.input_attn_mask_local` is present, both `attn_mask_buffer` and
+// `attn_mask_local_buffer` must be causal boolean masks on host memory
+// (pruned by the GPU delegate) in order to skip.
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer = nullptr,
+    const ::litert::TensorBuffer* attn_mask_local_buffer = nullptr);
 
 // The operational mode for filling the ring-buffer attention mask.
 enum class RingBufferAttentionMaskMode {

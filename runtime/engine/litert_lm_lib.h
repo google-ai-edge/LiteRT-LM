@@ -83,6 +83,7 @@ struct LiteRtLmSettings {
   std::optional<std::string> expected_output = std::nullopt;
   std::optional<std::string> log_sink_file = std::nullopt;
   int max_num_tokens = 0;
+  bool use_ringbuffers = false;
   // The maximum number of tokens to generate. For thinking models, both
   // thinking (reasoning) tokens and the final response tokens count towards
   // this limit.
@@ -155,6 +156,8 @@ struct LitertLmMetrics {
   std::optional<BenchmarkInfo> benchmark_info;
   float peak_mem_mb = 0.0f;
   float peak_private_mb = 0.0f;
+  float peak_dmabuf_mb = 0.0f;
+  int64_t dmabuf_buffer_count = 0;
 };
 
 // Aggregated (median) statistics of the metrics collected over multiple
@@ -176,6 +179,7 @@ struct AggregatedLitertLmMetrics {
   // Median peak memory usage, in MB.
   std::optional<float> peak_mem_mb;
   std::optional<float> peak_private_mb;
+  std::optional<float> peak_dmabuf_mb;
 };
 
 // Computes the median of each benchmark metric across the per-iteration

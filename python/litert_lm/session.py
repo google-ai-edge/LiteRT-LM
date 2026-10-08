@@ -19,7 +19,13 @@ import pathlib
 import queue
 import warnings
 from . import interfaces
+from ._ffi import call_checked
+from ._ffi import check_status
+from ._ffi import create_checked
+from ._ffi import create_optional_checked
+from ._ffi import get_checked
 from ._ffi import InputDataType
+from ._ffi import StatusCode
 from ._ffi import STREAM_CALLBACK_TYPE
 
 
@@ -57,11 +63,13 @@ class Session(interfaces.AbstractSession):
     try:
       for i, text in enumerate(contents):
         encoded_text = text.encode("utf-8")
-        input_ptr = self._lib.litert_lm_input_data_create(
-            InputDataType.TEXT, encoded_text, len(encoded_text)
+        input_ptr = create_checked(
+            self._lib,
+            "litert_lm_input_data_create",
+            InputDataType.TEXT,
+            encoded_text,
+            len(encoded_text),
         )
-        if not input_ptr:
-          raise RuntimeError("Failed to create LiteRtLmInputData")
         created_inputs.append(input_ptr)
         inputs[i] = input_ptr
 
@@ -75,22 +83,41 @@ class Session(interfaces.AbstractSession):
         self._lib.litert_lm_input_data_delete(input_ptr)
 
   def run_decode(self) -> interfaces.Responses:
-    resp_ptr = self._lib.litert_lm_session_run_decode(self._ptr)
-    if not resp_ptr:
-      raise RuntimeError("litert_lm_session_run_decode failed")
+    resp_ptr = create_checked(
+        self._lib, "litert_lm_session_run_decode", self._ptr
+    )
     return self._wrap_responses(resp_ptr)
 
   def run_decode_async(self) -> collections.abc.Iterator[interfaces.Responses]:
     q = queue.Queue()
 
     def callback(unused_data, chunk_ptr):
-      error_msg = self._lib.litert_lm_stream_chunk_get_error(chunk_ptr)
-      if error_msg:
-        q.put(RuntimeError(error_msg.decode("utf-8")))
-      else:
-        chunk = self._lib.litert_lm_stream_chunk_get_text(chunk_ptr)
-        is_final = self._lib.litert_lm_stream_chunk_is_final(chunk_ptr)
-        q.put((chunk.decode("utf-8") if chunk else "", is_final))
+      # Runs on a C++ thread: report failures through the queue, not by raising.
+      try:
+        error_msg = get_checked(
+            self._lib,
+            "litert_lm_stream_chunk_get_error",
+            ctypes.c_char_p,
+            chunk_ptr,
+        )
+        if error_msg:
+          q.put(RuntimeError(error_msg.decode("utf-8")))
+        else:
+          chunk = get_checked(
+              self._lib,
+              "litert_lm_stream_chunk_get_text",
+              ctypes.c_char_p,
+              chunk_ptr,
+          )
+          is_final = get_checked(
+              self._lib,
+              "litert_lm_stream_chunk_is_final",
+              ctypes.c_bool,
+              chunk_ptr,
+          )
+          q.put((chunk.decode("utf-8") if chunk else "", is_final))
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        q.put(e)
 
     c_callback = STREAM_CALLBACK_TYPE(callback)
     self._current_callback = c_callback
@@ -121,36 +148,89 @@ class Session(interfaces.AbstractSession):
     for i, t in enumerate(target_text):
       c_targets[i] = t.encode("utf-8")
 
-    resp_ptr = self._lib.litert_lm_session_run_text_scoring(
-        self._ptr, c_targets, num_targets, store_token_lengths
+    resp_ptr = create_checked(
+        self._lib,
+        "litert_lm_session_run_text_scoring",
+        self._ptr,
+        c_targets,
+        num_targets,
+        store_token_lengths,
     )
-    if not resp_ptr:
-      raise RuntimeError("litert_lm_session_run_text_scoring failed")
     return self._wrap_responses(resp_ptr)
+
+  def _get_response_text_at(self, resp_ptr, index: int) -> str | None:
+    """Returns the response text at `index`, or None if there is none."""
+    text = ctypes.c_char_p()
+    status = self._lib.litert_lm_responses_get_response_text_at(
+        resp_ptr, index, ctypes.byref(text)
+    )
+    if status == StatusCode.NOT_FOUND:
+      return None
+    check_status(self._lib, "litert_lm_responses_get_response_text_at", status)
+    return text.value.decode("utf-8") if text.value is not None else None
 
   def _wrap_responses(self, resp_ptr) -> interfaces.Responses:
     try:
-      num = self._lib.litert_lm_responses_get_num_candidates(resp_ptr)
+      lib = self._lib
+      num = get_checked(
+          lib, "litert_lm_responses_get_num_candidates", ctypes.c_int, resp_ptr
+      )
       texts = []
       scores = []
       lengths = []
       token_scores = []
       for i in range(num):
-        t = self._lib.litert_lm_responses_get_response_text_at(resp_ptr, i)
+        t = self._get_response_text_at(resp_ptr, i)
         if t is not None:
-          texts.append(t.decode("utf-8"))
-        if self._lib.litert_lm_responses_has_score_at(resp_ptr, i):
-          scores.append(self._lib.litert_lm_responses_get_score_at(resp_ptr, i))
-        if self._lib.litert_lm_responses_has_token_length_at(resp_ptr, i):
+          texts.append(t)
+        if get_checked(
+            lib, "litert_lm_responses_has_score_at", ctypes.c_bool, resp_ptr, i
+        ):
+          scores.append(
+              get_checked(
+                  lib,
+                  "litert_lm_responses_get_score_at",
+                  ctypes.c_float,
+                  resp_ptr,
+                  i,
+              )
+          )
+        if get_checked(
+            lib,
+            "litert_lm_responses_has_token_length_at",
+            ctypes.c_bool,
+            resp_ptr,
+            i,
+        ):
           lengths.append(
-              self._lib.litert_lm_responses_get_token_length_at(resp_ptr, i)
+              get_checked(
+                  lib,
+                  "litert_lm_responses_get_token_length_at",
+                  ctypes.c_int,
+                  resp_ptr,
+                  i,
+              )
           )
-        if self._lib.litert_lm_responses_has_token_scores_at(resp_ptr, i):
-          num_scores = self._lib.litert_lm_responses_get_num_token_scores_at(
-              resp_ptr, i
+        if get_checked(
+            lib,
+            "litert_lm_responses_has_token_scores_at",
+            ctypes.c_bool,
+            resp_ptr,
+            i,
+        ):
+          num_scores = get_checked(
+              lib,
+              "litert_lm_responses_get_num_token_scores_at",
+              ctypes.c_int,
+              resp_ptr,
+              i,
           )
-          scores_ptr = self._lib.litert_lm_responses_get_token_scores_at(
-              resp_ptr, i
+          scores_ptr = get_checked(
+              lib,
+              "litert_lm_responses_get_token_scores_at",
+              ctypes.POINTER(ctypes.c_float),
+              resp_ptr,
+              i,
           )
           if scores_ptr:
             token_scores.append([scores_ptr[j] for j in range(num_scores)])
@@ -167,9 +247,9 @@ class Session(interfaces.AbstractSession):
     """See base class."""
     if not self._ptr:
       raise RuntimeError("Session is closed.")
-    info_ptr = self._lib.litert_lm_session_get_benchmark_info(self._ptr)
-    if not info_ptr:
-      raise RuntimeError("Failed to get benchmark info.")
+    info_ptr = create_checked(
+        self._lib, "litert_lm_session_get_benchmark_info", self._ptr
+    )
     try:
       return interfaces.create_benchmark_info(self._lib, info_ptr)
     finally:
@@ -177,11 +257,13 @@ class Session(interfaces.AbstractSession):
 
   def cancel_process(self) -> None:
     if self._ptr:
-      self._lib.litert_lm_session_cancel_process(self._ptr)
+      call_checked(self._lib, "litert_lm_session_cancel_process", self._ptr)
 
   def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
     """See base class."""
-    if not self._lib.litert_lm_experimental_is_debugger_enabled():
+    if not get_checked(
+        self._lib, "litert_lm_experimental_is_debugger_enabled", ctypes.c_bool
+    ):
       warnings.warn(
           "LiteRT-LM Debugger is disabled in this runtime build. "
           "To enable artifact tracing, re-compile using "
@@ -194,17 +276,21 @@ class Session(interfaces.AbstractSession):
     if not self._engine or not self._engine.cache_dir:
       return None
 
-    debug_info_ptr = self._lib.litert_lm_experimental_session_get_debug_info(
-        self._ptr
+    if not self._ptr:
+      return None
+
+    debug_info_ptr = create_optional_checked(
+        self._lib, "litert_lm_experimental_session_get_debug_info", self._ptr
     )
     if not debug_info_ptr:
       return None
 
     try:
-      capture_dir_bytes = (
-          self._lib.litert_lm_experimental_session_debug_info_get_capture_dir(
-              debug_info_ptr
-          )
+      capture_dir_bytes = get_checked(
+          self._lib,
+          "litert_lm_experimental_session_debug_info_get_capture_dir",
+          ctypes.c_char_p,
+          debug_info_ptr,
       )
       if not capture_dir_bytes:
         return None

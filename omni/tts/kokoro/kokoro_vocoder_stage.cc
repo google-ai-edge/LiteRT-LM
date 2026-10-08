@@ -140,8 +140,6 @@ KokoroVocoderStage::~KokoroVocoderStage() {
   }
 }
 
-absl::Status KokoroVocoderStage::Flush() { return absl::OkStatus(); }
-
 absl::StatusOr<std::vector<float>> KokoroVocoderStage::SynthesizeIstftAudio(
     absl::Span<const float> magnitude_spectrogram,
     absl::Span<const float> phase_spectrogram, int active_subframes) {

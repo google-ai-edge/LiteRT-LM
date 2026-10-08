@@ -61,11 +61,7 @@ cc_test(
 cc_library(
     name = "text_source",
     hdrs = ["text_source.h"],
-    deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings:string_view",
-        "//omni/base:stage",
-    ],
+    deps = ["//omni/base:stage"],
 )
 
 cc_library(
@@ -101,7 +97,6 @@ cc_library(
     name = "vocoder",
     hdrs = ["vocoder.h"],
     deps = [
-        "@com_google_absl//absl/status",
         "//omni/base:io_types",
         "//omni/base:stage",
     ],
@@ -113,20 +108,15 @@ cc_library(
     hdrs = ["tts_session.h"],
     deps = [
         ":stream_text_source",
-        ":vocoder",
+        ":text_chunk_utils",
+        ":tts_engine",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
         "//omni:omni_session",
-        "//omni/base:async_stage_scheduler",
-        "//omni/base:io_types",
-        "//omni/base:stage",
-        "//runtime/framework:threadpool",
     ],
 )
 
@@ -135,14 +125,17 @@ cc_test(
     srcs = ["tts_session_test.cc"],
     deps = [
         ":stream_text_source",
+        ":text_chunk_utils",
+        ":text_source",
         ":tts_session",
         ":vocoder",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
+        "//omni:multi_staged_session",
         "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:stage",
@@ -193,7 +186,6 @@ cc_library(
     deps = [
         ":stream_text_source",
         ":text_chunk_utils",
-        ":tts_session",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
@@ -202,9 +194,11 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
+        "//omni:multi_staged_session",
         "//omni/base:io_types",
         "//omni/base:model_resources",
         "//omni/base:model_utils",
+        "//omni/base:stage",
         "//omni/tts/kokoro:kokoro_factory",
         "//omni/tts/kokoro:kokoro_model_config",
         "//omni/tts/qwen3_tts:qwen3_tts_factory",
@@ -217,24 +211,6 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "tts_omni_session",
-    srcs = ["tts_omni_session.cc"],
-    hdrs = ["tts_omni_session.h"],
-    deps = [
-        ":stream_text_source",
-        ":text_chunk_utils",
-        ":tts_engine",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "//omni:omni_session",
-    ],
-)
-
 cc_test(
     name = "tts_engine_test",
     srcs = ["tts_engine_test.cc"],
@@ -244,7 +220,6 @@ cc_test(
     deps = [
         ":stream_text_source",
         ":tts_engine",
-        ":tts_session",
         ":vocoder",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
@@ -253,6 +228,7 @@ cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_environment",
+        "//omni:multi_staged_session",
         "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:model_resources",

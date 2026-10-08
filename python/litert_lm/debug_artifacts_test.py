@@ -24,6 +24,19 @@ from absl.testing import absltest
 
 import litert_lm
 
+_STATUS_OK = 0
+_STATUS_INVALID_ARGUMENT = 3
+
+
+def _writes_out(value):
+  """Returns a C API mock side effect writing `value` to the out-parameter."""
+
+  def side_effect(*args):
+    args[-1]._obj.value = value  # pylint: disable=protected-access
+    return _STATUS_OK
+
+  return side_effect
+
 
 class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
   """End-to-End and Pre-condition validation suite for litert_lm.Session.get_debug_artifacts()."""
@@ -53,8 +66,8 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
     LITERT_LM_DEBUGGER_ENABLED elided.
     """
     # Simulate Macro elision (`LITERT_LM_DEBUGGER_ENABLED=0`)
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.return_value = (
-        False
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(False)
     )
 
     with warnings.catch_warnings(record=True) as captured_warnings:
@@ -71,23 +84,64 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
       )
 
   def test_get_debug_artifacts_invalid_session(self):
-    """Asserts get_debug_artifacts returns `None` for invalid session."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.return_value = True
-    # Emulate an invalid/null opaque struct handle returned from the C ABI
-    self.mock_lib.litert_lm_experimental_session_get_debug_info.return_value = (
-        None
+    """Asserts get_debug_artifacts returns `None` when debug info is absent."""
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(True)
+    )
+    # Emulate absent debug info: the C API succeeds and writes a NULL handle.
+    self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
+        _writes_out(None)
     )
 
     result = self.session.get_debug_artifacts()
     self.assertIsNone(result)
+    self.mock_lib.litert_lm_experimental_session_debug_info_delete.assert_not_called()
+
+  def test_get_debug_artifacts_raises_on_debug_info_error(self):
+    """Asserts a C API failure is surfaced with the last error message."""
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(True)
+    )
+    self.mock_lib.litert_lm_experimental_session_get_debug_info.return_value = (
+        _STATUS_INVALID_ARGUMENT
+    )
+    self.mock_lib.litert_lm_get_last_error_message.return_value = (
+        b"Invalid session."
+    )
+
+    with self.assertRaisesRegex(RuntimeError, "Invalid session"):
+      self.session.get_debug_artifacts()
+
+  def test_get_debug_artifacts_raises_on_capture_dir_error(self):
+    """Asserts debug info is freed when reading the capture dir fails."""
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(True)
+    )
+    self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
+        _writes_out(12345)
+    )
+    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.return_value = (
+        _STATUS_INVALID_ARGUMENT
+    )
+    self.mock_lib.litert_lm_get_last_error_message.return_value = (
+        b"debug_info must not be NULL."
+    )
+
+    with self.assertRaisesRegex(RuntimeError, "debug_info must not be NULL"):
+      self.session.get_debug_artifacts()
+    self.mock_lib.litert_lm_experimental_session_debug_info_delete.assert_called_once_with(
+        12345
+    )
 
   def test_get_debug_artifacts_empty_session_dir(self):
     """Tests traversal grace when the session directory does not exist."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.return_value = True
-    self.mock_lib.litert_lm_experimental_session_get_debug_info.return_value = (
-        12345
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(True)
     )
-    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.return_value = (
+    self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
+        _writes_out(12345)
+    )
+    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.side_effect = _writes_out(
         b"litert_lm_debugger/42"
     )
 
@@ -105,11 +159,13 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_populated_session_dir_and_sorting(self):
     """Validates multi-session sandbox isolation and safetensors sorting."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.return_value = True
-    self.mock_lib.litert_lm_experimental_session_get_debug_info.return_value = (
-        12345
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(True)
     )
-    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.return_value = (
+    self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
+        _writes_out(12345)
+    )
+    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.side_effect = _writes_out(
         b"litert_lm_debugger/42"
     )
 
@@ -177,8 +233,8 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_with_warning_on_macro_disabled(self):
     """Verifies that get_debug_artifacts triggers a RuntimeWarning when disabled."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.return_value = (
-        False
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(False)
     )
 
     with warnings.catch_warnings(record=True) as captured_warnings:
@@ -196,11 +252,13 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_populated_dir(self):
     """Validates retrieval of debug artifacts through Conversation."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.return_value = True
-    self.mock_lib.litert_lm_experimental_conversation_get_session_debug_info.return_value = (
+    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
+        _writes_out(True)
+    )
+    self.mock_lib.litert_lm_experimental_conversation_get_session_debug_info.side_effect = _writes_out(
         67890
     )
-    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.return_value = (
+    self.mock_lib.litert_lm_experimental_session_debug_info_get_capture_dir.side_effect = _writes_out(
         b"litert_lm_debugger/99"
     )
 

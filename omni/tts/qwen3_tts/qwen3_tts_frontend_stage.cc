@@ -46,7 +46,7 @@ namespace litert::omni::tts {
 absl::StatusOr<std::unique_ptr<Qwen3TtsFrontendStage>>
 Qwen3TtsFrontendStage::Create(
     Stage<std::string>* absl_nonnull text_source,
-    const std::string& model_dir,
+    absl::string_view model_dir,
     const Qwen3TtsModelConfig& config,
     std::shared_ptr<ModelResources> absl_nonnull resources) {
   auto stage = absl::WrapUnique(

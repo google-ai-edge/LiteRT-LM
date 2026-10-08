@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include "c/engine.h"
 #include "c/engine_internal.h"
+#include "c/error_reporter.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -42,13 +43,26 @@ using SamplerParamsPtr =
     std::unique_ptr<LiteRtLmSamplerParams,
                     decltype(&litert_lm_sampler_params_delete)>;
 
+// Creates engine settings through the status + out-parameter C API and returns
+// them (or NULL on failure) wrapped in a smart pointer.
+EngineSettingsPtr CreateEngineSettings(const char* model_path,
+                                       const char* backend_str,
+                                       const char* vision_backend_str,
+                                       const char* audio_backend_str) {
+  LiteRtLmEngineSettings* settings = nullptr;
+  EXPECT_EQ(litert_lm_engine_settings_create(model_path, backend_str,
+                                             vision_backend_str,
+                                             audio_backend_str, &settings),
+            kLiteRtLmStatusOk);
+  return EngineSettingsPtr(settings, &litert_lm_engine_settings_delete);
+}
+
 TEST(EngineLiteTest, CreateSettingsWithNoVisionAndAudioBackend) {
   const std::string task_path = "test_model_path_1";
-  EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
-      &litert_lm_engine_settings_delete);
+  EngineSettingsPtr settings =
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr);
   ASSERT_NE(settings, nullptr);
   EXPECT_FALSE(settings->settings->GetVisionExecutorSettings().has_value());
   EXPECT_FALSE(settings->settings->GetAudioExecutorSettings().has_value());
@@ -56,11 +70,10 @@ TEST(EngineLiteTest, CreateSettingsWithNoVisionAndAudioBackend) {
 
 TEST(EngineLiteTest, CreateSettingsWithVisionAndAudioBackend) {
   const std::string task_path = "test_model_path_1";
-  EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ "gpu",
-                                       /* audio_backend_str */ "cpu"),
-      &litert_lm_engine_settings_delete);
+  EngineSettingsPtr settings =
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ "gpu",
+                           /* audio_backend_str */ "cpu");
   ASSERT_NE(settings, nullptr);
   EXPECT_TRUE(settings->settings->GetVisionExecutorSettings().has_value());
   EXPECT_TRUE(settings->settings->GetAudioExecutorSettings().has_value());
@@ -72,11 +85,10 @@ TEST(EngineLiteTest, CreateSettingsWithVisionAndAudioBackend) {
 
 TEST(EngineLiteTest, SetCacheDir) {
   const std::string task_path = "test_model_path_1";
-  EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
-      &litert_lm_engine_settings_delete);
+  EngineSettingsPtr settings =
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr);
   ASSERT_NE(settings, nullptr);
   const std::string cache_dir = "test_cache_dir";
   litert_lm_engine_settings_set_cache_dir(settings.get(), cache_dir.c_str());
@@ -85,9 +97,11 @@ TEST(EngineLiteTest, SetCacheDir) {
 }
 
 TEST(EngineLiteTest, SamplerParamsCreateAndDelete) {
-  SamplerParamsPtr params(
-      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopK),
-      &litert_lm_sampler_params_delete);
+  LiteRtLmSamplerParams* raw_params = nullptr;
+  ASSERT_EQ(
+      litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopK, &raw_params),
+      kLiteRtLmStatusOk);
+  SamplerParamsPtr params(raw_params, &litert_lm_sampler_params_delete);
   ASSERT_NE(params, nullptr);
   EXPECT_EQ(params->type, kLiteRtLmSamplerTypeTopK);
   litert_lm_sampler_params_set_top_k(params.get(), 50);

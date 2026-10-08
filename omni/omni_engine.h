@@ -36,11 +36,16 @@ namespace litert::omni {
 //   - "qwen3-asr-0.6b"
 //   - "tinygemma-asr"
 //
-// Supported TTS model names / folders:
+// Supported TTS model names / paths:
 //   - "kokoro" / "kokoro-82m"
 //   - "qwen3-tts" / "qwen3"
-//   - Any directory path containing Kokoro (`kokoro_*.tflite`) or Qwen3-TTS
-//     (`talker_*.tflite` / `codec_*.tflite`) model files.
+//   - Any directory of `.tflite` or `.litertlm` model files for Kokoro or
+//     Qwen3-TTS.
+//
+// Supported Text2Image model names / paths:
+//   - "bonsai-flux2" / "flux2-klein" / "flux.2-klein-4b"
+//   - Any directory of `.tflite` or `.litertlm` model files (or `.litertlm`
+//     file path) for Bonsai-FLUX.2.
 class OmniEngine {
  public:
   // Common runtime options for `OmniEngine`.

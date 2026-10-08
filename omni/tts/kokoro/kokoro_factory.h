@@ -24,10 +24,13 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
+#include "omni/base/stage.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
+#include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
-#include "omni/tts/tts_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 
@@ -83,14 +86,18 @@ TextChunkConfig ReviseTextChunkConfigForKokoro(
 // - model_folder: Path to the directory containing the Kokoro models.
 // - text_source: StreamTextSource providing text chunks for the session.
 // - resources: Shared ModelResources container with compiled models.
+// - stages: Output vector populated with the created stages in pipeline order.
+//   The first stage (`stages[0]`) must be `StreamTextSource`.
+// - output_stage: Output pointer set to the final vocoder `Stage<Output>`.
 //
 // returns
-// - TtsSession::Components containing all stage components on success, or
-// error status on failure.
-absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
+// - absl::OkStatus on success, or error status on failure.
+absl::Status CreateKokoroComponents(
     const KokoroModelConfig& config, absl::string_view model_folder,
     std::unique_ptr<StreamTextSource> absl_nonnull text_source,
-    std::shared_ptr<ModelResources> resources);
+    std::shared_ptr<ModelResources> absl_nonnull resources,
+    std::vector<std::unique_ptr<internal::StageBase>>& stages,
+    Stage<Output>* absl_nullable* absl_nonnull output_stage);
 
 // Returns the list of available Kokoro voice profile names (e.g. "af_heart",
 // "ef_dora", "zf_xiaobei") discovered from GenericBinaryData sections in

@@ -29,7 +29,6 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/base/io_types.h"
@@ -173,11 +172,7 @@ absl::Status Qwen3TtsVocoderStage::ScheduleInternal() {
   return ProcessPendingChunks(/*flush_remaining=*/false);
 }
 
-absl::Status Qwen3TtsVocoderStage::Flush() {
-  if (!SetStateIfState(State::kIdle, State::kRunning)) {
-    return absl::FailedPreconditionError(
-        "Flush() called while Schedule() is in progress.");
-  }
+absl::Status Qwen3TtsVocoderStage::FlushInternal() {
   while (true) {
     auto latent_out = latent_decoder_.GetOutput();
     if (!latent_out.ok()) break;
@@ -186,9 +181,7 @@ absl::Status Qwen3TtsVocoderStage::Flush() {
                            latent_out->rvq_frames.end());
   }
 
-  absl::Status status = ProcessPendingChunks(/*flush_remaining=*/true);
-  SetState(State::kIdle);
-  return status;
+  return ProcessPendingChunks(/*flush_remaining=*/true);
 }
 
 void Qwen3TtsVocoderStage::ResetInternal() {

@@ -16,11 +16,12 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "c/engine.h"
 #include "c/error_reporter_internal.h"
 #include "schema/model_info/model_info.h"
 
@@ -32,9 +33,10 @@ struct LiteRtLmLoadedFile {
 };
 
 namespace {
-using ::litert::lm::c::SetLastError;
+using ::litert::lm::c::ReturnError;
 using ::litert::lm::schema::model_info::EmbeddingInferenceCapability;
 using ::litert::lm::schema::model_info::LlmInferenceCapability;
+using ::litert::lm::schema::model_info::SamplerParameters;
 using ::litert::lm::schema::model_info::SupportedBackends;
 
 // Helper functions to extract modality-specific SupportedBackends from the
@@ -78,22 +80,70 @@ const SupportedBackends* GetSupportedBackends(
   if (loaded_file->info.llm_capability.has_value()) {
     const auto* backends =
         GetModalityBackends(*loaded_file->info.llm_capability, modality);
-    if (backends != nullptr && (!backends->preferred_backends.empty() ||
-                                backends->cpu || backends->gpu ||
-                                backends->npu)) {
+    if (backends != nullptr &&
+        (!backends->preferred_backends.empty() || backends->cpu ||
+         backends->gpu || backends->npu)) {
       return backends;
     }
   }
   if (loaded_file->info.embedding_capability.has_value()) {
     const auto* backends =
         GetModalityBackends(*loaded_file->info.embedding_capability, modality);
-    if (backends != nullptr && (!backends->preferred_backends.empty() ||
-                                backends->cpu || backends->gpu ||
-                                backends->npu)) {
+    if (backends != nullptr &&
+        (!backends->preferred_backends.empty() || backends->cpu ||
+         backends->gpu || backends->npu)) {
       return backends;
     }
   }
   return nullptr;
+}
+
+// Returns an InvalidArgument error unless `modality` is a known
+// LiteRtLmModality.
+absl::Status ValidateModality(LiteRtLmModality modality) {
+  switch (modality) {
+    case kLiteRtLmModalityText:
+    case kLiteRtLmModalityVision:
+    case kLiteRtLmModalityAudio:
+    case kLiteRtLmModalityVideo:
+      return absl::OkStatus();
+  }
+  return absl::InvalidArgumentError(absl::StrFormat(
+      "Unknown LiteRtLmModality: %d.", static_cast<int>(modality)));
+}
+
+// Returns an InvalidArgument error if `max_size` is negative.
+absl::Status ValidateMaxSize(int32_t max_size) {
+  if (max_size < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("max_size must not be negative, got %d.", max_size));
+  }
+  return absl::OkStatus();
+}
+
+// Points `*params` at the model's default sampler parameters. Returns a
+// NotFound error if the model has no LLM capability.
+absl::Status GetDefaultSamplerParams(const LiteRtLmLoadedFile* loaded_file,
+                                     const SamplerParameters** params) {
+  if (!loaded_file->info.llm_capability.has_value()) {
+    return absl::NotFoundError(
+        "The model is not an LLM and has no default sampler parameters.");
+  }
+  *params = &loaded_file->info.llm_capability->default_sampler_params;
+  return absl::OkStatus();
+}
+
+// Copies up to `max_size` entries of `values` into `lengths` (if non-NULL) and
+// returns the total number of entries.
+int32_t CopyLengths(const std::vector<int>& values, int32_t* lengths,
+                    int32_t max_size) {
+  if (lengths != nullptr) {
+    int32_t count = std::min(max_size, static_cast<int32_t>(values.size()));
+    for (int32_t i = 0; i < count; ++i) {
+      lengths[i] = values[i];
+    }
+  }
+  return static_cast<int32_t>(values.size());
 }
 
 bool CheckModality(
@@ -117,83 +167,98 @@ bool CheckModality(
 
 extern "C" {
 
-LiteRtLmLoadedFile* litert_lm_loaded_file_create(const char* litertlm_path) {
-  if (litertlm_path == nullptr) {
-    SetLastError(absl::StatusCode::kInvalidArgument,
-                 "litertlm_path must not be null.");
-    return nullptr;
-  }
-  auto info_or = litert::lm::schema::model_info::GetModelInfo(litertlm_path);
-  if (!info_or.ok()) {
-    SetLastError(info_or.status());
-    return nullptr;
-  }
+LiteRtLmStatusCode litert_lm_loaded_file_create(
+    const char* litertlm_path, LiteRtLmLoadedFile** out_loaded_file) {
+  LITERT_LM_C_RETURN_IF_NULL(out_loaded_file);
+  *out_loaded_file = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(litertlm_path);
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      auto info, litert::lm::schema::model_info::GetModelInfo(litertlm_path));
   auto* file = new LiteRtLmLoadedFile;
-  file->info = std::move(*info_or);
-  return file;
+  file->info = std::move(info);
+  *out_loaded_file = file;
+  return kLiteRtLmStatusOk;
 }
 
 void litert_lm_loaded_file_delete(LiteRtLmLoadedFile* loaded_file) {
   delete loaded_file;
 }
 
-bool litert_lm_loaded_file_has_speculative_decoding_support(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return false;
-  }
-  return loaded_file->info.llm_capability->supports_speculative_decoding;
+LiteRtLmStatusCode litert_lm_loaded_file_has_speculative_decoding_support(
+    const LiteRtLmLoadedFile* loaded_file, bool* out_supported) {
+  LITERT_LM_C_RETURN_IF_NULL(out_supported);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const auto& llm_cap = loaded_file->info.llm_capability;
+  *out_supported =
+      llm_cap.has_value() && llm_cap->supports_speculative_decoding;
+  return kLiteRtLmStatusOk;
 }
 
-bool litert_lm_loaded_file_supports_thinking(LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return false;
-  }
-  return loaded_file->info.llm_capability->supports_thinking;
+LiteRtLmStatusCode litert_lm_loaded_file_supports_thinking(
+    const LiteRtLmLoadedFile* loaded_file, bool* out_supported) {
+  LITERT_LM_C_RETURN_IF_NULL(out_supported);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const auto& llm_cap = loaded_file->info.llm_capability;
+  *out_supported = llm_cap.has_value() && llm_cap->supports_thinking;
+  return kLiteRtLmStatusOk;
 }
 
-bool litert_lm_loaded_file_supports_function_calling(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return false;
-  }
-  return loaded_file->info.llm_capability->supports_function_calling;
+LiteRtLmStatusCode litert_lm_loaded_file_supports_function_calling(
+    const LiteRtLmLoadedFile* loaded_file, bool* out_supported) {
+  LITERT_LM_C_RETURN_IF_NULL(out_supported);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const auto& llm_cap = loaded_file->info.llm_capability;
+  *out_supported = llm_cap.has_value() && llm_cap->supports_function_calling;
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmSamplerType litert_lm_loaded_file_sampler_type(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return kLiteRtLmSamplerTypeUnspecified;
-  }
-  return static_cast<LiteRtLmSamplerType>(
-      loaded_file->info.llm_capability->default_sampler_params.type);
+LiteRtLmStatusCode litert_lm_loaded_file_sampler_type(
+    const LiteRtLmLoadedFile* loaded_file,
+    LiteRtLmSamplerType* out_sampler_type) {
+  LITERT_LM_C_RETURN_IF_NULL(out_sampler_type);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const SamplerParameters* params = nullptr;
+  LITERT_LM_C_RETURN_IF_ERROR(GetDefaultSamplerParams(loaded_file, &params));
+  *out_sampler_type = static_cast<LiteRtLmSamplerType>(params->type);
+  return kLiteRtLmStatusOk;
 }
 
-float litert_lm_loaded_file_sampler_temperature(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return 0.0f;
-  }
-  return loaded_file->info.llm_capability->default_sampler_params.temperature;
+LiteRtLmStatusCode litert_lm_loaded_file_sampler_temperature(
+    const LiteRtLmLoadedFile* loaded_file, float* out_temperature) {
+  LITERT_LM_C_RETURN_IF_NULL(out_temperature);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const SamplerParameters* params = nullptr;
+  LITERT_LM_C_RETURN_IF_ERROR(GetDefaultSamplerParams(loaded_file, &params));
+  *out_temperature = params->temperature;
+  return kLiteRtLmStatusOk;
 }
 
-int32_t litert_lm_loaded_file_sampler_top_k(LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return 0;
-  }
-  return loaded_file->info.llm_capability->default_sampler_params.k;
+LiteRtLmStatusCode litert_lm_loaded_file_sampler_top_k(
+    const LiteRtLmLoadedFile* loaded_file, int32_t* out_top_k) {
+  LITERT_LM_C_RETURN_IF_NULL(out_top_k);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const SamplerParameters* params = nullptr;
+  LITERT_LM_C_RETURN_IF_ERROR(GetDefaultSamplerParams(loaded_file, &params));
+  *out_top_k = params->k;
+  return kLiteRtLmStatusOk;
 }
 
-float litert_lm_loaded_file_sampler_top_p(LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
-    return 0.0f;
-  }
-  return loaded_file->info.llm_capability->default_sampler_params.p;
+LiteRtLmStatusCode litert_lm_loaded_file_sampler_top_p(
+    const LiteRtLmLoadedFile* loaded_file, float* out_top_p) {
+  LITERT_LM_C_RETURN_IF_NULL(out_top_p);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  const SamplerParameters* params = nullptr;
+  LITERT_LM_C_RETURN_IF_ERROR(GetDefaultSamplerParams(loaded_file, &params));
+  *out_top_p = params->p;
+  return kLiteRtLmStatusOk;
 }
 
-bool litert_lm_loaded_file_supports_input_modality(
-    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
-  if (loaded_file == nullptr) return false;
+LiteRtLmStatusCode litert_lm_loaded_file_supports_input_modality(
+    const LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
+    bool* out_supported) {
+  LITERT_LM_C_RETURN_IF_NULL(out_supported);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateModality(modality));
   bool supports = false;
   if (loaded_file->info.llm_capability.has_value()) {
     supports |= CheckModality(
@@ -203,166 +268,200 @@ bool litert_lm_loaded_file_supports_input_modality(
     supports |= CheckModality(
         loaded_file->info.embedding_capability->input_modalities, modality);
   }
-  return supports;
+  *out_supported = supports;
+  return kLiteRtLmStatusOk;
 }
 
-int32_t litert_lm_loaded_file_max_vision_token_budget(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr) return -1;
+LiteRtLmStatusCode litert_lm_loaded_file_max_vision_token_budget(
+    const LiteRtLmLoadedFile* loaded_file, int32_t* out_budget) {
+  LITERT_LM_C_RETURN_IF_NULL(out_budget);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
   if (loaded_file->info.llm_capability.has_value() &&
       loaded_file->info.llm_capability->max_vision_token_budget >= 0) {
-    return loaded_file->info.llm_capability->max_vision_token_budget;
+    *out_budget = loaded_file->info.llm_capability->max_vision_token_budget;
+    return kLiteRtLmStatusOk;
   }
   if (loaded_file->info.embedding_capability.has_value() &&
       loaded_file->info.embedding_capability->max_vision_token_budget >= 0) {
-    return loaded_file->info.embedding_capability->max_vision_token_budget;
+    *out_budget =
+        loaded_file->info.embedding_capability->max_vision_token_budget;
+    return kLiteRtLmStatusOk;
   }
-  return -1;
+  return ReturnError(absl::StatusCode::kNotFound,
+                     "The model does not define a max vision token budget.");
 }
 
-uint32_t litert_lm_loaded_file_max_context_tokens(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr) return 0;
+LiteRtLmStatusCode litert_lm_loaded_file_max_context_tokens(
+    const LiteRtLmLoadedFile* loaded_file, uint32_t* out_max_context_tokens) {
+  LITERT_LM_C_RETURN_IF_NULL(out_max_context_tokens);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  uint32_t max_context_tokens = 0;
   if (loaded_file->info.llm_capability.has_value()) {
-    return loaded_file->info.llm_capability->max_context_tokens;
+    max_context_tokens = loaded_file->info.llm_capability->max_context_tokens;
+  } else if (loaded_file->info.embedding_capability.has_value()) {
+    max_context_tokens =
+        loaded_file->info.embedding_capability->max_context_tokens;
   }
-  if (loaded_file->info.embedding_capability.has_value()) {
-    return loaded_file->info.embedding_capability->max_context_tokens;
+  if (max_context_tokens == 0) {
+    return ReturnError(absl::StatusCode::kNotFound,
+                       "The model does not define max context tokens.");
   }
-  return 0;
+  *out_max_context_tokens = max_context_tokens;
+  return kLiteRtLmStatusOk;
 }
 
-bool litert_lm_loaded_file_is_dynamic_context(LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr) return false;
+LiteRtLmStatusCode litert_lm_loaded_file_is_dynamic_context(
+    const LiteRtLmLoadedFile* loaded_file, bool* out_is_dynamic) {
+  LITERT_LM_C_RETURN_IF_NULL(out_is_dynamic);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  bool is_dynamic = false;
   if (loaded_file->info.llm_capability.has_value()) {
-    return loaded_file->info.llm_capability->is_dynamic_context;
+    is_dynamic = loaded_file->info.llm_capability->is_dynamic_context;
+  } else if (loaded_file->info.embedding_capability.has_value()) {
+    is_dynamic = loaded_file->info.embedding_capability->is_dynamic_context;
   }
-  if (loaded_file->info.embedding_capability.has_value()) {
-    return loaded_file->info.embedding_capability->is_dynamic_context;
-  }
-  return false;
+  *out_is_dynamic = is_dynamic;
+  return kLiteRtLmStatusOk;
 }
 
-int32_t litert_lm_loaded_file_vision_signature_selection(
-    LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size) {
-  if (loaded_file == nullptr) {
-    return -1;
-  }
-  const std::optional<std::vector<int>>* opt_lengths = nullptr;
+LiteRtLmStatusCode litert_lm_loaded_file_vision_signature_selection(
+    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size,
+    int32_t* out_count) {
+  LITERT_LM_C_RETURN_IF_NULL(out_count);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateMaxSize(max_size));
+  const std::vector<int>* values = nullptr;
   if (loaded_file->info.llm_capability.has_value() &&
       loaded_file->info.llm_capability->vision_signature_selection
           .has_value()) {
-    opt_lengths = &loaded_file->info.llm_capability->vision_signature_selection;
+    values = &*loaded_file->info.llm_capability->vision_signature_selection;
   } else if (loaded_file->info.embedding_capability.has_value() &&
              loaded_file->info.embedding_capability->vision_signature_selection
                  .has_value()) {
-    opt_lengths =
-        &loaded_file->info.embedding_capability->vision_signature_selection;
+    values =
+        &*loaded_file->info.embedding_capability->vision_signature_selection;
   }
-  if (opt_lengths == nullptr || !opt_lengths->has_value()) {
-    return -1;
+  if (values == nullptr) {
+    return ReturnError(
+        absl::StatusCode::kNotFound,
+        "The model does not define vision signature selection lengths.");
   }
-  const auto& vec = **opt_lengths;
-  if (lengths != nullptr) {
-    int32_t count = std::min(max_size, static_cast<int32_t>(vec.size()));
-    for (int32_t i = 0; i < count; ++i) {
-      lengths[i] = vec[i];
-    }
-  }
-  return static_cast<int32_t>(vec.size());
+  *out_count = CopyLengths(*values, lengths, max_size);
+  return kLiteRtLmStatusOk;
 }
 
-int32_t litert_lm_loaded_file_modality_supported_backends(
-    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
-    LiteRtLmBackendType* backends, int32_t max_size) {
+LiteRtLmStatusCode litert_lm_loaded_file_modality_supported_backends(
+    const LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
+    LiteRtLmBackendType* backends, int32_t max_size, int32_t* out_count) {
+  LITERT_LM_C_RETURN_IF_NULL(out_count);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateModality(modality));
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateMaxSize(max_size));
   const auto* modality_backends = GetSupportedBackends(loaded_file, modality);
   if (modality_backends == nullptr) {
-    return 0;
+    *out_count = 0;
+    return kLiteRtLmStatusOk;
   }
   const auto& preferred = modality_backends->preferred_backends;
   if (backends != nullptr) {
-    int32_t count =
-        std::min(max_size, static_cast<int32_t>(preferred.size()));
+    int32_t count = std::min(max_size, static_cast<int32_t>(preferred.size()));
     for (int32_t i = 0; i < count; ++i) {
       backends[i] = static_cast<LiteRtLmBackendType>(preferred[i]);
     }
   }
-  return static_cast<int32_t>(preferred.size());
+  *out_count = static_cast<int32_t>(preferred.size());
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
-    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
+LiteRtLmStatusCode litert_lm_loaded_file_modality_npu_brand(
+    const LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
+    LiteRtLmNpuBrand* out_npu_brand) {
+  LITERT_LM_C_RETURN_IF_NULL(out_npu_brand);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateModality(modality));
   const auto* backends = GetSupportedBackends(loaded_file, modality);
-  if (backends == nullptr) {
-    return kLiteRtLmNpuBrandUnknown;
-  }
-  return static_cast<LiteRtLmNpuBrand>(backends->npu_brand);
+  *out_npu_brand = backends == nullptr
+                       ? kLiteRtLmNpuBrandUnknown
+                       : static_cast<LiteRtLmNpuBrand>(backends->npu_brand);
+  return kLiteRtLmStatusOk;
 }
 
-const char* litert_lm_loaded_file_modality_soc_name(
-    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
+LiteRtLmStatusCode litert_lm_loaded_file_modality_soc_name(
+    const LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
+    const char** out_soc_name) {
+  LITERT_LM_C_RETURN_IF_NULL(out_soc_name);
+  *out_soc_name = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateModality(modality));
   const auto* backends = GetSupportedBackends(loaded_file, modality);
-  if (backends == nullptr || backends->soc_name.empty()) {
-    return nullptr;
+  if (backends != nullptr && !backends->soc_name.empty()) {
+    *out_soc_name = backends->soc_name.c_str();
   }
-  return backends->soc_name.c_str();
+  return kLiteRtLmStatusOk;
 }
 
-const char* litert_lm_loaded_file_min_runtime_version(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr) return nullptr;
+LiteRtLmStatusCode litert_lm_loaded_file_min_runtime_version(
+    const LiteRtLmLoadedFile* loaded_file, const char** out_version) {
+  LITERT_LM_C_RETURN_IF_NULL(out_version);
+  *out_version = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
   if (loaded_file->info.llm_capability.has_value() &&
       !loaded_file->info.llm_capability->min_runtime_version.empty()) {
-    return loaded_file->info.llm_capability->min_runtime_version.c_str();
+    *out_version =
+        loaded_file->info.llm_capability->min_runtime_version.c_str();
+  } else if (loaded_file->info.embedding_capability.has_value() &&
+             !loaded_file->info.embedding_capability->min_runtime_version
+                  .empty()) {
+    *out_version =
+        loaded_file->info.embedding_capability->min_runtime_version.c_str();
   }
-  if (loaded_file->info.embedding_capability.has_value() &&
-      !loaded_file->info.embedding_capability->min_runtime_version.empty()) {
-    return loaded_file->info.embedding_capability->min_runtime_version.c_str();
-  }
-  return nullptr;
+  return kLiteRtLmStatusOk;
 }
 
-LiteRtLmModelType litert_lm_loaded_file_model_type(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr) return kLiteRtLmModelTypeUnknown;
+LiteRtLmStatusCode litert_lm_loaded_file_model_type(
+    const LiteRtLmLoadedFile* loaded_file, LiteRtLmModelType* out_model_type) {
+  LITERT_LM_C_RETURN_IF_NULL(out_model_type);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
   if (loaded_file->info.llm_capability.has_value()) {
-    return kLiteRtLmModelTypeLlm;
+    *out_model_type = kLiteRtLmModelTypeLlm;
+  } else if (loaded_file->info.embedding_capability.has_value()) {
+    *out_model_type = kLiteRtLmModelTypeEmbedding;
+  } else {
+    *out_model_type = kLiteRtLmModelTypeUnknown;
   }
-  if (loaded_file->info.embedding_capability.has_value()) {
-    return kLiteRtLmModelTypeEmbedding;
-  }
-  return kLiteRtLmModelTypeUnknown;
+  return kLiteRtLmStatusOk;
 }
 
-int32_t litert_lm_loaded_file_embedding_dimension(
-    LiteRtLmLoadedFile* loaded_file) {
-  if (loaded_file == nullptr ||
-      !loaded_file->info.embedding_capability.has_value()) {
-    return -1;
+LiteRtLmStatusCode litert_lm_loaded_file_embedding_dimension(
+    const LiteRtLmLoadedFile* loaded_file, int32_t* out_dimension) {
+  LITERT_LM_C_RETURN_IF_NULL(out_dimension);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  if (!loaded_file->info.embedding_capability.has_value() ||
+      loaded_file->info.embedding_capability->embedding_dimension <= 0) {
+    return ReturnError(absl::StatusCode::kNotFound,
+                       "The model does not define an embedding dimension.");
   }
-  int dim = loaded_file->info.embedding_capability->embedding_dimension;
-  return dim > 0 ? dim : -1;
+  *out_dimension = loaded_file->info.embedding_capability->embedding_dimension;
+  return kLiteRtLmStatusOk;
 }
 
-int32_t litert_lm_loaded_file_embedding_signature_selection(
-    LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size) {
-  if (loaded_file == nullptr ||
-      !loaded_file->info.embedding_capability.has_value()) {
-    return -1;
+LiteRtLmStatusCode litert_lm_loaded_file_embedding_signature_selection(
+    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size,
+    int32_t* out_count) {
+  LITERT_LM_C_RETURN_IF_NULL(out_count);
+  LITERT_LM_C_RETURN_IF_NULL(loaded_file);
+  LITERT_LM_C_RETURN_IF_ERROR(ValidateMaxSize(max_size));
+  if (!loaded_file->info.embedding_capability.has_value() ||
+      !loaded_file->info.embedding_capability->supported_signature_lengths
+           .has_value()) {
+    return ReturnError(
+        absl::StatusCode::kNotFound,
+        "The model does not define embedding signature lengths.");
   }
-  const auto& opt_lengths =
-      loaded_file->info.embedding_capability->supported_signature_lengths;
-  if (!opt_lengths.has_value()) {
-    return -1;
-  }
-  if (lengths != nullptr) {
-    int32_t count =
-        std::min(max_size, static_cast<int32_t>(opt_lengths->size()));
-    for (int32_t i = 0; i < count; ++i) {
-      lengths[i] = (*opt_lengths)[i];
-    }
-  }
-  return static_cast<int32_t>(opt_lengths->size());
+  *out_count = CopyLengths(
+      *loaded_file->info.embedding_capability->supported_signature_lengths,
+      lengths, max_size);
+  return kLiteRtLmStatusOk;
 }
 
 }  // extern "C"

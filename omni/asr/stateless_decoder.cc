@@ -33,6 +33,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/speech_recognizer.h"
+#include "omni/asr/utils.h"
 #include "omni/base/litert_runner.h"
 
 namespace litert::omni::asr {
@@ -43,7 +44,6 @@ constexpr int kMaskInputIndex = -1;
 constexpr float kMaskedInFloatValue = 0.0f;
 constexpr float kMaskedOutFloatValue =
     -0.7f * std::numeric_limits<float>::max();
-
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<StatelessDecoder>> StatelessDecoder::Create(
@@ -97,7 +97,7 @@ StatelessDecoder::StatelessDecoder(
     size_t num_logits_per_token, size_t num_token_ids,
     int decode_start_token_id, int decode_stop_token_id,
     int decode_skip_until_token_id)
-    : runner_(runner),
+    : runner_(*runner),
       decode_input_buffers_(std::move(decode_input_buffers)),
       decode_output_buffers_(std::move(decode_output_buffers)),
       num_logits_per_token_(num_logits_per_token),
@@ -137,7 +137,7 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
     LITERT_RETURN_IF_ERROR(inputs[token_id_input_index].Write<int32_t>(
         absl::MakeConstSpan(token_ids)));
     LITERT_RETURN_IF_ERROR(
-        runner_->Run(kDecodeSignatureName, inputs, decode_output_buffers_));
+        runner_.Run(kDecodeSignatureName, inputs, decode_output_buffers_));
     LITERT_RETURN_IF_ERROR(
         decode_output_buffers_[0].Read<float>(absl::MakeSpan(logits)));
 
@@ -156,6 +156,9 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
     }
 
     if (seen_skip_until_token_id) {
+      if (TruncateOnTrailingRepetition(decoded_tokens, token_id)) {
+        break;
+      }
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = std::nullopt});
     } else if (token_id == decode_skip_until_token_id_) {

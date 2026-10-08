@@ -24,6 +24,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/tts_metadata.pb.h"
 
@@ -51,6 +52,12 @@ std::string TfLiteModelTypeToWireString(
     proto::AsrMetadata::TfLiteModelType model_type) {
   return absl::AsciiStrToLower(
       proto::AsrMetadata::TfLiteModelType_Name(model_type));
+}
+
+std::string TfLiteModelTypeToWireString(
+    proto::ImageGenMetadata::TfLiteModelType model_type) {
+  return absl::AsciiStrToLower(
+      proto::ImageGenMetadata::TfLiteModelType_Name(model_type));
 }
 
 std::string TfLiteModelTypeToWireString(ModelType model_type) {

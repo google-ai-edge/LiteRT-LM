@@ -17,74 +17,42 @@
 
 #include <memory>
 
-#include "absl/base/thread_annotations.h"  // from @com_google_absl
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "omni/asr/audio_preprocessor.h"
+#include "omni/asr/asr_engine.h"
 #include "omni/asr/audio_source.h"
-#include "omni/asr/detokenizer.h"
-#include "omni/asr/speech_recognizer.h"
-#include "omni/asr/text_merger.h"
-#include "omni/base/async_stage_scheduler.h"
 #include "omni/omni_session.h"
-#include "runtime/framework/threadpool.h"
+
+namespace litert::omni {
+class OmniSessionTest;
+}  // namespace litert::omni
 
 namespace litert::omni::asr {
 
-// Orchestrates component pipeline execution for ASR speech recognition streams.
-class AsrSession : public OmniSession {
+// `OmniSessionFactory` implementation backed by `AsrEngine`.
+class AsrSessionFactory : public OmniSessionFactory {
  public:
-  struct Components {
-    std::unique_ptr<AudioSource> audio_source;
-    std::unique_ptr<AudioPreprocessor> preprocessor;
-    std::unique_ptr<SpeechRecognizer> speech_recognizer;
-    std::unique_ptr<Detokenizer> detokenizer;
-    std::unique_ptr<TextMerger> text_merger;
-  };
+  static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
+      AsrEngineConfig config);
+  ~AsrSessionFactory() override;
 
-  // Creates an AsrSession instance taking ownership of configured components
-  // and an optional pointer to the ThreadPool (owned by client, e.g.
-  // AsrEngine).
-  static absl::StatusOr<std::unique_ptr<AsrSession>> Create(
-      Components components, ::litert::lm::ThreadPool* thread_pool = nullptr);
-
-  ~AsrSession() override;
-
-  // Resets session and component state for a new audio stream.
-  void Reset() override;
-
-  // Flushes remaining unconfirmed text at stream end.
-  absl::StatusOr<Output> Flush() override;
-
-  // Processes the next audio chunk from AudioSource synchronously and returns
-  // `OmniSession::Output` (`TextOutput`).
-  // Returns absl::OutOfRangeError when audio stream ends.
-  absl::StatusOr<Output> ProcessNext() override;
-
-  // Processes the audio stream asynchronously using the session's thread pool.
-  // Returns absl::FailedPreconditionError if `thread_pool_` is null, or
-  // absl::AlreadyExistsError if async processing is already active.
-  // Schedules asr session stages on the thread pool to execute concurrently and
-  // passes results to `callback` until `callback` returns an error status.
-  using AsyncCallback = OutputCallback;
-  absl::Status ProcessAsync(OutputCallback callback) override;
-
-  const Components& components() const { return components_; }
+  absl::StatusOr<std::unique_ptr<OmniSession>> Create(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
+      override;
 
  private:
-  AsrSession(Components components, ::litert::lm::ThreadPool* thread_pool);
+  friend class ::litert::omni::OmniSessionTest;
+  friend class AsrSessionTest;
 
-  void ResetAsyncScheduler();
-  void WaitForIdleOrStopped();
+  static std::unique_ptr<AudioSource> CreateAudioInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      int sample_rate_hz, int num_channels, int samples_per_interval,
+      int overlap_samples);
 
-  Components components_;
-  ::litert::lm::ThreadPool* const thread_pool_ = nullptr;
+  explicit AsrSessionFactory(
+      std::unique_ptr<AsrEngine> absl_nonnull asr_engine);
 
-  mutable absl::Mutex mutex_;
-  std::unique_ptr<AsyncStageScheduler<TextMerger::MergeResult>> async_scheduler_
-      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<AsrEngine> asr_engine_;
 };
 
 }  // namespace litert::omni::asr

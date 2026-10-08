@@ -1012,6 +1012,57 @@ TEST_F(TasksTest, DecodeConsecutiveByteTokensWithNonByteTokens) {
   EXPECT_EQ(step_results[2], "²");
 }
 
+TEST_F(TasksTest, DecodeFullwidthCurrencyByteTokens) {
+  constexpr int kNumOutputCandidates = 1;
+  constexpr int kVocabSize = 262144;
+  std::vector<std::vector<int>> prefill_tokens = {{2}};
+  // <0xEF> (477), <0xBF> (429), <0xA1> (399) -> "￡" (U+FFE1)
+  // <0xEF> (477), <0xBF> (429), <0xA6> (404) -> "￦" (U+FFE6)
+  std::vector<std::vector<int>> decode_tokens = {{477}, {429}, {399}, {477},
+                                                 {429}, {404}, {0}};
+
+  auto executor = std::make_unique<FakeLlmExecutor>(
+      kVocabSize, prefill_tokens, decode_tokens, kNumOutputCandidates);
+
+  std::optional<BenchmarkInfo> benchmark_info;
+
+  std::vector<int> prefill_token_ids = {2};
+  ASSERT_OK_AND_ASSIGN(
+      auto token_ids_buffer,
+      gemma3_tokenizer_->TokenIdsToTensorBuffer(prefill_token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+  ASSERT_OK(Tasks::Prefill(*executor, inputs, /*wait_for_completion=*/true,
+                           benchmark_info));
+
+  StopTokenDetector stop_token_detector(kNumOutputCandidates);
+  ASSERT_OK(stop_token_detector.AddStopTokenSequence({0}));
+
+  std::vector<std::string> step_results;
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
+      [&](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        if (responses->GetTaskState() == TaskState::kProcessing) {
+          ASSERT_EQ(responses->GetTexts().size(), 1);
+          step_results.push_back(responses->GetTexts()[0]);
+        }
+      };
+
+  auto task_responses = Tasks::Decode(
+      *executor, *gemma3_tokenizer_, stop_token_detector, kNumOutputCandidates,
+      benchmark_info, /*sampler=*/std::nullopt,
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(),
+      /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
+      /*callback=*/callback, /*cancelled=*/nullptr);
+
+  ASSERT_OK(task_responses);
+
+  ASSERT_EQ(step_results.size(), 2);
+  EXPECT_EQ(step_results[0], "￡");
+  EXPECT_EQ(step_results[1], "￦");
+}
+
 TEST_F(TasksTest, DecodeConsecutiveByteTokensWithPartialBpeIgnored) {
   constexpr int kNumOutputCandidates = 1;
   constexpr int kVocabSize = 262144;

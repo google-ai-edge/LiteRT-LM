@@ -16,16 +16,12 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_OMNI_SESSION_H_
 
 #include <memory>
-#include <string>
 #include <utility>
-#include <variant>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "omni/asr/text_merger.h"
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 
@@ -35,30 +31,12 @@ namespace litert::omni {
 // and producing multimodal outputs (`Output`).
 class OmniSession {
  public:
-  // Sentinel input indicating the end of the input stream.
-  struct EndOfInput {};
-
-  // Text input payload for TTS synthesis.
-  struct TextInput {
-    std::string text;
-  };
-
-  // Audio input metadata for ASR transcription applied to all following
-  // AudioInput until another AudioInputMetadata is pushed.
-  struct AudioInputMetadata {
-    int sample_rate_hz = 16000;
-    int num_channels = 1;
-  };
-
-  // Audio input payload for ASR transcription.
-  struct AudioInput {
-    std::vector<float> pcm_samples;
-  };
-
-  // Unified input variant for InputSource. Note that `EndOfInput` is the first
-  // alternative, so a default-constructed `Input` represents `EndOfInput`.
-  using Input =
-      std::variant<EndOfInput, TextInput, AudioInputMetadata, AudioInput>;
+  using EndOfInput = ::litert::omni::EndOfInput;
+  using TextInput = ::litert::omni::TextInput;
+  using AudioInputMetadata = ::litert::omni::AudioInputMetadata;
+  using AudioInput = ::litert::omni::AudioInput;
+  using ImageGenInputMetadata = ::litert::omni::ImageGenInputMetadata;
+  using Input = ::litert::omni::Input;
 
   // Base stage producing `Input` items for an `OmniSession`.
   class InputSource : public SingleThreadedStageWithDeque<Input> {
@@ -66,16 +44,11 @@ class OmniSession {
     ~InputSource() override = default;
   };
 
-  // Sentinel output indicating the end of the output stream.
-  // TODO(b/538727793): Define synchronous/streaming `EndOfOutput` semantics.
-  // Currently sessions signal end-of-stream via `absl::OutOfRangeError`. Note
-  // that `EndOfOutput` is the first alternative of `Output`, so a
-  // default-constructed `Output` represents `EndOfOutput`.
-  struct EndOfOutput {};
-
-  using TextOutput = asr::TextMerger::MergeResult;
+  using EndOfOutput = ::litert::omni::EndOfOutput;
+  using TextOutput = ::litert::omni::TextOutput;
   using AudioOutput = ::litert::omni::AudioOutput;
-  using Output = std::variant<EndOfOutput, TextOutput, AudioOutput>;
+  using ImageOutput = ::litert::omni::ImageOutput;
+  using Output = ::litert::omni::Output;
   using OutputCallback =
       absl::AnyInvocable<absl::Status(absl::StatusOr<Output>)>;
 
@@ -89,10 +62,11 @@ class OmniSession {
   // from `Reset()` in that it does not reset the session's internal state.
   virtual absl::StatusOr<Output> Flush() = 0;
 
-  // Synchronously processes the next available output chunk from the session's
-  // `InputSource`. Returns `absl::NotFoundError` when no output is ready yet
-  // (more input is needed), and `absl::OutOfRangeError` when the input source
-  // is exhausted and the stream has ended.
+  // Synchronously processes the pipeline and returns one `Output` chunk per
+  // call. Returns `absl::NotFoundError` when no output is ready yet (more
+  // input is needed or `Flush()` should be called), and
+  // `absl::OutOfRangeError` when the input source is exhausted and the stream
+  // has ended.
   virtual absl::StatusOr<Output> ProcessNext() = 0;
 
   // Asynchronously processes inputs from the session's `InputSource` using the

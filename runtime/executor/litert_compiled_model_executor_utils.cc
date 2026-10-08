@@ -49,9 +49,11 @@
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -432,13 +434,28 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
   return absl::FailedPreconditionError("No KV cache inputs found.");
 }
 
-absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
-    const ::litert::Model& model, absl::string_view signature_name_base,
+bool IsLinearAttentionStateName(absl::string_view name) {
+  static constexpr absl::string_view kLinearAttentionStatePrefixes[] = {
+      "kv_cache_c_",  // Convolution state.
+      "kv_cache_r_",  // Recurrent state.
+  };
+  for (absl::string_view prefix : kLinearAttentionStatePrefixes) {
+    if (absl::StartsWith(name, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+namespace {
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromSignatures(
+    absl::Span<const SimpleSignature> signatures,
+    absl::string_view signature_name_base,
     absl::string_view input_positions_name,
     absl::Span<const std::string> selected_signatures) {
   SortedPrefillSignatureMap prefill_runner_set;
-  auto signatures = model.GetSignatures();
-  for (auto& signature : *signatures) {
+  for (const auto& signature : signatures) {
     if (!selected_signatures.empty() &&
         absl::c_find(selected_signatures, signature.Key()) ==
             selected_signatures.end()) {
@@ -446,10 +463,8 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     }
     if (auto signature_key = signature.Key();
         absl::StartsWith(signature_key, signature_name_base)) {
-      LITERT_ASSIGN_OR_RETURN(auto input_positions_tensor,
-                              signature.InputTensor(input_positions_name));
       LITERT_ASSIGN_OR_RETURN(auto ranked_tensor_type,
-                              input_positions_tensor.RankedTensorType());
+                              signature.InputTensorType(input_positions_name));
       if (ranked_tensor_type.Layout().Rank() == 2) {
         // [batch_size, max_seq_len]
         prefill_runner_set[ranked_tensor_type.Layout().Dimensions()[1]] =
@@ -465,6 +480,28 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     }
   }
   return prefill_runner_set;
+}
+
+}  // namespace
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    const ::litert::Model& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures) {
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  return GetPrefillRunnerSetFromSignatures(signatures, signature_name_base,
+                                           input_positions_name,
+                                           selected_signatures);
+}
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures) {
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  return GetPrefillRunnerSetFromSignatures(signatures, signature_name_base,
+                                           input_positions_name,
+                                           selected_signatures);
 }
 
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
@@ -685,6 +722,71 @@ AttentionMaskParams GetAttentionMaskParams(
     }
   }
   return params;
+}
+
+namespace {
+
+// Returns true if `buffer` is a boolean mask that fell back to host memory,
+// i.e. no GPU consumer registered buffer requirements for it.
+bool IsPrunedBoolHostMask(const ::litert::TensorBuffer* buffer) {
+  if (buffer == nullptr || !*buffer) {
+    return false;
+  }
+  auto tensor_type = buffer->TensorType();
+  if (!tensor_type.HasValue() ||
+      tensor_type->ElementType() != ::litert::ElementType::Bool) {
+    return false;
+  }
+  auto buffer_type = buffer->BufferType();
+  return buffer_type.HasValue() &&
+         *buffer_type == ::litert::TensorBufferType::kHostMemory;
+}
+
+bool IsBidirectionalMaskType(proto::AttentionMaskType type) {
+  return type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL ||
+         type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+}
+
+}  // namespace
+
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer,
+    const ::litert::TensorBuffer* attn_mask_local_buffer) {
+  if (backend != Backend::GPU || !gpu_optimized_single_buffer_cache ||
+      !signatures.input_attn_mask.has_value() ||
+      !signatures.input_int32_param.has_value() ||
+      IsBidirectionalMaskType(attn_params.global_type)) {
+    return false;
+  }
+  // When the GPU delegate consumes the attention mask, it registers GPU buffer
+  // requirements for `input_attn_mask`, so `CreateInputBuffer` allocates a
+  // device buffer (e.g., Metal, OpenCL, or WebGPU). When all SDPA nodes in the
+  // subgraph compute causal masking directly from `param_tensor` and prune the
+  // boolean mask consumer from the GPU graph, no GPU buffer requirement is
+  // registered and `CreateInputBuffer` falls back to `kHostMemory`.
+  //
+  // The fallback host buffer is still allocated (`posix_memalign`), but once
+  // this returns true the executor never locks, initializes, or fills it, and
+  // the GPU graph never reads it. Its pages are therefore never touched and do
+  // not become resident, so the cost is address space rather than physical
+  // memory. Previously the same buffer was zeroed and filled on every prefill
+  // chunk and decode step (e.g. 1024 x 32768 bytes = 32 MB per prefill call),
+  // which did commit it.
+  if (!IsPrunedBoolHostMask(attn_mask_buffer)) {
+    return false;
+  }
+  // Models without a local mask leave `input_attn_mask_local` unset and pass
+  // `attn_mask_local_buffer == nullptr`, which still skips the global mask.
+  // When `input_attn_mask_local` is present, the executor initializes and fills
+  // both masks under the same guard, so the local mask must also be causal and
+  // pruned from the GPU graph.
+  if (signatures.input_attn_mask_local.has_value()) {
+    return !IsBidirectionalMaskType(attn_params.local_type) &&
+           IsPrunedBoolHostMask(attn_mask_local_buffer);
+  }
+  return true;
 }
 
 absl::Status FillAttentionMask(

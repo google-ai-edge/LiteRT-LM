@@ -32,6 +32,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/speech_recognizer.h"
+#include "omni/asr/utils.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_utils.h"
 #include "runtime/proto/token.pb.h"
@@ -86,7 +87,7 @@ LmDecoder::LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner,
                      int decode_start_token_id, int decode_stop_token_id,
                      int decode_skip_until_token_id, int max_decode_steps,
                      absl::flat_hash_set<int> stop_tokens)
-    : lm_runner_(lm_runner),
+    : lm_runner_(*lm_runner),
       decode_start_token_id_(decode_start_token_id),
       decode_stop_token_id_(decode_stop_token_id),
       decode_skip_until_token_id_(decode_skip_until_token_id),
@@ -99,15 +100,21 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
     return absl::InvalidArgumentError("Encoder outputs cannot be empty.");
   }
 
-  ABSL_RETURN_IF_ERROR(lm_runner_->Reset());
+  ABSL_RETURN_IF_ERROR(lm_runner_.Reset());
 
   ABSL_ASSIGN_OR_RETURN(auto prefill_inputs,
                         CreateExecutorInputsWithAudio(encoder_outputs[0]));
-  ABSL_RETURN_IF_ERROR(lm_runner_->Prefill(prefill_inputs));
+  ABSL_RETURN_IF_ERROR(lm_runner_.Prefill(prefill_inputs));
 
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
-  int32_t current_token =
-      decode_start_token_id_ >= 0 ? decode_start_token_id_ : 0;
+  // LlmLiteRtCompiledModelExecutorBase::Prefill processes all prompt tokens
+  // except the last one and records that final prompt token (e.g. '\n' after
+  // `<asr_text>` for qwen3-asr-0.6b) in `ProcessedTokens` via
+  // `AddPendingInputToken`. When `decode_start_token_id_ < 0`, passing a
+  // negative token ID on step 0 instructs Decode to consume that pending
+  // input token rather than invalidating it via `InvalidatePendingInputToken`
+  // and replacing it with an explicit start token ID.
+  int32_t current_token = decode_start_token_id_;
   bool seen_skip_until_token_id = decode_skip_until_token_id_ < 0;
 
   LITERT_ASSIGN_OR_RETURN(auto token_buf,
@@ -118,8 +125,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
         token_buf.Write<int32_t>(absl::MakeConstSpan(&current_token, 1)));
     ABSL_ASSIGN_OR_RETURN(auto decode_inputs,
                           CreateExecutorInputsWithText(token_buf));
-    ABSL_ASSIGN_OR_RETURN(auto logits_buf,
-                          lm_runner_->Decode(decode_inputs));
+    ABSL_ASSIGN_OR_RETURN(auto logits_buf, lm_runner_.Decode(decode_inputs));
 
     LITERT_ASSIGN_OR_RETURN(auto num_bytes, logits_buf.PackedSize());
     size_t num_logits = num_bytes / sizeof(float);
@@ -139,6 +145,9 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
     }
 
     if (seen_skip_until_token_id) {
+      if (TruncateOnTrailingRepetition(decoded_tokens, token_id)) {
+        break;
+      }
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = std::nullopt});
     } else if (token_id == decode_skip_until_token_id_) {

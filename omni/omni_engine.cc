@@ -27,32 +27,22 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/asr/asr_engine.h"
-#include "omni/asr/asr_omni_session.h"
+#include "omni/asr/asr_session.h"
 #include "omni/asr/model_metadata.h"
 #include "omni/omni_session.h"
+#include "omni/text2image/flux2/flux2_model_config.h"
+#include "omni/text2image/text2image_engine.h"
+#include "omni/text2image/text2image_session.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/tts_engine.h"
-#include "omni/tts/tts_omni_session.h"
+#include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni {
 namespace {
 
-asr::AsrEngineConfig::Backend ToAsrBackend(
-    OmniEngine::Options::Backend backend) {
-  switch (backend) {
-    case OmniEngine::Options::Backend::kGpu:
-      return asr::AsrEngineConfig::Backend::kGpu;
-    case OmniEngine::Options::Backend::kNpu:
-      return asr::AsrEngineConfig::Backend::kNpu;
-    case OmniEngine::Options::Backend::kCpu:
-    default:
-      return asr::AsrEngineConfig::Backend::kCpu;
-  }
-}
-
-lm::Backend ToTtsBackend(OmniEngine::Options::Backend backend) {
+lm::Backend ToBackend(OmniEngine::Options::Backend backend) {
   switch (backend) {
     case OmniEngine::Options::Backend::kGpu:
       return lm::Backend::GPU;
@@ -66,7 +56,7 @@ lm::Backend ToTtsBackend(OmniEngine::Options::Backend backend) {
 
 void ApplyOptionsToAsrConfig(const OmniEngine::Options& options,
                              asr::AsrEngineConfig& asr_config) {
-  asr_config.backend = ToAsrBackend(options.backend);
+  asr_config.backend = options.backend;
   if (!options.cache_dir.empty()) {
     asr_config.cache_dir = options.cache_dir;
   }
@@ -97,12 +87,26 @@ tts::TtsEngineSettings BuildTtsSettings(absl::string_view model_folder,
   tts::TtsEngineSettings tts_settings;
   tts_settings.model_folder = std::string(model_folder);
   tts_settings.cache_dir = options.cache_dir;
-  tts_settings.backend = ToTtsBackend(options.backend);
+  tts_settings.backend = ToBackend(options.backend);
   if (options.num_threads > 0) {
     tts_settings.num_threads = options.num_threads;
   }
   tts_settings.model_config = std::move(model_config);
   return tts_settings;
+}
+
+text2image::Text2ImageEngine::Settings BuildText2ImageSettings(
+    absl::string_view model_folder, text2image::ModelConfig model_config,
+    const OmniEngine::Options& options) {
+  text2image::Text2ImageEngine::Settings text2image_settings;
+  text2image_settings.model_folder = std::string(model_folder);
+  text2image_settings.cache_dir = options.cache_dir;
+  text2image_settings.backend = ToBackend(options.backend);
+  if (options.num_threads > 0) {
+    text2image_settings.num_threads = options.num_threads;
+  }
+  text2image_settings.model_config = std::move(model_config);
+  return text2image_settings;
 }
 
 // Instantiates an `OmniSessionFactory` for `model_name` and `options`.
@@ -116,10 +120,10 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
                                           asr_config)
           .ok()) {
     ApplyOptionsToAsrConfig(options, asr_config);
-    return asr::AsrOmniSessionFactory::CreateFactory(std::move(asr_config));
+    return asr::AsrSessionFactory::CreateFactory(std::move(asr_config));
   }
 
-  // 2. Check if `model_name` is a known TTS model name.
+  // 2. Check if `model_name` is a known TTS or Text2Image model name.
   const std::string lower_name = absl::AsciiStrToLower(model_name);
   const std::string model_folder =
       options.cache_dir.empty()
@@ -127,12 +131,18 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
           : (std::filesystem::path(options.cache_dir) / std::string(model_name))
                 .string();
   if (lower_name == "kokoro" || lower_name == "kokoro-82m") {
-    return tts::TtsOmniSessionFactory::CreateFactory(
+    return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_folder, tts::KokoroModelConfig{}, options));
   }
   if (lower_name == "qwen3-tts" || lower_name == "qwen3") {
-    return tts::TtsOmniSessionFactory::CreateFactory(
+    return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_folder, tts::Qwen3TtsModelConfig{}, options));
+  }
+  if (lower_name == "bonsai-flux2" || lower_name == "flux2" ||
+      lower_name == "flux2-klein" || lower_name == "flux.2-klein-4b") {
+    return text2image::Text2ImageSessionFactory::CreateFactory(
+        BuildText2ImageSettings(model_folder, text2image::Flux2ModelConfig{},
+                                options));
   }
 
   // 3. Check if `model_name` is a directory path containing recognizable TTS
@@ -145,8 +155,20 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
     } else if (*detected_tts == tts::ModelType::QWEN3_TTS) {
       model_config = tts::Qwen3TtsModelConfig{};
     }
-    return tts::TtsOmniSessionFactory::CreateFactory(
+    return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_name, std::move(model_config), options));
+  }
+
+  // 4. Check if `model_name` is a directory path containing recognizable
+  // Text2Image model files.
+  auto detected_text2image = text2image::DetectModelType(model_name);
+  if (detected_text2image.ok()) {
+    text2image::ModelConfig model_config;
+    if (*detected_text2image == text2image::ModelType::BONSAI_FLUX2) {
+      model_config = text2image::Flux2ModelConfig{};
+    }
+    return text2image::Text2ImageSessionFactory::CreateFactory(
+        BuildText2ImageSettings(model_name, std::move(model_config), options));
   }
 
   return absl::NotFoundError(

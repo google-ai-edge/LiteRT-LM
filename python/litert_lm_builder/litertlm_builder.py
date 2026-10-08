@@ -62,9 +62,12 @@ import tomli as tomllib
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
+from runtime.proto import image_gen_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import tts_metadata_pb2
 
 
 @enum.unique
@@ -290,6 +293,83 @@ def _get_model_type(section: _SectionObject) -> str | None:
   return values[0]
 
 
+_ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
+    set(llm_metadata_pb2.LlmMetadata.TfLiteModelType.keys())
+    | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.keys())
+    | set(asr_metadata_pb2.AsrMetadata.TfLiteModelType.keys())
+    | set(tts_metadata_pb2.TtsMetadata.TfLiteModelType.keys())
+    | set(image_gen_metadata_pb2.ImageGenMetadata.TfLiteModelType.keys())
+) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
+
+
+def get_all_tflite_model_types() -> list[str]:
+  """Returns all supported TF-free TFLite model type strings across capabilities."""
+  types = {
+      str(model_type.value).lower().replace("tf_lite_", "")
+      for model_type in TfLiteModelType
+  } | {
+      name.lower().replace("tf_lite_", "")
+      for name in _ALL_CAPABILITY_TFLITE_MODEL_TYPES
+  }
+  return sorted(types)
+
+
+def _resolve_model_type_wire_string(
+    model_type: TfLiteModelType | int | str,
+    capability_types: set[str] | None = None,
+) -> str:
+  """Resolves a model_type enum, int, or string to its lowercase wire string."""
+  if isinstance(model_type, TfLiteModelType):
+    return model_type.value
+  if isinstance(model_type, int) and not isinstance(model_type, bool):
+    if not capability_types:
+      raise ValueError(
+          "Capability metadata must be added before resolving an integer"
+          " model_type, or pass a string/TfLiteModelType."
+      )
+    if len(capability_types) > 1:
+      raise ValueError(
+          "Ambiguous integer model_type when multiple capability metadata"
+          f" sections ({sorted(capability_types)}) are present; pass a string"
+          " or TfLiteModelType."
+      )
+    if model_type == 0:
+      raise ValueError(
+          "TF_LITE_MODEL_TYPE_UNSPECIFIED (0) is not a valid model_type."
+      )
+    capability_type = next(iter(capability_types))
+    if capability_type == "asr":
+      return asr_metadata_pb2.AsrMetadata.TfLiteModelType.Name(
+          model_type
+      ).lower()
+    if capability_type == "tts":
+      return tts_metadata_pb2.TtsMetadata.TfLiteModelType.Name(
+          model_type
+      ).lower()
+    if capability_type == "image_gen":
+      return image_gen_metadata_pb2.ImageGenMetadata.TfLiteModelType.Name(
+          model_type
+      ).lower()
+    if capability_type == "embedding":
+      return embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.Name(
+          model_type
+      ).lower()
+    return llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(model_type).lower()
+  if isinstance(model_type, str):
+    try:
+      return TfLiteModelType.get_enum_from_tf_free_value(model_type).value
+    except ValueError:
+      wire_str = (
+          model_type.lower()
+          if model_type.lower().startswith("tf_lite_")
+          else "tf_lite_" + model_type.lower()
+      )
+      if wire_str.upper() in _ALL_CAPABILITY_TFLITE_MODEL_TYPES:
+        return wire_str
+      raise ValueError(f"Unknown TfLiteModelType: {model_type}") from None
+  raise ValueError(f"Unsupported model_type type: {type(model_type)}")
+
+
 def _get_active_model_type_message(
     msg: llm_metadata_pb2.LlmMetadata,
 ) -> message.Message:
@@ -385,7 +465,22 @@ class LitertLmFileBuilder:
     self._embedding_metadata: (
         embedding_metadata_pb2.EmbeddingMetadata | None
     ) = None
+    self._has_asr_metadata = False
+    self._has_tts_metadata = False
+    self._has_image_gen_metadata = False
+    self._capability_types: set[str] = set()
     self._tokenizers_by_model_type: set[str | None] = set()
+
+  def _check_no_capability_metadata_added(self, new_capability: str) -> None:
+    new_set = self._capability_types | {new_capability}
+    if len(new_set) > 1 and not (new_set <= {"llm", "embedding"}):
+      existing = ", ".join(sorted(self._capability_types))
+      raise ValueError(
+          "A .litertlm file can contain only one top-level capability metadata"
+          f" section. Already has '{existing}', cannot add"
+          f" '{new_capability}'."
+      )
+    self._capability_types.add(new_capability)
 
   @property
   def _has_tokenizer(self) -> bool:
@@ -406,6 +501,10 @@ class LitertLmFileBuilder:
     )
 
   _VISION_TRANSFORMER_MODEL_TYPES = frozenset({"gemma4", "lfm2"})
+
+  _EMBEDDING_VISION_TRANSFORMER_MODEL_TYPES = frozenset({
+      "embedding_gemma_v2",
+  })
 
   @property
   def is_vision_model(self) -> bool:
@@ -440,10 +539,35 @@ class LitertLmFileBuilder:
     return False
 
   @property
+  def is_embedding_vision_transformer_model(self) -> bool:
+    """Returns True if the embedding model is a vision transformer model."""
+    if not self.is_vision_model or self._embedding_metadata is None:
+      return False
+    active_type = self._embedding_metadata.embedding_model_type.WhichOneof(
+        "model_type"
+    )
+    if active_type in self._EMBEDDING_VISION_TRANSFORMER_MODEL_TYPES:
+      eg = self._embedding_metadata.embedding_model_type.embedding_gemma_v2
+      has_vision_fields = (
+          eg.HasField("start_of_image_token")
+          or eg.HasField("end_of_image_token")
+          or eg.patch_width > 0
+          or eg.patch_height > 0
+          or eg.max_num_patches > 0
+          or eg.pooling_kernel_size > 0
+      )
+      if has_vision_fields:
+        return True
+      if not self.is_llm_model:
+        return True
+    return False
+
+  @property
   def is_vision_transformer_model(self) -> bool:
     """Returns True if the model is a vision transformer (patch-based) model."""
     return (
         self.is_llm_vision_transformer_model
+        or self.is_embedding_vision_transformer_model
     )
 
   def validate_metadata(self) -> None:
@@ -479,6 +603,26 @@ class LitertLmFileBuilder:
               "Vision model conversion error: `pooling_kernel_size` is"
               " mandatory when vision transformer model is present."
           )
+
+    if (
+        self._has_embedding_metadata
+        and self.is_embedding_vision_transformer_model
+    ):
+      if self._embedding_metadata is not None:
+        if self._embedding_metadata.embedding_model_type.HasField(
+            "embedding_gemma_v2"
+        ):
+          eg = self._embedding_metadata.embedding_model_type.embedding_gemma_v2
+          if eg.max_num_patches <= 0:
+            raise ValueError(
+                "Vision model conversion error: `max_num_patches` is mandatory"
+                " when vision transformer model is present."
+            )
+          if eg.pooling_kernel_size <= 0:
+            raise ValueError(
+                "Vision model conversion error: `pooling_kernel_size` is"
+                " mandatory when vision transformer model is present."
+            )
 
   @classmethod
   def from_toml_str(
@@ -539,7 +683,9 @@ class LitertLmFileBuilder:
                 )
             )
 
-        if section["section_type"] == "LlmMetadata":
+        section_type = section["section_type"]
+
+        if section_type == "LlmMetadata":
           builder.add_llm_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
@@ -552,73 +698,72 @@ class LitertLmFileBuilder:
               max_num_patches=section.get("max_num_patches", None),
               pooling_kernel_size=section.get("pooling_kernel_size", None),
           )
-        elif section["section_type"] == "ExecutorMetadata":
+        elif section_type == "ExecutorMetadata":
           builder.add_executor_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section["section_type"] == "EmbeddingMetadata":
+        elif section_type == "EmbeddingMetadata":
           builder.add_embedding_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section["section_type"] == "TFLiteModel":
+        elif section_type == "AsrMetadata":
+          builder.add_asr_metadata(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section_type == "TtsMetadata":
+          builder.add_tts_metadata(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section_type == "ImageGenMetadata":
+          builder.add_image_gen_metadata(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section_type == "TFLiteModel":
           if "model_type" not in section:
             raise ValueError("TFLiteModel section does not have model_type.")
-          model_type = TfLiteModelType.get_enum_from_tf_free_value(
-              section["model_type"]
-          )
           builder.add_tflite_model(
               _resolve_path(section["data_path"], parent_dir),
-              model_type,
+              section["model_type"],
               backend_constraint=section.get("backend_constraint", None),
               prefer_activation_type=section.get(
                   "prefer_activation_type", None
               ),
               additional_metadata=additional_metadata,
           )
-        elif section["section_type"] == "TFLiteWeights":
+        elif section_type == "TFLiteWeights":
           if "model_type" not in section:
             raise ValueError("TFLiteWeights section does not have model_type.")
-          model_type = TfLiteModelType.get_enum_from_tf_free_value(
-              section["model_type"]
-          )
           builder.add_tflite_weights(
               _resolve_path(section["data_path"], parent_dir),
-              model_type,
+              section["model_type"],
               additional_metadata=additional_metadata,
           )
-        elif section["section_type"] == "SP_Tokenizer":
-          model_type = None
-          if "model_type" in section:
-            model_type = TfLiteModelType.get_enum_from_tf_free_value(
-                section["model_type"]
-            )
+        elif section_type == "SP_Tokenizer":
+          model_type = section.get("model_type", None)
           builder.add_sentencepiece_tokenizer(
               _resolve_path(section["data_path"], parent_dir),
               model_type=model_type,
               additional_metadata=additional_metadata,
           )
-        elif section["section_type"] == "HF_Tokenizer":
-          model_type = None
-          if "model_type" in section:
-            model_type = TfLiteModelType.get_enum_from_tf_free_value(
-                section["model_type"]
-            )
+        elif section_type == "HF_Tokenizer":
+          model_type = section.get("model_type", None)
           builder.add_hf_tokenizer(
               _resolve_path(section["data_path"], parent_dir),
               model_type=model_type,
               additional_metadata=additional_metadata,
           )
-        elif section["section_type"] == "GenericBinaryData":
+        elif section_type == "GenericBinaryData":
           builder.add_generic_binary_data(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
         else:
-          raise ValueError(
-              f"Unexpected section type: {section['section_type']}"
-          )
+          raise ValueError(f"Unexpected section type: {section_type}")
 
     if jinja_prompt_template_path is not None and not builder._has_llm_metadata:
       raise ValueError(
@@ -713,6 +858,7 @@ class LitertLmFileBuilder:
         found.
     """
     assert not self._has_llm_metadata, "Llm metadata already added."
+    self._check_no_capability_metadata_added("llm")
     self._has_llm_metadata = True
     if not litertlm_core.path_exists(llm_metadata_path):
       raise FileNotFoundError(
@@ -775,6 +921,41 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
 
+  def _add_proto_metadata_section(
+      self,
+      metadata_path: str,
+      proto_cls: Any,
+      data_type: int,
+      label: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Validates, parses, and appends a protobuf metadata section."""
+    if not litertlm_core.path_exists(metadata_path):
+      raise FileNotFoundError(
+          f"{label} metadata file not found: {metadata_path}"
+      )
+
+    if _is_binary_proto(metadata_path, proto_cls):
+
+      def data_writer(stream: BinaryIO):
+        with litertlm_core.open_file(metadata_path, "rb") as f:
+          _copy_file_to_stream(f, stream)
+
+    else:
+
+      def data_writer(stream: BinaryIO):
+        with litertlm_core.open_file(metadata_path, "r") as f:
+          data = text_format.Parse(f.read(), proto_cls()).SerializeToString()
+          stream.write(data)
+
+    section_object = _SectionObject(
+        metadata=additional_metadata if additional_metadata else [],
+        data_type=data_type,
+        data_writer=data_writer,
+    )
+    self._sections.append(section_object)
+    return self  # pyrefly: ignore[bad-return]
+
   def add_executor_metadata(
       self,
       executor_metadata_path: str,
@@ -795,35 +976,13 @@ class LitertLmFileBuilder:
     """
     assert not self._has_executor_metadata, "Executor metadata already added."
     self._has_executor_metadata = True
-    if not litertlm_core.path_exists(executor_metadata_path):
-      raise FileNotFoundError(
-          f"Executor metadata file not found: {executor_metadata_path}"
-      )
-
-    if _is_binary_proto(
-        executor_metadata_path, executor_metadata_pb2.ExecutorMetadata
-    ):
-
-      def data_writer(stream: BinaryIO):
-        with litertlm_core.open_file(executor_metadata_path, "rb") as f:
-          _copy_file_to_stream(f, stream)
-
-    else:
-
-      def data_writer(stream: BinaryIO):
-        with litertlm_core.open_file(executor_metadata_path, "r") as f:
-          data = text_format.Parse(
-              f.read(), executor_metadata_pb2.ExecutorMetadata()
-          ).SerializeToString()
-          stream.write(data)
-
-    section_object = _SectionObject(
-        metadata=additional_metadata if additional_metadata else [],
-        data_type=schema.AnySectionDataType.ExecutorMetadataProto,
-        data_writer=data_writer,
+    return self._add_proto_metadata_section(
+        executor_metadata_path,
+        executor_metadata_pb2.ExecutorMetadata,
+        schema.AnySectionDataType.ExecutorMetadataProto,
+        "Executor",
+        additional_metadata,
     )
-    self._sections.append(section_object)
-    return self  # pyrefly: ignore[bad-return]
 
   def add_embedding_metadata(
       self,
@@ -844,6 +1003,7 @@ class LitertLmFileBuilder:
       FileNotFoundError: If the embedding metadata file is not found.
     """
     assert not self._has_embedding_metadata, "Embedding metadata already added."
+    self._check_no_capability_metadata_added("embedding")
     self._has_embedding_metadata = True
     if not litertlm_core.path_exists(embedding_metadata_path):
       raise FileNotFoundError(
@@ -873,10 +1033,61 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
 
+  def add_asr_metadata(
+      self,
+      asr_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds ASR metadata to the litertlm file."""
+    assert not self._has_asr_metadata, "ASR metadata already added."
+    self._check_no_capability_metadata_added("asr")
+    self._has_asr_metadata = True
+    return self._add_proto_metadata_section(
+        asr_metadata_path,
+        asr_metadata_pb2.AsrMetadata,
+        schema.AnySectionDataType.AsrMetadataProto,
+        "ASR",
+        additional_metadata,
+    )
+
+  def add_tts_metadata(
+      self,
+      tts_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds TTS metadata to the litertlm file."""
+    assert not self._has_tts_metadata, "TTS metadata already added."
+    self._check_no_capability_metadata_added("tts")
+    self._has_tts_metadata = True
+    return self._add_proto_metadata_section(
+        tts_metadata_path,
+        tts_metadata_pb2.TtsMetadata,
+        schema.AnySectionDataType.TtsMetadataProto,
+        "TTS",
+        additional_metadata,
+    )
+
+  def add_image_gen_metadata(
+      self,
+      image_gen_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds image generation metadata to the litertlm file."""
+    assert not self._has_image_gen_metadata, "ImageGen metadata already added."
+    self._check_no_capability_metadata_added("image_gen")
+    self._has_image_gen_metadata = True
+    return self._add_proto_metadata_section(
+        image_gen_metadata_path,
+        image_gen_metadata_pb2.ImageGenMetadata,
+        schema.AnySectionDataType.ImageGenMetadataProto,
+        "ImageGen",
+        additional_metadata,
+    )
+
   def add_tflite_model(
       self,
       tflite_model_path: str,
-      model_type: TfLiteModelType,
+      model_type: TfLiteModelType | int | str,
       backend_constraint: Optional[str] = None,
       prefer_activation_type: Optional[str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
@@ -904,9 +1115,10 @@ class LitertLmFileBuilder:
       raise FileNotFoundError(
           f"Tflite model file not found: {tflite_model_path}"
       )
-    metadata = [
-        Metadata(key="model_type", value=model_type.value, dtype=DType.STRING)
-    ]
+    wire_str = _resolve_model_type_wire_string(
+        model_type, self._capability_types
+    )
+    metadata = [Metadata(key="model_type", value=wire_str, dtype=DType.STRING)]
     if backend_constraint:
       _validate_backend_constraints(backend_constraint)
       metadata.append(
@@ -949,7 +1161,7 @@ class LitertLmFileBuilder:
   def add_tflite_weights(
       self,
       tflite_weights_path: str,
-      model_type: TfLiteModelType,
+      model_type: TfLiteModelType | int | str,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds tflite weights to the litertlm file.
@@ -970,9 +1182,10 @@ class LitertLmFileBuilder:
       raise FileNotFoundError(
           f"Tflite weights file not found: {tflite_weights_path}"
       )
-    metadata = [
-        Metadata(key="model_type", value=model_type.value, dtype=DType.STRING)
-    ]
+    wire_str = _resolve_model_type_wire_string(
+        model_type, self._capability_types
+    )
+    metadata = [Metadata(key="model_type", value=wire_str, dtype=DType.STRING)]
     if additional_metadata is not None:
       for metadata_item in additional_metadata:
         if metadata_item.key == "model_type":
@@ -994,43 +1207,30 @@ class LitertLmFileBuilder:
 
   def _prepare_tokenizer_metadata(
       self,
-      model_type: Optional[TfLiteModelType | str],
+      model_type: Optional[TfLiteModelType | int | str],
       additional_metadata: Optional[list[Metadata]],
   ) -> list[Metadata]:
-    """Validates tokenizer uniqueness and prepares its metadata.
-
-    Args:
-      model_type: The model type associated with this tokenizer.
-      additional_metadata: Additional metadata to associate with the tokenizer.
-
-    Returns:
-      A list of metadata items including the model_type metadata.
-
-    Raises:
-      ValueError: If model_type metadata is overridden or if a tokenizer for the
-        given model_type has already been added.
-    """
-    if isinstance(model_type, str):
-      model_type = TfLiteModelType.get_enum_from_tf_free_value(model_type)
+    """Validates tokenizer uniqueness and prepares its metadata."""
+    model_type_key = (
+        _resolve_model_type_wire_string(model_type, self._capability_types)
+        if model_type is not None
+        else None
+    )
 
     metadata: list[Metadata] = []
-    if model_type is not None:
+    if model_type_key is not None:
       metadata.append(
-          Metadata(key="model_type", value=model_type.value, dtype=DType.STRING)
+          Metadata(key="model_type", value=model_type_key, dtype=DType.STRING)
       )
 
-    model_type_key = model_type.value if model_type is not None else None
     if additional_metadata:
       for metadata_item in additional_metadata:
         if metadata_item.key == "model_type":
-          if model_type is not None:
+          if model_type_key is not None:
             raise ValueError("Model type metadata cannot be overridden.")
-          if isinstance(metadata_item.value, str):
-            model_type_key = TfLiteModelType.get_enum_from_tf_free_value(
-                metadata_item.value
-            ).value
-          else:
-            model_type_key = metadata_item.value
+          model_type_key = _resolve_model_type_wire_string(
+              metadata_item.value, self._capability_types
+          )
       metadata.extend(additional_metadata)
 
     # Check for conflicts
@@ -1056,7 +1256,7 @@ class LitertLmFileBuilder:
   def add_sentencepiece_tokenizer(
       self,
       sp_tokenizer_path: str,
-      model_type: Optional[TfLiteModelType | str] = None,
+      model_type: Optional[TfLiteModelType | int | str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds a sentencepiece tokenizer to the litertlm file.
@@ -1096,7 +1296,7 @@ class LitertLmFileBuilder:
   def add_hf_tokenizer(
       self,
       hf_tokenizer_path: str,
-      model_type: Optional[TfLiteModelType | str] = None,
+      model_type: Optional[TfLiteModelType | int | str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds a hf tokenizer to the litertlm file.

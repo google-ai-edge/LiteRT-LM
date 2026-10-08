@@ -17,15 +17,19 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
+#include "omni/base/stage.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
+#include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_source.h"
-#include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::tts {
@@ -45,8 +49,8 @@ namespace litert::omni::tts {
 // returns
 // - absl::OkStatus on success, or error status on failure.
 absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
-                                   const std::string& model_folder,
-                                   const std::string& cache_dir,
+                                   absl::string_view model_folder,
+                                   absl::string_view cache_dir,
                                    lm::Backend backend, int num_threads,
                                    Environment& env, ModelResources& resources);
 
@@ -57,14 +61,18 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
 // - model_folder: Path to the directory containing the Qwen3-TTS models.
 // - text_source: StreamTextSource providing text chunks for the session.
 // - resources: Shared ModelResources container with compiled models.
+// - stages: Output vector populated with the created stages in pipeline order.
+//   The first stage (`stages[0]`) must be `StreamTextSource`.
+// - output_stage: Output pointer set to the final vocoder `Stage<Output>`.
 //
 // returns
-// - TtsSession::Components containing all stage components on success, or
-// error status on failure.
-absl::StatusOr<TtsSession::Components> CreateQwen3TtsComponents(
-    const Qwen3TtsModelConfig& config, const std::string& model_folder,
+// - absl::OkStatus on success, or error status on failure.
+absl::Status CreateQwen3TtsComponents(
+    const Qwen3TtsModelConfig& config, absl::string_view model_folder,
     std::unique_ptr<StreamTextSource> absl_nonnull text_source,
-    std::shared_ptr<ModelResources> resources);
+    std::shared_ptr<ModelResources> absl_nonnull resources,
+    std::vector<std::unique_ptr<internal::StageBase>>& stages,
+    Stage<Output>* absl_nullable* absl_nonnull output_stage);
 
 }  // namespace litert::omni::tts
 

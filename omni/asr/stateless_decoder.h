@@ -48,7 +48,7 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
                    int decode_start_token_id, int decode_stop_token_id,
                    int decode_skip_until_token_id);
 
-  LiteRtRunner* const absl_nonnull runner_;
+  LiteRtRunner& runner_;
   std::vector<::litert::TensorBuffer> decode_input_buffers_;
   std::vector<::litert::TensorBuffer> decode_output_buffers_;
   const size_t num_logits_per_token_;

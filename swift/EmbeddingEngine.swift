@@ -68,41 +68,55 @@ public actor EmbeddingEngine {
     let visionBackendStr = config.visionBackend?.rawValue
     let audioBackendStr = config.audioBackend?.rawValue
 
-    guard
-      let settings = litert_lm_embedding_engine_settings_create(
-        config.modelPath, backendStr, visionBackendStr, audioBackendStr)
-    else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToCreateSettings(errorMsg))
+    let settingsError: (String) -> LiteRTLMError = {
+      .embeddingEngine(.failedToCreateSettings($0))
+    }
+
+    let settings = try LiteRTLMError.create(
+      "litert_lm_embedding_engine_settings_create", settingsError
+    ) { out in
+      litert_lm_embedding_engine_settings_create(
+        config.modelPath, backendStr, visionBackendStr, audioBackendStr, out)
     }
 
     defer { litert_lm_embedding_engine_settings_delete(settings) }
 
     if case .cpu(let threadCount) = config.backend, let threadCount, threadCount > 0 {
-      litert_lm_embedding_engine_settings_set_num_threads(settings, Int32(threadCount))
+      try LiteRTLMError.check(
+        litert_lm_embedding_engine_settings_set_num_threads(settings, Int32(threadCount)),
+        "litert_lm_embedding_engine_settings_set_num_threads", settingsError)
     }
 
     if case .cpu(let threadCount) = config.audioBackend, let threadCount, threadCount > 0 {
-      litert_lm_embedding_engine_settings_set_audio_num_threads(settings, Int32(threadCount))
+      try LiteRTLMError.check(
+        litert_lm_embedding_engine_settings_set_audio_num_threads(settings, Int32(threadCount)),
+        "litert_lm_embedding_engine_settings_set_audio_num_threads", settingsError)
     }
 
     if let cacheDir = config.cacheDir {
-      litert_lm_embedding_engine_settings_set_cache_dir(settings, cacheDir)
+      try LiteRTLMError.check(
+        litert_lm_embedding_engine_settings_set_cache_dir(settings, cacheDir),
+        "litert_lm_embedding_engine_settings_set_cache_dir", settingsError)
     }
 
     if let maxInputLength = config.maxInputLength {
-      litert_lm_embedding_engine_settings_set_max_input_length(
-        settings, Int32(maxInputLength))
+      try LiteRTLMError.check(
+        litert_lm_embedding_engine_settings_set_max_input_length(
+          settings, Int32(maxInputLength)),
+        "litert_lm_embedding_engine_settings_set_max_input_length", settingsError)
     }
 
     if let visionTokensPerImage = config.visionTokensPerImage {
-      litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
-        settings, Int32(visionTokensPerImage))
+      try LiteRTLMError.check(
+        litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
+          settings, Int32(visionTokensPerImage)),
+        "litert_lm_embedding_engine_settings_set_vision_tokens_per_image", settingsError)
     }
 
-    guard let engineHandle = litert_lm_embedding_engine_create(settings) else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToCreateEngine(errorMsg))
+    let engineHandle = try LiteRTLMError.create(
+      "litert_lm_embedding_engine_create", { .embeddingEngine(.failedToCreateEngine($0)) }
+    ) { out in
+      litert_lm_embedding_engine_create(settings, out)
     }
 
     self.handle = engineHandle
@@ -137,56 +151,28 @@ public actor EmbeddingEngine {
       inputPointers.append(ptr)
     }
 
-    guard let optionsHandle = litert_lm_embedding_options_create() else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToCreateSettings(errorMsg))
-    }
+    let optionsHandle = try createOptions(options)
     defer { litert_lm_embedding_options_delete(optionsHandle) }
-    if let normalize = options.normalize {
-      litert_lm_embedding_options_set_normalize(optionsHandle, normalize)
-    }
-    if let insertSpecialTokens = options.insertSpecialTokens {
-      litert_lm_embedding_options_set_insert_special_tokens(
-        optionsHandle, insertSpecialTokens
-      )
-    }
-    if let outputSize = options.outputSize {
-      litert_lm_embedding_options_set_output_size(
-        optionsHandle, Int32(outputSize)
-      )
-    }
-    if let visionTokensPerImage = options.visionTokensPerImage {
-      litert_lm_embedding_options_set_vision_tokens_per_image(
-        optionsHandle, Int32(visionTokensPerImage)
-      )
-    }
 
-    let responseHandle = inputPointers.withUnsafeBufferPointer { buffer in
-      litert_lm_embedding_engine_compute_embedding(
-        handle,
-        buffer.baseAddress,
-        buffer.count,
-        optionsHandle
-      )
+    let computeError: (String) -> LiteRTLMError = {
+      .embeddingEngine(.failedToComputeEmbedding($0))
     }
-
-    guard let responseHandle else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToComputeEmbedding(errorMsg))
+    let responseHandle = try LiteRTLMError.create(
+      "litert_lm_embedding_engine_compute_embedding", computeError
+    ) { out in
+      inputPointers.withUnsafeBufferPointer { buffer in
+        litert_lm_embedding_engine_compute_embedding(
+          handle,
+          buffer.baseAddress,
+          buffer.count,
+          optionsHandle,
+          out
+        )
+      }
     }
     defer { litert_lm_embedding_response_delete(responseHandle) }
 
-    let size = litert_lm_embedding_response_get_size(responseHandle)
-    guard let valuesPtr = litert_lm_embedding_response_get_values(responseHandle) else {
-      if size == 0 {
-        return EmbeddingResponse(embedding: [])
-      }
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToComputeEmbedding(errorMsg))
-    }
-
-    let valuesBuffer = UnsafeBufferPointer(start: valuesPtr, count: size)
-    return EmbeddingResponse(embedding: Array(valuesBuffer))
+    return try readResponse(responseHandle, computeError)
   }
 
   /// Computes an embedding for multimodal input contents provided as variadic arguments.
@@ -232,82 +218,61 @@ public actor EmbeddingEngine {
       numInputsPerBatch.append(allInputPointers.count - startIndex)
     }
 
-    guard let optionsHandle = litert_lm_embedding_options_create() else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToCreateSettings(errorMsg))
-    }
+    let optionsHandle = try createOptions(options)
     defer { litert_lm_embedding_options_delete(optionsHandle) }
-    if let normalize = options.normalize {
-      litert_lm_embedding_options_set_normalize(optionsHandle, normalize)
-    }
-    if let insertSpecialTokens = options.insertSpecialTokens {
-      litert_lm_embedding_options_set_insert_special_tokens(
-        optionsHandle, insertSpecialTokens
-      )
-    }
-    if let outputSize = options.outputSize {
-      litert_lm_embedding_options_set_output_size(
-        optionsHandle, Int32(outputSize)
-      )
-    }
-    if let visionTokensPerImage = options.visionTokensPerImage {
-      litert_lm_embedding_options_set_vision_tokens_per_image(
-        optionsHandle, Int32(visionTokensPerImage)
-      )
+
+    let batchError: (String) -> LiteRTLMError = {
+      .embeddingEngine(.failedToComputeEmbeddingBatch($0))
     }
 
     // Prepare arrays of pointers for the C API batch call using pinned flat buffer
-    let responsesHandle = allInputPointers.withUnsafeBufferPointer { flatBuf in
-      var reqBasePointers: [UnsafePointer<OpaquePointer?>?] = []
-      var currentOffset = 0
-      for count in numInputsPerBatch {
-        if count == 0 {
-          reqBasePointers.append(nil)
-        } else {
-          reqBasePointers.append(flatBuf.baseAddress.map { $0 + currentOffset })
-          currentOffset += count
+    let responsesHandle = try LiteRTLMError.create(
+      "litert_lm_embedding_engine_compute_embedding_batch", batchError
+    ) { out in
+      allInputPointers.withUnsafeBufferPointer { flatBuf in
+        var reqBasePointers: [UnsafePointer<OpaquePointer?>?] = []
+        var currentOffset = 0
+        for count in numInputsPerBatch {
+          if count == 0 {
+            reqBasePointers.append(nil)
+          } else {
+            reqBasePointers.append(flatBuf.baseAddress.map { $0 + currentOffset })
+            currentOffset += count
+          }
+        }
+
+        return reqBasePointers.withUnsafeBufferPointer { batchBuf in
+          numInputsPerBatch.withUnsafeBufferPointer { numInputsBuf in
+            litert_lm_embedding_engine_compute_embedding_batch(
+              handle,
+              batchBuf.baseAddress,
+              numInputsBuf.baseAddress,
+              contentsBatch.count,
+              optionsHandle,
+              out
+            )
+          }
         }
       }
-
-      return reqBasePointers.withUnsafeBufferPointer { batchBuf in
-        numInputsPerBatch.withUnsafeBufferPointer { numInputsBuf in
-          litert_lm_embedding_engine_compute_embedding_batch(
-            handle,
-            batchBuf.baseAddress,
-            numInputsBuf.baseAddress,
-            contentsBatch.count,
-            optionsHandle
-          )
-        }
-      }
-    }
-
-    guard let responsesHandle else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.embeddingEngine(.failedToComputeEmbeddingBatch(errorMsg))
     }
     defer { litert_lm_embedding_responses_delete(responsesHandle) }
 
-    let count = litert_lm_embedding_responses_get_size(responsesHandle)
+    let count = try LiteRTLMError.get(
+      0, "litert_lm_embedding_responses_get_size", batchError
+    ) { out in
+      litert_lm_embedding_responses_get_size(responsesHandle, out)
+    }
     var results: [EmbeddingResponse] = []
     results.reserveCapacity(count)
 
     for i in 0..<count {
-      guard let respPtr = litert_lm_embedding_responses_get_at(responsesHandle, i) else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToComputeEmbeddingBatch(errorMsg))
+      // The response is borrowed from `responsesHandle` and must not be deleted.
+      let respPtr = try LiteRTLMError.create(
+        "litert_lm_embedding_responses_get_at", batchError
+      ) { out in
+        litert_lm_embedding_responses_get_at(responsesHandle, i, out)
       }
-      let size = litert_lm_embedding_response_get_size(respPtr)
-      guard let valuesPtr = litert_lm_embedding_response_get_values(respPtr) else {
-        if size == 0 {
-          results.append(EmbeddingResponse(embedding: []))
-          continue
-        }
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToComputeEmbeddingBatch(errorMsg))
-      }
-      let valuesBuffer = UnsafeBufferPointer(start: valuesPtr, count: size)
-      results.append(EmbeddingResponse(embedding: Array(valuesBuffer)))
+      results.append(try readResponse(respPtr, batchError))
     }
 
     return results
@@ -321,29 +286,92 @@ public actor EmbeddingEngine {
     }
   }
 
+  /// Creates native embedding options from `options`. The caller owns the returned handle and
+  /// must release it with `litert_lm_embedding_options_delete`.
+  private func createOptions(_ options: EmbeddingOptions) throws -> OpaquePointer {
+    let optionsError: (String) -> LiteRTLMError = {
+      .embeddingEngine(.failedToCreateSettings($0))
+    }
+    let optionsHandle = try LiteRTLMError.create(
+      "litert_lm_embedding_options_create", optionsError
+    ) { out in
+      litert_lm_embedding_options_create(out)
+    }
+    do {
+      if let normalize = options.normalize {
+        try LiteRTLMError.check(
+          litert_lm_embedding_options_set_normalize(optionsHandle, normalize),
+          "litert_lm_embedding_options_set_normalize", optionsError)
+      }
+      if let insertSpecialTokens = options.insertSpecialTokens {
+        try LiteRTLMError.check(
+          litert_lm_embedding_options_set_insert_special_tokens(
+            optionsHandle, insertSpecialTokens
+          ),
+          "litert_lm_embedding_options_set_insert_special_tokens", optionsError)
+      }
+      if let outputSize = options.outputSize {
+        try LiteRTLMError.check(
+          litert_lm_embedding_options_set_output_size(
+            optionsHandle, Int32(outputSize)
+          ),
+          "litert_lm_embedding_options_set_output_size", optionsError)
+      }
+      if let visionTokensPerImage = options.visionTokensPerImage {
+        try LiteRTLMError.check(
+          litert_lm_embedding_options_set_vision_tokens_per_image(
+            optionsHandle, Int32(visionTokensPerImage)
+          ),
+          "litert_lm_embedding_options_set_vision_tokens_per_image", optionsError)
+      }
+    } catch {
+      litert_lm_embedding_options_delete(optionsHandle)
+      throw error
+    }
+    return optionsHandle
+  }
+
+  /// Copies the embedding vector out of the native response `response`, which is not consumed.
+  private func readResponse(
+    _ response: OpaquePointer, _ makeError: (String) -> LiteRTLMError
+  ) throws -> EmbeddingResponse {
+    let size = try LiteRTLMError.get(
+      0, "litert_lm_embedding_response_get_size", makeError
+    ) { out in
+      litert_lm_embedding_response_get_size(response, out)
+    }
+    let values = try LiteRTLMError.get(
+      nil as UnsafePointer<Float>?, "litert_lm_embedding_response_get_values", makeError
+    ) { out in
+      litert_lm_embedding_response_get_values(response, out)
+    }
+    guard let values else {
+      if size == 0 {
+        return EmbeddingResponse(embedding: [])
+      }
+      throw makeError("litert_lm_embedding_response_get_values returned null values")
+    }
+    return EmbeddingResponse(embedding: Array(UnsafeBufferPointer(start: values, count: size)))
+  }
+
   private func createInputData(_ item: Content) throws -> OpaquePointer {
+    let inputDataError: (String) -> LiteRTLMError = {
+      .embeddingEngine(.failedToCreateInputData($0))
+    }
     switch item {
     case .text(let text):
-      guard
-        let ptr = text.withCString({ cStr in
-          litert_lm_input_data_create(kLiteRtLmInputDataTypeText, cStr, text.utf8.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        text.withCString { cStr in
+          litert_lm_input_data_create(kLiteRtLmInputDataTypeText, cStr, text.utf8.count, out)
+        }
       }
-      return ptr
     case .imageData(let data):
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .imageFile(let path):
       let data: Data
       do {
@@ -353,27 +381,19 @@ public actor EmbeddingEngine {
           .failedToCreateInputData(
             "Failed to read image file at '\(path)': \(error.localizedDescription)"))
       }
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeImage, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .audioData(let data):
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .audioFile(let path):
       let data: Data
       do {
@@ -383,16 +403,12 @@ public actor EmbeddingEngine {
           .failedToCreateInputData(
             "Failed to read audio file at '\(path)': \(error.localizedDescription)"))
       }
-      guard
-        let ptr = data.withUnsafeBytes({ rawBuffer in
+      return try LiteRTLMError.create("litert_lm_input_data_create", inputDataError) { out in
+        data.withUnsafeBytes { rawBuffer in
           litert_lm_input_data_create(
-            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count)
-        })
-      else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.embeddingEngine(.failedToCreateInputData(errorMsg))
+            kLiteRtLmInputDataTypeAudio, rawBuffer.baseAddress, data.count, out)
+        }
       }
-      return ptr
     case .toolResponse:
       throw LiteRTLMError.embeddingEngine(
         .failedToCreateInputData("Tool responses are not supported for embeddings"))

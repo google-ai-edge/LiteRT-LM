@@ -17,43 +17,49 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
+#include "omni/multi_staged_session.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
+
+class TtsSessionTest : public ::testing::Test {
+ public:
+  static std::unique_ptr<StreamTextSource> CreateTextInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      TextChunkConfig config = {}) {
+    return TtsSessionFactory::CreateTextInputSource(std::move(input_source),
+                                                    std::move(config));
+  }
+};
+
 namespace {
 
-struct DummyFrontendOutput {
-  std::vector<int> token_ids;
-};
+using ::absl_testing::StatusIs;
+using ::testing::ElementsAre;
 
-struct DummyAcousticOutput {
-  std::vector<std::vector<int>> rvq_frames;
-};
-
-struct DummyLatentOutput {
-  std::vector<float> codec_features;
-  std::vector<std::vector<int>> rvq_frames;
-};
-
-class DummyTextFrontend
-    : public SingleThreadedStageWithDeque<DummyFrontendOutput> {
+// Fake Vocoder that encodes the length of each text chunk as a single float
+// sample in `AudioOutput`.
+class FakeLengthVocoder : public Vocoder {
  public:
-  explicit DummyTextFrontend(Stage<std::string>* absl_nonnull text_source)
+  explicit FakeLengthVocoder(TextSource* text_source)
       : text_source_(*text_source) {}
 
  protected:
@@ -62,256 +68,139 @@ class DummyTextFrontend
   }
 
   absl::Status ScheduleInternal() override {
-    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-    auto text_chunk = text_source_.GetOutput();
-    if (absl::IsNotFound(text_chunk.status())) {
+    SetState(State::kRunning);
+    auto text = text_source_.GetOutput();
+    if (absl::IsNotFound(text.status())) {
+      SetState(State::kIdle);
       return absl::OkStatus();
-    } else if (!text_chunk.ok()) {
-      return text_chunk.status();
     }
-    DummyFrontendOutput out;
-    out.token_ids = {10, 20};
-    PushOutput(std::move(out));
+    if (!text.ok()) {
+      SetState(State::kIdle);
+      return text.status();
+    }
+    PushOutput(AudioOutput{
+        .pcm_samples = {static_cast<float>(text->size())},
+        .sample_rate_hz = 24000,
+    });
+    SetState(State::kIdle);
     return absl::OkStatus();
   }
 
  private:
-  Stage<std::string>& text_source_;
+  TextSource& text_source_;
 };
 
-class DummyAcousticPredictor
-    : public SingleThreadedStageWithDeque<DummyAcousticOutput> {
- public:
-  explicit DummyAcousticPredictor(
-      Stage<DummyFrontendOutput>* absl_nonnull text_frontend)
-      : text_frontend_(*text_frontend) {}
+TEST_F(TtsSessionTest, SequentialSynthesizeCallsWithResetAndFlush) {
+  auto text_source = std::make_unique<StreamTextSource>();
+  StreamTextSource* raw_text_source = text_source.get();
+  auto vocoder = std::make_unique<FakeLengthVocoder>(raw_text_source);
+  Stage<Output>* raw_vocoder = vocoder.get();
 
- protected:
-  bool NeedScheduleInternal() const override {
-    return text_frontend_.HasOutput();
-  }
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
 
-  absl::Status ScheduleInternal() override {
-    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-    auto frontend_out = text_frontend_.GetOutput();
-    if (absl::IsNotFound(frontend_out.status())) {
-      return absl::OkStatus();
-    } else if (!frontend_out.ok()) {
-      return frontend_out.status();
-    }
-    DummyAcousticOutput out;
-    out.rvq_frames.push_back({1, 2, 3});
-    PushOutput(std::move(out));
-    return absl::OkStatus();
-  }
+  ASSERT_OK_AND_ASSIGN(
+      auto session, MultiStagedSession::Create(std::move(stages), raw_vocoder));
 
- private:
-  Stage<DummyFrontendOutput>& text_frontend_;
-};
+  // First synthesize call (mirrors JNI nativeTtsSessionSynthesize & mediapipe).
+  session->Reset();
+  ASSERT_OK(raw_text_source->PushText("Hello"));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out1, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(out1));
+  EXPECT_THAT(std::get<AudioOutput>(out1).pcm_samples, ElementsAre(5.0f));
 
-class DummyLatentDecoder
-    : public SingleThreadedStageWithDeque<DummyLatentOutput> {
- public:
-  explicit DummyLatentDecoder(
-      Stage<DummyAcousticOutput>* absl_nonnull acoustic_predictor)
-      : acoustic_predictor_(*acoustic_predictor) {}
-
- protected:
-  bool NeedScheduleInternal() const override {
-    return acoustic_predictor_.HasOutput();
-  }
-
-  absl::Status ScheduleInternal() override {
-    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-    auto acoustic_out = acoustic_predictor_.GetOutput();
-    if (absl::IsNotFound(acoustic_out.status())) {
-      return absl::OkStatus();
-    } else if (!acoustic_out.ok()) {
-      return acoustic_out.status();
-    }
-    DummyLatentOutput out;
-    out.codec_features = {0.1f, 0.2f};
-    out.rvq_frames = acoustic_out->rvq_frames;
-    PushOutput(std::move(out));
-    return absl::OkStatus();
-  }
-
- private:
-  Stage<DummyAcousticOutput>& acoustic_predictor_;
-};
-
-class DummyVocoder : public Vocoder {
- public:
-  explicit DummyVocoder(Stage<DummyLatentOutput>* absl_nonnull latent_decoder)
-      : latent_decoder_(*latent_decoder) {}
-
-  absl::Status Flush() override {
-    if (has_pending_audio_) {
-      PushOutput({{0.5f, -0.5f}, 24000});
-      has_pending_audio_ = false;
-    }
-    return absl::OkStatus();
-  }
-
- protected:
-  void ResetInternal() override { has_pending_audio_ = false; }
-
-  bool NeedScheduleInternal() const override {
-    return latent_decoder_.HasOutput();
-  }
-
-  absl::Status ScheduleInternal() override {
-    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-    auto latent_out = latent_decoder_.GetOutput();
-    if (absl::IsNotFound(latent_out.status())) {
-      return absl::OkStatus();
-    } else if (!latent_out.ok()) {
-      return latent_out.status();
-    }
-    AudioOutput out;
-    out.pcm_samples = {0.1f, 0.2f, 0.3f};
-    out.sample_rate_hz = 24000;
-    PushOutput(std::move(out));
-    has_pending_audio_ = true;
-    return absl::OkStatus();
-  }
-
- private:
-  Stage<DummyLatentOutput>& latent_decoder_;
-  bool has_pending_audio_ = false;
-};
-
-TtsSession::Components CreateStreamComponents() {
-  TtsSession::Components components;
-  components.text_source = std::make_unique<StreamTextSource>();
-  auto frontend =
-      std::make_unique<DummyTextFrontend>(components.text_source.get());
-  auto acoustic = std::make_unique<DummyAcousticPredictor>(frontend.get());
-  auto latent = std::make_unique<DummyLatentDecoder>(acoustic.get());
-  auto vocoder = std::make_unique<DummyVocoder>(latent.get());
-
-  components.intermediate_stages.push_back(std::move(frontend));
-  components.intermediate_stages.push_back(std::move(acoustic));
-  components.intermediate_stages.push_back(std::move(latent));
-  components.vocoder = std::move(vocoder);
-
-  return components;
+  // Second synthesize call on the same session after Reset().
+  session->Reset();
+  ASSERT_OK(raw_text_source->PushText("Second call!"));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out2, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(out2));
+  EXPECT_THAT(std::get<AudioOutput>(out2).pcm_samples, ElementsAre(12.0f));
 }
 
-TEST(TtsSessionTest, Synthesize) {
-  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+TEST_F(TtsSessionTest, TextInputSourceProcessNextFlushAndReset) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto text_source = CreateTextInputSource(std::move(input_source));
+  auto vocoder = std::make_unique<FakeLengthVocoder>(text_source.get());
+  Stage<Output>* raw_vocoder = vocoder.get();
 
-  ASSERT_OK(session->text_source().PushText("Hello world."));
-  ASSERT_OK_AND_ASSIGN(auto out, session->ProcessNext());
-  const auto& audio = std::get<AudioOutput>(out);
-  EXPECT_EQ(audio.sample_rate_hz, 24000);
-  EXPECT_FALSE(audio.pcm_samples.empty());
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto session, MultiStagedSession::Create(std::move(stages), raw_vocoder));
+
+  // Non-TextInput is rejected with InvalidArgumentError.
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {0.1f}}));
+  EXPECT_THAT(session->ProcessNext(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // First sentence has a delimiter; trailing fragment does not.
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "Hi. Tail"}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output chunk1, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(chunk1));
+  EXPECT_THAT(std::get<AudioOutput>(chunk1).pcm_samples, ElementsAre(3.0f));
+
+  // Flush() finishes TextInputSource and synthesizes " Tail" (length 5).
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output flushed, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(flushed));
+  EXPECT_THAT(std::get<AudioOutput>(flushed).pcm_samples, ElementsAre(5.0f));
+
+  // Reset() clears the finished state so a new stream can run on the session.
+  session->Reset();
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "Again"}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output flushed2, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(flushed2));
+  EXPECT_THAT(std::get<AudioOutput>(flushed2).pcm_samples, ElementsAre(5.0f));
 }
 
-TEST(TtsSessionTest, SynthesizeAsync) {
-  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+TEST_F(TtsSessionTest, TextInputSourceProcessAsyncStreamsAndFlushesTail) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto text_source = CreateTextInputSource(std::move(input_source));
+  auto vocoder = std::make_unique<FakeLengthVocoder>(text_source.get());
+  Stage<Output>* raw_vocoder = vocoder.get();
 
-  absl::Notification done;
-  int chunk_count = 0;
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
+
+  ::litert::lm::ThreadPool pool("tts_omni_test_pool", 2);
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      MultiStagedSession::Create(std::move(stages), raw_vocoder, &pool));
+
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "One. Two"}));
+  raw_input_source->Finish();
+
+  std::vector<float> lengths;
   absl::Status final_status;
+  absl::Notification done;
 
-  ASSERT_OK(session->text_source().PushText("Hello world."));
-  absl::Status status = session->ProcessAsync(
-      [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
-        if (!result.ok()) {
-          final_status = result.status();
+  ASSERT_OK(session->ProcessAsync(
+      [&](absl::StatusOr<OmniSession::Output> res) -> absl::Status {
+        if (!res.ok()) {
+          final_status = res.status();
           done.Notify();
-          return result.status();
+          return res.status();
         }
-        chunk_count++;
+        if (const auto* audio = std::get_if<AudioOutput>(&*res)) {
+          lengths.insert(lengths.end(), audio->pcm_samples.begin(),
+                         audio->pcm_samples.end());
+        }
         return absl::OkStatus();
-      });
-  ASSERT_TRUE(status.ok());
+      }));
 
   done.WaitForNotification();
-  EXPECT_TRUE(absl::IsOutOfRange(final_status))
-      << "final_status was: " << final_status;
-  EXPECT_GT(chunk_count, 0);
-}
-
-TEST(TtsSessionTest, SequentialSynthesizeCalls) {
-  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
-
-  ASSERT_OK(session->text_source().PushText("First chunk."));
-  ASSERT_OK_AND_ASSIGN(auto out1, session->ProcessNext());
-  EXPECT_FALSE(std::get<AudioOutput>(out1).pcm_samples.empty());
-
-  ASSERT_OK(session->text_source().PushText("Second chunk."));
-  ASSERT_OK_AND_ASSIGN(auto out2, session->ProcessNext());
-  EXPECT_FALSE(std::get<AudioOutput>(out2).pcm_samples.empty());
-}
-
-TEST(TtsSessionTest, SequentialSynthesizeAsyncCalls) {
-  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
-
-  // First async call
-  {
-    absl::Notification done;
-    int chunk_count = 0;
-    absl::Status final_status;
-    ASSERT_OK(session->text_source().PushText("First call."));
-    absl::Status status = session->ProcessAsync(
-        [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
-          if (!result.ok()) {
-            final_status = result.status();
-            done.Notify();
-            return result.status();
-          }
-          chunk_count++;
-          return absl::OkStatus();
-        });
-    ASSERT_TRUE(status.ok());
-    done.WaitForNotification();
-    EXPECT_TRUE(absl::IsOutOfRange(final_status));
-    EXPECT_GT(chunk_count, 0);
-  }
-
-  // Second async call on the same session
-  {
-    session->Reset();
-    absl::Notification done;
-    int chunk_count = 0;
-    absl::Status final_status;
-    ASSERT_OK(session->text_source().PushText("Second call."));
-    absl::Status status = session->ProcessAsync(
-        [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
-          if (!result.ok()) {
-            final_status = result.status();
-            done.Notify();
-            return result.status();
-          }
-          chunk_count++;
-          return absl::OkStatus();
-        });
-    ASSERT_TRUE(status.ok());
-    done.WaitForNotification();
-    EXPECT_TRUE(absl::IsOutOfRange(final_status));
-    EXPECT_GT(chunk_count, 0);
-  }
-}
-
-TEST(TtsSessionTest, ResetAndFlush) {
-  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
-  ASSERT_OK_AND_ASSIGN(
-      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
-
-  session->Reset();
-  ASSERT_OK_AND_ASSIGN(auto flushed, session->Flush());
-  const auto& audio = std::get<OmniSession::AudioOutput>(flushed);
-  EXPECT_TRUE(audio.pcm_samples.empty());
+  EXPECT_THAT(final_status, StatusIs(absl::StatusCode::kOutOfRange));
+  // "One." (4 chars) and " Two" (4 chars).
+  EXPECT_THAT(lengths, ElementsAre(4.0f, 4.0f));
 }
 
 }  // namespace

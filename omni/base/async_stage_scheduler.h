@@ -152,7 +152,17 @@ class AsyncStageScheduler {
         return;
       }
       absl::Status status = stage.Schedule();
-      if (!status.ok() && !absl::IsNotFound(status)) {
+      const bool is_source_stage =
+          !stages_.empty() && &stage == stages_.front();
+      if (!status.ok() &&
+          // Ignore NotFoundError: the stage is already running/being scheduled
+          // on another thread or currently has no ready input work.
+          !absl::IsNotFound(status) &&
+          // Ignore OutOfRangeError from the source stage: the source stage
+          // reached end-of-stream while downstream stages may still have queued
+          // or in-flight work to drain; ScheduleReadyStages() reports
+          // OutOfRangeError once all stages are idle and drained.
+          !(is_source_stage && absl::IsOutOfRange(status))) {
         CallCallbackOnError(status);
       }
     });

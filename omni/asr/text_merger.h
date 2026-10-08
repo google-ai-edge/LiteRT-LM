@@ -15,26 +15,19 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TEXT_MERGER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TEXT_MERGER_H_
 
-#include <string>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
 #include "omni/asr/detokenizer.h"
+#include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
 
-// Represents the merged text result from processing an audio chunk.
-struct MergeResult {
-  // Finalized text that will not change in subsequent chunks.
-  std::string confirmed_text;
-  // Pending text subject to alignment and change in the next chunk.
-  std::string unconfirmed_text;
-};
+using MergeResult = ::litert::omni::TextOutput;
 
 // Abstract interface for aligning and merging overlapping word streams.
-class TextMerger : public SingleThreadedStageWithDeque<MergeResult> {
+class TextMerger : public SingleThreadedStageWithDeque<Output> {
  public:
   using MergeResult = ::litert::omni::asr::MergeResult;
 
@@ -43,9 +36,6 @@ class TextMerger : public SingleThreadedStageWithDeque<MergeResult> {
       : detokenizer_(*detokenizer) {}
 
   ~TextMerger() override = default;
-
-  // Flushes remaining unconfirmed text into the output queue at end of stream.
-  virtual absl::Status Flush() = 0;
 
  protected:
   bool NeedScheduleInternal() const override {

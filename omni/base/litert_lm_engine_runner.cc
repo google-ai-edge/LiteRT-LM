@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -29,10 +30,10 @@
 namespace litert::omni {
 
 LiteRtLmEngineRunnerImpl::LiteRtLmEngineRunnerImpl(
-    std::unique_ptr<lm::Engine> engine,
-    std::unique_ptr<lm::SessionInterface> session,
+    std::unique_ptr<lm::Engine> absl_nullable engine,
+    std::unique_ptr<lm::SessionInterface> absl_nonnull session,
     const lm::SessionConfig& session_config,
-    std::unique_ptr<lm::ModelResources> model_resources)
+    std::unique_ptr<lm::ModelResources> absl_nullable model_resources)
     : engine_(std::move(engine)),
       session_(std::move(session)),
       session_config_(session_config),

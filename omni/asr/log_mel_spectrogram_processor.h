@@ -71,7 +71,7 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
   LogMelSpectrogramProcessor(
       int sample_rate_hz, const LogMelSpectrogramConfig& config,
       Stage<std::vector<float>>* absl_nonnull audio_source,
-      std::unique_ptr<litert::support::AudioPreprocessorMiniAudio>
+      std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
           preprocessor);
 
   // Processes raw speech (float vector) into model input features.
@@ -79,7 +79,8 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
 
   const int sample_rate_hz_;
   const LogMelSpectrogramConfig config_;
-  std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> preprocessor_;
+  std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
+      preprocessor_;
 };
 
 }  // namespace litert::omni::asr

@@ -28,6 +28,7 @@ cc_library(
     hdrs = ["model_resources.h"],
     deps = [
         ":litert_lm_runner",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -338,5 +339,38 @@ cc_test(
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
+    ],
+)
+
+cc_library(
+    name = "tensor_utils",
+    srcs = ["tensor_utils.cc"],
+    hdrs = ["tensor_utils.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "tensor_utils_test",
+    srcs = ["tensor_utils_test.cc"],
+    deps = [
+        ":tensor_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "//support/util:test_utils",
     ],
 )

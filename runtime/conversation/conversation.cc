@@ -53,6 +53,7 @@
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
 #include "runtime/conversation/prompt_utils.h"
 #include "runtime/conversation/thinking_config.h"
+#include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -65,8 +66,6 @@ namespace litert::lm {
 
 namespace {
 
-constexpr absl::string_view kRoleKey = "role";
-constexpr absl::string_view kUser = "user";
 constexpr absl::string_view kChannelsKey = "channels";
 constexpr absl::string_view kChannelContentCheckpoint =
     "channel_content_checkpoint";
@@ -90,11 +89,6 @@ bool IsEmptyPreface(const Preface& preface) {
          (json_preface.tools.is_null() || json_preface.tools.empty()) &&
          (json_preface.extra_context.is_null() ||
           json_preface.extra_context.empty());
-}
-
-bool IsUserMessage(const nlohmann::ordered_json& json_msg) {
-  return json_msg.contains(kRoleKey) && json_msg[kRoleKey].is_string() &&
-         json_msg[kRoleKey].get<absl::string_view>() == kUser;
 }
 
 std::optional<ThinkingConfig> ResolveThinkingConfig(
@@ -607,31 +601,27 @@ absl::Status Conversation::SendMessageAsync(
       history_.pop_back();
     }
     is_appending_message_ = prev_is_appending_message;
+    checkpoint_message_index_ = std::nullopt;
+    checkpoint_after_user_prefill_ = false;
   };
 
   if (!config_.enable_rewinding() && was_history_empty) {
     ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kStartContentCheckpoint));
   }
 
-  // If channel content (e.g. reasoning) needs to be filtered from the KV cache,
-  // we rewind the session to the last user message and compute the inputs that
-  // need to be "refilled" into the session.
-  std::vector<InputData> refill_session_inputs;
-  if (config_.filter_channel_content_from_kv_cache() &&
-      IsUserMessage(message) && !is_appending_message) {
-    if (channel_content_since_last_user_message_) {
-      ABSL_ASSIGN_OR_RETURN(refill_session_inputs,
-                            RewindAndGetInputDataVector(optional_args));
-      channel_content_since_last_user_message_ = false;
-    }
-
-    if (refill_session_inputs.empty()) {
-      // If there are no refill session inputs, save a session checkpoint here.
+  // If the prompt template itself opens a channel at the end of the user
+  // prefill (e.g. `<think>\n`), save the checkpoint before prefilling the user
+  // message so that the open channel start tag can also be stripped on rewind.
+  // Otherwise, the checkpoint is saved after prefilling the user message
+  // (PostUserPrefill) right before decoding starts.
+  if (config_.filter_channel_content_from_kv_cache() && !is_appending_message &&
+      open_channel_name.has_value()) {
+    if (config_.enable_rewinding()) {
       ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kChannelContentCheckpoint));
     }
-
     absl::MutexLock lock(history_mutex_);
-    checkpoint_message_index_ = history_.size() - 1;
+    checkpoint_message_index_ = history_.size() - num_messages_added;
+    checkpoint_after_user_prefill_ = false;
   }
 
   nlohmann::ordered_json messages_for_conversion;
@@ -703,31 +693,6 @@ absl::Status Conversation::SendMessageAsync(
     return absl::OkStatus();
   }
 
-  absl::AnyInvocable<void(Message)> complete_message_callback =
-      [this](const Message& complete_message) {
-        absl::MutexLock lock(history_mutex_);
-        history_.push_back(complete_message);
-
-        // If the model's output message contains channel content, set a
-        // variable indicating the session needs to be rewound to the last user
-        // message.
-        if (config_.filter_channel_content_from_kv_cache() &&
-            complete_message.contains(kChannelsKey)) {
-          channel_content_since_last_user_message_ = true;
-        }
-      };
-
-  auto internal_callback =
-      std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Responses>)>>(
-          CreateInternalCallback(
-              *model_data_processor_,
-              optional_args.args.value_or(std::monostate()),
-              config_.GetChannels(), std::move(user_callback),
-              std::move(cancel_callback), std::move(complete_message_callback),
-              open_channel_name, config_.return_error_on_max_tokens_reached(),
-              config_.stream_tool_calls(),
-              config_.stream_tool_calls_channel_name()));
-
   ABSL_ASSIGN_OR_RETURN(
       auto decode_config,
       CreateDecodeConfig(std::move(optional_args.repetition_penalty_config),
@@ -738,109 +703,168 @@ absl::Status Conversation::SendMessageAsync(
                          ResolveThinkingConfig(config_, optional_args),
                          open_channel_name));
 
-  std::optional<std::string> task_group_id = optional_args.task_group_id;
+  auto shared_user_callback =
+      std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Message>)>>(
+          std::move(user_callback));
+  // `SendCompleteMessage` in `internal_callback_util.cc` invokes
+  // `complete_message_callback` synchronously before invoking
+  // `user_callback(Message())` (the null completion sentinel). When channel
+  // content must be stripped from the KV cache, `complete_message_callback`
+  // sets `*defer_completion = true` so `wrapped_user_callback` suppresses that
+  // immediate `Message()` sentinel and instead emits `Message()` only after the
+  // rewind + `RunPrefillAsync` task finishes (`TaskState::kDone`). This ensures
+  // the KV cache cleanup completes before the caller is notified that the turn
+  // is done.
+  auto defer_completion = std::make_shared<bool>(false);
 
-  // This lambda contains the async calls to prefill and decode. It is called
-  // immediately if refill_session_inputs is empty. If refill_session_inputs is
-  // not empty, this lambda is called after refill_session_inputs is prefilled.
-  auto run_prefill = [this, session_inputs = std::move(session_inputs),
-                      internal_callback, decode_config,
-                      optional_args =
-                          std::move(optional_args)]() -> absl::Status {
-    ABSL_ASSIGN_OR_RETURN(
-        auto prefill_task_controller,
-        session_->RunPrefillAsync(
-            session_inputs, [this, callback = internal_callback, decode_config,
-                             task_group_id = optional_args.task_group_id](
-                                absl::StatusOr<Responses> responses) mutable {
-              // First, check if prefill returned an error. Ignore errors
-              // caused by empty input, as this is a valid case for triggering
-              // decode only.
-              auto status = IgnoreEmptyInputError(responses.status());
-              // Scenario 1: Prefill failed with an unexpected error.
-              if (!status.ok()) {
-                // If prefill failed, invoke the callback with the error
-                // status and do not proceed to decode.
-                (*callback)(responses.status());
-              } else if (responses.ok() &&
-                         IsTaskEndState(responses->GetTaskState()) &&
-                         responses->GetTaskState() != TaskState::kDone) {
-                (*callback)(responses);
-              } else if (IsEmptyInputError(responses.status()) ||
-                         (responses.ok() &&
-                          responses->GetTaskState() == TaskState::kDone)) {
-                // Scenario 2: Prefill was skipped due to empty input, or
-                // prefill completed successfully. In either case, we can now
-                // start the decode process.
+  absl::AnyInvocable<void(absl::StatusOr<Message>)> wrapped_user_callback =
+      [shared_user_callback,
+       defer_completion](absl::StatusOr<Message> message) {
+        if (message.ok() && message->is_null() && *defer_completion) {
+          return;
+        }
+        (*shared_user_callback)(std::move(message));
+      };
 
-                // Run decode.
-                auto decode_task_controller = session_->RunDecodeAsync(
-                    [callback](absl::StatusOr<Responses> responses) {
-                      (*callback)(responses);
-                    },
-                    decode_config);
-                // If RunDecodeAsync returns a task controller, it means the
-                // decode task was scheduled successfully. Add the controller
-                // to our map if a task_group_id was provided, so it can be
-                // cancelled later.
-                if (decode_task_controller.ok()) {
-                  AddTaskController(task_group_id,
-                                    std::move(*decode_task_controller));
+  auto data_processor_args = optional_args.args.value_or(std::monostate());
+  auto task_group_id = optional_args.task_group_id;
+
+  absl::AnyInvocable<void(Message)> complete_message_callback =
+      [this, shared_user_callback, defer_completion,
+       optional_args =
+           std::move(optional_args)](const Message& complete_message) {
+        absl::StatusOr<std::vector<InputData>> refill_session_inputs;
+        {
+          absl::MutexLock lock(history_mutex_);
+          history_.push_back(complete_message);
+          if (!config_.filter_channel_content_from_kv_cache() ||
+              !complete_message.contains(kChannelsKey)) {
+            checkpoint_message_index_ = std::nullopt;
+            checkpoint_after_user_prefill_ = false;
+            return;
+          }
+
+          // Eagerly rewind to the checkpoint and refill the model response
+          // without channel content before signaling completion to the caller.
+          *defer_completion = true;
+          refill_session_inputs = RewindAndGetInputDataVector(optional_args);
+        }
+        if (!refill_session_inputs.ok()) {
+          (*shared_user_callback)(refill_session_inputs.status());
+          return;
+        }
+        if (refill_session_inputs->empty()) {
+          *defer_completion = false;
+          return;
+        }
+
+        auto refill_task_controller = session_->RunPrefillAsync(
+            *refill_session_inputs,
+            [shared_user_callback](absl::StatusOr<Responses> responses) {
+              if (!responses.ok()) {
+                auto status = IgnoreEmptyInputError(responses.status());
+                if (!status.ok()) {
+                  (*shared_user_callback)(status);
                 } else {
-                  // If !decode_task_controller.ok(), it means
-                  // RunDecodeAsync failed to schedule. Invoke the callback
-                  // with the error status.
-                  (*callback)(decode_task_controller.status());
+                  (*shared_user_callback)(Message());
                 }
+                return;
               }
-            }));
-    AddTaskController(optional_args.task_group_id,
-                      std::move(prefill_task_controller));
-
-    return absl::OkStatus();
-  };
-
-  // If there are refill session inputs, run prefill for the refill session
-  // inputs first, then save a checkpoint, and then run prefill for the
-  // input message.
-  if (!refill_session_inputs.empty()) {
-    auto refill_callback = [this, run_prefill = std::move(run_prefill),
-                            internal_callback](
-                               absl::StatusOr<Responses> responses) mutable {
-      if (!responses.ok()) {
-        (*internal_callback)(responses.status());
-        return;
-      }
-
-      if (IsTaskEndState(responses->GetTaskState()) &&
-          responses->GetTaskState() != TaskState::kDone) {
-        (*internal_callback)(responses);
-        return;
-      }
-
-      if (responses->GetTaskState() == TaskState::kDone) {
-        if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
-          (*internal_callback)(absl::InternalError(
-              "Failed to save checkpoint for channel content."));
-          return;
+              if (responses->GetTaskState() == TaskState::kDone) {
+                (*shared_user_callback)(Message());
+              } else if (responses->GetTaskState() == TaskState::kCancelled ||
+                         responses->GetTaskState() ==
+                             TaskState::kDependentTaskCancelled) {
+                (*shared_user_callback)(absl::CancelledError("Task cancelled"));
+              } else if (IsTaskEndState(responses->GetTaskState())) {
+                (*shared_user_callback)(absl::InternalError(absl::StrCat(
+                    "Prefill failed with task state: ",
+                    TaskStateToString(responses->GetTaskState()))));
+              }
+            });
+        if (refill_task_controller.ok()) {
+          AddTaskController(optional_args.task_group_id,
+                            std::move(*refill_task_controller));
+        } else {
+          (*shared_user_callback)(refill_task_controller.status());
         }
+      };
 
-        if (!run_prefill().ok()) {
-          (*internal_callback)(absl::InternalError("Failed to start prefill."));
-          return;
-        }
-      }
-    };
-    ABSL_ASSIGN_OR_RETURN(
-        auto refill_task_controller,
-        session_->RunPrefillAsync(refill_session_inputs,
-                                  std::move(refill_callback)));
-    AddTaskController(task_group_id, std::move(refill_task_controller));
-    return absl::OkStatus();
-  }
+  auto internal_callback =
+      std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Responses>)>>(
+          CreateInternalCallback(
+              *model_data_processor_, std::move(data_processor_args),
+              config_.GetChannels(), std::move(wrapped_user_callback),
+              std::move(cancel_callback), std::move(complete_message_callback),
+              open_channel_name, config_.return_error_on_max_tokens_reached(),
+              config_.stream_tool_calls(),
+              config_.stream_tool_calls_channel_name()));
 
-  // Run prefill for the input message.
-  return run_prefill();
+  ABSL_ASSIGN_OR_RETURN(
+      auto prefill_task_controller,
+      session_->RunPrefillAsync(
+          session_inputs,
+          [this, callback = internal_callback, decode_config,
+           open_channel_name = std::move(open_channel_name),
+           task_group_id](absl::StatusOr<Responses> responses) mutable {
+            // First, check if prefill returned an error. Ignore errors
+            // caused by empty input, as this is a valid case for triggering
+            // decode only.
+            auto status = IgnoreEmptyInputError(responses.status());
+            // Scenario 1: Prefill failed with an unexpected error.
+            if (!status.ok()) {
+              // If prefill failed, invoke the callback with the error
+              // status and do not proceed to decode.
+              (*callback)(responses.status());
+            } else if (responses.ok() &&
+                       IsTaskEndState(responses->GetTaskState()) &&
+                       responses->GetTaskState() != TaskState::kDone) {
+              (*callback)(responses);
+            } else if (IsEmptyInputError(responses.status()) ||
+                       (responses.ok() &&
+                        responses->GetTaskState() == TaskState::kDone)) {
+              // Scenario 2: Prefill was skipped due to empty input, or
+              // prefill completed successfully. In either case, we can now
+              // start the decode process.
+              if (config_.filter_channel_content_from_kv_cache() &&
+                  !open_channel_name.has_value()) {
+                if (config_.enable_rewinding()) {
+                  auto save_status =
+                      session_->SaveCheckpoint(kChannelContentCheckpoint);
+                  if (!save_status.ok()) {
+                    (*callback)(save_status);
+                    return;
+                  }
+                }
+                absl::MutexLock lock(history_mutex_);
+                checkpoint_message_index_ = history_.size();
+                checkpoint_after_user_prefill_ = true;
+              }
+
+              // Run decode.
+              auto decode_task_controller = session_->RunDecodeAsync(
+                  [callback](absl::StatusOr<Responses> responses) {
+                    (*callback)(responses);
+                  },
+                  decode_config);
+              // If RunDecodeAsync returns a task controller, it means the
+              // decode task was scheduled successfully. Add the controller
+              // to our map if a task_group_id was provided, so it can be
+              // cancelled later.
+              if (decode_task_controller.ok()) {
+                AddTaskController(task_group_id,
+                                  std::move(*decode_task_controller));
+              } else {
+                // If !decode_task_controller.ok(), it means
+                // RunDecodeAsync failed to schedule. Invoke the callback
+                // with the error status.
+                (*callback)(decode_task_controller.status());
+              }
+            }
+          }));
+  AddTaskController(task_group_id, std::move(prefill_task_controller));
+
+  return absl::OkStatus();
 };
 
 absl::StatusOr<Responses> Conversation::RunTextScoring(
@@ -868,6 +892,32 @@ absl::Status Conversation::RunTextScoringAsync(
 
 absl::StatusOr<int> Conversation::GetTokenCount() const {
   return session_->GetCurrentStep();
+}
+
+absl::StatusOr<int> Conversation::CountTokens(
+    const Message& message, const OptionalArgs& optional_args) const {
+  absl::MutexLock lock(history_mutex_);  // NOLINT
+  std::vector<Message> messages;
+  if (message.is_array()) {
+    messages.reserve(message.size());
+    for (const auto& msg : message) {
+      messages.push_back(msg);
+    }
+  } else {
+    messages.push_back(message);
+  }
+
+  // const_cast is needed because GetInputDataVectorForMessages() is non-const,
+  // even though constructing the InputData vector does not mutate conversation
+  // state.
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<InputData> input_data,
+      const_cast<Conversation*>(this)->GetInputDataVectorForMessages(
+          history_, messages, optional_args,
+          /*include_preface=*/history_.empty() &&
+              !config_.prefill_preface_on_init()));
+
+  return CalculateInputDataTokens(input_data, engine_);
 }
 
 absl::StatusOr<BenchmarkInfo> Conversation::GetBenchmarkInfo() {
@@ -961,10 +1011,10 @@ absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
 absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface, bool add_generation_prompt_to_old) {
   // Create the template context for the `old` string.
   PromptTemplateInput old_context;
-  old_context.add_generation_prompt = false;
+  old_context.add_generation_prompt = add_generation_prompt_to_old;
 
   // Fill the `old` template context with the preface.
   ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
@@ -1013,6 +1063,7 @@ absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
 
   // Copy the `old` template context to the `new` template context.
   PromptTemplateInput new_context = old_context;
+  new_context.add_generation_prompt = false;
 
   // Add new messages to the `new` template context.
   nlohmann::ordered_json prefill_messages = nlohmann::ordered_json::array();
@@ -1048,11 +1099,11 @@ absl::StatusOr<std::vector<InputData>>
 Conversation::GetInputDataVectorForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface, bool add_generation_prompt_to_old) {
   ABSL_ASSIGN_OR_RETURN(
       std::string prefill_text,
       GetPrefillTextForMessages(old_messages, new_messages, optional_args,
-                                include_preface));
+                                include_preface, add_generation_prompt_to_old));
 
   nlohmann::ordered_json prefill_messages = nlohmann::ordered_json::array();
   for (const auto& message : new_messages) {
@@ -1066,11 +1117,12 @@ Conversation::GetInputDataVectorForMessages(
 
 absl::StatusOr<std::vector<InputData>>
 Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
-  absl::MutexLock lock(history_mutex_);
   if (!checkpoint_message_index_.has_value()) {
     // If no rewind is needed, return early with empty InputData vector.
     return std::vector<InputData>();
   }
+
+  bool add_generation_prompt_to_old = checkpoint_after_user_prefill_;
 
   // If rewinding enabled, rewind the session to the saved checkpoint.
   if (config_.enable_rewinding()) {
@@ -1080,6 +1132,7 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
     // Otherwise rewind to the beginning.
     ABSL_RETURN_IF_ERROR(session_->RewindToCheckpoint(kStartContentCheckpoint));
     checkpoint_message_index_ = 0;
+    add_generation_prompt_to_old = false;
   }
 
   // Get the InputData vector for the messages from the checkpoint onward.
@@ -1087,14 +1140,14 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
       std::vector<InputData> input_data_vector,
       GetInputDataVectorForMessages(
           absl::MakeSpan(history_).subspan(0, *checkpoint_message_index_),
-          absl::MakeSpan(history_).subspan(
-              *checkpoint_message_index_,
-              history_.size() - *checkpoint_message_index_ - 1),
+          absl::MakeSpan(history_).subspan(*checkpoint_message_index_),
           optional_args,
-          /*include_preface=*/!config_.prefill_preface_on_init()));
+          /*include_preface=*/!config_.prefill_preface_on_init(),
+          add_generation_prompt_to_old));
 
   // Clear the checkpoint message index.
   checkpoint_message_index_ = std::nullopt;
+  checkpoint_after_user_prefill_ = false;
 
   return input_data_vector;
 }

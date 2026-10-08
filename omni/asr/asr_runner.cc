@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <iostream>
@@ -30,12 +29,13 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "omni/asr/asr_engine.h"
 #include "omni/asr/file_audio_source.h"
 #include "omni/asr/model_metadata.h"
+#include "omni/base/model_utils.h"
+#include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 
 ABSL_FLAG(std::string, model_name, "parakeet-tdt-0.6b-v3",
@@ -59,20 +59,6 @@ ABSL_FLAG(std::string, model_path, "",
           "download.");
 
 namespace {
-
-absl::Status DownloadFileWithCurl(absl::string_view url,
-                                  absl::string_view target_path) {
-  ABSL_LOG(INFO) << "Downloading " << url << " to " << target_path;
-  std::string cmd =
-      absl::StrCat("mkdir -p $(dirname \"", target_path,
-                   "\") && curl -L -s -o \"", target_path, "\" \"", url, "\"");
-  int ret = std::system(cmd.c_str());
-  if (ret != 0) {
-    return absl::InternalError(
-        absl::StrFormat("Failed to download from %s to %s", url, target_path));
-  }
-  return absl::OkStatus();
-}
 
 absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     absl::string_view json_path, absl::string_view model_name,
@@ -113,11 +99,11 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   }
 
   if (backend_flag == "gpu") {
-    config.backend = litert::omni::asr::AsrEngineConfig::Backend::kGpu;
+    config.backend = litert::omni::OmniEngine::Options::Backend::kGpu;
   } else if (backend_flag == "npu") {
-    config.backend = litert::omni::asr::AsrEngineConfig::Backend::kNpu;
+    config.backend = litert::omni::OmniEngine::Options::Backend::kNpu;
   } else {
-    config.backend = litert::omni::asr::AsrEngineConfig::Backend::kCpu;
+    config.backend = litert::omni::OmniEngine::Options::Backend::kCpu;
   }
 
   std::string model_ext =
@@ -158,8 +144,8 @@ absl::Status RunAsrRunner(
   absl::Duration interval = absl::Milliseconds(config.input_milliseconds);
   absl::Duration overlap = interval * overlap_ratio;
   ABSL_ASSIGN_OR_RETURN(
-      auto engine, litert::omni::asr::AsrEngine::Create(std::move(config),
-                                                        DownloadFileWithCurl));
+      auto engine, litert::omni::asr::AsrEngine::Create(
+                       std::move(config), litert::omni::DownloadFileWithCurl));
   ABSL_ASSIGN_OR_RETURN(
       auto audio_source,
       litert::omni::asr::FileAudioSource::Create(

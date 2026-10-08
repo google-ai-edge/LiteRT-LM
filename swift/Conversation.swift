@@ -185,115 +185,34 @@ public final class Conversation: Sendable {
     {
       extraContextString = String(data: extraData, encoding: .utf8)
     }
-    let optionalArgs = litert_lm_conversation_optional_args_create()
+    let optionalArgs = try makeOptionalArgs(
+      forMessageDict: messageJson,
+      repetitionPenaltyConfig: repetitionPenaltyConfig,
+      noRepeatNgramConfig: noRepeatNgramConfig,
+      suppressTokensConfig: suppressTokensConfig,
+      maxOutputTokens: maxOutputTokens,
+      thinkingConfig: thinkingConfig,
+      responseFormat: responseFormat
+    )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
-    if let visualTokenBudget = self.visualTokenBudget ?? ExperimentalFlags.visualTokenBudget {
-      litert_lm_conversation_optional_args_set_visual_token_budget(
-        optionalArgs, Int32(visualTokenBudget))
-    }
-    if let repetitionPenaltyConfig = repetitionPenaltyConfig {
-      guard let cRepetitionPenaltyConfig = litert_lm_repetition_penalty_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError()
-          ?? "Failed to create native repetition penalty config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_repetition_penalty_config_delete(cRepetitionPenaltyConfig) }
 
-      if let repetitionPenalty = repetitionPenaltyConfig.repetitionPenalty {
-        litert_lm_repetition_penalty_config_set_repetition_penalty(
-          cRepetitionPenaltyConfig, repetitionPenalty)
-      }
-      if let presencePenalty = repetitionPenaltyConfig.presencePenalty {
-        litert_lm_repetition_penalty_config_set_presence_penalty(
-          cRepetitionPenaltyConfig, presencePenalty)
-      }
-      if let frequencyPenalty = repetitionPenaltyConfig.frequencyPenalty {
-        litert_lm_repetition_penalty_config_set_frequency_penalty(
-          cRepetitionPenaltyConfig, frequencyPenalty)
-      }
-      if let windowSize = repetitionPenaltyConfig.windowSize {
-        litert_lm_repetition_penalty_config_set_window_size(
-          cRepetitionPenaltyConfig, Int32(windowSize))
-      }
-      litert_lm_conversation_optional_args_set_repetition_penalty_config(
-        optionalArgs, cRepetitionPenaltyConfig)
-    }
-    if let noRepeatNgramConfig = noRepeatNgramConfig {
-      guard let cNoRepeatNgramConfig = litert_lm_no_repeat_ngram_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError() ?? "Failed to create native no repeat ngram config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_no_repeat_ngram_config_delete(cNoRepeatNgramConfig) }
-
-      if let noRepeatNgramSize = noRepeatNgramConfig.noRepeatNgramSize {
-        litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
-          cNoRepeatNgramConfig, Int32(noRepeatNgramSize))
-      }
-      if let windowSize = noRepeatNgramConfig.windowSize {
-        litert_lm_no_repeat_ngram_config_set_window_size(
-          cNoRepeatNgramConfig, Int32(windowSize))
-      }
-      litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
-        optionalArgs, cNoRepeatNgramConfig)
-    }
-    if let suppressTokens = suppressTokensConfig?.suppressTokens, !suppressTokens.isEmpty {
-      guard let cSuppressTokensConfig = litert_lm_suppress_tokens_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError() ?? "Failed to create native suppress tokens config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_suppress_tokens_config_delete(cSuppressTokensConfig) }
-
-      let cTokens = suppressTokens.map { Int32($0) }
-      cTokens.withUnsafeBufferPointer { buffer in
-        litert_lm_suppress_tokens_config_set_suppress_tokens(
-          cSuppressTokensConfig, buffer.baseAddress, buffer.count)
-      }
-      litert_lm_conversation_optional_args_set_suppress_tokens_config(
-        optionalArgs, cSuppressTokensConfig)
-    }
-    if let maxOutputTokens = maxOutputTokens {
-      litert_lm_conversation_optional_args_set_max_output_tokens(
-        optionalArgs, Int32(maxOutputTokens))
-    }
-    if let thinkingConfig = thinkingConfig {
-      guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError() ?? "Failed to create native thinking config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_thinking_config_delete(cThinkingConfig) }
-      litert_lm_thinking_config_set_enable_thinking(
-        cThinkingConfig, thinkingConfig.enableThinking)
-      litert_lm_thinking_config_set_thinking_token_budget(
-        cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget))
-      litert_lm_conversation_optional_args_set_thinking_config(optionalArgs, cThinkingConfig)
-    }
-
-    if let responseFormat = responseFormat,
-      shouldApplyResponseFormat(responseFormat, forMessageDict: messageJson)
-    {
-      litert_lm_conversation_optional_args_set_constraint(
-        optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern)
-    }
-
-    guard
-      let responsePtr = litert_lm_conversation_send_message(
-        handle, messageString, extraContextString, optionalArgs)
-    else {
-      let errorMsg = LiteRTLMError.consumeLastError() ?? "Native sendMessage returned null."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let responseError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let responsePtr = try LiteRTLMError.create(
+      "litert_lm_conversation_send_message", responseError
+    ) { out in
+      litert_lm_conversation_send_message(
+        handle, messageString, extraContextString, optionalArgs, out)
     }
     // Delete the response pointer at the end of each iteration. Handled by defer block.
     let responsePtrRef = responsePtr
     defer { litert_lm_json_response_delete(responsePtrRef) }
 
-    guard let responseChars = litert_lm_json_response_get_string(responsePtr) else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Native get string for response returned null."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let responseChars: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_json_response_get_string", responseError
+    ) { litert_lm_json_response_get_string(responsePtr, $0) }
+    guard let responseChars else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_json_response_get_string returned a null string"))
     }
     let responseString = String(cString: responseChars)
 
@@ -303,6 +222,165 @@ public final class Conversation: Sendable {
       throw LiteRTLMError.conversation(.invalidJson("Failed to parse native response JSON."))
     }
     return (responseJson, responseString)
+  }
+
+  /// Creates native optional args for a single `send_message` call and applies the given settings.
+  ///
+  /// - Parameters:
+  ///   - messageJson: The message being sent, used to decide whether `responseFormat` applies.
+  ///   - repetitionPenaltyConfig: Optional configuration for repetition penalty.
+  ///   - noRepeatNgramConfig: Optional configuration for no-repeat n-gram.
+  ///   - suppressTokensConfig: Optional configuration for suppressed tokens.
+  ///   - maxOutputTokens: Optional maximum number of output tokens.
+  ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
+  ///   - responseFormat: Optional response format for constrained decoding.
+  /// - Returns: The native optional args handle. The caller must delete it with
+  ///   `litert_lm_conversation_optional_args_delete`.
+  /// - Throws: A `LiteRTLMError` if creating the optional args or any native setter fails. The
+  ///   optional args are deleted before the error is thrown.
+  private func makeOptionalArgs(
+    forMessageDict messageJson: [String: Any],
+    repetitionPenaltyConfig: RepetitionPenaltyConfig?,
+    noRepeatNgramConfig: NoRepeatNgramConfig?,
+    suppressTokensConfig: SuppressTokensConfig?,
+    maxOutputTokens: Int?,
+    thinkingConfig: ThinkingConfig?,
+    responseFormat: ResponseFormat?
+  ) throws -> OpaquePointer {
+    let optionalArgsError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let optionalArgs = try LiteRTLMError.create(
+      "litert_lm_conversation_optional_args_create", optionalArgsError
+    ) { out in
+      litert_lm_conversation_optional_args_create(out)
+    }
+    do {
+      if let visualTokenBudget = self.visualTokenBudget ?? ExperimentalFlags.visualTokenBudget {
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_visual_token_budget(
+            optionalArgs, Int32(visualTokenBudget)),
+          "litert_lm_conversation_optional_args_set_visual_token_budget", optionalArgsError)
+      }
+      if let repetitionPenaltyConfig = repetitionPenaltyConfig {
+        let cRepetitionPenaltyConfig = try LiteRTLMError.create(
+          "litert_lm_repetition_penalty_config_create", optionalArgsError
+        ) { out in
+          litert_lm_repetition_penalty_config_create(out)
+        }
+        defer { litert_lm_repetition_penalty_config_delete(cRepetitionPenaltyConfig) }
+
+        if let repetitionPenalty = repetitionPenaltyConfig.repetitionPenalty {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_repetition_penalty(
+              cRepetitionPenaltyConfig, repetitionPenalty),
+            "litert_lm_repetition_penalty_config_set_repetition_penalty", optionalArgsError)
+        }
+        if let presencePenalty = repetitionPenaltyConfig.presencePenalty {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_presence_penalty(
+              cRepetitionPenaltyConfig, presencePenalty),
+            "litert_lm_repetition_penalty_config_set_presence_penalty", optionalArgsError)
+        }
+        if let frequencyPenalty = repetitionPenaltyConfig.frequencyPenalty {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_frequency_penalty(
+              cRepetitionPenaltyConfig, frequencyPenalty),
+            "litert_lm_repetition_penalty_config_set_frequency_penalty", optionalArgsError)
+        }
+        if let windowSize = repetitionPenaltyConfig.windowSize {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_window_size(
+              cRepetitionPenaltyConfig, Int32(windowSize)),
+            "litert_lm_repetition_penalty_config_set_window_size", optionalArgsError)
+        }
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_repetition_penalty_config(
+            optionalArgs, cRepetitionPenaltyConfig),
+          "litert_lm_conversation_optional_args_set_repetition_penalty_config", optionalArgsError)
+      }
+      if let noRepeatNgramConfig = noRepeatNgramConfig {
+        let cNoRepeatNgramConfig = try LiteRTLMError.create(
+          "litert_lm_no_repeat_ngram_config_create", optionalArgsError
+        ) { out in
+          litert_lm_no_repeat_ngram_config_create(out)
+        }
+        defer { litert_lm_no_repeat_ngram_config_delete(cNoRepeatNgramConfig) }
+
+        if let noRepeatNgramSize = noRepeatNgramConfig.noRepeatNgramSize {
+          try LiteRTLMError.check(
+            litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+              cNoRepeatNgramConfig, Int32(noRepeatNgramSize)),
+            "litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size", optionalArgsError)
+        }
+        if let windowSize = noRepeatNgramConfig.windowSize {
+          try LiteRTLMError.check(
+            litert_lm_no_repeat_ngram_config_set_window_size(
+              cNoRepeatNgramConfig, Int32(windowSize)),
+            "litert_lm_no_repeat_ngram_config_set_window_size", optionalArgsError)
+        }
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+            optionalArgs, cNoRepeatNgramConfig),
+          "litert_lm_conversation_optional_args_set_no_repeat_ngram_config", optionalArgsError)
+      }
+      if let suppressTokens = suppressTokensConfig?.suppressTokens, !suppressTokens.isEmpty {
+        let cSuppressTokensConfig = try LiteRTLMError.create(
+          "litert_lm_suppress_tokens_config_create", optionalArgsError
+        ) { out in
+          litert_lm_suppress_tokens_config_create(out)
+        }
+        defer { litert_lm_suppress_tokens_config_delete(cSuppressTokensConfig) }
+
+        let cTokens = suppressTokens.map { Int32($0) }
+        let suppressTokensStatus = cTokens.withUnsafeBufferPointer { buffer in
+          litert_lm_suppress_tokens_config_set_suppress_tokens(
+            cSuppressTokensConfig, buffer.baseAddress, buffer.count)
+        }
+        try LiteRTLMError.check(
+          suppressTokensStatus, "litert_lm_suppress_tokens_config_set_suppress_tokens",
+          optionalArgsError)
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_suppress_tokens_config(
+            optionalArgs, cSuppressTokensConfig),
+          "litert_lm_conversation_optional_args_set_suppress_tokens_config", optionalArgsError)
+      }
+      if let maxOutputTokens = maxOutputTokens {
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_max_output_tokens(
+            optionalArgs, Int32(maxOutputTokens)),
+          "litert_lm_conversation_optional_args_set_max_output_tokens", optionalArgsError)
+      }
+      if let thinkingConfig = thinkingConfig {
+        let cThinkingConfig = try LiteRTLMError.create(
+          "litert_lm_thinking_config_create", optionalArgsError
+        ) { out in
+          litert_lm_thinking_config_create(out)
+        }
+        defer { litert_lm_thinking_config_delete(cThinkingConfig) }
+        try LiteRTLMError.check(
+          litert_lm_thinking_config_set_enable_thinking(
+            cThinkingConfig, thinkingConfig.enableThinking),
+          "litert_lm_thinking_config_set_enable_thinking", optionalArgsError)
+        try LiteRTLMError.check(
+          litert_lm_thinking_config_set_thinking_token_budget(
+            cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget)),
+          "litert_lm_thinking_config_set_thinking_token_budget", optionalArgsError)
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_thinking_config(optionalArgs, cThinkingConfig),
+          "litert_lm_conversation_optional_args_set_thinking_config", optionalArgsError)
+      }
+      if let responseFormat = responseFormat,
+        shouldApplyResponseFormat(responseFormat, forMessageDict: messageJson)
+      {
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_constraint(
+            optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern),
+          "litert_lm_conversation_optional_args_set_constraint", optionalArgsError)
+      }
+      return optionalArgs
+    } catch {
+      litert_lm_conversation_optional_args_delete(optionalArgs)
+      throw error
+    }
   }
 
   fileprivate func handleToolCalls(_ toolCalls: [[String: Any]]) async throws -> [String: Any] {
@@ -436,99 +514,16 @@ public final class Conversation: Sendable {
       extraContextString = String(data: extraData, encoding: .utf8)
     }
 
-    let optionalArgs = litert_lm_conversation_optional_args_create()
+    let optionalArgs = try makeOptionalArgs(
+      forMessageDict: messageJson,
+      repetitionPenaltyConfig: repetitionPenaltyConfig,
+      noRepeatNgramConfig: noRepeatNgramConfig,
+      suppressTokensConfig: suppressTokensConfig,
+      maxOutputTokens: maxOutputTokens,
+      thinkingConfig: thinkingConfig,
+      responseFormat: responseFormat
+    )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
-    if let visualTokenBudget = self.visualTokenBudget ?? ExperimentalFlags.visualTokenBudget {
-      litert_lm_conversation_optional_args_set_visual_token_budget(
-        optionalArgs, Int32(visualTokenBudget))
-    }
-    if let repetitionPenaltyConfig = repetitionPenaltyConfig {
-      guard let cRepetitionPenaltyConfig = litert_lm_repetition_penalty_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError()
-          ?? "Failed to create native repetition penalty config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_repetition_penalty_config_delete(cRepetitionPenaltyConfig) }
-
-      if let repetitionPenalty = repetitionPenaltyConfig.repetitionPenalty {
-        litert_lm_repetition_penalty_config_set_repetition_penalty(
-          cRepetitionPenaltyConfig, repetitionPenalty)
-      }
-      if let presencePenalty = repetitionPenaltyConfig.presencePenalty {
-        litert_lm_repetition_penalty_config_set_presence_penalty(
-          cRepetitionPenaltyConfig, presencePenalty)
-      }
-      if let frequencyPenalty = repetitionPenaltyConfig.frequencyPenalty {
-        litert_lm_repetition_penalty_config_set_frequency_penalty(
-          cRepetitionPenaltyConfig, frequencyPenalty)
-      }
-      if let windowSize = repetitionPenaltyConfig.windowSize {
-        litert_lm_repetition_penalty_config_set_window_size(
-          cRepetitionPenaltyConfig, Int32(windowSize))
-      }
-      litert_lm_conversation_optional_args_set_repetition_penalty_config(
-        optionalArgs, cRepetitionPenaltyConfig)
-    }
-    if let noRepeatNgramConfig = noRepeatNgramConfig {
-      guard let cNoRepeatNgramConfig = litert_lm_no_repeat_ngram_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError() ?? "Failed to create native no repeat ngram config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_no_repeat_ngram_config_delete(cNoRepeatNgramConfig) }
-
-      if let noRepeatNgramSize = noRepeatNgramConfig.noRepeatNgramSize {
-        litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
-          cNoRepeatNgramConfig, Int32(noRepeatNgramSize))
-      }
-      if let windowSize = noRepeatNgramConfig.windowSize {
-        litert_lm_no_repeat_ngram_config_set_window_size(
-          cNoRepeatNgramConfig, Int32(windowSize))
-      }
-      litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
-        optionalArgs, cNoRepeatNgramConfig)
-    }
-    if let suppressTokens = suppressTokensConfig?.suppressTokens, !suppressTokens.isEmpty {
-      guard let cSuppressTokensConfig = litert_lm_suppress_tokens_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError() ?? "Failed to create native suppress tokens config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_suppress_tokens_config_delete(cSuppressTokensConfig) }
-
-      let cTokens = suppressTokens.map { Int32($0) }
-      cTokens.withUnsafeBufferPointer { buffer in
-        litert_lm_suppress_tokens_config_set_suppress_tokens(
-          cSuppressTokensConfig, buffer.baseAddress, buffer.count)
-      }
-      litert_lm_conversation_optional_args_set_suppress_tokens_config(
-        optionalArgs, cSuppressTokensConfig)
-    }
-    if let maxOutputTokens = maxOutputTokens {
-      litert_lm_conversation_optional_args_set_max_output_tokens(
-        optionalArgs, Int32(maxOutputTokens))
-    }
-    if let thinkingConfig = thinkingConfig {
-      guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-        let errorMsg =
-          LiteRTLMError.consumeLastError() ?? "Failed to create native thinking config."
-        throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
-      }
-      defer { litert_lm_thinking_config_delete(cThinkingConfig) }
-      litert_lm_thinking_config_set_enable_thinking(
-        cThinkingConfig, thinkingConfig.enableThinking)
-      litert_lm_thinking_config_set_thinking_token_budget(
-        cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget))
-      litert_lm_conversation_optional_args_set_thinking_config(optionalArgs, cThinkingConfig)
-    }
-
-    if let responseFormat = responseFormat,
-      shouldApplyResponseFormat(responseFormat, forMessageDict: messageJson)
-    {
-      litert_lm_conversation_optional_args_set_constraint(
-        optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern)
-    }
 
     let contextPtr = Unmanaged.passRetained(context).toOpaque()
 
@@ -541,17 +536,20 @@ public final class Conversation: Sendable {
       contextPtr
     )
 
-    guard status == 0 else {
+    guard status == kLiteRtLmStatusOk else {
       Unmanaged<StreamContext>.fromOpaque(contextPtr).release()
       let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-      throw LiteRTLMError.conversation(.failedToStartStream(status: Int(status), message: errorMsg))
+      throw LiteRTLMError.conversation(
+        .failedToStartStream(status: Int(status.rawValue), message: errorMsg))
     }
   }
 
   /// Cancels the ongoing asynchronous inference process.
   public func cancel() throws {
     let handle = try checkIsAlive()
-    litert_lm_conversation_cancel_process(handle)
+    try LiteRTLMError.check(
+      litert_lm_conversation_cancel_process(handle), "litert_lm_conversation_cancel_process",
+      { .conversation(.invalidResponse($0)) })
   }
 
   /// Renders the message into a string for testing and logging.
@@ -569,11 +567,13 @@ public final class Conversation: Sendable {
       throw LiteRTLMError.conversation(.failedToSerializeMessage)
     }
 
-    guard let cString = litert_lm_conversation_render_message_to_string(handle, messageString)
-    else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Failed to render message into string."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let renderError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let cString: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_conversation_render_message_to_string", renderError
+    ) { litert_lm_conversation_render_message_to_string(handle, messageString, $0) }
+    guard let cString else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_conversation_render_message_to_string returned a null string"))
     }
     return String(cString: cString)
   }
@@ -584,20 +584,27 @@ public final class Conversation: Sendable {
   /// - Throws: A `LiteRTLMError` if the conversation is not alive, or rendering fails.
   public func renderPrefaceIntoString() throws -> String {
     let handle = try checkIsAlive()
-    guard let cString = litert_lm_conversation_render_preface_to_string(handle) else {
-      let errorMsg =
-        LiteRTLMError.consumeLastError() ?? "Failed to render preface into string."
-      throw LiteRTLMError.conversation(.invalidResponse(errorMsg))
+    let renderError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let cString: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_conversation_render_preface_to_string", renderError
+    ) { litert_lm_conversation_render_preface_to_string(handle, $0) }
+    guard let cString else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_conversation_render_preface_to_string returned a null string"))
     }
     return String(cString: cString)
   }
 
   /// Gets the number of tokens in the conversation KV Cache (prefill + decode).
   ///
-  /// - Throws: A `LiteRTLMError` if the conversation is not alive.
+  /// - Throws: A `LiteRTLMError` if the conversation is not alive or the native call fails.
   public func getTokenCount() throws -> Int {
     let handle = try checkIsAlive()
-    return Int(litert_lm_conversation_get_token_count(handle))
+    let tokenCount = try LiteRTLMError.get(
+      Int32(0), "litert_lm_conversation_get_token_count",
+      { .conversation(.invalidResponse($0)) }
+    ) { litert_lm_conversation_get_token_count(handle, $0) }
+    return Int(tokenCount)
   }
 
   /// Retrieves the benchmark information from the conversation.
@@ -611,37 +618,67 @@ public final class Conversation: Sendable {
       throw LiteRTLMError.conversation(.benchmarkNotEnabled)
     }
 
-    guard let benchmarkInfoPtr = litert_lm_conversation_get_benchmark_info(handle) else {
-      throw LiteRTLMError.conversation(.benchmarkInfoUnavailable)
+    let makeError: (String) -> LiteRTLMError = { details in
+      self.logger.error("Failed to read benchmark info: \(details)")
+      return LiteRTLMError.conversation(.benchmarkInfoUnavailable)
+    }
+
+    let benchmarkInfoPtr = try LiteRTLMError.create(
+      "litert_lm_conversation_get_benchmark_info", makeError
+    ) { out in
+      litert_lm_conversation_get_benchmark_info(handle, out)
     }
     defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
 
-    let numPrefillTurns = litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr)
-    let numDecodeTurns = litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr)
+    let numPrefillTurns = try LiteRTLMError.get(
+      Int32(0), "litert_lm_benchmark_info_get_num_prefill_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr, $0) }
+    let numDecodeTurns = try LiteRTLMError.get(
+      Int32(0), "litert_lm_benchmark_info_get_num_decode_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr, $0) }
 
-    let initTimeInSecond = litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr)
-    let timeToFirstTokenInSecond = litert_lm_benchmark_info_get_time_to_first_token(
-      benchmarkInfoPtr)
+    let initTimeInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_total_init_time_in_second", makeError
+    ) { litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr, $0) }
+    let timeToFirstTokenInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_time_to_first_token", makeError
+    ) { litert_lm_benchmark_info_get_time_to_first_token(benchmarkInfoPtr, $0) }
 
-    let lastPrefillTokenCount: Int =
-      numPrefillTurns > 0
-      ? Int(
-        litert_lm_benchmark_info_get_prefill_token_count_at(
-          benchmarkInfoPtr, numPrefillTurns - 1)) : 0
-    let lastPrefillTokensPerSec: Double =
-      numPrefillTurns > 0
-      ? litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-        benchmarkInfoPtr, numPrefillTurns - 1) : 0.0
+    var lastPrefillTokenCount = 0
+    var lastPrefillTokensPerSec = 0.0
+    if numPrefillTurns > 0 {
+      lastPrefillTokenCount = try Int(
+        LiteRTLMError.get(
+          Int32(0), "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_prefill_token_count_at(
+            benchmarkInfoPtr, numPrefillTurns - 1, $0)
+        })
+      lastPrefillTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_prefill_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+          benchmarkInfoPtr, numPrefillTurns - 1, $0)
+      }
+    }
 
-    let lastDecodeTokenCount: Int =
-      numDecodeTurns > 0
-      ? Int(
-        litert_lm_benchmark_info_get_decode_token_count_at(
-          benchmarkInfoPtr, numDecodeTurns - 1)) : 0
-    let lastDecodeTokensPerSec: Double =
-      numDecodeTurns > 0
-      ? litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-        benchmarkInfoPtr, numDecodeTurns - 1) : 0.0
+    var lastDecodeTokenCount = 0
+    var lastDecodeTokensPerSec = 0.0
+    if numDecodeTurns > 0 {
+      lastDecodeTokenCount = try Int(
+        LiteRTLMError.get(
+          Int32(0), "litert_lm_benchmark_info_get_decode_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_decode_token_count_at(
+            benchmarkInfoPtr, numDecodeTurns - 1, $0)
+        })
+      lastDecodeTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_decode_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+          benchmarkInfoPtr, numDecodeTurns - 1, $0)
+      }
+    }
 
     return BenchmarkInfo(
       initTimeInSecond: initTimeInSecond,
@@ -781,8 +818,26 @@ private func streamCallback(
 
   let context = Unmanaged<Conversation.StreamContext>.fromOpaque(userData).takeUnretainedValue()
 
-  let isFinal = litert_lm_stream_chunk_is_final(chunk)
-  let errorMessage = litert_lm_stream_chunk_get_error(chunk)
+  let isFinal: Bool
+  let errorMessage: UnsafePointer<CChar>?
+  let responseJson: UnsafePointer<CChar>?
+  do {
+    let makeError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    isFinal = try LiteRTLMError.get(false, "litert_lm_stream_chunk_is_final", makeError) {
+      litert_lm_stream_chunk_is_final(chunk, $0)
+    }
+    // A chunk without an error or text yields a nil result.
+    errorMessage = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_error", makeError) {
+      litert_lm_stream_chunk_get_error(chunk, $0)
+    }
+    responseJson = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_text", makeError) {
+      litert_lm_stream_chunk_get_text(chunk, $0)
+    }
+  } catch {
+    context.continuation.finish(throwing: error)
+    Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+    return
+  }
 
   if let errorMessage = errorMessage {
     let errorString = String(cString: errorMessage)
@@ -793,7 +848,7 @@ private func streamCallback(
     return
   }
 
-  if let responseJson = litert_lm_stream_chunk_get_text(chunk) {
+  if let responseJson = responseJson {
     let responseString = String(cString: responseJson)
     do {
       guard let responseData = responseString.data(using: .utf8),

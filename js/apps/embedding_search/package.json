@@ -1,0 +1,21 @@
+{
+  "name": "litertlm_embedding_search_demo",
+  "version": "1.0.0",
+  "description": "Multimodal semantic search demo for LiteRT-LM on WebGPU",
+  "main": "index.js",
+  "scripts": {
+    "build": "vite build",
+    "build-selfcontained": "vite build --mode selfcontained",
+    "dev": "vite"
+  },
+  "type": "module",
+  "dependencies": {
+    "@litert-lm/core": "0.12.1",
+    "highlight.js": "^11.11.1",
+    "lit": "^3.3.3"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^6.4.2"
+  }
+}

@@ -34,8 +34,10 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
+#include "omni/base/stage.h"
 #include "omni/tts/kokoro/common.h"
 #include "omni/tts/kokoro/espeak_assets.h"
 #include "omni/tts/kokoro/kokoro_acoustic_stage.h"
@@ -44,7 +46,6 @@
 #include "omni/tts/kokoro/phonemizer.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
-#include "omni/tts/tts_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 
@@ -186,17 +187,16 @@ TextChunkConfig ReviseTextChunkConfigForKokoro(
   return text_chunk_config;
 }
 
-absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
+absl::Status CreateKokoroComponents(
     const KokoroModelConfig& config, absl::string_view model_folder,
     std::unique_ptr<StreamTextSource> absl_nonnull text_source,
-    std::shared_ptr<ModelResources> resources) {
-  TtsSession::Components components;
-  components.text_source = std::move(text_source);
-
+    std::shared_ptr<ModelResources> absl_nonnull resources,
+    std::vector<std::unique_ptr<internal::StageBase>>& stages,
+    Stage<Output>* absl_nullable* absl_nonnull output_stage) {
   // Stage 1: Text frontend, phonemization, and unified acoustic prediction.
-  ABSL_ASSIGN_OR_RETURN(auto acoustic, KokoroAcousticStage::Create(
-                                           components.text_source.get(), config,
-                                           model_folder, resources));
+  ABSL_ASSIGN_OR_RETURN(auto acoustic,
+                        KokoroAcousticStage::Create(text_source.get(), config,
+                                                    model_folder, resources));
   // Stage 2: Neural vocoder and iSTFT audio synthesis.
   ABSL_ASSIGN_OR_RETURN(auto vocoder,
                         KokoroVocoderStage::Create(acoustic.get(), resources));
@@ -209,10 +209,12 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
         acoustic->frame_capacity(), vocoder->frame_capacity()));
   }
 
-  components.intermediate_stages.push_back(std::move(acoustic));
-  components.vocoder = std::move(vocoder);
-
-  return components;
+  *output_stage = vocoder.get();
+  // The first stage must be `StreamTextSource`.
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(acoustic));
+  stages.push_back(std::move(vocoder));
+  return absl::OkStatus();
 }
 
 std::vector<std::string> GetAvailableKokoroVoices(

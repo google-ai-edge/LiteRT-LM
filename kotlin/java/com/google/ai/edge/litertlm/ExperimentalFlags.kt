@@ -110,6 +110,20 @@ object ExperimentalFlags {
    *    engine's max visual tokens per image.
    */
   var visualTokenBudget: Int? = null
+
+  /**
+   * Whether YNNPACK should delegate supported CPU operations before XNNPACK.
+   *
+   * If null, use the engine's default. If true, force enable YNNPACK. If false, force disable
+   * YNNPACK.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   *
+   * This feature requires build-time flag "--define=litert_enable_ynnpack=true". The release
+   * version might not have it.
+   */
+  var enableYnnpack: Boolean? = null
 }
 
 // Mark this annotation itself as requiring opt-in

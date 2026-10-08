@@ -14,141 +14,209 @@
 
 #include "omni/asr/asr_session.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "absl/time/time.h"  // from @com_google_absl
-#include "omni/asr/text_merger.h"
-#include "omni/base/async_stage_scheduler.h"
-#include "omni/base/stage.h"
+#include "omni/asr/asr_engine.h"
+#include "omni/asr/audio_source.h"
 #include "omni/omni_session.h"
-#include "runtime/framework/threadpool.h"
 
 namespace litert::omni::asr {
+namespace {
 
-absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
-    Components components, ::litert::lm::ThreadPool* thread_pool) {
-  if (components.audio_source == nullptr) {
-    return absl::InvalidArgumentError("AudioSource component is required.");
-  }
-  if (components.preprocessor == nullptr) {
-    return absl::InvalidArgumentError(
-        "AudioPreprocessor component is required.");
-  }
-  if (components.speech_recognizer == nullptr) {
-    return absl::InvalidArgumentError(
-        "SpeechRecognizer component is required.");
-  }
-  if (components.detokenizer == nullptr) {
-    return absl::InvalidArgumentError("Detokenizer component is required.");
-  }
-  if (components.text_merger == nullptr) {
-    return absl::InvalidArgumentError("TextMerger component is required.");
-  }
-  return std::unique_ptr<AsrSession>(
-      new AsrSession(std::move(components), thread_pool));
-}
+// AudioSource implementation that pulls `AudioInput` buffers from an
+// `OmniSession::InputSource` and yields PCM audio chunks to an `OmniSession`.
+class AudioInputSource : public AudioSource {
+ public:
+  AudioInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      int sample_rate_hz, int num_channels, int samples_per_interval,
+      int overlap_samples)
+      : input_source_(std::move(input_source)),
+        sample_rate_hz_(sample_rate_hz),
+        num_channels_(num_channels),
+        samples_per_interval_(
+            static_cast<size_t>(std::max(1, samples_per_interval))),
+        overlap_samples_(overlap_samples > 0 &&
+                                 static_cast<size_t>(overlap_samples) <
+                                     samples_per_interval_
+                             ? static_cast<size_t>(overlap_samples)
+                             : 0) {}
 
-AsrSession::AsrSession(Components components,
-                       ::litert::lm::ThreadPool* thread_pool)
-    : components_(std::move(components)), thread_pool_(thread_pool) {}
+  ~AudioInputSource() override = default;
 
-AsrSession::~AsrSession() { ResetAsyncScheduler(); }
+  int GetSampleRateHz() const override { return sample_rate_hz_; }
+  int GetNumChannels() const override { return num_channels_; }
 
-void AsrSession::ResetAsyncScheduler() {
-  absl::MutexLock lock(mutex_);
-  if (async_scheduler_) {
-    // 3 seconds is a arbitrary timeout to wait for the scheduler to finish, but
-    // not too long. Better to crash than to wait too long.
-    ABSL_CHECK_OK(async_scheduler_->Stop(absl::Seconds(3)));
-  }
-}
-
-void AsrSession::WaitForIdleOrStopped() {
-  absl::MutexLock lock(mutex_);
-  if (async_scheduler_) {
-    ABSL_CHECK_OK(async_scheduler_->WaitForIdleOrStopped(absl::Seconds(3)));
-  }
-}
-
-void AsrSession::Reset() {
-  ResetAsyncScheduler();
-  components_.audio_source->Reset();
-  components_.preprocessor->Reset();
-  components_.speech_recognizer->Reset();
-  components_.detokenizer->Reset();
-  components_.text_merger->Reset();
-}
-
-absl::StatusOr<OmniSession::Output> AsrSession::ProcessNext() {
-  ResetAsyncScheduler();
-  ABSL_RETURN_IF_ERROR(components_.audio_source->Schedule());
-
-  if (components_.preprocessor->NeedSchedule()) {
-    ABSL_RETURN_IF_ERROR(components_.preprocessor->Schedule());
+ protected:
+  void ResetInternal() override {
+    input_source_->Reset();
+    buffer_.clear();
   }
 
-  if (components_.speech_recognizer->NeedSchedule()) {
-    ABSL_RETURN_IF_ERROR(components_.speech_recognizer->Schedule());
+  bool NeedScheduleInternal() const override {
+    return input_source_->NeedSchedule() || input_source_->HasOutput() ||
+           buffer_.size() >= samples_per_interval_;
   }
 
-  if (components_.detokenizer->NeedSchedule()) {
-    ABSL_RETURN_IF_ERROR(components_.detokenizer->Schedule());
-  }
+  absl::Status ScheduleInternal() override {
+    SetState(State::kRunning);
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-  if (components_.text_merger->NeedSchedule()) {
-    ABSL_RETURN_IF_ERROR(components_.text_merger->Schedule());
-  }
-
-  return components_.text_merger->GetOutput();
-}
-
-absl::Status AsrSession::ProcessAsync(OutputCallback callback) {
-  if (thread_pool_ == nullptr) {
-    return absl::FailedPreconditionError("ThreadPool is null.");
-  }
-  absl::MutexLock lock(mutex_);
-  if (async_scheduler_ != nullptr) {
-    if (async_scheduler_->IsRunning()) {
-      return absl::AlreadyExistsError("Async processing is already active.");
-    }
-    ABSL_RETURN_IF_ERROR(async_scheduler_->Stop(absl::Seconds(3)));
-  }
-
-  std::vector<internal::StageBase*> stages = {
-      components_.audio_source.get(),      components_.preprocessor.get(),
-      components_.speech_recognizer.get(), components_.detokenizer.get(),
-      components_.text_merger.get(),
-  };
-  auto callback_with_flush_on_eos =
-      [callback = std::move(callback),
-       this](absl::StatusOr<TextMerger::MergeResult> result) mutable
-      -> absl::Status {
-    if (absl::IsOutOfRange(result.status())) {
-      ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
-      if (components_.text_merger->HasOutput()) {
-        ABSL_RETURN_IF_ERROR(callback(components_.text_merger->GetOutput()));
+    while (buffer_.size() < samples_per_interval_) {
+      ABSL_ASSIGN_OR_RETURN(bool has_more, PullNextInput());
+      if (!has_more) {
+        if (buffer_.empty()) {
+          return absl::OutOfRangeError("End of audio stream reached.");
+        }
+        PushPaddedRemainder();
+        return absl::OkStatus();
       }
     }
-    return callback(std::move(result));
-  };
-  async_scheduler_ =
-      std::make_unique<AsyncStageScheduler<TextMerger::MergeResult>>(
-          std::move(stages), components_.text_merger.get(), thread_pool_,
-          std::move(callback_with_flush_on_eos));
-  return async_scheduler_->Start();
+
+    PushNextInterval();
+    return absl::OkStatus();
+  }
+
+  absl::Status FlushInternal() override {
+    ABSL_RETURN_IF_ERROR(input_source_->Flush());
+    while (input_source_->NeedSchedule() || input_source_->HasOutput()) {
+      absl::StatusOr<bool> has_more = PullNextInput();
+      if (absl::IsOutOfRange(has_more.status())) {
+        break;
+      }
+      ABSL_RETURN_IF_ERROR(has_more.status());
+      if (!*has_more) {
+        break;
+      }
+    }
+
+    while (buffer_.size() >= samples_per_interval_) {
+      PushNextInterval();
+    }
+
+    if (!buffer_.empty()) {
+      PushPaddedRemainder();
+    }
+    return absl::OkStatus();
+  }
+
+ private:
+  // Pulls and processes the next input from `input_source_`.
+  // Returns `true` if an input was processed, `false` if `EndOfInput` was
+  // reached, or `OutOfRangeError` if `input_source_` has no more output.
+  absl::StatusOr<bool> PullNextInput() {
+    if (input_source_->NeedSchedule()) {
+      ABSL_RETURN_IF_ERROR(input_source_->Schedule());
+    }
+    if (!input_source_->HasOutput()) {
+      return absl::OutOfRangeError("End of audio stream reached.");
+    }
+    ABSL_ASSIGN_OR_RETURN(OmniSession::Input input, input_source_->GetOutput());
+    if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+      return false;
+    }
+    if (const auto* metadata =
+            std::get_if<OmniSession::AudioInputMetadata>(&input)) {
+      if (metadata->sample_rate_hz > 0 &&
+          metadata->sample_rate_hz != sample_rate_hz_) {
+        return absl::InvalidArgumentError(
+            "AudioInputMetadata sample_rate_hz does not match "
+            "AudioInputSource.");
+      }
+      if (metadata->num_channels > 0 &&
+          metadata->num_channels != num_channels_) {
+        return absl::InvalidArgumentError(
+            "AudioInputMetadata num_channels does not match "
+            "AudioInputSource.");
+      }
+      return true;
+    }
+    auto* audio_input = std::get_if<OmniSession::AudioInput>(&input);
+    if (audio_input == nullptr) {
+      return absl::InvalidArgumentError("ASR Session requires AudioInput.");
+    }
+    if (buffer_.empty()) {
+      std::swap(buffer_, audio_input->pcm_samples);
+    } else {
+      buffer_.insert(buffer_.end(), audio_input->pcm_samples.begin(),
+                     audio_input->pcm_samples.end());
+    }
+    return true;
+  }
+
+  void PushNextInterval() {
+    const size_t step = samples_per_interval_ - overlap_samples_;
+    // Copy remaining content into output first, then swap to reduce data copy.
+    std::vector<float> output(buffer_.begin() + step, buffer_.end());
+    std::swap(output, buffer_);
+    output.resize(samples_per_interval_);
+    PushOutput(std::move(output));
+  }
+
+  void PushPaddedRemainder() {
+    // Zero-pad any remaining samples in `buffer_` (including retained
+    // overlap samples from the previous chunk) to `samples_per_interval_`
+    // and emit a final chunk so the recognizer can process the tail with
+    // trailing silence context.
+    buffer_.resize(samples_per_interval_, 0.0f);
+    std::vector<float> output;
+    std::swap(output, buffer_);
+    PushOutput(std::move(output));
+  }
+
+  std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;
+  const int sample_rate_hz_;
+  const int num_channels_;
+  const size_t samples_per_interval_;
+  const size_t overlap_samples_;
+  std::vector<float> buffer_;
+};
+
+}  // namespace
+
+std::unique_ptr<AudioSource> AsrSessionFactory::CreateAudioInputSource(
+    std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+    int sample_rate_hz, int num_channels, int samples_per_interval,
+    int overlap_samples) {
+  return std::make_unique<AudioInputSource>(
+      std::move(input_source), sample_rate_hz, num_channels,
+      samples_per_interval, overlap_samples);
 }
 
-absl::StatusOr<OmniSession::Output> AsrSession::Flush() {
-  WaitForIdleOrStopped();
-  ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
-  return components_.text_merger->GetOutput();
+absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
+AsrSessionFactory::CreateFactory(AsrEngineConfig config) {
+  ABSL_ASSIGN_OR_RETURN(auto asr_engine, AsrEngine::Create(std::move(config)));
+  return std::unique_ptr<OmniSessionFactory>(
+      new AsrSessionFactory(std::move(asr_engine)));
+}
+
+AsrSessionFactory::AsrSessionFactory(
+    std::unique_ptr<AsrEngine> absl_nonnull asr_engine)
+    : asr_engine_(std::move(asr_engine)) {}
+
+AsrSessionFactory::~AsrSessionFactory() = default;
+
+absl::StatusOr<std::unique_ptr<OmniSession>> AsrSessionFactory::Create(
+    std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) {
+  const auto& config = asr_engine_->config();
+  int samples_per_interval = static_cast<int>(
+      config.sample_rate_hz * (config.input_milliseconds / 1000.0));
+  int overlap_samples =
+      static_cast<int>(samples_per_interval * config.overlap_ratio);
+  auto audio_source = CreateAudioInputSource(
+      std::move(input_source), config.sample_rate_hz, /*num_channels=*/1,
+      samples_per_interval, overlap_samples);
+  return asr_engine_->CreateSession(std::move(audio_source));
 }
 
 }  // namespace litert::omni::asr

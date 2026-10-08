@@ -628,6 +628,18 @@ class Conversation {
   // decode).
   absl::StatusOr<int> GetTokenCount() const;
 
+  // Returns the number of tokens the given message would consume if added
+  // to the conversation, including template tokens and media (vision/audio)
+  // soft tokens. This does not mutate the conversation or the KV cache.
+  //
+  // Args:
+  // - `message`: The message to count tokens for. Can be a single message
+  //   or an array of messages.
+  // - `optional_args`: Optional arguments for template rendering.
+  absl::StatusOr<int> CountTokens(
+      const Message& message,
+      const OptionalArgs& optional_args = OptionalArgs()) const;
+
   // Returns the benchmark info for the conversation. Under the hood, this
   // method triggers the benchmark info collection from the Session. Returns:
   // - The benchmark info for the conversation.
@@ -752,11 +764,17 @@ class Conversation {
   // - `optional_args`: The optional arguments for template rendering.
   // - `include_preface`: Include the preface in the returned text when
   //   `old_messages` is empty.
+  // - `add_generation_prompt_to_old`: Whether to set `add_generation_prompt`
+  //   when rendering `old_messages` into `old_string` (which is subtracted from
+  //   `new_string`). Set to true when rewinding to a checkpoint taken after
+  //   prefilling the user turn, because the KV cache at that checkpoint already
+  //   contains the generation prompt (e.g. `<|turn>model\n`) and subtracting it
+  //   from `new_string` avoids duplicating the assistant turn header.
   absl::StatusOr<std::string> GetPrefillTextForMessages(
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
       const OptionalArgs& optional_args = OptionalArgs(),
-      bool include_preface = true);
+      bool include_preface = true, bool add_generation_prompt_to_old = false);
 
   // Returns the input data vector for the given messages.
   //
@@ -769,16 +787,20 @@ class Conversation {
   // - `optional_args`: The optional arguments for template rendering.
   // - `include_preface`: Include the preface in the returned input data vector
   //   when `old_messages` is empty.
+  // - `add_generation_prompt_to_old`: Whether to set `add_generation_prompt`
+  //   when rendering `old_messages` into the prefix subtracted from
+  //   `new_string`.
   absl::StatusOr<std::vector<InputData>> GetInputDataVectorForMessages(
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
       const OptionalArgs& optional_args = OptionalArgs(),
-      bool include_preface = true);
+      bool include_preface = true, bool add_generation_prompt_to_old = false);
 
   // Rewinds the session to the checkpoint after the most recent channel content
   // and return the input data vector for all messages from that point onward.
   absl::StatusOr<std::vector<InputData>> RewindAndGetInputDataVector(
-      const OptionalArgs& optional_args = OptionalArgs());
+      const OptionalArgs& optional_args = OptionalArgs())
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(history_mutex_);
 
   // Applies the prompt template to the given input. This function will strip
   // heavy blobs from the input before applying the template.
@@ -816,10 +838,12 @@ class Conversation {
 
   // The index of the message you have to rewind to in order to remove channel
   // content from the KV cache. nullopt means no rewind is needed.
-  std::optional<int> checkpoint_message_index_ = std::nullopt;
+  std::optional<int> checkpoint_message_index_ ABSL_GUARDED_BY(history_mutex_) =
+      std::nullopt;
 
-  // Whether there is channel content present since the last user message.
-  bool channel_content_since_last_user_message_ = false;
+  // Whether the saved channel content checkpoint was taken after prefilling the
+  // user turn (including the generation prompt).
+  bool checkpoint_after_user_prefill_ ABSL_GUARDED_BY(history_mutex_) = false;
 };
 }  // namespace litert::lm
 

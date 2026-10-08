@@ -15,6 +15,7 @@
 #include "runtime/engine/engine_settings.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -419,6 +420,28 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
       (backend == Backend::CPU || backend == Backend::GPU)) {
     metadata.mutable_sampler_params()->set_type(
         proto::SamplerParameters::TOP_P);
+  }
+
+  if (metadata.has_sampler_params() && metadata.sampler_params().k() > 0) {
+    const uint32_t metadata_top_k =
+        static_cast<uint32_t>(metadata.sampler_params().k());
+    if (backend == Backend::GPU_ARTISAN
+    ) {
+      auto gpu_artisan_config =
+          main_executor_settings_.MutableBackendConfig<GpuArtisanConfig>();
+      if (gpu_artisan_config.ok() &&
+          metadata_top_k > gpu_artisan_config->max_top_k) {
+        gpu_artisan_config->max_top_k = metadata_top_k;
+        main_executor_settings_.SetBackendConfig(*gpu_artisan_config);
+      }
+    } else if (backend == Backend::GPU) {
+      auto gpu_config =
+          main_executor_settings_.MutableBackendConfig<GpuConfig>();
+      if (gpu_config.ok() && metadata_top_k > gpu_config->max_top_k) {
+        gpu_config->max_top_k = metadata_top_k;
+        main_executor_settings_.SetBackendConfig(*gpu_config);
+      }
+    }
   }
 
   if (!metadata.has_llm_model_type()) {

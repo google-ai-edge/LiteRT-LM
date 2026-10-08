@@ -21,6 +21,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "support/tokenizer/tokenizer.h"
@@ -62,6 +63,12 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
     const std::vector<InputData>& contents, const SessionConfig& session_config,
     support::Tokenizer& tokenizer,
     const std::optional<BenchmarkInfo>& benchmark_info);
+
+// Calculates the number of tokens that the input contents will consume in the
+// model, accounting for text tokenization and multimodal (vision and audio)
+// tokens based on engine properties.
+absl::StatusOr<int> CalculateInputDataTokens(
+    const std::vector<InputData>& contents, const Engine& engine);
 
 }  // namespace litert::lm
 

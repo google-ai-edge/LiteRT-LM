@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -32,7 +33,8 @@
 
 namespace litert::omni::asr {
 
-void FileAudioSource::MaDecoderDeleter::operator()(ma_decoder* decoder) const {
+void FileAudioSource::MaDecoderDeleter::operator()(
+    ma_decoder* absl_nullable decoder) const {
   if (decoder != nullptr) {
     ma_decoder_uninit(decoder);
     delete decoder;
@@ -87,9 +89,9 @@ absl::StatusOr<std::unique_ptr<FileAudioSource>> FileAudioSource::Create(
 }
 
 FileAudioSource::FileAudioSource(
-    std::unique_ptr<ma_decoder, MaDecoderDeleter> decoder, int sample_rate_hz,
-    int num_channels, int samples_per_interval, int overlap_samples, int step,
-    int64_t total_frames)
+    std::unique_ptr<ma_decoder, MaDecoderDeleter> absl_nonnull decoder,
+    int sample_rate_hz, int num_channels, int samples_per_interval,
+    int overlap_samples, int step, int64_t total_frames)
     : decoder_(std::move(decoder)),
       sample_rate_hz_(sample_rate_hz),
       num_channels_(num_channels),
@@ -125,21 +127,21 @@ absl::Status FileAudioSource::ScheduleInternal() {
     return absl::OutOfRangeError("End of audio stream reached.");
   }
 
-  auto* decoder = decoder_.get();
   int frames_to_read = (current_frame_ == 0) ? samples_per_interval_ : step_;
   int read_len = std::min(frames_to_read, samples_per_interval_ - ring_pos_);
-  ABSL_ASSIGN_OR_RETURN(
-      ma_uint64 frames_read,
-      ReadFrames(decoder, ring_buffer_.data() + ring_pos_, read_len));
+  ABSL_ASSIGN_OR_RETURN(ma_uint64 frames_read, ReadFrames(read_len));
 
   if (frames_to_read > read_len) {
     read_len = frames_to_read - read_len;
-    auto second_read_len =
-        ReadFrames(decoder, ring_buffer_.data() + ring_pos_, read_len);
+    auto second_read_len = ReadFrames(read_len);
     if (second_read_len.ok()) {
       frames_read += *second_read_len;
-    } else if (second_read_len.status().code() !=
+    } else if (second_read_len.status().code() ==
                absl::StatusCode::kOutOfRange) {
+      std::fill_n(ring_buffer_.begin() + ring_pos_, read_len, 0.0f);
+      ring_pos_ = (ring_pos_ + read_len) % samples_per_interval_;
+      current_frame_ += read_len;
+    } else {
       return second_read_len.status();
     }
   }
@@ -158,12 +160,11 @@ absl::Status FileAudioSource::ScheduleInternal() {
   return absl::OkStatus();
 }
 
-absl::StatusOr<ma_uint64> FileAudioSource::ReadFrames(ma_decoder* decoder,
-                                                      float* buffer,
-                                                      int num_frames_to_read) {
+absl::StatusOr<ma_uint64> FileAudioSource::ReadFrames(int num_frames_to_read) {
   ma_uint64 read_len = 0;
   ma_result res = ma_decoder_read_pcm_frames(
-      decoder, ring_buffer_.data() + ring_pos_, num_frames_to_read, &read_len);
+      decoder_.get(), ring_buffer_.data() + ring_pos_, num_frames_to_read,
+      &read_len);
   if (res != MA_SUCCESS && res != MA_AT_END) {
     is_closed_ = true;
     return absl::InternalError("Failed to read PCM frames from file.");

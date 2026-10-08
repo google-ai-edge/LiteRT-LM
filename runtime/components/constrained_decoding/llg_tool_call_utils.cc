@@ -18,14 +18,44 @@
 #include <unordered_set>
 #include <vector>
 
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
 
 namespace litert::lm {
+
+std::string SanitizeLarkRuleName(absl::string_view name) {
+  std::string sanitized;
+  sanitized.reserve(name.size());
+  for (char c : name) {
+    if (absl::ascii_islower(c) || absl::ascii_isdigit(c) || c == '_') {
+      sanitized.push_back(c);
+    } else if (absl::ascii_isupper(c)) {
+      // Escape uppercase as `-u<lower>` to satisfy the lowercase-only rule
+      // regex while preserving case distinction.
+      sanitized.append("-u");
+      sanitized.push_back(absl::ascii_tolower(c));
+    } else {
+      // Escape `-` and any non-identifier characters as `-x<hex>` so literal
+      // hyphens cannot collide with `-u` escapes or `-req-`/`-opt-` separators.
+      absl::StrAppendFormat(&sanitized, "-x%02x",
+                            static_cast<unsigned char>(c));
+    }
+  }
+  // Prefix with `r--` if the name does not start with `[a-z]`. This guarantees
+  // the rule name matches `[a-z][_a-z0-9\-]*`, and cannot collide with a name
+  // starting with `r` because unprefixed sanitized names never contain `--`
+  // (hyphens only appear in `-u<lower>` and `-x<hex>`).
+  if (name.empty() || !absl::ascii_islower(name[0])) {
+    return absl::StrCat("r--", sanitized);
+  }
+  return sanitized;
+}
 
 void ExtractToolProperties(const nlohmann::ordered_json& tool,
                            const std::string& tool_name,
@@ -37,6 +67,7 @@ void ExtractToolProperties(const nlohmann::ordered_json& tool,
     return;
   }
 
+  const std::string sanitized_tool = SanitizeLarkRuleName(tool_name);
   const auto& params = tool["parameters"];
   std::unordered_set<std::string> required_set;
   if (params.contains("required") && params["required"].is_array()) {
@@ -54,14 +85,17 @@ void ExtractToolProperties(const nlohmann::ordered_json& tool,
       std::string pair_rule =
           absl::StrFormat(R"("%s" "%s" %s)", prop_name, config.pair_separator,
                           config.generate_value_rule(prop_schema, is_req));
+      std::string sanitized_prop = SanitizeLarkRuleName(prop_name);
 
+      // Hyphenated `-req-`/`-opt-` separators prevent `(tool, prop)` boundary
+      // collisions. See `SanitizeLarkRuleName` for details.
       if (is_req) {
-        tool_blocks.push_back(absl::StrFormat(R"(%s_req_%s: %s)", tool_name,
-                                              prop_name, pair_rule));
+        tool_blocks.push_back(absl::StrFormat(
+            R"(%s-req-%s: %s)", sanitized_tool, sanitized_prop, pair_rule));
       } else {
         optional_props.push_back(prop_name);
-        tool_blocks.push_back(absl::StrFormat(R"(%s_opt_%s: %s)", tool_name,
-                                              prop_name, pair_rule));
+        tool_blocks.push_back(absl::StrFormat(
+            R"(%s-opt-%s: %s)", sanitized_tool, sanitized_prop, pair_rule));
       }
     }
   }
@@ -70,11 +104,13 @@ void ExtractToolProperties(const nlohmann::ordered_json& tool,
 void AppendRequiredProperties(const std::vector<std::string>& required_props,
                               const std::string& tool_name,
                               std::vector<std::string>& sequence) {
+  const std::string sanitized_tool = SanitizeLarkRuleName(tool_name);
   for (const std::string& req : required_props) {
     if (!sequence.empty()) {
       sequence.push_back(R"(",")");
     }
-    sequence.push_back(absl::StrFormat("%s_req_%s", tool_name, req));
+    sequence.push_back(absl::StrFormat("%s-req-%s", sanitized_tool,
+                                       SanitizeLarkRuleName(req)));
   }
 }
 
@@ -86,14 +122,18 @@ void AppendOptionalProperties(const std::vector<std::string>& optional_props,
     return;
   }
 
-  std::string opt_rule_name = absl::StrCat(tool_name, "_optional");
+  const std::string sanitized_tool = SanitizeLarkRuleName(tool_name);
+  // See `SanitizeLarkRuleName` for why `-optional` uses a hyphen separator.
+  std::string opt_rule_name = absl::StrCat(sanitized_tool, "-optional");
 
   std::vector<std::string> opt_pairs;
   std::vector<std::string> opt_pairs_with_comma;
   for (const std::string& opt : optional_props) {
-    opt_pairs.push_back(absl::StrFormat("%s_opt_%s", tool_name, opt));
-    opt_pairs_with_comma.push_back(
-        absl::StrFormat(R"("," %s_opt_%s %s)", tool_name, opt, opt_rule_name));
+    std::string sanitized_opt = SanitizeLarkRuleName(opt);
+    opt_pairs.push_back(
+        absl::StrFormat("%s-opt-%s", sanitized_tool, sanitized_opt));
+    opt_pairs_with_comma.push_back(absl::StrFormat(
+        R"("," %s-opt-%s %s)", sanitized_tool, sanitized_opt, opt_rule_name));
   }
   std::string all_opts = absl::StrJoin(opt_pairs, " | ");
   std::string all_opts_with_comma = absl::StrJoin(opt_pairs_with_comma, " | ");
@@ -113,7 +153,8 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
                      const std::string& tool_name,
                      const ToolFormatConfig& config,
                      std::vector<std::string>& tool_blocks) {
-  std::string tool_rule = absl::StrCat(tool_name, config.rule_suffix);
+  std::string tool_rule =
+      absl::StrCat(SanitizeLarkRuleName(tool_name), config.rule_suffix);
 
   std::vector<std::string> required_props;
   std::vector<std::string> optional_props;

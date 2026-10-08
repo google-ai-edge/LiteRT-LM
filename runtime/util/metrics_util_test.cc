@@ -36,11 +36,15 @@ TEST(MetricsUtilTest, EmptyMetrics) {
   LitertLmMetrics metrics;
   metrics.peak_mem_mb = 12.5f;
   metrics.peak_private_mb = 10.0f;
+  metrics.peak_dmabuf_mb = 348.7f;
+  metrics.dmabuf_buffer_count = 14;
 
   ASSERT_OK_AND_ASSIGN(auto proto, ToProto(metrics));
 
   EXPECT_THAT(proto.peak_mem_mb(), FloatEq(12.5f));
   EXPECT_THAT(proto.peak_private_mb(), FloatEq(10.0f));
+  EXPECT_THAT(proto.peak_dmabuf_mb(), FloatEq(348.7f));
+  EXPECT_EQ(proto.dmabuf_buffer_count(), 14);
   EXPECT_FALSE(proto.has_benchmark_params());
   EXPECT_THAT(proto.init_phase_durations_us(), SizeIs(0));
   EXPECT_THAT(proto.mark_durations_us(), SizeIs(0));

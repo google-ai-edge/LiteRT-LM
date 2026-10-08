@@ -27,7 +27,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/asr/detokenizer.h"
@@ -110,7 +109,8 @@ std::vector<std::string> MergeIntoUnconfirmedText(
         std::ceil(curr_words.size() * overlap_ratio),
         static_cast<int>(prev_words.size()) - prev_word_index_of_unconfirmed);
     num_words_before_pivot_in_current = std::min<size_t>(
-        static_cast<size_t>(num_words_overlap_in_current * pivot_factor),
+        static_cast<size_t>(
+            std::ceil(num_words_overlap_in_current * pivot_factor)),
         curr_words.size());
   }
 
@@ -192,6 +192,13 @@ absl::Status TimestampTextMerger::Execute() {
       curr_timestamps.push_back(word.timestamp_ms.value() +
                                 stream_timestamp_offset_ms_);
     }
+  }
+
+  if (curr_words.empty()) {
+    UpdateStreamTimestampOffset(max_chunk_timestamp_ms, curr_timestamps);
+    LogAndPushOutput(
+        {"", prev_words_.empty() ? "" : absl::StrJoin(prev_words_, " ")});
+    return absl::OkStatus();
   }
 
   if (overlap_ratio_ == 0.0f) {
@@ -279,12 +286,7 @@ absl::Status TimestampTextMerger::Execute() {
   return absl::OkStatus();
 }
 
-absl::Status TimestampTextMerger::Flush() {
-  if (!SetStateIfState(State::kIdle, State::kRunning)) {
-    return absl::FailedPreconditionError(
-        "Flush() called while Schedule() is in progress.");
-  }
-
+absl::Status TimestampTextMerger::FlushInternal() {
   if (!prev_words_.empty()) {
     MergeResult result = {absl::StrJoin(prev_words_, " "), ""};
     prev_words_.clear();
@@ -294,8 +296,6 @@ absl::Status TimestampTextMerger::Flush() {
     prev_word_index_of_pivot_ = -1;
     LogAndPushOutput(std::move(result));
   }
-
-  SetState(State::kIdle);
   return absl::OkStatus();
 }
 

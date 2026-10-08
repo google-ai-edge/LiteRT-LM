@@ -46,6 +46,11 @@ void StreamTextSource::Finish() {
   is_finished_ = true;
 }
 
+absl::Status StreamTextSource::FlushInternal() {
+  Finish();
+  return absl::OkStatus();
+}
+
 bool StreamTextSource::IsFinished() const {
   absl::MutexLock lock(mutex_);
   return is_finished_;
@@ -78,6 +83,12 @@ absl::Status StreamTextSource::ScheduleInternal() {
       buffer_.clear();
       buffer_start_index_ = 0;
     }
+    return absl::OkStatus();
+  }
+  if (is_finished_) {
+    buffer_.clear();
+    buffer_start_index_ = 0;
+    return absl::OutOfRangeError("End of text stream reached.");
   }
   return absl::OkStatus();
 }

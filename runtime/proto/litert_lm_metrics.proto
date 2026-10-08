@@ -59,6 +59,12 @@ message LitertLmMetrics {
 
   // Peak private memory usage in megabytes.
   float peak_private_mb = 9;
+
+  // Peak DMA-BUF memory usage in megabytes.
+  float peak_dmabuf_mb = 10;
+
+  // Number of active DMA-BUF buffers at peak memory measurement.
+  int64 dmabuf_buffer_count = 11;
 }
 
 message LitertLmMetricsList {

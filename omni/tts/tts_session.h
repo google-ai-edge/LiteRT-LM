@@ -16,75 +16,43 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_
 
 #include <memory>
-#include <vector>
 
-#include "absl/base/thread_annotations.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "omni/base/async_stage_scheduler.h"
-#include "omni/base/io_types.h"
-#include "omni/base/stage.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
-#include "omni/tts/vocoder.h"
-#include "runtime/framework/threadpool.h"
+#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/tts_engine.h"
+
+namespace litert::omni {
+class OmniSessionTest;
+}  // namespace litert::omni
 
 namespace litert::omni::tts {
 
-// Orchestrates component pipeline execution for TTS speech synthesis streams.
-class TtsSession : public OmniSession {
+// `OmniSessionFactory` implementation backed by `TtsEngine`.
+class TtsSessionFactory : public OmniSessionFactory {
  public:
-  struct Components {
-    std::unique_ptr<StreamTextSource> text_source;
-    std::vector<std::unique_ptr<internal::StageBase>> intermediate_stages;
-    std::unique_ptr<Vocoder> vocoder;
-  };
+  static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
+      TtsEngineSettings settings);
+  ~TtsSessionFactory() override;
 
-  // Creates a TtsSession instance taking ownership of configured components
-  // and reference to the ThreadPool (owned by TtsEngine).
-  static absl::StatusOr<std::unique_ptr<TtsSession>> Create(
-      Components components, ::litert::lm::ThreadPool* thread_pool);
-
-  ~TtsSession() override;
-
-  // Resets session and component state for a new synthesis stream.
-  void Reset() override;
-
-  // Flushes remaining synthesized audio at stream end.
-  absl::StatusOr<Output> Flush() override;
-
-  // Synchronously synthesizes pending text from `text_source` using the
-  // session's thread pool and returns the concatenated `OmniSession::Output`
-  // (`AudioOutput`), then resets the session.
-  // TODO(b/538727793): Drive stages inline chunk-by-chunk without calling
-  // `Finish()` and `Reset()` inside `ProcessNext()`.
-  // Returns `absl::OutOfRangeError` when no audio is produced.
-  absl::StatusOr<Output> ProcessNext() override;
-
-  // Processes the TTS stream asynchronously using the session's thread pool and
-  // emits `OmniSession::Output` (`AudioOutput`) chunks to `callback`.
-  // Returns `absl::AlreadyExistsError` if async processing is already active
-  // (in which case newly pushed text is synthesized into the active stream's
-  // callback).
-  absl::Status ProcessAsync(OutputCallback callback) override;
-
-  // Returns the session's `StreamTextSource` stage.
-  StreamTextSource& text_source() { return *components_.text_source; }
+  absl::StatusOr<std::unique_ptr<OmniSession>> Create(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
+      override;
 
  private:
-  explicit TtsSession(Components components,
-                      ::litert::lm::ThreadPool* thread_pool);
+  friend class ::litert::omni::OmniSessionTest;
+  friend class TtsSessionTest;
 
-  void ResetAsyncScheduler();
-  void WaitForIdleOrStopped();
+  static std::unique_ptr<StreamTextSource> CreateTextInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      TextChunkConfig config = {});
 
-  Components components_;
-  ::litert::lm::ThreadPool* thread_pool_ = nullptr;
+  explicit TtsSessionFactory(
+      std::unique_ptr<TtsEngine> absl_nonnull tts_engine);
 
-  mutable absl::Mutex mutex_;
-  std::unique_ptr<AsyncStageScheduler<AudioOutput>> async_scheduler_
-      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<TtsEngine> tts_engine_;
 };
 
 }  // namespace litert::omni::tts

@@ -35,10 +35,6 @@ class LevenshteinTextMerger : public TextMerger {
       Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
       : TextMerger(detokenizer) {}
 
-  // Flushes remaining unconfirmed text into output queue at end of stream.
-  // Returns error if called when Schedule() is in progress.
-  absl::Status Flush() override;
-
   // Returns cached unconfirmed words.
   // It's only used for testing. Not thread-safe.
   absl::Span<const std::string> unconfirmed_words_for_testing() const {
@@ -48,6 +44,9 @@ class LevenshteinTextMerger : public TextMerger {
  private:
   // SingleThreadedStageWithDeque<MergeResult> implementation:
   absl::Status ScheduleInternal() override;
+
+  // Flushes remaining unconfirmed text into output queue at end of stream.
+  absl::Status FlushInternal() override;
 
   // Resets internal cached state for a new audio stream.
   void ResetInternal() override;

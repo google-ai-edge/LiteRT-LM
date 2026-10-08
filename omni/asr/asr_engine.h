@@ -17,18 +17,22 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
-#include "omni/asr/asr_session.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/log_mel_spectrogram_processor.h"
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -36,16 +40,11 @@ namespace litert::omni::asr {
 
 struct AsrEngineConfig {
   enum class DecoderType {
-    kCtc = 0,
-    kTdt = 1,
-    kStateless = 2,
-    kLm = 3,
-  };
-
-  enum class Backend {
-    kCpu = 0,
-    kGpu = 1,
-    kNpu = 2,
+    kUnspecified = 0,
+    kCtc = 1,
+    kTdt = 2,
+    kStateless = 3,
+    kLm = 4,
   };
 
   enum class TextMergerType {
@@ -63,7 +62,7 @@ struct AsrEngineConfig {
   int input_milliseconds = 5000;
 
   DecoderType decoder_type = DecoderType::kTdt;
-  Backend backend = Backend::kCpu;
+  OmniEngine::Options::Backend backend = OmniEngine::Options::Backend::kCpu;
   TextMergerType text_merger_type = TextMergerType::kTimestamp;
   int num_threads = 4;
   float overlap_ratio = 0.4f;
@@ -101,18 +100,22 @@ class AsrEngine {
   ~AsrEngine() = default;
 
   // Instantiates components based on configuration and returns a new
-  // AsrSession.
-  absl::StatusOr<std::unique_ptr<AsrSession>> CreateSession(
-      std::unique_ptr<AudioSource> audio_source);
+  // MultiStagedSession.
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateSession(
+      std::unique_ptr<AudioSource> absl_nonnull audio_source);
 
   const AsrEngineConfig& config() const { return config_; }
 
  private:
   AsrEngine(AsrEngineConfig config,
-            std::unique_ptr<::litert::support::Tokenizer> tokenizer,
-            std::unique_ptr<::litert::Environment> environment,
-            std::unique_ptr<::litert::CompiledModel> compiled_model,
-            std::unique_ptr<::litert::lm::ThreadPool> thread_pool,
+            std::shared_ptr<::litert::lm::ModelResources> absl_nullable
+                model_resources,
+            std::unique_ptr<::litert::support::Tokenizer> absl_nonnull
+                tokenizer,
+            std::unique_ptr<::litert::Environment> absl_nonnull environment,
+            std::unique_ptr<::litert::CompiledModel> absl_nullable
+                compiled_model,
+            std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool,
             std::unique_ptr<LiteRtLmRunner> lm_runner = nullptr,
             std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner = nullptr);
 
@@ -120,12 +123,13 @@ class AsrEngine {
                                             const FileDownloader& downloader);
 
   AsrEngineConfig config_;
-  std::unique_ptr<::litert::support::Tokenizer> tokenizer_;
-  std::unique_ptr<::litert::Environment> environment_;
-  std::unique_ptr<::litert::CompiledModel> compiled_model_;
-  std::unique_ptr<::litert::lm::ThreadPool> thread_pool_;
-  std::unique_ptr<LiteRtLmRunner> lm_runner_;
-  std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner_;
+  std::shared_ptr<::litert::lm::ModelResources> absl_nullable model_resources_;
+  std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer_;
+  std::unique_ptr<::litert::Environment> absl_nonnull environment_;
+  std::unique_ptr<::litert::CompiledModel> absl_nullable compiled_model_;
+  std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool_;
+  std::unique_ptr<LiteRtLmRunner> absl_nullable lm_runner_;
+  std::unique_ptr<LiteRtLmEngineRunner> absl_nullable lm_engine_runner_;
 };
 
 }  // namespace litert::omni::asr

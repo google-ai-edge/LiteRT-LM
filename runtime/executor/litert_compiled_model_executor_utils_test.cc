@@ -39,6 +39,8 @@
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -300,6 +302,16 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetKVCacheRootNames_KvCacheC) {
   EXPECT_EQ(v_root_name, "kv_cache_c_");
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest, IsLinearAttentionStateName) {
+  EXPECT_TRUE(IsLinearAttentionStateName("kv_cache_c_0"));
+  EXPECT_TRUE(IsLinearAttentionStateName("kv_cache_r_12"));
+  EXPECT_FALSE(IsLinearAttentionStateName("kv_cache_k_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("kv_cache_v_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("k_cache_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("input_pos"));
+  EXPECT_FALSE(IsLinearAttentionStateName(""));
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      GetKVCacheRootNames_HybridConvAndKVCache) {
   // Hybrid models like LFM start with conv cache (kv_cache_c_0) followed by
@@ -545,6 +557,103 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
       GetPrefillRunnerSetFromModel(*litert_model, "prefill",
                                    /*input_positions_name=*/"input_pos"));
   EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+class GetPrefillRunnerSetFromCompiledModelTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    auto model_path =
+        std::filesystem::path(::testing::SrcDir()) /
+        "litert_lm/runtime/testdata/test_lm.task";
+    ASSERT_OK_AND_ASSIGN(auto model_assets,
+                         ModelAssets::Create(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(model_resources_,
+                         BuildLiteRtCompiledModelResources(model_assets));
+    ASSERT_NE(model_resources_, nullptr);
+    ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                         model_resources_->GetTFLiteModelBuffer(
+                             ModelType::kTfLitePrefillDecode));
+    ::litert::BufferRef<uint8_t> model_buffer(
+        reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
+        model_buffer_view.size());
+
+    LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+    env_.emplace(std::move(env));
+    LITERT_ASSERT_OK_AND_ASSIGN(::litert::Options compilation_options,
+                                ::litert::Options::Create());
+    compilation_options.SetHardwareAccelerators(::litert::HwAccelerators::kCpu);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto compiled_model,
+                                ::litert::CompiledModel::Create(
+                                    *env_, model_buffer, compilation_options));
+    compiled_model_.emplace(std::move(compiled_model));
+  }
+
+  std::unique_ptr<ModelResources> model_resources_;
+  std::optional<::litert::Environment> env_;
+  std::optional<::litert::CompiledModel> compiled_model_;
+};
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest, ReturnsPrefillSignatures) {
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos"));
+  EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MatchesFlatbufferModelOverload) {
+  ASSERT_OK_AND_ASSIGN(auto litert_model, model_resources_->GetTFLiteModel(
+                                              ModelType::kTfLitePrefillDecode));
+  ASSERT_NE(litert_model, nullptr);
+  ASSERT_OK_AND_ASSIGN(
+      auto expected,
+      GetPrefillRunnerSetFromModel(*litert_model, "prefill",
+                                   /*input_positions_name=*/"input_pos"));
+  ASSERT_OK_AND_ASSIGN(auto actual, GetPrefillRunnerSetFromModel(
+                                        *compiled_model_, "prefill",
+                                        /*input_positions_name=*/"input_pos"));
+  EXPECT_EQ(actual, expected);
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MatchingSelectedSignatureIsKept) {
+  const std::vector<std::string> selected_signatures = {"prefill"};
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos",
+                                   selected_signatures));
+  EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       NonMatchingSelectedSignatureFiltersAll) {
+  // A non-matching selected signature filters out all prefill runners.
+  const std::vector<std::string> selected_signatures = {"decode"};
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos",
+                                   selected_signatures));
+  EXPECT_TRUE(prefill_runner_set.empty());
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       NonMatchingSignatureNameBaseReturnsEmpty) {
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "nonexistent_prefix",
+                                   /*input_positions_name=*/"input_pos"));
+  EXPECT_TRUE(prefill_runner_set.empty());
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MissingInputPositionsTensorReturnsError) {
+  EXPECT_FALSE(
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"nonexistent_input")
+          .ok());
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, InitializeAttentionMask_Float32) {
@@ -2100,6 +2209,106 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_EQ(params.global_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
   EXPECT_EQ(params.local_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
   EXPECT_FALSE(params.sliding_window_size.has_value());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ShouldSkipGlobalCausalAttentionMask) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto bool_layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));
+  RankedTensorType bool_tensor_type(ElementType::Bool, std::move(bool_layout));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto bool_host_mask,
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  bool_tensor_type, sizeof(bool) * 128));
+
+  auto float_layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));
+  RankedTensorType float_tensor_type(ElementType::Float32,
+                                     std::move(float_layout));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto float_host_mask,
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  float_tensor_type, sizeof(float) * 128));
+
+  ModelSignatures signatures;
+  signatures.input_tokens = "tokens";
+  signatures.input_positions = "input_pos";
+  signatures.input_attn_mask = "mask";
+  signatures.input_int32_param = "param_tensor";
+  signatures.output_logits = "logits";
+
+  AttentionMaskParams causal_params;
+  causal_params.global_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+
+  // Pruned boolean mask on GPU with single-buffer cache params should be
+  // skipped.
+  EXPECT_TRUE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &bool_host_mask));
+
+  // CPU backend must never skip initializing/filling the host attention mask.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::CPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &bool_host_mask));
+
+  // Float attention masks are not pruned by Flash SDPA and must not be skipped.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &float_host_mask));
+
+  // Null mask buffer or disabled single-buffer cache must not skip.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, /*attn_mask_buffer=*/nullptr));
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/false, signatures,
+      causal_params, &bool_host_mask));
+
+  // Bidirectional and vision-bidirectional masks must not be skipped.
+  AttentionMaskParams bidirectional_params;
+  bidirectional_params.global_type = proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      bidirectional_params, &bool_host_mask));
+
+  AttentionMaskParams vision_bidirectional_params;
+  vision_bidirectional_params.global_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      vision_bidirectional_params, &bool_host_mask));
+
+  // Models with a separate local attention mask only skip when the local mask
+  // buffer is also a pruned boolean causal mask on host memory.
+  ModelSignatures local_mask_signatures = signatures;
+  local_mask_signatures.input_attn_mask_local = "local_mask";
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask,
+      /*attn_mask_local_buffer=*/nullptr));
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask, &float_host_mask));
+  EXPECT_TRUE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask, &bool_host_mask));
+
+  // Non-causal local_type must prevent skipping even when global_type is causal
+  // and both masks are boolean host buffers.
+  AttentionMaskParams local_bidirectional_params = causal_params;
+  local_bidirectional_params.local_type =
+      proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, local_bidirectional_params, &bool_host_mask,
+      &bool_host_mask));
+
+  AttentionMaskParams local_vision_bidirectional_params = causal_params;
+  local_vision_bidirectional_params.local_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, local_vision_bidirectional_params, &bool_host_mask,
+      &bool_host_mask));
 }
 
 }  // namespace

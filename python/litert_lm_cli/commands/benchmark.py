@@ -27,7 +27,7 @@ from litert_lm_cli import model
 
 try:
   # pylint: disable=g-import-not-at-top
-  from litert_lm.adb import adb_benchmark  # pytype: disable=import-error
+  from litert_lm.adb import adb_benchmark  # pyrefly: ignore[missing-import]
 
   _HAS_ADB = True
 except ImportError:
@@ -144,14 +144,15 @@ def run_benchmark(
 
     info_list = []
 
-    if not skip_warmup:
-      click.echo("Running warmup..")
-      benchmark_obj.run()
+    with benchmark_obj:
+      if not skip_warmup:
+        click.echo("Running warmup..")
+        benchmark_obj.run()
 
-    for i in range(runs):
-      click.echo(f"Running iteration {i + 1} of {runs}..")
-      result = benchmark_obj.run()
-      info_list.append(result)
+      for i in range(runs):
+        click.echo(f"Running iteration {i + 1} of {runs}..")
+        result = benchmark_obj.run()
+        info_list.append(result)
 
     if not info_list:
       raise RuntimeError("No benchmark info collected")

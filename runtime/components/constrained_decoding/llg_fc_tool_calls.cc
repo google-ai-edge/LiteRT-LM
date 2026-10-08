@@ -134,9 +134,10 @@ absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
     }
     std::string tool_name = tool["name"].get<std::string>();
     tool_names.push_back(tool_name);
+    // See `SanitizeLarkRuleName` for why `-object` uses a hyphen separator.
     const ToolFormatConfig fc_config = {
         .pair_separator = ":",
-        .rule_suffix = "_object",
+        .rule_suffix = "-object",
         .start_wrap = "{",
         .end_wrap = "}",
         .generate_value_rule = GenerateFcValueRule,
@@ -144,14 +145,12 @@ absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
     AppendToolRules(tool, tool_name, fc_config, tool_blocks);
   }
 
-  std::string tool_union =
-      absl::StrFormat(R"(TOOL_UNION: /%s/)", absl::StrJoin(tool_names, "|"));
-
   std::vector<std::string> tool_call_cases;
   tool_call_cases.reserve(tool_names.size());
   for (const auto& tool_name : tool_names) {
-    tool_call_cases.push_back(
-        absl::StrFormat(R"("call:" "%s" %s_object)", tool_name, tool_name));
+    tool_call_cases.push_back(absl::StrFormat(R"("call:" "%s" %s-object)",
+                                              tool_name,
+                                              SanitizeLarkRuleName(tool_name)));
   }
 
   std::string json_grammar = GetFcGrammar(options);
@@ -187,8 +186,8 @@ function_block: %s
     }
   }
 
-  return absl::StrCat(tool_union, "\n", absl::StrJoin(tool_blocks, "\n"), "\n",
-                      json_grammar, "\n", start_rule);
+  return absl::StrCat(absl::StrJoin(tool_blocks, "\n"), "\n", json_grammar,
+                      "\n", start_rule);
 }
 
 }  // namespace litert::lm

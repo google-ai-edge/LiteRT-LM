@@ -151,11 +151,15 @@ genrule(
     srcs = PHSOURCE_FILES + DATA_FILES,
     outs = ["espeak-ng-data/intonations"],
     cmd = """
-        mkdir -p $(RULEDIR)/espeak-ng-data $(RULEDIR)/phsource
-        cp -R external/espeak_ng/espeak-ng-data/* $(RULEDIR)/espeak-ng-data/ 2>/dev/null || true
-        cp -R external/espeak_ng/phsource/* $(RULEDIR)/phsource/ 2>/dev/null || true
-        chmod -R 755 $(RULEDIR)
-        $(location :espeak-ng-bin) --path=$(RULEDIR) --compile-intonations
+        WORK_DIR="$(RULEDIR)/.work_intonations"
+        rm -rf "$$WORK_DIR"
+        mkdir -p "$$WORK_DIR/espeak-ng-data" "$$WORK_DIR/phsource" "$(RULEDIR)/espeak-ng-data"
+        cp -R external/espeak_ng/espeak-ng-data/* "$$WORK_DIR/espeak-ng-data/" 2>/dev/null || true
+        cp -R external/espeak_ng/phsource/* "$$WORK_DIR/phsource/" 2>/dev/null || true
+        chmod -R 755 "$$WORK_DIR"
+        $(location :espeak-ng-bin) --path="$$WORK_DIR" --compile-intonations
+        cp -f "$$WORK_DIR/espeak-ng-data/intonations" "$@"
+        rm -rf "$$WORK_DIR"
     """,
     tools = [":espeak-ng-bin"],
 )
@@ -172,106 +176,30 @@ genrule(
         "espeak-ng-data/phontab",
     ],
     cmd = """
-        mkdir -p $(RULEDIR)/espeak-ng-data $(RULEDIR)/phsource
-        cp -R external/espeak_ng/espeak-ng-data/* $(RULEDIR)/espeak-ng-data/ 2>/dev/null || true
-        cp -R external/espeak_ng/phsource/* $(RULEDIR)/phsource/ 2>/dev/null || true
-        if [ "$(location :intonations)" != "$(RULEDIR)/espeak-ng-data/intonations" ]; then
-            cp -f $(location :intonations) $(RULEDIR)/espeak-ng-data/
-        fi
-        chmod -R 755 $(RULEDIR)
-        $(location :espeak-ng-bin) --path=$(RULEDIR) --compile-phonemes
+        WORK_DIR="$(RULEDIR)/.work_phonemes"
+        rm -rf "$$WORK_DIR"
+        mkdir -p "$$WORK_DIR/espeak-ng-data" "$$WORK_DIR/phsource" "$(RULEDIR)/espeak-ng-data"
+        cp -R external/espeak_ng/espeak-ng-data/* "$$WORK_DIR/espeak-ng-data/" 2>/dev/null || true
+        cp -R external/espeak_ng/phsource/* "$$WORK_DIR/phsource/" 2>/dev/null || true
+        cp -f $(location :intonations) "$$WORK_DIR/espeak-ng-data/intonations"
+        chmod -R 755 "$$WORK_DIR"
+        $(location :espeak-ng-bin) --path="$$WORK_DIR" --compile-phonemes
+        for f in phondata phondata-manifest phonindex phontab; do
+          cp -f "$$WORK_DIR/espeak-ng-data/$$f" "$(RULEDIR)/espeak-ng-data/$$f"
+        done
+        rm -rf "$$WORK_DIR"
     """,
     tools = [":espeak-ng-bin"],
 )
 
 LOCALES = [
-    "af",
-    "am",
-    "an",
-    "ar",
-    "as",
-    "az",
-    "bg",
-    "bn",
-    "bpy",
-    "bs",
-    "ca",
-    "cs",
-    "cy",
-    "da",
-    "de",
-    "el",
     "en",
-    "eo",
     "es",
-    "et",
-    "eu",
-    "fa",
-    "fi",
     "fr",
-    "ga",
-    "gd",
-    "gn",
-    "grc",
-    "gu",
-    "hak",
     "hi",
-    "hr",
-    "ht",
-    "hu",
-    "hy",
-    "ia",
-    "id",
-    "is",
     "it",
     "ja",
-    "jbo",
-    "ka",
-    "kl",
-    "kn",
-    "ko",
-    "kok",
-    "ku",
-    "ky",
-    "la",
-    "lfn",
-    "lt",
-    "lv",
-    "mi",
-    "mk",
-    "ml",
-    "mr",
-    "ms",
-    "mt",
-    "my",
-    "nci",
-    "ne",
-    "nl",
-    "no",
-    "om",
-    "or",
-    "pa",
-    "pap",
-    "pl",
     "pt",
-    "ro",
-    "ru",
-    "sd",
-    "shn",
-    "si",
-    "sk",
-    "sl",
-    "sq",
-    "sr",
-    "sv",
-    "sw",
-    "ta",
-    "te",
-    "tn",
-    "tr",
-    "tt",
-    "ur",
-    "vi",
     "zh",
 ]
 
@@ -287,19 +215,20 @@ LOCALES = [
         "espeak-ng-data/cmn_dict",
     ],
     cmd = """
-        mkdir -p $(RULEDIR)/espeak-ng-data $(RULEDIR)/phsource $(RULEDIR)/dictsource
-        cp -R external/espeak_ng/espeak-ng-data/* $(RULEDIR)/espeak-ng-data/ 2>/dev/null || true
-        cp -R external/espeak_ng/phsource/* $(RULEDIR)/phsource/ 2>/dev/null || true
-        cp -R external/espeak_ng/dictsource/* $(RULEDIR)/dictsource/ 2>/dev/null || true
+        WORK_DIR="$(RULEDIR)/.work_{locale}"
+        rm -rf "$$WORK_DIR"
+        mkdir -p "$$WORK_DIR/espeak-ng-data" "$$WORK_DIR/phsource" "$$WORK_DIR/dictsource" "$(RULEDIR)/espeak-ng-data"
+        cp -R external/espeak_ng/espeak-ng-data/* "$$WORK_DIR/espeak-ng-data/" 2>/dev/null || true
+        cp -R external/espeak_ng/phsource/* "$$WORK_DIR/phsource/" 2>/dev/null || true
+        cp -R external/espeak_ng/dictsource/* "$$WORK_DIR/dictsource/" 2>/dev/null || true
         for f in $(locations :phonemes) $(location :intonations); do
-          dst="$(RULEDIR)/espeak-ng-data/$$(basename $$f)"
-          if [ "$$f" != "$$dst" ]; then
-            cp -f $$f "$$dst"
-          fi
+          cp -f "$$f" "$$WORK_DIR/espeak-ng-data/$$(basename $$f)"
         done
-        chmod -R 755 $(RULEDIR)
+        chmod -R 755 "$$WORK_DIR"
         EXECROOT=$$(pwd)
-        (cd $(RULEDIR)/dictsource && $$EXECROOT/$(location :espeak-ng-bin) --path=$$EXECROOT/$(RULEDIR) --compile={locale})
+        (cd "$$WORK_DIR/dictsource" && "$$EXECROOT/$(location :espeak-ng-bin)" --path="$$EXECROOT/$$WORK_DIR" --compile={locale})
+        cp -f "$$WORK_DIR/espeak-ng-data/$$(basename $@)" "$@"
+        rm -rf "$$WORK_DIR"
     """.format(locale = locale),
     tools = [":espeak-ng-bin"],
 ) for locale in LOCALES]

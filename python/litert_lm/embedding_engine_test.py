@@ -13,6 +13,7 @@
 # limitations under the License.
 """Tests for LiteRT-LM EmbeddingEngine."""
 
+import ctypes
 import math
 import pathlib
 from unittest import mock
@@ -214,15 +215,186 @@ class EmbeddingEngineTest(parameterized.TestCase):
     with self.assertRaises(RuntimeError):
       engine.compute_embedding_batch(["'s"])
 
+  @parameterized.named_parameters(
+      ("single", False),
+      ("batch", True),
+  )
+  def test_options_setter_failure_propagates_runtime_error(self, batch):
+    engine = litert_lm.EmbeddingEngine(
+        model_path=self.model_path, backend=litert_lm.Backend.CPU()
+    )
+    try:
+      with mock.patch.object(
+          litert_lm.embedding_engine,
+          "call_checked",
+          autospec=True,
+          side_effect=RuntimeError("setter failed"),
+      ):
+        with self.assertRaisesRegex(RuntimeError, "setter failed"):
+          if batch:
+            engine.compute_embedding_batch(
+                ["'s"], options=litert_lm.EmbeddingOptions(normalize=True)
+            )
+          else:
+            engine.compute_embedding(
+                "'s", options=litert_lm.EmbeddingOptions(normalize=True)
+            )
+    finally:
+      engine.close()
+
   def test_invalid_model_path_raises_runtime_error(self):
     with self.assertRaises(RuntimeError):
       litert_lm.EmbeddingEngine(
           model_path="/invalid/path/to/nonexistent/model.litertlm"
       )
 
+  def test_invalid_model_path_error_includes_c_status(self):
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "litert_lm_embedding_engine_create failed with status NOT_FOUND",
+    ):
+      litert_lm.EmbeddingEngine(
+          model_path="/invalid/path/to/nonexistent/model.litertlm"
+      )
+
+  def test_engine_create_failure_includes_c_status(self):
+    with self.assertRaisesRegex(
+        RuntimeError, "litert_lm_embedding_engine_create failed with status"
+    ):
+      litert_lm.EmbeddingEngine(
+          model_path=self.model_path,
+          backend=litert_lm.Backend.CPU(),
+          max_input_length=512,
+      )
+
+  def test_c_options_getters_round_trip(self):
+    lib = litert_lm._ffi._get_lib()
+    options_ptr = litert_lm.embedding_engine._create_c_options(
+        lib,
+        litert_lm.EmbeddingOptions(
+            normalize=False,
+            insert_special_tokens=False,
+            input_overflow_strategy=litert_lm.InputOverflowStrategy.TRUNCATE,
+            output_size=64,
+            vision_tokens_per_image=70,
+        ),
+    )
+    try:
+
+      def get(name, out_type):
+        return litert_lm._ffi.get_checked(lib, name, out_type, options_ptr)
+
+      self.assertFalse(
+          get("litert_lm_embedding_options_get_normalize", ctypes.c_bool)
+      )
+      self.assertFalse(
+          get(
+              "litert_lm_embedding_options_get_insert_special_tokens",
+              ctypes.c_bool,
+          )
+      )
+      self.assertEqual(
+          get(
+              "litert_lm_embedding_options_get_input_overflow_strategy",
+              ctypes.c_int,
+          ),
+          litert_lm.InputOverflowStrategy.TRUNCATE,
+      )
+      self.assertEqual(
+          get("litert_lm_embedding_options_get_output_size", ctypes.c_int), 64
+      )
+      self.assertEqual(
+          get(
+              "litert_lm_embedding_options_get_vision_tokens_per_image",
+              ctypes.c_int,
+          ),
+          70,
+      )
+    finally:
+      lib.litert_lm_embedding_options_delete(options_ptr)
+
+  def test_c_options_unset_optional_getters_return_not_found(self):
+    lib = litert_lm._ffi._get_lib()
+    options_ptr = litert_lm._ffi.create_checked(
+        lib, "litert_lm_embedding_options_create"
+    )
+    try:
+      for name in (
+          "litert_lm_embedding_options_get_output_size",
+          "litert_lm_embedding_options_get_vision_tokens_per_image",
+      ):
+        with self.subTest(name=name):
+          out = ctypes.c_int(42)
+          status = getattr(lib, name)(options_ptr, ctypes.byref(out))
+          self.assertEqual(status, litert_lm._ffi.StatusCode.NOT_FOUND)
+          self.assertEqual(out.value, 42)
+    finally:
+      lib.litert_lm_embedding_options_delete(options_ptr)
+
+  def test_c_null_handle_returns_invalid_argument(self):
+    lib = litert_lm._ffi._get_lib()
+    out = ctypes.c_size_t(42)
+    status = lib.litert_lm_embedding_response_get_size(None, ctypes.byref(out))
+    self.assertEqual(status, litert_lm._ffi.StatusCode.INVALID_ARGUMENT)
+    self.assertEqual(out.value, 42)
+    with self.assertRaisesRegex(RuntimeError, "INVALID_ARGUMENT"):
+      litert_lm._ffi.get_checked(
+          lib,
+          "litert_lm_embedding_options_get_output_size",
+          ctypes.c_int,
+          None,
+      )
+
+  def test_c_responses_get_at_out_of_range(self):
+    lib = litert_lm._ffi._get_lib()
+    with litert_lm.EmbeddingEngine(
+        model_path=self.model_path, backend=litert_lm.Backend.CPU()
+    ) as engine:
+      text = b"'s"
+      input_ptr = litert_lm._ffi.create_checked(
+          lib,
+          "litert_lm_input_data_create",
+          litert_lm._ffi.InputDataType.TEXT,
+          text,
+          len(text),
+      )
+      try:
+        request = (ctypes.c_void_p * 1)(input_ptr)
+        batch = (ctypes.POINTER(ctypes.c_void_p) * 1)(
+            ctypes.cast(request, ctypes.POINTER(ctypes.c_void_p))
+        )
+        num_inputs = (ctypes.c_size_t * 1)(1)
+        responses_ptr = litert_lm._ffi.create_checked(
+            lib,
+            "litert_lm_embedding_engine_compute_embedding_batch",
+            engine._engine_ptr,  # pylint: disable=protected-access
+            batch,
+            num_inputs,
+            1,
+            None,
+        )
+      finally:
+        lib.litert_lm_input_data_delete(input_ptr)
+      try:
+        out = ctypes.c_void_p()
+        status = lib.litert_lm_embedding_responses_get_at(
+            responses_ptr, 1, ctypes.byref(out)
+        )
+        self.assertEqual(status, litert_lm._ffi.StatusCode.OUT_OF_RANGE)
+        self.assertIsNone(out.value)
+      finally:
+        lib.litert_lm_embedding_responses_delete(responses_ptr)
+
   def test_create_c_input_data_multimodal_image_and_audio(self):
     mock_lib = mock.MagicMock()
-    mock_lib.litert_lm_input_data_create.side_effect = [101, 201]
+    handles = iter([101, 201])
+
+    def fake_input_data_create(unused_type, unused_data, unused_size, out):
+      # `out` is a `ctypes.byref` to the handle to fill in.
+      out._obj.value = next(handles)  # pylint: disable=protected-access
+      return litert_lm._ffi.StatusCode.OK
+
+    mock_lib.litert_lm_input_data_create.side_effect = fake_input_data_create
 
     image_content = litert_lm.Content.ImageBytes(bytes=b"fake_image_bytes")
     ptr = litert_lm.embedding_engine._create_c_input_data(

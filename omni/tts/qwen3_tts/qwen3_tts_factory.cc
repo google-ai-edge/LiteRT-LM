@@ -22,26 +22,27 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
+#include "omni/base/stage.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_acoustic_predictor_stage.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_frontend_stage.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_latent_decoder_stage.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_vocoder_stage.h"
 #include "omni/tts/stream_text_source.h"
-#include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::tts {
 
 absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
-                                   const std::string& model_folder,
-                                   const std::string& cache_dir,
+                                   absl::string_view model_folder,
+                                   absl::string_view cache_dir,
                                    lm::Backend backend, int num_threads,
                                    Environment& env,
                                    ModelResources& resources) {
@@ -99,17 +100,15 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
   return absl::OkStatus();
 }
 
-absl::StatusOr<TtsSession::Components> CreateQwen3TtsComponents(
-    const Qwen3TtsModelConfig& config, const std::string& model_folder,
+absl::Status CreateQwen3TtsComponents(
+    const Qwen3TtsModelConfig& config, absl::string_view model_folder,
     std::unique_ptr<StreamTextSource> absl_nonnull text_source,
-    std::shared_ptr<ModelResources> resources) {
-  TtsSession::Components components;
-  components.text_source = std::move(text_source);
-
+    std::shared_ptr<ModelResources> absl_nonnull resources,
+    std::vector<std::unique_ptr<internal::StageBase>>& stages,
+    Stage<Output>* absl_nullable* absl_nonnull output_stage) {
   LITERT_ASSIGN_OR_RETURN(
-      auto frontend, Qwen3TtsFrontendStage::Create(components.text_source.get(),
-                                                   model_folder, config,
-                                                   resources));
+      auto frontend, Qwen3TtsFrontendStage::Create(
+                         text_source.get(), model_folder, config, resources));
   LITERT_ASSIGN_OR_RETURN(auto acoustic,
                           Qwen3TtsAcousticPredictorStage::Create(
                               frontend.get(), config, resources));
@@ -119,12 +118,14 @@ absl::StatusOr<TtsSession::Components> CreateQwen3TtsComponents(
       auto vocoder,
       Qwen3TtsVocoderStage::Create(latent.get(), config, resources));
 
-  components.intermediate_stages.push_back(std::move(frontend));
-  components.intermediate_stages.push_back(std::move(acoustic));
-  components.intermediate_stages.push_back(std::move(latent));
-  components.vocoder = std::move(vocoder);
-
-  return components;
+  *output_stage = vocoder.get();
+  // The first stage must be `StreamTextSource`.
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(frontend));
+  stages.push_back(std::move(acoustic));
+  stages.push_back(std::move(latent));
+  stages.push_back(std::move(vocoder));
+  return absl::OkStatus();
 }
 
 }  // namespace litert::omni::tts

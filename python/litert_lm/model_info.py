@@ -86,13 +86,41 @@ class SupportedModalities:
   video: bool
 
 
+def _get_lengths(lib: Any, func_name: str, handle: int) -> list[int] | None:
+  """Reads a two-pass `int32_t` array from a C API `*_selection` function.
+
+  Args:
+    lib: The loaded C library instance.
+    func_name: Name of a C API function with the signature `int f(handle,
+      int32_t* lengths, int32_t max_size, int32_t* out_count)`.
+    handle: The loaded file handle.
+
+  Returns:
+    The lengths, or None if the C API reports them as not defined
+    (`kLiteRtLmStatusNotFound`).
+
+  Raises:
+    RuntimeError: If the C API call fails for another reason.
+  """
+  count = _ffi.get_optional_checked(
+      lib, func_name, ctypes.c_int32, handle, None, 0
+  )
+  if count is None:
+    return None
+  lengths = (ctypes.c_int32 * count)()
+  written = _ffi.get_checked(
+      lib, func_name, ctypes.c_int32, handle, lengths, count
+  )
+  return list(lengths[: min(count, written)])
+
+
 class _Capability:
   """Base class for model capabilities."""
 
   def __init__(
       self,
       lib: Any,
-      handle_fn: collections.abc.Callable[[], ctypes.c_void_p],
+      handle_fn: collections.abc.Callable[[], int],
       model_info: ModelInfo,
   ):
     self._lib = lib
@@ -115,39 +143,58 @@ class LlmCapability(_Capability):
 
   def has_speculative_decoding_support(self) -> bool:
     """Returns True if the model supports speculative decoding."""
-    handle = self._handle_fn()
-    return bool(
-        self._lib.litert_lm_loaded_file_has_speculative_decoding_support(handle)
+    return _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_has_speculative_decoding_support",
+        ctypes.c_bool,
+        self._handle_fn(),
     )
 
   def supports_thinking(self) -> bool:
     """Returns True if the model supports thinking/reasoning steps."""
-    handle = self._handle_fn()
-    return bool(self._lib.litert_lm_loaded_file_supports_thinking(handle))
+    return _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_supports_thinking",
+        ctypes.c_bool,
+        self._handle_fn(),
+    )
 
   def supports_function_calling(self) -> bool:
     """Returns True if the model supports function calling."""
-    handle = self._handle_fn()
-    return bool(
-        self._lib.litert_lm_loaded_file_supports_function_calling(handle)
+    return _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_supports_function_calling",
+        ctypes.c_bool,
+        self._handle_fn(),
     )
 
   @property
   def default_sampler_params(self) -> interfaces.SamplerConfig:
     """Returns the default sampler parameters configured in the model."""
     handle = self._handle_fn()
-    top_k = self._lib.litert_lm_loaded_file_sampler_top_k(handle)
+    top_k = _ffi.get_checked(
+        self._lib, "litert_lm_loaded_file_sampler_top_k", ctypes.c_int32, handle
+    )
     return interfaces.SamplerConfig(
-        temperature=self._lib.litert_lm_loaded_file_sampler_temperature(handle),
+        temperature=_ffi.get_checked(
+            self._lib,
+            "litert_lm_loaded_file_sampler_temperature",
+            ctypes.c_float,
+            handle,
+        ),
         top_k=top_k if top_k > 0 else None,
-        top_p=self._lib.litert_lm_loaded_file_sampler_top_p(handle),
+        top_p=_ffi.get_checked(
+            self._lib,
+            "litert_lm_loaded_file_sampler_top_p",
+            ctypes.c_float,
+            handle,
+        ),
     )
 
   @property
   def is_dynamic_context(self) -> bool:
     """Returns whether the model has dynamic context support."""
-    handle = self._handle_fn()
-    return bool(self._lib.litert_lm_loaded_file_is_dynamic_context(handle))
+    return self._model_info.is_dynamic_context
 
 
 class EmbeddingCapability(_Capability):
@@ -156,24 +203,21 @@ class EmbeddingCapability(_Capability):
   @property
   def dimension(self) -> int | None:
     """Returns output embedding dimension, or None if not defined."""
-    handle = self._handle_fn()
-    dim = self._lib.litert_lm_loaded_file_embedding_dimension(handle)
-    return int(dim) if dim > 0 else None
+    return _ffi.get_optional_checked(
+        self._lib,
+        "litert_lm_loaded_file_embedding_dimension",
+        ctypes.c_int32,
+        self._handle_fn(),
+    )
 
   @property
   def signature_selection(self) -> list[int] | None:
     """Returns supported embedding signature lengths, or None if not defined."""
-    handle = self._handle_fn()
-    count = self._lib.litert_lm_loaded_file_embedding_signature_selection(
-        handle, None, 0
+    return _get_lengths(
+        self._lib,
+        "litert_lm_loaded_file_embedding_signature_selection",
+        self._handle_fn(),
     )
-    if count == -1:
-      return None
-    lengths = (ctypes.c_int32 * count)()
-    self._lib.litert_lm_loaded_file_embedding_signature_selection(
-        handle, lengths, count
-    )
-    return list(lengths)
 
 
 class ModelInfo:
@@ -194,12 +238,15 @@ class ModelInfo:
       raise FileNotFoundError(f"Model file not found: {model_path_str}")
 
     self._lib = _ffi._get_lib()  # pylint: disable=protected-access
-    self._handle = self._lib.litert_lm_loaded_file_create(model_path_str)
-
-    if not self._handle:
-      raise RuntimeError(
-          f"Failed to load model info for model: {model_path_str}"
+    self._handle: int | None = None
+    try:
+      self._handle = _ffi.create_checked(
+          self._lib, "litert_lm_loaded_file_create", model_path_str
       )
+    except RuntimeError as e:
+      raise RuntimeError(
+          f"Failed to load model info for model: {model_path_str}: {e}"
+      ) from e
 
     self._llm = (
         LlmCapability(self._lib, self._get_active_handle, self)
@@ -231,8 +278,9 @@ class ModelInfo:
     if not self._handle:
       raise RuntimeError("ModelInfo object is closed")
 
-  def _get_active_handle(self) -> ctypes.c_void_p:
-    self._check_closed()
+  def _get_active_handle(self) -> int:
+    if not self._handle:
+      raise RuntimeError("ModelInfo object is closed")
     return self._handle
 
   @property
@@ -249,43 +297,43 @@ class ModelInfo:
   def input_modalities(self) -> SupportedModalities:
     """Returns the input modalities supported by the model."""
     self._check_closed()
+
+    def supports(modality: _ffi.LiteRtLmModality) -> bool:
+      return _ffi.get_checked(
+          self._lib,
+          "litert_lm_loaded_file_supports_input_modality",
+          ctypes.c_bool,
+          self._handle,
+          int(modality),
+      )
+
     return SupportedModalities(
-        text=self._lib.litert_lm_loaded_file_supports_input_modality(
-            self._handle, _ffi.LiteRtLmModality.TEXT
-        ),
-        vision=self._lib.litert_lm_loaded_file_supports_input_modality(
-            self._handle, _ffi.LiteRtLmModality.VISION
-        ),
-        audio=self._lib.litert_lm_loaded_file_supports_input_modality(
-            self._handle, _ffi.LiteRtLmModality.AUDIO
-        ),
-        video=self._lib.litert_lm_loaded_file_supports_input_modality(
-            self._handle, _ffi.LiteRtLmModality.VIDEO
-        ),
+        text=supports(_ffi.LiteRtLmModality.TEXT),
+        vision=supports(_ffi.LiteRtLmModality.VISION),
+        audio=supports(_ffi.LiteRtLmModality.AUDIO),
+        video=supports(_ffi.LiteRtLmModality.VIDEO),
     )
 
   @property
   def max_vision_token_budget(self) -> int:
     """Returns maximum vision token budget, or -1 if not defined."""
     self._check_closed()
-    return int(
-        self._lib.litert_lm_loaded_file_max_vision_token_budget(self._handle)
+    budget = _ffi.get_optional_checked(
+        self._lib,
+        "litert_lm_loaded_file_max_vision_token_budget",
+        ctypes.c_int32,
+        self._handle,
     )
+    return -1 if budget is None else budget
 
   @property
   def vision_signature_selection(self) -> list[int] | None:
     """Returns vision signature choices, or None if vision is unsupported."""
-    self._check_closed()
-    count = self._lib.litert_lm_loaded_file_vision_signature_selection(
-        self._handle, None, 0
+    return _get_lengths(
+        self._lib,
+        "litert_lm_loaded_file_vision_signature_selection",
+        self._get_active_handle(),
     )
-    if count == -1:
-      return None
-    lengths = (ctypes.c_int32 * count)()
-    self._lib.litert_lm_loaded_file_vision_signature_selection(
-        self._handle, lengths, count
-    )
-    return list(lengths)
 
   @property
   def max_context_tokens(self) -> int:
@@ -297,13 +345,24 @@ class ModelInfo:
       context size that can be set.
     """
     self._check_closed()
-    return int(self._lib.litert_lm_loaded_file_max_context_tokens(self._handle))
+    max_context_tokens = _ffi.get_optional_checked(
+        self._lib,
+        "litert_lm_loaded_file_max_context_tokens",
+        ctypes.c_uint32,
+        self._handle,
+    )
+    return 0 if max_context_tokens is None else max_context_tokens
 
   @property
   def model_type(self) -> _ffi.LiteRtLmModelType:
     """Returns the model type of the loaded file."""
     self._check_closed()
-    raw_type = self._lib.litert_lm_loaded_file_model_type(self._handle)
+    raw_type = _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_model_type",
+        ctypes.c_int,
+        self._handle,
+    )
     try:
       return _ffi.LiteRtLmModelType(raw_type)
     except ValueError:
@@ -323,16 +382,22 @@ class ModelInfo:
   def is_dynamic_context(self) -> bool:
     """Returns whether the model has dynamic context support."""
     self._check_closed()
-    return bool(
-        self._lib.litert_lm_loaded_file_is_dynamic_context(self._handle)
+    return _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_is_dynamic_context",
+        ctypes.c_bool,
+        self._handle,
     )
 
   @property
   def min_runtime_version(self) -> str | None:
     """Returns minimum runtime version required, or None if not defined."""
     self._check_closed()
-    version_bytes = self._lib.litert_lm_loaded_file_min_runtime_version(
-        self._handle
+    version_bytes = _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_min_runtime_version",
+        ctypes.c_char_p,
+        self._handle,
     )
     if version_bytes is None:
       return None
@@ -353,21 +418,37 @@ class ModelInfo:
       entry is the default/highest-priority backend.
     """
     self._check_closed()
-    count = self._lib.litert_lm_loaded_file_modality_supported_backends(
-        self._handle, int(modality), None, 0
+    count = _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_modality_supported_backends",
+        ctypes.c_int32,
+        self._handle,
+        int(modality),
+        None,
+        0,
     )
     if count <= 0:
       return []
     backends_arr = (ctypes.c_int * count)()
-    self._lib.litert_lm_loaded_file_modality_supported_backends(
-        self._handle, int(modality), backends_arr, count
+    written = _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_modality_supported_backends",
+        ctypes.c_int32,
+        self._handle,
+        int(modality),
+        backends_arr,
+        count,
     )
     backend_map = {
         _ffi.LiteRtLmBackendType.CPU: "cpu",
         _ffi.LiteRtLmBackendType.GPU: "gpu",
         _ffi.LiteRtLmBackendType.NPU: "npu",
     }
-    return [backend_map[b] for b in backends_arr if b in backend_map]
+    return [
+        backend_map[b]
+        for b in backends_arr[: min(count, written)]
+        if b in backend_map
+    ]
 
   def npu_brand_for_modality(
       self, modality: _ffi.LiteRtLmModality
@@ -381,8 +462,12 @@ class ModelInfo:
       The NpuBrand enum value for the modality.
     """
     self._check_closed()
-    brand_val = self._lib.litert_lm_loaded_file_modality_npu_brand(
-        self._handle, int(modality)
+    brand_val = _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_modality_npu_brand",
+        ctypes.c_int,
+        self._handle,
+        int(modality),
     )
     try:
       return _ffi.LiteRtLmNpuBrand(brand_val)
@@ -401,8 +486,12 @@ class ModelInfo:
       The SoC name string (e.g. 'SM8750') or None.
     """
     self._check_closed()
-    soc_bytes = self._lib.litert_lm_loaded_file_modality_soc_name(
-        self._handle, int(modality)
+    soc_bytes = _ffi.get_checked(
+        self._lib,
+        "litert_lm_loaded_file_modality_soc_name",
+        ctypes.c_char_p,
+        self._handle,
+        int(modality),
     )
     if soc_bytes is None:
       return None

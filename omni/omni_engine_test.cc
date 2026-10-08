@@ -27,7 +27,6 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
-#include "omni/asr/asr_omni_session.h"
 #include "omni/asr/asr_session.h"
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
@@ -36,11 +35,11 @@
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
+#include "omni/multi_staged_session.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
-#include "omni/tts/tts_omni_session.h"
 #include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
@@ -54,7 +53,7 @@ class OmniSessionTest : public ::testing::Test {
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       int sample_rate_hz, int num_channels, int samples_per_interval,
       int overlap_samples) {
-    return asr::AsrOmniSessionFactory::CreateAudioInputSource(
+    return asr::AsrSessionFactory::CreateAudioInputSource(
         std::move(input_source), sample_rate_hz, num_channels,
         samples_per_interval, overlap_samples);
   }
@@ -62,7 +61,7 @@ class OmniSessionTest : public ::testing::Test {
   static std::unique_ptr<tts::StreamTextSource> CreateTextInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       tts::TextChunkConfig config = {}) {
-    return tts::TtsOmniSessionFactory::CreateTextInputSource(
+    return tts::TtsSessionFactory::CreateTextInputSource(
         std::move(input_source), std::move(config));
   }
 };
@@ -141,7 +140,6 @@ class FakeVocoder : public tts::Vocoder {
  public:
   explicit FakeVocoder(tts::TextSource* text_source)
       : text_source_(text_source) {}
-  absl::Status Flush() override { return absl::OkStatus(); }
 
  protected:
   bool NeedScheduleInternal() const override {
@@ -172,11 +170,12 @@ class FakeOmniSessionFactory : public OmniSessionFactory {
     auto text_source =
         OmniSessionTest::CreateTextInputSource(std::move(input_source));
     auto vocoder = std::make_unique<FakeVocoder>(text_source.get());
-    tts::TtsSession::Components components{
-        .text_source = std::move(text_source),
-        .vocoder = std::move(vocoder),
-    };
-    return tts::TtsSession::Create(std::move(components), &pool_);
+    Stage<Output>* raw_output_stage = vocoder.get();
+    std::vector<std::unique_ptr<internal::StageBase>> stages;
+    stages.push_back(std::move(text_source));
+    stages.push_back(std::move(vocoder));
+    return MultiStagedSession::Create(std::move(stages), raw_output_stage,
+                                      &pool_);
   }
 
  private:
@@ -237,7 +236,7 @@ TEST(OmniEngineTest, ResolvesAsrModelAndForwardsOptions) {
   };
   EXPECT_THAT(OmniEngine::Create("moonshine-tiny", options),
               StatusIs(absl::StatusCode::kNotFound,
-                       HasSubstr("/custom/asr_cache/moonshine-tiny.tflite")));
+                       HasSubstr("/custom/asr_cache/moonshine-tiny.litertlm")));
 }
 
 TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {
@@ -249,6 +248,17 @@ TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {
   EXPECT_THAT(OmniEngine::Create("kokoro", options),
               StatusIs(absl::StatusCode::kNotFound,
                        HasSubstr("/custom/tts_cache/kokoro")));
+}
+
+TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
+  OmniEngine::Options options{
+      .backend = OmniEngine::Options::Backend::kGpu,
+      .cache_dir = "/custom/text2image_cache",
+      .num_threads = 4,
+  };
+  EXPECT_THAT(OmniEngine::Create("bonsai-flux2", options),
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("/custom/text2image_cache/bonsai-flux2")));
 }
 
 TEST(OmniEngineTest, RejectsUnknownModel) {
@@ -270,17 +280,18 @@ TEST_F(OmniSessionTest, AsrSessionProcessNextAndFlushWithAudioInput) {
   auto detokenizer = std::make_unique<FakeDetokenizer>(recognizer.get());
   auto text_merger =
       std::make_unique<asr::LevenshteinTextMerger>(detokenizer.get());
+  Stage<Output>* raw_output_stage = text_merger.get();
 
-  asr::AsrSession::Components components{
-      .audio_source = std::move(audio_source),
-      .preprocessor = std::move(preprocessor),
-      .speech_recognizer = std::move(recognizer),
-      .detokenizer = std::move(detokenizer),
-      .text_merger = std::move(text_merger),
-  };
-  auto asr_session = asr::AsrSession::Create(std::move(components));
-  ASSERT_OK(asr_session);
-  std::unique_ptr<OmniSession> omni_session = *std::move(asr_session);
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(audio_source));
+  stages.push_back(std::move(preprocessor));
+  stages.push_back(std::move(recognizer));
+  stages.push_back(std::move(detokenizer));
+  stages.push_back(std::move(text_merger));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OmniSession> omni_session,
+      MultiStagedSession::Create(std::move(stages), raw_output_stage));
 
   ASSERT_OK(
       raw_input_source->PushInput(OmniSession::TextInput{.text = "hello"}));
@@ -317,18 +328,19 @@ TEST_F(OmniSessionTest, AsrSessionProcessAsyncWithAudioInput) {
   auto detokenizer = std::make_unique<FakeDetokenizer>(recognizer.get());
   auto text_merger =
       std::make_unique<asr::LevenshteinTextMerger>(detokenizer.get());
+  Stage<Output>* raw_output_stage = text_merger.get();
 
-  asr::AsrSession::Components components{
-      .audio_source = std::move(audio_source),
-      .preprocessor = std::move(preprocessor),
-      .speech_recognizer = std::move(recognizer),
-      .detokenizer = std::move(detokenizer),
-      .text_merger = std::move(text_merger),
-  };
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(audio_source));
+  stages.push_back(std::move(preprocessor));
+  stages.push_back(std::move(recognizer));
+  stages.push_back(std::move(detokenizer));
+  stages.push_back(std::move(text_merger));
+
   ::litert::lm::ThreadPool pool("test_asr_pool", 2);
-  auto asr_session = asr::AsrSession::Create(std::move(components), &pool);
-  ASSERT_OK(asr_session);
-  std::unique_ptr<OmniSession> omni_session = *std::move(asr_session);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OmniSession> omni_session,
+      MultiStagedSession::Create(std::move(stages), raw_output_stage, &pool));
 
   ASSERT_OK(raw_input_source->PushInput(OmniSession::AudioInputMetadata{
       .sample_rate_hz = 16000, .num_channels = 1}));
@@ -358,14 +370,16 @@ TEST_F(OmniSessionTest, TtsSessionProcessNextAndFlushWithTextInput) {
   PushInputSource* raw_input_source = input_source.get();
   auto text_source = CreateTextInputSource(std::move(input_source));
   auto vocoder = std::make_unique<FakeVocoder>(text_source.get());
-  tts::TtsSession::Components components{
-      .text_source = std::move(text_source),
-      .vocoder = std::move(vocoder),
-  };
+  Stage<Output>* raw_output_stage = vocoder.get();
+
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
+
   ::litert::lm::ThreadPool pool("test_tts_pool", 1);
-  auto tts_session = tts::TtsSession::Create(std::move(components), &pool);
-  ASSERT_OK(tts_session);
-  std::unique_ptr<OmniSession> omni_session = *std::move(tts_session);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OmniSession> omni_session,
+      MultiStagedSession::Create(std::move(stages), raw_output_stage, &pool));
 
   ASSERT_OK(raw_input_source->PushInput(
       OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
@@ -373,7 +387,7 @@ TEST_F(OmniSessionTest, TtsSessionProcessNextAndFlushWithTextInput) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   ASSERT_OK(raw_input_source->PushInput(
-      OmniSession::TextInput{.text = "Hello world."}));
+      OmniSession::TextInput{.text = "Hello world. Trailing"}));
   auto audio_out = omni_session->ProcessNext();
   ASSERT_OK(audio_out);
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(*audio_out));
@@ -382,6 +396,100 @@ TEST_F(OmniSessionTest, TtsSessionProcessNextAndFlushWithTextInput) {
   auto flushed = omni_session->Flush();
   ASSERT_OK(flushed);
   EXPECT_TRUE(std::holds_alternative<AudioOutput>(*flushed));
+
+  auto empty_flushed = omni_session->Flush();
+  ASSERT_OK(empty_flushed);
+  EXPECT_TRUE(std::holds_alternative<OmniSession::EndOfOutput>(*empty_flushed));
+}
+
+TEST_F(OmniSessionTest, MultiStagedSessionFlushDrainsStages) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto text_source = CreateTextInputSource(std::move(input_source));
+  auto vocoder = std::make_unique<FakeVocoder>(text_source.get());
+  Stage<Output>* raw_output_stage = vocoder.get();
+
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
+
+  ::litert::lm::ThreadPool pool("test_multi_staged_pool", 1);
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      MultiStagedSession::Create(std::move(stages), raw_output_stage, &pool));
+
+  // Push text without a sentence delimiter so `TextInputSource` will only emit
+  // it once `Flush()` is called.
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::TextInput{.text = "Trailing text without delimiter"}));
+
+  ASSERT_OK_AND_ASSIGN(auto flushed, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(flushed));
+  EXPECT_FALSE(std::get<AudioOutput>(flushed).pcm_samples.empty());
+  for (const auto& stage : session->stages()) {
+    EXPECT_TRUE(stage->IsIdle());
+    EXPECT_FALSE(stage->NeedSchedule());
+  }
+}
+
+TEST_F(OmniSessionTest, MultiStagedSessionAsrFlushDrainsStages) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto audio_source =
+      CreateAudioInputSource(std::move(input_source),
+                             /*sample_rate_hz=*/16000, /*num_channels=*/1,
+                             /*samples_per_interval=*/4, /*overlap_samples=*/0);
+  auto preprocessor =
+      std::make_unique<FakeAudioPreprocessor>(audio_source.get());
+  auto recognizer = std::make_unique<FakeSpeechRecognizer>(preprocessor.get());
+  auto detokenizer = std::make_unique<FakeDetokenizer>(recognizer.get());
+  auto text_merger =
+      std::make_unique<asr::LevenshteinTextMerger>(detokenizer.get());
+  Stage<Output>* raw_output_stage = text_merger.get();
+
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(audio_source));
+  stages.push_back(std::move(preprocessor));
+  stages.push_back(std::move(recognizer));
+  stages.push_back(std::move(detokenizer));
+  stages.push_back(std::move(text_merger));
+
+  ::litert::lm::ThreadPool pool("test_multi_staged_asr_pool", 2);
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      MultiStagedSession::Create(std::move(stages), raw_output_stage, &pool));
+
+  // Push partial audio (2 samples < samples_per_interval=4). `Flush()` causes
+  // `AudioInputSource` to zero-pad and emit the final chunk, then schedules
+  // and flushes all stages until idle.
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
+
+  ASSERT_OK_AND_ASSIGN(auto flushed, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<OmniSession::TextOutput>(flushed));
+  EXPECT_EQ(std::get<OmniSession::TextOutput>(flushed).confirmed_text,
+            "w_1 w_2 w_0 w_0");
+  for (const auto& stage : session->stages()) {
+    EXPECT_TRUE(stage->IsIdle());
+    EXPECT_FALSE(stage->NeedSchedule());
+  }
+}
+
+TEST_F(OmniSessionTest, ProcessAsyncFailsWithoutThreadPool) {
+  auto input_source = std::make_unique<PushInputSource>();
+  auto text_source = CreateTextInputSource(std::move(input_source));
+  auto vocoder = std::make_unique<FakeVocoder>(text_source.get());
+  Stage<Output>* raw_output_stage = vocoder.get();
+
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  stages.push_back(std::move(text_source));
+  stages.push_back(std::move(vocoder));
+
+  ASSERT_OK_AND_ASSIGN(auto session, MultiStagedSession::Create(
+                                         std::move(stages), raw_output_stage));
+  EXPECT_THAT(session->ProcessAsync(
+                  [](absl::StatusOr<Output>) { return absl::OkStatus(); }),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
 }  // namespace

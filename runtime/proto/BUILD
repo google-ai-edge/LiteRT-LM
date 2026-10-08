@@ -294,3 +294,44 @@ alias(
     name = "asr_metadata_py_pb2",
     actual = ":asr_metadata_py_proto",
 )
+
+tf_proto_library(
+    name = "image_gen_model_type",
+    srcs = ["image_gen_model_type.proto"],
+)
+
+alias(
+    name = "image_gen_model_type_proto",
+    actual = ":image_gen_model_type",
+)
+
+alias(
+    name = "image_gen_model_type_cc_proto",
+    actual = ":image_gen_model_type_cc",
+)
+
+alias(
+    name = "image_gen_model_type_py_pb2",
+    actual = ":image_gen_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "image_gen_metadata",
+    srcs = ["image_gen_metadata.proto"],
+    deps = [":image_gen_model_type"],
+)
+
+alias(
+    name = "image_gen_metadata_proto",
+    actual = ":image_gen_metadata",
+)
+
+alias(
+    name = "image_gen_metadata_cc_proto",
+    actual = ":image_gen_metadata_cc",
+)
+
+alias(
+    name = "image_gen_metadata_py_pb2",
+    actual = ":image_gen_metadata_py_proto",
+)

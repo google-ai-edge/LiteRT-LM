@@ -19,10 +19,34 @@
 #include <vector>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
 
 namespace litert::lm {
+
+// Sanitizes a tool or property name into a valid, collision-free Lark rule
+// identifier matching `[a-z][_a-z0-9\-]*`.
+//
+// LLGuidance Lark lexer only recognizes rule names matching
+// `!?[_?]?[a-z][_a-z0-9\-]*`; anything else is lexed as a different token
+// (e.g. an uppercase-leading name becomes a terminal) and grammar compilation
+// fails.
+//
+// Encoding (injective):
+// - `[a-z0-9_]`: unchanged.
+// - `[A-Z]`: `-u` + lowercase letter.
+// - Any other char (including `-`): `-x` + 2-digit lowercase hex.
+// - Empty or non-`[a-z]` first character: prefixed with `r--`.
+//
+// Because `-` inside a sanitized name only ever appears as `-u<lower>`,
+// `-x<hex>`, or the leading `r--`, joining sanitized names with hyphenated
+// separators/suffixes (`-req-`, `-opt-`, `-optional`, `-object`, `-args`) is
+// unambiguous and prevents boundary collisions such as
+// `(tool="a_req", prop="b")` vs. `(tool="a", prop="req_b")`. Callers should
+// keep raw tool/property names in quoted string literals (which constrain model
+// output) and use `SanitizeLarkRuleName` only for non-terminal rule names.
+std::string SanitizeLarkRuleName(absl::string_view name);
 
 struct ToolFormatConfig {
   std::string pair_separator;

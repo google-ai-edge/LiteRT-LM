@@ -58,7 +58,7 @@ TokenizerDetokenizer::TokenizerDetokenizer(
     Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
         speech_recognizer,
     ::litert::support::Tokenizer* absl_nonnull tokenizer)
-    : Detokenizer(speech_recognizer), tokenizer_(tokenizer) {}
+    : Detokenizer(speech_recognizer), tokenizer_(*tokenizer) {}
 
 absl::Status TokenizerDetokenizer::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
@@ -91,14 +91,14 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
   std::vector<Detokenizer::Word> words;
   if (!token_ids.empty()) {
     auto text_status =
-        tokenizer_->TokenIdsToText(token_ids, /*skip_special_tokens=*/true);
+        tokenizer_.TokenIdsToText(token_ids, /*skip_special_tokens=*/true);
     // SentencePieceTokenizer (used by Gemma ASR models) does not support
     // skip_special_tokens=true and returns InvalidArgumentError because special
     // tokens are handled by the SentencePiece buildenormalizer. Fall back to
     // skip_special_tokens=false.
     if (!text_status.ok() && absl::IsInvalidArgument(text_status.status())) {
       text_status =
-          tokenizer_->TokenIdsToText(token_ids, /*skip_special_tokens=*/false);
+          tokenizer_.TokenIdsToText(token_ids, /*skip_special_tokens=*/false);
     }
     ABSL_ASSIGN_OR_RETURN(auto text, std::move(text_status));
     ABSL_VLOG(1) << "Detokenized text: " << text;

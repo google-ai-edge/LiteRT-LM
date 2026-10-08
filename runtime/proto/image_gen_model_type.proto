@@ -1,0 +1,51 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package litert.lm.proto;
+
+option java_multiple_files = true;
+option java_outer_classname = "ImageGenModelTypeOuterClass";
+
+// Shared FLUX.2 configuration parameters.
+message Flux2Params {
+  optional int32 seq_len = 1;
+  optional int32 img_size = 2;
+  optional int32 packed_ch = 3;
+  optional int32 prompt_dim = 4;
+  optional int32 default_steps = 5;
+  repeated float latent_bn_scale = 6;
+  repeated float latent_bn_shift = 7;
+}
+
+// Bonsai-FLUX.2: 3-graph monolithic FLUX.2-klein-4B (text encoder, DiT, VAE).
+message BonsaiFlux2 {
+  Flux2Params flux2_params = 1;
+}
+
+// FLUX.2-klein-4B-LiteRT: 11-graph sharded mobile GPU layout.
+message Flux2Klein {
+  Flux2Params flux2_params = 1;
+  // Key of the GenericBinaryData section holding qwen_embed_fp16.bin.
+  optional string text_embed_table_key = 2;
+}
+
+// Architecture-specific parameters for image generation models.
+message ImageGenModelType {
+  oneof model_type {
+    BonsaiFlux2 bonsai_flux2 = 1;
+    Flux2Klein flux2_klein = 2;
+  }
+}

@@ -52,7 +52,8 @@ absl::StatusOr<TextMerger::MergeResult> ProcessWords(
     const std::vector<std::string>& strings) {
   word_stage.PushWords(strings);
   LITERT_RETURN_IF_ERROR(merger.Schedule());
-  return merger.GetOutput();
+  LITERT_ASSIGN_OR_RETURN(auto out, merger.GetOutput());
+  return std::get<TextMerger::MergeResult>(std::move(out));
 }
 
 TEST(LevenshteinTextMergerTest, InitialChunkReturnsUnconfirmedOnly) {
@@ -61,6 +62,7 @@ TEST(LevenshteinTextMergerTest, InitialChunkReturnsUnconfirmedOnly) {
 
   auto result = ProcessWords(word_stage, merger, {"hello", "world"});
   ASSERT_TRUE(result.ok());
+  if (!result.ok()) return;
 
   EXPECT_EQ(result->confirmed_text, "");
   EXPECT_EQ(result->unconfirmed_text, "hello world");
@@ -74,12 +76,14 @@ TEST(LevenshteinTextMergerTest, SequentialMergeFlow) {
   auto res1 =
       ProcessWords(word_stage, merger, {"hello", "world", "this", "is"});
   ASSERT_TRUE(res1.ok());
+  if (!res1.ok()) return;
   EXPECT_EQ(res1->confirmed_text, "");
   EXPECT_EQ(res1->unconfirmed_text, "hello world this is");
 
   // Chunk 2: overlaps at "this is", adds "a test"
   auto res2 = ProcessWords(word_stage, merger, {"this", "is", "a", "test"});
   ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
   EXPECT_EQ(res2->confirmed_text, "hello world");
   EXPECT_EQ(res2->unconfirmed_text, "this is a test");
 
@@ -87,6 +91,7 @@ TEST(LevenshteinTextMergerTest, SequentialMergeFlow) {
   auto res3 =
       ProcessWords(word_stage, merger, {"a", "test", "of", "streaming"});
   ASSERT_TRUE(res3.ok());
+  if (!res3.ok()) return;
   EXPECT_EQ(res3->confirmed_text, "this is");
   EXPECT_EQ(res3->unconfirmed_text, "a test of streaming");
 
@@ -94,8 +99,10 @@ TEST(LevenshteinTextMergerTest, SequentialMergeFlow) {
   ASSERT_TRUE(merger.Flush().ok());
   auto res_flush = merger.GetOutput();
   ASSERT_TRUE(res_flush.ok());
-  EXPECT_EQ(res_flush->confirmed_text, "a test of streaming");
-  EXPECT_EQ(res_flush->unconfirmed_text, "");
+  if (!res_flush.ok()) return;
+  const auto& flush_text = std::get<TextMerger::MergeResult>(*res_flush);
+  EXPECT_EQ(flush_text.confirmed_text, "a test of streaming");
+  EXPECT_EQ(flush_text.unconfirmed_text, "");
 }
 
 TEST(LevenshteinTextMergerTest, ResetClearsState) {
@@ -112,6 +119,7 @@ TEST(LevenshteinTextMergerTest, ResetClearsState) {
   // First merge after reset behaves as initial chunk
   auto result = ProcessWords(word_stage, merger, {"new", "stream"});
   ASSERT_TRUE(result.ok());
+  if (!result.ok()) return;
   EXPECT_EQ(result->confirmed_text, "");
   EXPECT_EQ(result->unconfirmed_text, "new stream");
 }
@@ -126,8 +134,29 @@ TEST(LevenshteinTextMergerTest, NoOverlapConfirmsPreviousState) {
   // Chunk 2 has no overlap
   auto result = ProcessWords(word_stage, merger, {"cat", "dog"});
   ASSERT_TRUE(result.ok());
+  if (!result.ok()) return;
   EXPECT_EQ(result->confirmed_text, "apple banana");
   EXPECT_EQ(result->unconfirmed_text, "cat dog");
+}
+
+TEST(LevenshteinTextMergerTest, StitchesAtLongestContiguousOverlapMatch) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  // Chunk 1 has an earlier "the" and ends with "of the project".
+  auto res1 = ProcessWords(word_stage, merger,
+                           {"are", "they", "happy", "with", "the", "progress",
+                            "of", "the", "project"});
+  ASSERT_TRUE(res1.ok());
+
+  // Chunk 2 starts with a noisy token "with", then matches "of the project".
+  auto res2 = ProcessWords(
+      word_stage, merger,
+      {"with", "of", "the", "project", "they", "might", "not", "be"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "are they happy with the progress");
+  EXPECT_EQ(res2->unconfirmed_text, "of the project they might not be");
 }
 
 }  // namespace

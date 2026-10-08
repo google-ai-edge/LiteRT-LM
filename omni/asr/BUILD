@@ -21,10 +21,7 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "audio_source",
     hdrs = ["audio_source.h"],
-    deps = [
-        "@com_google_absl//absl/status",
-        "//omni/base:stage",
-    ],
+    deps = ["//omni/base:stage"],
 )
 
 cc_library(
@@ -34,6 +31,7 @@ cc_library(
     deps = [
         ":audio_source",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -81,6 +79,7 @@ cc_library(
     hdrs = ["log_mel_spectrogram_processor.h"],
     deps = [
         ":audio_preprocessor",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/memory",
@@ -103,6 +102,7 @@ cc_library(
     hdrs = ["dummy_preprocessor.h"],
     deps = [
         ":audio_preprocessor",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
@@ -130,6 +130,26 @@ cc_library(
     deps = [
         "@com_google_absl//absl/base:nullability",
         "//omni/base:stage",
+    ],
+)
+
+cc_library(
+    name = "utils",
+    srcs = ["utils.cc"],
+    hdrs = ["utils.h"],
+    deps = [
+        ":speech_recognizer",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_test(
+    name = "utils_test",
+    srcs = ["utils_test.cc"],
+    deps = [
+        ":speech_recognizer",
+        ":utils",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -170,6 +190,7 @@ cc_library(
     deps = [
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -207,7 +228,6 @@ cc_library(
         ":litert_speech_recognizer",
         ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -245,6 +265,7 @@ cc_library(
     deps = [
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
@@ -253,11 +274,9 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc:litert_tensor_buffer_types",
         "//omni/base:litert_lm_runner",
         "//omni/base:model_utils",
         "//runtime/proto:token_cc_proto",
-        "//runtime/util:tensor_buffer_util",
         "//support/tokenizer",
         "//support/util:convert_tensor_buffer",
     ],
@@ -278,6 +297,7 @@ cc_test(
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:mock_litert_lm_runner",
+        "//runtime/executor:llm_executor_io_types",
         "//support/util:test_utils",
     ],
 )
@@ -414,7 +434,7 @@ cc_library(
     deps = [
         ":detokenizer",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/status",
+        "//omni/base:io_types",
         "//omni/base:stage",
     ],
 )
@@ -450,7 +470,6 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "//omni/base:stage",
     ],
@@ -483,7 +502,6 @@ cc_library(
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "//omni/base:stage",
@@ -512,23 +530,14 @@ cc_library(
     srcs = ["asr_session.cc"],
     hdrs = ["asr_session.h"],
     deps = [
-        ":audio_preprocessor",
+        ":asr_engine",
         ":audio_source",
-        ":detokenizer",
-        ":speech_recognizer",
-        ":text_merger",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
         "//omni:omni_session",
-        "//omni/base:async_stage_scheduler",
-        "//omni/base:stage",
-        "//runtime/framework:threadpool",
     ],
 )
 
@@ -542,16 +551,15 @@ cc_test(
         ":detokenizer",
         ":levenshtein_text_merger",
         ":speech_recognizer",
-        ":text_merger",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
+        "//omni:multi_staged_session",
         "//omni:omni_session",
+        "//omni/base:io_types",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
         "//support/util:test_utils",
@@ -564,7 +572,6 @@ cc_library(
     hdrs = ["asr_engine.h"],
     data = ["model_metadata.json"],
     deps = [
-        ":asr_session",
         ":audio_preprocessor",
         ":audio_source",
         ":ctc_decoder",
@@ -579,6 +586,7 @@ cc_library(
         ":text_merger",
         ":timestamp_text_merger",
         ":tokenizer_detokenizer",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -593,31 +601,20 @@ cc_library(
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
         "//omni/base:litert_lm_engine_runner",
         "//omni/base:litert_lm_runner",
         "//omni/base:litert_runner",
         "//omni/base:model_utils",
+        "//omni/base:stage",
         "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
         "//runtime/framework:threadpool",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
         "//support/tokenizer",
         "//support/tokenizer:huggingface_tokenizer",
-    ],
-)
-
-cc_library(
-    name = "asr_omni_session",
-    srcs = ["asr_omni_session.cc"],
-    hdrs = ["asr_omni_session.h"],
-    deps = [
-        ":asr_engine",
-        ":audio_source",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "//omni:omni_session",
     ],
 )
 
@@ -635,9 +632,10 @@ cc_binary(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
+        "//omni:omni_engine_header",
         "//omni:omni_session",
+        "//omni/base:model_utils",
         "//runtime/executor:default_static_gpu_accelerator",
     ],
 )

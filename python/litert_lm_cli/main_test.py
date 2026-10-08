@@ -125,6 +125,28 @@ class MainTest(absltest.TestCase):
     # Should return early and not start the interactive session
     mock_run_interactive.assert_not_called()
 
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_model_not_found(self, mock_from_model_ref):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = False
+    mock_model.to_str.return_value = "some-org/some-model"
+    mock_model.model_path = "/path/to/some-org--some-model/model.litertlm"
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        main.cli, ["run", "some-org/some-model", "--prompt", "hi"]
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn(
+        "Could not find some-org/some-model locally in"
+        " /path/to/some-org--some-model/model.litertlm.",
+        result.output,
+    )
+
   def test_create_keybindings(self):
     kb = run_cmd._create_keybindings()
     self.assertIsInstance(kb, key_binding.KeyBindings)

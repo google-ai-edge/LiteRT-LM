@@ -23,6 +23,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "omni/asr/audio_preprocessor.h"
+#include "omni/asr/utils.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -42,6 +43,17 @@ class DummyPreprocessor : public AudioPreprocessor {
   absl::Status ScheduleInternal() override {
     auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
     ABSL_ASSIGN_OR_RETURN(auto raw_speech, audio_source_.GetOutput());
+    // Models that consume raw PCM waveforms directly (such as moonshine-tiny)
+    // apply internal normalization inside the encoder subgraph. Feeding digital
+    // silence or near-silent background noise causes that internal
+    // normalization to amplify near-zero inputs and make the autoregressive
+    // decoder hallucinate text (e.g. "Thank you."). Emit an empty feature
+    // vector on silent chunks so LiteRtSpeechRecognizer skips encoder/decoder
+    // execution.
+    if (IsSilentAudio(raw_speech)) {
+      PushOutput(std::vector<float>());
+      return absl::OkStatus();
+    }
     PushOutput(std::move(raw_speech));
     return absl::OkStatus();
   }

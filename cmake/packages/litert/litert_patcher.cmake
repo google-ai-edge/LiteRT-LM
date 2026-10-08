@@ -25,18 +25,20 @@ if(EXISTS "${LITERTLM_LITERT_SRC_DIR}/../tflite")
     file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tflite")
 endif()
 
-if(EXISTS "${LITERTLM_LITERT_SRC_DIR}/../tensor")
-    file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tensor")
-endif()
-
 if(EXISTS "${LITERTLM_TFLITE_SRC_DIR}")
     file(COPY "${LITERTLM_TFLITE_SRC_DIR}/"
      DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tflite")
 endif()
 
-if(EXISTS "${LITERTLM_TENSORFLOW_SOURCE_DIR}")
-file(COPY "${LITERTLM_TENSORFLOW_SOURCE_DIR}/"
-     DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tensor")
+# Only replace LiteRT's own tensor/ directory when an override source is
+# provided. Otherwise keep the upstream copy, which LiteRT-LM compiles
+# (e.g. tensor/buffer.cc for the logit mask runner).
+if(LITERTLM_TENSORFLOW_SOURCE_DIR AND EXISTS "${LITERTLM_TENSORFLOW_SOURCE_DIR}")
+    if(EXISTS "${LITERTLM_LITERT_SRC_DIR}/../tensor")
+        file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tensor")
+    endif()
+    file(COPY "${LITERTLM_TENSORFLOW_SOURCE_DIR}/"
+         DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tensor")
 endif()
 
 file(COPY_FILE "${LITERTLM_LITERT_PACKAGE_DIR}/shims/CMakeLists-shim.txt"

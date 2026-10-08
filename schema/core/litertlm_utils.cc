@@ -48,6 +48,8 @@ std::string AnySectionDataTypeToString(AnySectionDataType value) {
       return "AnySectionDataType_TtsMetadataProto";
     case AnySectionDataType_AsrMetadataProto:
       return "AnySectionDataType_AsrMetadataProto";
+    case AnySectionDataType_ImageGenMetadataProto:
+      return "AnySectionDataType_ImageGenMetadataProto";
     default:
       // Handle cases for MIN/MAX or potentially invalid values.
       return "Unknown AnySectionDataType value";

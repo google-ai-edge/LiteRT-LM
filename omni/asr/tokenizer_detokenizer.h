@@ -44,7 +44,7 @@ class TokenizerDetokenizer : public Detokenizer {
   absl::StatusOr<std::vector<Detokenizer::Word>> Detokenize(
       const std::vector<SpeechRecognizer::DecodedToken>& tokens);
 
-  ::litert::support::Tokenizer* const tokenizer_;
+  ::litert::support::Tokenizer& tokenizer_;
 };
 
 }  // namespace litert::omni::asr

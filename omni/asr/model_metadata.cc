@@ -96,9 +96,9 @@ absl::Status PopulateConfigFromMetadataJson(absl::string_view model_name,
     model_ext = std::filesystem::path(config.model_url).extension().string();
   }
 
-  if (model_ext == ".litertlm" || model_name == "tinygemma-asr" ||
-      model_name == "qwen3-asr-0.6b") {
-    config.decoder_type = AsrEngineConfig::DecoderType::kLm;
+  if (model_ext == ".litertlm") {
+    // Resolved based on .litertlm metadata by OmniEngine / AsrEngine.
+    config.decoder_type = AsrEngineConfig::DecoderType::kUnspecified;
   } else if (absl::StrContains(model_name, "tdt")) {
     config.decoder_type = AsrEngineConfig::DecoderType::kTdt;
   } else if (absl::StrContains(model_name, "ctc")) {

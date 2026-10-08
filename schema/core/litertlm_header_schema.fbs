@@ -139,6 +139,9 @@ enum AnySectionDataType:ubyte {
 
   // A litert.lm.proto.AsrMetadata Protobuf.
   AsrMetadataProto,
+
+  // A litert.lm.proto.ImageGenMetadata Protobuf.
+  ImageGenMetadataProto,
 }
 
 // Section offsets and datatype

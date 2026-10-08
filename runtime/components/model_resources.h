@@ -43,6 +43,7 @@
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
@@ -170,6 +171,8 @@ std::string TfLiteModelTypeToWireString(
     proto::TtsMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
     proto::AsrMetadata::TfLiteModelType model_type);
+std::string TfLiteModelTypeToWireString(
+    proto::ImageGenMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(ModelType model_type);
 
 // Describes the location of a contiguous region of bytes in a file.
@@ -206,7 +209,8 @@ class ModelResources {
   // - proto::LlmMetadata::TfLiteModelType,
   // - proto::EmbeddingMetadata::TfLiteModelType,
   // - proto::TtsMetadata::TfLiteModelType
-  // - proto::AsrMetadata::TfLiteModelType.
+  // - proto::AsrMetadata::TfLiteModelType
+  // - proto::ImageGenMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
       typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
@@ -236,7 +240,8 @@ class ModelResources {
   // - proto::LlmMetadata::TfLiteModelType,
   // - proto::EmbeddingMetadata::TfLiteModelType,
   // - proto::TtsMetadata::TfLiteModelType
-  // - proto::AsrMetadata::TfLiteModelType.
+  // - proto::AsrMetadata::TfLiteModelType
+  // - proto::ImageGenMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
       typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
@@ -316,6 +321,11 @@ class ModelResources {
   // Returns the ASR metadata.
   virtual absl::StatusOr<const proto::AsrMetadata*> GetAsrMetadata() {
     return absl::UnimplementedError("GetAsrMetadata is not implemented.");
+  }
+
+  // Returns the ImageGen metadata.
+  virtual absl::StatusOr<const proto::ImageGenMetadata*> GetImageGenMetadata() {
+    return absl::UnimplementedError("GetImageGenMetadata is not implemented.");
   }
 
   // Returns a zero-copy buffer for a GenericBinaryData section matching the

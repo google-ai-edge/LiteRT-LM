@@ -119,6 +119,16 @@ http_archive(
     url = "https://github.com/bazel-contrib/rules_kotlin/releases/download/v2.4.10/rules_kotlin-v2.4.10.tar.gz",
 )
 
+# Android rules (must be declared before kotlin_repositories and tf_workspace to override
+# older versions whose com_android_dex and apksig archives lacked sha256 and mirror URLs;
+# pinned to v0.7.2 because v0.7.3+ requires @protobuf_maven for @com_google_protobuf//java/util)
+http_archive(
+    name = "rules_android",
+    sha256 = "0da7198c7c8bac7e11e08dca3c434617b8593075858716595672e9aeefbef2a7",
+    strip_prefix = "rules_android-0.7.2",
+    url = "https://github.com/bazelbuild/rules_android/releases/download/v0.7.2/rules_android-v0.7.2.tar.gz",
+)
+
 # Go rules and Gazelle for rules_android (must be declared before tf_workspace to override ancient versions)
 http_archive(
     name = "io_bazel_rules_go",

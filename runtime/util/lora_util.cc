@@ -32,8 +32,8 @@ namespace litert::lm {
 namespace {
 
 constexpr LazyRE2 kLoRAInputNamePattern = {
-    "^(?:(?:query|key|value|post)_w_prime_(?:left|right)|"
-    "lora_atten_(?:q|k|v|o)_(?:a|b)_prime_weight)_\\d+$|"
+    "^(?:(?:query|key|value|post)_w_prime_(?:left|right)_?\\d+|"
+    "lora_atten_(?:q|k|v|o)_(?:a|b)_prime_weight_\\d+)$|"
     "^transformer\\.layer_\\d+\\.attn\\."
     "(?:q|k|v|attn_vec_einsum)\\.w_prime_(?:left|right)$"};
 

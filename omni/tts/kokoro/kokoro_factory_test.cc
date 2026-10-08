@@ -29,7 +29,9 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
+#include "omni/base/stage.h"
 #include "omni/tts/kokoro/espeak_assets.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/stream_text_source.h"
@@ -128,10 +130,12 @@ TEST(KokoroFactoryTest, CreateKokoroComponentsRejectsMissingModels) {
 
   // Since ModelResources does not have compiled models loaded,
   // CreateKokoroComponents should propagate the error.
-  auto components = CreateKokoroComponents(
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  Stage<Output>* output_stage = nullptr;
+  auto status = CreateKokoroComponents(
       config, "/tmp", std::make_unique<StreamTextSource>(chunk_config),
-      resources);
-  EXPECT_FALSE(components.ok());
+      resources, stages, &output_stage);
+  EXPECT_FALSE(status.ok());
 }
 
 TEST(KokoroFactoryTest, GetAvailableKokoroVoicesSkipsNonVoiceSections) {

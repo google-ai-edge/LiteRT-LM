@@ -456,5 +456,87 @@ TEST(LitertLmLoaderTest, LoadCapabilityTtsMetadataAndNamedSections) {
       loader->GetTFLiteModel(proto::TtsMetadata::TF_LITE_ACOUSTIC).Size(), 16);
 }
 
+TEST(LitertLmLoaderTest, LoadCapabilityImageGenMetadataAndSections) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "image_gen_capability_model.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+
+  // Section 0: ImageGenMetadataProto
+  auto image_gen_meta_section = schema::CreateSectionObject(
+      builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
+      schema::AnySectionDataType_ImageGenMetadataProto);
+
+  // Section 1: TFLiteModel with model_type = "tf_lite_image_denoiser"
+  const std::string dit_model_type = "tf_lite_image_denoiser";
+  auto dit_kv =
+      schema::CreateKeyValuePair(builder, "model_type", dit_model_type);
+  auto dit_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{dit_kv});
+  auto dit_section = schema::CreateSectionObject(
+      builder, dit_items, /*begin_offset=*/216, /*end_offset=*/240,
+      schema::AnySectionDataType_TFLiteModel);
+
+  // Section 2: TFLiteModel with model_type = "tf_lite_image_decoder"
+  const std::string vae_model_type = "tf_lite_image_decoder";
+  auto vae_kv =
+      schema::CreateKeyValuePair(builder, "model_type", vae_model_type);
+  auto vae_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{vae_kv});
+  auto vae_section = schema::CreateSectionObject(
+      builder, vae_items, /*begin_offset=*/240, /*end_offset=*/272,
+      schema::AnySectionDataType_TFLiteModel);
+
+  // Section 3: TFLiteModel with model_type =
+  // "tf_lite_diffusion_transformer_initial" (Flux2Klein)
+  const std::string dit_prep_model_type =
+      "tf_lite_diffusion_transformer_initial";
+  auto dit_prep_kv =
+      schema::CreateKeyValuePair(builder, "model_type", dit_prep_model_type);
+  auto dit_prep_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{dit_prep_kv});
+  auto dit_prep_section = schema::CreateSectionObject(
+      builder, dit_prep_items, /*begin_offset=*/272, /*end_offset=*/288,
+      schema::AnySectionDataType_TFLiteModel);
+
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
+      image_gen_meta_section, dit_section, vae_section, dit_prep_section};
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  {
+    std::ofstream file(test_file_path.string(),
+                       std::ios::binary | std::ios::app);
+    std::string dummy(300, 'b');
+    file.write(dummy.data(), dummy.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  ASSERT_TRUE(loader->GetImageGenMetadata().has_value());
+  EXPECT_EQ(loader->GetImageGenMetadata()->Size(), 16);
+
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::ImageGenMetadata::TF_LITE_IMAGE_DENOISER)
+          .Size(),
+      24);
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::ImageGenMetadata::TF_LITE_IMAGE_DECODER)
+          .Size(),
+      32);
+  EXPECT_EQ(
+      loader
+          ->GetTFLiteModel(
+              proto::ImageGenMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
+          .Size(),
+      16);
+}
+
 }  // namespace
 }  // namespace litert::lm

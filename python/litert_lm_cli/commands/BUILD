@@ -141,7 +141,6 @@ pytype_strict_library(
     srcs = ["run.py"],
     imports = [".."],
     deps = [
-        ":convert",
         "//python/litert_lm",
         "//python/litert_lm_builder:litertlm_builder",
         "//python/litert_lm_cli:cli_helpers",

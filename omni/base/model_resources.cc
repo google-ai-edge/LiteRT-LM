@@ -18,6 +18,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -29,7 +30,7 @@
 
 namespace litert::omni {
 
-ModelResources::ModelResources(std::shared_ptr<Environment> env)
+ModelResources::ModelResources(std::shared_ptr<Environment> absl_nullable env)
     : env_(std::move(env)) {}
 
 absl::Status ModelResources::AddCompiledModel(
@@ -81,7 +82,7 @@ bool ModelResources::HasLmRunner(absl::string_view key) const {
 }
 
 void ModelResources::SetLmModelResources(
-    std::shared_ptr<lm::ModelResources> lm_resources) {
+    std::shared_ptr<lm::ModelResources> absl_nullable lm_resources) {
   lm_resources_ = std::move(lm_resources);
 }
 
@@ -94,7 +95,8 @@ bool ModelResources::HasLmModelResources() const {
   return lm_resources_ != nullptr;
 }
 
-void ModelResources::SetEnvironment(std::shared_ptr<Environment> env) {
+void ModelResources::SetEnvironment(
+    std::shared_ptr<Environment> absl_nullable env) {
   env_ = std::move(env);
 }
 

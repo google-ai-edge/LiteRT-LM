@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <functional>
@@ -25,9 +26,14 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>  // NOLINT
 #include <utility>
 #include <variant>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -214,6 +220,46 @@ absl::StatusOr<std::string> LoadFile(absl::string_view path) {
 absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
                                      absl::string_view filename) {
   return LoadFile(JoinPath(model_dir, filename));
+}
+
+absl::Status DownloadFileWithCurl(absl::string_view url,
+                                  absl::string_view target_path) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+  (void)url;
+  (void)target_path;
+  return absl::UnimplementedError(
+      "DownloadFileWithCurl is not supported on iOS.");
+#else
+  ABSL_LOG(INFO) << "Downloading " << url << " to " << target_path;
+  std::string cmd =
+      absl::StrCat("mkdir -p $(dirname \"", target_path,
+                   "\") && curl -L -s -o \"", target_path, "\" \"", url, "\"");
+  int ret = std::system(cmd.c_str());
+  if (ret != 0) {
+    return absl::InternalError(
+        absl::StrCat("Failed to download from ", url, " to ", target_path));
+  }
+  return absl::OkStatus();
+#endif
+}
+
+std::string ResolveLitertLmPath(absl::string_view model_folder) {
+  constexpr absl::string_view kLitertLmExtension = ".litertlm";
+  std::filesystem::path path{std::string(model_folder)};
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(path, ec) &&
+      path.extension().string() == kLitertLmExtension) {
+    return path.string();
+  }
+  if (std::filesystem::is_directory(path, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
+      if (entry.is_regular_file(ec) &&
+          entry.path().extension().string() == kLitertLmExtension) {
+        return entry.path().string();
+      }
+    }
+  }
+  return "";
 }
 
 absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(

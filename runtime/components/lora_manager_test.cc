@@ -44,6 +44,10 @@ using ::litert::Model;
 using ::litert::Options;
 using ::testing::status::StatusIs;
 
+// LoRA inputs of the test model: {query,key,value,post}_w_prime_{left,right}
+// for each of its 35 layers.
+constexpr int kNumModelLoRAInputs = 8 * 35;
+
 std::string GetLoraOnesFilePath() {
   auto path = std::filesystem::path(::testing::SrcDir()) /
               "litert_lm/runtime/testdata/test_lora_rank32_f16_all_ones.tflite";
@@ -133,7 +137,7 @@ TEST_F(LoraManagerTest, GetLoRABuffersSuccess) {
   ASSERT_OK(lora_manager_->UseLoRA(0));
 
   ASSERT_OK_AND_ASSIGN(auto buffers, lora_manager_->GetLoRABuffers());
-  EXPECT_EQ(buffers.size(), 280);
+  EXPECT_EQ(buffers.size(), kNumModelLoRAInputs);
 
   // Spot check a tensor.
   auto it = buffers.find("query_w_prime_left_10");
@@ -154,6 +158,23 @@ TEST_F(LoraManagerTest, GetLoRABuffersSuccess) {
   for (size_t i = 0; i < num_elements; ++i) {
     EXPECT_EQ(data_ptr[i], fp16_one);
   }
+}
+
+TEST_F(LoraManagerTest, GetLoRABuffersForSignatureSuccess) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(GetLoraOnesFilePath()));
+  ASSERT_OK(lora_manager_->LoadLoRA(0, model_assets));
+  ASSERT_OK(lora_manager_->UseLoRA(0));
+
+  ASSERT_OK_AND_ASSIGN(auto buffers, lora_manager_->GetLoRABuffers("prefill"));
+  EXPECT_EQ(buffers.size(), kNumModelLoRAInputs);
+  EXPECT_THAT(lora_manager_->GetLoRABuffers("unknown_signature"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(LoraManagerTest, GetLoRABuffersForSignatureFailsBeforeUse) {
+  EXPECT_THAT(lora_manager_->GetLoRABuffers("prefill"),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
 TEST_F(LoraManagerTest, LoadMultipleLoRAsSuccess) {

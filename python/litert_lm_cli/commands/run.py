@@ -30,11 +30,10 @@ from litert_lm_cli import common
 from litert_lm_cli import help_formatter
 from litert_lm_cli import huggingface_download
 from litert_lm_cli import model
-from litert_lm_cli.commands import convert as _convert_module
 
 try:
   # pylint: disable=g-import-not-at-top
-  from litert_lm.adb import adb_engine  # pytype: disable=import-error
+  from litert_lm.adb import adb_engine  # pyrefly: ignore[missing-import]
 
   _HAS_ADB = True
 except ImportError:
@@ -720,28 +719,6 @@ def run(
     model_obj = model.Model.from_model_path(model_path)
   else:
     model_obj = model.Model.from_model_reference(model_reference)
-    if not model_obj.exists():
-      # Only auto-convert if it looks like a HuggingFace repo ID (account/repo)
-      # and is not a local path.
-      parts = model_reference.split("/")
-      if len(parts) == 2 and all(parts) and not os.path.exists(model_reference):
-        click.echo(
-            click.style(
-                f"Model '{model_reference}' not found. Attempting to convert"
-                f" from https://huggingface.co/{model_reference} ...",
-                fg="yellow",
-            )
-        )
-        model_obj = model.Model.from_model_reference(model_reference)
-
-      if not model_obj.exists():
-        click.echo(
-            click.style(
-                f"Failed to find or convert model '{model_reference}'.",
-                fg="red",
-            )
-        )
-        return
 
   max_num_images = None if num_images == 0 else num_images
 

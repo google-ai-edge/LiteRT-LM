@@ -1121,5 +1121,76 @@ get_time()
 ```)");
 }
 
+class LlgPythonToolNameTest : public LlgPythonToolCallsTest,
+                              public testing::WithParamInterface<std::string> {
+};
+
+TEST_P(LlgPythonToolNameTest, AcceptsValidToolName) {
+  const std::string& tool_name = GetParam();
+  nlohmann::ordered_json tool = {
+      {"name", tool_name},
+      {"parameters",
+       {{"type", "object"},
+        {"properties",
+         {{"zipCode", {{"type", "integer"}}}, {"_unit", {{"type", "string"}}}}},
+        {"required", {"zipCode"}}}}};
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, absl::StrCat("```tool_code\n", tool_name,
+                                          "(zipCode=94043)\n```"));
+  AssertAccepts(*constraint, absl::StrCat("```tool_code\n", tool_name,
+                                          "(zipCode=94043, _unit=\"C\")\n```"));
+  AssertRejects(*constraint, "```tool_code\nother_tool(zipCode=94043)\n```");
+}
+
+INSTANTIATE_TEST_SUITE_P(ToolNamesWithCapitalsAndPrefixes,
+                         LlgPythonToolNameTest,
+                         testing::Values("f0_Get_weather", "getWeather",
+                                         "Get_weather", "_0_get_weather",
+                                         "0_get_weather", "__get_weather",
+                                         "get-weather", "get.weather", "dict"));
+
+TEST_F(LlgPythonToolCallsTest, CaseSensitiveToolNamesCoexist) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_Weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zip_code": { "type": "integer" }
+      },
+      "required": ["zip_code"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_Weather(zip_code=94043)
+```)");
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -146,9 +146,10 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
     }
     std::string tool_name = tool["name"].get<std::string>();
     tool_names.push_back(tool_name);
+    // See `SanitizeLarkRuleName` for why `-args` uses a hyphen separator.
     const ToolFormatConfig python_config = {
         .pair_separator = "=",
-        .rule_suffix = "_args",
+        .rule_suffix = "-args",
         .start_wrap = "",
         .end_wrap = "",
         .generate_value_rule = GeneratePythonValueRule,
@@ -156,14 +157,12 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
     AppendToolRules(tool, tool_name, python_config, tool_blocks);
   }
 
-  std::string tool_union =
-      absl::StrFormat(R"(TOOL_UNION: /%s/)", absl::StrJoin(tool_names, "|"));
-
   std::vector<std::string> tool_call_cases;
   tool_call_cases.reserve(tool_names.size());
   for (const auto& tool_name : tool_names) {
-    tool_call_cases.push_back(
-        absl::StrFormat(R"raw("%s" "(" %s_args ")")raw", tool_name, tool_name));
+    tool_call_cases.push_back(absl::StrFormat(R"raw("%s" "(" %s-args ")")raw",
+                                              tool_name,
+                                              SanitizeLarkRuleName(tool_name)));
   }
 
   std::string python_grammar = GetPythonGrammar(options);
@@ -198,8 +197,8 @@ function_block: %s
     }
   }
 
-  return absl::StrCat(tool_union, "\n", absl::StrJoin(tool_blocks, "\n"), "\n",
-                      python_grammar, "\n", start_rule);
+  return absl::StrCat(absl::StrJoin(tool_blocks, "\n"), "\n", python_grammar,
+                      "\n", start_rule);
 }
 
 }  // namespace litert::lm

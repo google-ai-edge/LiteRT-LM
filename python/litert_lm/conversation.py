@@ -25,6 +25,10 @@ from typing import Any
 import warnings
 
 from . import interfaces
+from ._ffi import call_checked
+from ._ffi import create_checked
+from ._ffi import create_optional_checked
+from ._ffi import get_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmConstraintType
 from ._ffi import STREAM_CALLBACK_TYPE
@@ -54,6 +58,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens=None,
       chat_template=None,
       constrained_decoding_config=None,
+      visual_token_budget=None,
   ):
     super().__init__(
         messages=messages,
@@ -72,6 +77,10 @@ class Conversation(interfaces.AbstractConversation):
     self._engine = engine  # Keep engine alive
     self._tools_map = tools_map or {}
     self.constrained_decoding_config = constrained_decoding_config
+    # Per-image visual token budget applied to every message so images are
+    # downscaled to fit the vision encoder signatures loaded by the engine. The
+    # runtime rejects budgets above the engine's max_vision_tokens_per_image.
+    self._visual_token_budget = visual_token_budget
     # Keep the active ctypes callback alive to prevent SIGSEGV if the C++ thread
     # calls it after the local variable is garbage collected during
     # cancellation.
@@ -165,7 +174,7 @@ class Conversation(interfaces.AbstractConversation):
           | list[collections.abc.Mapping[str, Any]]
       ) | None = None,
       response_format: interfaces.ResponseFormat | None = None,
-  ) -> ctypes.c_void_p | None:
+  ) -> int | None:
     """Creates a C pointer for ConversationOptionalArgs if needed."""
     if (
         repetition_penalty_config is None
@@ -174,79 +183,130 @@ class Conversation(interfaces.AbstractConversation):
         and max_output_tokens is None
         and thinking_config is None
         and not response_format
+        and self._visual_token_budget is None
     ):
       return None
-    optional_args_ptr = self._lib.litert_lm_conversation_optional_args_create()
-    if not optional_args_ptr:
-      raise RuntimeError("Failed to create optional args")
+    optional_args_ptr = create_checked(
+        self._lib, "litert_lm_conversation_optional_args_create"
+    )
 
     try:
       if repetition_penalty_config is not None:
-        rpp_ptr = self._lib.litert_lm_repetition_penalty_config_create()
+        rpp_ptr = create_checked(
+            self._lib, "litert_lm_repetition_penalty_config_create"
+        )
         try:
           if repetition_penalty_config.repetition_penalty is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_repetition_penalty(
-                rpp_ptr, repetition_penalty_config.repetition_penalty
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_repetition_penalty",
+                rpp_ptr,
+                repetition_penalty_config.repetition_penalty,
             )
           if repetition_penalty_config.presence_penalty is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_presence_penalty(
-                rpp_ptr, repetition_penalty_config.presence_penalty
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_presence_penalty",
+                rpp_ptr,
+                repetition_penalty_config.presence_penalty,
             )
           if repetition_penalty_config.frequency_penalty is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_frequency_penalty(
-                rpp_ptr, repetition_penalty_config.frequency_penalty
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_frequency_penalty",
+                rpp_ptr,
+                repetition_penalty_config.frequency_penalty,
             )
           if repetition_penalty_config.window_size is not None:
-            self._lib.litert_lm_repetition_penalty_config_set_window_size(
-                rpp_ptr, repetition_penalty_config.window_size
+            call_checked(
+                self._lib,
+                "litert_lm_repetition_penalty_config_set_window_size",
+                rpp_ptr,
+                repetition_penalty_config.window_size,
             )
-          self._lib.litert_lm_conversation_optional_args_set_repetition_penalty_config(
-              optional_args_ptr, rpp_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_repetition_penalty_config",
+              optional_args_ptr,
+              rpp_ptr,
           )
         finally:
           if rpp_ptr:
             self._lib.litert_lm_repetition_penalty_config_delete(rpp_ptr)
       if no_repeat_ngram_config is not None:
-        nrn_ptr = self._lib.litert_lm_no_repeat_ngram_config_create()
+        nrn_ptr = create_checked(
+            self._lib, "litert_lm_no_repeat_ngram_config_create"
+        )
         try:
           if no_repeat_ngram_config.no_repeat_ngram_size is not None:
-            self._lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
-                nrn_ptr, no_repeat_ngram_config.no_repeat_ngram_size
+            call_checked(
+                self._lib,
+                "litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size",
+                nrn_ptr,
+                no_repeat_ngram_config.no_repeat_ngram_size,
             )
           if no_repeat_ngram_config.window_size is not None:
-            self._lib.litert_lm_no_repeat_ngram_config_set_window_size(
-                nrn_ptr, no_repeat_ngram_config.window_size
+            call_checked(
+                self._lib,
+                "litert_lm_no_repeat_ngram_config_set_window_size",
+                nrn_ptr,
+                no_repeat_ngram_config.window_size,
             )
-          self._lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
-              optional_args_ptr, nrn_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_no_repeat_ngram_config",
+              optional_args_ptr,
+              nrn_ptr,
           )
         finally:
           if nrn_ptr:
             self._lib.litert_lm_no_repeat_ngram_config_delete(nrn_ptr)
       if suppress_tokens_config is not None:
-        st_ptr = self._lib.litert_lm_suppress_tokens_config_create()
+        st_ptr = create_checked(
+            self._lib, "litert_lm_suppress_tokens_config_create"
+        )
         try:
           if suppress_tokens_config.suppress_tokens is not None:
             tokens_list = list(suppress_tokens_config.suppress_tokens)
             tokens_array = (ctypes.c_int * len(tokens_list))(*tokens_list)
-            self._lib.litert_lm_suppress_tokens_config_set_suppress_tokens(
-                st_ptr, tokens_array, len(tokens_list)
+            call_checked(
+                self._lib,
+                "litert_lm_suppress_tokens_config_set_suppress_tokens",
+                st_ptr,
+                tokens_array,
+                len(tokens_list),
             )
-          self._lib.litert_lm_conversation_optional_args_set_suppress_tokens_config(
-              optional_args_ptr, st_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_suppress_tokens_config",
+              optional_args_ptr,
+              st_ptr,
           )
         finally:
           if st_ptr:
             self._lib.litert_lm_suppress_tokens_config_delete(st_ptr)
+      if self._visual_token_budget is not None:
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_visual_token_budget",
+            optional_args_ptr,
+            self._visual_token_budget,
+        )
       if max_output_tokens is not None:
-        self._lib.litert_lm_conversation_optional_args_set_max_output_tokens(
-            optional_args_ptr, max_output_tokens
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_max_output_tokens",
+            optional_args_ptr,
+            max_output_tokens,
         )
       if thinking_config is not None:
         tc_ptr = thinking_config_to_params(self._lib, thinking_config)
         try:
-          self._lib.litert_lm_conversation_optional_args_set_thinking_config(
-              optional_args_ptr, tc_ptr
+          call_checked(
+              self._lib,
+              "litert_lm_conversation_optional_args_set_thinking_config",
+              optional_args_ptr,
+              tc_ptr,
           )
         finally:
           if tc_ptr:
@@ -257,15 +317,19 @@ class Conversation(interfaces.AbstractConversation):
           c_type = LiteRtLmConstraintType.REGEX
         elif response_format.type == interfaces.ResponseFormat.Type.JSON_OBJECT:
           c_type = LiteRtLmConstraintType.JSON_SCHEMA
-        self._lib.litert_lm_conversation_optional_args_set_constraint(
-            optional_args_ptr, c_type, response_format.schema_or_pattern
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_constraint",
+            optional_args_ptr,
+            c_type,
+            response_format.schema_or_pattern,
         )
       return optional_args_ptr
     except Exception as e:
       self._lib.litert_lm_conversation_optional_args_delete(optional_args_ptr)
       raise e
 
-  def _delete_optional_args(self, ptr: ctypes.c_void_p | None) -> None:
+  def _delete_optional_args(self, ptr: int | None) -> None:
     """Deletes the ConversationOptionalArgs C pointer."""
     if ptr:
       self._lib.litert_lm_conversation_optional_args_delete(ptr)
@@ -317,17 +381,22 @@ class Conversation(interfaces.AbstractConversation):
           response_format=active_response_format,
       )
       try:
-        resp_ptr = self._lib.litert_lm_conversation_send_message(
+        resp_ptr = create_checked(
+            self._lib,
+            "litert_lm_conversation_send_message",
             self._ptr,
             msg_json,
             ctx_json,
             optional_args_ptr,
         )
-        if not resp_ptr:
-          raise RuntimeError("litert_lm_conversation_send_message failed")
 
         try:
-          resp_str = self._lib.litert_lm_json_response_get_string(resp_ptr)
+          resp_str = get_checked(
+              self._lib,
+              "litert_lm_json_response_get_string",
+              ctypes.c_char_p,
+              resp_ptr,
+          )
           response_dict = (
               json.loads(resp_str.decode("utf-8")) if resp_str else {}
           )
@@ -381,13 +450,33 @@ class Conversation(interfaces.AbstractConversation):
       q = queue.Queue()
 
       def callback(unused_data, chunk_ptr):
-        error_msg = self._lib.litert_lm_stream_chunk_get_error(chunk_ptr)
-        if error_msg:
-          q.put(RuntimeError(error_msg.decode("utf-8")))
-        else:
-          chunk = self._lib.litert_lm_stream_chunk_get_text(chunk_ptr)
-          is_final = self._lib.litert_lm_stream_chunk_is_final(chunk_ptr)
-          q.put((chunk.decode("utf-8") if chunk else "", is_final))
+        # Runs on a C++ thread: report failures through the queue instead of
+        # raising.
+        try:
+          error_msg = get_checked(
+              self._lib,
+              "litert_lm_stream_chunk_get_error",
+              ctypes.c_char_p,
+              chunk_ptr,
+          )
+          if error_msg:
+            q.put(RuntimeError(error_msg.decode("utf-8")))
+          else:
+            chunk = get_checked(
+                self._lib,
+                "litert_lm_stream_chunk_get_text",
+                ctypes.c_char_p,
+                chunk_ptr,
+            )
+            is_final = get_checked(
+                self._lib,
+                "litert_lm_stream_chunk_is_final",
+                ctypes.c_bool,
+                chunk_ptr,
+            )
+            q.put((chunk.decode("utf-8") if chunk else "", is_final))
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          q.put(e)
 
       c_callback = STREAM_CALLBACK_TYPE(callback)
       self._current_callback = c_callback
@@ -476,8 +565,12 @@ class Conversation(interfaces.AbstractConversation):
     if not self._ptr:
       return ""
     msg_json = normalize_message(message)
-    res_str = self._lib.litert_lm_conversation_render_message_to_string(
-        self._ptr, json.dumps(msg_json)
+    res_str = get_checked(
+        self._lib,
+        "litert_lm_conversation_render_message_to_string",
+        ctypes.c_char_p,
+        self._ptr,
+        json.dumps(msg_json),
     )
     return res_str.decode("utf-8") if res_str else ""
 
@@ -485,9 +578,9 @@ class Conversation(interfaces.AbstractConversation):
     """See base class."""
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
-    info_ptr = self._lib.litert_lm_conversation_get_benchmark_info(self._ptr)
-    if not info_ptr:
-      raise RuntimeError("Failed to get benchmark info.")
+    info_ptr = create_checked(
+        self._lib, "litert_lm_conversation_get_benchmark_info", self._ptr
+    )
     try:
       return interfaces.create_benchmark_info(self._lib, info_ptr)
     finally:
@@ -495,21 +588,27 @@ class Conversation(interfaces.AbstractConversation):
 
   def cancel_process(self) -> None:
     if self._ptr:
-      self._lib.litert_lm_conversation_cancel_process(self._ptr)
+      call_checked(
+          self._lib, "litert_lm_conversation_cancel_process", self._ptr
+      )
 
   @property
   def token_count(self) -> int:
     """See base class."""
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
-    res = self._lib.litert_lm_conversation_get_token_count(self._ptr)
-    if res == -1:
-      raise RuntimeError("Failed to get token count.")
-    return res
+    return get_checked(
+        self._lib,
+        "litert_lm_conversation_get_token_count",
+        ctypes.c_int,
+        self._ptr,
+    )
 
   def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
     """See base class."""
-    if not self._lib.litert_lm_experimental_is_debugger_enabled():
+    if not get_checked(
+        self._lib, "litert_lm_experimental_is_debugger_enabled", ctypes.c_bool
+    ):
       warnings.warn(
           "LiteRT-LM Debugger is disabled in this runtime build. "
           "To enable artifact tracing, re-compile using "
@@ -525,19 +624,20 @@ class Conversation(interfaces.AbstractConversation):
     if not self._ptr:
       return None
 
-    debug_info_ptr = (
-        self._lib.litert_lm_experimental_conversation_get_session_debug_info(
-            self._ptr
-        )
+    debug_info_ptr = create_optional_checked(
+        self._lib,
+        "litert_lm_experimental_conversation_get_session_debug_info",
+        self._ptr,
     )
     if not debug_info_ptr:
       return None
 
     try:
-      capture_dir_bytes = (
-          self._lib.litert_lm_experimental_session_debug_info_get_capture_dir(
-              debug_info_ptr
-          )
+      capture_dir_bytes = get_checked(
+          self._lib,
+          "litert_lm_experimental_session_debug_info_get_capture_dir",
+          ctypes.c_char_p,
+          debug_info_ptr,
       )
       if not capture_dir_bytes:
         return None

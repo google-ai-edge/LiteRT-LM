@@ -22,6 +22,10 @@
 
 #include "runtime/engine/embedding_litert_lm_lib.h"
 
+#if defined(__ANDROID__)
+#include "runtime/engine/dmabuf_util.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -70,7 +74,6 @@ namespace {
 
 using ::litert::lm::ActivationDataType;
 using ::litert::lm::Backend;
-using ::litert::lm::BuildLiteRtCompiledModelResources;
 using ::litert::lm::EmbeddingEngineImpl;
 using ::litert::lm::EmbeddingEngineSettings;
 using ::litert::lm::EmbeddingOptions;
@@ -208,20 +211,25 @@ bool ParseBool(absl::string_view value) {
 
 void StopAndReportPeakMemoryUsage(
     tflite::profiling::memory::MemoryUsageMonitor* mem_monitor,
-    std::string* report_out) {
-  if (mem_monitor == nullptr) {
+    bool report_peak_memory_footprint, std::string* report_out) {
+  if (!report_peak_memory_footprint) {
     return;
   }
-  mem_monitor->Stop();
-  const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
-  if (peak_ram_mb ==
-      tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
-    return;
+  if (mem_monitor != nullptr) {
+    mem_monitor->Stop();
+    const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
+    if (peak_ram_mb !=
+        tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
+      ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
+                                        peak_ram_mb);
+      Emit(report_out,
+           absl::StrFormat("Peak system ram usage: %.2f MB", peak_ram_mb));
+    }
   }
-  ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
-                                    peak_ram_mb);
-  Emit(report_out,
-       absl::StrFormat("Peak system ram usage: %.2f MB", peak_ram_mb));
+
+#if defined(__ANDROID__)
+  LogDmaBufUsage(GetProcessDmaBufUsage(), report_out, /*print_to_stdout=*/true);
+#endif  // defined(__ANDROID__)
 }
 
 }  // namespace
@@ -272,7 +280,8 @@ absl::Status SetEmbeddingFlag(EmbeddingLiteRtLmSettings* settings,
   } else if (name == "num_warmup" || name == "num_iterations" ||
              name == "min_input_length" || name == "max_input_length" ||
              name == "benchmark_prefill_tokens" ||
-             name == "visual_token_budget" || name == "num_cpu_threads") {
+             name == "visual_token_budget" || name == "num_cpu_threads" ||
+             name == "output_size") {
     int parsed = 0;
     if (!absl::SimpleAtoi(value, &parsed)) {
       return absl::InvalidArgumentError(
@@ -290,6 +299,8 @@ absl::Status SetEmbeddingFlag(EmbeddingLiteRtLmSettings* settings,
       settings->benchmark_prefill_tokens = parsed;
     } else if (name == "visual_token_budget") {
       settings->visual_token_budget = parsed;
+    } else if (name == "output_size") {
+      settings->output_size = parsed;
     } else {
       settings->num_cpu_threads = parsed;
     }
@@ -317,6 +328,7 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
     return absl::InvalidArgumentError("Model path is empty.");
   }
   Emit(report_out, absl::StrCat("Loading model from: ", model_path));
+  const absl::Time init_start_time = absl::Now();
 
   const std::string backend_str = run_settings.backend;
   LITERT_ASSIGN_OR_RETURN(Backend backend,
@@ -445,6 +457,13 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
                           EmbeddingEngineImpl::Create(
                               std::move(resources), std::move(owned_env_ptr),
                               std::move(tokenizer), std::move(settings)));
+  const absl::Time init_end_time = absl::Now();
+  const double init_time_ms =
+      absl::ToDoubleMilliseconds(init_end_time - init_start_time);
+  if (auto* bm = engine->GetMutableBenchmarkInfo()) {
+    (void)bm->InitPhaseRecord(BenchmarkInfo::InitPhase::kTotal,
+                              init_end_time - init_start_time);
+  }
 
   std::string prompt = run_settings.input_prompt;
   const std::string input_prompt_file = run_settings.input_prompt_file;
@@ -510,6 +529,14 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       .normalize = run_settings.normalize,
       .input_overflow_strategy = overflow_strategy,
   };
+  if (run_settings.visual_token_budget > 0) {
+    options.vision_tokens_per_image = run_settings.visual_token_budget;
+  }
+  // 0 keeps the model's default output size. Any other value (including
+  // negatives) is forwarded so the engine can validate and report it.
+  if (run_settings.output_size != 0) {
+    options.output_size = run_settings.output_size;
+  }
 
   if (is_benchmark) {
     const int num_warmup = run_settings.num_warmup;
@@ -566,6 +593,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       }
     }
 
+    ABSL_LOG(INFO) << absl::StrFormat("Init Time: %.2f ms", init_time_ms);
+    Emit(report_out, absl::StrFormat("Init Time: %.2f ms", init_time_ms));
+
     ABSL_LOG(INFO) << absl::StrFormat(
         "Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)", avg_ms, min_ms,
         max_ms);
@@ -574,7 +604,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
         absl::StrFormat("Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)",
                         avg_ms, min_ms, max_ms));
 
-    StopAndReportPeakMemoryUsage(mem_monitor.get(), report_out);
+    StopAndReportPeakMemoryUsage(mem_monitor.get(),
+                                 run_settings.report_peak_memory_footprint,
+                                 report_out);
     Emit(report_out, absl::StrCat("Embedding vector dimension: ",
                                   last_response.embedding.size()));
     if (const std::string compare_path = run_settings.compare_embedding_path;
@@ -600,7 +632,10 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   EmbeddingResponse response = *std::move(response_result);
 
   Emit(report_out, "\n================ RESULT ================");
-  StopAndReportPeakMemoryUsage(mem_monitor.get(), report_out);
+  StopAndReportPeakMemoryUsage(
+      mem_monitor.get(), run_settings.report_peak_memory_footprint, report_out);
+  ABSL_LOG(INFO) << absl::StrFormat("Init Time: %.2f ms", init_time_ms);
+  Emit(report_out, absl::StrFormat("Init Time: %.2f ms", init_time_ms));
   Emit(report_out, absl::StrCat("Input length: ", response.input_length));
   if (response.truncated_length.has_value()) {
     Emit(report_out,

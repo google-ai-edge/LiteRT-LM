@@ -22,6 +22,9 @@ from typing import Any, Sequence
 
 from . import interfaces
 from ._ffi import _get_lib
+from ._ffi import call_checked
+from ._ffi import create_checked
+from ._ffi import get_checked
 from ._ffi import InputDataType
 from ._messages import AudioBytes
 from ._messages import AudioFile
@@ -79,25 +82,27 @@ class EmbeddingResponse:
   embedding: list[float]
 
 
-def _create_c_input_data(
-    lib: Any, item: str | Content
-) -> ctypes.c_void_p:
+def _create_c_input_data(lib: Any, item: str | Content) -> int:
   """Creates a LiteRtLmInputData pointer from a string or Content."""
   if isinstance(item, str):
     data_bytes = item.encode("utf-8")
-    ptr = lib.litert_lm_input_data_create(
-        InputDataType.TEXT, data_bytes, len(data_bytes)
+    ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.TEXT,
+        data_bytes,
+        len(data_bytes),
     )
-    if not ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData")
     return ptr
   elif isinstance(item, Text):
     data_bytes = item.text.encode("utf-8")
-    ptr = lib.litert_lm_input_data_create(
-        InputDataType.TEXT, data_bytes, len(data_bytes)
+    ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.TEXT,
+        data_bytes,
+        len(data_bytes),
     )
-    if not ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData")
     return ptr
   elif isinstance(item, (ImageBytes, ImageFile)):
     if isinstance(item, ImageBytes):
@@ -105,11 +110,13 @@ def _create_c_input_data(
     else:
       with open(item.absolute_path, "rb") as f:
         data_bytes = f.read()
-    img_ptr = lib.litert_lm_input_data_create(
-        InputDataType.IMAGE, data_bytes, len(data_bytes)
+    img_ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.IMAGE,
+        data_bytes,
+        len(data_bytes),
     )
-    if not img_ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData for Image")
     return img_ptr
   elif isinstance(item, (AudioBytes, AudioFile)):
     if isinstance(item, AudioBytes):
@@ -117,14 +124,100 @@ def _create_c_input_data(
     else:
       with open(item.absolute_path, "rb") as f:
         data_bytes = f.read()
-    audio_ptr = lib.litert_lm_input_data_create(
-        InputDataType.AUDIO, data_bytes, len(data_bytes)
+    audio_ptr = create_checked(
+        lib,
+        "litert_lm_input_data_create",
+        InputDataType.AUDIO,
+        data_bytes,
+        len(data_bytes),
     )
-    if not audio_ptr:
-      raise RuntimeError("Failed to create LiteRtLmInputData for Audio")
     return audio_ptr
   else:
     raise TypeError(f"Unsupported content type for embedding: {type(item)}")
+
+
+def _create_c_options(lib: Any, options: EmbeddingOptions) -> int:
+  """Creates a LiteRtLmEmbeddingOptions pointer from `options`.
+
+  Args:
+    lib: The loaded C library instance.
+    options: The options to convert. Fields set to None keep the C defaults.
+
+  Returns:
+    The created options handle, owned by the caller; release it with
+    `litert_lm_embedding_options_delete`.
+
+  Raises:
+    RuntimeError: If a C API call fails.
+  """
+  options_ptr = create_checked(lib, "litert_lm_embedding_options_create")
+  try:
+    if options.normalize is not None:
+      call_checked(
+          lib,
+          "litert_lm_embedding_options_set_normalize",
+          options_ptr,
+          options.normalize,
+      )
+    if options.insert_special_tokens is not None:
+      call_checked(
+          lib,
+          "litert_lm_embedding_options_set_insert_special_tokens",
+          options_ptr,
+          options.insert_special_tokens,
+      )
+    if options.input_overflow_strategy is not None:
+      call_checked(
+          lib,
+          "litert_lm_embedding_options_set_input_overflow_strategy",
+          options_ptr,
+          int(options.input_overflow_strategy),
+      )
+    if options.output_size is not None:
+      call_checked(
+          lib,
+          "litert_lm_embedding_options_set_output_size",
+          options_ptr,
+          options.output_size,
+      )
+    if options.vision_tokens_per_image is not None:
+      call_checked(
+          lib,
+          "litert_lm_embedding_options_set_vision_tokens_per_image",
+          options_ptr,
+          options.vision_tokens_per_image,
+      )
+  except BaseException:
+    lib.litert_lm_embedding_options_delete(options_ptr)
+    raise
+  return options_ptr
+
+
+def _read_c_embedding_response(lib: Any, resp_ptr: int) -> EmbeddingResponse:
+  """Copies the values of a LiteRtLmEmbeddingResponse into Python.
+
+  Args:
+    lib: The loaded C library instance.
+    resp_ptr: The LiteRtLmEmbeddingResponse to read. Not consumed.
+
+  Returns:
+    An EmbeddingResponse holding a copy of the embedding values.
+
+  Raises:
+    RuntimeError: If a C API call fails.
+  """
+  size = get_checked(
+      lib, "litert_lm_embedding_response_get_size", ctypes.c_size_t, resp_ptr
+  )
+  vals_ptr = get_checked(
+      lib,
+      "litert_lm_embedding_response_get_values",
+      ctypes.POINTER(ctypes.c_float),
+      resp_ptr,
+  )
+  if not vals_ptr and size > 0:
+    raise RuntimeError("Invalid embedding response values pointer.")
+  return EmbeddingResponse(embedding=[float(vals_ptr[i]) for i in range(size)])
 
 
 class EmbeddingEngine:
@@ -153,63 +246,90 @@ class EmbeddingEngine:
     self._vision_tokens_per_image = vision_tokens_per_image
 
     self._lib = _get_lib()
-    self._engine_ptr: ctypes.c_void_p | None = None
+    self._engine_ptr: int | None = None
 
-    settings = self._lib.litert_lm_embedding_engine_settings_create(
+    settings = create_checked(
+        self._lib,
+        "litert_lm_embedding_engine_settings_create",
         self._model_path,
         self._backend.get_name(),
         (self._vision_backend.get_name() if self._vision_backend else None),
         (self._audio_backend.get_name() if self._audio_backend else None),
     )
-    if not settings:
-      raise RuntimeError("Failed to create LiteRtLmEmbeddingEngineSettings")
 
     try:
       if isinstance(self._backend, interfaces.CPU):
         if self._backend.thread_count is not None:
-          self._lib.litert_lm_embedding_engine_settings_set_num_threads(
-              settings, self._backend.thread_count
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_num_threads",
+              settings,
+              self._backend.thread_count,
           )
       if isinstance(self._audio_backend, interfaces.CPU):
         if self._audio_backend.thread_count is not None:
-          self._lib.litert_lm_embedding_engine_settings_set_audio_num_threads(
-              settings, self._audio_backend.thread_count
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_audio_num_threads",
+              settings,
+              self._audio_backend.thread_count,
           )
       if self._cache_dir:
-        self._lib.litert_lm_embedding_engine_settings_set_cache_dir(
-            settings, self._cache_dir
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_cache_dir",
+            settings,
+            self._cache_dir,
         )
       if isinstance(self._backend, interfaces.NPU):
         if self._backend.litert_dispatch_lib_dir:
-          self._lib.litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir(
-              settings, self._backend.litert_dispatch_lib_dir
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir",
+              settings,
+              self._backend.litert_dispatch_lib_dir,
           )
       if isinstance(self._vision_backend, interfaces.NPU):
         if self._vision_backend.litert_dispatch_lib_dir:
-          self._lib.litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir(
-              settings, self._vision_backend.litert_dispatch_lib_dir
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir",
+              settings,
+              self._vision_backend.litert_dispatch_lib_dir,
           )
       if isinstance(self._audio_backend, interfaces.NPU):
         if self._audio_backend.litert_dispatch_lib_dir:
-          self._lib.litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
-              settings, self._audio_backend.litert_dispatch_lib_dir
+          call_checked(
+              self._lib,
+              "litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir",
+              settings,
+              self._audio_backend.litert_dispatch_lib_dir,
           )
       if self._min_input_length is not None:
-        self._lib.litert_lm_embedding_engine_settings_set_min_input_length(
-            settings, self._min_input_length
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_min_input_length",
+            settings,
+            self._min_input_length,
         )
       if self._max_input_length is not None:
-        self._lib.litert_lm_embedding_engine_settings_set_max_input_length(
-            settings, self._max_input_length
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_max_input_length",
+            settings,
+            self._max_input_length,
         )
       if self._vision_tokens_per_image is not None:
-        self._lib.litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
-            settings, self._vision_tokens_per_image
+        call_checked(
+            self._lib,
+            "litert_lm_embedding_engine_settings_set_vision_tokens_per_image",
+            settings,
+            self._vision_tokens_per_image,
         )
 
-      self._engine_ptr = self._lib.litert_lm_embedding_engine_create(settings)
-      if not self._engine_ptr:
-        raise RuntimeError("Failed to create LiteRtLmEmbeddingEngine")
+      self._engine_ptr = create_checked(
+          self._lib, "litert_lm_embedding_engine_create", settings
+      )
     finally:
       self._lib.litert_lm_embedding_engine_settings_delete(settings)
 
@@ -273,45 +393,23 @@ class EmbeddingEngine:
     else:
       items = list(contents)
 
-    options_ptr = self._lib.litert_lm_embedding_options_create()
+    created_ptrs: list[int] = []
+    options_ptr = _create_c_options(self._lib, options)
     try:
-      if options.normalize is not None:
-        self._lib.litert_lm_embedding_options_set_normalize(
-            options_ptr, options.normalize
-        )
-      if options.insert_special_tokens is not None:
-        self._lib.litert_lm_embedding_options_set_insert_special_tokens(
-            options_ptr, options.insert_special_tokens
-        )
-      if options.input_overflow_strategy is not None:
-        self._lib.litert_lm_embedding_options_set_input_overflow_strategy(
-            options_ptr, int(options.input_overflow_strategy)
-        )
-      if options.output_size is not None:
-        self._lib.litert_lm_embedding_options_set_output_size(
-            options_ptr, options.output_size
-        )
-      if options.vision_tokens_per_image is not None:
-        self._lib.litert_lm_embedding_options_set_vision_tokens_per_image(
-            options_ptr, options.vision_tokens_per_image
-        )
-
-      created_ptrs = [_create_c_input_data(self._lib, item) for item in items]
+      for item in items:
+        created_ptrs.append(_create_c_input_data(self._lib, item))
 
       inputs_array = (ctypes.c_void_p * len(created_ptrs))(*created_ptrs)
-      resp_ptr = self._lib.litert_lm_embedding_engine_compute_embedding(
-          self._engine_ptr, inputs_array, len(created_ptrs), options_ptr
+      resp_ptr = create_checked(
+          self._lib,
+          "litert_lm_embedding_engine_compute_embedding",
+          self._engine_ptr,
+          inputs_array,
+          len(created_ptrs),
+          options_ptr,
       )
-      if not resp_ptr:
-        raise RuntimeError("Failed to compute embedding.")
-
       try:
-        size = self._lib.litert_lm_embedding_response_get_size(resp_ptr)
-        vals_ptr = self._lib.litert_lm_embedding_response_get_values(resp_ptr)
-        if not vals_ptr and size > 0:
-          raise RuntimeError("Invalid embedding response values pointer.")
-        embedding = [float(vals_ptr[i]) for i in range(size)]
-        return EmbeddingResponse(embedding=embedding)
+        return _read_c_embedding_response(self._lib, resp_ptr)
       finally:
         self._lib.litert_lm_embedding_response_delete(resp_ptr)
     finally:
@@ -344,37 +442,19 @@ class EmbeddingEngine:
       else:
         normalized_batch.append(list(req))
 
-    all_created_ptrs: list[ctypes.c_void_p] = []
-    options_ptr = self._lib.litert_lm_embedding_options_create()
+    all_created_ptrs: list[int] = []
+    options_ptr = _create_c_options(self._lib, options)
 
     try:
-      if options.normalize is not None:
-        self._lib.litert_lm_embedding_options_set_normalize(
-            options_ptr, options.normalize
-        )
-      if options.insert_special_tokens is not None:
-        self._lib.litert_lm_embedding_options_set_insert_special_tokens(
-            options_ptr, options.insert_special_tokens
-        )
-      if options.input_overflow_strategy is not None:
-        self._lib.litert_lm_embedding_options_set_input_overflow_strategy(
-            options_ptr, int(options.input_overflow_strategy)
-        )
-      if options.output_size is not None:
-        self._lib.litert_lm_embedding_options_set_output_size(
-            options_ptr, options.output_size
-        )
-      if options.vision_tokens_per_image is not None:
-        self._lib.litert_lm_embedding_options_set_vision_tokens_per_image(
-            options_ptr, options.vision_tokens_per_image
-        )
-
       batch_inputs_arrays: list[Any] = []
       num_inputs_per_batch = (ctypes.c_size_t * batch_size)()
 
       for i, req in enumerate(normalized_batch):
-        req_ptrs = [_create_c_input_data(self._lib, item) for item in req]
-        all_created_ptrs.extend(req_ptrs)
+        req_ptrs: list[int] = []
+        for item in req:
+          ptr = _create_c_input_data(self._lib, item)
+          all_created_ptrs.append(ptr)
+          req_ptrs.append(ptr)
         req_array = (ctypes.c_void_p * len(req_ptrs))(*req_ptrs)
         batch_inputs_arrays.append(req_array)
         num_inputs_per_batch[i] = len(req_ptrs)
@@ -384,40 +464,33 @@ class EmbeddingEngine:
           for arr in batch_inputs_arrays
       ])
 
-      responses_ptr = (
-          self._lib.litert_lm_embedding_engine_compute_embedding_batch(
-              self._engine_ptr,
-              inputs_batch_array,
-              num_inputs_per_batch,
-              batch_size,
-              options_ptr,
-          )
+      responses_ptr = create_checked(
+          self._lib,
+          "litert_lm_embedding_engine_compute_embedding_batch",
+          self._engine_ptr,
+          inputs_batch_array,
+          num_inputs_per_batch,
+          batch_size,
+          options_ptr,
       )
-      if not responses_ptr:
-        raise RuntimeError("Failed to compute embedding batch.")
 
       try:
-        num_responses = self._lib.litert_lm_embedding_responses_get_size(
-            responses_ptr
+        num_responses = get_checked(
+            self._lib,
+            "litert_lm_embedding_responses_get_size",
+            ctypes.c_size_t,
+            responses_ptr,
         )
         results: list[EmbeddingResponse] = []
         for i in range(num_responses):
-          resp_ptr = self._lib.litert_lm_embedding_responses_get_at(
-              responses_ptr, i
+          # Borrowed from `responses_ptr`; must not be deleted.
+          resp_ptr = create_checked(
+              self._lib,
+              "litert_lm_embedding_responses_get_at",
+              responses_ptr,
+              i,
           )
-          if not resp_ptr:
-            raise RuntimeError(
-                f"Failed to get embedding response at index {i}."
-            )
-          size = self._lib.litert_lm_embedding_response_get_size(resp_ptr)
-          vals_ptr = self._lib.litert_lm_embedding_response_get_values(resp_ptr)
-          if not vals_ptr and size > 0:
-            raise RuntimeError("Invalid embedding response values pointer.")
-          results.append(
-              EmbeddingResponse(
-                  embedding=[float(vals_ptr[j]) for j in range(size)]
-              )
-          )
+          results.append(_read_c_embedding_response(self._lib, resp_ptr))
         return results
       finally:
         self._lib.litert_lm_embedding_responses_delete(responses_ptr)

@@ -57,12 +57,6 @@ class KokoroVocoderStage : public Vocoder {
   // Model-static frame capacity derived in Create() from tensor buffers.
   int frame_capacity() const { return frame_capacity_; }
 
-  // Flushes remaining buffered audio frames and synthesizes audio.
-  //
-  // returns
-  // - absl::OkStatus() on success, or error status on failure.
-  absl::Status Flush() override;
-
  protected:
   bool NeedScheduleInternal() const override {
     return acoustic_predictor_.HasOutput();
@@ -88,8 +82,9 @@ class KokoroVocoderStage : public Vocoder {
     size_t phase_spectrogram = 1;
   };
 
-  KokoroVocoderStage(Stage<KokoroAcousticOutput>* acoustic_predictor,
-                     std::shared_ptr<ModelResources> resources)
+  KokoroVocoderStage(
+      Stage<KokoroAcousticOutput>* absl_nonnull acoustic_predictor,
+      std::shared_ptr<ModelResources> absl_nonnull resources)
       : acoustic_predictor_(*acoustic_predictor),
         resources_(std::move(resources)) {}
 
@@ -101,7 +96,7 @@ class KokoroVocoderStage : public Vocoder {
       absl::Span<const float> phase_spectrogram, int active_subframes);
 
   Stage<KokoroAcousticOutput>& acoustic_predictor_;
-  std::shared_ptr<ModelResources> resources_;
+  std::shared_ptr<ModelResources> absl_nonnull resources_;
 
   std::shared_ptr<CompiledModel> vocoder_model_;
 

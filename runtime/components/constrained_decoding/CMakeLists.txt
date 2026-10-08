@@ -125,6 +125,37 @@ target_include_directories(runtime_components_constrained_decoding_fst_constrain
 # ==============================================================================
 # LiteRT Logit Mask Runner
 # ==============================================================================
+# LiteRT's tensor/backends/tflite sources include
+# "tflite/schema/mutable/schema_generated.h", which Bazel generates via
+# //tflite/schema:schema_fbs_with_mutable. Generate the equivalent here, after
+# tflite_external has fetched schema.fbs.
+set(LITERTLM_TFLITE_MUTABLE_SCHEMA_GEN_DIR
+  "${CMAKE_BINARY_DIR}/generated/tflite_mutable_schema")
+set(LITERTLM_TFLITE_MUTABLE_SCHEMA_H
+  "${LITERTLM_TFLITE_MUTABLE_SCHEMA_GEN_DIR}/tflite/schema/mutable/schema_generated.h")
+set(LITERTLM_TFLITE_SCHEMA_FBS
+  "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/schema/schema.fbs")
+if(DEFINED LITERTLM_HOST_FLATC)
+  set(_litertlm_mutable_schema_flatc "${LITERTLM_HOST_FLATC}")
+else()
+  set(_litertlm_mutable_schema_flatc "${LITERTLM_FLATC_EXECUTABLE}")
+endif()
+
+add_custom_command(
+  OUTPUT "${LITERTLM_TFLITE_MUTABLE_SCHEMA_H}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+    "${LITERTLM_TFLITE_MUTABLE_SCHEMA_GEN_DIR}/tflite/schema/mutable"
+  COMMAND "${_litertlm_mutable_schema_flatc}" -c
+    --gen-mutable --gen-object-api
+    -o "${LITERTLM_TFLITE_MUTABLE_SCHEMA_GEN_DIR}/tflite/schema/mutable/"
+    "${LITERTLM_TFLITE_SCHEMA_FBS}"
+  DEPENDS tflite_external
+  COMMENT "[LiteRTLM] Generating tflite/schema/mutable/schema_generated.h"
+  VERBATIM
+)
+add_custom_target(litertlm_tflite_mutable_schema
+  DEPENDS "${LITERTLM_TFLITE_MUTABLE_SCHEMA_H}")
+
 add_litertlm_library(runtime_components_constrained_decoding_litert_logit_mask_runner STATIC
   litert_logit_mask_runner.cc
   ${LITERTLM_LITERT_SRC_DIR}/../tensor/buffer.cc
@@ -139,11 +170,15 @@ add_litertlm_library(runtime_components_constrained_decoding_litert_logit_mask_r
 add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
   ALIAS runtime_components_constrained_decoding_litert_logit_mask_runner)
 
+add_dependencies(runtime_components_constrained_decoding_litert_logit_mask_runner
+  litertlm_tflite_mutable_schema)
+
 target_include_directories(runtime_components_constrained_decoding_litert_logit_mask_runner
   PUBLIC
     ${PKG_ROOT}
     ${LITERTLM_INCLUDE_PATHS}
     ${LITERTLM_LITERT_INCLUDE_PATHS}
+    ${LITERTLM_TFLITE_MUTABLE_SCHEMA_GEN_DIR}
 )
 
 target_link_libraries(runtime_components_constrained_decoding_litert_logit_mask_runner

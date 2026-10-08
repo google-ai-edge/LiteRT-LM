@@ -12,29 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_TEXT2IMAGE_SESSION_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_TEXT2IMAGE_SESSION_H_
 
 #include <memory>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
-#include "omni/asr/audio_source.h"
+#include "omni/base/io_types.h"
 #include "omni/omni_session.h"
+#include "omni/text2image/prompt_source.h"
+#include "omni/text2image/text2image_engine.h"
 
 namespace litert::omni {
 class OmniSessionTest;
 }  // namespace litert::omni
 
-namespace litert::omni::asr {
+namespace litert::omni::text2image {
 
-// `OmniSessionFactory` implementation backed by `AsrEngine`.
-class AsrOmniSessionFactory : public OmniSessionFactory {
+// `OmniSessionFactory` implementation backed by `Text2ImageEngine`.
+class Text2ImageSessionFactory : public OmniSessionFactory {
  public:
   static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
-      AsrEngineConfig config);
-  ~AsrOmniSessionFactory() override = default;
+      Text2ImageEngine::Settings settings);
+  ~Text2ImageSessionFactory() override;
 
   absl::StatusOr<std::unique_ptr<OmniSession>> Create(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
@@ -42,18 +43,18 @@ class AsrOmniSessionFactory : public OmniSessionFactory {
 
  private:
   friend class ::litert::omni::OmniSessionTest;
+  friend class Text2ImageSessionTest;
 
-  static std::unique_ptr<AudioSource> CreateAudioInputSource(
+  static std::unique_ptr<PromptSource> CreatePromptInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
-      int sample_rate_hz, int num_channels, int samples_per_interval,
-      int overlap_samples);
+      ImageGenInputMetadata default_params = {});
 
-  explicit AsrOmniSessionFactory(
-      std::unique_ptr<AsrEngine> absl_nonnull asr_engine);
+  explicit Text2ImageSessionFactory(
+      std::unique_ptr<Text2ImageEngine> absl_nonnull text2image_engine);
 
-  std::unique_ptr<AsrEngine> asr_engine_;
+  std::unique_ptr<Text2ImageEngine> text2image_engine_;
 };
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni::text2image
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_OMNI_SESSION_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_TEXT2IMAGE_SESSION_H_

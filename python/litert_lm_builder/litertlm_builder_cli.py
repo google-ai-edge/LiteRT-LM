@@ -89,6 +89,9 @@ _SUBCOMMANDS = (
     "llm_metadata",
     "executor_metadata",
     "embedding_metadata",
+    "asr_metadata",
+    "tts_metadata",
+    "image_gen_metadata",
     "tflite_model",
     "tflite_weights",
     "sp_tokenizer",
@@ -217,6 +220,63 @@ def _add_embedding_metadata_parser(subparsers) -> None:
   )
 
 
+def _add_asr_metadata_parser(subparsers) -> None:
+  """Adds a parser for asr metadata to the subparsers."""
+  asr_metadata_parser = subparsers.add_parser(
+      "asr_metadata",
+      description=(
+          "Add asr metadata to the LiteRT-LM file. Can be a text or binary"
+          " proto file."
+      ),
+      help="Add asr metadata.",
+  )
+  asr_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the asr metadata file.",
+  )
+  _add_metadata_arguments(asr_metadata_parser)
+
+
+def _add_tts_metadata_parser(subparsers) -> None:
+  """Adds a parser for tts metadata to the subparsers."""
+  tts_metadata_parser = subparsers.add_parser(
+      "tts_metadata",
+      description=(
+          "Add tts metadata to the LiteRT-LM file. Can be a text or binary"
+          " proto file."
+      ),
+      help="Add tts metadata.",
+  )
+  tts_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the tts metadata file.",
+  )
+  _add_metadata_arguments(tts_metadata_parser)
+
+
+def _add_image_gen_metadata_parser(subparsers) -> None:
+  """Adds a parser for image_gen metadata to the subparsers."""
+  image_gen_metadata_parser = subparsers.add_parser(
+      "image_gen_metadata",
+      description=(
+          "Add image_gen metadata to the LiteRT-LM file. Can be a text or"
+          " binary proto file."
+      ),
+      help="Add image_gen metadata.",
+  )
+  image_gen_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the image_gen metadata file.",
+  )
+  _add_metadata_arguments(image_gen_metadata_parser)
+
+
 def _add_tflite_model_parser(subparsers) -> None:
   """Adds a parser for tflite model to the subparsers."""
   tflite_model_parser = subparsers.add_parser(
@@ -234,10 +294,7 @@ def _add_tflite_model_parser(subparsers) -> None:
       "--model_type",
       type=str,
       required=True,
-      choices=[
-          str(model_type.value).lower().replace("tf_lite_", "")
-          for model_type in litertlm_builder.TfLiteModelType
-      ],
+      choices=litertlm_builder.get_all_tflite_model_types(),
       help="The type of the tflite model.",
   )
   tflite_model_parser.add_argument(
@@ -276,10 +333,7 @@ def _add_tflite_weights_parser(subparsers) -> None:
       "--model_type",
       type=str,
       required=True,
-      choices=[
-          str(model_type.value).lower().replace("tf_lite_", "")
-          for model_type in litertlm_builder.TfLiteModelType
-      ],
+      choices=litertlm_builder.get_all_tflite_model_types(),
       help="The type of the tflite model these weights correspond to.",
   )
   _add_metadata_arguments(tflite_weights_parser)
@@ -303,10 +357,7 @@ def _add_sentencepiece_tokenizer_parser(subparsers) -> None:
       type=str,
       required=False,
       default=None,
-      choices=[
-          str(model_type.value).lower().replace("tf_lite_", "")
-          for model_type in litertlm_builder.TfLiteModelType
-      ],
+      choices=litertlm_builder.get_all_tflite_model_types(),
       help="The type of the model this tokenizer corresponds to.",
   )
   _add_metadata_arguments(sp_tokenizer_parser)
@@ -330,10 +381,7 @@ def _add_hf_tokenizer_parser(subparsers) -> None:
       type=str,
       required=False,
       default=None,
-      choices=[
-          str(model_type.value).lower().replace("tf_lite_", "")
-          for model_type in litertlm_builder.TfLiteModelType
-      ],
+      choices=litertlm_builder.get_all_tflite_model_types(),
       help="The type of the model this tokenizer corresponds to.",
   )
   _add_metadata_arguments(hf_tokenizer_parser)
@@ -397,6 +445,9 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_llm_metadata_parser(subparsers)
   _add_executor_metadata_parser(subparsers)
   _add_embedding_metadata_parser(subparsers)
+  _add_asr_metadata_parser(subparsers)
+  _add_tts_metadata_parser(subparsers)
+  _add_image_gen_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
   _add_sentencepiece_tokenizer_parser(subparsers)
@@ -526,6 +577,54 @@ def _build_embedding_metadata(
   builder.add_embedding_metadata(args.path, additional_metadata=metadata)
 
 
+def _build_asr_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds asr metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_asr_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_tts_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds tts metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_tts_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_image_gen_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds image_gen metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_image_gen_metadata(args.path, additional_metadata=metadata)
+
+
+def _resolve_required_cli_model_type(
+    model_type_str: str,
+) -> litertlm_builder.TfLiteModelType | str:
+  """Resolves a required CLI model_type argument to a TfLiteModelType or wire string."""
+  try:
+    return litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
+        model_type_str
+    )
+  except ValueError:
+    return model_type_str
+
+
+def _resolve_optional_cli_model_type(
+    model_type_str: str | None,
+) -> litertlm_builder.TfLiteModelType | str | None:
+  """Resolves an optional CLI model_type argument to a TfLiteModelType or wire string."""
+  if model_type_str is None:
+    return None
+  return _resolve_required_cli_model_type(model_type_str)
+
+
 def _build_tflite_model(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
@@ -534,9 +633,7 @@ def _build_tflite_model(
   metadata = _get_metadata_from_args(args)
   builder.add_tflite_model(
       args.path,
-      litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-          args.model_type
-      ),
+      _resolve_required_cli_model_type(args.model_type),
       backend_constraint=args.backend_constraint,
       prefer_activation_type=args.prefer_activation_type,
       additional_metadata=metadata,
@@ -551,9 +648,7 @@ def _build_tflite_weights(
   metadata = _get_metadata_from_args(args)
   builder.add_tflite_weights(
       args.path,
-      litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-          args.model_type
-      ),
+      _resolve_required_cli_model_type(args.model_type),
       additional_metadata=metadata,
   )
 
@@ -564,11 +659,7 @@ def _build_sp_tokenizer(
 ) -> None:
   """Builds sentencepiece tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  model_type = None
-  if args.model_type:
-    model_type = litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-        args.model_type
-    )
+  model_type = _resolve_optional_cli_model_type(args.model_type)
   builder.add_sentencepiece_tokenizer(
       args.path, model_type=model_type, additional_metadata=metadata
   )
@@ -580,11 +671,7 @@ def _build_hf_tokenizer(
 ) -> None:
   """Builds huggingface tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  model_type = None
-  if args.model_type:
-    model_type = litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-        args.model_type
-    )
+  model_type = _resolve_optional_cli_model_type(args.model_type)
   builder.add_hf_tokenizer(
       args.path, model_type=model_type, additional_metadata=metadata
   )
@@ -645,6 +732,12 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_executor_metadata(parsed_arg, builder)
         case "embedding_metadata":
           _build_embedding_metadata(parsed_arg, builder)
+        case "asr_metadata":
+          _build_asr_metadata(parsed_arg, builder)
+        case "tts_metadata":
+          _build_tts_metadata(parsed_arg, builder)
+        case "image_gen_metadata":
+          _build_image_gen_metadata(parsed_arg, builder)
         case "tflite_model":
           _build_tflite_model(parsed_arg, builder)
         case "tflite_weights":

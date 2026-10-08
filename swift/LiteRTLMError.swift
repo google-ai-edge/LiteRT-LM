@@ -53,17 +53,8 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     return String(cString: cString)
   }
 
-  /// Returns the last integer error code recorded by the native LiteRT-LM C API on the calling
-  /// thread, or 0 (kOk) if no error has occurred or the error state has been cleared.
-  ///
-  /// - Note: The native C API uses thread-local storage. For `async` Swift methods, prefer
-  ///   inspecting the thrown `LiteRTLMError`.
-  public static func getLastErrorCode() -> Int {
-    return Int(litert_lm_get_last_error_code())
-  }
-
   /// Clears the last error recorded by the native LiteRT-LM C API on the calling thread,
-  /// resetting the error message to `nil` and the error code to 0.
+  /// resetting the error message to `nil`.
   public static func clearLastError() {
     litert_lm_clear_last_error()
   }
@@ -77,6 +68,72 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     }
     let message = String(cString: cString)
     return message.isEmpty ? nil : message
+  }
+
+  /// Checks the `LiteRtLmStatusCode` returned by the native C API function `functionName`.
+  ///
+  /// Must be called on the thread that made the native call, immediately after it, because the
+  /// native error message is stored in thread-local storage.
+  ///
+  /// - Parameters:
+  ///   - status: The status code returned by the native call.
+  ///   - functionName: The name of the native function, used in the error details.
+  ///   - makeError: Builds the error to throw from a description of the failure.
+  /// - Throws: The error built by `makeError` if `status` is not `kLiteRtLmStatusOk`. Its details
+  ///   contain `functionName`, the status code and the native last error message.
+  static func check(
+    _ status: LiteRtLmStatusCode, _ functionName: String, _ makeError: (String) -> LiteRTLMError
+  ) throws {
+    guard status == kLiteRtLmStatusOk else {
+      let message = consumeLastError() ?? "no error message available"
+      throw makeError("\(functionName) failed with status \(status.rawValue): \(message)")
+    }
+  }
+
+  /// Calls a native constructor that returns a status code and writes the new handle to an
+  /// out-parameter, and returns the handle.
+  ///
+  /// `body` must make the native call synchronously on the calling thread, passing its argument
+  /// as the out-parameter.
+  ///
+  /// - Parameters:
+  ///   - functionName: The name of the native function, used in the error details.
+  ///   - makeError: Builds the error to throw from a description of the failure.
+  ///   - body: Calls the native constructor with the given out-parameter and returns its status.
+  /// - Returns: The created handle, owned by the caller.
+  /// - Throws: The error built by `makeError` if the call fails or produces no handle.
+  static func create(
+    _ functionName: String, _ makeError: (String) -> LiteRTLMError,
+    _ body: (UnsafeMutablePointer<OpaquePointer?>) -> LiteRtLmStatusCode
+  ) throws -> OpaquePointer {
+    var handle: OpaquePointer?
+    try check(body(&handle), functionName, makeError)
+    guard let handle else {
+      throw makeError("\(functionName) returned a null handle")
+    }
+    return handle
+  }
+
+  /// Calls a native accessor that returns a status code and writes its result to an
+  /// out-parameter, and returns the result.
+  ///
+  /// `body` must make the native call synchronously on the calling thread, passing its argument
+  /// as the out-parameter.
+  ///
+  /// - Parameters:
+  ///   - initialValue: The value the out-parameter holds before the call.
+  ///   - functionName: The name of the native function, used in the error details.
+  ///   - makeError: Builds the error to throw from a description of the failure.
+  ///   - body: Calls the native accessor with the given out-parameter and returns its status.
+  /// - Returns: The value written to the out-parameter.
+  /// - Throws: The error built by `makeError` if the call fails.
+  static func get<T>(
+    _ initialValue: T, _ functionName: String, _ makeError: (String) -> LiteRTLMError,
+    _ body: (UnsafeMutablePointer<T>) -> LiteRtLmStatusCode
+  ) throws -> T {
+    var value = initialValue
+    try check(body(&value), functionName, makeError)
+    return value
   }
 
   /// Specific errors related to the `Engine`.

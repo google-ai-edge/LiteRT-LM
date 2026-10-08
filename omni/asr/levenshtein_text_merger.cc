@@ -22,7 +22,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/levenshtein_align.h"
@@ -53,26 +52,48 @@ absl::Status LevenshteinTextMerger::Execute() {
     curr_strings.push_back(word.text);
   }
 
+  if (curr_strings.empty()) {
+    PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
+    return absl::OkStatus();
+  }
+
   if (unconfirmed_words_.empty()) {
     // Initial chunk: cache words as unconfirmed state.
     unconfirmed_words_ = std::move(curr_strings);
-    PushOutput({"", absl::StrJoin(unconfirmed_words_, " ")});
+    PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
     return absl::OkStatus();
   }
 
   auto align_codes = AlignTokens(unconfirmed_words_, curr_strings);
 
+  // Find the longest contiguous run of kCorrect matches (preferring later runs
+  // in unconfirmed_words_ on ties) so an isolated stopword match before a
+  // chunk-boundary deletion does not drop words from unconfirmed_words_.
+  size_t best_run_len = 0;
   size_t first_matching_hyp_idx = curr_strings.size();
   size_t first_matching_ref_idx = unconfirmed_words_.size();
+
+  size_t cur_run_len = 0;
+  size_t cur_run_ref_idx = 0;
+  size_t cur_run_hyp_idx = 0;
 
   size_t ref_idx = 0;
   size_t hyp_idx = 0;
   for (const auto& code : align_codes) {
     if (code == AlignCode::kCorrect) {
-      if (first_matching_hyp_idx == curr_strings.size()) {
-        first_matching_hyp_idx = hyp_idx;
-        first_matching_ref_idx = ref_idx;
+      if (cur_run_len == 0) {
+        cur_run_ref_idx = ref_idx;
+        cur_run_hyp_idx = hyp_idx;
       }
+      ++cur_run_len;
+      if (cur_run_len > best_run_len ||
+          (cur_run_len == best_run_len && cur_run_len >= 2)) {
+        best_run_len = cur_run_len;
+        first_matching_ref_idx = cur_run_ref_idx;
+        first_matching_hyp_idx = cur_run_hyp_idx;
+      }
+    } else {
+      cur_run_len = 0;
     }
     if (code == AlignCode::kDeletion || code == AlignCode::kSubstitution ||
         code == AlignCode::kCorrect) {
@@ -82,6 +103,14 @@ absl::Status LevenshteinTextMerger::Execute() {
         code == AlignCode::kCorrect) {
       hyp_idx++;
     }
+  }
+
+  // Ignore a single 1-word match if it is not near the chunk boundary.
+  if (best_run_len == 1 &&
+      (first_matching_ref_idx + 2 < unconfirmed_words_.size() ||
+       first_matching_hyp_idx > 1)) {
+    first_matching_ref_idx = unconfirmed_words_.size();
+    first_matching_hyp_idx = curr_strings.size();
   }
 
   std::vector<std::string> confirmed;
@@ -105,24 +134,17 @@ absl::Status LevenshteinTextMerger::Execute() {
   }
 
   unconfirmed_words_ = std::move(new_unconfirmed);
-  PushOutput(
-      {absl::StrJoin(confirmed, " "), absl::StrJoin(unconfirmed_words_, " ")});
+  PushOutput(MergeResult{absl::StrJoin(confirmed, " "),
+                         absl::StrJoin(unconfirmed_words_, " ")});
   return absl::OkStatus();
 }
 
-absl::Status LevenshteinTextMerger::Flush() {
-  if (!SetStateIfState(State::kIdle, State::kRunning)) {
-    return absl::FailedPreconditionError(
-        "Flush() called while Schedule() is in progress.");
-  }
-
+absl::Status LevenshteinTextMerger::FlushInternal() {
   if (!unconfirmed_words_.empty()) {
     MergeResult result = {absl::StrJoin(unconfirmed_words_, " "), ""};
     unconfirmed_words_.clear();
     PushOutput(std::move(result));
   }
-
-  SetState(State::kIdle);
   return absl::OkStatus();
 }
 

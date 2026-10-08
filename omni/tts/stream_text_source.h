@@ -63,6 +63,10 @@ class StreamTextSource : public TextSource {
   // Appends a text fragment directly to the internal buffer for subclasses.
   void AppendText(absl::string_view text) { buffer_.append(text); }
 
+  // Marks the end of the text input stream so any buffered text can be
+  // scheduled and flushed.
+  absl::Status FlushInternal() override;
+
   // Resets stream state and buffers for a new session.
   void ResetInternal() override;
 

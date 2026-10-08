@@ -166,7 +166,10 @@ cc_library(
     name = "conversation_headers",
     hdrs = ["conversation.h"],
     visibility = ["//visibility:public"],
-    deps = [":engine_headers"],
+    deps = [
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
 )
 
 # Header library for model info C API.
@@ -174,7 +177,10 @@ cc_library(
     name = "model_info_headers",
     hdrs = ["model_info.h"],
     visibility = ["//visibility:public"],
-    deps = [":engine_headers"],
+    deps = [
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
 )
 
 # Header library for embedding engine C API.
@@ -182,7 +188,11 @@ cc_library(
     name = "embedding_engine_headers",
     hdrs = ["embedding_engine.h"],
     visibility = ["//visibility:public"],
-    deps = [":engine_headers"],
+    deps = [
+        ":api_export_headers",
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
 )
 
 # Header library for experimental C API.
@@ -193,6 +203,7 @@ cc_library(
     deps = [
         ":api_export_headers",
         ":engine_headers",
+        ":error_reporter_headers",
     ],
 )
 
@@ -415,6 +426,8 @@ cc_test(
         ":engine",
         ":engine_headers",
         ":engine_internal",
+        ":experimental_headers",
+        ":experimental_internal",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
@@ -423,8 +436,10 @@ cc_test(
         "//runtime/conversation:io_types",
         "//runtime/conversation:thinking_config",
         "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -471,6 +486,7 @@ cc_test(
         ":error_reporter_internal",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
     ],
 )
 

@@ -72,6 +72,34 @@ class MockTokenizer : public Tokenizer {
         } else {
           result += "\xef\xbf\xbd";
         }
+      } else if (id == 6) {
+        // Simulates 3-byte UTF-8 byte-fallback tokens (<0xEF>, <0xBF>, <0xA1>
+        // for "￡" U+FFE1 = \xef\xbf\xa1, or <0xA6> for "￦" U+FFE6 =
+        // \xef\xbf\xa6) whose UTF-8 encoding shares the 2-byte prefix \xef\xbf
+        // with U+FFFD (\xef\xbf\xbd).
+        if (i + 2 < token_ids.size() && token_ids[i + 1] == 7 &&
+            (token_ids[i + 2] == 8 || token_ids[i + 2] == 9)) {
+          result += (token_ids[i + 2] == 8) ? "\xef\xbf\xa1" : "\xef\xbf\xa6";
+          i += 2;
+        } else if (i + 1 < token_ids.size() && token_ids[i + 1] == 7) {
+          result += "\xef\xbf\xbd\xef\xbf\xbd";
+          i += 1;
+        } else {
+          result += "\xef\xbf\xbd";
+        }
+      } else if (id == 10) {
+        // Simulates context-dependent normalization where [10] decodes to "é"
+        // (\xc3\xa9) but [10, 11] decodes to "è!" (\xc3\xa8!), sharing the
+        // leading UTF-8 byte 0xC3.
+        if (i + 1 < token_ids.size() && token_ids[i + 1] == 11) {
+          result += "\xc3\xa8!";
+          i += 1;
+        } else {
+          result += "\xc3\xa9";
+        }
+      } else if (id == 12) {
+        // Simulates a raw orphaned UTF-8 continuation byte (malformed output).
+        result += '\x80';
       } else {
         result += std::to_string(id);
       }
@@ -164,14 +192,14 @@ TEST(BufferedStreamingDetokenizerTest, EmojiConsolidation) {
 
   // Step 3: Input [4] -> "Hello\xef\xbf\xbd\xef\xbf\xbd"
   // Decoded: "Hello\xef\xbf\xbd\xef\xbf\xbd", trimmed: "Hello"
-  // LCP(Hello\xef\xbf\xbd, Hello) = 5.
+  // LCP(Hello, Hello) = 5.
   // Released: "" (since released_len is 5)
   EXPECT_THAT(detokenizer.ProcessStep({{4}}),
               IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
 
   // Step 4: Input [5] -> "Hello🌟"
   // Decoded: "Hello🌟", trimmed: "Hello🌟"
-  // LCP(Hello\xef\xbf\xbd\xef\xbf\xbd, Hello🌟) = 5
+  // LCP(Hello, Hello🌟) = 5
   // Released: "" (released_len: 5)
   EXPECT_THAT(detokenizer.ProcessStep({{5}}),
               IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
@@ -242,6 +270,206 @@ TEST(BufferedStreamingDetokenizerTest, LongStreamingWithPruning) {
               IsOkAndHolds(std::vector<DetokenizedStep>{{" World", {2}}}));
 
   // Step 6: Flush -> release "!" with token [3]
+  EXPECT_THAT(detokenizer.Flush(),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"!", {3}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest,
+     FullwidthCurrencyByteFallbackSharingPrefixWithReplacementChar) {
+  MockTokenizer tokenizer;
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1);
+
+  // Step 1: Input [1] ("Hello")
+  EXPECT_THAT(detokenizer.ProcessStep({{1}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 2: First byte-fallback token [6] (<0xEF>) -> "Hello\xef\xbf\xbd"
+  // Trimmed: "Hello". Releases "Hello".
+  EXPECT_THAT(detokenizer.ProcessStep({{6}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"Hello", {1}}}));
+
+  // Step 3: Second byte-fallback token [7] (<0xBF>) ->
+  // "Hello\xef\xbf\xbd\xef\xbf\xbd". Trimmed: "Hello". Releases nothing.
+  EXPECT_THAT(detokenizer.ProcessStep({{7}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 4: Third byte-fallback token [8] (<0xA1>) completes "￡"
+  // (\xef\xbf\xa1). Must NOT match the \xef\xbf prefix of U+FFFD (\xef\xbf\xbd)
+  // and must release nothing yet.
+  EXPECT_THAT(detokenizer.ProcessStep({{8}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 5: Next token [3] ("!") releases the complete 3-byte UTF-8 "￡".
+  EXPECT_THAT(
+      detokenizer.ProcessStep({{3}}),
+      IsOkAndHolds(std::vector<DetokenizedStep>{{"\xef\xbf\xa1", {6, 7, 8}}}));
+
+  // Step 6: Flush releases "!".
+  EXPECT_THAT(detokenizer.Flush(),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"!", {3}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest, LeadingByteFallbackAtStartOfStream) {
+  MockTokenizer tokenizer;
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1);
+
+  // Stream starts directly with byte-fallback tokens [6], [7], [9] for "￦"
+  // (\xef\xbf\xa6) followed by [2000].
+  EXPECT_THAT(detokenizer.ProcessStep({{6}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+  EXPECT_THAT(detokenizer.ProcessStep({{7}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+  EXPECT_THAT(detokenizer.ProcessStep({{9}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Next token [2000] ("2000") releases complete "￦" (\xef\xbf\xa6).
+  EXPECT_THAT(
+      detokenizer.ProcessStep({{2000}}),
+      IsOkAndHolds(std::vector<DetokenizedStep>{{"\xef\xbf\xa6", {6, 7, 9}}}));
+  EXPECT_THAT(detokenizer.Flush(),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"2000", {2000}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest, IncompleteBpeDuringLookbackPruning) {
+  MockTokenizer tokenizer;
+  // Use lookback_tokens = 1 so pruning runs on the step where the first
+  // incomplete byte token [6] is appended.
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1,
+                                           /*lookback_tokens=*/1);
+
+  // Step 1: [1] ("Hello") -> ""
+  EXPECT_THAT(detokenizer.ProcessStep({{1}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 2: [2] (" World") -> releases "Hello" (released_token_indices = 1)
+  EXPECT_THAT(detokenizer.ProcessStep({{2}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"Hello", {1}}}));
+
+  // Step 3: [6] (incomplete <0xEF>) -> releases " World"
+  // (released_token_indices = 2 > lookback_tokens = 1, triggering pruning while
+  // decoded ends with \xef\xbf\xbd).
+  EXPECT_THAT(detokenizer.ProcessStep({{6}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{" World", {2}}}));
+
+  // Step 4: [7] (incomplete <0xBF>) -> releases nothing.
+  EXPECT_THAT(detokenizer.ProcessStep({{7}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 5: [8] (completes "￡" = \xef\xbf\xa1) -> releases nothing (must not
+  // duplicate text or release partial \xef\xbf).
+  EXPECT_THAT(detokenizer.ProcessStep({{8}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 6: [3] ("!") -> releases complete "￡" with tokens {6, 7, 8}.
+  EXPECT_THAT(
+      detokenizer.ProcessStep({{3}}),
+      IsOkAndHolds(std::vector<DetokenizedStep>{{"\xef\xbf\xa1", {6, 7, 8}}}));
+
+  // Step 7: Flush -> releases "!".
+  EXPECT_THAT(detokenizer.Flush(),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"!", {3}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest,
+     DivergentMultiByteUtf8PrefixDoesNotSplitCodepoint) {
+  MockTokenizer tokenizer;
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1);
+
+  // Step 1: [1] ("Hello")
+  EXPECT_THAT(detokenizer.ProcessStep({{1}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 2: [10] -> "Helloé" ("Hello\xc3\xa9") -> releases "Hello"
+  EXPECT_THAT(detokenizer.ProcessStep({{10}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"Hello", {1}}}));
+
+  // Step 3: [11] -> "Helloè!" ("Hello\xc3\xa8!").
+  // Although "é" (\xc3\xa9) and "è" (\xc3\xa8) share the leading byte 0xC3,
+  // LCP must not split the 2-byte UTF-8 character and must release nothing yet.
+  EXPECT_THAT(detokenizer.ProcessStep({{11}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 4: Flush releases the full valid "è!" ("\xc3\xa8!").
+  EXPECT_THAT(
+      detokenizer.Flush(),
+      IsOkAndHolds(std::vector<DetokenizedStep>{{"\xc3\xa8!", {10, 11}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest,
+     FlushWithTrailingIncompleteBpeEmitsReplacementChar) {
+  MockTokenizer tokenizer;
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1);
+
+  // Step 1: [1] ("Hello") -> ""
+  EXPECT_THAT(detokenizer.ProcessStep({{1}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 2: [6] (incomplete <0xEF>) -> releases "Hello"
+  EXPECT_THAT(detokenizer.ProcessStep({{6}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"Hello", {1}}}));
+
+  // Step 3: Flush while [6] is still incomplete -> releases "\xef\xbf\xbd"
+  EXPECT_THAT(
+      detokenizer.Flush(),
+      IsOkAndHolds(std::vector<DetokenizedStep>{{"\xef\xbf\xbd", {6}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest,
+     OrphanedContinuationByteAfterAsciiDoesNotDropAscii) {
+  MockTokenizer tokenizer;
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1);
+
+  // Step 1: [1] ("Hello") -> ""
+  EXPECT_THAT(detokenizer.ProcessStep({{1}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 2: [3] -> "Hello!" -> releases "Hello"
+  EXPECT_THAT(detokenizer.ProcessStep({{3}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"Hello", {1}}}));
+
+  // Step 3: [12] -> "Hello!\x80" -> releases "!"
+  EXPECT_THAT(detokenizer.ProcessStep({{12}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"!", {3}}}));
+
+  // Step 4: [3] -> "Hello!\x80!". The common prefix "Hello!\x80" ends in an
+  // orphaned continuation byte after the already-released ASCII "!"; it must
+  // not back up past "!" (which would shrink below the released text).
+  EXPECT_THAT(detokenizer.ProcessStep({{3}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"\x80", {12}}}));
+
+  // Step 5: Flush releases "!".
+  EXPECT_THAT(detokenizer.Flush(),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"!", {3}}}));
+}
+
+TEST(BufferedStreamingDetokenizerTest,
+     OrphanedContinuationByteAfterFourByteCodepoint) {
+  MockTokenizer tokenizer;
+  BufferedStreamingDetokenizer detokenizer(&tokenizer, /*output_heads=*/1);
+
+  // Step 1: [1] ("Hello") -> ""
+  EXPECT_THAT(detokenizer.ProcessStep({{1}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 2: [4] -> "Hello\xef\xbf\xbd" (trimmed "Hello") -> releases "Hello"
+  EXPECT_THAT(detokenizer.ProcessStep({{4}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"Hello", {1}}}));
+
+  // Step 3: [5] -> "Hello🌟" -> releases nothing.
+  EXPECT_THAT(detokenizer.ProcessStep({{5}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"", {}}}));
+
+  // Step 4: [12] -> "Hello🌟\x80" -> releases the complete "🌟".
+  EXPECT_THAT(detokenizer.ProcessStep({{12}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"🌟", {4, 5}}}));
+
+  // Step 5: [3] -> "Hello🌟\x80!". The common prefix ends with 4 continuation
+  // bytes (3 from "🌟" plus the orphan). The bounded backward scan stops on a
+  // continuation byte and must not back up into the released "🌟".
+  EXPECT_THAT(detokenizer.ProcessStep({{3}}),
+              IsOkAndHolds(std::vector<DetokenizedStep>{{"\x80", {12}}}));
+
+  // Step 6: Flush releases "!".
   EXPECT_THAT(detokenizer.Flush(),
               IsOkAndHolds(std::vector<DetokenizedStep>{{"!", {3}}}));
 }

@@ -33,6 +33,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/audio_preprocessor.h"
+#include "omni/asr/utils.h"
 #include "omni/base/stage.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
@@ -42,7 +43,6 @@ namespace litert::omni::asr {
 namespace {
 
 constexpr float kEpsilon = 1e-5f;
-constexpr float kLogZeroGuardValue = 5.960464477539063e-8f;  // 2**-24
 constexpr float kLn10 = 2.302585092994046f;
 
 int GetSmallestPowerOfTwoGreaterOrEqualTo(int n) {
@@ -141,7 +141,8 @@ LogMelSpectrogramProcessor::Create(
 LogMelSpectrogramProcessor::LogMelSpectrogramProcessor(
     int sample_rate_hz, const LogMelSpectrogramConfig& config,
     Stage<std::vector<float>>* absl_nonnull audio_source,
-    std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> preprocessor)
+    std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
+        preprocessor)
     : AudioPreprocessor(audio_source),
       sample_rate_hz_(sample_rate_hz),
       config_(config),
@@ -163,7 +164,14 @@ absl::Status LogMelSpectrogramProcessor::ScheduleInternal() {
 
 absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
     std::vector<float> raw_speech) {
-  if (raw_speech.empty()) {
+  if (IsSilentAudio(raw_speech)) {
+    // AudioPreprocessorMiniAudio buffers trailing PCM samples in its internal
+    // input_queue_ across calls for STFT window overlap. Reset it when
+    // skipping a silent chunk so stale pre-silence samples are not stitched
+    // onto the start of the next non-silent chunk.
+    if (preprocessor_) {
+      preprocessor_->Reset();
+    }
     return std::vector<float>();
   }
 

@@ -17,181 +17,141 @@
 #include <memory>
 #include <utility>
 #include <variant>
-#include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "absl/synchronization/notification.h"  // from @com_google_absl
-#include "absl/time/time.h"  // from @com_google_absl
-#include "omni/base/async_stage_scheduler.h"
-#include "omni/base/io_types.h"
-#include "omni/base/stage.h"
 #include "omni/omni_session.h"
-#include "omni/tts/vocoder.h"
-#include "runtime/framework/threadpool.h"
+#include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/tts_engine.h"
 
 namespace litert::omni::tts {
+namespace {
 
-absl::StatusOr<std::unique_ptr<TtsSession>> TtsSession::Create(
-    Components components, ::litert::lm::ThreadPool* thread_pool) {
-  if (thread_pool == nullptr) {
-    return absl::InvalidArgumentError("ThreadPool is required.");
+// StreamTextSource subclass that pulls `TextInput` payloads from an
+// `OmniSession::InputSource` and yields text chunks to an `OmniSession`.
+class TextInputSource : public StreamTextSource {
+ public:
+  explicit TextInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      TextChunkConfig config = {})
+      : StreamTextSource(std::move(config)),
+        input_source_(std::move(input_source)) {}
+
+  ~TextInputSource() override = default;
+
+ protected:
+  void ResetInternal() override {
+    input_source_->Reset();
+    StreamTextSource::ResetInternal();
   }
-  if (components.text_source == nullptr) {
-    return absl::InvalidArgumentError("TextSource component is required.");
+
+  bool NeedScheduleInternal() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) override {
+    return input_source_->NeedSchedule() || input_source_->HasOutput() ||
+           StreamTextSource::NeedScheduleInternal();
   }
-  for (const auto& stage : components.intermediate_stages) {
-    if (stage == nullptr) {
-      return absl::InvalidArgumentError(
-          "intermediate_stages contains null stage pointer.");
-    }
-  }
-  if (components.vocoder == nullptr) {
-    return absl::InvalidArgumentError("Vocoder component is required.");
-  }
-  return std::unique_ptr<TtsSession>(
-      new TtsSession(std::move(components), thread_pool));
-}
 
-TtsSession::TtsSession(Components components,
-                       ::litert::lm::ThreadPool* thread_pool)
-    : components_(std::move(components)), thread_pool_(thread_pool) {}
+  absl::Status ScheduleInternal() ABSL_NO_THREAD_SAFETY_ANALYSIS override {
+    SetState(State::kRunning);
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-TtsSession::~TtsSession() { ResetAsyncScheduler(); }
-
-void TtsSession::ResetAsyncScheduler() {
-  absl::MutexLock lock(mutex_);
-  if (async_scheduler_) {
-    absl::Status status = async_scheduler_->Stop(absl::Seconds(3));
-    if (!status.ok()) {
-      ABSL_LOG(ERROR) << "Failed to stop async scheduler: " << status;
-    }
-  }
-}
-
-void TtsSession::WaitForIdleOrStopped() {
-  absl::MutexLock lock(mutex_);
-  if (async_scheduler_) {
-    absl::Status status =
-        async_scheduler_->WaitForIdleOrStopped(absl::Seconds(3));
-    if (!status.ok()) {
-      ABSL_LOG(ERROR) << "Failed to wait for async scheduler: " << status;
-    }
-  }
-}
-
-void TtsSession::Reset() {
-  ResetAsyncScheduler();
-  components_.text_source->Reset();
-  for (auto& stage : components_.intermediate_stages) {
-    stage->Reset();
-  }
-  components_.vocoder->Reset();
-}
-
-absl::StatusOr<OmniSession::Output> TtsSession::ProcessNext() {
-  // TODO(b/538727793): Remove Finish() and Reset() here and drive stages
-  // inline.
-  absl::Cleanup reset_cleanup = [this] { Reset(); };
-  components_.text_source->Finish();
-
-  AudioOutput result;
-  absl::Notification done;
-  absl::Status final_status;
-  absl::Mutex mutex;
-
-  ABSL_RETURN_IF_ERROR(
-      ProcessAsync([&](absl::StatusOr<Output> output) -> absl::Status {
-        if (absl::IsOutOfRange(output.status())) {
-          if (result.pcm_samples.empty()) {
-            final_status = output.status();
-          }
-          done.Notify();
-          return output.status();
+    // TODO(b/538727793): Handle two edge cases between `TextInputSource` and
+    // `StreamTextSource`:
+    // 1. Streaming partial fragments in `ProcessAsync()` without a sentence
+    //    delimiter before `EndOfInput` is pushed, so
+    //    `!input_source_->HasOutput()` waits for more `TextInput`s instead of
+    //    returning `OutOfRangeError`.
+    // 2. Coalescing multiple consecutive `TextInput`s before `ProcessNext()`.
+    while (!StreamTextSource::NeedScheduleInternal()) {
+      ABSL_ASSIGN_OR_RETURN(bool has_more, PullNextInput());
+      if (!has_more) {
+        Finish();
+        if (!StreamTextSource::NeedScheduleInternal()) {
+          return absl::OutOfRangeError("End of text stream reached.");
         }
-        if (absl::IsNotFound(output.status())) {
-          return absl::OkStatus();
-        }
-        if (!output.ok()) {
-          final_status = output.status();
-          done.Notify();
-          return output.status();
-        }
-        const auto* audio = std::get_if<AudioOutput>(&*output);
-        if (audio != nullptr) {
-          absl::MutexLock lock(mutex);
-          if (result.sample_rate_hz == 0) {
-            result.sample_rate_hz = audio->sample_rate_hz;
-          }
-          result.pcm_samples.insert(result.pcm_samples.end(),
-                                    audio->pcm_samples.begin(),
-                                    audio->pcm_samples.end());
-        }
-        return absl::OkStatus();
-      }));
-
-  done.WaitForNotification();
-  if (!final_status.ok()) {
-    return final_status;
-  }
-  return result;
-}
-
-absl::Status TtsSession::ProcessAsync(OutputCallback callback) {
-  if (thread_pool_ == nullptr) {
-    return absl::FailedPreconditionError("ThreadPool is null.");
-  }
-  absl::MutexLock lock(mutex_);
-  if (async_scheduler_ != nullptr) {
-    if (async_scheduler_->IsRunning()) {
-      return absl::AlreadyExistsError("Async processing is already active.");
-    }
-    ABSL_RETURN_IF_ERROR(async_scheduler_->Stop(absl::Seconds(3)));
-  }
-
-  std::vector<internal::StageBase*> stages;
-  stages.reserve(2 + components_.intermediate_stages.size());
-  stages.push_back(components_.text_source.get());
-  for (const auto& stage : components_.intermediate_stages) {
-    stages.push_back(stage.get());
-  }
-  stages.push_back(components_.vocoder.get());
-
-  auto callback_with_flush_on_eos =
-      [callback = std::move(callback),
-       this](absl::StatusOr<AudioOutput> result) mutable -> absl::Status {
-    if (absl::IsOutOfRange(result.status())) {
-      ABSL_RETURN_IF_ERROR(components_.vocoder->Flush());
-      while (components_.vocoder->HasOutput()) {
-        auto out = components_.vocoder->GetOutput();
-        if (out.ok()) {
-          ABSL_RETURN_IF_ERROR(callback(std::move(out)));
-        } else if (!absl::IsNotFound(out.status())) {
-          return out.status();
-        }
+        break;
       }
     }
-    return callback(std::move(result));
-  };
-  async_scheduler_ = std::make_unique<AsyncStageScheduler<AudioOutput>>(
-      std::move(stages), components_.vocoder.get(), thread_pool_,
-      std::move(callback_with_flush_on_eos));
-  return async_scheduler_->Start();
+
+    return StreamTextSource::ScheduleInternal();
+  }
+
+  absl::Status FlushInternal() ABSL_NO_THREAD_SAFETY_ANALYSIS override {
+    ABSL_RETURN_IF_ERROR(input_source_->Flush());
+    while (input_source_->NeedSchedule() || input_source_->HasOutput()) {
+      absl::StatusOr<bool> has_more = PullNextInput();
+      if (absl::IsOutOfRange(has_more.status())) {
+        break;
+      }
+      ABSL_RETURN_IF_ERROR(has_more.status());
+      if (!*has_more) {
+        break;
+      }
+    }
+    return StreamTextSource::FlushInternal();
+  }
+
+ private:
+  // Pulls and processes the next input from `input_source_`.
+  // Returns `true` if a `TextInput` was processed, `false` if `EndOfInput` was
+  // reached, or `OutOfRangeError` if `input_source_` has no more output.
+  absl::StatusOr<bool> PullNextInput() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    if (input_source_->NeedSchedule()) {
+      ABSL_RETURN_IF_ERROR(input_source_->Schedule());
+    }
+    if (!input_source_->HasOutput()) {
+      return absl::OutOfRangeError("End of text stream reached.");
+    }
+    ABSL_ASSIGN_OR_RETURN(OmniSession::Input input, input_source_->GetOutput());
+    if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+      return false;
+    }
+    const auto* text_input = std::get_if<OmniSession::TextInput>(&input);
+    if (text_input == nullptr) {
+      return absl::InvalidArgumentError("TTS Session requires TextInput.");
+    }
+    AppendText(text_input->text);
+    return true;
+  }
+
+  std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;
+};
+
+}  // namespace
+
+std::unique_ptr<StreamTextSource> TtsSessionFactory::CreateTextInputSource(
+    std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+    TextChunkConfig config) {
+  return std::make_unique<TextInputSource>(std::move(input_source),
+                                           std::move(config));
 }
 
-absl::StatusOr<OmniSession::Output> TtsSession::Flush() {
-  components_.text_source->Finish();
-  WaitForIdleOrStopped();
-  ABSL_RETURN_IF_ERROR(components_.vocoder->Flush());
-  auto result = components_.vocoder->GetOutput();
-  if (absl::IsNotFound(result.status())) {
-    return AudioOutput();
-  }
-  return result;
+absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
+TtsSessionFactory::CreateFactory(TtsEngineSettings settings) {
+  ABSL_ASSIGN_OR_RETURN(auto tts_engine,
+                        TtsEngine::Create(std::move(settings)));
+  return std::unique_ptr<OmniSessionFactory>(
+      new TtsSessionFactory(std::move(tts_engine)));
+}
+
+TtsSessionFactory::TtsSessionFactory(
+    std::unique_ptr<TtsEngine> absl_nonnull tts_engine)
+    : tts_engine_(std::move(tts_engine)) {}
+
+TtsSessionFactory::~TtsSessionFactory() = default;
+
+absl::StatusOr<std::unique_ptr<OmniSession>> TtsSessionFactory::Create(
+    std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) {
+  TtsSessionConfig session_config;
+  auto text_source = CreateTextInputSource(
+      std::move(input_source),
+      tts_engine_->ResolveTextChunkConfig(session_config));
+  return tts_engine_->CreateSession(session_config, std::move(text_source));
 }
 
 }  // namespace litert::omni::tts

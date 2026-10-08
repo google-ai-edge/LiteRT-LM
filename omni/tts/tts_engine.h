@@ -29,10 +29,11 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
+#include "omni/multi_staged_session.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
+#include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
-#include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/framework/threadpool.h"
 
@@ -60,7 +61,7 @@ using ModelConfig =
 // embedded in the model file metadata.
 absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder);
 
-// Configuration settings for a TtsSession instance.
+// Configuration settings for a TTS session instance.
 struct TtsSessionConfig {
   // Target language for speech synthesis in BCP-47 format (e.g., "en-US",
   // "en-GB", "es", "zh-CN", "hi", "ja", "fr", "it", "pt-BR"). Defaults to
@@ -109,7 +110,7 @@ struct TtsEngineSettings {
 };
 
 // High-level TTS Engine owning heavy model resources and creating lightweight
-// TtsSession instances for streaming text synthesis.
+// MultiStagedSession instances for streaming text synthesis.
 class TtsEngine {
  public:
   using AsyncCallback =
@@ -126,12 +127,13 @@ class TtsEngine {
   TextChunkConfig ResolveTextChunkConfig(
       const TtsSessionConfig& session_config = {}) const;
 
-  // Creates a lightweight TtsSession for a synthesis stream.
+  // Creates a lightweight MultiStagedSession for a synthesis stream.
+  // The first stage (`stages()[0]`) is guaranteed to be a `StreamTextSource`.
   // If `text_source` is null, a `StreamTextSource` is created using
   // `ResolveTextChunkConfig(session_config)`. If a custom `text_source` is
   // provided, its `TextChunkConfig` is used as-is (callers can use
   // `ResolveTextChunkConfig()` when constructing `text_source`).
-  absl::StatusOr<std::unique_ptr<TtsSession>> CreateSession(
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateSession(
       const TtsSessionConfig& session_config = {},
       std::unique_ptr<StreamTextSource> absl_nullable text_source = nullptr);
 
@@ -163,8 +165,8 @@ class TtsEngine {
 
   TtsEngine(const TtsEngineSettings& settings,
             std::vector<std::string> available_voices,
-            std::shared_ptr<ModelResources> resources,
-            std::unique_ptr<lm::ThreadPool> thread_pool)
+            std::shared_ptr<ModelResources> absl_nonnull resources,
+            std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool)
       : settings_(settings),
         available_voices_(std::move(available_voices)),
         model_resources_(std::move(resources)),
@@ -172,8 +174,8 @@ class TtsEngine {
 
   TtsEngineSettings settings_;
   std::vector<std::string> available_voices_;
-  std::shared_ptr<ModelResources> model_resources_;
-  std::unique_ptr<lm::ThreadPool> thread_pool_;
+  std::shared_ptr<ModelResources> absl_nonnull model_resources_;
+  std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool_;
 };
 
 }  // namespace litert::omni::tts

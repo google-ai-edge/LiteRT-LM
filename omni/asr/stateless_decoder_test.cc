@@ -277,5 +277,53 @@ TEST(StatelessDecoderTest, DecodeWithDecodeSkipUntilTokenId) {
   EXPECT_EQ(decoded_tokens[1].token_id, 3);
 }
 
+TEST(StatelessDecoderTest, DecodeTruncatesTrailingRepetitionLoop) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(50, sizeof(float)));
+        return buffers;
+      });
+
+  size_t run_count = 0;
+  // Step 0 -> token 1, steps 1..4 -> token 2 repeated 4 times.
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly(
+          [&run_count](absl::string_view,
+                       absl::Span<const ::litert::TensorBuffer> inputs,
+                       absl::Span<const ::litert::TensorBuffer> outputs)
+              -> absl::Status {
+            std::vector<float> logits(50, 0.0f);
+            int token = (run_count == 0) ? 1 : 2;
+            logits[run_count * 5 + token] = 1.0f;
+            run_count++;
+            auto res = const_cast<::litert::TensorBuffer&>(outputs[0])
+                           .Write<float>(absl::MakeConstSpan(logits));
+            if (!res) return absl::InternalError("Write failed");
+            return absl::OkStatus();
+          });
+
+  ASSERT_OK_AND_ASSIGN(auto decoder, StatelessDecoder::Create(&mock_runner));
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto decoded_tokens, decoder->Decode(encoder_outputs));
+
+  // Stops as soon as the 4th consecutive repeat of token 2 is detected and
+  // truncates the extra 3 repeats.
+  EXPECT_EQ(run_count, 5);
+  ASSERT_EQ(decoded_tokens.size(), 2);
+  EXPECT_EQ(decoded_tokens[0].token_id, 1);
+  EXPECT_EQ(decoded_tokens[1].token_id, 2);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

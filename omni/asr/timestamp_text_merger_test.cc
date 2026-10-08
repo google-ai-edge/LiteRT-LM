@@ -71,12 +71,18 @@ class DummyWordStage
   absl::Status ScheduleInternal() override { return absl::OkStatus(); }
 };
 
+absl::StatusOr<TextMerger::MergeResult> GetMergeResult(
+    TimestampTextMerger& merger) {
+  LITERT_ASSIGN_OR_RETURN(auto out, merger.GetOutput());
+  return std::get<TextMerger::MergeResult>(std::move(out));
+}
+
 absl::StatusOr<TextMerger::MergeResult> ProcessWords(
     DummyWordStage& word_stage, TimestampTextMerger& merger,
     const std::vector<std::string>& strings) {
   word_stage.PushWords(strings);
   LITERT_RETURN_IF_ERROR(merger.Schedule());
-  return merger.GetOutput();
+  return GetMergeResult(merger);
 }
 
 absl::StatusOr<TextMerger::MergeResult> ProcessWordsWithTimestamps(
@@ -84,7 +90,7 @@ absl::StatusOr<TextMerger::MergeResult> ProcessWordsWithTimestamps(
     const std::vector<std::pair<std::string, int>>& word_ts_pairs) {
   word_stage.PushWordsWithTimestamps(word_ts_pairs);
   LITERT_RETURN_IF_ERROR(merger.Schedule());
-  return merger.GetOutput();
+  return GetMergeResult(merger);
 }
 
 TEST(TimestampTextMergerTest, InitialChunkReturnsUnconfirmedOnly) {
@@ -128,7 +134,7 @@ TEST(TimestampTextMergerTest, SequentialMergeFlowWithTimestamps) {
   EXPECT_FALSE(res2->unconfirmed_text.empty());
 
   ASSERT_OK(merger.Flush());
-  auto res_flush = merger.GetOutput();
+  auto res_flush = GetMergeResult(merger);
   ASSERT_OK(res_flush);
   EXPECT_FALSE(res_flush->confirmed_text.empty());
   EXPECT_EQ(res_flush->unconfirmed_text, "");
@@ -166,7 +172,7 @@ TEST(TimestampTextMergerTest,
                                                {"lingers", 3500}},
                                               /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
-  auto res1 = merger.GetOutput();
+  auto res1 = GetMergeResult(merger);
   ASSERT_OK(res1);
 
   // Chunk 2 starts at 2500 ms relative to start of Chunk 2
@@ -178,7 +184,7 @@ TEST(TimestampTextMergerTest,
                                                {"heat", 2500}},
                                               /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
-  auto res2 = merger.GetOutput();
+  auto res2 = GetMergeResult(merger);
   ASSERT_OK(res2);
   EXPECT_FALSE(res2->confirmed_text.empty());
   EXPECT_FALSE(res2->unconfirmed_text.empty());
@@ -201,7 +207,7 @@ TEST(TimestampTextMergerTest, ReplacesEndOfChunkHallucinationWithGroundTruth) {
                                                {"huge", 5400}},
                                               /*end_ts_ms=*/5500);
   ASSERT_OK(merger.Schedule());
-  auto res1 = merger.GetOutput();
+  auto res1 = GetMergeResult(merger);
   ASSERT_OK(res1);
   EXPECT_EQ(res1->confirmed_text, "");
 
@@ -215,13 +221,13 @@ TEST(TimestampTextMergerTest, ReplacesEndOfChunkHallucinationWithGroundTruth) {
                                                {"out", 2800}},
                                               /*end_ts_ms=*/5500);
   ASSERT_OK(merger.Schedule());
-  auto res2 = merger.GetOutput();
+  auto res2 = GetMergeResult(merger);
   ASSERT_OK(res2);
   EXPECT_EQ(res2->confirmed_text, "the stale smell of old beer");
   EXPECT_EQ(res2->unconfirmed_text, "lingers it takes heat to bring out");
 
   ASSERT_OK(merger.Flush());
-  auto res_flush = merger.GetOutput();
+  auto res_flush = GetMergeResult(merger);
   ASSERT_OK(res_flush);
   EXPECT_EQ(res_flush->confirmed_text, "lingers it takes heat to bring out");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
@@ -235,7 +241,7 @@ TEST(TimestampTextMergerTest, SilencePausePreventsMisalignment) {
   word_stage.PushWordsWithEndOfChunkTimestamp({{"hello", 500}, {"world", 1000}},
                                               /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
-  auto res1 = merger.GetOutput();
+  auto res1 = GetMergeResult(merger);
   ASSERT_OK(res1);
 
   // Chunk 2 starts after long silence (first word at 4500ms)
@@ -243,13 +249,13 @@ TEST(TimestampTextMergerTest, SilencePausePreventsMisalignment) {
       {{"hello", 4500}, {"again", 4800}},
       /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
-  auto res2 = merger.GetOutput();
+  auto res2 = GetMergeResult(merger);
   ASSERT_OK(res2);
   EXPECT_EQ(res2->confirmed_text, "");
   EXPECT_EQ(res2->unconfirmed_text, "hello world hello again");
 
   ASSERT_OK(merger.Flush());
-  auto res_flush = merger.GetOutput();
+  auto res_flush = GetMergeResult(merger);
   ASSERT_OK(res_flush);
   EXPECT_EQ(res_flush->confirmed_text, "hello world hello again");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
@@ -264,21 +270,58 @@ TEST(TimestampTextMergerTest, RepeatedWordsHandlingWithTimestamps) {
       {{"the", 500}, {"the", 1500}, {"the", 2500}, {"end", 3000}},
       /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
-  auto res1 = merger.GetOutput();
+  auto res1 = GetMergeResult(merger);
   ASSERT_OK(res1);
 
   word_stage.PushWordsWithEndOfChunkTimestamp(
       {{"the", 0}, {"end", 500}, {"next", 1000}},
       /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
-  auto res2 = merger.GetOutput();
+  auto res2 = GetMergeResult(merger);
   ASSERT_OK(res2);
 
   ASSERT_OK(merger.Flush());
-  auto res_flush = merger.GetOutput();
+  auto res_flush = GetMergeResult(merger);
   ASSERT_OK(res_flush);
   EXPECT_EQ(res_flush->confirmed_text, "the end next");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
+}
+
+TEST(TimestampTextMergerTest,
+     EmptyChunkWithEndOfChunkSentinelRetainsUnconfirmedWords) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"hello", 500}, {"world", 1000}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res1 = GetMergeResult(merger);
+  ASSERT_OK(res1);
+  EXPECT_EQ(res1->unconfirmed_text, "hello world");
+
+  // Chunk 2 has only the end-of-chunk sentinel (no spoken words).
+  word_stage.PushWordsWithEndOfChunkTimestamp({}, /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "");
+  EXPECT_EQ(res2->unconfirmed_text, "hello world");
+}
+
+TEST(TimestampTextMergerTest, SequentialMergeFlowWithoutTimestamps) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  auto res1 =
+      ProcessWords(word_stage, merger, {"hello", "world", "this", "is"});
+  ASSERT_OK(res1);
+  EXPECT_EQ(res1->confirmed_text, "");
+  EXPECT_EQ(res1->unconfirmed_text, "hello world this is");
+
+  auto res2 = ProcessWords(word_stage, merger, {"this", "is", "a", "test"});
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "hello world");
+  EXPECT_EQ(res2->unconfirmed_text, "this is a test");
 }
 
 }  // namespace
