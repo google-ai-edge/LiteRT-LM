@@ -104,6 +104,9 @@ std::unique_ptr<Constraint::State> ThinkingBudgetConstraint::Start() const {
   }
   state->natural_end_match_index = 0;
   state->forced_end_token_index = -1;
+  // If thinking is prefilled and the budget is 0, force the end sequence
+  // immediately.
+  CheckBudget(*state);
   return state;
 }
 
@@ -298,6 +301,8 @@ bool ThinkingBudgetConstraint::ProcessStartMatching(ThinkingState& state,
     if (state.matching_start_index >= start_token_ids_.size()) {
       state.matching_start_index = -1;
       state.in_thinking = true;
+      // If the budget is 0, force the end sequence immediately.
+      CheckBudget(state);
     }
   } else {
     // Mismatch: The model generated a token that is not part of the start
