@@ -438,6 +438,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   // vision_tokens_per_image is set.
   const bool lazy_load_multimodal_encoders =
       settings.GetLazyLoadMultimodalEncoders();
+  // When the encoders are loaded lazily, the model is not read until the first
+  // image input, and EnsureVisionExecutorLoaded() checks for the encoder then.
+  const bool has_vision_encoder =
+      !lazy_load_multimodal_encoders &&
+      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok();
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
       std::nullopt;
   int vision_max_num_patches = 0;
@@ -483,12 +488,18 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     // Selecting the signatures requires reading the vision encoder model. When
     // lazy loading is enabled this is deferred to the first image input, and
     // performed together with the compilation of the vision encoder.
-    if (!lazy_load_multimodal_encoders) {
+    if (has_vision_encoder) {
       LITERT_ASSIGN_OR_RETURN(
           selected_vision_signature_info,
           SelectAndApplyVisionSignatures(
               *resources, vision_tokens_per_image, vision_max_num_patches,
               *settings.GetMutableVisionExecutorSettings()));
+    } else if (!lazy_load_multimodal_encoders) {
+      // The value may come from the model metadata rather than the caller, so
+      // a text-only model must still be usable.
+      ABSL_LOG(WARNING) << "vision_tokens_per_image is set, but the model does "
+                           "not contain a vision encoder. Image inputs will "
+                           "not be supported.";
     }
   }
 
@@ -523,9 +534,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Initialize the vision executor.
   std::unique_ptr<VisionExecutor> vision_executor = nullptr;
-  if (!lazy_load_multimodal_encoders &&
-      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok() &&
-      settings.GetVisionExecutorSettings().has_value()) {
+  if (has_vision_encoder && settings.GetVisionExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         vision_executor,
         VisionLiteRtCompiledModelExecutor::Create(
@@ -917,6 +926,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
 
   // Auto-select vision encoder and adapter signatures if
   // vision_tokens_per_image is set.
+  const bool has_vision_encoder =
+      streaming_resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok();
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
       std::nullopt;
   if (settings.GetVisionTokensPerImage().has_value()) {
@@ -964,11 +975,19 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           ->set_pooling_kernel_size(pooling_kernel_size);
     }
 
-    LITERT_ASSIGN_OR_RETURN(
-        selected_vision_signature_info,
-        SelectAndApplyVisionSignatures(
-            *streaming_resources, vision_tokens_per_image, max_num_patches,
-            *settings.GetMutableVisionExecutorSettings()));
+    if (has_vision_encoder) {
+      LITERT_ASSIGN_OR_RETURN(
+          selected_vision_signature_info,
+          SelectAndApplyVisionSignatures(
+              *streaming_resources, vision_tokens_per_image, max_num_patches,
+              *settings.GetMutableVisionExecutorSettings()));
+    } else {
+      // The value may come from the model metadata rather than the caller, so
+      // a text-only model must still be usable.
+      ABSL_LOG(WARNING) << "vision_tokens_per_image is set, but the model does "
+                           "not contain a vision encoder. Image inputs will "
+                           "not be supported.";
+    }
   }
 
   SpecialTokens special_tokens;
@@ -996,9 +1015,7 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
 
   // Initialize the vision executor.
   std::unique_ptr<VisionExecutor> vision_executor = nullptr;
-  if (streaming_resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder)
-          .ok() &&
-      settings.GetVisionExecutorSettings().has_value()) {
+  if (has_vision_encoder && settings.GetVisionExecutorSettings().has_value()) {
     if (owned_env == nullptr) {
       ABSL_ASSIGN_OR_RETURN(
           auto temp_owned_env,

@@ -2931,7 +2931,7 @@ TEST(EmbeddingEngineImplTest,
 }
 
 TEST(EmbeddingEngineImplTest,
-     CreateWithMetadataMaxNumPatchesWithVisionBackendFailsIfNoVisionModel) {
+     CreateWithMetadataMaxNumPatchesWithVisionBackendSucceedsIfNoVisionModel) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
                                    std::string(kTestEmbeddingModelPath))
                                       .string();
@@ -2943,6 +2943,8 @@ TEST(EmbeddingEngineImplTest,
   ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
                                           model_assets, Backend::CPU,
                                           Backend::CPU, std::nullopt));
+  // Vision metadata on a model without a vision encoder must not prevent the
+  // engine from being created for text-only use.
   proto::EmbeddingMetadata metadata;
   auto* gemma_v2 =
       metadata.mutable_embedding_model_type()->mutable_embedding_gemma_v2();
@@ -2950,10 +2952,62 @@ TEST(EmbeddingEngineImplTest,
   gemma_v2->set_pooling_kernel_size(3);
   settings.GetMutableEmbeddingMetadata() = metadata;
 
-  EXPECT_THAT(
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
       EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
-                                  std::move(tokenizer), std::move(settings)),
-      StatusIs(absl::StatusCode::kNotFound));
+                                  std::move(tokenizer), std::move(settings)));
+  EXPECT_NE(engine, nullptr);
+  EXPECT_EQ(engine->GetSelectedVisionSignatureInfo(), std::nullopt);
+
+  // Image input is still rejected with a clear error rather than a crash.
+  // ComputeEmbedding() wraps the precondition failure as INTERNAL.
+  std::vector<InputData> image_contents;
+  image_contents.push_back(InputImage("dummy"));
+  EXPECT_THAT(engine->ComputeEmbedding(image_contents, EmbeddingOptions()),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("Vision executor is not available")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithVisionTokensPerImageSucceedsIfNoVisionModel) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetVisionTokensPerImage(70);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+  EXPECT_NE(engine, nullptr);
+  EXPECT_EQ(engine->GetSelectedVisionSignatureInfo(), std::nullopt);
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithVisionTokensPerImageSucceedsIfNoVisionModel) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetVisionTokensPerImage(70);
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  EXPECT_NE(engine, nullptr);
+  EXPECT_EQ(engine->GetSelectedVisionSignatureInfo(), std::nullopt);
 }
 
 TEST(
