@@ -437,5 +437,70 @@ TEST(ThinkingBudgetConstraintTest, TestSkipThinkingWithLlgConstraint) {
   EXPECT_TRUE(constraint.IsEnded(*state));
 }
 
+TEST(ThinkingBudgetConstraintTest, TestZeroBudgetForcesEndImmediatelyOnStart) {
+  std::vector<int> start_tokens = {};  // Prefilled <|channel>thought\n
+  std::vector<int> end_tokens = {12, 13};
+  FakeConstraint user_constraint({20, 21, 1}, 100);
+  ThinkingBudgetConstraint constraint(&user_constraint, /*budget=*/0,
+                                      start_tokens, end_tokens, 100);
+
+  auto state = constraint.Start();
+  auto* s = static_cast<ThinkingBudgetConstraint::ThinkingState*>(state.get());
+  EXPECT_TRUE(s->in_thinking);
+  EXPECT_EQ(s->thinking_token_count, 0);
+  EXPECT_EQ(s->forced_end_token_index, 0);
+  EXPECT_THAT(AllowedTokens(constraint, *state), ElementsAre(12));
+
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 12));
+  EXPECT_THAT(AllowedTokens(constraint, *state), ElementsAre(13));
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 13));
+  s = static_cast<ThinkingBudgetConstraint::ThinkingState*>(state.get());
+  EXPECT_FALSE(s->in_thinking);
+  EXPECT_THAT(AllowedTokens(constraint, *state), ElementsAre(20));
+}
+
+TEST(ThinkingBudgetConstraintTest,
+     TestZeroBudgetForcesEndAfterMatchingStartTokens) {
+  std::vector<int> start_tokens = {10, 11};
+  std::vector<int> end_tokens = {12, 13};
+  FakeConstraint user_constraint({20, 21, 1}, 100);
+  ThinkingBudgetConstraint constraint(&user_constraint, /*budget=*/0,
+                                      start_tokens, end_tokens, 100);
+
+  auto state = constraint.Start();
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 10));
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 11));
+
+  auto* s = static_cast<ThinkingBudgetConstraint::ThinkingState*>(state.get());
+  EXPECT_TRUE(s->in_thinking);
+  EXPECT_EQ(s->thinking_token_count, 0);
+  EXPECT_EQ(s->forced_end_token_index, 0);
+  EXPECT_THAT(AllowedTokens(constraint, *state), ElementsAre(12));
+
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 12));
+  EXPECT_THAT(AllowedTokens(constraint, *state), ElementsAre(13));
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 13));
+  s = static_cast<ThinkingBudgetConstraint::ThinkingState*>(state.get());
+  EXPECT_FALSE(s->in_thinking);
+  EXPECT_THAT(AllowedTokens(constraint, *state), ElementsAre(20));
+}
+
+TEST(ThinkingBudgetConstraintTest,
+     TestUnlimitedBudgetDoesNotForceEndOnPrefilledStart) {
+  std::vector<int> start_tokens = {};  // Prefilled <|channel>thought\n
+  std::vector<int> end_tokens = {12, 13};
+  FakeConstraint user_constraint({20, 21, 1}, 100);
+  ThinkingBudgetConstraint constraint(&user_constraint, /*budget=*/-1,
+                                      start_tokens, end_tokens, 100);
+
+  auto state = constraint.Start();
+  auto* s = static_cast<ThinkingBudgetConstraint::ThinkingState*>(state.get());
+  EXPECT_TRUE(s->in_thinking);
+  EXPECT_EQ(s->forced_end_token_index, -1);
+  ASSERT_OK_AND_ASSIGN(auto bitmap, constraint.ComputeBitmap(*state));
+  EXPECT_TRUE(bitmap->Get(20));
+  EXPECT_TRUE(bitmap->Get(99));
+}
+
 }  // namespace
 }  // namespace litert::lm
