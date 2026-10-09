@@ -245,10 +245,10 @@ def main():
         shutil.copy(gfile_model, target_model)
 
   if not target_model.exists():
-    gcs_url = "gs://litert-lm-api/models/gemma-4-E2B-it.litertlm"
+    gcs_url = "gs://litert-lm-model/gemma-4-E2B-it.litertlm"
     print(f"⏬ Downloading verification model from {gcs_url}...", flush=True)
     gcs_http_url = (
-        "https://storage.googleapis.com/litert-lm-api/models/gemma-4-E2B-it.litertlm"
+        "https://storage.googleapis.com/litert-lm-model/gemma-4-E2B-it.litertlm"
     )
     hf_url = (
         "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/"

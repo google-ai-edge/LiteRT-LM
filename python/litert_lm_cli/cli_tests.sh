@@ -16,7 +16,7 @@
 set -ex
 
 MODEL_FILENAME="gemma-4-E2B-it.litertlm"
-GCS_MODEL_PATH="gs://litert-lm-api/models/${MODEL_FILENAME}"
+GCS_MODEL_PATH="gs://litert-lm-model/${MODEL_FILENAME}"
 HF_REPO="litert-community/gemma-4-E2B-it-litert-lm"
 
 CACHE_DIR="/tmp/litert_lm_cli_tests_cache"
