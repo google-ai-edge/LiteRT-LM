@@ -497,6 +497,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
   // ERROR: Node number 21 (DIV) failed to invoke.
 
   for (auto& group : context_groups) {
+    // Warm only the tier a session starts in (group 0). Running any other tier
+    // here would make the dispatch delegate import that tier's blobs at init;
+    // it is brought up by its first real run instead.
+    if (&group != &context_groups.front()) continue;
     if (group.text_decoder_inference_context.decode_input_buffers.contains(
             TextDecoderSignatures::kInputEmbeddings)) {
       LITERT_RETURN_IF_ERROR(Fill(
