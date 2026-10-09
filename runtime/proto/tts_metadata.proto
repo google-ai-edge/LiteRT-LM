@@ -21,15 +21,29 @@ import "runtime/proto/tts_model_type.proto";
 option java_multiple_files = true;
 option java_outer_classname = "TtsMetadataOuterClass";
 
-// Parameters for Text-to-Speech (TTS) models.
+// Model-specific parameters for Text-to-Speech (TTS) models.
 message TtsMetadata {
   enum TfLiteModelType {
     // Placeholder for unspecified model type.
     TF_LITE_MODEL_TYPE_UNSPECIFIED = 0;
-    // The acoustic model converting phonemes to hidden states.
+    // The acoustic model converting phonemes to hidden states (e.g., Kokoro).
     TF_LITE_ACOUSTIC = 1;
-    // The vocoder model converting hidden states to audio.
+    // The vocoder model converting hidden states to audio (e.g., Kokoro).
     TF_LITE_VOCODER = 2;
+    // Autoregressive talker model (e.g., Qwen3-TTS).
+    TF_LITE_TALKER = 3;
+    // Multi-token prediction (MTP) drafter model (e.g., Qwen3-TTS).
+    TF_LITE_MTP_DRAFTER = 4;
+    // RVQ codec decoder model (e.g., Qwen3-TTS).
+    TF_LITE_CODEC_DECODER = 5;
+    // Text embedding model (e.g., Qwen3-TTS).
+    TF_LITE_TEXT_EMBEDDING = 6;
+    // Text projection model (e.g., Qwen3-TTS).
+    TF_LITE_TEXT_PROJECTION = 7;
+    // Codec embedding model (e.g., Qwen3-TTS).
+    TF_LITE_CODEC_EMBEDDING = 8;
+    // MTP embedding model (e.g., Qwen3-TTS).
+    TF_LITE_MTP_EMBEDDING = 9;
   }
 
   // TTS model type.

@@ -45,8 +45,8 @@
 #include "omni/text2image/text_encoder_stage.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/image_gen_model_type.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::text2image {
@@ -95,37 +95,37 @@ absl::StatusOr<size_t> ResolveSignatureArgInputIndex(
   return arg_index;
 }
 
-constexpr std::array<lm::proto::ImageGenMetadata::TfLiteModelType, 3>
+constexpr std::array<lm::proto::Text2ImageMetadata::TfLiteModelType, 3>
     kTextEncTypes = {
-        lm::proto::ImageGenMetadata::TF_LITE_TEXT_ENCODER_0,
-        lm::proto::ImageGenMetadata::TF_LITE_TEXT_ENCODER_1,
-        lm::proto::ImageGenMetadata::TF_LITE_TEXT_ENCODER_2,
+        lm::proto::Text2ImageMetadata::TF_LITE_TEXT_ENCODER_0,
+        lm::proto::Text2ImageMetadata::TF_LITE_TEXT_ENCODER_1,
+        lm::proto::Text2ImageMetadata::TF_LITE_TEXT_ENCODER_2,
     };
 
-constexpr std::array<lm::proto::ImageGenMetadata::TfLiteModelType, 2>
+constexpr std::array<lm::proto::Text2ImageMetadata::TfLiteModelType, 2>
     kDoubleBlockTypes = {
-        lm::proto::ImageGenMetadata::
+        lm::proto::Text2ImageMetadata::
             TF_LITE_DIFFUSION_TRANSFORMER_DOUBLE_BLOCK_0,
-        lm::proto::ImageGenMetadata::
+        lm::proto::Text2ImageMetadata::
             TF_LITE_DIFFUSION_TRANSFORMER_DOUBLE_BLOCK_1,
     };
 
-constexpr std::array<lm::proto::ImageGenMetadata::TfLiteModelType, 4>
+constexpr std::array<lm::proto::Text2ImageMetadata::TfLiteModelType, 4>
     kSingleBlockTypes = {
-        lm::proto::ImageGenMetadata::
+        lm::proto::Text2ImageMetadata::
             TF_LITE_DIFFUSION_TRANSFORMER_SINGLE_BLOCK_0,
-        lm::proto::ImageGenMetadata::
+        lm::proto::Text2ImageMetadata::
             TF_LITE_DIFFUSION_TRANSFORMER_SINGLE_BLOCK_1,
-        lm::proto::ImageGenMetadata::
+        lm::proto::Text2ImageMetadata::
             TF_LITE_DIFFUSION_TRANSFORMER_SINGLE_BLOCK_2,
-        lm::proto::ImageGenMetadata::
+        lm::proto::Text2ImageMetadata::
             TF_LITE_DIFFUSION_TRANSFORMER_SINGLE_BLOCK_3,
     };
 
 absl::Status RegisterCompiledModel(
     ::litert::Environment& env, lm::ModelResources& lm_resources,
     const ModelOptions& options,
-    lm::proto::ImageGenMetadata::TfLiteModelType model_type,
+    lm::proto::Text2ImageMetadata::TfLiteModelType model_type,
     absl::string_view resource_name, ModelResources& resources) {
   LITERT_ASSIGN_OR_RETURN(absl::string_view buffer,
                           lm_resources.GetTFLiteModelBuffer(model_type));
@@ -351,9 +351,9 @@ absl::Status InitFlux2Resources(Flux2ModelConfig& config,
   auto lm_resources = resources.GetLmModelResources();
   // TODO(b/568027544): Consolidate how model configs and proto metadata
   // overrides are defined.
-  auto image_gen_metadata = lm_resources->GetImageGenMetadata();
-  if (image_gen_metadata.ok() && *image_gen_metadata != nullptr) {
-    const auto& model_type = (*image_gen_metadata)->image_gen_model_type();
+  auto text2image_metadata = lm_resources->GetText2ImageMetadata();
+  if (text2image_metadata.ok() && *text2image_metadata != nullptr) {
+    const auto& model_type = (*text2image_metadata)->image_gen_model_type();
     if (model_type.has_bonsai_flux2()) {
       PopulateFlux2ConfigFromProto(model_type.bonsai_flux2(), config);
     } else if (model_type.has_flux2_klein()) {
@@ -362,7 +362,7 @@ absl::Status InitFlux2Resources(Flux2ModelConfig& config,
   }
   if (!config.is_klein &&
       lm_resources
-          ->GetTFLiteModelBuffer(lm::proto::ImageGenMetadata::
+          ->GetTFLiteModelBuffer(lm::proto::Text2ImageMetadata::
                                      TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
           .ok()) {
     config.is_klein = true;
@@ -380,7 +380,7 @@ absl::Status InitFlux2Resources(Flux2ModelConfig& config,
 
     ABSL_RETURN_IF_ERROR(RegisterCompiledModel(
         env, *lm_resources, dit_options,
-        lm::proto::ImageGenMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL,
+        lm::proto::Text2ImageMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL,
         "flux2_dit_initial", resources));
 
     for (size_t i = 0; i < kDoubleBlockTypes.size(); ++i) {
@@ -397,23 +397,23 @@ absl::Status InitFlux2Resources(Flux2ModelConfig& config,
 
     ABSL_RETURN_IF_ERROR(RegisterCompiledModel(
         env, *lm_resources, dit_options,
-        lm::proto::ImageGenMetadata::TF_LITE_DIFFUSION_TRANSFORMER_FINAL,
+        lm::proto::Text2ImageMetadata::TF_LITE_DIFFUSION_TRANSFORMER_FINAL,
         "flux2_dit_final", resources));
   } else {
     ABSL_RETURN_IF_ERROR(RegisterCompiledModel(
         env, *lm_resources, textenc_options,
-        lm::proto::ImageGenMetadata::TF_LITE_TEXT_ENCODER, "flux2_textenc",
+        lm::proto::Text2ImageMetadata::TF_LITE_TEXT_ENCODER, "flux2_textenc",
         resources));
     ABSL_RETURN_IF_ERROR(RegisterCompiledModel(
         env, *lm_resources, dit_options,
-        lm::proto::ImageGenMetadata::TF_LITE_IMAGE_DENOISER, "flux2_dit",
+        lm::proto::Text2ImageMetadata::TF_LITE_IMAGE_DENOISER, "flux2_dit",
         resources));
   }
 
   ABSL_RETURN_IF_ERROR(RegisterCompiledModel(
-       env, *lm_resources, vae_options,
-       lm::proto::ImageGenMetadata::TF_LITE_IMAGE_DECODER, "flux2_vae",
-       resources));
+      env, *lm_resources, vae_options,
+      lm::proto::Text2ImageMetadata::TF_LITE_IMAGE_DECODER, "flux2_vae",
+      resources));
   return absl::OkStatus();
 }
 

@@ -80,7 +80,7 @@ struct Flux2ModelConfig {
 absl::Status ValidateFlux2ModelConfig(const Flux2ModelConfig& config);
 
 // Populates `config` from `Flux2Params` / `BonsaiFlux2` / `Flux2Klein` protobuf
-// messages stored in `ImageGenMetadata` inside a `.litertlm` container.
+// messages stored in `Text2ImageMetadata` inside a `.litertlm` container.
 void PopulateFlux2ConfigFromProto(const lm::proto::Flux2Params& params,
                                   Flux2ModelConfig& config);
 void PopulateFlux2ConfigFromProto(const lm::proto::BonsaiFlux2& proto,

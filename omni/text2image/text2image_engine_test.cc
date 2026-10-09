@@ -41,8 +41,8 @@
 #include "omni/text2image/prompt_source.h"
 #include "omni/text2image/text2image_session.h"
 #include "runtime/framework/threadpool.h"
-#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/image_gen_model_type.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -72,7 +72,7 @@ using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
 
 void WriteDummyBonsaiLitertLmFile(const std::filesystem::path& path) {
-  lm::proto::ImageGenMetadata meta;
+  lm::proto::Text2ImageMetadata meta;
   meta.mutable_image_gen_model_type()
       ->mutable_bonsai_flux2()
       ->mutable_flux2_params()
@@ -82,12 +82,12 @@ void WriteDummyBonsaiLitertLmFile(const std::filesystem::path& path) {
   flatbuffers::FlatBufferBuilder builder(1024);
   uint64_t meta_begin = 256;
   uint64_t meta_end = meta_begin + meta_bytes.size();
-  auto image_gen_meta_section = lm::schema::CreateSectionObject(
+  auto text2image_meta_section = lm::schema::CreateSectionObject(
       builder, /*items=*/0, meta_begin, meta_end,
-      lm::schema::AnySectionDataType_ImageGenMetadataProto);
+      lm::schema::AnySectionDataType_Text2ImageMetadataProto);
 
   std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
-      image_gen_meta_section};
+      text2image_meta_section};
   auto section_metadata = lm::schema::CreateSectionMetadata(
       builder, builder.CreateVector(sections));
   auto metadata =
@@ -168,7 +168,7 @@ TEST(PushPromptSourceTest, PushScheduleAndFinish) {
 }
 
 void WriteDummyKleinLitertLmFile(const std::filesystem::path& path) {
-  lm::proto::ImageGenMetadata meta;
+  lm::proto::Text2ImageMetadata meta;
   meta.mutable_image_gen_model_type()
       ->mutable_flux2_klein()
       ->mutable_flux2_params()
@@ -178,12 +178,12 @@ void WriteDummyKleinLitertLmFile(const std::filesystem::path& path) {
   flatbuffers::FlatBufferBuilder builder(1024);
   uint64_t meta_begin = 256;
   uint64_t meta_end = meta_begin + meta_bytes.size();
-  auto image_gen_meta_section = lm::schema::CreateSectionObject(
+  auto text2image_meta_section = lm::schema::CreateSectionObject(
       builder, /*items=*/0, meta_begin, meta_end,
-      lm::schema::AnySectionDataType_ImageGenMetadataProto);
+      lm::schema::AnySectionDataType_Text2ImageMetadataProto);
 
   std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
-      image_gen_meta_section};
+      text2image_meta_section};
   auto section_metadata = lm::schema::CreateSectionMetadata(
       builder, builder.CreateVector(sections));
   auto metadata =

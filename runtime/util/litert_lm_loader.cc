@@ -89,10 +89,11 @@ bool IsValidTfLiteModelTypeWireString(absl::string_view model_type_str) {
       asr_type != proto::AsrMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
-  proto::ImageGenMetadata::TfLiteModelType image_gen_type;
-  if (proto::ImageGenMetadata::TfLiteModelType_Parse(upper, &image_gen_type) &&
+  proto::Text2ImageMetadata::TfLiteModelType image_gen_type;
+  if (proto::Text2ImageMetadata::TfLiteModelType_Parse(upper,
+                                                       &image_gen_type) &&
       image_gen_type !=
-          proto::ImageGenMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+          proto::Text2ImageMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
   return StringToModelType(model_type_str).ok();
@@ -555,9 +556,9 @@ std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetAsrMetadata() {
 }
 
 std::optional<litert::BufferRef<uint8_t>>
-LitertLmLoader::GetImageGenMetadata() {
+LitertLmLoader::GetText2ImageMetadata() {
   return GetSectionBuffer(
-      BufferKey(schema::AnySectionDataType_ImageGenMetadataProto));
+      BufferKey(schema::AnySectionDataType_Text2ImageMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetGenericBinaryData(

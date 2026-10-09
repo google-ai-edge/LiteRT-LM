@@ -91,7 +91,7 @@ _SUBCOMMANDS = (
     "embedding_metadata",
     "asr_metadata",
     "tts_metadata",
-    "image_gen_metadata",
+    "text2image_metadata",
     "tflite_model",
     "tflite_weights",
     "sp_tokenizer",
@@ -258,23 +258,23 @@ def _add_tts_metadata_parser(subparsers) -> None:
   _add_metadata_arguments(tts_metadata_parser)
 
 
-def _add_image_gen_metadata_parser(subparsers) -> None:
-  """Adds a parser for image_gen metadata to the subparsers."""
-  image_gen_metadata_parser = subparsers.add_parser(
-      "image_gen_metadata",
+def _add_text2image_metadata_parser(subparsers) -> None:
+  """Adds a parser for text2image metadata to the subparsers."""
+  text2image_metadata_parser = subparsers.add_parser(
+      "text2image_metadata",
       description=(
-          "Add image_gen metadata to the LiteRT-LM file. Can be a text or"
+          "Add text2image metadata to the LiteRT-LM file. Can be a text or"
           " binary proto file."
       ),
-      help="Add image_gen metadata.",
+      help="Add text2image metadata.",
   )
-  image_gen_metadata_parser.add_argument(
+  text2image_metadata_parser.add_argument(
       "--path",
       type=str,
       required=True,
-      help="The path to the image_gen metadata file.",
+      help="The path to the text2image metadata file.",
   )
-  _add_metadata_arguments(image_gen_metadata_parser)
+  _add_metadata_arguments(text2image_metadata_parser)
 
 
 def _add_tflite_model_parser(subparsers) -> None:
@@ -447,7 +447,7 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_embedding_metadata_parser(subparsers)
   _add_asr_metadata_parser(subparsers)
   _add_tts_metadata_parser(subparsers)
-  _add_image_gen_metadata_parser(subparsers)
+  _add_text2image_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
   _add_sentencepiece_tokenizer_parser(subparsers)
@@ -595,13 +595,13 @@ def _build_tts_metadata(
   builder.add_tts_metadata(args.path, additional_metadata=metadata)
 
 
-def _build_image_gen_metadata(
+def _build_text2image_metadata(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
 ) -> None:
-  """Builds image_gen metadata from the parsed arguments."""
+  """Builds text2image metadata from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  builder.add_image_gen_metadata(args.path, additional_metadata=metadata)
+  builder.add_text2image_metadata(args.path, additional_metadata=metadata)
 
 
 def _resolve_required_cli_model_type(
@@ -736,8 +736,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_asr_metadata(parsed_arg, builder)
         case "tts_metadata":
           _build_tts_metadata(parsed_arg, builder)
-        case "image_gen_metadata":
-          _build_image_gen_metadata(parsed_arg, builder)
+        case "text2image_metadata":
+          _build_text2image_metadata(parsed_arg, builder)
         case "tflite_model":
           _build_tflite_model(parsed_arg, builder)
         case "tflite_weights":

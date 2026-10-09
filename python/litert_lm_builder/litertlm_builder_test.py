@@ -26,8 +26,8 @@ from litert_lm_builder import litertlm_peek
 from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
-from runtime.proto import image_gen_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import text2image_metadata_pb2
 from runtime.proto import tts_metadata_pb2
 
 _TOML_TEMPLATE = """
@@ -1822,9 +1822,9 @@ data_path = "{vocoder_path}"
     self.assertIn("Key: model_type, Value (String): tf_lite_acoustic", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_vocoder", ss)
 
-  def test_from_toml_with_image_gen_metadata(self):
-    """Tests that TOML with ImageGenMetadata and capability model types builds properly."""
-    image_gen_meta_content = """
+  def test_from_toml_with_text2image_metadata(self):
+    """Tests that TOML with Text2ImageMetadata and capability model types builds properly."""
+    text2image_meta_content = """
     image_gen_model_type {
       bonsai_flux2 {
         flux2_params {
@@ -1836,8 +1836,8 @@ data_path = "{vocoder_path}"
       }
     }
     """
-    image_gen_meta_path = self._create_dummy_file(
-        "image_gen_meta.textproto", image_gen_meta_content.encode()
+    text2image_meta_path = self._create_dummy_file(
+        "text2image_meta.textproto", text2image_meta_content.encode()
     )
     text_enc_path = self._create_dummy_file(
         "textenc.tflite", b"dummy textenc tflite"
@@ -1852,8 +1852,8 @@ entries = [
 ]
 
 [[section]]
-section_type = "ImageGenMetadata"
-data_path = "{image_gen_meta_path}"
+section_type = "Text2ImageMetadata"
+data_path = "{text2image_meta_path}"
 
 [[section]]
 section_type = "TFLiteModel"
@@ -1873,13 +1873,13 @@ data_path = "{vae_path}"
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Sections (4)", ss)
-    self.assertIn("Data Type:    ImageGenMetadataProto", ss)
+    self.assertIn("Data Type:    Text2ImageMetadataProto", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_text_encoder", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_image_denoiser", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_image_decoder", ss)
 
   def test_capability_tflite_model_type_int_enum_resolution(self):
-    """Tests resolving capability proto enum ints for ASR, TTS, and ImageGen."""
+    """Tests resolving capability proto enum ints for ASR, TTS, and Text2Image."""
     tflite_path = self._create_dummy_file("m.tflite", b"dummy")
     asr_path = self._create_dummy_file(
         "asr.pb", asr_metadata_pb2.AsrMetadata().SerializeToString()
@@ -1904,13 +1904,14 @@ data_path = "{vae_path}"
     self.assertIn("Key: model_type, Value (String): tf_lite_acoustic", ss_tts)
 
     img_path = self._create_dummy_file(
-        "img.pb", image_gen_metadata_pb2.ImageGenMetadata().SerializeToString()
+        "img.pb",
+        text2image_metadata_pb2.Text2ImageMetadata().SerializeToString(),
     )
     builder_img = litertlm_builder.LitertLmFileBuilder()
-    builder_img.add_image_gen_metadata(img_path)
+    builder_img.add_text2image_metadata(img_path)
     builder_img.add_tflite_model(
         tflite_path,
-        image_gen_metadata_pb2.ImageGenMetadata.TF_LITE_DIFFUSION_TRANSFORMER_INITIAL,
+        text2image_metadata_pb2.Text2ImageMetadata.TF_LITE_DIFFUSION_TRANSFORMER_INITIAL,
     )
     ss_img = self._build_and_read_litertlm(builder_img)
     self.assertIn(
@@ -1933,7 +1934,7 @@ data_path = "{vae_path}"
     with self.assertRaisesRegex(ValueError, "TF_LITE_MODEL_TYPE_UNSPECIFIED"):
       builder_img.add_tflite_model(
           tflite_path,
-          image_gen_metadata_pb2.ImageGenMetadata.TF_LITE_MODEL_TYPE_UNSPECIFIED,
+          text2image_metadata_pb2.Text2ImageMetadata.TF_LITE_MODEL_TYPE_UNSPECIFIED,
       )
 
   def test_multiple_capability_metadata_raises_error(self):
@@ -1945,8 +1946,8 @@ data_path = "{vae_path}"
     tts_meta_path = self._create_dummy_file(
         "tts.textproto", b"output_sample_rate: 24000\n"
     )
-    image_gen_meta_path = self._create_dummy_file(
-        "image_gen.textproto", b"image_gen_model_type { bonsai_flux2 {} }\n"
+    text2image_meta_path = self._create_dummy_file(
+        "text2image.textproto", b"image_gen_model_type { bonsai_flux2 {} }\n"
     )
     builder = litertlm_builder.LitertLmFileBuilder()
     builder.add_llm_metadata(llm_meta_path)
@@ -1961,7 +1962,7 @@ data_path = "{vae_path}"
     with self.assertRaisesRegex(
         ValueError, "can contain only one top-level capability metadata section"
     ):
-      builder.add_image_gen_metadata(image_gen_meta_path)
+      builder.add_text2image_metadata(text2image_meta_path)
 
 
 if __name__ == "__main__":

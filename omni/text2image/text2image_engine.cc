@@ -37,17 +37,17 @@
 #include "omni/text2image/prompt_source.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
-#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/image_gen_model_type.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
 
 namespace litert::omni::text2image {
 namespace {
 
 absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
     lm::ModelResources& lm_resources) {
-  auto image_gen_metadata = lm_resources.GetImageGenMetadata();
-  if (image_gen_metadata.ok() && *image_gen_metadata != nullptr) {
-    const auto& model_type = (*image_gen_metadata)->image_gen_model_type();
+  auto text2image_metadata = lm_resources.GetText2ImageMetadata();
+  if (text2image_metadata.ok() && *text2image_metadata != nullptr) {
+    const auto& model_type = (*text2image_metadata)->image_gen_model_type();
     if (model_type.has_bonsai_flux2()) {
       return ModelType::BONSAI_FLUX2;
     }
@@ -56,14 +56,14 @@ absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
     }
   }
   if (lm_resources
-          .GetTFLiteModelBuffer(lm::proto::ImageGenMetadata::
+          .GetTFLiteModelBuffer(lm::proto::Text2ImageMetadata::
                                     TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
           .ok()) {
     return ModelType::FLUX2_KLEIN;
   }
   if (lm_resources
           .GetTFLiteModelBuffer(
-              lm::proto::ImageGenMetadata::TF_LITE_IMAGE_DENOISER)
+              lm::proto::Text2ImageMetadata::TF_LITE_IMAGE_DENOISER)
           .ok()) {
     return ModelType::BONSAI_FLUX2;
   }
@@ -91,7 +91,7 @@ absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder) {
 
   return absl::InvalidArgumentError(absl::StrCat(
       "Unable to determine the text2image model type from '", model_folder,
-      "': expected a .litertlm container with ImageGenMetadata."));
+      "': expected a .litertlm container with Text2ImageMetadata."));
 }
 
 absl::StatusOr<std::unique_ptr<Text2ImageEngine>> Text2ImageEngine::Create(

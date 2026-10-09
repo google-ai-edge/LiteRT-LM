@@ -176,9 +176,9 @@ class LitertLmLoader {
   // std::nullopt.
   std::optional<litert::BufferRef<uint8_t>> GetAsrMetadata();
 
-  // Returns the ImageGen metadata section buffer. If not found, returns
+  // Returns the Text2Image metadata section buffer. If not found, returns
   // std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetImageGenMetadata();
+  std::optional<litert::BufferRef<uint8_t>> GetText2ImageMetadata();
 
   // Returns a GenericBinaryData section buffer matching the given name.
   std::optional<litert::BufferRef<uint8_t>> GetGenericBinaryData(

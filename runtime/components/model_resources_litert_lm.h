@@ -30,8 +30,8 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
-#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -82,7 +82,8 @@ class ModelResourcesLitertLm : public ModelResources {
 
   absl::StatusOr<const proto::AsrMetadata*> GetAsrMetadata() override;
 
-  absl::StatusOr<const proto::ImageGenMetadata*> GetImageGenMetadata() override;
+  absl::StatusOr<const proto::Text2ImageMetadata*> GetText2ImageMetadata()
+      override;
 
   absl::StatusOr<absl::string_view> GetGenericBinaryDataBuffer(
       absl::string_view name) override;
@@ -120,7 +121,7 @@ class ModelResourcesLitertLm : public ModelResources {
   std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_;
   std::unique_ptr<proto::TtsMetadata> tts_metadata_;
   std::unique_ptr<proto::AsrMetadata> asr_metadata_;
-  std::unique_ptr<proto::ImageGenMetadata> image_gen_metadata_;
+  std::unique_ptr<proto::Text2ImageMetadata> text2image_metadata_;
   std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 };
 

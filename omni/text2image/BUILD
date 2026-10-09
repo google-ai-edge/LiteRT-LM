@@ -135,8 +135,8 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
         "//runtime/framework:threadpool",
-        "//runtime/proto:image_gen_metadata_cc_proto",
         "//runtime/proto:image_gen_model_type_cc_proto",
+        "//runtime/proto:text2image_metadata_cc_proto",
     ],
 )
 
@@ -178,8 +178,8 @@ cc_test(
         "//omni/base:stage",
         "//omni/text2image/flux2:flux2_model_config",
         "//runtime/framework:threadpool",
-        "//runtime/proto:image_gen_metadata_cc_proto",
         "//runtime/proto:image_gen_model_type_cc_proto",
+        "//runtime/proto:text2image_metadata_cc_proto",
         "//schema/core:litertlm_header_schema",
         "//support/util:test_utils",
     ],

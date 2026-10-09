@@ -65,8 +65,8 @@ from litert_lm_builder import litertlm_peek
 from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
-from runtime.proto import image_gen_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import text2image_metadata_pb2
 from runtime.proto import tts_metadata_pb2
 
 
@@ -298,7 +298,7 @@ _ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
     | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.keys())
     | set(asr_metadata_pb2.AsrMetadata.TfLiteModelType.keys())
     | set(tts_metadata_pb2.TtsMetadata.TfLiteModelType.keys())
-    | set(image_gen_metadata_pb2.ImageGenMetadata.TfLiteModelType.keys())
+    | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.keys())
 ) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
 
 
@@ -346,8 +346,8 @@ def _resolve_model_type_wire_string(
       return tts_metadata_pb2.TtsMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
-    if capability_type == "image_gen":
-      return image_gen_metadata_pb2.ImageGenMetadata.TfLiteModelType.Name(
+    if capability_type == "text2image":
+      return text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
     if capability_type == "embedding":
@@ -467,7 +467,7 @@ class LitertLmFileBuilder:
     ) = None
     self._has_asr_metadata = False
     self._has_tts_metadata = False
-    self._has_image_gen_metadata = False
+    self._has_text2image_metadata = False
     self._capability_types: set[str] = set()
     self._tokenizers_by_model_type: set[str | None] = set()
 
@@ -718,8 +718,8 @@ class LitertLmFileBuilder:
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section_type == "ImageGenMetadata":
-          builder.add_image_gen_metadata(
+        elif section_type == "Text2ImageMetadata":
+          builder.add_text2image_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
@@ -1067,20 +1067,22 @@ class LitertLmFileBuilder:
         additional_metadata,
     )
 
-  def add_image_gen_metadata(
+  def add_text2image_metadata(
       self,
-      image_gen_metadata_path: str,
+      text2image_metadata_path: str,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
-    """Adds image generation metadata to the litertlm file."""
-    assert not self._has_image_gen_metadata, "ImageGen metadata already added."
-    self._check_no_capability_metadata_added("image_gen")
-    self._has_image_gen_metadata = True
+    """Adds text-to-image metadata to the litertlm file."""
+    assert (
+        not self._has_text2image_metadata
+    ), "Text2Image metadata already added."
+    self._check_no_capability_metadata_added("text2image")
+    self._has_text2image_metadata = True
     return self._add_proto_metadata_section(
-        image_gen_metadata_path,
-        image_gen_metadata_pb2.ImageGenMetadata,
-        schema.AnySectionDataType.ImageGenMetadataProto,
-        "ImageGen",
+        text2image_metadata_path,
+        text2image_metadata_pb2.Text2ImageMetadata,
+        schema.AnySectionDataType.Text2ImageMetadataProto,
+        "Text2Image",
         additional_metadata,
     )
 

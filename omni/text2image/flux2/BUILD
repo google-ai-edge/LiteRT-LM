@@ -178,8 +178,8 @@ cc_library(
         "//omni/text2image:text_encoder_stage",
         "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
-        "//runtime/proto:image_gen_metadata_cc_proto",
         "//runtime/proto:image_gen_model_type_cc_proto",
+        "//runtime/proto:text2image_metadata_cc_proto",
         "//support/tokenizer",
     ],
 )

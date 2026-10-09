@@ -307,21 +307,21 @@ ModelResourcesLitertLm::GetAsrMetadata() {
   return asr_metadata_.get();
 }
 
-absl::StatusOr<const proto::ImageGenMetadata*>
-ModelResourcesLitertLm::GetImageGenMetadata() {
-  if (image_gen_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetImageGenMetadata();
+absl::StatusOr<const proto::Text2ImageMetadata*>
+ModelResourcesLitertLm::GetText2ImageMetadata() {
+  if (text2image_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetText2ImageMetadata();
     if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No ImageGenMetadata found in the model.");
+      return absl::NotFoundError("No Text2ImageMetadata found in the model.");
     }
-    auto image_gen_metadata = std::make_unique<proto::ImageGenMetadata>();
-    if (!image_gen_metadata->ParseFromArray(buffer_ref->Data(),
-                                            buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse ImageGenMetadata");
+    auto text2image_metadata = std::make_unique<proto::Text2ImageMetadata>();
+    if (!text2image_metadata->ParseFromArray(buffer_ref->Data(),
+                                             buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse Text2ImageMetadata");
     }
-    image_gen_metadata_ = std::move(image_gen_metadata);
+    text2image_metadata_ = std::move(text2image_metadata);
   }
-  return image_gen_metadata_.get();
+  return text2image_metadata_.get();
 }
 
 absl::StatusOr<absl::string_view>

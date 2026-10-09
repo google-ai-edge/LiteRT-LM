@@ -24,8 +24,8 @@ from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
-from runtime.proto import image_gen_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import text2image_metadata_pb2
 from runtime.proto import tts_metadata_pb2
 
 # --- ANSI Escape Code Definitions ---
@@ -308,19 +308,19 @@ def _dump_tts_metadata_proto(
   )
 
 
-def _dump_image_gen_metadata_proto(
+def _dump_text2image_metadata_proto(
     file_stream: IO[bytes],
     section_object: schema.SectionObject,
     dump_files_dir: str | None,
     output_stream: IO[str],
 ) -> Optional[str]:
-  """Dumps ImageGenMetadataProto section content."""
+  """Dumps Text2ImageMetadataProto section content."""
   return _dump_proto_section(
       file_stream,
       section_object,
       dump_files_dir,
       output_stream,
-      image_gen_metadata_pb2.ImageGenMetadata,
+      text2image_metadata_pb2.Text2ImageMetadata,
   )
 
 
@@ -697,9 +697,9 @@ def peek_litertlm_file(
           dumped_file_name = _dump_tts_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
-        elif data_type == schema.AnySectionDataType.ImageGenMetadataProto:
-          section_info["section_type"] = "ImageGenMetadata"
-          dumped_file_name = _dump_image_gen_metadata_proto(
+        elif data_type == schema.AnySectionDataType.Text2ImageMetadataProto:
+          section_info["section_type"] = "Text2ImageMetadata"
+          dumped_file_name = _dump_text2image_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.TFLiteModel:

@@ -43,8 +43,8 @@
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
-#include "runtime/proto/image_gen_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "support/tokenizer/tokenizer.h"
@@ -172,7 +172,7 @@ std::string TfLiteModelTypeToWireString(
 std::string TfLiteModelTypeToWireString(
     proto::AsrMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
-    proto::ImageGenMetadata::TfLiteModelType model_type);
+    proto::Text2ImageMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(ModelType model_type);
 
 // Describes the location of a contiguous region of bytes in a file.
@@ -210,7 +210,7 @@ class ModelResources {
   // - proto::EmbeddingMetadata::TfLiteModelType,
   // - proto::TtsMetadata::TfLiteModelType
   // - proto::AsrMetadata::TfLiteModelType
-  // - proto::ImageGenMetadata::TfLiteModelType.
+  // - proto::Text2ImageMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
       typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
@@ -241,7 +241,7 @@ class ModelResources {
   // - proto::EmbeddingMetadata::TfLiteModelType,
   // - proto::TtsMetadata::TfLiteModelType
   // - proto::AsrMetadata::TfLiteModelType
-  // - proto::ImageGenMetadata::TfLiteModelType.
+  // - proto::Text2ImageMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
       typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
@@ -323,9 +323,11 @@ class ModelResources {
     return absl::UnimplementedError("GetAsrMetadata is not implemented.");
   }
 
-  // Returns the ImageGen metadata.
-  virtual absl::StatusOr<const proto::ImageGenMetadata*> GetImageGenMetadata() {
-    return absl::UnimplementedError("GetImageGenMetadata is not implemented.");
+  // Returns the Text2Image metadata.
+  virtual absl::StatusOr<const proto::Text2ImageMetadata*>
+  GetText2ImageMetadata() {
+    return absl::UnimplementedError(
+        "GetText2ImageMetadata is not implemented.");
   }
 
   // Returns a zero-copy buffer for a GenericBinaryData section matching the

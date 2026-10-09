@@ -21,7 +21,30 @@ import "runtime/proto/asr_model_type.proto";
 option java_multiple_files = true;
 option java_outer_classname = "AsrMetadataOuterClass";
 
-// Parameters for Automatic Speech Recognition (ASR) models.
+// Parameters for log-mel spectrogram audio preprocessing in ASR.
+message LogMelSpectrogramConfig {
+  enum NormType {
+    NORM_TYPE_NONE = 0;
+    NORM_TYPE_WHISPER = 1;
+  }
+
+  optional int32 n_fft = 1;
+  optional int32 n_mels = 2;
+  optional int32 n_frames = 3;
+  optional int32 fft_length = 4;
+  optional float input_scale = 5;
+  optional float preemphasis = 6;
+  optional float mel_low_hz = 7;
+  optional float mel_high_hz = 8;
+  optional float mel_floor = 9;
+  optional bool normalize_mel = 10;
+  optional bool add_floor_to_mel_before_log = 11;
+  optional bool transpose = 12;
+  optional NormType norm_type = 13;
+  optional int32 hop_length = 14;
+}
+
+// Model-specific parameters for Automatic Speech Recognition (ASR) models.
 message AsrMetadata {
   enum TfLiteModelType {
     // Placeholder for unspecified model type.
@@ -36,4 +59,26 @@ message AsrMetadata {
 
   // ASR model type.
   AsrModelType asr_model_type = 1;
+
+  // Expected input audio sample rate in Hz (e.g., 16000).
+  optional int32 sample_rate_hz = 2;
+
+  // Duration of each input audio window in milliseconds (e.g., 5000, 30000).
+  optional int32 input_milliseconds = 3;
+
+  // Log-mel spectrogram audio preprocessing configuration. When unset, audio
+  // preprocessing is bypassed (raw PCM is fed directly to the model).
+  optional LogMelSpectrogramConfig log_mel_spectrogram_config = 4;
+
+  // Token IDs for decoding control.
+  optional int32 decode_start_token_id = 5;
+  optional int32 decode_stop_token_id = 6;
+  optional int32 decode_skip_until_token_id = 7;
+  optional int32 decode_statefully_after = 8;
+  optional int32 vocab_size = 9;
+  optional int32 blank_token_id = 10;
+
+  // Patterns for state and intermediate buffer tensor names to be declared as
+  // external/buffer-storage tensors on GPU.
+  repeated string state_buffer_name_patterns = 11;
 }

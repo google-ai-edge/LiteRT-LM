@@ -456,16 +456,16 @@ TEST(LitertLmLoaderTest, LoadCapabilityTtsMetadataAndNamedSections) {
       loader->GetTFLiteModel(proto::TtsMetadata::TF_LITE_ACOUSTIC).Size(), 16);
 }
 
-TEST(LitertLmLoaderTest, LoadCapabilityImageGenMetadataAndSections) {
+TEST(LitertLmLoaderTest, LoadCapabilityText2ImageMetadataAndSections) {
   auto test_file_path = std::filesystem::path(::testing::TempDir()) /
-                        "image_gen_capability_model.litertlm";
+                        "text2image_capability_model.litertlm";
 
   flatbuffers::FlatBufferBuilder builder(1024);
 
-  // Section 0: ImageGenMetadataProto
-  auto image_gen_meta_section = schema::CreateSectionObject(
+  // Section 0: Text2ImageMetadataProto
+  auto text2image_meta_section = schema::CreateSectionObject(
       builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
-      schema::AnySectionDataType_ImageGenMetadataProto);
+      schema::AnySectionDataType_Text2ImageMetadataProto);
 
   // Section 1: TFLiteModel with model_type = "tf_lite_image_denoiser"
   const std::string dit_model_type = "tf_lite_image_denoiser";
@@ -500,7 +500,7 @@ TEST(LitertLmLoaderTest, LoadCapabilityImageGenMetadataAndSections) {
       schema::AnySectionDataType_TFLiteModel);
 
   std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
-      image_gen_meta_section, dit_section, vae_section, dit_prep_section};
+      text2image_meta_section, dit_section, vae_section, dit_prep_section};
   auto section_metadata =
       schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
   auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
@@ -519,21 +519,21 @@ TEST(LitertLmLoaderTest, LoadCapabilityImageGenMetadataAndSections) {
   ASSERT_OK_AND_ASSIGN(auto loader,
                        LitertLmLoader::Create(std::move(mapped_file)));
 
-  ASSERT_TRUE(loader->GetImageGenMetadata().has_value());
-  EXPECT_EQ(loader->GetImageGenMetadata()->Size(), 16);
+  ASSERT_TRUE(loader->GetText2ImageMetadata().has_value());
+  EXPECT_EQ(loader->GetText2ImageMetadata()->Size(), 16);
 
   EXPECT_EQ(
-      loader->GetTFLiteModel(proto::ImageGenMetadata::TF_LITE_IMAGE_DENOISER)
+      loader->GetTFLiteModel(proto::Text2ImageMetadata::TF_LITE_IMAGE_DENOISER)
           .Size(),
       24);
   EXPECT_EQ(
-      loader->GetTFLiteModel(proto::ImageGenMetadata::TF_LITE_IMAGE_DECODER)
+      loader->GetTFLiteModel(proto::Text2ImageMetadata::TF_LITE_IMAGE_DECODER)
           .Size(),
       32);
   EXPECT_EQ(
       loader
           ->GetTFLiteModel(
-              proto::ImageGenMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
+              proto::Text2ImageMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
           .Size(),
       16);
 }

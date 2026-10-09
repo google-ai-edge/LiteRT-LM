@@ -50,7 +50,7 @@ using ModelConfig = std::variant<std::monostate, Flux2ModelConfig>;
 
 // Determines the text-to-image model architecture from the `.litertlm` model
 // container or `.tflite` model files found under `model_folder` (e.g., a
-// `.litertlm` container with `ImageGenMetadata` or "textenc_*.tflite" /
+// `.litertlm` container with `Text2ImageMetadata` or "textenc_*.tflite" /
 // "dit_*.tflite" / "vae_dec_*.tflite" -> `ModelType::BONSAI_FLUX2`).
 absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder);
 

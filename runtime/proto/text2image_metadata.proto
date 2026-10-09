@@ -19,10 +19,10 @@ package litert.lm.proto;
 import "runtime/proto/image_gen_model_type.proto";
 
 option java_multiple_files = true;
-option java_outer_classname = "ImageGenMetadataOuterClass";
+option java_outer_classname = "Text2ImageMetadataOuterClass";
 
-// Parameters for Image Generation models.
-message ImageGenMetadata {
+// Parameters for Text-to-Image generation models.
+message Text2ImageMetadata {
   enum TfLiteModelType {
     // Placeholder for unspecified model type.
     TF_LITE_MODEL_TYPE_UNSPECIFIED = 0;
@@ -52,5 +52,6 @@ message ImageGenMetadata {
   }
 
   // Image generation model type.
+  // TODO(b/524681030): Rename ImageGenModelType to Text2ImageModelType.
   ImageGenModelType image_gen_model_type = 1;
 }

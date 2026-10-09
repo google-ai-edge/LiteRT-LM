@@ -255,6 +255,26 @@ alias(
 )
 
 tf_proto_library(
+    name = "tts_session_config",
+    srcs = ["tts_session_config.proto"],
+)
+
+alias(
+    name = "tts_session_config_proto",
+    actual = ":tts_session_config",
+)
+
+alias(
+    name = "tts_session_config_cc_proto",
+    actual = ":tts_session_config_cc",
+)
+
+alias(
+    name = "tts_session_config_py_pb2",
+    actual = ":tts_session_config_py_proto",
+)
+
+tf_proto_library(
     name = "asr_model_type",
     srcs = ["asr_model_type.proto"],
 )
@@ -296,6 +316,26 @@ alias(
 )
 
 tf_proto_library(
+    name = "asr_session_config",
+    srcs = ["asr_session_config.proto"],
+)
+
+alias(
+    name = "asr_session_config_proto",
+    actual = ":asr_session_config",
+)
+
+alias(
+    name = "asr_session_config_cc_proto",
+    actual = ":asr_session_config_cc",
+)
+
+alias(
+    name = "asr_session_config_py_pb2",
+    actual = ":asr_session_config_py_proto",
+)
+
+tf_proto_library(
     name = "image_gen_model_type",
     srcs = ["image_gen_model_type.proto"],
 )
@@ -316,22 +356,42 @@ alias(
 )
 
 tf_proto_library(
-    name = "image_gen_metadata",
-    srcs = ["image_gen_metadata.proto"],
+    name = "text2image_metadata",
+    srcs = ["text2image_metadata.proto"],
     deps = [":image_gen_model_type"],
 )
 
 alias(
-    name = "image_gen_metadata_proto",
-    actual = ":image_gen_metadata",
+    name = "text2image_metadata_proto",
+    actual = ":text2image_metadata",
 )
 
 alias(
-    name = "image_gen_metadata_cc_proto",
-    actual = ":image_gen_metadata_cc",
+    name = "text2image_metadata_cc_proto",
+    actual = ":text2image_metadata_cc",
 )
 
 alias(
-    name = "image_gen_metadata_py_pb2",
-    actual = ":image_gen_metadata_py_proto",
+    name = "text2image_metadata_py_pb2",
+    actual = ":text2image_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "text2image_session_config",
+    srcs = ["text2image_session_config.proto"],
+)
+
+alias(
+    name = "text2image_session_config_proto",
+    actual = ":text2image_session_config",
+)
+
+alias(
+    name = "text2image_session_config_cc_proto",
+    actual = ":text2image_session_config_cc",
+)
+
+alias(
+    name = "text2image_session_config_py_pb2",
+    actual = ":text2image_session_config_py_proto",
 )
