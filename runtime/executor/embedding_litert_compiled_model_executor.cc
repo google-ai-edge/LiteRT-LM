@@ -302,17 +302,6 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
         auto output_buffers,
         compiled_model_ptr->CreateOutputBuffers(signature_index));
 
-    // Run a warmup inference to prime the NPU driver and execution pipelines.
-    if (executor_settings.GetBackend() == Backend::NPU) {
-      auto warmup_status = compiled_model_ptr->Run(
-          signature_index, input_buffers, output_buffers);
-      if (!warmup_status) {
-        ABSL_LOG(WARNING) << "Warmup inference failed for signature index "
-                          << signature_index << ": "
-                          << warmup_status.Error().Message();
-      }
-    }
-
     input_buffers_cache[signature_index] = std::move(input_buffers);
     output_buffers_cache[signature_index] = std::move(output_buffers);
   }
