@@ -98,6 +98,21 @@ int64_t GetKvCacheInitValue(ModelResources& resources) {
 
 absl::Status FillKVCacheBuffer(TensorBuffer& buffer, int64_t init_value) {
   LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, buffer.TensorType());
+  // Only 16-bit KV honors init_value below; every other type is zeroed. When
+  // the fill writes all zeros, do it as a Clear(), which a buffer type can do
+  // without mapping the memory (or, for a buffer never touched yet, without
+  // creating it).
+  //
+  // Note: CopySingleKVCacheBuffer's padding also honors init_value for Int8 and
+  // UInt8, so an int8 KV with a non-zero init value is zeroed here but padded
+  // with init_value after a tier-up copy.
+  const bool honors_init_value =
+      tensor_type.ElementType() == ::litert::ElementType::Int16 ||
+      tensor_type.ElementType() == ::litert::ElementType::UInt16;
+  if (!honors_init_value || init_value == 0) {
+    LITERT_RETURN_IF_ERROR(buffer.Clear());
+    return absl::OkStatus();
+  }
   LITERT_ASSIGN_OR_RETURN(auto size, buffer.PackedSize());
   LITERT_ASSIGN_OR_RETURN(
       auto lock, ::litert::TensorBufferScopedLock::Create(
