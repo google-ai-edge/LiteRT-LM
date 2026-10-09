@@ -27,9 +27,68 @@
 #include "c/error_reporter.h"
 #endif
 
+// Version of the LiteRT LM C API declared by these headers.
+//
+// The C API is versioned independently of the LiteRT LM release, following
+// semantic versioning:
+//   - MAJOR is incremented for ABI-breaking changes, such as removing a
+//     function or changing an existing function signature or struct layout.
+//   - MINOR is incremented when functions or types are added in a
+//     backward-compatible way.
+//   - PATCH is incremented for backward-compatible fixes.
+//
+// These are plain integer literals, so they can be used in preprocessor
+// conditionals, e.g. `#if LITERT_LM_C_API_VERSION_MAJOR >= 2`. They describe
+// the headers the caller is compiled against; use `litert_lm_get_api_version`
+// to query the library that is actually loaded.
+//
+// Maintainers: keep these in sync with C_API_VERSION in version.bzl;
+// engine_test fails if they differ.
+//
+// Added in version 1.0.0.
+#define LITERT_LM_C_API_VERSION_MAJOR 1
+#define LITERT_LM_C_API_VERSION_MINOR 0
+#define LITERT_LM_C_API_VERSION_PATCH 0
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Returns the version of the *library*, which may differ from the
+// LITERT_LM_C_API_VERSION_* macros the caller was compiled against.
+//
+// The two can differ whenever the library is loaded or replaced independently
+// of the application, for example when it is loaded at run time with
+// dlopen/LoadLibrary. Compare them before calling any other function:
+//
+//   int major, minor, patch;
+//   LiteRtLmStatusCode status =
+//       litert_lm_get_api_version(&major, &minor, &patch);
+//   if (status != kLiteRtLmStatusOk ||
+//       major != LITERT_LM_C_API_VERSION_MAJOR ||
+//       minor < LITERT_LM_C_API_VERSION_MINOR) {
+//     // Refuse to proceed: a different major version is ABI-incompatible, and
+//     // an older minor version may lack functions declared in these headers.
+//   }
+//
+// The name and signature of this function will not change in any future
+// version, including major versions. Libraries older than version 1.0.0 do not
+// export it, so a caller that loads the library dynamically and cannot resolve
+// this symbol should treat the library as incompatible.
+//
+// @param out_major On success, receives the major version of the library; not
+//   written on failure.
+// @param out_minor On success, receives the minor version of the library; not
+//   written on failure.
+// @param out_patch On success, receives the patch version of the library; not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `out_major`, `out_minor`, or `out_patch` is NULL.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_get_api_version(int* out_major, int* out_minor,
+                                             int* out_patch);
 
 // Opaque pointer for the LiteRT LM Engine.
 //

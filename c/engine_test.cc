@@ -29,6 +29,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
@@ -343,6 +344,54 @@ LiteRtLmTokenUnions* GetStopTokens(LiteRtLmEngine* engine) {
   EXPECT_EQ(litert_lm_engine_get_stop_tokens(engine, &tokens),
             kLiteRtLmStatusOk);
   return tokens;
+}
+
+// LITERT_LM_EXPECTED_C_API_VERSION is C_API_VERSION from version.bzl, passed in
+// by the BUILD file.
+TEST(EngineCVersionTest, VersionMacrosMatchVersionBzl) {
+  EXPECT_EQ(absl::StrCat(LITERT_LM_C_API_VERSION_MAJOR, ".",
+                         LITERT_LM_C_API_VERSION_MINOR, ".",
+                         LITERT_LM_C_API_VERSION_PATCH),
+            LITERT_LM_EXPECTED_C_API_VERSION)
+      << "Update LITERT_LM_C_API_VERSION_* in engine.h and C_API_VERSION in "
+         "version.bzl together.";
+}
+
+TEST(EngineCVersionTest, GetApiVersionReturnsLibraryVersion) {
+  int major = -1;
+  int minor = -1;
+  int patch = -1;
+  EXPECT_EQ(litert_lm_get_api_version(&major, &minor, &patch),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(major, LITERT_LM_C_API_VERSION_MAJOR);
+  EXPECT_EQ(minor, LITERT_LM_C_API_VERSION_MINOR);
+  EXPECT_EQ(patch, LITERT_LM_C_API_VERSION_PATCH);
+}
+
+TEST(EngineCVersionTest, GetApiVersionRejectsNullOutParams) {
+  int major = -1;
+  int minor = -1;
+  int patch = -1;
+
+  EXPECT_EQ(litert_lm_get_api_version(nullptr, &minor, &patch),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("out_major must not be NULL"));
+
+  EXPECT_EQ(litert_lm_get_api_version(&major, nullptr, &patch),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("out_minor must not be NULL"));
+
+  EXPECT_EQ(litert_lm_get_api_version(&major, &minor, nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("out_patch must not be NULL"));
+
+  // Scalar out-parameters are not written on failure.
+  EXPECT_EQ(major, -1);
+  EXPECT_EQ(minor, -1);
+  EXPECT_EQ(patch, -1);
 }
 
 TEST(EngineCTest, CreateSettingsWithNoVisionAndAudioBackend) {

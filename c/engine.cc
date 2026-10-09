@@ -320,6 +320,21 @@ CreateEngineSettingsHelper(ModelAssets model_assets,
 
 extern "C" {
 
+LiteRtLmStatusCode litert_lm_get_api_version(int* out_major, int* out_minor,
+                                             int* out_patch) {
+  // Validate every out-parameter before writing any of them, so that none is
+  // written on failure.
+  LITERT_LM_C_RETURN_IF_NULL(out_major);
+  LITERT_LM_C_RETURN_IF_NULL(out_minor);
+  LITERT_LM_C_RETURN_IF_NULL(out_patch);
+  // The macros are expanded when the library is compiled, so these values
+  // describe the library rather than the headers seen by the caller.
+  *out_major = LITERT_LM_C_API_VERSION_MAJOR;
+  *out_minor = LITERT_LM_C_API_VERSION_MINOR;
+  *out_patch = LITERT_LM_C_API_VERSION_PATCH;
+  return kLiteRtLmStatusOk;
+}
+
 LiteRtLmStatusCode litert_lm_set_min_log_level(LiteRtLmLogSeverity level) {
   if (!IsValidLogSeverity(level)) {
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,

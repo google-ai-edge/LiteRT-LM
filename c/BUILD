@@ -15,6 +15,7 @@
 # [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+load("//:version.bzl", "C_API_VERSION")
 
 package(
     default_hdrs_check = "strict",
@@ -412,6 +413,10 @@ cc_test(
     data = [
         "//runtime/testdata",
     ],
+    # Lets the test check that the version macros in engine.h match version.bzl.
+    local_defines = [
+        'LITERT_LM_EXPECTED_C_API_VERSION=\\"' + C_API_VERSION + '\\"',
+    ],
     tags = ["requires-mac-inputs:hard"],
     target_compatible_with = select({
         "@platforms//os:ios": [],
@@ -431,6 +436,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
