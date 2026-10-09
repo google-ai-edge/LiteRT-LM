@@ -39,31 +39,31 @@ namespace {
 // tokenizer_config.json templates into Minijinja-compatible syntax.
 std::string EditTemplateForMinijinja(absl::string_view template_content) {
   std::string modified_template = std::string(template_content);
-  RE2::GlobalReplace(&modified_template, R"regex(\.startswith\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.startswith\((.*?)\))regex",
                      R"( is startingwith \1)");
-  RE2::GlobalReplace(&modified_template, R"regex(\.endswith\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.endswith\((.*?)\))regex",
                      R"( is endingwith \1)");
   RE2::GlobalReplace(&modified_template,
-                     R"regex(\.replace\((.*?),(.*?)\))regex",
+                     R"regex((?s)\.replace\((.*?),(.*?)\))regex",
                      R"( | replace(\1,\2))");
-  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\)\[0\])regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.split\((.*?)\)\[0\])regex",
                      R"( | split(\1) | first)");
-  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\)\[-1\])regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.split\((.*?)\)\[-1\])regex",
                      R"( | split(\1) | last)");
-  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.split\((.*?)\))regex",
                      R"( | split(\1))");
-  RE2::GlobalReplace(&modified_template, R"regex(\.join\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.join\((.*?)\))regex",
                      R"( | join(\1))");
   RE2::GlobalReplace(&modified_template, R"regex(\.lstrip\(\))regex",
                      " | lstrip");
-  RE2::GlobalReplace(&modified_template, R"regex(\.lstrip\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.lstrip\((.*?)\))regex",
                      R"( | lstrip(\1))");
   RE2::GlobalReplace(&modified_template, R"regex(\.rstrip\(\))regex",
                      " | rstrip");
-  RE2::GlobalReplace(&modified_template, R"regex(\.rstrip\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.rstrip\((.*?)\))regex",
                      R"( | rstrip(\1))");
   RE2::GlobalReplace(&modified_template, R"regex(\.strip\(\))regex", " | trim");
-  RE2::GlobalReplace(&modified_template, R"regex(\.strip\((.*?)\))regex",
+  RE2::GlobalReplace(&modified_template, R"regex((?s)\.strip\((.*?)\))regex",
                      R"( | trim(\1))");
   RE2::GlobalReplace(&modified_template, R"regex(\.items\(\))regex",
                      " | items");
