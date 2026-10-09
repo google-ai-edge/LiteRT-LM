@@ -569,6 +569,25 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_GpuConfig) {
   EXPECT_TRUE(gpu_config_or->external_tensor_mode);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_NpuConfig) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "npu";
+  settings.npu_dynamic_kv_cache_initial_size = 256;
+  settings.npu_dynamic_kv_cache_growth_step = 1024;
+
+  auto engine_settings_or = CreateEngineSettings(settings);
+  ASSERT_OK(engine_settings_or.status());
+  auto npu_config_or = engine_settings_or->GetMainExecutorSettings()
+                           .GetBackendConfig<NpuConfig>();
+  ASSERT_OK(npu_config_or.status());
+  EXPECT_EQ(npu_config_or->dynamic_kv_cache_initial_size, 256);
+  EXPECT_EQ(npu_config_or->dynamic_kv_cache_growth_step, 1024);
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSettings_AdvancedSettings) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
