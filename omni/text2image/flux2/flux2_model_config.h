@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -52,6 +53,13 @@ struct Flux2ModelConfig {
   int steps = 4;
   // Default random seed for initial Gaussian latent noise.
   uint64_t default_seed = 42;
+
+  // True if this model uses the sharded FLUX.2-klein graph layout (3 text
+  // encoder shards + FP16 embedding table + 8 DiT shards + 1 VAE decoder).
+  bool is_klein = false;
+  // Section name for the raw FP16 Qwen3 token embedding table in the
+  // `.litertlm` container when `is_klein == true`.
+  std::string text_embed_table_key = "qwen_embed_fp16.bin";
 
   // Optional per-stage backend overrides. If unset, defaults to the engine's
   // backend.

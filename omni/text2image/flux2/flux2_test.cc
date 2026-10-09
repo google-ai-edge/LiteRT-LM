@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
@@ -45,6 +49,8 @@
 #include "omni/text2image/flux2/flux2_math.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
 #include "omni/text2image/flux2/flux2_vae_decoder_stage.h"
+#include "omni/text2image/flux2/klein_denoiser_stage.h"
+#include "omni/text2image/flux2/klein_text_encoder_stage.h"
 #include "omni/text2image/prompt_source.h"
 #include "omni/text2image/text_encoder_stage.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -1003,6 +1009,341 @@ TEST_F(Flux2StagesTest, FactoryRejectsMissingLmModelResources) {
                                     std::make_unique<PushPromptSource>(),
                                     resources, stages, &output_stage),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Flux2MathTest, Fp16ToFp32AndLookupFp16TokenEmbeddings) {
+  EXPECT_FLOAT_EQ(Fp16ToFp32(0x0000), 0.0f);
+  EXPECT_FLOAT_EQ(Fp16ToFp32(0x8000), -0.0f);
+  EXPECT_TRUE(std::signbit(Fp16ToFp32(0x8000)));
+  EXPECT_FLOAT_EQ(Fp16ToFp32(0x3c00), 1.0f);
+  EXPECT_FLOAT_EQ(Fp16ToFp32(0xc100), -2.5f);
+  // Subnormal: 2^-24 = 0x0001
+  EXPECT_FLOAT_EQ(Fp16ToFp32(0x0001), std::ldexp(1.0f, -24));
+  // Infinity and NaN
+  EXPECT_TRUE(std::isinf(Fp16ToFp32(0x7c00)));
+  EXPECT_GT(Fp16ToFp32(0x7c00), 0.0f);
+  EXPECT_TRUE(std::isinf(Fp16ToFp32(0xfc00)));
+  EXPECT_LT(Fp16ToFp32(0xfc00), 0.0f);
+  EXPECT_TRUE(std::isnan(Fp16ToFp32(0x7e00)));
+
+  // Build a 3-row x 2-col FP16 embedding table:
+  // row 0: [1.0, -2.5], row 1: [0.5, 2.0], row 2: [-1.0, 0.0]
+  const std::vector<uint16_t> table_u16 = {
+      0x3c00, 0xc100,  // token 0
+      0x3800, 0x4000,  // token 1
+      0xbc00, 0x0000,  // token 2
+  };
+  absl::string_view table_bytes(reinterpret_cast<const char*>(table_u16.data()),
+                                table_u16.size() * sizeof(uint16_t));
+  const std::vector<int32_t> token_ids = {2, 0, 1};
+  auto looked_up =
+      LookupFp16TokenEmbeddings(token_ids, table_bytes, /*hidden_dim=*/2);
+  ASSERT_OK(looked_up);
+  EXPECT_THAT(*looked_up, ElementsAre(-1.0f, 0.0f, 1.0f, -2.5f, 0.5f, 2.0f));
+
+  // Invalid arguments / out of bounds
+  EXPECT_THAT(LookupFp16TokenEmbeddings(token_ids, table_bytes,
+                                        /*hidden_dim=*/0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(LookupFp16TokenEmbeddings(token_ids, table_bytes.substr(0, 3),
+                                        /*hidden_dim=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(LookupFp16TokenEmbeddings({-1}, table_bytes, /*hidden_dim=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(LookupFp16TokenEmbeddings({3}, table_bytes, /*hidden_dim=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Flux2MathTest, BuildCausalPaddingAttentionMaskAndRotaryEmbeds) {
+  // 2 heads, seq_len=3, active_len=2 (token 2 is padding).
+  constexpr float kNegInf = -1e9f;
+  auto mask_4d = BuildCausalPaddingAttentionMask(
+      /*seq_len=*/3, /*active_len=*/2, /*num_heads=*/2, kNegInf);
+  ASSERT_OK(mask_4d);
+  ASSERT_EQ(mask_4d->size(), 2 * 3 * 3);
+  for (int h = 0; h < 2; ++h) {
+    const size_t base = static_cast<size_t>(h) * 9;
+    // Query 0 can attend only to Key 0: [0, -inf, -2*inf]
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 0], 0.0f);
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 1], kNegInf);
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 2], 2.0f * kNegInf);
+    // Query 1 can attend to Keys 0 and 1, Key 2 is future/pad: [0, 0, -2*inf]
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 3], 0.0f);
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 4], 0.0f);
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 5], 2.0f * kNegInf);
+    // Query 2 can attend to Keys 0 and 1, Key 2 is pad: [0, 0, -inf]
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 6], 0.0f);
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 7], 0.0f);
+    EXPECT_FLOAT_EQ((*mask_4d)[base + 8], kNegInf);
+  }
+  EXPECT_THAT(BuildCausalPaddingAttentionMask(/*seq_len=*/0, /*active_len=*/1,
+                                              /*num_heads=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(BuildCausalPaddingAttentionMask(/*seq_len=*/3, /*active_len=*/2,
+                                              /*num_heads=*/0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Qwen3 RoPE
+  auto qwen_rope = BuildQwen3RotaryPosEmbed(/*seq_len=*/2, /*head_dim=*/4,
+                                            /*theta=*/10000.0f);
+  ASSERT_OK(qwen_rope);
+  ASSERT_EQ(qwen_rope->first.size(), 8);
+  ASSERT_EQ(qwen_rope->second.size(), 8);
+  // Position 0: cos=1, sin=0
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_FLOAT_EQ(qwen_rope->first[i], 1.0f);
+    EXPECT_FLOAT_EQ(qwen_rope->second[i], 0.0f);
+  }
+  // Position 1: freq_0 = 1.0, freq_1 = 10000^(-2/4) = 0.01, duplicated across
+  // half_dim=2
+  EXPECT_THAT(qwen_rope->first[4], FloatNear(std::cos(1.0f), 1e-6f));
+  EXPECT_THAT(qwen_rope->first[5], FloatNear(std::cos(0.01f), 1e-6f));
+  EXPECT_THAT(qwen_rope->first[6], FloatNear(std::cos(1.0f), 1e-6f));
+  EXPECT_THAT(qwen_rope->first[7], FloatNear(std::cos(0.01f), 1e-6f));
+  EXPECT_THAT(BuildQwen3RotaryPosEmbed(/*seq_len=*/0, /*head_dim=*/4),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(BuildQwen3RotaryPosEmbed(/*seq_len=*/2, /*head_dim=*/3),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // InterleaveThreeEncoderTaps: seq_len=2, hidden_dim=2
+  const std::vector<float> tap0 = {1.0f, 2.0f, 3.0f, 4.0f};
+  const std::vector<float> tap1 = {10.0f, 20.0f, 30.0f, 40.0f};
+  const std::vector<float> tap2 = {100.0f, 200.0f, 300.0f, 400.0f};
+  auto interleaved = InterleaveThreeEncoderTaps(tap0, tap1, tap2, /*seq_len=*/2,
+                                                /*hidden_dim=*/2);
+  ASSERT_OK(interleaved);
+  EXPECT_THAT(*interleaved,
+              ElementsAre(1.0f, 2.0f, 10.0f, 20.0f, 100.0f, 200.0f, 3.0f, 4.0f,
+                          30.0f, 40.0f, 300.0f, 400.0f));
+  EXPECT_THAT(InterleaveThreeEncoderTaps(tap0, tap1, {1.0f}, /*seq_len=*/2,
+                                         /*hidden_dim=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // BuildFlux2RotaryPosEmbed: seq_len=2, grid_h=1, grid_w=2 -> total_tokens=4
+  std::vector<float> joint_ids = BuildTextPositionIds(/*seq_len=*/2);
+  const std::vector<float> img_ids =
+      BuildImagePositionIds(/*grid_h=*/1, /*grid_w=*/2);
+  joint_ids.insert(joint_ids.end(), img_ids.begin(), img_ids.end());
+  const std::vector<int> axes_dim = {4, 4, 4, 4};
+  auto flux_rope = BuildFlux2RotaryPosEmbed(joint_ids, /*num_tokens=*/4,
+                                            axes_dim, /*theta=*/2000.0f);
+  ASSERT_OK(flux_rope);
+  ASSERT_EQ(flux_rope->first.size(), 4 * 16);
+  ASSERT_EQ(flux_rope->second.size(), 4 * 16);
+  // Token 0 is text token at pos (0, 0, 0, 0) -> all cos=1, sin=0
+  for (int d = 0; d < 16; ++d) {
+    EXPECT_FLOAT_EQ(flux_rope->first[d], 1.0f);
+    EXPECT_FLOAT_EQ(flux_rope->second[d], 0.0f);
+  }
+  EXPECT_THAT(
+      BuildFlux2RotaryPosEmbed(joint_ids, /*num_tokens=*/0, axes_dim),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  const std::vector<int> bad_axes = {4, 4, 4};
+  EXPECT_THAT(BuildFlux2RotaryPosEmbed(joint_ids, /*num_tokens=*/4, bad_axes),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(Flux2StagesTest, EndToEndKleinStagesWithMockRunners) {
+  // Scaled-down dimensions for fast unit testing:
+  // seq_len = 8, hidden_dim = 4 -> prompt_dim = 12, num_heads = 2, head_dim = 4
+  // img_size = 16 -> tokens = 1, packed_ch = 128, dit_hidden_dim = 8, steps = 2
+  Flux2ModelConfig config;
+  config.is_klein = true;
+  config.seq_len = 8;
+  config.prompt_dim = 12;
+  config.img_size = 16;
+  config.packed_ch = 128;
+  config.steps = 2;
+
+  const int kHiddenDim = 4;
+  const int kNumHeads = 2;
+  const int kQwenHeadDim = 4;
+  const int kDitHiddenDim = 8;
+  const int kDitHeadDim = 128;
+  const int kJointTokens = config.seq_len + 1;
+
+  // Build a dummy FP16 embedding table with 1024 vocab entries x 4 hidden_dim
+  // filled with FP16 0.5 (0x3800).
+  std::vector<uint16_t> embed_u16(1024 * kHiddenDim, 0x3800);
+  absl::string_view embed_table_bytes(
+      reinterpret_cast<const char*>(embed_u16.data()),
+      embed_u16.size() * sizeof(uint16_t));
+
+  PushPromptSource prompt_source(ImageGenInputMetadata{
+      .width = 16, .height = 16, .num_inference_steps = 2, .seed = 11});
+
+  // 1. KleinTextEncoderStage (3 shards)
+  std::array<std::unique_ptr<LiteRtRunner>, 3> textenc_runners;
+  for (int i = 0; i < 3; ++i) {
+    auto runner = std::make_unique<MockLiteRtRunner>();
+    ExpectBuffers(
+        *runner,
+        {{ElementType::Float32, {1, config.seq_len, kHiddenDim}, 4},
+         {ElementType::Float32,
+          {1, kNumHeads, config.seq_len, config.seq_len},
+          4},
+         {ElementType::Float32, {1, config.seq_len, kQwenHeadDim}, 4},
+         {ElementType::Float32, {1, config.seq_len, kQwenHeadDim}, 4}},
+        {{ElementType::Float32, {1, config.seq_len, kHiddenDim}, 4}});
+    EXPECT_CALL(*runner, Run(absl::string_view(""), _, _))
+        .WillOnce([i, &config](
+                      absl::string_view, absl::Span<const TensorBuffer> inputs,
+                      absl::Span<const TensorBuffer> outputs) {
+          EXPECT_EQ(inputs.size(), 4);
+          EXPECT_EQ(outputs.size(), 1);
+          std::vector<float> tap_vals(config.seq_len * kHiddenDim,
+                                      static_cast<float>(i + 1));
+          auto& tap_out = const_cast<TensorBuffer&>(outputs[0]);
+          EXPECT_TRUE(tap_out.Write<float>(tap_vals).HasValue());
+          return absl::OkStatus();
+        });
+    textenc_runners[i] = std::move(runner);
+  }
+
+  KleinTextEncoderStage::Config textenc_config;
+  textenc_config.framing.seq_len = config.seq_len;
+  textenc_config.framing.prefix_token_ids = {1, 2};
+  textenc_config.framing.suffix_token_ids = {3};
+  textenc_config.framing.pad_token_id = 0;
+  textenc_config.prompt_dim = config.prompt_dim;
+
+  auto textenc_stage = KleinTextEncoderStage::Create(
+      &prompt_source,
+      std::make_unique<FakeTokenizer>(support::TokenIds{10, 20}),
+      std::move(textenc_runners), embed_table_bytes, textenc_config);
+  ASSERT_OK(textenc_stage);
+
+  // 2. KleinDenoiserStage (8 shards: initial, 2 double, 4 single, final)
+  KleinDenoiserStage::Runners dit_runners;
+
+  auto init_runner = std::make_unique<MockLiteRtRunner>();
+  ExpectBuffers(
+      *init_runner,
+      {{ElementType::Float32, {1, 1, config.packed_ch}, 4},
+       {ElementType::Float32, {1, config.seq_len, config.prompt_dim}, 4},
+       {ElementType::Float32, {1}, 4}},
+      {{ElementType::Float32, {1, 1, kDitHiddenDim}, 4},
+       {ElementType::Float32, {1, config.seq_len, kDitHiddenDim}, 4},
+       {ElementType::Float32, {1, 6 * kDitHiddenDim}, 4},
+       {ElementType::Float32, {1, 6 * kDitHiddenDim}, 4},
+       {ElementType::Float32, {1, 3 * kDitHiddenDim}, 4},
+       {ElementType::Float32, {1, kDitHiddenDim}, 4}});
+  EXPECT_CALL(*init_runner, Run(absl::string_view(""), _, _))
+      .WillRepeatedly([&](absl::string_view, absl::Span<const TensorBuffer>,
+                          absl::Span<const TensorBuffer> outputs) {
+        for (size_t idx = 0; idx < outputs.size(); ++idx) {
+          auto& out = const_cast<TensorBuffer&>(outputs[idx]);
+          auto sz = out.PackedSize();
+          EXPECT_TRUE(sz.HasValue());
+          std::vector<float> zeros(*sz / sizeof(float), 0.1f);
+          EXPECT_TRUE(out.Write<float>(zeros).HasValue());
+        }
+        return absl::OkStatus();
+      });
+  dit_runners.initial = std::move(init_runner);
+
+  for (int i = 0; i < 2; ++i) {
+    auto dbl_runner = std::make_unique<MockLiteRtRunner>();
+    ExpectBuffers(
+        *dbl_runner,
+        {{ElementType::Float32, {1, 1, kDitHiddenDim}, 4},
+         {ElementType::Float32, {1, config.seq_len, kDitHiddenDim}, 4},
+         {ElementType::Float32, {1, kJointTokens, 1, kDitHeadDim}, 4},
+         {ElementType::Float32, {1, kJointTokens, 1, kDitHeadDim}, 4},
+         {ElementType::Float32, {1, 6 * kDitHiddenDim}, 4},
+         {ElementType::Float32, {1, 6 * kDitHiddenDim}, 4}},
+        {{ElementType::Float32, {1, 1, kDitHiddenDim}, 4},
+         {ElementType::Float32, {1, config.seq_len, kDitHiddenDim}, 4}});
+    EXPECT_CALL(*dbl_runner, Run(absl::string_view(""), _, _))
+        .WillRepeatedly([&](absl::string_view, absl::Span<const TensorBuffer>,
+                            absl::Span<const TensorBuffer> outputs) {
+          std::vector<float> img_out(1 * kDitHiddenDim, 0.2f);
+          std::vector<float> txt_out(config.seq_len * kDitHiddenDim, 0.3f);
+          EXPECT_TRUE(const_cast<TensorBuffer&>(outputs[0])
+                          .Write<float>(img_out)
+                          .HasValue());
+          EXPECT_TRUE(const_cast<TensorBuffer&>(outputs[1])
+                          .Write<float>(txt_out)
+                          .HasValue());
+          return absl::OkStatus();
+        });
+    dit_runners.double_blocks[i] = std::move(dbl_runner);
+  }
+
+  for (int i = 0; i < 4; ++i) {
+    auto sgl_runner = std::make_unique<MockLiteRtRunner>();
+    ExpectBuffers(
+        *sgl_runner,
+        {{ElementType::Float32, {1, kJointTokens, kDitHiddenDim}, 4},
+         {ElementType::Float32, {1, kJointTokens, 1, kDitHeadDim}, 4},
+         {ElementType::Float32, {1, kJointTokens, 1, kDitHeadDim}, 4},
+         {ElementType::Float32, {1, 3 * kDitHiddenDim}, 4}},
+        {{ElementType::Float32, {1, kJointTokens, kDitHiddenDim}, 4}});
+    EXPECT_CALL(*sgl_runner, Run(absl::string_view(""), _, _))
+        .WillRepeatedly([&](absl::string_view, absl::Span<const TensorBuffer>,
+                            absl::Span<const TensorBuffer> outputs) {
+          std::vector<float> joint_out(kJointTokens * kDitHiddenDim, 0.4f);
+          EXPECT_TRUE(const_cast<TensorBuffer&>(outputs[0])
+                          .Write<float>(joint_out)
+                          .HasValue());
+          return absl::OkStatus();
+        });
+    dit_runners.single_blocks[i] = std::move(sgl_runner);
+  }
+
+  int final_calls = 0;
+  auto final_runner = std::make_unique<MockLiteRtRunner>();
+  ExpectBuffers(
+      *final_runner,
+      {{ElementType::Float32, {1, kJointTokens, kDitHiddenDim}, 4},
+       {ElementType::Float32, {1, kDitHiddenDim}, 4}},
+      {{ElementType::Float32, {1, 1, config.packed_ch}, 4}});
+  EXPECT_CALL(*final_runner, Run(absl::string_view(""), _, _))
+      .WillRepeatedly([&](absl::string_view, absl::Span<const TensorBuffer>,
+                          absl::Span<const TensorBuffer> outputs) {
+        ++final_calls;
+        std::vector<float> vel(config.packed_ch, 0.5f);
+        EXPECT_TRUE(
+            const_cast<TensorBuffer&>(outputs[0]).Write<float>(vel).HasValue());
+        return absl::OkStatus();
+      });
+  dit_runners.final_stage = std::move(final_runner);
+
+  auto denoiser_stage = KleinDenoiserStage::Create(
+      textenc_stage->get(), config, std::move(dit_runners));
+  ASSERT_OK(denoiser_stage);
+
+  // 3. Flux2VaeDecoderStage
+  auto vae_runner = std::make_unique<MockLiteRtRunner>();
+  ExpectBuffers(*vae_runner, {{ElementType::Float32, {1, 32, 2, 2}, 4}},
+                {{ElementType::Float32, {1, 3, 16, 16}, 4}});
+  EXPECT_CALL(*vae_runner, Run(absl::string_view(""), _, _))
+      .WillOnce([](absl::string_view, absl::Span<const TensorBuffer>,
+                   absl::Span<const TensorBuffer> outputs) {
+        std::vector<float> decoded(3 * 16 * 16, 0.0f);
+        EXPECT_TRUE(const_cast<TensorBuffer&>(outputs[0])
+                        .Write<float>(decoded)
+                        .HasValue());
+        return absl::OkStatus();
+      });
+  auto vae_stage = Flux2VaeDecoderStage::Create(denoiser_stage->get(), config,
+                                                std::move(vae_runner));
+  ASSERT_OK(vae_stage);
+
+  ASSERT_OK(prompt_source.PushPrompt("sharded klein test"));
+  ASSERT_OK((*textenc_stage)->Schedule());
+  ASSERT_OK((*denoiser_stage)->Schedule());
+  EXPECT_EQ(final_calls, 2);
+  ASSERT_OK((*vae_stage)->Schedule());
+
+  ASSERT_TRUE((*vae_stage)->HasOutput());
+  auto out = (*vae_stage)->GetOutput();
+  ASSERT_OK(out);
+  const auto& img = std::get<ImageOutput>(*out);
+  EXPECT_EQ(img.width, 16);
+  EXPECT_EQ(img.height, 16);
+  EXPECT_EQ(img.channels, 3);
+  EXPECT_EQ(img.rgb_data[0], 128);
 }
 
 }  // namespace

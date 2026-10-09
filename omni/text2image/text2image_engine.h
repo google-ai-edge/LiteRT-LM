@@ -40,6 +40,9 @@ enum class ModelType {
   // 3-graph FLUX.2-klein-4B / Bonsai-Image-ternary-4B pipeline
   // (textenc + dit + vae_dec).
   BONSAI_FLUX2 = 1,
+  // Sharded 12-part FLUX.2-klein-4B pipeline (3 textenc shards + FP16 token
+  // embedding table + 8 DiT shards + vae_dec).
+  FLUX2_KLEIN = 2,
 };
 
 // Model-specific configuration variant.
@@ -73,8 +76,9 @@ class Text2ImageEngine {
     ModelConfig model_config;
 
     ModelType GetModelType() const {
-      if (std::holds_alternative<Flux2ModelConfig>(model_config)) {
-        return ModelType::BONSAI_FLUX2;
+      if (const auto* config = std::get_if<Flux2ModelConfig>(&model_config)) {
+        return config->is_klein ? ModelType::FLUX2_KLEIN
+                                : ModelType::BONSAI_FLUX2;
       }
       return ModelType::UNSPECIFIED;
     }

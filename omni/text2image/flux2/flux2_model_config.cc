@@ -175,12 +175,18 @@ void PopulateFlux2ConfigFromProto(const lm::proto::Flux2Params& params,
 
 void PopulateFlux2ConfigFromProto(const lm::proto::BonsaiFlux2& proto,
                                   Flux2ModelConfig& config) {
+  config.is_klein = false;
   PopulateFlux2ConfigFromProto(proto.flux2_params(), config);
 }
 
 void PopulateFlux2ConfigFromProto(const lm::proto::Flux2Klein& proto,
                                   Flux2ModelConfig& config) {
+  config.is_klein = true;
   PopulateFlux2ConfigFromProto(proto.flux2_params(), config);
+  if (proto.has_text_embed_table_key() &&
+      !proto.text_embed_table_key().empty()) {
+    config.text_embed_table_key = proto.text_embed_table_key();
+  }
 }
 
 }  // namespace litert::omni::text2image

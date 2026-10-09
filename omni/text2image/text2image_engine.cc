@@ -47,9 +47,19 @@ absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
     lm::ModelResources& lm_resources) {
   auto image_gen_metadata = lm_resources.GetImageGenMetadata();
   if (image_gen_metadata.ok() && *image_gen_metadata != nullptr) {
-    if ((*image_gen_metadata)->image_gen_model_type().has_bonsai_flux2()) {
+    const auto& model_type = (*image_gen_metadata)->image_gen_model_type();
+    if (model_type.has_bonsai_flux2()) {
       return ModelType::BONSAI_FLUX2;
     }
+    if (model_type.has_flux2_klein()) {
+      return ModelType::FLUX2_KLEIN;
+    }
+  }
+  if (lm_resources
+          .GetTFLiteModelBuffer(lm::proto::ImageGenMetadata::
+                                    TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
+          .ok()) {
+    return ModelType::FLUX2_KLEIN;
   }
   if (lm_resources
           .GetTFLiteModelBuffer(
@@ -109,6 +119,12 @@ absl::StatusOr<std::unique_ptr<Text2ImageEngine>> Text2ImageEngine::Create(
       case ModelType::BONSAI_FLUX2:
         resolved_settings.model_config = Flux2ModelConfig{};
         break;
+      case ModelType::FLUX2_KLEIN: {
+        Flux2ModelConfig config;
+        config.is_klein = true;
+        resolved_settings.model_config = std::move(config);
+        break;
+      }
       case ModelType::UNSPECIFIED:
         return absl::InvalidArgumentError(
             absl::StrCat("Unable to determine the text2image model type from ",

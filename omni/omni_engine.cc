@@ -138,11 +138,18 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
     return tts::TtsSessionFactory::CreateFactory(
         BuildTtsSettings(model_folder, tts::Qwen3TtsModelConfig{}, options));
   }
-  if (lower_name == "bonsai-flux2" || lower_name == "flux2" ||
-      lower_name == "flux2-klein" || lower_name == "flux.2-klein-4b") {
+  if (lower_name == "bonsai-flux2" || lower_name == "bonsai_flux2" ||
+      lower_name == "flux2") {
     return text2image::Text2ImageSessionFactory::CreateFactory(
         BuildText2ImageSettings(model_folder, text2image::Flux2ModelConfig{},
                                 options));
+  }
+  if (lower_name == "flux2-klein" || lower_name == "flux2_klein" ||
+      lower_name == "flux.2-klein-4b") {
+    text2image::Flux2ModelConfig config;
+    config.is_klein = true;
+    return text2image::Text2ImageSessionFactory::CreateFactory(
+        BuildText2ImageSettings(model_folder, std::move(config), options));
   }
 
   // 3. Check if `model_name` is a directory path containing recognizable TTS
@@ -166,6 +173,10 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
     text2image::ModelConfig model_config;
     if (*detected_text2image == text2image::ModelType::BONSAI_FLUX2) {
       model_config = text2image::Flux2ModelConfig{};
+    } else if (*detected_text2image == text2image::ModelType::FLUX2_KLEIN) {
+      text2image::Flux2ModelConfig config;
+      config.is_klein = true;
+      model_config = std::move(config);
     }
     return text2image::Text2ImageSessionFactory::CreateFactory(
         BuildText2ImageSettings(model_name, std::move(model_config), options));

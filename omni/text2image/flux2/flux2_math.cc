@@ -18,12 +18,15 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::omni::text2image {
@@ -190,6 +193,223 @@ absl::StatusOr<std::vector<uint8_t>> ConvertNchwToRgb888(
     rgb[i * 3 + 2] = FloatToUint8Channel(b_plane[i]);
   }
   return rgb;
+}
+
+// TODO(b/568027544): Move generic utility functions to a common directory such
+// as `base/` or `util/`.
+float Fp16ToFp32(uint16_t h) {
+  const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+  uint32_t exp = (h >> 10) & 0x1Fu;
+  uint32_t mant = h & 0x03FFu;
+  uint32_t bits = 0;
+  if (exp == 0) {
+    if (mant == 0) {
+      bits = sign;
+    } else {
+      exp = 1;
+      while ((mant & 0x0400u) == 0) {
+        mant <<= 1;
+        --exp;
+      }
+      mant &= 0x03FFu;
+      bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+    }
+  } else if (exp == 0x1Fu) {
+    bits = sign | 0x7F800000u | (mant << 13);
+  } else {
+    bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+  }
+  float out = 0.0f;
+  std::memcpy(&out, &bits, sizeof(float));
+  return out;
+}
+
+absl::StatusOr<std::vector<float>> LookupFp16TokenEmbeddings(
+    absl::Span<const int32_t> token_ids, absl::string_view fp16_table_bytes,
+    int hidden_dim) {
+  if (hidden_dim <= 0) {
+    return absl::InvalidArgumentError("hidden_dim must be positive.");
+  }
+  const size_t row_bytes = static_cast<size_t>(hidden_dim) * sizeof(uint16_t);
+  if (fp16_table_bytes.empty() || fp16_table_bytes.size() % row_bytes != 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "fp16_table_bytes size (", fp16_table_bytes.size(),
+        ") must be a positive multiple of row_bytes (", row_bytes, ")."));
+  }
+  const size_t vocab_size = fp16_table_bytes.size() / row_bytes;
+  std::vector<float> out(token_ids.size() * static_cast<size_t>(hidden_dim));
+  const auto* raw_bytes =
+      reinterpret_cast<const uint8_t*>(fp16_table_bytes.data());
+
+  for (size_t t = 0; t < token_ids.size(); ++t) {
+    const int32_t id = token_ids[t];
+    if (id < 0 || static_cast<size_t>(id) >= vocab_size) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("token_id (", id, ") out of bounds for vocab_size (",
+                       vocab_size, ")."));
+    }
+    const uint8_t* row_ptr = raw_bytes + static_cast<size_t>(id) * row_bytes;
+    float* dst_ptr = out.data() + t * static_cast<size_t>(hidden_dim);
+    for (int d = 0; d < hidden_dim; ++d) {
+      const uint16_t h =
+          static_cast<uint16_t>(row_ptr[2 * d]) |
+          (static_cast<uint16_t>(row_ptr[2 * d + 1]) << 8);
+      dst_ptr[d] = Fp16ToFp32(h);
+    }
+  }
+  return out;
+}
+
+absl::StatusOr<std::vector<float>> BuildCausalPaddingAttentionMask(
+    int seq_len, int active_len, int num_heads, float neg_inf) {
+  if (seq_len <= 0) {
+    return absl::InvalidArgumentError("seq_len must be positive.");
+  }
+  if (active_len < 0 || active_len > seq_len) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("active_len (", active_len, ") must be in [0, seq_len=",
+                     seq_len, "]."));
+  }
+  if (num_heads <= 0) {
+    return absl::InvalidArgumentError("num_heads must be positive.");
+  }
+  const size_t plane = static_cast<size_t>(seq_len) * seq_len;
+  std::vector<float> mask(static_cast<size_t>(num_heads) * plane, 0.0f);
+  for (int q = 0; q < seq_len; ++q) {
+    for (int k = 0; k < seq_len; ++k) {
+      const float val =
+          (k > q ? neg_inf : 0.0f) + (k >= active_len ? neg_inf : 0.0f);
+      mask[static_cast<size_t>(q) * seq_len + k] = val;
+    }
+  }
+  for (int h = 1; h < num_heads; ++h) {
+    std::memcpy(mask.data() + static_cast<size_t>(h) * plane, mask.data(),
+                plane * sizeof(float));
+  }
+  return mask;
+}
+
+absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
+BuildQwen3RotaryPosEmbed(int seq_len, int head_dim, float theta) {
+  if (seq_len <= 0) {
+    return absl::InvalidArgumentError("seq_len must be positive.");
+  }
+  if (head_dim <= 0 || head_dim % 2 != 0) {
+    return absl::InvalidArgumentError(
+        "head_dim must be a positive even integer.");
+  }
+  if (theta <= 0.0f) {
+    return absl::InvalidArgumentError("theta must be positive.");
+  }
+  const int half_dim = head_dim / 2;
+  std::vector<double> inv_freq(half_dim);
+  for (int i = 0; i < half_dim; ++i) {
+    inv_freq[i] = 1.0 / std::pow(static_cast<double>(theta),
+                                 static_cast<double>(2 * i) / head_dim);
+  }
+  const size_t total = static_cast<size_t>(seq_len) * head_dim;
+  std::vector<float> cos_out(total);
+  std::vector<float> sin_out(total);
+  for (int pos = 0; pos < seq_len; ++pos) {
+    float* cos_row = cos_out.data() + static_cast<size_t>(pos) * head_dim;
+    float* sin_row = sin_out.data() + static_cast<size_t>(pos) * head_dim;
+    for (int i = 0; i < half_dim; ++i) {
+      const double angle = static_cast<double>(pos) * inv_freq[i];
+      const float c = static_cast<float>(std::cos(angle));
+      const float s = static_cast<float>(std::sin(angle));
+      cos_row[i] = c;
+      cos_row[half_dim + i] = c;
+      sin_row[i] = s;
+      sin_row[half_dim + i] = s;
+    }
+  }
+  return std::make_pair(std::move(cos_out), std::move(sin_out));
+}
+
+absl::StatusOr<std::vector<float>> InterleaveThreeEncoderTaps(
+    absl::Span<const float> tap0, absl::Span<const float> tap1,
+    absl::Span<const float> tap2, int seq_len, int hidden_dim) {
+  if (seq_len <= 0 || hidden_dim <= 0) {
+    return absl::InvalidArgumentError(
+        "seq_len and hidden_dim must be positive.");
+  }
+  const size_t expected = static_cast<size_t>(seq_len) * hidden_dim;
+  if (tap0.size() != expected || tap1.size() != expected ||
+      tap2.size() != expected) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Encoder tap sizes (", tap0.size(), ", ", tap1.size(), ", ",
+        tap2.size(), ") must all equal seq_len * hidden_dim (", expected,
+        ")."));
+  }
+  std::vector<float> out(expected * 3);
+  const size_t row_bytes = static_cast<size_t>(hidden_dim) * sizeof(float);
+  for (int s = 0; s < seq_len; ++s) {
+    float* dst = out.data() + static_cast<size_t>(s) * 3 * hidden_dim;
+    const size_t src_off = static_cast<size_t>(s) * hidden_dim;
+    std::memcpy(dst, tap0.data() + src_off, row_bytes);
+    std::memcpy(dst + hidden_dim, tap1.data() + src_off, row_bytes);
+    std::memcpy(dst + 2 * hidden_dim, tap2.data() + src_off, row_bytes);
+  }
+  return out;
+}
+
+absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
+BuildFlux2RotaryPosEmbed(absl::Span<const float> joint_ids, int num_tokens,
+                         absl::Span<const int> axes_dim, float theta) {
+  if (num_tokens <= 0) {
+    return absl::InvalidArgumentError("num_tokens must be positive.");
+  }
+  if (axes_dim.empty()) {
+    return absl::InvalidArgumentError("axes_dim must not be empty.");
+  }
+  if (theta <= 0.0f) {
+    return absl::InvalidArgumentError("theta must be positive.");
+  }
+  const size_t num_axes = axes_dim.size();
+  if (joint_ids.size() != static_cast<size_t>(num_tokens) * num_axes) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "joint_ids size (", joint_ids.size(),
+        ") must equal num_tokens * axes_dim.size() (",
+        static_cast<size_t>(num_tokens) * num_axes, ")."));
+  }
+  int total_dim = 0;
+  for (int dim : axes_dim) {
+    if (dim <= 0 || dim % 2 != 0) {
+      return absl::InvalidArgumentError(
+          "Each entry in axes_dim must be a positive even integer.");
+    }
+    total_dim += dim;
+  }
+
+  const size_t total_elements = static_cast<size_t>(num_tokens) * total_dim;
+  std::vector<float> cos_out(total_elements);
+  std::vector<float> sin_out(total_elements);
+
+  for (int n = 0; n < num_tokens; ++n) {
+    float* cos_row = cos_out.data() + static_cast<size_t>(n) * total_dim;
+    float* sin_row = sin_out.data() + static_cast<size_t>(n) * total_dim;
+    int col_offset = 0;
+    for (size_t a = 0; a < num_axes; ++a) {
+      const int dim = axes_dim[a];
+      const int half_dim = dim / 2;
+      const double pos =
+          static_cast<double>(joint_ids[static_cast<size_t>(n) * num_axes + a]);
+      for (int j = 0; j < half_dim; ++j) {
+        const double inv_freq =
+            1.0 / std::pow(static_cast<double>(theta),
+                           static_cast<double>(2 * j) / dim);
+        const double angle = pos * inv_freq;
+        const float c = static_cast<float>(std::cos(angle));
+        const float s = static_cast<float>(std::sin(angle));
+        cos_row[col_offset + 2 * j] = c;
+        cos_row[col_offset + 2 * j + 1] = c;
+        sin_row[col_offset + 2 * j] = s;
+        sin_row[col_offset + 2 * j + 1] = s;
+      }
+      col_offset += dim;
+    }
+  }
+  return std::make_pair(std::move(cos_out), std::move(sin_out));
 }
 
 }  // namespace litert::omni::text2image

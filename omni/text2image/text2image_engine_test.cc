@@ -167,6 +167,48 @@ TEST(PushPromptSourceTest, PushScheduleAndFinish) {
               StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
+void WriteDummyKleinLitertLmFile(const std::filesystem::path& path) {
+  lm::proto::ImageGenMetadata meta;
+  meta.mutable_image_gen_model_type()
+      ->mutable_flux2_klein()
+      ->mutable_flux2_params()
+      ->set_seq_len(256);
+  std::string meta_bytes = meta.SerializeAsString();
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  uint64_t meta_begin = 256;
+  uint64_t meta_end = meta_begin + meta_bytes.size();
+  auto image_gen_meta_section = lm::schema::CreateSectionObject(
+      builder, /*items=*/0, meta_begin, meta_end,
+      lm::schema::AnySectionDataType_ImageGenMetadataProto);
+
+  std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
+      image_gen_meta_section};
+  auto section_metadata = lm::schema::CreateSectionMetadata(
+      builder, builder.CreateVector(sections));
+  auto metadata =
+      lm::schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+
+  std::ofstream file(path, std::ios::binary);
+  file.write("LITERTLM", 8);
+  uint32_t major = 1, minor = 0, patch = 0, padding = 0;
+  file.write(reinterpret_cast<const char*>(&major), sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&minor), sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&patch), sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&padding), sizeof(uint32_t));
+  uint64_t header_end_offset = 32 + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end_offset),
+             sizeof(uint64_t));
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  if (header_end_offset < meta_begin) {
+    std::string pad(meta_begin - header_end_offset, '\0');
+    file.write(pad.data(), pad.size());
+  }
+  file.write(meta_bytes.data(), meta_bytes.size());
+}
+
 TEST(DetectModelTypeTest, DetectsBonsaiFlux2FromLitertLmFileAndFolder) {
   std::filesystem::path temp_dir =
       std::filesystem::path(::testing::TempDir()) / "bonsai_litertlm_dir";
@@ -178,6 +220,20 @@ TEST(DetectModelTypeTest, DetectsBonsaiFlux2FromLitertLmFileAndFolder) {
               IsOkAndHolds(ModelType::BONSAI_FLUX2));
   EXPECT_THAT(DetectModelType(temp_dir.string()),
               IsOkAndHolds(ModelType::BONSAI_FLUX2));
+  std::filesystem::remove_all(temp_dir);
+}
+
+TEST(DetectModelTypeTest, DetectsFlux2KleinFromLitertLmFileAndFolder) {
+  std::filesystem::path temp_dir =
+      std::filesystem::path(::testing::TempDir()) / "klein_litertlm_dir";
+  std::filesystem::create_directories(temp_dir);
+  std::filesystem::path litertlm_file = temp_dir / "flux2_klein.litertlm";
+  WriteDummyKleinLitertLmFile(litertlm_file);
+
+  EXPECT_THAT(DetectModelType(litertlm_file.string()),
+              IsOkAndHolds(ModelType::FLUX2_KLEIN));
+  EXPECT_THAT(DetectModelType(temp_dir.string()),
+              IsOkAndHolds(ModelType::FLUX2_KLEIN));
   std::filesystem::remove_all(temp_dir);
 }
 
@@ -202,6 +258,12 @@ TEST(Text2ImageEngineTest, GetModelTypeAndResolveDefaultPromptParams) {
   flux2_config.steps = 4;
   settings.model_config = flux2_config;
   EXPECT_EQ(settings.GetModelType(), ModelType::BONSAI_FLUX2);
+
+  Flux2ModelConfig klein_config = flux2_config;
+  klein_config.is_klein = true;
+  settings.model_config = klein_config;
+  EXPECT_EQ(settings.GetModelType(), ModelType::FLUX2_KLEIN);
+  settings.model_config = flux2_config;
 
   auto engine = Text2ImageEngineTestingPeer::CreateWithSettings(settings);
   ImageGenInputMetadata resolved_defaults =

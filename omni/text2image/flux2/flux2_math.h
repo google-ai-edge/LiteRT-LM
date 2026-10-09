@@ -17,9 +17,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::omni::text2image {
@@ -54,6 +56,47 @@ absl::StatusOr<std::vector<float>> UnpatchifyLatents(
 // `round(clamp(y * 0.5 + 0.5, 0.0, 1.0) * 255.0)`.
 absl::StatusOr<std::vector<uint8_t>> ConvertNchwToRgb888(
     absl::Span<const float> nchw, int height, int width);
+
+// TODO(b/568027544): Move generic utility functions (e.g., `Fp16ToFp32` and
+// `LookupFp16TokenEmbeddings`) to a common directory such as `base/` or
+// `util/`.
+// Converts an IEEE-754 binary16 (FP16) value to IEEE-754 binary32 (float).
+float Fp16ToFp32(uint16_t h);
+
+// Looks up `token_ids` in a little-endian FP16 embedding table of row width
+// `hidden_dim` (`[vocab_size, hidden_dim]`) and returns `float` embeddings of
+// shape `[1, token_ids.size(), hidden_dim]`.
+absl::StatusOr<std::vector<float>> LookupFp16TokenEmbeddings(
+    absl::Span<const int32_t> token_ids, absl::string_view fp16_table_bytes,
+    int hidden_dim);
+
+// Builds a 4D additive causal + padding attention mask of shape
+// `[1, num_heads, seq_len, seq_len]` where entry `(q, k)` is
+// `(k > q ? neg_inf : 0.0f) + (k >= active_len ? neg_inf : 0.0f)`.
+absl::StatusOr<std::vector<float>> BuildCausalPaddingAttentionMask(
+    int seq_len, int active_len, int num_heads, float neg_inf = -1e9f);
+
+// Computes 1D Qwen3 rotary positional embeddings `(cos, sin)` of shape
+// `[1, seq_len, head_dim]` where `emb = concat(freqs, freqs, dim=-1)`.
+absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
+BuildQwen3RotaryPosEmbed(int seq_len, int head_dim = 128,
+                         float theta = 1000000.0f);
+
+// Interleaves three text encoder tap tensors of shape
+// `[1, seq_len, hidden_dim]` along the feature dimension into
+// `[1, seq_len, 3 * hidden_dim]`
+// (`stack([tap0, tap1, tap2], dim=1).permute(0, 2, 1, 3).reshape(1, S, 3*D)`).
+absl::StatusOr<std::vector<float>> InterleaveThreeEncoderTaps(
+    absl::Span<const float> tap0, absl::Span<const float> tap1,
+    absl::Span<const float> tap2, int seq_len, int hidden_dim);
+
+// Computes multi-axis FLUX.2 rotary positional embeddings `(cos, sin)` of shape
+// `[1, num_tokens, 1, sum(axes_dim)]` from `joint_ids` of shape
+// `[num_tokens, axes_dim.size()]`, matching `Flux2PosEmbed`
+// (`repeat_interleave` by 2 along each axis).
+absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
+BuildFlux2RotaryPosEmbed(absl::Span<const float> joint_ids, int num_tokens,
+                         absl::Span<const int> axes_dim, float theta = 2000.0f);
 
 }  // namespace litert::omni::text2image
 
