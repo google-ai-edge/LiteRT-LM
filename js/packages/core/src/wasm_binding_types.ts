@@ -16,7 +16,9 @@
 
 import {WasmModule} from '@litertjs/wasm-utils';
 
-import {type ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
+import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
+
+export {ReadableStreamDataStreamWrapper};
 
 /**
  * Backend types for LiteRT-LM.
@@ -105,7 +107,6 @@ declare interface ModelAssetsConstructor {
   // `ModelAssetsConstructor` as the class from which `ModelAssets` are
   // constructed, even though we don't use it.
   new(...args: never[]): ModelAssets;  // Do not call.
-  create(modelPath: string): ModelAssets;
   createStreaming(stream: ReadableStreamDataStream): ModelAssets;
 }
 
@@ -117,7 +118,6 @@ declare const ModelAssetsBrand: unique symbol;
 export declare interface ModelAssets extends Deletable {
   // Prevent accidentally assigning other objects as ModelAssets.
   [ModelAssetsBrand]: void;
-  getPath(): string;
 }
 
 /**
@@ -130,7 +130,7 @@ declare interface EngineSettingsConstructor {
   new(...args: never[]): EngineSettings;  // Do not call.
   createDefault(
       modelAssets: ModelAssets,
-      backend: EmscriptenEnumElement<Backend>): EngineSettings;
+      backend: EmscriptenEnumElement<Backend>): Promise<EngineSettings>;
 }
 
 declare const EngineSettingsBrand: unique symbol;
@@ -295,7 +295,7 @@ declare interface EngineConstructor {
   new(...args: never[]): Engine;  // Do not call.
   createEngine(engineSettings: EngineSettings, inputPromptAsHint: string):
       Promise<Engine>;
-  createStreaming(engineSettings: EngineSettings, inputPromptAsHint: string):
+  createLegacyEngine(engineSettings: EngineSettings, inputPromptAsHint: string):
       Promise<Engine>;
 }
 
@@ -616,7 +616,6 @@ export declare interface LiteRtLmWasm extends WasmModule {
   VectorVectorInt: VectorVectorIntConstructor;
   VectorFloat: VectorFloatConstructor;
   VectorEmbeddingResponse: VectorEmbeddingResponseConstructor;
-  FS: FileSystemApi;
   setupLogging(): void;
   Backend: BackendEnum;
   ModelAssets: ModelAssetsConstructor;
@@ -630,17 +629,4 @@ export declare interface LiteRtLmWasm extends WasmModule {
   ConversationConfig: ConversationConfigConstructor;
   Conversation: ConversationConstructor;
   clearStoredWeightsStreams(): Promise<void>;
-  WebGPU: {
-    getJsObject(id: number): unknown;
-  };
-}
-
-
-// Minimal subset of Emscripten FS api needed in order to write a model file to
-// the in-memory file system. This will likely be removed when we switch to
-// streaming loading.
-
-declare interface FileSystemApi {
-  writeFile(path: string, data: string|ArrayBufferView): void;
-  unlink(path: string): void;
 }

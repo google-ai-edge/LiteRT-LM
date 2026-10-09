@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-import {modelToStream} from './stream_utils.js';
+import {Cleanup} from './cleanup.js';
+import {createStreamingModelAssets, modelToStream} from './stream_utils.js';
+import {LiteRtLmWasm, ModelAssets, ReadableStreamDataStream} from './wasm_binding_types.js';
 
 describe('stream_utils', () => {
   it('converts a Blob to a ReadableStream', async () => {
@@ -36,4 +38,40 @@ describe('stream_utils', () => {
     const stream = await modelToStream(existingStream);
     expect(stream).toBe(existingStream);
   });
+
+  it('creates streaming ModelAssets and manages cleanup', async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3])]);
+    const cleanup = new Cleanup();
+    const mockDataStream =
+        jasmine.createSpyObj<ReadableStreamDataStream>('DataStream', ['delete']);
+    const mockModelAssets =
+        jasmine.createSpyObj<ModelAssets>('ModelAssets', ['delete']);
+    const mockWasm = {
+      HEAPU8: new Uint8Array(64),
+      ReadableStreamDataStream: {
+        create: jasmine.createSpy('create').and.returnValue(mockDataStream),
+      },
+      ModelAssets: {
+        createStreaming: jasmine.createSpy('createStreaming')
+                             .and.returnValue(mockModelAssets),
+      },
+    } as unknown as LiteRtLmWasm;
+
+    const {modelAssets, cleanupModelAssets} =
+        await createStreamingModelAssets(blob, mockWasm, cleanup);
+    expect(modelAssets).toBe(mockModelAssets);
+    expect(mockWasm.ModelAssets.createStreaming)
+        .toHaveBeenCalledWith(mockDataStream);
+
+    // Calling cleanupModelAssets deletes only the ModelAssets wrapper, leaving
+    // the underlying DataStream alive until cleanup.run() is called.
+    cleanupModelAssets();
+    expect(mockModelAssets.delete).toHaveBeenCalledTimes(1);
+    expect(mockDataStream.delete).not.toHaveBeenCalled();
+
+    cleanup.run();
+    expect(mockModelAssets.delete).toHaveBeenCalledTimes(1);
+    expect(mockDataStream.delete).toHaveBeenCalledTimes(1);
+  });
 });
+

@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl  // IWYU pragma: keep
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -35,7 +36,10 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/magic_number_configs_helper.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/logging.h"
+#include "runtime/util/scoped_file.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 
 namespace litert::lm {
 
@@ -191,6 +195,39 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   LITERT_ASSIGN_OR_RETURN(auto env,
                           Environment::Create(EnvironmentOptions(env_options)));
   return OwnedEnvironment{std::move(helper), std::move(env)};
+}
+
+absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets) {
+  if (model_assets.HasDataStream()) {
+    return false;
+  }
+
+  std::unique_ptr<LitertLmLoader> loader;
+  if (model_assets.HasMemoryMappedFile()) {
+    ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
+                          model_assets.GetMemoryMappedFile());
+    ABSL_ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
+  } else if (auto path = model_assets.GetPath(); path.ok()) {
+    ABSL_ASSIGN_OR_RETURN(auto file, ScopedFile::Open(*path));
+    ABSL_ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(std::move(file)));
+  } else {
+    ABSL_ASSIGN_OR_RETURN(auto scoped_file,
+                          model_assets.GetOrCreateScopedFile());
+    ABSL_ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
+    ABSL_ASSIGN_OR_RETURN(loader,
+                          LitertLmLoader::Create(std::move(duplicate_file)));
+  }
+
+  return loader
+             ->GetSectionLocation(
+                 BufferKey(schema::AnySectionDataType_TFLiteModel,
+                           ModelType::kTfLitePrefillDecode))
+             .ok() &&
+         loader
+             ->GetSectionLocation(
+                 BufferKey(schema::AnySectionDataType_TFLiteWeights,
+                           ModelType::kTfLitePrefillDecode))
+             .ok();
 }
 
 }  // namespace litert::lm

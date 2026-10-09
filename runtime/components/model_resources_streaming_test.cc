@@ -26,6 +26,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/data_stream.h"
@@ -94,10 +95,35 @@ TEST(ModelResourcesStreamingTest,
       absl::StatusCode::kUnimplemented);
 }
 
-TEST(ModelResourcesStreamingTest, GetTFLiteModelBackendConstraint) {
+TEST(ModelResourcesStreamingTest, SetAndGetTFLiteModelBackendConstraint) {
   ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
+                ModelType::kTfLitePrefillDecode),
+            std::nullopt);
+
+  model_resources.SetTFLiteModelBackendConstraint(
+      ModelType::kTfLitePrefillDecode, "gpu");
+  EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
+                ModelType::kTfLitePrefillDecode),
+            "gpu");
   EXPECT_EQ(
       model_resources.GetTFLiteModelBackendConstraint(ModelType::kUnknown),
+      std::nullopt);
+}
+
+TEST(ModelResourcesStreamingTest, SetAndGetTFLiteModelPreferActivationType) {
+  ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
+                ModelType::kTfLitePrefillDecode),
+            std::nullopt);
+
+  model_resources.SetTFLiteModelPreferActivationType(
+      ModelType::kTfLitePrefillDecode, "fp16");
+  EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
+                ModelType::kTfLitePrefillDecode),
+            "fp16");
+  EXPECT_EQ(
+      model_resources.GetTFLiteModelPreferActivationType(ModelType::kUnknown),
       std::nullopt);
 }
 
@@ -133,6 +159,25 @@ TEST(ModelResourcesStreamingTest, SetAndGetEmbeddingMetadata) {
   ASSERT_OK_AND_ASSIGN(const auto* retrieved_metadata,
                        model_resources.GetEmbeddingMetadata());
   EXPECT_EQ(retrieved_metadata->bos_token().token_str(), "<bos>");
+}
+
+TEST(ModelResourcesStreamingTest, SetAndGetExecutorMetadata) {
+  ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetExecutorMetadata().status().code(),
+            absl::StatusCode::kNotFound);
+
+  proto::ExecutorMetadata metadata;
+  metadata.mutable_llm_executor_metadata()
+      ->mutable_attention_mask_settings()
+      ->set_sliding_window_size(512);
+  model_resources.SetExecutorMetadata(metadata);
+
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_metadata,
+                       model_resources.GetExecutorMetadata());
+  EXPECT_EQ(retrieved_metadata->llm_executor_metadata()
+                .attention_mask_settings()
+                .sliding_window_size(),
+            512);
 }
 
 TEST(ModelResourcesStreamingTest, SetAndGetWeightsFromStream) {

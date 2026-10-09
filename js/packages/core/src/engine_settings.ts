@@ -36,7 +36,8 @@ export interface GpuArtisanConfig extends
  */
 export interface LlmExecutorSettings {
   maxNumTokens?: number;
-  backendConfig?: CpuConfig|GpuConfig|GpuArtisanConfig;
+  backendConfig?: Partial<CpuConfig>|Partial<GpuConfig>|
+      Partial<GpuArtisanConfig>;
   samplerBackend?: Backend;
   advancedSettings?: Partial<AdvancedSettings>;
 }
@@ -82,17 +83,44 @@ export function fillWasmEngineSettingsFromEngineSettings(
     if (mainExecutorSettings.backendConfig !== undefined) {
       const backendConfig = mainExecutorSettings.backendConfig;
       if (backend === Backend.CPU) {
-        wasmExecutorSettings.setBackendConfigCpu(backendConfig as CpuConfig);
+        const partialCpuConfig = backendConfig as Partial<CpuConfig>;
+        const cpuConfig: CpuConfig = {
+          kv_increment_size: partialCpuConfig.kv_increment_size ?? 0,
+          prefill_chunk_size: partialCpuConfig.prefill_chunk_size ?? 0,
+          number_of_threads: partialCpuConfig.number_of_threads ?? 0,
+        };
+        wasmExecutorSettings.setBackendConfigCpu(cpuConfig);
       } else if (backend === Backend.GPU) {
-        wasmExecutorSettings.setBackendConfigGpu(backendConfig as GpuConfig);
+        const partialGpuConfig = backendConfig as Partial<GpuConfig>;
+        const gpuConfig: GpuConfig = {
+          max_top_k: partialGpuConfig.max_top_k ?? 1,
+          external_tensor_mode: partialGpuConfig.external_tensor_mode ?? false,
+        };
+        wasmExecutorSettings.setBackendConfigGpu(gpuConfig);
       } else if (backend === Backend.GPU_ARTISAN) {
-        const gpuArtisanConfig = backendConfig as GpuArtisanConfig;
+        const partialGpuArtisanConfig =
+            backendConfig as Partial<GpuArtisanConfig>;
         const loraRanksVec = new wasm.VectorUint32();
         fillEmscriptenVector(
-            gpuArtisanConfig.supported_lora_ranks, loraRanksVec);
+            partialGpuArtisanConfig.supported_lora_ranks ?? [], loraRanksVec);
         const wasmGpuArtisanConfig: WasmGpuArtisanConfig = {
-          ...gpuArtisanConfig,
+          num_output_candidates:
+              partialGpuArtisanConfig.num_output_candidates ?? 1,
+          wait_for_weight_uploads:
+              partialGpuArtisanConfig.wait_for_weight_uploads ?? true,
+          num_decode_steps_per_sync:
+              partialGpuArtisanConfig.num_decode_steps_per_sync ?? 1,
+          sequence_batch_size:
+              partialGpuArtisanConfig.sequence_batch_size ?? 0,
           supported_lora_ranks: loraRanksVec,
+          max_top_k: partialGpuArtisanConfig.max_top_k ?? 1,
+          enable_decode_logits:
+              partialGpuArtisanConfig.enable_decode_logits ?? false,
+          enable_external_embeddings:
+              partialGpuArtisanConfig.enable_external_embeddings ?? false,
+          use_submodel: partialGpuArtisanConfig.use_submodel ?? true,
+          use_autosized_ringbuffers:
+              partialGpuArtisanConfig.use_autosized_ringbuffers ?? true,
         };
         wasmExecutorSettings.setBackendConfigGpuArtisan(wasmGpuArtisanConfig);
         loraRanksVec.delete();

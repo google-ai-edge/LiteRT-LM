@@ -21,17 +21,11 @@ import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, wasmEngineSett
 import {getGlobalLiteRtLm} from './global_litertlm.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
-import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
 import {Session} from './session.js';
 import {sessionConfigToWasmSessionConfig} from './session_config.js';
+import {createStreamingModelAssets} from './stream_utils.js';
 import {RecursiveRequired} from './types.js';
-import {Backend, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, ModelAssets, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
-
-/**
- * Global index to avoid writing to the sane VFS path.
- */
-// TODO: b/477709280 - Remove this when streaming loading works.
-let modelPathIndex = 0;
+import {Backend, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
 
 /**
  * LiteRT-LM Engine
@@ -62,11 +56,8 @@ export class Engine implements Deletable {
       Promise<Engine> {
     const litertlm = await getOrLoadGlobalLiteRtLm();
     const wasm = litertlm.liteRtLmWasm;
-    // TODO: b/477709280 - Support other formats like .task.
-    const dstPath = `/model_${modelPathIndex++}.litertlm`;
-
-    // Default to GPU_ARTISAN if not specified.
-    const backend = engineSettings.backend ?? Backend.GPU_ARTISAN;
+    // Default to GPU if not specified.
+    const backend = engineSettings.backend ?? Backend.GPU;
     engineSettings = {...engineSettings, backend};
 
     const samplerBackend = engineSettings.mainExecutorSettings?.samplerBackend;
@@ -78,41 +69,13 @@ export class Engine implements Deletable {
 
     const cleanup = new Cleanup();
 
-    const modelStream = await modelToStream(engineSettings.model);
     let engine: WasmEngine;
     try {
-      let modelAssets: ModelAssets;
-      const isStreaming = backend === Backend.GPU_ARTISAN;
+      const {modelAssets, cleanupModelAssets} =
+          await createStreamingModelAssets(engineSettings.model, wasm, cleanup);
 
-      if (isStreaming) {
-        // GPU Artisan supports streamed loading.
-        const streamWrapper =
-            new ReadableStreamDataStreamWrapper(modelStream, () => wasm.HEAPU8);
-        const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
-        cleanup.add(() => {
-          dataStream.delete();
-        });
-        modelAssets = wasm.ModelAssets.createStreaming(dataStream);
-      } else {
-        // Other backends must be fully loaded into Wasm memory first.
-        await loadModelToVfs(wasm, modelStream, dstPath);
-        cleanup.add(() => {
-          try {
-            wasm.FS.unlink(dstPath);
-          } catch (e) {
-            console.error(`Error removing file from VFS:`, e);
-          }
-        });
-
-        modelAssets = wasm.ModelAssets.create(dstPath);
-      }
-
-      const cleanupModelAssets = cleanup.add(() => {
-        modelAssets.delete();
-      });
-
-      const wasmEngineSettings =
-          wasm.EngineSettings.createDefault(modelAssets, {value: backend});
+      const wasmEngineSettings = await wasm.EngineSettings.createDefault(
+          modelAssets, {value: backend});
       // Delete our copy of the ModelAssets object (not the underlying file).
       cleanupModelAssets();
 
@@ -120,17 +83,30 @@ export class Engine implements Deletable {
         wasmEngineSettings.delete();
       });
 
+      const resolvedBackend =
+          wasmEngineSettings.getMutableMainExecutorSettings().getBackend().value;
+
       fillWasmEngineSettingsFromEngineSettings(
-          wasmEngineSettings, engineSettings, backend, wasm);
+          wasmEngineSettings, engineSettings, resolvedBackend, wasm);
       wasmEngineSettings.setParallelFileSectionLoading(false);
       wasmEngineSettings.setSingleThreadedExecution(true);
 
-      if (isStreaming) {
-        engine = await wasm.Engine.createStreaming(
-            wasmEngineSettings, inputPromptAsHint);
-      } else {
-        engine = await wasm.Engine.createEngine(
-            wasmEngineSettings, inputPromptAsHint);
+      try {
+        if (resolvedBackend === Backend.GPU_ARTISAN) {
+          engine = await wasm.Engine.createLegacyEngine(
+              wasmEngineSettings, inputPromptAsHint);
+        } else {
+          engine = await wasm.Engine.createEngine(
+              wasmEngineSettings, inputPromptAsHint);
+        }
+      } finally {
+        if (resolvedBackend === Backend.GPU) {
+          try {
+            await wasm.clearStoredWeightsStreams();
+          } catch (cleanupError) {
+            console.error('Error clearing stored weights streams:', cleanupError);
+          }
+        }
       }
       cleanupWasmEngineSettings();
 
@@ -193,55 +169,3 @@ export class Engine implements Deletable {
   }
 }
 
-async function modelToStream(model: EngineSettings['model']):
-    Promise<ReadableStream<Uint8Array>> {
-  if (model instanceof ReadableStream) {
-    return model;
-  }
-  if (model instanceof Blob) {
-    return model.stream();
-  }
-
-  const modelUrl = model;
-  const response = await fetch(modelUrl, {
-    credentials: 'same-origin',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch model file from ${modelUrl}`);
-  }
-  return response.body!;
-}
-
-// TODO: b/477709280 - Remove this when streaming loading works.
-async function loadModelToVfs(
-    module: LiteRtLmWasm,
-    modelStream: ReadableStream<Uint8Array>,
-    dstPath: string,
-) {
-  let fileContent: Uint8Array;
-
-  const reader = modelStream.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    if (value) {
-      chunks.push(value);
-      totalLength += value.length;
-    }
-  }
-  fileContent = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    fileContent.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  try {
-    module.FS.writeFile(dstPath, fileContent);
-  } catch (e) {
-    console.error(`Error writing file to VFS:`, e);
-    throw e;
-  }
-}
