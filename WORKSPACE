@@ -15,6 +15,15 @@ TENSORFLOW_REF = "d9a8da74b4c3de28a39ab34ad007838d6bc30c67"
 
 TENSORFLOW_SHA256 = "cd46b37c0f722d5a48c0accc9618cc5684c553332b913091023703461f318d9b"
 
+# UPDATED = 2026-10-09
+LITERT_REF = "ca21dc99de51c76bdcc572afeea1dd937d3c9e5c"
+
+LITERT_SHA256 = "d3c0455b405fadc597c840c8d708ced4f2a89c78eae21d9c0252f744b94c7fbc"
+
+TENSORFLOW_REF = "a1179d3c224967bd979950b823d5ce2a7e8f4c94"
+
+TENSORFLOW_SHA256 = "c99256ecac35ee2d7795de8ee8976afbcc47308edf2c8a04a20a5bd8ffd5b8ae"
+
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
