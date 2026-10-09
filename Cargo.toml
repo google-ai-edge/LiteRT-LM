@@ -19,7 +19,7 @@ llguidance = { version = "=1.3.0", default-features = false, features = ["lark",
 minijinja = { version = "=2.14.0", features = ["json", "preserve_order"] }
 paste = "1.0"
 quote = "1.0"
-tokenizers = { version = "=0.21.0", default-features = false, features = ["onig"] }
+tokenizers = { version = "=0.21.0", default-features = false, features = ["fancy-regex"] }
 serde = { version = "1.0", features = [ "derive" ] }
 serde_json = { version = "1.0", features = [ "preserve_order" ] }
 syn = "2.0"
