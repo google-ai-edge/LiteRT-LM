@@ -388,6 +388,19 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "prompt_template_noop",
+    srcs = ["prompt_template_noop.cc"],
+    hdrs = ["prompt_template.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
+        "@nlohmann_json//:json",
+    ],
+)
+
 cc_test(
     name = "prompt_template_test",
     srcs = ["prompt_template_test.cc"],
@@ -404,6 +417,17 @@ cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "prompt_template_noop_test",
+    srcs = ["prompt_template_noop_test.cc"],
+    deps = [
+        ":prompt_template_noop",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
         "//runtime/util:test_utils",
     ],
 )

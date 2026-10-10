@@ -226,6 +226,23 @@ target_link_libraries(runtime_components_prompt_template
     LITERTLM_DEPS
 )
 
+add_litertlm_library(runtime_components_prompt_template_noop STATIC
+  prompt_template_noop.cc
+)
+add_library(LiteRTLM::Runtime::Components::PromptTemplateNoop
+  ALIAS runtime_components_prompt_template_noop)
+
+target_include_directories(runtime_components_prompt_template_noop
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+    ${THIRD_PARTY_DIR}/json/include
+)
+
+target_link_libraries(runtime_components_prompt_template_noop
+  PUBLIC
+    LITERTLM_DEPS
+)
+
 # ==============================================================================
 # Sampler Factory
 # ==============================================================================

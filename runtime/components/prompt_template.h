@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PROMPT_TEMPLATE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PROMPT_TEMPLATE_H_
 
+#include <memory>
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -22,7 +23,6 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "runtime/components/rust/minijinja_template.rs.h"
 
 namespace litert::lm {
 
@@ -112,6 +112,8 @@ class PromptTemplate {
   // template_content: the jinja template string.
   explicit PromptTemplate(absl::string_view template_content);
 
+  ~PromptTemplate();
+
   // Copying constructor.
   PromptTemplate(const PromptTemplate&);
 
@@ -136,11 +138,13 @@ class PromptTemplate {
   }
 
  private:
-  rust::Box<MinijinjaTemplate> minijinja_template_;
+  struct MinijinjaTemplateImpl;
+  std::unique_ptr<MinijinjaTemplateImpl> minijinja_template_;
 
   // The capabilities of the prompt template. Auto inferred from the template
   // source string.
   PromptTemplateCapabilities capabilities_;
 };
+
 }  // namespace litert::lm
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PROMPT_TEMPLATE_H_
