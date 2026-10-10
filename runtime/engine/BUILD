@@ -92,6 +92,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:executor_backend_registry",
         "//runtime/executor:executor_settings_base",
     ],
 )
@@ -234,6 +235,7 @@ cc_library(
         "@litert//tflite/profiling:memory_usage_monitor",
     ] + select({
         "@platforms//os:linux": [
+            # gemma.cpp backend plugin is only supported on Linux.
         ],
         "//conditions:default": [],
     }),
@@ -299,7 +301,12 @@ cc_binary(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
-    ],
+    ] + select({
+        # gemma.cpp backend plugin is only supported on Linux.
+        "@platforms//os:linux": [
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_binary(
@@ -442,6 +449,7 @@ cc_library(
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/core:version",
         "//runtime/executor:audio_executor_settings",
+        "//runtime/executor:executor_backend_registry",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
