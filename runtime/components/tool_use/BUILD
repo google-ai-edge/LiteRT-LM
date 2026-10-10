@@ -190,6 +190,33 @@ cc_test(
 )
 
 cc_library(
+    name = "antlr_parser_utils_noop",
+    srcs = ["antlr_parser_utils_noop.cc"],
+    hdrs = [
+        "fc_parser_utils.h",
+        "json_parser_utils.h",
+        "python_parser_utils.h",
+    ],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_test(
+    name = "antlr_parser_utils_noop_test",
+    srcs = ["antlr_parser_utils_noop_test.cc"],
+    deps = [
+        ":antlr_parser_utils_noop",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "parser_utils",
     srcs = ["parser_utils.cc"],
     hdrs = ["parser_utils.h"],

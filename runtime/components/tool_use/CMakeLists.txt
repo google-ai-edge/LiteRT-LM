@@ -174,6 +174,23 @@ target_link_libraries(runtime_components_tool_use_python_tool_format_utils
     LITERTLM_DEPS
 )
 
+add_litertlm_library(runtime_components_tool_use_antlr_parser_utils_noop STATIC
+  antlr_parser_utils_noop.cc
+)
+add_library(LiteRTLM::Runtime::Components::ToolUse::AntlrParserUtilsNoop
+  ALIAS runtime_components_tool_use_antlr_parser_utils_noop)
+
+target_include_directories(runtime_components_tool_use_antlr_parser_utils_noop
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_tool_use_antlr_parser_utils_noop
+  PUBLIC
+    LITERTLM_DEPS
+)
+
 # ==============================================================================
 # Folder Facade
 # ==============================================================================
