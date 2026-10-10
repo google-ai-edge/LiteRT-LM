@@ -120,9 +120,10 @@ constexpr char cache_k17[] = "kv_cache_k_17";
 constexpr char cache_v17[] = "kv_cache_v_17";
 
 // Dynamic (resizable) KV cache allocation settings. These only apply to models
-// exported with a dynamic KV cache and are ignored for static models.
-// TODO: b/565760564 - For now these are read from environment variables; read
-// them from `NpuConfig` once the corresponding config fields are available.
+// exported with a dynamic KV cache and are ignored for static models. The
+// values come from `NpuConfig`; if set, the environment variables below
+// override them.
+// TODO: b/565760564 - Remove the environment variable overrides.
 constexpr char kDynamicKvCacheInitialSizeEnvVar[] =
     "LITERT_LM_NPU_DYNAMIC_KV_CACHE_INITIAL_SIZE";
 constexpr char kDynamicKvCacheGrowthStepEnvVar[] =
@@ -145,18 +146,17 @@ int GetIntFromEnvOrDefault(const char* name, int default_value) {
 }
 
 // Number of tokens the dynamic KV cache is allocated for when the executor is
-// created. 0 (default) allocates the full `max_num_tokens` up front; a positive
-// value allocates only this many tokens and grows the KV cache on demand.
-int GetDynamicKvCacheInitialSize() {
+// created (see `NpuConfig::dynamic_kv_cache_initial_size`).
+int GetDynamicKvCacheInitialSize(const NpuConfig& npu_config) {
   return GetIntFromEnvOrDefault(kDynamicKvCacheInitialSizeEnvVar,
-                                /*default_value=*/0);
+                                npu_config.dynamic_kv_cache_initial_size);
 }
 
 // Minimum number of tokens by which the dynamic KV cache is grown whenever it
-// runs out of capacity.
-int GetDynamicKvCacheGrowthStep() {
+// runs out of capacity (see `NpuConfig::dynamic_kv_cache_growth_step`).
+int GetDynamicKvCacheGrowthStep(const NpuConfig& npu_config) {
   return GetIntFromEnvOrDefault(kDynamicKvCacheGrowthStepEnvVar,
-                                /*default_value=*/512);
+                                npu_config.dynamic_kv_cache_growth_step);
 }
 }  // namespace
 
@@ -197,15 +197,30 @@ LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     int64_t kv_cache_init_value, std::optional<int> requested_context_size) {
   int resolved_context_size = 0;
   if (requested_context_size.has_value()) {
+    // The runtime may round the requested size up to a supported bucket
+    // (e.g. 2814 -> 4096). The KV buffers are allocated at the resolved size.
     LITERT_ASSIGN_OR_RETURN(
         resolved_context_size,
         NpuDynamismHelper::ResizeDynamicInputs(text_decoder_compiled_model,
                                                prefill_signatures.prefill,
                                                *requested_context_size));
-    LITERT_ASSIGN_OR_RETURN(resolved_context_size,
+    if (resolved_context_size != *requested_context_size) {
+      // Prefill stays prepared with the requested size while its KV inputs
+      // (and hence the shared buffers, geometry and decode) use the resolved
+      // bucket. Re-resizing prefill to the resolved size is a no-op since its
+      // input shapes already match. This is fine: the requested size only
+      // selects the bucket, and prefill was verified to run correctly at
+      // positions beyond the requested size.
+      ABSL_LOG(INFO) << "NPU context size " << *requested_context_size
+                     << " was bucketed to " << resolved_context_size << ".";
+    }
+    LITERT_ASSIGN_OR_RETURN(int decode_resolved_context_size,
                             NpuDynamismHelper::ResizeDynamicInputs(
                                 text_decoder_compiled_model, decode_signature,
                                 resolved_context_size));
+    // Prefill and decode share one set of KV buffers and must agree.
+    RET_CHECK_EQ(decode_resolved_context_size, resolved_context_size)
+        << "Prefill and decode resolved to different context sizes.";
   } else {
     auto decode_sig = text_decoder_model->FindSignature(decode_signature);
     if (decode_sig.HasValue()) {
@@ -1324,7 +1339,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::GrowDynamicKVCache(
       << "Dynamic models are expected to have exactly one context group.";
   // Grow by at least the configured step to amortize re-allocations, but never
   // beyond the logical limit.
-  const int growth_step = std::max(GetDynamicKvCacheGrowthStep(), 1);
+  const int growth_step = std::max(GetDynamicKvCacheGrowthStep(npu_config_), 1);
   const int target_context_size = std::min(
       std::max(required_tokens, dynamic_kv_cache_capacity_ + growth_step),
       max_num_tokens);
@@ -2926,12 +2941,13 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     // size by resizing. Two allocation modes are supported:
     // - Full: allocate the whole logical limit (`max_num_tokens`) at creation
     //   time so that all allocation cost is paid during initialization.
-    // - Deferred: allocate only the configured initial size (see
-    //   GetDynamicKvCacheInitialSize) now and grow on demand once the actual
-    //   prefill/decode length is known (see GrowDynamicKVCache).
+    // - Deferred: allocate only `NpuConfig::dynamic_kv_cache_initial_size`
+    //   tokens now (see GetDynamicKvCacheInitialSize) and grow on demand once
+    //   the actual prefill/decode length is known (see GrowDynamicKVCache).
     const int logical_max_tokens = mutable_settings.GetMaxNumTokens();
     // The initial capacity must at least hold one (padded) prefill chunk.
-    const int configured_initial_size = GetDynamicKvCacheInitialSize();
+    const int configured_initial_size = GetDynamicKvCacheInitialSize(
+        npu_config_status.ok() ? *npu_config_status : NpuConfig());
     const int initial_size =
         configured_initial_size > 0
             ? std::max(configured_initial_size, prefill_size)
