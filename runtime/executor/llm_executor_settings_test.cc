@@ -678,5 +678,26 @@ TEST(LlmExecutorConfigTest, SelectedSignatures) {
               testing::ElementsAre("llm_signature_1", "llm_signature_2"));
 }
 
+TEST(LlmExecutorConfigTest, CustomBackendCpuConfigDefaults) {
+  auto cpu_assets = ModelAssets::Create("/path/to/model1");
+  ASSERT_OK(cpu_assets);
+  ASSERT_OK_AND_ASSIGN(auto cpu_settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(cpu_assets), Backend::CPU));
+  ASSERT_OK_AND_ASSIGN(auto cpu_config,
+                       cpu_settings.GetBackendConfig<CpuConfig>());
+  EXPECT_EQ(cpu_config.number_of_threads, 4);
+
+  const Backend custom_backend = RegisterCustomBackend("gemma_cpp");
+  auto gemma_cpp_assets = ModelAssets::Create("/path/to/model1");
+  ASSERT_OK(gemma_cpp_assets);
+  ASSERT_OK_AND_ASSIGN(auto gemma_cpp_settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(gemma_cpp_assets), custom_backend));
+  ASSERT_OK_AND_ASSIGN(auto gemma_cpp_config,
+                       gemma_cpp_settings.GetBackendConfig<CpuConfig>());
+  EXPECT_EQ(gemma_cpp_config.number_of_threads, 0);
+}
+
 }  // namespace
 }  // namespace litert::lm

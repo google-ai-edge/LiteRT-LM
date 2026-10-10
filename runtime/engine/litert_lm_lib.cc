@@ -728,7 +728,7 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     engine_settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
         settings.selected_signatures);
   }
-  if (backend == Backend::CPU) {
+  if (backend == Backend::CPU || IsCustomBackend(backend)) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
     ABSL_ASSIGN_OR_RETURN(
         auto cpu_settings,
