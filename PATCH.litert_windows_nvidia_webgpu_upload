@@ -1,0 +1,23 @@
+--- a/ml_drift_delegate/delegate/delegate_webgpu.cc
++++ b/ml_drift_delegate/delegate/delegate_webgpu.cc
+@@ -685,6 +685,18 @@ TfLiteDelegatePtr CreateMlDriftWebGpuDelegate(MlDriftDelegateOptionsPtr options,
+ 
+ #if !defined(__EMSCRIPTEN__)
+   // Set up the executors.
++#if defined(_WIN32)
++  // Windows/D3D12 drivers have shown crashes while LiteRT performs concurrent
++  // WebGPU weight uploads during delegate initialization. Keep WebGPU/D3D12
++  // execution enabled, but serialize the one-time weight upload on Windows.
++  //
++  // This is deliberately scoped to Windows and does not disable GPU compute.
++  if (delegate_data->options->num_threads_to_upload > 0) {
++    ABSL_LOG(WARNING)
++        << "Windows WebGPU: disabling asynchronous weight uploads (requested "
++        << delegate_data->options->num_threads_to_upload
++        << " threads); D3D12 GPU execution remains enabled.";
++    delegate_data->options->num_threads_to_upload = 0;
++  }
++#endif  // defined(_WIN32)
+   ABSL_LOG(INFO) << "# of threads to upload weights = "
+                  << delegate_data->options->num_threads_to_upload;
+   if (delegate_data->options->num_threads_to_upload > 0) {
