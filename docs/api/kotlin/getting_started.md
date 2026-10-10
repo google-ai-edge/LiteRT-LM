@@ -69,6 +69,14 @@ and
 
 `latest.release` can be used to get the latest release.
 
+`litertlm-android` 0.17.0 and 0.17.1 carry Kotlin metadata 2.4.0 and bring
+kotlin-reflect 2.4.0 and kotlin-stdlib 2.4.0 onto the compile classpath, so the
+Kotlin code in a consuming module needs Kotlin 2.3 or newer; a 2.2.x compiler
+fails with errors including `Class 'com.google.ai.edge.litertlm.Engine' was
+compiled with an incompatible version of Kotlin. The actual metadata version is
+2.4.0, but the compiler version 2.2.0 can read versions up to 2.3.0`. 0.16.1
+carries metadata 2.3.0 and builds with Kotlin 2.2 or newer.
+
 ### 2. Initialize the Engine
 
 The `Engine` is the entry point to the API. Initialize it with the model path
