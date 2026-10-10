@@ -31,6 +31,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/util/data_stream.h"
@@ -60,6 +61,7 @@ struct SectionInfo {
   const schema::SectionObject* section;
   BufferKey buffer_key;
   std::optional<std::string> backend_constraint;
+  std::optional<std::string> prefer_activation_type;
   std::shared_ptr<DataStream> data_stream;
 
   std::weak_ptr<schema::LitertlmHeader> header;
@@ -86,6 +88,20 @@ class LitertLmStreamingLoader {
   // Returns std::nullopt if there are no more sections to read.
   absl::StatusOr<std::optional<SectionInfo>> GetNextSection();
 
+  // Returns the TFLite model backend constraint.
+  // If not found, returns std::nullopt.
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      ModelType model_type);
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      absl::string_view model_type_str);
+
+  // Returns the TFLite model section buffer's prefer activation type.
+  // If not found, returns std::nullopt.
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type);
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      absl::string_view model_type_str);
+
  private:
   // The parent data stream from which sections are created.
   std::shared_ptr<DataStream> data_stream_;
@@ -94,6 +110,9 @@ class LitertLmStreamingLoader {
   // The sections of the model file in the order they are provided by the
   // stream.
   std::vector<SectionInfo> ordered_section_info_;
+  // Map of all the sections' section hints.
+  std::unordered_map<BufferKey, TfLiteSectionHint, BufferKeyHash>
+      section_hints_map_;
   // The index of the next section to be returned.
   size_t next_section_index_ = 0;
   bool header_loaded_ = false;

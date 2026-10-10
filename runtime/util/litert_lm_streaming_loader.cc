@@ -27,6 +27,8 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -98,9 +100,12 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
                  << ", end: " << section->end_offset();
     ABSL_ASSIGN_OR_RETURN(auto key_and_section_hint,
                           ExtractBufferKeyAndTfLiteSectionHint(section));
+    section_hints_map_[key_and_section_hint.first] =
+        key_and_section_hint.second;
     ordered_section_info_.push_back(
         {section, key_and_section_hint.first,
-         key_and_section_hint.second.backend_constraint, nullptr, header_});
+         key_and_section_hint.second.backend_constraint,
+         key_and_section_hint.second.prefer_activation_type, nullptr, header_});
   }
 
   // Sort by section begin offset since this is the order the stream will
@@ -146,12 +151,56 @@ LitertLmStreamingLoader::GetNextSection() {
       section_info.section,
       section_info.buffer_key,
       section_info.backend_constraint,
+      section_info.prefer_activation_type,
       std::move(sub_stream),
       section_info.header,
   };
 
   next_section_index_++;
   return std::move(return_val);
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(ModelType model_type) {
+  return GetTFLiteModelBackendConstraint(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(
+    absl::string_view model_type_str) {
+  BufferKey key(schema::AnySectionDataType_TFLiteModel, model_type_str);
+  auto it = section_hints_map_.find(key);
+  if (it != section_hints_map_.end()) {
+    return it->second.backend_constraint;
+  }
+  ABSL_LOG(WARNING) << "TFLite model type: " << model_type_str
+                    << " not found for backend constraints. Skipping.";
+  return std::nullopt;
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelPreferActivationType(
+    ModelType model_type) {
+  return GetTFLiteModelPreferActivationType(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelPreferActivationType(
+    absl::string_view model_type_str) {
+  BufferKey key(schema::AnySectionDataType_TFLiteModel, model_type_str);
+  auto it = section_hints_map_.find(key);
+  if (it != section_hints_map_.end()) {
+    return it->second.prefer_activation_type;
+  }
+  ABSL_LOG(WARNING)
+      << "TFLite model type: " << model_type_str
+      << " not found for prefer activation type. Use system's "
+         "default backend activation type. System's default activation "
+         "type for Text decoder is fp16. Vision encoder and audio encoder "
+         "default is fp32.";
+  return std::nullopt;
 }
 
 }  // namespace litert::lm

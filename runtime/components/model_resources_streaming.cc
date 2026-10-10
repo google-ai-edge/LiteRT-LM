@@ -93,12 +93,20 @@ ModelResourcesStreaming::GetWeightsSectionOffset(ModelType model_type) {
 
 std::optional<std::string>
 ModelResourcesStreaming::GetTFLiteModelBackendConstraint(ModelType model_type) {
+  auto it = backend_constraints_.find(model_type);
+  if (it != backend_constraints_.end()) {
+    return it->second;
+  }
   return std::nullopt;
 }
 
 std::optional<std::string>
 ModelResourcesStreaming::GetTFLiteModelPreferActivationType(
     ModelType model_type) {
+  auto it = prefer_activation_types_.find(model_type);
+  if (it != prefer_activation_types_.end()) {
+    return it->second;
+  }
   return std::nullopt;
 }
 
@@ -125,7 +133,10 @@ ModelResourcesStreaming::GetEmbeddingMetadata() {
 
 absl::StatusOr<const proto::ExecutorMetadata*>
 ModelResourcesStreaming::GetExecutorMetadata() {
-  return absl::UnimplementedError("GetExecutorMetadata not implemented.");
+  if (executor_metadata_.has_value()) {
+    return &*executor_metadata_;
+  }
+  return absl::NotFoundError("ExecutorMetadata not set.");
 }
 
 absl::StatusOr<FileRegion>

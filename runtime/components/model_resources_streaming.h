@@ -86,13 +86,12 @@ class ModelResourcesStreaming : public ModelResources {
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
       ModelType model_type) override;
 
-  // Returns `std::nullopt` as backend constraints are not currently stored in
-  // ModelResourcesStreaming.
+  // Returns the backend constraint for `model_type` if set, or `std::nullopt`.
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       ModelType model_type) override;
 
-  // Returns `std::nullopt` as activation type preferences are not currently
-  // stored in ModelResourcesStreaming.
+  // Returns the preferred activation type for `model_type` if set, or
+  // `std::nullopt`.
   std::optional<std::string> GetTFLiteModelPreferActivationType(
       ModelType model_type) override;
 
@@ -109,8 +108,8 @@ class ModelResourcesStreaming : public ModelResources {
   absl::StatusOr<const proto::EmbeddingMetadata*> GetEmbeddingMetadata()
       override;
 
-  // Always returns `UnimplementedError` as ExecutorMetadata is not stored in
-  // ModelResourcesStreaming.
+  // Returns the ExecutorMetadata if set, or `NotFoundError` if not available.
+  // The returned pointer remains valid for the lifetime of this instance.
   absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;
 
   // Always returns `UnimplementedError` because streamed models do not have
@@ -132,6 +131,23 @@ class ModelResourcesStreaming : public ModelResources {
   // Sets the Embedding metadata for this streaming resource instance.
   void SetEmbeddingMetadata(proto::EmbeddingMetadata embedding_metadata) {
     embedding_metadata_ = std::move(embedding_metadata);
+  }
+
+  // Sets the Executor metadata for this streaming resource instance.
+  void SetExecutorMetadata(proto::ExecutorMetadata executor_metadata) {
+    executor_metadata_ = std::move(executor_metadata);
+  }
+
+  // Sets the backend constraint for a given `model_type`.
+  void SetTFLiteModelBackendConstraint(ModelType model_type,
+                                       std::string backend_constraint) {
+    backend_constraints_[model_type] = std::move(backend_constraint);
+  }
+
+  // Sets the preferred activation type for a given `model_type`.
+  void SetTFLiteModelPreferActivationType(ModelType model_type,
+                                          std::string prefer_activation_type) {
+    prefer_activation_types_[model_type] = std::move(prefer_activation_type);
   }
 
   // Sets the flatbuffer model data for a given `model_type`. This stores the
@@ -194,6 +210,9 @@ class ModelResourcesStreaming : public ModelResources {
  private:
   std::optional<proto::LlmMetadata> llm_metadata_;
   std::optional<proto::EmbeddingMetadata> embedding_metadata_;
+  std::optional<proto::ExecutorMetadata> executor_metadata_;
+  absl::flat_hash_map<ModelType, std::string> backend_constraints_;
+  absl::flat_hash_map<ModelType, std::string> prefer_activation_types_;
   // In-memory buffers for model flatbuffers.
   // These are cached from the input stream so that 'GetTFLiteModel' can load
   // models without relying on the original stream. This does not include

@@ -499,5 +499,42 @@ TEST(LiteRtUtilTest,
 #endif
 }
 
+std::string TestdataModelPath(absl::string_view file_name) {
+  return (std::filesystem::path(::testing::SrcDir()) /
+          "litert_lm/runtime/testdata" /
+          std::string(file_name))
+      .string();
+}
+
+TEST(LiteRtUtilTest, ModelHasExternalWeights_ExternalWeightsModel) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestdataModelPath(
+                           "test_lm_external_weights.litertlm")));
+  ASSERT_OK_AND_ASSIGN(bool has_external_weights,
+                       ModelHasExternalWeights(model_assets));
+  EXPECT_TRUE(has_external_weights);
+}
+
+TEST(LiteRtUtilTest, ModelHasExternalWeights_ExternalWeightsModelScopedFile) {
+  ASSERT_OK_AND_ASSIGN(
+      ScopedFile file,
+      ScopedFile::Open(TestdataModelPath("test_lm_external_weights.litertlm")));
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets model_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(file))));
+  ASSERT_OK_AND_ASSIGN(bool has_external_weights,
+                       ModelHasExternalWeights(model_assets));
+  EXPECT_TRUE(has_external_weights);
+}
+
+TEST(LiteRtUtilTest, ModelHasExternalWeights_EmbeddedWeightsModel) {
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets model_assets,
+      ModelAssets::Create(TestdataModelPath("test_lm.litertlm")));
+  ASSERT_OK_AND_ASSIGN(bool has_external_weights,
+                       ModelHasExternalWeights(model_assets));
+  EXPECT_FALSE(has_external_weights);
+}
+
 }  // namespace
 }  // namespace litert::lm
