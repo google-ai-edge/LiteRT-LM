@@ -509,8 +509,18 @@ cc_binary(
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
     linkopts = select({
-        "@platforms//os:macos": [],
-        "@platforms//os:ios": [],
+        "@platforms//os:macos": [
+            # Export only the public C API symbols to hide internal C++ symbols.
+            "-Wl,-exported_symbol,_litert_lm_*",
+            # Remove unreachable code and data to reduce library size.
+            "-Wl,-dead_strip",
+        ],
+        "@platforms//os:ios": [
+            # Export only the public C API symbols to hide internal C++ symbols.
+            "-Wl,-exported_symbol,_litert_lm_*",
+            # Remove unreachable code and data to reduce library size.
+            "-Wl,-dead_strip",
+        ],
         "@platforms//os:windows": [],
         "//conditions:default": [
             # Report unresolved symbol references as errors during linking.
