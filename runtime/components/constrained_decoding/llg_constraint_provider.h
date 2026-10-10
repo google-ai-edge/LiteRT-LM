@@ -26,7 +26,8 @@
 #include "runtime/components/constrained_decoding/constraint_provider_config.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "support/tokenizer/tokenizer.h"
-#include "llguidance.h"
+
+struct LlgTokenizer;
 
 namespace litert::lm {
 

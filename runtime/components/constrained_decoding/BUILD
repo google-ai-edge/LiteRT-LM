@@ -357,6 +357,21 @@ cc_library(
 )
 
 cc_library(
+    name = "llg_constraint_provider_noop",
+    srcs = ["llg_constraint_provider_noop.cc"],
+    hdrs = ["llg_constraint_provider.h"],
+    deps = [
+        ":constraint",
+        ":constraint_provider",
+        ":constraint_provider_config",
+        ":llg_constraint_config",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "//support/tokenizer",
+    ],
+)
+
+cc_library(
     name = "tool_utils",
     srcs = ["tool_utils.cc"],
     hdrs = ["tool_utils.h"],
@@ -537,6 +552,38 @@ cc_test(
         ":constraint_provider_factory",
         ":external_constraint_config",
         ":llg_constraint_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "//runtime/util:test_utils",
+        "//support/tokenizer",
+    ],
+)
+
+cc_library(
+    name = "constraint_provider_factory_noop",
+    srcs = ["constraint_provider_factory_noop.cc"],
+    hdrs = ["constraint_provider_factory.h"],
+    deps = [
+        ":constraint_provider",
+        ":constraint_provider_config",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "//support/tokenizer",
+    ],
+)
+
+cc_test(
+    name = "constraint_provider_factory_noop_test",
+    srcs = ["constraint_provider_factory_noop_test.cc"],
+    deps = [
+        ":constraint_provider_config",
+        ":constraint_provider_factory_noop",
+        ":external_constraint_config",
+        ":llg_constraint_config",
+        ":llg_constraint_provider_noop",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

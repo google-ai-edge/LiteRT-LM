@@ -232,6 +232,24 @@ target_link_libraries(runtime_components_constrained_decoding_constraint_provide
     LITERTLM_DEPS
 )
 
+add_litertlm_library(runtime_components_constrained_decoding_constraint_provider_factory_noop STATIC
+  constraint_provider_factory_noop.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::FactoryNoop
+  ALIAS runtime_components_constrained_decoding_constraint_provider_factory_noop)
+
+target_include_directories(runtime_components_constrained_decoding_constraint_provider_factory_noop
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+    ${LITERT_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_constrained_decoding_constraint_provider_factory_noop
+  PUBLIC
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LITERTLM_DEPS
+)
+
 # ==============================================================================
 # External Constraint Provider
 # ==============================================================================
@@ -315,6 +333,23 @@ target_link_libraries(runtime_components_constrained_decoding_llg_constraint_pro
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LlgConstraint
+)
+
+add_litertlm_library(runtime_components_constrained_decoding_llg_constraint_provider_noop STATIC
+  llg_constraint_provider_noop.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LlgConstraintProviderNoop
+  ALIAS runtime_components_constrained_decoding_llg_constraint_provider_noop)
+
+target_include_directories(runtime_components_constrained_decoding_llg_constraint_provider_noop
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_constrained_decoding_llg_constraint_provider_noop
+  PUBLIC
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LITERTLM_DEPS
 )
 
 # ==============================================================================
