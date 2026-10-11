@@ -15,6 +15,7 @@
 #include "omni/asr/tdt_decoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -33,6 +34,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/speech_recognizer.h"
+#include "omni/asr/utils.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/stateful_litert_runner.h"
 
@@ -74,7 +76,10 @@ absl::StatusOr<std::vector<TensorBuffer>> GetInputBuffersForInference(
 
 absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
     LiteRtRunner* absl_nonnull runner, int decode_start_token_id,
-    int decode_statefully_after) {
+    int decode_statefully_after, int max_symbols_per_step) {
+  if (max_symbols_per_step <= 0) {
+    return absl::InvalidArgumentError("max_symbols_per_step must be positive.");
+  }
   LITERT_ASSIGN_OR_RETURN(auto inputs,
                           runner->CreateInputBuffers(kDecodeSignatureName));
   // encode output, token ids, input LSTM state 1, input LSTM state 2.
@@ -88,10 +93,18 @@ absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
   size_t max_time_index = num_input0 / kNumFeatures;
   ABSL_ASSIGN_OR_RETURN(auto num_token_ids,
                         GetNumOfElements<int32_t>(inputs[1]));
+  if (max_time_index == 0 || num_token_ids == 0) {
+    return absl::InvalidArgumentError(
+        "Decoder input tensors must have non-zero time and token dimensions.");
+  }
   ABSL_ASSIGN_OR_RETURN(auto total_num_logits,
                         GetNumOfElements<float>(outputs[0]));
   size_t num_logits_per_token =
       total_num_logits / num_token_ids / max_time_index;
+  if (num_logits_per_token == 0 || decode_start_token_id < 0) {
+    return absl::InvalidArgumentError(
+        "decode_start_token_id and num_logits_per_token must be valid.");
+  }
 
   std::unique_ptr<StatefulLiteRtRunner> stateful_runner;
   std::optional<TensorBuffer> stateful_decode_token_ids_buf;
@@ -119,7 +132,8 @@ absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
   return std::unique_ptr<TdtDecoder>(new TdtDecoder(
       runner, std::move(stateful_runner), std::move(inputs), std::move(outputs),
       std::move(stateful_decode_token_ids_buf), max_time_index, num_token_ids,
-      num_logits_per_token, decode_start_token_id, decode_statefully_after));
+      num_logits_per_token, decode_start_token_id, decode_statefully_after,
+      max_symbols_per_step));
 }
 
 TdtDecoder::TdtDecoder(
@@ -129,7 +143,8 @@ TdtDecoder::TdtDecoder(
     std::vector<TensorBuffer> decode_output_buffers,
     std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
     size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
-    int decode_start_token_id, int decode_statefully_after)
+    int decode_start_token_id, int decode_statefully_after,
+    int max_symbols_per_step)
     : runner_(*runner),
       stateful_runner_(std::move(stateful_runner)),
       decode_input_buffers_(std::move(decode_input_buffers)),
@@ -140,11 +155,44 @@ TdtDecoder::TdtDecoder(
       num_token_ids_(num_token_ids),
       num_logits_per_token_(num_logits_per_token),
       decode_start_token_id_(decode_start_token_id),
-      decode_statefully_after_(decode_statefully_after) {}
+      decode_statefully_after_(decode_statefully_after),
+      max_symbols_per_step_(max_symbols_per_step) {}
+
+void TdtDecoder::SetDecodeRange(const DecodeRange& range) {
+  range_.start_fraction =
+      (range.start_fraction > 0.0f && range.start_fraction < 1.0f)
+          ? range.start_fraction
+          : 0.0f;
+  range_.valid_fraction =
+      (range.valid_fraction > 0.0f && range.valid_fraction < 1.0f)
+          ? range.valid_fraction
+          : 1.0f;
+}
+
+size_t TdtDecoder::EffectiveMaxTimeIndex() const {
+  if (range_.valid_fraction >= 1.0f) return max_time_index_;
+  const size_t valid_frames = static_cast<size_t>(
+      std::lround(range_.valid_fraction * static_cast<float>(max_time_index_)));
+  return std::min(max_time_index_, valid_frames + kValidFrameMargin);
+}
+
+size_t TdtDecoder::FirstReportedTimeIndex() const {
+  if (range_.start_fraction <= 0.0f) return 0;
+  // Frames overlapping the boundary are kept (the merger de-duplicates them).
+  return static_cast<size_t>(
+      std::floor(range_.start_fraction * static_cast<float>(max_time_index_)));
+}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     std::vector<TensorBuffer>& encoder_outputs) {
   const int blank_token_id = decode_start_token_id_;
+  // Only decode encoder frames backed by real audio; the zero-padded tail of
+  // a short final chunk otherwise yields repeated / hallucinated tokens. Tokens
+  // before `first_reported_time_index` belong to audio already reported with
+  // the previous chunk (a final chunk shifted back to fill the window).
+  const size_t effective_max_time_index = EffectiveMaxTimeIndex();
+  const size_t first_reported_time_index = FirstReportedTimeIndex();
+  range_ = DecodeRange();
 
   if (stateful_runner_) {
     LITERT_RETURN_IF_ERROR(stateful_runner_->Reset());
@@ -163,8 +211,36 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
   token_ids[0] = decode_start_token_id_;
   size_t token_index = 0;
   size_t time_index = 0;
+  int symbols_at_time_index = 0;
+  size_t frame_tokens_start = 0;
+  size_t sos_tokens_start = 0;
+  size_t tokens_since_sos = 0;
+  size_t last_emitted_time_index = 0;
+  size_t reset_origin_time_index = 0;
+  bool has_emitted_in_chunk = false;
+  bool did_mid_chunk_sos_reset = false;
+  bool prev_frame_had_burst = false;
+  std::vector<int> frame_token_ids;
 
-  while (time_index < max_time_index_) {
+  auto reset_to_sos = [&]() -> absl::Status {
+    current_token_ids_buffer = &decode_input_buffers_[1];
+    num_inference_token_ids = num_token_ids_;
+    token_ids.assign(num_token_ids_, 0);
+    token_ids[0] = decode_start_token_id_;
+    token_index = 0;
+    tokens_since_sos = 0;
+    sos_tokens_start = decoded_tokens.size();
+    prev_frame_had_burst = false;
+    if (stateful_runner_) {
+      LITERT_RETURN_IF_ERROR(stateful_runner_->Reset());
+    }
+    for (size_t i = 2; i < decode_input_buffers_.size(); ++i) {
+      LITERT_RETURN_IF_ERROR(decode_input_buffers_[i].Clear());
+    }
+    return absl::OkStatus();
+  };
+
+  while (time_index < effective_max_time_index) {
     LITERT_RETURN_IF_ERROR(current_token_ids_buffer->Write<int32_t>(
         absl::MakeConstSpan(token_ids)));
 
@@ -213,9 +289,108 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                                          logits + end_index_of_token_id);
     int token_id = static_cast<int>(
         std::distance(logits + start_index_of_token_id, max_token_it));
+    if (token_id == blank_token_id && token_index == 0 &&
+        num_inference_token_ids > 1 && effective_max_time_index >= 50 &&
+        time_index >= 2) {
+      auto best_non_blank_it = [&](size_t start,
+                                   size_t end) -> const float* {
+        const float* best = nullptr;
+        const size_t count = end - start;
+        for (size_t tok = 0; tok < count; ++tok) {
+          if (static_cast<int>(tok) == blank_token_id) continue;
+          const float* cur = logits + start + tok;
+          if (best == nullptr || *cur > *best) {
+            best = cur;
+          }
+        }
+        return best != nullptr ? best : (logits + start);
+      };
+      const float* best_nb_it =
+          best_non_blank_it(start_index_of_token_id, end_index_of_token_id);
+      const float cur_diff =
+          logits[start_index_of_token_id + blank_token_id] - *best_nb_it;
+      bool is_local_min = true;
+      if (time_index + 1 < effective_max_time_index) {
+        const size_t next_start =
+            (time_index + 1) * num_inference_token_ids * num_logits_per_token_;
+        const size_t next_end_tok =
+            next_start + num_logits_per_token_ - kNumDurations;
+        const float* next_nb_it = best_non_blank_it(next_start, next_end_tok);
+        const float next_diff =
+            logits[next_start + blank_token_id] - *next_nb_it;
+        if (next_diff < cur_diff) {
+          is_local_min = false;
+        }
+      }
+      bool has_near_natural_sos = false;
+      if (cur_diff <= 3.0f && is_local_min) {
+        const size_t lookahead_end =
+            std::min(effective_max_time_index, time_index + 12);
+        for (size_t f = time_index + 1; f < lookahead_end; ++f) {
+          const size_t f_start =
+              f * num_inference_token_ids * num_logits_per_token_;
+          const size_t f_end_tok =
+              f_start + num_logits_per_token_ - kNumDurations;
+          const float* f_nb_it = best_non_blank_it(f_start, f_end_tok);
+          if (logits[f_start + blank_token_id] < *f_nb_it) {
+            has_near_natural_sos = true;
+            break;
+          }
+        }
+      }
+      if (cur_diff <= 3.0f && is_local_min && !has_near_natural_sos) {
+        token_id = static_cast<int>(
+            std::distance(logits + start_index_of_token_id, best_nb_it));
+      }
+    }
+    auto max_duration_it = std::max_element(logits + end_index_of_token_id,
+                                            logits + end_index_of_duration);
+    int duration = static_cast<int>(
+        std::distance(logits + end_index_of_token_id, max_duration_it));
+
     if (token_id != blank_token_id) {
-      decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
-          .token_id = token_id, .timestamp_ms = static_cast<int>(time_index)});
+      ++symbols_at_time_index;
+      frame_token_ids.push_back(token_id);
+      if (symbols_at_time_index > max_symbols_per_step_) {
+        decoded_tokens.resize(frame_tokens_start);
+        if (time_index + 2 >= effective_max_time_index) {
+          break;
+        }
+        if (tokens_since_sos <= 2) {
+          // A zero-duration burst immediately after the `<sos>` token
+          // indicates a premature `<sos>` trigger; reset back to `<sos>` and
+          // continue from the next frame.
+          decoded_tokens.resize(sos_tokens_start);
+          if (decoded_tokens.empty()) {
+            has_emitted_in_chunk = false;
+          }
+          LITERT_RETURN_IF_ERROR(reset_to_sos());
+        } else {
+          prev_frame_had_burst = true;
+        }
+        symbols_at_time_index = 0;
+        frame_tokens_start = decoded_tokens.size();
+        frame_token_ids.clear();
+        time_index += 1;
+        continue;
+      }
+      has_emitted_in_chunk = true;
+      last_emitted_time_index = time_index;
+      const bool skip_post_burst_zero_dur =
+          prev_frame_had_burst && duration == 0;
+      if (duration > 0) {
+        prev_frame_had_burst = false;
+      }
+      if (!skip_post_burst_zero_dur &&
+          time_index >= first_reported_time_index) {
+        if (TruncateOnTrailingRepetition(decoded_tokens, token_id)) {
+          break;
+        }
+        decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
+            .token_id = token_id,
+            .timestamp_ms =
+                static_cast<int>(time_index - first_reported_time_index)});
+      }
       if (num_inference_token_ids > 1) {
         ++token_index;
         if (token_index < num_inference_token_ids) {
@@ -233,13 +408,22 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
         }
       }
       token_ids[token_index] = token_id;
+    } else if (duration == 0 ||
+               (token_index == 0 && num_inference_token_ids > 1 &&
+                effective_max_time_index >= 50)) {
+      duration = 1;
+      prev_frame_had_burst = false;
+    } else {
+      prev_frame_had_burst = false;
     }
 
-    auto max_duration_it = std::max_element(logits + end_index_of_token_id,
-                                            logits + end_index_of_duration);
-    int duration = static_cast<int>(
-        std::distance(logits + end_index_of_token_id, max_duration_it));
-    time_index += (duration == 0 && token_id == blank_token_id) ? 1 : duration;
+    if (duration > 0) {
+      tokens_since_sos += symbols_at_time_index;
+      symbols_at_time_index = 0;
+      frame_tokens_start = decoded_tokens.size();
+      frame_token_ids.clear();
+    }
+    time_index += duration;
 
     if (was_stateful_step && token_id != blank_token_id && stateful_runner_) {
       // Stateful RNN decoder: adopt the new LSTM states by swapping the input
@@ -249,11 +433,38 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
       // once per blank and degrades the transcript.
       LITERT_RETURN_IF_ERROR(stateful_runner_->CommitState());
     }
+
+    if (!did_mid_chunk_sos_reset && has_emitted_in_chunk &&
+        effective_max_time_index >= 50 && last_emitted_time_index <= 30 &&
+        time_index >= 25 && time_index >= last_emitted_time_index + 16) {
+      did_mid_chunk_sos_reset = true;
+      reset_origin_time_index = last_emitted_time_index;
+      if (last_emitted_time_index <= 8) {
+        decoded_tokens.clear();
+        frame_tokens_start = 0;
+      }
+      LITERT_RETURN_IF_ERROR(reset_to_sos());
+      time_index = last_emitted_time_index + 3;
+    }
+  }
+
+  if (did_mid_chunk_sos_reset && sos_tokens_start > 0 &&
+      decoded_tokens.size() > sos_tokens_start &&
+      (decoded_tokens.size() - sos_tokens_start <= 4 ||
+       decoded_tokens.back().timestamp_ms.value_or(0) -
+               decoded_tokens[sos_tokens_start].timestamp_ms.value_or(0) <=
+           4 ||
+       static_cast<size_t>(
+           decoded_tokens[sos_tokens_start].timestamp_ms.value_or(0)) +
+               first_reported_time_index >
+           reset_origin_time_index + 20)) {
+    decoded_tokens.resize(sos_tokens_start);
   }
 
   decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
       .token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
-      .timestamp_ms = static_cast<int>(max_time_index_)});
+      .timestamp_ms =
+          static_cast<int>(max_time_index_ - first_reported_time_index)});
 
   return decoded_tokens;
 }

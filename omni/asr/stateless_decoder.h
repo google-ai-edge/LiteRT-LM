@@ -16,7 +16,9 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_STATELESS_DECODER_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -37,6 +39,13 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
 
   ~StatelessDecoder() override = default;
 
+  // Seeds the decoder with a fixed prompt (e.g. Whisper's
+  // <|startoftranscript|><|en|><|transcribe|><|notimestamps|>) instead of the
+  // single start token; decoding continues after the prompt.
+  void SetPromptTokenIds(std::vector<int32_t> prompt_token_ids) {
+    prompt_token_ids_ = std::move(prompt_token_ids);
+  }
+
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
       std::vector<::litert::TensorBuffer>& encoder_outputs) override;
 
@@ -56,6 +65,7 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
   const int decode_start_token_id_;
   const int decode_stop_token_id_;
   const int decode_skip_until_token_id_;
+  std::vector<int32_t> prompt_token_ids_;
 };
 
 }  // namespace litert::omni::asr

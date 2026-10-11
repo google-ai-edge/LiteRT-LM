@@ -77,6 +77,9 @@ class FileAudioSource : public AudioSource {
   std::vector<float> ring_buffer_;
   int ring_pos_;
   bool is_closed_;
+  // Number of zero frames appended to the current window because the file hit
+  // EOF; they are trimmed from the emitted chunk.
+  int tail_padding_ = 0;
 };
 
 }  // namespace litert::omni::asr

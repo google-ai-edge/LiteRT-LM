@@ -33,7 +33,6 @@ namespace litert::omni::asr {
 namespace {
 
 using ::absl_testing::StatusIs;
-using ::testing::Eq;
 using ::testing::SizeIs;
 
 void WriteWavFile(const std::string& path,
@@ -185,11 +184,10 @@ TEST_F(FileAudioSourceTest, Create_ShortAudio_ReturnsWhatItCan) {
   EXPECT_FALSE(source->NeedSchedule());
 
   ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
-  EXPECT_THAT(chunk, SizeIs(1600));
+  // Only the real audio is emitted; the preprocessor pads to the model window.
+  EXPECT_THAT(chunk, SizeIs(800));
   EXPECT_NEAR(chunk[0], 1000.0f / 32768.0f, 1e-4f);
   EXPECT_NEAR(chunk[799], 1000.0f / 32768.0f, 1e-4f);
-  EXPECT_THAT(chunk[800], Eq(0.0f));
-  EXPECT_THAT(chunk[1599], Eq(0.0f));
 }
 
 TEST_F(FileAudioSourceTest, Create_InvalidIntervalOverlap) {
@@ -229,7 +227,7 @@ TEST_F(FileAudioSourceTest, Reset_ClearsStateAndRestarts) {
 }
 
 TEST_F(FileAudioSourceTest,
-       Schedule_RingBufferWrapAroundHitsEofZeroPadsRemaining) {
+       Schedule_RingBufferWrapAroundHitsEofTrimsRemaining) {
   int sample_rate = 16000;
   // Total 2880 samples:
   // interval = 100ms (1600 samples), overlap = 40ms (640 samples), step = 960.
@@ -239,8 +237,9 @@ TEST_F(FileAudioSourceTest,
   //   - read1 reads 640 samples (1600 - 960), leaving 320 samples in the file
   //     (2560 + 320 = 2880), so read1 succeeds!
   //   - read2 tries to read 320 samples at the wrapped start of ring_buffer_,
-  //     hitting EOF (0 frames read). It must zero-pad those 320 frames instead
-  //     of leaving stale samples from Chunk 0.
+  //     hitting EOF (0 frames read). Those 320 frames must not leak stale
+  //     samples from Chunk 0: they are zeroed in the ring buffer and trimmed
+  //     from the emitted chunk.
   std::vector<int16_t> samples(2880, 4096);
   std::string path = GetTempWavPath("test_wrap_eof.wav");
   WriteWavFile(path, samples, sample_rate);
@@ -261,12 +260,13 @@ TEST_F(FileAudioSourceTest,
   }
 
   ASSERT_THAT(chunks, SizeIs(3));
-  // Chunk 2 has 640 overlap + 320 newly read = 960 valid samples, followed by
-  // 640 zero-padded samples.
+  EXPECT_THAT(chunks[0], SizeIs(1600));
+  EXPECT_THAT(chunks[1], SizeIs(1600));
+  // Chunk 2 has 640 overlap + 320 newly read = 960 valid samples; the 640
+  // samples of EOF padding are trimmed.
+  ASSERT_THAT(chunks[2], SizeIs(960));
+  EXPECT_NEAR(chunks[2][0], 4096.0f / 32768.0f, 1e-4f);
   EXPECT_NEAR(chunks[2][959], 4096.0f / 32768.0f, 1e-4f);
-  for (int i = 960; i < 1600; ++i) {
-    EXPECT_THAT(chunks[2][i], Eq(0.0f));
-  }
 }
 
 }  // namespace

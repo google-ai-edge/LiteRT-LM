@@ -212,5 +212,62 @@ TEST(MelFilterbankTest, InverseIsCloseToOriginal) {
   EXPECT_LT(absolute_error_sum, kMaxFractionalError * mel_channel_sum);
 }
 
+TEST(MelFilterbankTest, InitializeSlaneyWithPowerSpectrum) {
+  MelFilterbank filterbank;
+  constexpr int kSampleCount = 201;  // n_fft = 400
+  constexpr int kChannelCount = 80;
+  ASSERT_OK(filterbank.InitializeSlaney(kSampleCount,
+                                        /*sample_rate=*/16000.0, kChannelCount,
+                                        /*lower_frequency_limit=*/0.0,
+                                        /*upper_frequency_limit=*/8000.0,
+                                        /*power_spectrum=*/true));
+
+  std::vector<double> input(kSampleCount, 1.0);
+  std::vector<double> output1;
+  ASSERT_OK(filterbank.ToMelSpectrum(input, &output1));
+  ASSERT_EQ(output1.size(), kChannelCount);
+  EXPECT_THAT(output1, Each(Gt(0.0)));
+
+  // With power_spectrum=true, ToMelSpectrum is linear in the squared-magnitude
+  // input (no internal sqrt), so scaling input by 4 scales output by 4.
+  std::vector<double> input4(kSampleCount, 4.0);
+  std::vector<double> output4;
+  ASSERT_OK(filterbank.ToMelSpectrum(input4, &output4));
+  ASSERT_EQ(output4.size(), kChannelCount);
+  for (int i = 0; i < kChannelCount; ++i) {
+    EXPECT_NEAR(output4[i], 4.0 * output1[i], 1e-6);
+  }
+
+  std::vector<double> inv_fft;
+  EXPECT_FALSE(filterbank.ToSquaredMagnitudeFft(output1, &inv_fft).ok());
+}
+
+TEST(MelFilterbankTest, InitializeSlaneyWithMagnitudeSpectrum) {
+  MelFilterbank filterbank;
+  constexpr int kSampleCount = 201;  // n_fft = 400
+  constexpr int kChannelCount = 80;
+  ASSERT_OK(filterbank.InitializeSlaney(kSampleCount,
+                                        /*sample_rate=*/16000.0, kChannelCount,
+                                        /*lower_frequency_limit=*/0.0,
+                                        /*upper_frequency_limit=*/8000.0,
+                                        /*use_power=*/false));
+
+  std::vector<double> input(kSampleCount, 1.0);
+  std::vector<double> output1;
+  ASSERT_OK(filterbank.ToMelSpectrum(input, &output1));
+  ASSERT_EQ(output1.size(), kChannelCount);
+  EXPECT_THAT(output1, Each(Gt(0.0)));
+
+  // With use_power=false, ToMelSpectrum takes sqrt of the squared-magnitude
+  // input, so scaling input by 4 scales output by 2.
+  std::vector<double> input4(kSampleCount, 4.0);
+  std::vector<double> output4;
+  ASSERT_OK(filterbank.ToMelSpectrum(input4, &output4));
+  ASSERT_EQ(output4.size(), kChannelCount);
+  for (int i = 0; i < kChannelCount; ++i) {
+    EXPECT_NEAR(output4[i], 2.0 * output1[i], 1e-6);
+  }
+}
+
 }  // namespace
 }  // namespace litert::support

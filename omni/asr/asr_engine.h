@@ -74,6 +74,7 @@ struct AsrEngineConfig {
   int decode_stop_token_id = -1;
   int decode_skip_until_token_id = -1;
   int decode_statefully_after = 4;
+  std::vector<int> decode_prompt_token_ids;
   int vocab_size = 0;
   int blank_token_id = 0;
 

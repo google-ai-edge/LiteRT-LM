@@ -29,6 +29,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
@@ -40,6 +41,17 @@
 
 namespace litert::omni::asr {
 namespace {
+
+std::string CanonicalizeStr(absl::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    if (absl::ascii_isalnum(c) || c >= 0x80) {
+      out.push_back(absl::ascii_tolower(c));
+    }
+  }
+  return out;
+}
 
 // Formatters for absl::StrJoin.
 void StrAppendToken(std::string* out,
@@ -90,15 +102,16 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
 
   std::vector<Detokenizer::Word> words;
   if (!token_ids.empty()) {
+    bool skip_special_tokens = true;
     auto text_status =
-        tokenizer_.TokenIdsToText(token_ids, /*skip_special_tokens=*/true);
+        tokenizer_.TokenIdsToText(token_ids, skip_special_tokens);
     // SentencePieceTokenizer (used by Gemma ASR models) does not support
     // skip_special_tokens=true and returns InvalidArgumentError because special
     // tokens are handled by the SentencePiece buildenormalizer. Fall back to
     // skip_special_tokens=false.
     if (!text_status.ok() && absl::IsInvalidArgument(text_status.status())) {
-      text_status =
-          tokenizer_.TokenIdsToText(token_ids, /*skip_special_tokens=*/false);
+      skip_special_tokens = false;
+      text_status = tokenizer_.TokenIdsToText(token_ids, skip_special_tokens);
     }
     ABSL_ASSIGN_OR_RETURN(auto text, std::move(text_status));
     ABSL_VLOG(1) << "Detokenized text: " << text;
@@ -111,13 +124,56 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
     const size_t num_words = raw_words.size();
     const size_t num_tokens = token_ids.size();
 
-    // Calculate word timestamps by interpolating token timestamps based on
-    // relative position in the sequence. For example, if there are 3 words and
-    // 5 tokens, the words correspond to token indices 0, 2, and 4.
+    // Find the starting token index of each word by decoding token prefixes.
+    // Subword tokenizers (SentencePiece, BPE) often use 2-5 tokens for one word
+    // and 1 token for another; linear index interpolation shifts word
+    // timestamps away from their acoustic onset and breaks overlap alignment.
+    std::vector<size_t> word_token_idx(num_words, 0);
+    bool has_prefix_word_mapping = false;
+    if (num_words >= 1 && num_tokens > 1) {
+      size_t prev_word_count = 0;
+      std::vector<int> prefix_ids;
+      prefix_ids.reserve(num_tokens);
+      for (size_t k = 0; k + 1 < num_tokens; ++k) {
+        prefix_ids.push_back(token_ids[k]);
+        auto prefix_or =
+            tokenizer_.TokenIdsToText(prefix_ids, skip_special_tokens);
+        if (!prefix_or.ok()) {
+          continue;
+        }
+        size_t curr_word_count = 0;
+        bool in_word = false;
+        for (char c : *prefix_or) {
+          if (c != ' ') {
+            if (!in_word) {
+              ++curr_word_count;
+              in_word = true;
+            }
+          } else {
+            in_word = false;
+          }
+        }
+        curr_word_count = std::min(curr_word_count, num_words);
+        while (prev_word_count < curr_word_count) {
+          word_token_idx[prev_word_count] = k;
+          ++prev_word_count;
+        }
+      }
+      if (prev_word_count > 0 || num_words == 1) {
+        while (prev_word_count < num_words) {
+          word_token_idx[prev_word_count] = num_tokens - 1;
+          ++prev_word_count;
+        }
+        has_prefix_word_mapping = true;
+      }
+    }
+
     for (size_t i = 0; i < num_words; ++i) {
       size_t token_idx = 0;
       if (num_tokens > 0) {
-        if (num_words <= 1) {
+        if (has_prefix_word_mapping) {
+          token_idx = word_token_idx[i];
+        } else if (num_words <= 1) {
           token_idx = 0;
         } else {
           token_idx = static_cast<size_t>(std::round(
@@ -143,8 +199,46 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
           }
         }
       }
+      if (!timestamp_ms.has_value() && !end_of_chunk_timestamp_ms.has_value() &&
+          CanonicalizeStr(raw_words[i]).empty()) {
+        continue;
+      }
       words.push_back(Detokenizer::Word{.text = std::string(raw_words[i]),
                                         .timestamp_ms = timestamp_ms});
+    }
+
+    // Autoregressive decoders without frame timestamps (e.g. tinygemma-asr)
+    // attend over the full padded window on short (< 3s) utterances and often
+    // transcribe a complete punctuated sentence 3 times consecutively (or a
+    // single punctuated word 2 times consecutively).
+    if (!end_of_chunk_timestamp_ms.has_value() && words.size() >= 2 &&
+        !words.front().timestamp_ms.has_value()) {
+      for (size_t r : {size_t{3}, size_t{2}}) {
+        if (words.size() >= r && words.size() % r == 0 &&
+            (r >= 3 || words.size() == r)) {
+          const size_t m = words.size() / r;
+          if (words[m - 1].text.empty()) {
+            continue;
+          }
+          const char last_char = words[m - 1].text.back();
+          if (last_char == '.' || last_char == '?' || last_char == '!') {
+            bool all_match = true;
+            for (size_t copy = 1; copy < r && all_match; ++copy) {
+              for (size_t j = 0; j < m; ++j) {
+                if (CanonicalizeStr(words[j].text) !=
+                    CanonicalizeStr(words[copy * m + j].text)) {
+                  all_match = false;
+                  break;
+                }
+              }
+            }
+            if (all_match) {
+              words.resize(m);
+              break;
+            }
+          }
+        }
+      }
     }
   }
 

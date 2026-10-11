@@ -127,6 +127,7 @@ absl::Status FileAudioSource::ScheduleInternal() {
     return absl::OutOfRangeError("End of audio stream reached.");
   }
 
+  tail_padding_ = 0;
   int frames_to_read = (current_frame_ == 0) ? samples_per_interval_ : step_;
   int read_len = std::min(frames_to_read, samples_per_interval_ - ring_pos_);
   ABSL_ASSIGN_OR_RETURN(ma_uint64 frames_read, ReadFrames(read_len));
@@ -141,6 +142,7 @@ absl::Status FileAudioSource::ScheduleInternal() {
       std::fill_n(ring_buffer_.begin() + ring_pos_, read_len, 0.0f);
       ring_pos_ = (ring_pos_ + read_len) % samples_per_interval_;
       current_frame_ += read_len;
+      tail_padding_ += read_len;
     } else {
       return second_read_len.status();
     }
@@ -155,6 +157,13 @@ absl::Status FileAudioSource::ScheduleInternal() {
   int first_part_len = samples_per_interval_ - ring_pos_;
   std::copy_n(ring_buffer_.begin() + ring_pos_, first_part_len, chunk.begin());
   std::copy_n(ring_buffer_.begin(), ring_pos_, chunk.begin() + first_part_len);
+
+  // At EOF the newest part of the window is zero padding. Emit only the real
+  // audio; the downstream preprocessor pads to the model window itself so that
+  // feature normalization statistics are not skewed by trailing silence.
+  if (tail_padding_ > 0 && tail_padding_ < samples_per_interval_) {
+    chunk.resize(samples_per_interval_ - tail_padding_);
+  }
 
   PushOutput(std::move(chunk));
   return absl::OkStatus();
@@ -177,6 +186,7 @@ absl::StatusOr<ma_uint64> FileAudioSource::ReadFrames(int num_frames_to_read) {
   if (read_len < static_cast<ma_uint64>(num_frames_to_read)) {
     std::fill_n(ring_buffer_.begin() + ring_pos_ + read_len,
                 num_frames_to_read - read_len, 0.0f);
+    tail_padding_ += num_frames_to_read - read_len;
   }
 
   ring_pos_ = (ring_pos_ + num_frames_to_read) % samples_per_interval_;

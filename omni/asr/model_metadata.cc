@@ -71,6 +71,10 @@ absl::Status PopulateConfigFromMetadataJson(absl::string_view model_name,
   if (m.contains("decodeSkipUntilTokenId")) {
     config.decode_skip_until_token_id = m["decodeSkipUntilTokenId"].get<int>();
   }
+  if (m.contains("decodePromptTokenIds")) {
+    config.decode_prompt_token_ids =
+        m["decodePromptTokenIds"].get<std::vector<int>>();
+  }
   if (m.contains("stateBufferNamePatterns")) {
     config.state_buffer_name_patterns =
         m["stateBufferNamePatterns"].get<std::vector<std::string>>();
@@ -151,6 +155,13 @@ absl::Status PopulateConfigFromMetadataJson(absl::string_view model_name,
         config.log_mel_config.norm_type =
             LogMelSpectrogramProcessor::NormType::kWhisper;
       }
+    }
+    if (l.contains("melScale")) {
+      std::string scale = l["melScale"].get<std::string>();
+      config.log_mel_config.slaney_mel = (scale == "slaney");
+    }
+    if (l.contains("melPower")) {
+      config.log_mel_config.power_spectrum = l["melPower"].get<bool>();
     }
   } else {
     config.has_log_mel_config = false;

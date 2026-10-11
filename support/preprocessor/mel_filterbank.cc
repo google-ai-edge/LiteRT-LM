@@ -29,7 +29,9 @@
 
 #include "support/preprocessor/mel_filterbank.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <vector>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -146,6 +148,74 @@ absl::Status MelFilterbank::Initialize(int fft_length, double sample_rate,
                       << " upper_frequency_limit: " << upper_frequency_limit;
   }
 
+  slaney_ = false;
+  initialized_ = true;
+  return absl::OkStatus();
+}
+
+namespace {
+// librosa's Slaney mel scale (hz_to_mel / mel_to_hz with htk=False).
+double SlaneyHzToMel(double hz) {
+  constexpr double kFSp = 200.0 / 3.0;
+  constexpr double kMinLogHz = 1000.0;
+  constexpr double kMinLogMel = kMinLogHz / kFSp;
+  const double logstep = std::log(6.4) / 27.0;
+  if (hz >= kMinLogHz) return kMinLogMel + std::log(hz / kMinLogHz) / logstep;
+  return hz / kFSp;
+}
+
+double SlaneyMelToHz(double mel) {
+  constexpr double kFSp = 200.0 / 3.0;
+  constexpr double kMinLogHz = 1000.0;
+  constexpr double kMinLogMel = kMinLogHz / kFSp;
+  const double logstep = std::log(6.4) / 27.0;
+  if (mel >= kMinLogMel) {
+    return kMinLogHz * std::exp(logstep * (mel - kMinLogMel));
+  }
+  return kFSp * mel;
+}
+}  // namespace
+
+absl::Status MelFilterbank::InitializeSlaney(int fft_length, double sample_rate,
+                                             int mel_channel_count,
+                                             double lower_frequency_limit,
+                                             double upper_frequency_limit,
+                                             bool use_power) {
+  if (mel_channel_count < 1 || sample_rate <= 0 || fft_length < 2 ||
+      lower_frequency_limit < 0 ||
+      upper_frequency_limit <= lower_frequency_limit) {
+    return absl::InvalidArgumentError("Invalid Slaney mel filterbank config.");
+  }
+  num_mel_channels_ = mel_channel_count;
+  sample_rate_ = sample_rate;
+  fft_length_ = fft_length;
+  // `fft_length` here is the number of spectrum bins handed to ToMelSpectrum
+  // (n_fft / 2 + 1), matching Initialize()'s convention.
+  slaney_bins_ = fft_length;
+  const int n_fft = 2 * (fft_length - 1);
+  const double mel_lo = SlaneyHzToMel(lower_frequency_limit);
+  const double mel_hi = SlaneyHzToMel(upper_frequency_limit);
+  std::vector<double> hz(num_mel_channels_ + 2);
+  for (int i = 0; i < num_mel_channels_ + 2; ++i) {
+    hz[i] =
+        SlaneyMelToHz(mel_lo + (mel_hi - mel_lo) * i / (num_mel_channels_ + 1));
+  }
+  slaney_weights_.assign(static_cast<size_t>(num_mel_channels_) * slaney_bins_,
+                         0.0);
+  for (int m = 0; m < num_mel_channels_; ++m) {
+    const double enorm = 2.0 / (hz[m + 2] - hz[m]);
+    for (int k = 0; k < slaney_bins_; ++k) {
+      const double f = static_cast<double>(k) * sample_rate / n_fft;
+      const double lower = (f - hz[m]) / (hz[m + 1] - hz[m]);
+      const double upper = (hz[m + 2] - f) / (hz[m + 2] - hz[m + 1]);
+      const double w = std::max(0.0, std::min(lower, upper));
+      slaney_weights_[static_cast<size_t>(m) * slaney_bins_ + k] = w * enorm;
+    }
+  }
+  start_index_ = 0;
+  end_index_ = slaney_bins_ - 1;
+  slaney_ = true;
+  use_power_ = use_power;
   initialized_ = true;
   return absl::OkStatus();
 }
@@ -158,6 +228,34 @@ absl::Status MelFilterbank::ToMelSpectrum(
     std::vector<double>* mel) const {
   if (!initialized_) {
     return absl::InternalError("Mel Filterbank not initialized.");
+  }
+  if (mel == nullptr) {
+    return absl::InvalidArgumentError("mel output pointer must not be null.");
+  }
+  if (slaney_) {
+    if (squared_magnitude_fft.size() < static_cast<size_t>(slaney_bins_)) {
+      return absl::InternalError("FFT too short to compute filterbank");
+    }
+    std::vector<double> linear_mag;
+    if (!use_power_) {
+      linear_mag.resize(slaney_bins_);
+      for (int k = 0; k < slaney_bins_; ++k) {
+        linear_mag[k] = std::sqrt(squared_magnitude_fft[k]);
+      }
+    }
+    const double* spec =
+        use_power_ ? squared_magnitude_fft.data() : linear_mag.data();
+    mel->assign(num_mel_channels_, 0.0);
+    for (int m = 0; m < num_mel_channels_; ++m) {
+      const double* w =
+          slaney_weights_.data() + static_cast<size_t>(m) * slaney_bins_;
+      double acc = 0.0;
+      for (int k = 0; k < slaney_bins_; ++k) {
+        acc += w[k] * spec[k];
+      }
+      (*mel)[m] = acc;
+    }
+    return absl::OkStatus();
   }
 
   if (squared_magnitude_fft.size() <= end_index_) {
@@ -185,6 +283,14 @@ absl::Status MelFilterbank::ToSquaredMagnitudeFft(
     std::vector<double>* squared_magnitude_fft) const {
   if (!initialized_) {
     return absl::InternalError("Mel Filterbank not initialized.");
+  }
+  if (slaney_) {
+    return absl::UnimplementedError(
+        "ToSquaredMagnitudeFft is not supported for Slaney mel filterbanks.");
+  }
+  if (squared_magnitude_fft == nullptr) {
+    return absl::InvalidArgumentError(
+        "squared_magnitude_fft output pointer must not be null.");
   }
 
   if (mel.size() != num_mel_channels_) {

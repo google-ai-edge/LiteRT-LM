@@ -67,5 +67,43 @@ TEST(CtcDecoderTest, DecodeIncludesEndOfChunkToken) {
   EXPECT_EQ(tokens.back().timestamp_ms, 2);
 }
 
+TEST(CtcDecoderTest, SetDecodeRangeValidFractionBoundsDecoding) {
+  constexpr int kNumFrames = 8;
+  ASSERT_OK_AND_ASSIGN(auto decoder, CtcDecoder::Create(/*vocab_size=*/2));
+  // Frame t emits token (t % 2), so every frame yields a new token.
+  alignas(64) float logits[kNumFrames * 2];
+  for (int t = 0; t < kNumFrames; ++t) {
+    logits[t * 2] = (t % 2 == 0) ? 1.0f : 0.0f;
+    logits[t * 2 + 1] = (t % 2 == 0) ? 0.0f : 1.0f;
+  }
+  ::litert::RankedTensorType tensor_type(
+      ::litert::ElementType::Float32,
+      ::litert::Layout(::litert::Dimensions{kNumFrames, 2}));
+  auto buffer_or = ::litert::TensorBuffer::CreateFromHostMemory(
+      tensor_type, logits, sizeof(logits));
+  ASSERT_TRUE(buffer_or.HasValue());
+  std::vector<::litert::TensorBuffer> outputs;
+  outputs.push_back(std::move(*buffer_or));
+
+  // 25% of the window is real audio: round(0.25 * 8) = 2 valid frames, plus
+  // the margin, are decoded; the end-of-chunk token still marks the window end.
+  decoder->SetDecodeRange({.valid_fraction = 0.25f});
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(outputs));
+  const int expected_frames = 2 + CtcDecoder::kValidFrameMargin;
+  ASSERT_EQ(tokens.size(), expected_frames + 1);
+  EXPECT_EQ(tokens[expected_frames - 1].timestamp_ms, expected_frames - 1);
+  EXPECT_TRUE(tokens.back().IsEndOfChunk());
+  EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames);
+
+  // The bound only applies to the next Decode().
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(outputs));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+
+  // Fractions outside (0, 1) mean "decode everything".
+  decoder->SetDecodeRange({.valid_fraction = 0.0f});
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(outputs));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr
