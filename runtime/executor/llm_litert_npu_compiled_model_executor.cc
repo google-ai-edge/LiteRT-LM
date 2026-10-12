@@ -2322,12 +2322,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   ran_decode_ = false;
   active_context_group_index_ = 0;
   if (!context_groups_.empty()) {
-    const auto& active_group = context_groups_[0];
-    main_mask_.SetGeometry(&active_group.geometry);
-    main_cache_.SetGeometry(&active_group.geometry);
-    if (drafter_aux_context_.has_value()) {
-      drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
-    }
+    // Point the sub-components back at group 0's buffers, not just its
+    // geometry: after a conversation that crossed to a larger tier they still
+    // reference that tier's buffers.
+    LITERT_RETURN_IF_ERROR(RebindActiveContextGroup());
   }
   LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(0));
   latency_stats_ = {};
