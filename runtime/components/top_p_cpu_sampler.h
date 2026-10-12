@@ -21,8 +21,10 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
+#include "runtime/components/sampling_cpu_util.h"
 #include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
@@ -65,7 +67,26 @@ class TopPSampler : public Sampler {
   }
   bool ComputeExactLogProbs() const { return compute_exact_log_probs_; }
 
+  // See `Sampler::SampleToIdAndTopKBuffer()`.
+  absl::Status SampleToIdAndTopKBuffer(const TensorBuffer& logits_tensor,
+                                       TensorBuffer& ids_tensor,
+                                       TensorBuffer& topk_probs_tensor,
+                                       TensorBuffer& topk_ids_tensor) override;
+
  private:
+  // Returns the logits as float32 values in host memory. The span may refer to
+  // `logits_data_`.
+  absl::StatusOr<absl::Span<float>> ReadLogits(
+      const TensorBuffer& logits_tensor);
+
+  // Samples the ids (and optionally the scores) from the logits. If
+  // `topk_distribution` is not null, it is set to the top-k distribution the
+  // ids are drawn from.
+  absl::Status SampleFromLogits(absl::Span<float> logits_data_span,
+                                TensorBuffer& ids_tensor,
+                                TensorBuffer* scores_tensor,
+                                TopKDistribution* topk_distribution);
+
   explicit TopPSampler(int k, float p, float temperature, int batch_size,
                        int sequence_size, int seed,
                        bool compute_exact_log_probs = false)

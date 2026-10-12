@@ -19,6 +19,7 @@
 #include <random>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 
@@ -54,6 +55,19 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
     float temperature, int batch_size, int sequence_size,
     std::vector<std::vector<float>>& max_logit_values);
 
+// The top-k distribution that TopKTopPSampling() draws from, before the top-p
+// cut.
+struct TopKDistribution {
+  // The number of entries per (batch, position): min(k, vocab_size).
+  int k = 0;
+  // Shape [batch_size, sequence_size, k] (flattened): for each
+  // (batch, position), the softmax of the top-k logits divided by the
+  // temperature and the corresponding token ids, sorted in descending order of
+  // probability with ties broken by ascending token id.
+  std::vector<float> probs;
+  std::vector<int> ids;
+};
+
 // Samples a batch of token ids from the given probabilities.
 //   - logits: a 3D tensor (in a flattened buffer) of shape
 //     [batch_size, sequence_size, vocab_size].
@@ -69,10 +83,29 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
 //     true probabilities as they are calculated based on the top-k logits
 //     which are not normalized across the entire vocab. When k == 1, the
 //     sampled_scores are always 1.0.
+//   - topk_distribution: optional output parameter. If not null, it is set to
+//     the top-k distribution the tokens are drawn from. For each
+//     (batch, position), the top-p cut keeps the smallest prefix of its sorted
+//     entries whose mass reaches p.
 absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
     absl::Span<const float> logits, int k, float p, float temperature,
     std::shared_ptr<std::default_random_engine> rng, int batch_size,
-    int sequence_size, std::vector<std::vector<float>>& sampled_scores);
+    int sequence_size, std::vector<std::vector<float>>& sampled_scores,
+    TopKDistribution* topk_distribution = nullptr);
+
+// Computes the top-k distribution that TopKTopPSampling() draws from (the same
+// as its `topk_distribution` output), without sampling.
+//   - logits: a 3D tensor (in a flattened buffer) of shape
+//     [batch_size, sequence_size, vocab_size].
+//   - k: the number of top k. Clamped to vocab_size.
+//   - temperature: the temperature of the softmax.
+// On success, `probs` and `ids` are the `probs` and `ids` of
+// `TopKDistribution`, of shape [batch_size, sequence_size, min(k, vocab_size)].
+absl::Status ComputeTopKDistribution(absl::Span<const float> logits, int k,
+                                     float temperature, int batch_size,
+                                     int sequence_size,
+                                     std::vector<float>& probs,
+                                     std::vector<int>& ids);
 
 }  // namespace litert::lm
 

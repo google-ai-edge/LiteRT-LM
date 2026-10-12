@@ -93,6 +93,41 @@ class Sampler {
     return absl::UnimplementedError(
         "SetInferenceFuncAndInputTensors is not implemented.");
   }
+
+  // Same as `SampleToIdAndScoreBuffer()` without scores, and additionally
+  // writes the top-k distribution that the tokens are drawn from.
+  //
+  // Inputs and outputs:
+  //   - `logits_tensor` (input, float32 or float16): input logits of shape
+  //     [batch_size, sequence_size, vocab_size].
+  //   - `ids_tensor` (output, int32): sampled token ids of shape
+  //     [batch_size, sequence_size].
+  //   - `topk_probs_tensor` (output, float32) and `topk_ids_tensor` (output,
+  //     int32), both of shape [batch_size, sequence_size, K]. For each
+  //     (batch, position), the first `min(k, vocab_size)` entries are the
+  //     probabilities normalized by softmax over only the top-k logits (divided
+  //     by the temperature, i.e., after selecting the top-k logits, not over
+  //     the full vocabulary, and before top-p truncation or sampling) and their
+  //     token ids, sorted in descending order of probability. Tied entries are
+  //     in the order that the sampler's top-p cut uses (`TopPSampler` breaks
+  //     ties by ascending token id). The remaining entries, if any, are 0.0 and
+  //     -1.
+  //   - K must be at least `min(k, vocab_size)` for the current `k` of the
+  //     sampler parameters; otherwise `InvalidArgumentError` is returned.
+  //
+  // The distribution is taken *before* the top-p (nucleus) cut: callers that
+  // need the exact distribution of the sampled tokens apply the top-p
+  // truncation to these buffers themselves (smallest prefix whose mass
+  // reaches p, renormalized). The sampled ids and the random values consumed
+  // are the same as with `SampleToIdAndScoreBuffer()`.
+  //
+  // Returns `UnimplementedError` if the sampler doesn't support it.
+  virtual absl::Status SampleToIdAndTopKBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer& topk_probs_tensor, TensorBuffer& topk_ids_tensor) {
+    return absl::UnimplementedError(
+        "SampleToIdAndTopKBuffer is not implemented.");
+  }
 };
 
 }  // namespace litert::lm
