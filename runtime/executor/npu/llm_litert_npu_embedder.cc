@@ -298,7 +298,7 @@ absl::Status HWPerLayerEmbeddingLookup(
     row_float.resize(ple_embedding_dim);
   }
 
-  int row_size_bytes = 0;
+  size_t row_size_bytes = 0;
   if (ple_table_element_type == litert::ElementType::Int4) {
     row_size_bytes = ple_embedding_dim / 2;
   } else if (ple_table_element_type == litert::ElementType::Int8) {
@@ -310,9 +310,9 @@ absl::Status HWPerLayerEmbeddingLookup(
   }
 
   for (int t = 0; t < num_tokens; ++t) {
-    int id = token_ids[t];
-    if (id < 0 || id >= kVocabSize) {
-      id = 0;  // Default to 0 as in model
+    size_t id = 0;  // Default to 0 as in model
+    if (token_ids[t] >= 0 && token_ids[t] < kVocabSize) {
+      id = static_cast<size_t>(token_ids[t]);
     }
 
     size_t row_offset = id * row_size_bytes;
