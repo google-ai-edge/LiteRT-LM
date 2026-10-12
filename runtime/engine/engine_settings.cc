@@ -34,9 +34,9 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/core/version.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/core/version.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -48,6 +48,7 @@
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
+#include "runtime/util/litert_lm_streaming_loader.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -173,6 +174,25 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
       auto mapped_file_status = model_assets.GetMemoryMappedFile();
       if (mapped_file_status.ok()) {
         loader_status = LitertLmLoader::Create(*mapped_file_status);
+      }
+    } else if (model_assets.HasDataStream()) {
+      auto data_stream_status = model_assets.GetDataStream();
+      if (data_stream_status.ok()) {
+        LitertLmStreamingLoader streaming_loader(*data_stream_status);
+        absl::Status load_header_status =
+            streaming_loader.LoadHeader(/*preserve_stream=*/true);
+        if (!load_header_status.ok()) {
+          ABSL_LOG(WARNING)
+              << "Failed to load LitertLm header from data stream: "
+              << load_header_status;
+        } else if (streaming_loader.HasSection(
+                       BufferKey(schema::AnySectionDataType_TFLiteModel,
+                                 ModelType::kArtisanTextDecoder))) {
+          is_text_artisan = true;
+        }
+      } else {
+        ABSL_LOG(WARNING) << "Failed to get data stream from ModelAssets: "
+                          << data_stream_status.status();
       }
     } else {
       auto scoped_file_status = model_assets.GetOrCreateScopedFile();

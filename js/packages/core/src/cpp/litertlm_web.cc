@@ -228,11 +228,6 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
 
   emscripten::class_<litert::lm::ModelAssets>("ModelAssets")
       .class_function(
-          "create", optional_override([](std::string model_path) {
-            return UnwrapStatusOr(litert::lm::ModelAssets::Create(model_path));
-          }),
-          emscripten::return_value_policy::take_ownership())
-      .class_function(
           "createStreaming",
           optional_override(
               [](std::shared_ptr<litert::lm::ReadableStreamDataStream>
@@ -240,12 +235,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 return UnwrapStatusOr(
                     litert::lm::ModelAssets::Create(data_stream));
               }),
-          emscripten::return_value_policy::take_ownership())
-      .function("getPath",
-                optional_override([](litert::lm::ModelAssets& model_assets) {
-                  // Convert from string_view to string for embind.
-                  return std::string(UnwrapStatusOr(model_assets.GetPath()));
-                }));
+          emscripten::return_value_policy::take_ownership());
 
   emscripten::class_<litert::lm::EngineSettings>("EngineSettings")
       .class_function(
@@ -255,7 +245,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             return UnwrapStatusOr(litert::lm::EngineSettings::CreateDefault(
                 std::move(model_assets), backend));
           }),
-          emscripten::return_value_policy::take_ownership())
+          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
       .function("getParallelFileSectionLoading",
                 &litert::lm::EngineSettings::GetParallelFileSectionLoading)
       .function("setParallelFileSectionLoading",
@@ -406,7 +396,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           }),
           emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
       .class_function(
-          "createStreaming",
+          "createLegacyEngine",
           optional_override([](litert::lm::EngineSettings& engine_settings,
                                std::string input_prompt_as_hint = "") {
             return UnwrapStatusOr(litert::lm::EngineFactory::Create(

@@ -19,8 +19,7 @@ import {ContentPart, SUPPORTED_AUDIO_MIME_TYPES, SUPPORTED_IMAGE_MIME_TYPES} fro
 import {EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings} from './embedding_engine_settings.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
-import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
-import {modelToStream} from './stream_utils.js';
+import {createStreamingModelAssets} from './stream_utils.js';
 import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
@@ -132,24 +131,17 @@ export class EmbeddingEngine implements Deletable {
     const backend = settings.backend ?? Backend.GPU;
     settings = {...settings, backend};
 
-    if (backend === Backend.GPU || backend === Backend.GPU_ARTISAN) {
+    if (backend === Backend.GPU || backend === Backend.GPU_ARTISAN ||
+        settings.visionBackend === Backend.GPU ||
+        settings.audioBackend === Backend.GPU) {
       await litertlm.setupDefaultWebGpuDevice();
     }
 
     const cleanup = new Cleanup();
-    const modelStream = await modelToStream(settings.model);
     let engine: WasmEmbeddingEngine;
     try {
-      const streamWrapper =
-          new ReadableStreamDataStreamWrapper(modelStream, () => wasm.HEAPU8);
-      const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
-      cleanup.add(() => {
-        dataStream.delete();
-      });
-      const modelAssets = wasm.ModelAssets.createStreaming(dataStream);
-      const cleanupModelAssets = cleanup.add(() => {
-        modelAssets.delete();
-      });
+      const {modelAssets, cleanupModelAssets} =
+          await createStreamingModelAssets(settings.model, wasm, cleanup);
 
       const wasmSettings = wasm.EmbeddingEngineSettings.createDefaultMultimodal(
           modelAssets, {value: backend},
@@ -169,16 +161,18 @@ export class EmbeddingEngine implements Deletable {
           wasmSettings.getMutableMainExecutorSettings().getBackend().value;
 
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
-          wasmSettings, settings, resolvedBackend);
+          wasmSettings, settings);
 
       try {
         engine = await wasm.EmbeddingEngine.createEngine(wasmSettings);
       } finally {
-        if (resolvedBackend === Backend.GPU) {
+        if (resolvedBackend === Backend.GPU ||
+            settings.visionBackend === Backend.GPU ||
+            settings.audioBackend === Backend.GPU) {
           try {
             await wasm.clearStoredWeightsStreams();
           } catch (cleanupError) {
-            console.error('Error during cleanup:', cleanupError);
+            console.error('Error clearing stored weights streams:', cleanupError);
           }
         }
       }

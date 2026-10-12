@@ -17,8 +17,12 @@
 import {LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
+import {Cleanup} from './cleanup.js';
+import {createStreamingModelAssets} from './stream_utils.js';
+
 describe('LlmExecutorSettings', () => {
   let liteRtLm: LiteRtLm;
+  let cleanup: Cleanup;
   let modelAssets: Wasm.ModelAssets;
   let engineSettings: Wasm.EngineSettings;
   let llmExecutorSettings: Wasm.LlmExecutorSettings;
@@ -28,9 +32,11 @@ describe('LlmExecutorSettings', () => {
     liteRtLm = await loadLiteRtLm(trustedResourceUrl`/wasm`);
   });
 
-  beforeEach(() => {
-    modelAssets = liteRtLm.liteRtLmWasm.ModelAssets.create('/path/to/model');
-    engineSettings = liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+  beforeEach(async () => {
+    cleanup = new Cleanup();
+    ({modelAssets} = await createStreamingModelAssets(
+         new Blob([]), liteRtLm.liteRtLmWasm, cleanup));
+    engineSettings = await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
         modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
     llmExecutorSettings = engineSettings.getMutableMainExecutorSettings();
   });
@@ -38,7 +44,7 @@ describe('LlmExecutorSettings', () => {
   afterEach(() => {
     // Do not delete llmExecutorSettings, as it is owned by engineSettings.
     engineSettings.delete();
-    modelAssets.delete();
+    cleanup.run();
   });
 
   it('sets and gets max num tokens', () => {

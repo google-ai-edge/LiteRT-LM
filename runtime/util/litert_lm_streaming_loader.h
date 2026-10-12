@@ -79,10 +79,18 @@ class LitertLmStreamingLoader {
         header_(std::make_shared<schema::LitertlmHeader>()) {}
 
   // Loads the header from the stream.
+  // If preserve_stream is true, uses ReadAndPreserve so the header remains in
+  // the stream for subsequent readers.
   // Returns an error if the header cannot be loaded.
   // Optional. If not called, LoadHeader() will be called within
   // GetNextSection().
-  absl::Status LoadHeader();
+  absl::Status LoadHeader(bool preserve_stream = false);
+
+  // Returns whether the model contains a section with the given buffer key.
+  // Must be called after LoadHeader().
+  bool HasSection(const BufferKey& key) const {
+    return section_hints_map_.find(key) != section_hints_map_.end();
+  }
 
   // Returns the next section from the stream.
   // Returns std::nullopt if there are no more sections to read.

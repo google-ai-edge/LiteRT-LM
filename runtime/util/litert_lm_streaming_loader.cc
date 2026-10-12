@@ -36,14 +36,18 @@
 
 namespace litert::lm {
 
-absl::Status LitertLmStreamingLoader::LoadHeader() {
+absl::Status LitertLmStreamingLoader::LoadHeader(bool preserve_stream) {
   if (header_loaded_) {
     return absl::OkStatus();
   }
 
+  auto read_fn = [&](void* buffer, size_t offset, size_t size) {
+    return preserve_stream ? data_stream_->ReadAndPreserve(buffer, offset, size)
+                           : data_stream_->ReadAndDiscard(buffer, offset, size);
+  };
+
   HeaderPreamble header_preamble;
-  ABSL_RETURN_IF_ERROR(data_stream_->ReadAndDiscard(&header_preamble, 0,
-                                                    sizeof(HeaderPreamble)));
+  ABSL_RETURN_IF_ERROR(read_fn(&header_preamble, 0, sizeof(HeaderPreamble)));
   ABSL_VLOG(1) << "[StreamingLoader]: Loaded preamble. Magic: "
                << std::string(header_preamble.magic, 8)
                << ", version: " << header_preamble.major_version << "."
@@ -80,9 +84,8 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   // Read the rest of the header from the stream.
   size_t remaining_size = header_size - sizeof(HeaderPreamble);
   if (remaining_size > 0) {
-    ABSL_RETURN_IF_ERROR(
-        data_stream_->ReadAndDiscard(header_data.get() + sizeof(HeaderPreamble),
-                                     sizeof(HeaderPreamble), remaining_size));
+    ABSL_RETURN_IF_ERROR(read_fn(header_data.get() + sizeof(HeaderPreamble),
+                                 sizeof(HeaderPreamble), remaining_size));
   }
 
   // Read the LiteRTLM header from the buffer.

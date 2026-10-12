@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import {Cleanup} from './cleanup.js';
+import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
+import {LiteRtLmWasm, ModelAssets} from './wasm_binding_types.js';
+
 /**
  * Converts a model source (URL string, Blob, or ReadableStream) into a ReadableStream.
  */
@@ -36,3 +40,28 @@ export async function modelToStream(
   }
   return response.body!;
 }
+
+/**
+ * Creates a streaming Wasm `ModelAssets` from a model source (URL string, Blob,
+ * or ReadableStream) and registers cleanup callbacks for the underlying
+ * `ReadableStreamDataStream` and `ModelAssets`.
+ */
+export async function createStreamingModelAssets(
+    model: string | Blob | ReadableStream<Uint8Array>,
+    wasm: LiteRtLmWasm,
+    cleanup: Cleanup,
+): Promise<{modelAssets: ModelAssets; cleanupModelAssets: () => void}> {
+  const modelStream = await modelToStream(model);
+  const streamWrapper =
+      new ReadableStreamDataStreamWrapper(modelStream, () => wasm.HEAPU8);
+  const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
+  cleanup.add(() => {
+    dataStream.delete();
+  });
+  const modelAssets = wasm.ModelAssets.createStreaming(dataStream);
+  const cleanupModelAssets = cleanup.add(() => {
+    modelAssets.delete();
+  });
+  return {modelAssets, cleanupModelAssets};
+}
+

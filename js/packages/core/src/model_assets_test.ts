@@ -17,6 +17,9 @@
 import {LiteRtLm, loadLiteRtLm, unloadLiteRtLm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
+import {Cleanup} from './cleanup.js';
+import {createStreamingModelAssets} from './stream_utils.js';
+
 describe('ModelAssets tests', () => {
   let liteRtLm: LiteRtLm;
   beforeAll(async () => {
@@ -25,12 +28,12 @@ describe('ModelAssets tests', () => {
   });
 
   describe('ModelAssets', () => {
-    it('creates ModelAssets', () => {
-      const modelAssets =
-          liteRtLm.liteRtLmWasm.ModelAssets.create('/path/to/model');
+    it('creates streaming ModelAssets', async () => {
+      const cleanup = new Cleanup();
+      const {modelAssets} = await createStreamingModelAssets(
+          new Blob([]), liteRtLm.liteRtLmWasm, cleanup);
       expect(modelAssets).toBeDefined();
-      expect(modelAssets.getPath()).toBe('/path/to/model');
-      modelAssets.delete();
+      cleanup.run();
     });
   });
 });

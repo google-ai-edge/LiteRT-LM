@@ -14,21 +14,27 @@
  * limitations under the License.
  */
 
-import {Backend, type EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings, LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
+import {type EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings, LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
+
+import {Cleanup} from './cleanup.js';
+import {createStreamingModelAssets} from './stream_utils.js';
 
 describe('EmbeddingEngineSettings', () => {
   let liteRtLm: LiteRtLm;
+  let cleanup: Cleanup;
   let modelAssets: Wasm.ModelAssets;
 
   beforeAll(async () => {
     unloadLiteRtLm();
     liteRtLm = await loadLiteRtLm(trustedResourceUrl`/wasm`);
-    modelAssets = liteRtLm.liteRtLmWasm.ModelAssets.create('/path/to/model');
+    cleanup = new Cleanup();
+    ({modelAssets} = await createStreamingModelAssets(
+         new Blob([]), liteRtLm.liteRtLmWasm, cleanup));
   });
 
   afterAll(() => {
-    modelAssets.delete();
+    cleanup.run();
   });
 
   it('creates EmbeddingEngineSettings', () => {
@@ -46,7 +52,7 @@ describe('EmbeddingEngineSettings', () => {
           liteRtLm.liteRtLmWasm.EmbeddingEngineSettings.createDefault(
               modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
-          wasmSettings, {...settings, model: '/path/to/model'}, Backend.CPU);
+          wasmSettings, {...settings, model: '/path/to/model'});
       return wasmSettings;
     }
 
