@@ -214,9 +214,15 @@ target_link_libraries(runtime_components_constrained_decoding_constrained_decode
 # ==============================================================================
 # Constraint Provider Factory
 # ==============================================================================
-add_litertlm_library(runtime_components_constrained_decoding_constraint_provider_factory STATIC
-  constraint_provider_factory.cc
-)
+if(LITERT_LM_ENABLE_CONSTRAINED_DECODING)
+  add_litertlm_library(runtime_components_constrained_decoding_constraint_provider_factory STATIC
+    constraint_provider_factory.cc
+  )
+else()
+  add_litertlm_library(runtime_components_constrained_decoding_constraint_provider_factory STATIC
+    constraint_provider_factory_noop.cc
+  )
+endif()
 add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::Factory
   ALIAS runtime_components_constrained_decoding_constraint_provider_factory)
 
@@ -316,9 +322,15 @@ target_link_libraries(runtime_components_constrained_decoding_llg_constraint
 # ==============================================================================
 # LLG Provider
 # ==============================================================================
-add_litertlm_library(runtime_components_constrained_decoding_llg_constraint_provider STATIC
-  llg_constraint_provider.cc
-)
+if(LITERT_LM_ENABLE_CONSTRAINED_DECODING AND LITERT_LM_ENABLE_LLGUIDANCE)
+  add_litertlm_library(runtime_components_constrained_decoding_llg_constraint_provider STATIC
+    llg_constraint_provider.cc
+  )
+else()
+  add_litertlm_library(runtime_components_constrained_decoding_llg_constraint_provider STATIC
+    llg_constraint_provider_noop.cc
+  )
+endif()
 add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LlgConstraintProvider 
   ALIAS runtime_components_constrained_decoding_llg_constraint_provider)
 

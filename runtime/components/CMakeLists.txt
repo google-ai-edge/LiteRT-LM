@@ -209,9 +209,15 @@ target_link_libraries(runtime_components_model_resources_task
 # ==============================================================================
 # Prompt Template
 # ==============================================================================
-add_litertlm_library(runtime_components_prompt_template STATIC
-  prompt_template.cc
-)
+if(LITERT_LM_ENABLE_MINIJINJA_TEMPLATE)
+  add_litertlm_library(runtime_components_prompt_template STATIC
+    prompt_template.cc
+  )
+else()
+  add_litertlm_library(runtime_components_prompt_template STATIC
+    prompt_template_noop.cc
+  )
+endif()
 add_library(LiteRTLM::Runtime::Components::PromptTemplate
   ALIAS runtime_components_prompt_template)
 

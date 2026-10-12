@@ -221,9 +221,6 @@ cc_library(
     srcs = ["parser_utils.cc"],
     hdrs = ["parser_utils.h"],
     deps = [
-        ":fc_parser_utils",
-        ":json_parser_utils",
-        ":python_parser_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
@@ -231,7 +228,16 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
         "@com_googlesource_code_re2//:re2",
-    ],
+    ] + select({
+        "//build_config:disable_tool_use_parser": [
+            ":antlr_parser_utils_noop",
+        ],
+        "//conditions:default": [
+            ":fc_parser_utils",
+            ":json_parser_utils",
+            ":python_parser_utils",
+        ],
+    }),
 )
 
 cc_test(

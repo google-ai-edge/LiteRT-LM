@@ -434,7 +434,7 @@ cc_library(
     srcs = ["llm_litert_compiled_model_executor_factory.cc"],
     hdrs = ["llm_litert_compiled_model_executor_factory.h"],
     defines = select({
-        "@platforms//os:ios": ["LITERT_DISABLE_NPU"],
+        "//build_config:disable_npu_backend": ["LITERT_DISABLE_NPU"],
         "//conditions:default": [],
     }) + select({
         "//conditions:default": [],
@@ -464,7 +464,7 @@ cc_library(
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/util:litert_status_util",
     ] + select({
-        "@platforms//os:ios": [],
+        "//build_config:disable_npu_backend": [],
         "//conditions:default": [":llm_litert_npu_compiled_model_executor"],
     }) + select({
         "//conditions:default": [],

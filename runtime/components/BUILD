@@ -35,9 +35,9 @@ package(
 
 licenses(["notice"])
 
-config_setting(
+alias(
     name = "disable_huggingface_tokenizer",
-    define_values = {"DISABLE_HUGGINGFACE_TOKENIZER": "1"},
+    actual = "//build_config:disable_huggingface_tokenizer",
     visibility = ["//visibility:public"],
 )
 
@@ -47,9 +47,9 @@ config_setting(
     values = {"copt": "-DLITERT_USE_WEBGPU_ACCELERATOR"},
 )
 
-config_setting(
+alias(
     name = "disable_sentencepiece_tokenizer",
-    define_values = {"DISABLE_SENTENCEPIECE_TOKENIZER": "1"},
+    actual = "//build_config:disable_sentencepiece_tokenizer",
     visibility = ["//visibility:public"],
 )
 
@@ -370,7 +370,12 @@ cc_library(
 
 cc_library(
     name = "prompt_template",
-    srcs = ["prompt_template.cc"],
+    srcs = select({
+        "//build_config:disable_minijinja_template": [
+            "prompt_template_noop.cc",
+        ],
+        "//conditions:default": ["prompt_template.cc"],
+    }),
     hdrs = ["prompt_template.h"],
     linkopts = select({
         "@platforms//os:windows": ["ntdll.lib"],
@@ -379,13 +384,17 @@ cc_library(
     deps = [
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
-        "//runtime/components/rust:minijinja_template_cpp",
-        "@com_googlesource_code_re2//:re2",
-    ],
+    ] + select({
+        "//build_config:disable_minijinja_template": [],
+        "//conditions:default": [
+            "@com_google_absl//absl/strings",
+            "//runtime/components/rust:minijinja_template_cpp",
+            "@com_googlesource_code_re2//:re2",
+        ],
+    }),
 )
 
 cc_library(

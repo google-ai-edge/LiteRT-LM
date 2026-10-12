@@ -174,6 +174,44 @@ file(MAKE_DIRECTORY "${LITERTLM_STAGING_DIR}")
 file(MAKE_DIRECTORY "${LITERTLM_GENERATED_SRC_DIR}")
 file(MAKE_DIRECTORY "${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}")
 
+# --- Feature Flags ---
+option(LITERT_LM_ENABLE_SENTENCEPIECE_TOKENIZER
+    "Enable SentencePiece tokenizer support"
+    ON)
+option(LITERT_LM_ENABLE_HUGGINGFACE_TOKENIZER
+    "Enable HuggingFace BPE tokenizer support"
+    ON)
+option(LITERT_LM_ENABLE_MINIJINJA_TEMPLATE
+    "Enable Minijinja prompt template engine"
+    ON)
+option(LITERT_LM_ENABLE_CONSTRAINED_DECODING
+    "Enable constrained decoding support"
+    ON)
+option(LITERT_LM_ENABLE_LLGUIDANCE
+    "Enable LlGuidance constrained decoding backend"
+    ON)
+option(LITERT_LM_ENABLE_FST_CONSTRAINTS
+    "Enable OpenFST constraint provider"
+    ON)
+option(LITERT_LM_ENABLE_TOOL_USE_PARSER
+    "Enable tool-use expression parsers"
+    ON)
+option(LITERT_LM_ENABLE_GEMMA_PROCESSORS
+    "Enable Gemma family model data processors"
+    ON)
+option(LITERT_LM_ENABLE_QWEN_PROCESSOR
+    "Enable Qwen family model data processor"
+    ON)
+option(LITERT_LM_ENABLE_FASTVLM_PROCESSOR
+    "Enable FastVLM model data processor"
+    ON)
+option(LITERT_LM_ENABLE_LFM2_PROCESSOR
+    "Enable LFM2 model data processor"
+    ON)
+option(LITERT_LM_ENABLE_MINICPM_PROCESSOR
+    "Enable MiniCPM family model data processors"
+    ON)
+
 # --- Build
 option(LITERT_BUILD_CONFIG_DISABLE_GPU_VAL
     "LiteRT definition to disable GPU in build config"
@@ -270,9 +308,21 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
 
     add_compile_definitions(
         absl_nullable=
-        absl_nonnull=
-        ENABLE_HUGGINGFACE_TOKENIZER
-        ENABLE_SENTENCEPIECE_TOKENIZER)
+        absl_nonnull=)
+    if(LITERT_LM_ENABLE_HUGGINGFACE_TOKENIZER)
+        add_compile_definitions(ENABLE_HUGGINGFACE_TOKENIZER)
+    endif()
+    if(LITERT_LM_ENABLE_SENTENCEPIECE_TOKENIZER)
+        add_compile_definitions(ENABLE_SENTENCEPIECE_TOKENIZER)
+    endif()
+    if(NOT LITERT_LM_ENABLE_CONSTRAINED_DECODING)
+        add_compile_definitions(
+            LITERT_LM_CONSTRAINED_DECODING_DISABLED
+            LITERT_LM_FST_CONSTRAINTS_DISABLED)
+    endif()
+    if(NOT LITERT_LM_ENABLE_FST_CONSTRAINTS)
+        add_compile_definitions(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+    endif()
 
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/c" "${LITERTLM_GENERATED_SRC_DIR}/c")
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/js" "${LITERTLM_GENERATED_SRC_DIR}/js")

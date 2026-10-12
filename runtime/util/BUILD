@@ -111,9 +111,9 @@ cc_test(
     ],
 )
 
-config_setting(
+alias(
     name = "litert_lm_debugger_enabled",
-    define_values = {"LITERT_LM_DEBUGGER_ENABLED": "1"},
+    actual = "//build_config:enable_debugger_setting",
 )
 
 cc_library(

@@ -22,12 +22,12 @@ package(
     ],
 )
 
-# Pass --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to disable FST constraints.
-config_setting(
+# Pass --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 or
+# --//build_config:enable_fst_constraints=false
+# to disable FST constraints.
+alias(
     name = "litert_lm_fst_constraints_disabled",
-    define_values = {
-        "LITERT_LM_FST_CONSTRAINTS_DISABLED": "1",
-    },
+    actual = "//build_config:disable_fst_constraints",
 )
 
 cc_library(
@@ -215,24 +215,16 @@ cc_library(
     hdrs = ["model_data_processor_factory.h"],
     deps = [
         ":config_registry",
-        ":fastvlm_data_processor",
         ":fastvlm_data_processor_config",
-        ":function_gemma_data_processor",
         ":function_gemma_data_processor_config",
-        ":gemma3_data_processor",
         ":gemma3_data_processor_config",
-        ":gemma4_data_processor",
         ":gemma4_data_processor_config",
         ":generic_data_processor",
         ":generic_data_processor_config",
-        ":lfm2_data_processor",
         ":lfm2_data_processor_config",
-        ":minicpm5_data_processor",
         ":minicpm5_data_processor_config",
-        ":minicpmv_data_processor",
         ":minicpmv_data_processor_config",
         ":model_data_processor",
-        ":qwen3_data_processor",
         ":qwen3_data_processor_config",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/status",
@@ -246,7 +238,35 @@ cc_library(
         "//runtime/proto:token_cc_proto",
         "//runtime/util:litert_status_util",
         "//support/tokenizer",
-    ],
+    ] + select({
+        "//build_config:enable_gemma_processors_setting": [
+            ":function_gemma_data_processor",
+            ":gemma3_data_processor",
+            ":gemma4_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_qwen_processor_setting": [
+            ":qwen3_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_fastvlm_processor_setting": [
+            ":fastvlm_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_lfm2_processor_setting": [
+            ":lfm2_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_minicpm_processor_setting": [
+            ":minicpm5_data_processor",
+            ":minicpmv_data_processor",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(
