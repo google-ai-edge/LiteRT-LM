@@ -130,6 +130,8 @@ LogMelSpectrogramProcessor::Create(
           /*semicausal_padding=*/false,
           /*non_zero_hanning=*/true, /*periodic_hanning=*/true,
           litert::support::AudioPreprocessorConfig::FftPaddingType::kRight);
+  preprocessor_config.SetSlaneyMel(config.slaney_mel);
+  preprocessor_config.SetPowerSpectrum(config.power_spectrum);
 
   ABSL_ASSIGN_OR_RETURN(
       auto preprocessor,

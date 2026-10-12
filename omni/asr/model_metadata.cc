@@ -153,6 +153,20 @@ absl::Status PopulateConfigFromMetadataJson(absl::string_view model_name,
             LogMelSpectrogramProcessor::NormType::kWhisper;
       }
     }
+    if (l.contains("melScale")) {
+      std::string scale = l["melScale"].get<std::string>();
+      if (scale == "slaney") {
+        config.log_mel_config.slaney_mel = true;
+      } else if (scale == "htk") {
+        config.log_mel_config.slaney_mel = false;
+      } else {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Unsupported melScale: ", scale));
+      }
+    }
+    if (l.contains("melPower")) {
+      config.log_mel_config.power_spectrum = l["melPower"].get<bool>();
+    }
   } else {
     config.has_log_mel_config = false;
   }

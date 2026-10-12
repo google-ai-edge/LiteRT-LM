@@ -53,6 +53,10 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
     bool normalize_mel = false;
     bool add_floor_to_mel_before_log = true;
     NormType norm_type = NormType::kStandard;
+    // librosa-compatible mel (Slaney scale + normalization, fractional
+    // triangles) summed over the power spectrum; what Whisper and NeMo use.
+    bool slaney_mel = false;
+    bool power_spectrum = false;
   };
 
   static absl::StatusOr<std::unique_ptr<LogMelSpectrogramProcessor>> Create(
