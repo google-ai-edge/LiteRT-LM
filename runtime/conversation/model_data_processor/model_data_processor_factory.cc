@@ -65,6 +65,10 @@
 #include "runtime/conversation/model_data_processor/qwen3_data_processor.h"
 #endif
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
+#ifdef ENABLE_QWEN3P5_DATA_PROCESSOR
+#include "runtime/conversation/model_data_processor/qwen3p5_data_processor.h"
+#endif
+#include "runtime/conversation/model_data_processor/qwen3p5_data_processor_config.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/status_macros.h"
@@ -89,6 +93,9 @@ void EnsureBuiltinProcessorsRegistered() {
 #endif
 #ifdef ENABLE_QWEN3_DATA_PROCESSOR
     reg.Register<Qwen3DataProcessor, Qwen3DataProcessorConfig>();
+#endif
+#ifdef ENABLE_QWEN3P5_DATA_PROCESSOR
+    reg.Register<Qwen3p5DataProcessor, Qwen3p5DataProcessorConfig>();
 #endif
 #ifdef ENABLE_FASTVLM_DATA_PROCESSOR
     reg.Register<FastVlmDataProcessor, FastVlmDataProcessorConfig>();
@@ -563,6 +570,27 @@ absl::StatusOr<DataProcessorConfig> CreateQwen3DataProcessorConfig(
   return config;
 }
 
+absl::StatusOr<DataProcessorConfig> CreateQwen3p5DataProcessorConfig(
+    const proto::LlmModelType& model_type) {
+  if (!model_type.has_qwen3p5()) {
+    return absl::InvalidArgumentError(
+        "Qwen3.5 LlmModelType is required to create "
+        "Qwen3p5DataProcessorConfig.");
+  }
+  Qwen3p5DataProcessorConfig config;
+  const proto::Qwen3p5& qwen3p5 = model_type.qwen3p5();
+  if (qwen3p5.has_code_fence_start()) {
+    config.code_fence_start = qwen3p5.code_fence_start();
+  }
+  if (qwen3p5.has_code_fence_end()) {
+    config.code_fence_end = qwen3p5.code_fence_end();
+  }
+  if (qwen3p5.has_escape_fence_strings()) {
+    config.escape_fence_strings = qwen3p5.escape_fence_strings();
+  }
+  return config;
+}
+
 absl::StatusOr<DataProcessorConfig> CreateLfm2DataProcessorConfig(
     const proto::LlmModelType& model_type) {
   if (!model_type.has_lfm2()) {
@@ -673,6 +701,8 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     case proto::LlmModelType::kQwen3:
     case proto::LlmModelType::kQwen2P5:
       return CreateQwen3DataProcessorConfig(model_type);
+    case proto::LlmModelType::kQwen3P5:
+      return CreateQwen3p5DataProcessorConfig(model_type);
     case proto::LlmModelType::kGenericModel:
       return CreateGenericDataProcessorConfig(model_type);
     case proto::LlmModelType::kFastVlm:

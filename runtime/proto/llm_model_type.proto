@@ -34,6 +34,7 @@ message LlmModelType {
     Lfm2 lfm2 = 11;
     MiniCPM5 minicpm5 = 12;
     MiniCpmV4 minicpmv4 = 13;
+    Qwen3p5 qwen3p5 = 14;
   }
   reserved 6, 10;
 }
@@ -243,6 +244,20 @@ message Qwen2p5 {
   optional bool escape_fence_strings = 3;
   // An optional regex to match each line of the tool code block.
   optional string tool_code_regex = 4;
+}
+
+// Qwen3.5 model. Tool calls are the model's own XML form inside the fences:
+// <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function>
+// </tool_call>.
+message Qwen3p5 {
+  // Options for tool calling.
+  // Signifies the beginning of a tool call.
+  optional string code_fence_start = 1;
+  // Signifies the end of tool call.
+  optional string code_fence_end = 2;
+  // Whether to escape the fence strings for regex matching.
+  optional bool escape_fence_strings = 3;
+  // No tool_code_regex: a per-line filter does not fit calls that span lines.
 }
 
 // Google's Gemma4 model.

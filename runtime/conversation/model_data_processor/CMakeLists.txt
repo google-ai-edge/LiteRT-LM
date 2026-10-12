@@ -100,6 +100,19 @@ target_include_directories(runtime_conversation_model_data_processor_qwen3_data_
 )
 
 # ==============================================================================
+# Qwen3p5 Data Processor Config
+# ==============================================================================
+add_litertlm_library(runtime_conversation_model_data_processor_qwen3p5_data_processor_config INTERFACE)
+add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5Config
+  ALIAS runtime_conversation_model_data_processor_qwen3p5_data_processor_config)
+
+target_include_directories(runtime_conversation_model_data_processor_qwen3p5_data_processor_config
+  INTERFACE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+# ==============================================================================
 # Model Data Processor Interface
 # ==============================================================================
 add_litertlm_library(runtime_conversation_model_data_processor INTERFACE)
@@ -309,6 +322,37 @@ if(LITERT_LM_ENABLE_QWEN_PROCESSOR)
       LiteRTLM::Runtime::Conversation::IoTypes
       LITERTLM_DEPS
   )
+
+  # ==============================================================================
+  # Qwen3p5 Data Processor
+  # ==============================================================================
+  add_litertlm_library(runtime_conversation_model_data_processor_qwen3p5_data_processor STATIC
+    qwen3p5_data_processor.cc
+  )
+  add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5 ALIAS runtime_conversation_model_data_processor_qwen3p5_data_processor)
+
+  target_compile_definitions(runtime_conversation_model_data_processor_qwen3p5_data_processor
+    PUBLIC
+      ENABLE_QWEN3P5_DATA_PROCESSOR
+  )
+
+  target_include_directories(runtime_conversation_model_data_processor_qwen3p5_data_processor
+    PUBLIC
+      ${LITERTLM_GENERATED_SRC_DIR}
+      ${LITERTLM_INCLUDE_PATHS}
+  )
+
+  target_link_libraries(runtime_conversation_model_data_processor_qwen3p5_data_processor
+    PUBLIC
+      LiteRTLM::Runtime::Util
+      LiteRTLM::Runtime::Engine
+      LiteRTLM::Runtime::Components
+      LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+      LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
+      LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5Config
+      LiteRTLM::Runtime::Conversation::IoTypes
+      LITERTLM_DEPS
+  )
 endif()
 
 # ==============================================================================
@@ -336,6 +380,7 @@ target_link_libraries(runtime_conversation_model_data_processor_factory
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::GenericConfig
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3Config
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5Config
     LiteRTLM::Runtime::Conversation::IoTypes
     LITERTLM_DEPS
 )
@@ -351,6 +396,7 @@ if(LITERT_LM_ENABLE_QWEN_PROCESSOR)
   target_link_libraries(runtime_conversation_model_data_processor_factory
     PUBLIC
       LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3
+      LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5
   )
 endif()
 if(LITERT_LM_ENABLE_FASTVLM_PROCESSOR)
@@ -505,6 +551,7 @@ target_link_libraries(runtime_conversation_model_data_processor_libs INTERFACE
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::Factory
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3Config
+  LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5Config
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::MultimodalProcessorHelper
 )
 if(LITERT_LM_ENABLE_GEMMA_PROCESSORS)
@@ -522,6 +569,7 @@ endif()
 if(LITERT_LM_ENABLE_QWEN_PROCESSOR)
   target_link_libraries(runtime_conversation_model_data_processor_libs INTERFACE
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3p5
   )
 endif()
 if(LITERT_LM_ENABLE_MINICPM_PROCESSOR)

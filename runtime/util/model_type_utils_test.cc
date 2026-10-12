@@ -216,6 +216,9 @@ TEST(ModelTypeUtilsTest, GetModelTypeName) {
   model_type.mutable_qwen2p5();
   EXPECT_EQ(GetModelTypeName(model_type), "qwen2p5");
 
+  model_type.mutable_qwen3p5();
+  EXPECT_EQ(GetModelTypeName(model_type), "qwen3p5");
+
   model_type.mutable_gemma4();
   EXPECT_EQ(GetModelTypeName(model_type), "gemma4");
 
