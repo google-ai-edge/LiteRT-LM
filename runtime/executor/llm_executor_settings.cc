@@ -71,6 +71,10 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
   os << "use_hw_cache_update_for_npu: " << config.use_hw_cache_update_for_npu
      << "\n";
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
+  os << "dynamic_kv_cache_initial_size: "
+     << config.dynamic_kv_cache_initial_size << "\n";
+  os << "dynamic_kv_cache_growth_step: " << config.dynamic_kv_cache_growth_step
+     << "\n";
   return os;
 }
 

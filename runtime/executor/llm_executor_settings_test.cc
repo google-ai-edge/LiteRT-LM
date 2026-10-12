@@ -663,6 +663,23 @@ TEST(LlmExecutorConfigTest, NpuConfigDefaults) {
   EXPECT_TRUE(config.use_hw_cache_update_for_npu);
   EXPECT_TRUE(config.use_hw_ple_for_npu);
   EXPECT_FALSE(config.enable_npu_debug_logging);
+  EXPECT_EQ(config.dynamic_kv_cache_initial_size, 0);
+  EXPECT_EQ(config.dynamic_kv_cache_growth_step, 512);
+}
+
+TEST(LlmExecutorConfigTest, NpuConfig) {
+  NpuConfig config;
+  config.dynamic_kv_cache_initial_size = 128;
+  config.dynamic_kv_cache_growth_step = 256;
+  std::stringstream oss;
+  oss << config;
+  EXPECT_EQ(oss.str(), R"(enable_neon_for_npu_greedy_sampling: 1
+use_hw_masking_for_npu: 1
+use_hw_cache_update_for_npu: 1
+enable_npu_debug_logging: 0
+dynamic_kv_cache_initial_size: 128
+dynamic_kv_cache_growth_step: 256
+)");
 }
 
 TEST(LlmExecutorConfigTest, SelectedSignatures) {

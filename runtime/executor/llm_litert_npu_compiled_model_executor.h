@@ -271,8 +271,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Dynamic models only; returns an error if called for a static model.
   // No-op if `required_tokens` fits in the currently allocated capacity.
   // Otherwise re-allocates the single context group for at least
-  // `required_tokens` tokens (growing by at least the configured dynamic KV
-  // cache growth step and at most up to
+  // `required_tokens` tokens (growing by at least
+  // `NpuConfig::dynamic_kv_cache_growth_step` and at most up to
   // `max_num_tokens`), migrates the processed KV cache entries, re-resolves the
   // geometry, resizes the auxiliary mask signatures and re-binds all
   // sub-components.
