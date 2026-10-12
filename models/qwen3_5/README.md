@@ -15,8 +15,10 @@ model family.
 
     -   Supports function/tool signatures enclosed in `<tools>` and `</tools>`
         XML tags in the system prompt.
-    -   Assistant function calls are formatted as JSON within `<tool_call>` and
-        `</tool_call>` tags.
+    -   Assistant function calls are `<function=NAME>` blocks with one
+        `<parameter=KEY>` block per argument, within `<tool_call>` tags. The
+        `llm_model_type { qwen3p5 {} }` data processor parses them, converting
+        values to the types in the tool's parameter schema.
     -   Multi-step tool responses are wrapped within `<tool_response>` tags
         under the `tool` role.
 
