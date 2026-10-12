@@ -30,6 +30,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/asr/speech_recognizer.h"
+#include "omni/asr/utils.h"
 #include "omni/base/litert_lm_engine_runner.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
@@ -182,6 +183,9 @@ LmEngineDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
         seen_skip_until_token_id = true;
       }
       continue;
+    }
+    if (TruncateOnTrailingRepetition(decoded_tokens, token_id)) {
+      break;
     }
     decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
         .token_id = token_id,

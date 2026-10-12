@@ -82,6 +82,8 @@ cc_library(
         ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:absl_vlog_is_on",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -115,6 +117,7 @@ cc_test(
     name = "log_mel_spectrogram_processor_test",
     srcs = ["log_mel_spectrogram_processor_test.cc"],
     deps = [
+        ":dummy_preprocessor",
         ":log_mel_spectrogram_processor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
@@ -227,6 +230,7 @@ cc_library(
     deps = [
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -309,6 +313,7 @@ cc_library(
     deps = [
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
@@ -346,6 +351,7 @@ cc_library(
     srcs = ["litert_speech_recognizer.cc"],
     hdrs = ["litert_speech_recognizer.h"],
     deps = [
+        ":audio_preprocessor",
         ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
@@ -365,9 +371,11 @@ cc_test(
     name = "litert_speech_recognizer_test",
     srcs = ["litert_speech_recognizer_test.cc"],
     deps = [
+        ":audio_preprocessor",
         ":litert_speech_recognizer",
         ":speech_recognizer",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -498,8 +506,10 @@ cc_library(
         ":detokenizer",
         ":levenshtein_align",
         ":text_merger",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:absl_vlog_is_on",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",

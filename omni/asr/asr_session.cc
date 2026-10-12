@@ -61,6 +61,7 @@ class AudioInputSource : public AudioSource {
   void ResetInternal() override {
     input_source_->Reset();
     buffer_.clear();
+    has_unpushed_samples_ = false;
     is_finished_ = false;
   }
 
@@ -68,7 +69,7 @@ class AudioInputSource : public AudioSource {
     return (!is_finished_ &&
             (input_source_->NeedSchedule() || input_source_->HasOutput())) ||
            buffer_.size() >= samples_per_interval_ ||
-           (is_finished_ && !buffer_.empty());
+           (is_finished_ && has_unpushed_samples_);
   }
 
   absl::Status ScheduleInternal() override {
@@ -81,10 +82,11 @@ class AudioInputSource : public AudioSource {
       return absl::OkStatus();
     }
     if (is_finished_) {
-      if (buffer_.empty()) {
+      if (!has_unpushed_samples_) {
+        buffer_.clear();
         return absl::OutOfRangeError("End of audio stream reached.");
       }
-      PushPaddedRemainder();
+      PushRemainder();
       return absl::OkStatus();
     }
     return absl::NotFoundError("Not enough audio samples for an interval.");
@@ -99,8 +101,10 @@ class AudioInputSource : public AudioSource {
       ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
     }
 
-    if (!buffer_.empty()) {
-      PushPaddedRemainder();
+    if (has_unpushed_samples_) {
+      PushRemainder();
+    } else if (is_finished_) {
+      buffer_.clear();
     }
     return absl::OkStatus();
   }
@@ -158,6 +162,9 @@ class AudioInputSource : public AudioSource {
       if (audio_input == nullptr) {
         return absl::InvalidArgumentError("ASR Session requires AudioInput.");
       }
+      if (!audio_input->pcm_samples.empty()) {
+        has_unpushed_samples_ = true;
+      }
       if (buffer_.empty()) {
         std::swap(buffer_, audio_input->pcm_samples);
       } else {
@@ -174,17 +181,21 @@ class AudioInputSource : public AudioSource {
     std::vector<float> output(buffer_.begin() + step, buffer_.end());
     std::swap(output, buffer_);
     output.resize(samples_per_interval_);
+    has_unpushed_samples_ = buffer_.size() > overlap_samples_;
     PushOutput(std::move(output));
   }
 
-  void PushPaddedRemainder() {
-    // Zero-pad any remaining samples in `buffer_` (including retained
-    // overlap samples from the previous chunk) to `samples_per_interval_`
-    // and emit a final chunk so the recognizer can process the tail with
-    // trailing silence context.
-    buffer_.resize(samples_per_interval_, 0.0f);
+  void PushRemainder() {
+    // Emit any remaining samples in `buffer_` (including retained overlap
+    // samples from the previous chunk) as a final, shorter chunk. The chunk is
+    // deliberately *not* zero-padded to `samples_per_interval_` here: the
+    // downstream `AudioPreprocessor` pads to the model's fixed input length
+    // itself, so that per-utterance feature normalization statistics (e.g.
+    // log-mel mean/std) are computed over real audio only rather than being
+    // skewed by trailing digital silence.
     std::vector<float> output;
     std::swap(output, buffer_);
+    has_unpushed_samples_ = false;
     PushOutput(std::move(output));
   }
 
@@ -194,6 +205,7 @@ class AudioInputSource : public AudioSource {
   const size_t samples_per_interval_;
   const size_t overlap_samples_;
   std::vector<float> buffer_;
+  bool has_unpushed_samples_ = false;
   bool is_finished_ = false;
 };
 

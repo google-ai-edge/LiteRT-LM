@@ -127,13 +127,24 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
 
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
   std::vector<int32_t> token_ids(num_token_ids_, 0);
-  if (decode_start_token_id_ >= 0) {
+  size_t first_step = 0;
+  if (!prompt_token_ids_.empty()) {
+    if (prompt_token_ids_.size() >= num_token_ids_) {
+      return absl::InvalidArgumentError(
+          "Prompt token sequence length must be smaller than decoder token "
+          "buffer capacity.");
+    }
+    for (size_t i = 0; i < prompt_token_ids_.size(); ++i) {
+      token_ids[i] = prompt_token_ids_[i];
+    }
+    first_step = prompt_token_ids_.size() - 1;
+  } else if (decode_start_token_id_ >= 0) {
     token_ids[0] = decode_start_token_id_;
   }
   bool seen_skip_until_token_id = decode_skip_until_token_id_ < 0;
 
   std::vector<float> logits(num_logits_per_token_ * num_token_ids_);
-  for (size_t i = 0; i < num_token_ids_ - 1; ++i) {
+  for (size_t i = first_step; i < num_token_ids_ - 1; ++i) {
     LITERT_RETURN_IF_ERROR(inputs[token_id_input_index].Write<int32_t>(
         absl::MakeConstSpan(token_ids)));
     LITERT_RETURN_IF_ERROR(

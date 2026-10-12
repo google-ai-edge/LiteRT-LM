@@ -156,6 +156,51 @@ TEST(TokenizerDetokenizerTest,
 }
 
 TEST(TokenizerDetokenizerTest,
+     ProcessTokensMapsMultiTokenSubwordsToWordOnsetTimestamps) {
+  DummySpeechRecognizer dummy_decoder;
+  FakeTokenizer fake_tokenizer;
+  const std::vector<std::string> pieces = {"Th",  "ere", "'s", " his",
+                                           " be", "ak",  ".",  " But"};
+  fake_tokenizer.token_ids_to_text_fn_ =
+      [&pieces](absl::Span<const int> ids) -> absl::StatusOr<std::string> {
+    std::string out;
+    for (int id : ids) {
+      if (id >= 0 && id < static_cast<int>(pieces.size())) {
+        out += pieces[id];
+      }
+    }
+    return out;
+  };
+
+  TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
+  dummy_decoder.PushTokens({
+      SpeechRecognizer::DecodedToken{.token_id = 0, .timestamp_ms = 11},
+      SpeechRecognizer::DecodedToken{.token_id = 1, .timestamp_ms = 13},
+      SpeechRecognizer::DecodedToken{.token_id = 2, .timestamp_ms = 14},
+      SpeechRecognizer::DecodedToken{.token_id = 3, .timestamp_ms = 14},
+      SpeechRecognizer::DecodedToken{.token_id = 4, .timestamp_ms = 17},
+      SpeechRecognizer::DecodedToken{.token_id = 5, .timestamp_ms = 20},
+      SpeechRecognizer::DecodedToken{.token_id = 6, .timestamp_ms = 38},
+      SpeechRecognizer::DecodedToken{.token_id = 7, .timestamp_ms = 42},
+  });
+
+  ASSERT_OK(detokenizer.Schedule());
+  auto words_or = detokenizer.GetOutput();
+  ASSERT_OK(words_or);
+  auto words = std::move(*words_or);
+
+  ASSERT_EQ(words.size(), 4);
+  EXPECT_EQ(words[0].text, "There's");
+  EXPECT_EQ(words[0].timestamp_ms, 11);  // Token 0 ("Th")
+  EXPECT_EQ(words[1].text, "his");
+  EXPECT_EQ(words[1].timestamp_ms, 14);  // Token 3 (" his")
+  EXPECT_EQ(words[2].text, "beak.");
+  EXPECT_EQ(words[2].timestamp_ms, 17);  // Token 4 (" be")
+  EXPECT_EQ(words[3].text, "But");
+  EXPECT_EQ(words[3].timestamp_ms, 42);  // Token 7 (" But")
+}
+
+TEST(TokenizerDetokenizerTest,
      ProcessTokensPicksClosestTimestampWhenTokenLacksTimestamp) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
@@ -189,6 +234,44 @@ TEST(TokenizerDetokenizerTest,
   EXPECT_EQ(words[1].timestamp_ms, 200);  // Token 1 itself
   EXPECT_EQ(words[2].text, "gamma");
   EXPECT_EQ(words[2].timestamp_ms, 200);  // Closest is token 1 (200ms)
+}
+
+TEST(TokenizerDetokenizerTest,
+     DropsStandalonePunctuationAndCollapsesRepeatedUntimestampedSentences) {
+  DummySpeechRecognizer dummy_decoder;
+  FakeTokenizer fake_tokenizer;
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
+    if (ids == absl::Span<const int>({1, 2})) {
+      return "Hello world. , Hello world. Hello world.";
+    }
+    if (ids == absl::Span<const int>({3})) {
+      return "Yes. Yes.";
+    }
+    return "";
+  };
+
+  TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
+  dummy_decoder.PushTokens({
+      SpeechRecognizer::DecodedToken{.token_id = 1,
+                                     .timestamp_ms = std::nullopt},
+      SpeechRecognizer::DecodedToken{.token_id = 2,
+                                     .timestamp_ms = std::nullopt},
+  });
+
+  ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto words3x, detokenizer.GetOutput());
+  ASSERT_EQ(words3x.size(), 2);
+  EXPECT_EQ(words3x[0].text, "Hello");
+  EXPECT_EQ(words3x[1].text, "world.");
+
+  dummy_decoder.PushTokens({
+      SpeechRecognizer::DecodedToken{.token_id = 3,
+                                     .timestamp_ms = std::nullopt},
+  });
+  ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto words2x, detokenizer.GetOutput());
+  ASSERT_EQ(words2x.size(), 1);
+  EXPECT_EQ(words2x[0].text, "Yes.");
 }
 
 TEST(TokenizerDetokenizerTest, ResetClearsOutputs) {

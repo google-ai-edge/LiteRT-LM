@@ -159,5 +159,47 @@ TEST(LevenshteinTextMergerTest, StitchesAtLongestContiguousOverlapMatch) {
   EXPECT_EQ(res2->unconfirmed_text, "of the project they might not be");
 }
 
+TEST(LevenshteinTextMergerTest,
+     FallsBackToContiguousSeamRunWhenGlobalAlignmentScattersSingleMatches) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  // Global edit distance between chunk 1 and chunk 2 can pair scattered tokens
+  // ("a", "b", "c") interleaved with substitutions so no contiguous kCorrect
+  // run in `align_codes` has length >= 2, even though the seam has an exact
+  // 2-word contiguous match ("right now") at the end of chunk 1 / start of
+  // chunk 2.
+  auto res1 = ProcessWords(
+      word_stage, merger,
+      {"a", "x1", "b", "x2", "c", "x3", "right", "now"});
+  ASSERT_TRUE(res1.ok());
+
+  auto res2 = ProcessWords(
+      word_stage, merger,
+      {"right", "now", "a", "y1", "b", "y2", "c", "y3"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "a x1 b x2 c x3");
+  EXPECT_EQ(res2->unconfirmed_text, "right now a y1 b y2 c y3");
+}
+
+TEST(LevenshteinTextMergerTest, IgnoresInteriorSingleWordStopwordMatch) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 =
+      ProcessWords(word_stage, merger, {"alpha", "the", "bravo", "charlie"});
+  ASSERT_TRUE(res1.ok());
+
+  // Only "the" matches, and it is neither at the end of chunk 1 nor a >=2-char
+  // boundary token, so no false stitch should drop "bravo charlie".
+  auto res2 =
+      ProcessWords(word_stage, merger, {"delta", "echo", "the", "foxtrot"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "alpha the bravo charlie");
+  EXPECT_EQ(res2->unconfirmed_text, "delta echo the foxtrot");
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

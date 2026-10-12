@@ -32,6 +32,19 @@ class AudioPreprocessor
 
   ~AudioPreprocessor() override = default;
 
+  // Describe the most recently emitted feature chunk along the time axis, as
+  // fractions of the model window. The final chunk of a stream is shorter
+  // than the window; preprocessors either shift it back so it ends at the end
+  // of the audio (long streams — the model always sees real audio) or pad it
+  // (short streams). Decoders use these to report only the new, real part.
+  //
+  // Fraction in [0, 1) of the window, from its start, that was already covered
+  // by the previous chunk (0 unless the chunk was shifted back).
+  virtual float last_chunk_start_fraction() const { return 0.0f; }
+  // Fraction in (0, 1] of the window backed by real audio (1 unless padded).
+  virtual float last_chunk_valid_fraction() const { return 1.0f; }
+  virtual std::vector<float> last_chunk_centered_features() const { return {}; }
+
  protected:
   bool NeedScheduleInternal() const override {
     return audio_source_.HasOutput();

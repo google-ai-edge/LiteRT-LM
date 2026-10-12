@@ -105,10 +105,36 @@ absl::Status LevenshteinTextMerger::Execute() {
     }
   }
 
-  // Ignore a single 1-word match if it is not near the chunk boundary.
-  if (best_run_len == 1 &&
-      (first_matching_ref_idx + 2 < unconfirmed_words_.size() ||
-       first_matching_hyp_idx > 1)) {
+  if (best_run_len < 2) {
+    for (size_t r = 0; r < unconfirmed_words_.size(); ++r) {
+      for (size_t h = 0; h < curr_strings.size(); ++h) {
+        size_t len = 0;
+        while (r + len < unconfirmed_words_.size() &&
+               h + len < curr_strings.size() &&
+               CloseEnoughStr(unconfirmed_words_[r + len],
+                              curr_strings[h + len])) {
+          ++len;
+        }
+        if (len >= 2 && (h <= 3 || r + len + 2 >= unconfirmed_words_.size()) &&
+            (len > best_run_len ||
+             (len == best_run_len && r >= first_matching_ref_idx))) {
+          best_run_len = len;
+          first_matching_ref_idx = r;
+          first_matching_hyp_idx = h;
+        }
+      }
+    }
+  }
+
+  // Ignore a single 1-word match if it is not at the chunk boundary.
+  const bool valid_single_match =
+      best_run_len == 1 &&
+      ((first_matching_ref_idx + 1 == unconfirmed_words_.size() &&
+        first_matching_hyp_idx == 0) ||
+       (first_matching_ref_idx + 2 >= unconfirmed_words_.size() &&
+        first_matching_hyp_idx <= 1 &&
+        CanonicalizeStr(curr_strings[first_matching_hyp_idx]).size() >= 2));
+  if (best_run_len == 1 && !valid_single_match) {
     first_matching_ref_idx = unconfirmed_words_.size();
     first_matching_hyp_idx = curr_strings.size();
   }

@@ -52,6 +52,23 @@ class MelFilterbank {
   absl::Status ToMelSpectrum(absl::Span<const double> squared_magnitude_fft,
                              std::vector<double>* mel) const;
 
+  // Initializes a librosa-compatible filterbank: Slaney mel scale (linear
+  // below 1 kHz, logarithmic above), triangles with fractional bin weights, and
+  // Slaney area normalization (2 / bandwidth). `use_power` sums the squared
+  // magnitudes (as Whisper and NeMo do) instead of the magnitudes.
+  // Args:
+  // - fft_length: Number of unique FFT bins fftsize/2+1.
+  // - sample_rate: Sample rate of the input audio.
+  // - mel_channel_count: Number of mel channels in the filterbank.
+  // - lower_frequency_limit: Lower frequency limit of the mel filterbank.
+  // - upper_frequency_limit: Upper frequency limit of the mel filterbank.
+  // - use_power: If true, sum squared magnitudes; otherwise sum linear
+  //   magnitudes.
+  absl::Status InitializeSlaney(int fft_length, double sample_rate,
+                                int mel_channel_count,
+                                double lower_frequency_limit,
+                                double upper_frequency_limit, bool use_power);
+
   // Takes a triangular-mel-weighted linear-magnitude filterbank and estimates
   // the squared-magnitude spectrogram slice that corresponds to it. This is
   // merely an estimate, so ToMelSpectrum() followed by ToSquaredMagnitudeFft()
@@ -90,6 +107,10 @@ class MelFilterbank {
 
   int start_index_;  // Lowest FFT bin used to calculate mel spectrum.
   int end_index_;    // Highest FFT bin used to calculate mel spectrum.
+  bool slaney_ = false;
+  bool use_power_ = false;
+  int slaney_bins_ = 0;
+  std::vector<double> slaney_weights_;
 
   MelFilterbank(const MelFilterbank&) = delete;
   MelFilterbank& operator=(const MelFilterbank&) = delete;

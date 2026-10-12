@@ -350,7 +350,12 @@ absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
         LogMelSpectrogramProcessor::Create(
             config_.sample_rate_hz, config_.log_mel_config, raw_audio_source));
   } else {
-    preprocessor = std::make_unique<DummyPreprocessor>(raw_audio_source);
+    // Raw-PCM models take a fixed `input_milliseconds` window; the audio source
+    // leaves the final chunk of a stream unpadded, so pad it here.
+    const int samples_per_interval = static_cast<int>(
+        config_.sample_rate_hz * (config_.input_milliseconds / 1000.0));
+    preprocessor = std::make_unique<DummyPreprocessor>(raw_audio_source,
+                                                       samples_per_interval);
   }
 
   std::unique_ptr<LiteRtSpeechRecognizer::Decoder> decoder;
@@ -368,11 +373,14 @@ absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
     }
     case AsrEngineConfig::DecoderType::kStateless: {
       ABSL_ASSIGN_OR_RETURN(
-          decoder,
-          StatelessDecoder::Create(
-              runner.get(), config_.decode_start_token_id,
-              config_.decode_stop_token_id,
-              config_.decode_skip_until_token_id));
+          auto stateless_decoder,
+          StatelessDecoder::Create(runner.get(), config_.decode_start_token_id,
+                                   config_.decode_stop_token_id,
+                                   config_.decode_skip_until_token_id));
+      if (!config_.decode_prompt_token_ids.empty()) {
+        stateless_decoder->SetPromptTokenIds(config_.decode_prompt_token_ids);
+      }
+      decoder = std::move(stateless_decoder);
       break;
     }
     case AsrEngineConfig::DecoderType::kLm: {
@@ -405,7 +413,8 @@ absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
   ABSL_ASSIGN_OR_RETURN(
       auto speech_recognizer,
       LiteRtSpeechRecognizer::Create(std::move(runner), raw_preprocessor,
-                                     std::move(decoder)));
+                                     std::move(decoder),
+                                     /*chunk_info=*/raw_preprocessor));
 
   LiteRtSpeechRecognizer* raw_speech_recognizer = speech_recognizer.get();
   auto detokenizer = std::make_unique<TokenizerDetokenizer>(

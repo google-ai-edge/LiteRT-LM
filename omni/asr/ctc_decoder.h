@@ -35,10 +35,19 @@ class CtcDecoder : public LiteRtSpeechRecognizer::Decoder {
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
       std::vector<::litert::TensorBuffer>& encoder_outputs) override;
 
+  // Restricts the next `Decode()` to `range`: logit frames
+  // `[floor(start_fraction * num_frames), round(valid_fraction * num_frames) +
+  // kValidFrameMargin)` are reported, with timestamps relative to the first
+  // reported frame; see `LiteRtSpeechRecognizer::Decoder::SetDecodeRange`.
+  void SetDecodeRange(const DecodeRange& range) override;
+
+  static constexpr int kValidFrameMargin = 0;
+
  private:
   explicit CtcDecoder(int vocab_size);
 
   const int vocab_size_;
+  DecodeRange range_;
 };
 
 }  // namespace litert::omni::asr

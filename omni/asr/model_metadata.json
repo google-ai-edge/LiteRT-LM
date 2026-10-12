@@ -7,7 +7,10 @@
       "nFFT": 512,
       "nMels": 128,
       "nFrames": 500,
-      "preemphasis": 0.97
+      "preemphasis": 0.97,
+      "melScale": "slaney",
+      "melPower": true,
+      "melFloor": 5.960464477539063e-08
     },
     "decodeStartTokenId": 8192,
     "stateBufferNamePatterns": [
@@ -30,7 +33,10 @@
       "nFFT": 512,
       "nFrames": 500,
       "transpose": true,
-      "preemphasis": 0.97
+      "preemphasis": 0.97,
+      "melScale": "slaney",
+      "melPower": true,
+      "melFloor": 5.960464477539063e-08
     }
   },
   "moonshine-tiny": {
@@ -47,10 +53,19 @@
     "logMelSpectro": {
       "nFFT": 400,
       "nFrames": 3000,
-      "normType": "whisper"
+      "normType": "whisper",
+      "melScale": "slaney",
+      "melPower": true,
+      "melFloor": 1e-10
     },
     "decodeStartTokenId": 50258,
-    "decodeStopTokenId": 50257
+    "decodeStopTokenId": 50257,
+    "decodePromptTokenIds": [
+      50258,
+      50259,
+      50359,
+      50363
+    ]
   },
   "qwen3-asr-0.6b": {
     "modelRemoteUrl": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_i8.litertlm",
@@ -60,7 +75,10 @@
       "nFFT": 400,
       "nMels": 128,
       "nFrames": 500,
-      "normType": "whisper"
+      "normType": "whisper",
+      "melScale": "slaney",
+      "melPower": true,
+      "melFloor": 1e-10
     },
     "decodeSkipUntilTokenId": 151704
   },

@@ -89,5 +89,20 @@ TEST(ModelMetadataTest, RejectsInvalidJson) {
       GetConfigFromMetadataJson("whisper-tiny", "{invalid json").status()));
 }
 
+TEST(ModelMetadataTest, PopulatesSlaneyMelAndWhisperPromptTokens) {
+  ASSERT_OK_AND_ASSIGN(auto whisper_config,
+                       GetConfigFromMetadataJson("whisper-tiny"));
+  EXPECT_TRUE(whisper_config.log_mel_config.slaney_mel);
+  EXPECT_TRUE(whisper_config.log_mel_config.power_spectrum);
+  EXPECT_FLOAT_EQ(whisper_config.log_mel_config.mel_floor, 1e-10f);
+  EXPECT_THAT(whisper_config.decode_prompt_token_ids,
+              ::testing::ElementsAre(50258, 50259, 50359, 50363));
+
+  ASSERT_OK_AND_ASSIGN(auto parakeet_config,
+                       GetConfigFromMetadataJson("parakeet-tdt-0.6b-v3"));
+  EXPECT_TRUE(parakeet_config.log_mel_config.slaney_mel);
+  EXPECT_TRUE(parakeet_config.log_mel_config.power_spectrum);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

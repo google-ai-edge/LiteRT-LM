@@ -325,5 +325,73 @@ TEST(StatelessDecoderTest, DecodeTruncatesTrailingRepetitionLoop) {
   EXPECT_EQ(decoded_tokens[1].token_id, 2);
 }
 
+TEST(StatelessDecoderTest, DecodeWithPromptTokenIds) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(6, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(30, sizeof(float)));
+        return buffers;
+      });
+
+  constexpr int kStopTokenId = 4;
+  std::vector<int32_t> first_run_tokens;
+  size_t run_count = 0;
+
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&first_run_tokens, &run_count](
+                          absl::string_view,
+                          absl::Span<const ::litert::TensorBuffer> inputs,
+                          absl::Span<const ::litert::TensorBuffer> outputs)
+                          -> absl::Status {
+        if (run_count == 0) {
+          first_run_tokens.resize(6);
+          auto res =
+              const_cast<::litert::TensorBuffer&>(inputs[1]).Read<int32_t>(
+                  absl::MakeSpan(first_run_tokens));
+          if (!res) return absl::InternalError("Read failed");
+        }
+        std::vector<float> logits(30, 0.0f);
+        // Prompt has 3 tokens (indices 0, 1, 2), so first decode step reads
+        // logits at index 2.
+        if (run_count == 0) {
+          logits[2 * 5 + 3] = 1.0f;  // Emits token 3
+        } else {
+          logits[3 * 5 + kStopTokenId] = 1.0f;  // Emits stop token 4
+        }
+        run_count++;
+        auto res = const_cast<::litert::TensorBuffer&>(outputs[0])
+                       .Write<float>(absl::MakeConstSpan(logits));
+        if (!res) return absl::InternalError("Write failed");
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      StatelessDecoder::Create(&mock_runner, /*decode_start_token_id=*/10,
+                               /*decode_stop_token_id=*/kStopTokenId));
+  decoder->SetPromptTokenIds({10, 11, 12});
+
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto decoded_tokens, decoder->Decode(encoder_outputs));
+
+  ASSERT_EQ(first_run_tokens.size(), 6);
+  EXPECT_EQ(first_run_tokens[0], 10);
+  EXPECT_EQ(first_run_tokens[1], 11);
+  EXPECT_EQ(first_run_tokens[2], 12);
+  EXPECT_EQ(run_count, 2);
+  ASSERT_EQ(decoded_tokens.size(), 1);
+  EXPECT_EQ(decoded_tokens[0].token_id, 3);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

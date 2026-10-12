@@ -36,12 +36,26 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
   static absl::StatusOr<std::unique_ptr<TdtDecoder>> Create(
       LiteRtRunner* absl_nonnull runner, int decode_start_token_id = 8192,
-      int decode_statefully_after = 4);
+      int decode_statefully_after = 4, int max_symbols_per_step = 3);
 
   ~TdtDecoder() override = default;
 
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
       std::vector<TensorBuffer>& encoder_outputs) override;
+
+  // Restricts the next `Decode()` to `range` (see `Decoder::DecodeRange`):
+  // encoder frames `[floor(start_fraction * max_time_index),
+  // round(valid_fraction * max_time_index) + kValidFrameMargin)` are reported,
+  // i.e. frames whose center lies in real audio (frames straddling the
+  // padding boundary otherwise emit stray partial tokens), with timestamps
+  // relative to the first reported frame. Frames before the start are still
+  // decoded (the prediction network is autoregressive) but their tokens are
+  // dropped. Reset to the whole window after each call.
+  void SetDecodeRange(const DecodeRange& range) override;
+
+  // Extra encoder frames decoded past the last real-audio frame to absorb the
+  // encoder's receptive field and TDT duration jitter at the boundary.
+  static constexpr size_t kValidFrameMargin = 0;
 
  private:
   TdtDecoder(
@@ -51,7 +65,15 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<TensorBuffer> decode_output_buffers,
       std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
       size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
-      int decode_start_token_id, int decode_statefully_after);
+      int decode_start_token_id, int decode_statefully_after,
+      int max_symbols_per_step);
+
+  // Number of encoder frames to decode for the current chunk, derived from
+  // `range_.valid_fraction` and `max_time_index_`.
+  size_t EffectiveMaxTimeIndex() const;
+  // First encoder frame whose tokens are reported for the current chunk,
+  // derived from `range_.start_fraction` and `max_time_index_`.
+  size_t FirstReportedTimeIndex() const;
 
   LiteRtRunner& runner_;
   std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner_;
@@ -63,6 +85,8 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
   const size_t num_logits_per_token_;
   const int decode_start_token_id_;
   const int decode_statefully_after_;
+  const int max_symbols_per_step_;
+  DecodeRange range_;
 };
 
 }  // namespace litert::omni::asr

@@ -144,6 +144,8 @@ class AudioPreprocessorConfig {
     os << "  non_zero_hanning: " << config.GetNonZeroHanning() << "\n";
     os << "  periodic_hanning: " << config.GetPeriodicHanning() << "\n";
     os << "  fft_padding_type: " << config.GetFftPaddingType() << "\n";
+    os << "  slaney_mel: " << config.GetSlaneyMel() << "\n";
+    os << "  power_spectrum: " << config.GetPowerSpectrum() << "\n";
     os << "  skip_mel_spectrogram_extraction: "
        << config.SkipMelSpectrogramExtraction() << "\n";
     os << "  buffer_last_frame: " << config.BufferLastFrame() << "\n";
@@ -200,6 +202,15 @@ class AudioPreprocessorConfig {
   bool GetPeriodicHanning() const { return periodic_hanning_; }
   // The padding type used for FFT.
   FftPaddingType GetFftPaddingType() const { return fft_padding_type_; }
+  // librosa-compatible mel filterbank (Slaney scale and normalization) and
+  // power-spectrum summation (applied when `slaney_mel` is true); off by
+  // default to keep existing models as is.
+  bool GetSlaneyMel() const { return slaney_mel_; }
+  bool GetPowerSpectrum() const { return power_spectrum_; }
+  void SetSlaneyMel(bool slaney_mel) { slaney_mel_ = slaney_mel; }
+  void SetPowerSpectrum(bool power_spectrum) {
+    power_spectrum_ = power_spectrum;
+  }
   // Whether to skip the Mel spectrogram extraction.
   bool SkipMelSpectrogramExtraction() const {
     return skip_mel_spectrogram_extraction_;
@@ -399,6 +410,8 @@ class AudioPreprocessorConfig {
   FftPaddingType fft_padding_type_;
   bool skip_mel_spectrogram_extraction_;
   bool buffer_last_frame_;
+  bool slaney_mel_ = false;
+  bool power_spectrum_ = false;
 };
 
 // Interface for audio preprocessing.
