@@ -1311,6 +1311,21 @@ absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
     }
   }
 
+  // Intel OpenVINO: import the master KV buffer's custom handle as a
+  // non-owning OpenVINO buffer of the smaller shape, so the dispatch keeps
+  // getting its own buffer type (a host-memory alias would not match the
+  // dispatch's buffer requirements and would be copied instead of shared).
+  if (static_cast<LiteRtTensorBufferType>(buffer_type) ==
+      kLiteRtTensorBufferTypeOpenVINOTensorBuffer) {
+    LITERT_ASSIGN_OR_RETURN(auto master_handle,
+                            source_buffer.GetCustomHandle());
+    LITERT_ASSIGN_OR_RETURN(
+        auto buf,
+        ::litert::TensorBuffer::CreateFromCustomHandle(
+            env, target_type, buffer_type, master_handle, target_bytes));
+    return std::move(buf);
+  }
+
 #if LITERT_HAS_AHWB_SUPPORT
   if (buffer_type == ::litert::TensorBufferType::kAhwb) {
     auto ahwb_res = source_buffer.GetAhwb();
