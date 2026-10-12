@@ -131,6 +131,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_gemma3_data_proce
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Gemma3DataProcessor
   ALIAS runtime_conversation_model_data_processor_gemma3_data_processor)
 
+target_compile_definitions(runtime_conversation_model_data_processor_gemma3_data_processor
+  PUBLIC
+    ENABLE_GEMMA3_DATA_PROCESSOR
+)
+
 target_include_directories(runtime_conversation_model_data_processor_gemma3_data_processor
   PUBLIC
     ${LITERTLM_GENERATED_SRC_DIR}
@@ -159,6 +164,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_gemma4_data_proce
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Gemma4DataProcessor 
   ALIAS runtime_conversation_model_data_processor_gemma4_data_processor)
 
+target_compile_definitions(runtime_conversation_model_data_processor_gemma4_data_processor
+  PUBLIC
+    ENABLE_GEMMA4_DATA_PROCESSOR
+)
+
 target_include_directories(runtime_conversation_model_data_processor_gemma4_data_processor
   PRIVATE
     "${LITERTLM_INCLUDE_PATHS}"
@@ -185,6 +195,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_fastvlm_data_proc
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::FastvlmDataProcessor ALIAS 
     runtime_conversation_model_data_processor_fastvlm_data_processor)
 
+target_compile_definitions(runtime_conversation_model_data_processor_fastvlm_data_processor
+  PUBLIC
+    ENABLE_FASTVLM_DATA_PROCESSOR
+)
+
 target_include_directories(runtime_conversation_model_data_processor_fastvlm_data_processor
   PRIVATE
     "${LITERTLM_INCLUDE_PATHS}"
@@ -208,6 +223,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_function_gemma_da
 )
 add_library(LiteRTLM::Runtime::Conversation::FunctionDataProcessor
 ALIAS runtime_conversation_model_data_processor_function_gemma_data_processor)
+
+target_compile_definitions(runtime_conversation_model_data_processor_function_gemma_data_processor
+  PUBLIC
+    ENABLE_FUNCTION_GEMMA_DATA_PROCESSOR
+)
 
 target_include_directories(runtime_conversation_model_data_processor_function_gemma_data_processor
   PUBLIC
@@ -262,6 +282,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_qwen3_data_proces
 )
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3 ALIAS runtime_conversation_model_data_processor_qwen3_data_processor)
 
+target_compile_definitions(runtime_conversation_model_data_processor_qwen3_data_processor
+  PUBLIC
+    ENABLE_QWEN3_DATA_PROCESSOR
+)
+
 target_include_directories(runtime_conversation_model_data_processor_qwen3_data_processor
   PUBLIC
     ${LITERTLM_GENERATED_SRC_DIR}
@@ -308,6 +333,10 @@ target_link_libraries(runtime_conversation_model_data_processor_factory
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3Config
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Gemma4DataProcessor
+    LiteRTLM::Runtime::Conversation::FunctionDataProcessor
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::FastvlmDataProcessor
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Minicpm5DataProcessor
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::MiniCpmVDataProcessor
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Lfm2DataProcessor
     LiteRTLM::Runtime::Conversation::IoTypes
     LITERTLM_DEPS
@@ -346,6 +375,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_minicpm5_data_pro
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Minicpm5DataProcessor
     ALIAS runtime_conversation_model_data_processor_minicpm5_data_processor)
 
+target_compile_definitions(runtime_conversation_model_data_processor_minicpm5_data_processor
+  PUBLIC
+    ENABLE_MINICPM5_DATA_PROCESSOR
+)
+
 target_include_directories(runtime_conversation_model_data_processor_minicpm5_data_processor
   PRIVATE
     "${LITERTLM_INCLUDE_PATHS}"
@@ -368,6 +402,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_minicpmv_data_pro
 )
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::MiniCpmVDataProcessor
     ALIAS runtime_conversation_model_data_processor_minicpmv_data_processor)
+
+target_compile_definitions(runtime_conversation_model_data_processor_minicpmv_data_processor
+  PUBLIC
+    ENABLE_MINICPMV_DATA_PROCESSOR
+)
 
 target_include_directories(runtime_conversation_model_data_processor_minicpmv_data_processor
   PRIVATE
@@ -394,6 +433,11 @@ add_litertlm_library(runtime_conversation_model_data_processor_lfm2_data_process
 )
 add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::Lfm2DataProcessor
     ALIAS runtime_conversation_model_data_processor_lfm2_data_processor)
+
+target_compile_definitions(runtime_conversation_model_data_processor_lfm2_data_processor
+  PUBLIC
+    ENABLE_LFM2_DATA_PROCESSOR
+)
 
 target_include_directories(runtime_conversation_model_data_processor_lfm2_data_processor
   PRIVATE

@@ -192,6 +192,7 @@ cc_library(
     deps = [
         ":config_registry",
         ":data_utils",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
@@ -233,7 +234,7 @@ cc_library(
         ":model_data_processor",
         ":qwen3_data_processor",
         ":qwen3_data_processor_config",
-        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -330,6 +331,7 @@ cc_library(
     name = "fastvlm_data_processor",
     srcs = ["fastvlm_data_processor.cc"],
     hdrs = ["fastvlm_data_processor.h"],
+    defines = ["ENABLE_FASTVLM_DATA_PROCESSOR"],
     deps = [
         ":fastvlm_data_processor_config",
         ":model_data_processor",
@@ -351,6 +353,7 @@ cc_library(
     name = "qwen3_data_processor",
     srcs = ["qwen3_data_processor.cc"],
     hdrs = ["qwen3_data_processor.h"],
+    defines = ["ENABLE_QWEN3_DATA_PROCESSOR"],
     deps = [
         ":data_utils",
         ":model_data_processor",
@@ -376,6 +379,7 @@ cc_library(
     name = "minicpm5_data_processor",
     srcs = ["minicpm5_data_processor.cc"],
     hdrs = ["minicpm5_data_processor.h"],
+    defines = ["ENABLE_MINICPM5_DATA_PROCESSOR"],
     deps = [
         ":minicpm5_data_processor_config",
         ":model_data_processor",
@@ -419,6 +423,7 @@ cc_library(
     name = "minicpmv_data_processor",
     srcs = ["minicpmv_data_processor.cc"],
     hdrs = ["minicpmv_data_processor.h"],
+    defines = ["ENABLE_MINICPMV_DATA_PROCESSOR"],
     deps = [
         ":data_utils",
         ":minicpmv_data_processor_config",
@@ -479,6 +484,7 @@ cc_library(
     name = "lfm2_data_processor",
     srcs = ["lfm2_data_processor.cc"],
     hdrs = ["lfm2_data_processor.h"],
+    defines = ["ENABLE_LFM2_DATA_PROCESSOR"],
     deps = [
         ":data_utils",
         ":lfm2_data_processor_config",
@@ -518,7 +524,7 @@ cc_library(
     name = "gemma3_data_processor",
     srcs = ["gemma3_data_processor.cc"],
     hdrs = ["gemma3_data_processor.h"],
-    defines = select({
+    defines = ["ENABLE_GEMMA3_DATA_PROCESSOR"] + select({
         ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
         "//conditions:default": [],
     }),
@@ -593,7 +599,7 @@ cc_library(
     name = "function_gemma_data_processor",
     srcs = ["function_gemma_data_processor.cc"],
     hdrs = ["function_gemma_data_processor.h"],
-    defines = select({
+    defines = ["ENABLE_FUNCTION_GEMMA_DATA_PROCESSOR"] + select({
         ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
         "//conditions:default": [],
     }),
@@ -660,7 +666,7 @@ cc_library(
     name = "gemma4_data_processor",
     srcs = ["gemma4_data_processor.cc"],
     hdrs = ["gemma4_data_processor.h"],
-    defines = select({
+    defines = ["ENABLE_GEMMA4_DATA_PROCESSOR"] + select({
         ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
         "//conditions:default": [],
     }),

@@ -310,5 +310,29 @@ TEST_F(ModelDataProcessorFactoryTest, CreateLfm2DataProcessor) {
   EXPECT_EQ(lfm2_config.patch_height, 16);
 }
 
+TEST_F(ModelDataProcessorFactoryTest,
+       UnregisteredProcessorReturnsUnimplemented) {
+  ModelDataProcessorRegistry empty_registry;
+  DataProcessorConfig config = GenericDataProcessorConfig();
+  EXPECT_THAT(empty_registry.Create(config, /*preface=*/std::nullopt,
+                                    /*tokenizer=*/nullptr,
+                                    /*stop_token_ids=*/{},
+                                    /*enable_constrained_decoding=*/false),
+              StatusIs(absl::StatusCode::kUnimplemented));
+
+  ASSERT_OK(CreateModelDataProcessor(config));
+  struct DummyGenericDataProcessor {
+    static absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
+        const GenericDataProcessorConfig&) {
+      return absl::UnimplementedError("dummy");
+    }
+  };
+  // Duplicate registration for the same ConfigT should return false and not
+  // overwrite the existing creator.
+  EXPECT_FALSE(
+      (ModelDataProcessorRegistry::Instance()
+           .Register<DummyGenericDataProcessor, GenericDataProcessorConfig>()));
+}
+
 }  // namespace
 }  // namespace litert::lm

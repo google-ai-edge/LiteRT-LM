@@ -15,11 +15,18 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_MODEL_DATA_PROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_MODEL_DATA_PROCESSOR_H_
 
+#include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
+#include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -206,6 +213,89 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
       const TypeSafeModelDataProcessor<ExpectedConfigT, ExpectedArgsT>& other) {
     return absl::OkStatus();
   }
+};
+
+// Registry for ModelDataProcessor implementations.
+class ModelDataProcessorRegistry {
+ public:
+  using Creator =
+      std::function<absl::StatusOr<std::unique_ptr<ModelDataProcessor>>(
+          const DataProcessorConfig& config, std::optional<Preface> preface,
+          const Tokenizer* tokenizer,
+          const std::vector<std::vector<int>>& stop_token_ids,
+          bool enable_constrained_decoding)>;
+
+  static ModelDataProcessorRegistry& Instance() {
+    static absl::NoDestructor<ModelDataProcessorRegistry> instance;
+    return *instance;
+  }
+
+  template <typename ProcessorT, typename ConfigT>
+  bool Register() {
+    auto [it, inserted] = creators_.try_emplace(
+        VariantIndex<ConfigT>(),
+        [](const DataProcessorConfig& config, std::optional<Preface> preface,
+           const Tokenizer* tokenizer,
+           const std::vector<std::vector<int>>& stop_token_ids,
+           bool enable_constrained_decoding)
+            -> absl::StatusOr<std::unique_ptr<ModelDataProcessor>> {
+          const auto& typed_config = std::get<ConfigT>(config);
+          if constexpr (requires {
+                          ProcessorT::Create(typed_config, std::move(preface),
+                                             tokenizer, stop_token_ids,
+                                             enable_constrained_decoding);
+                        }) {
+            return ProcessorT::Create(typed_config, std::move(preface),
+                                      tokenizer, stop_token_ids,
+                                      enable_constrained_decoding);
+          } else if constexpr (requires {
+                                 ProcessorT::Create(typed_config,
+                                                    std::move(preface));
+                               }) {
+            return ProcessorT::Create(typed_config, std::move(preface));
+          } else if constexpr (requires { ProcessorT::Create(typed_config); }) {
+            return ProcessorT::Create(typed_config);
+          } else {
+            static_assert(sizeof(ProcessorT) == 0,
+                          "ProcessorT::Create does not match any known factory "
+                          "overload.");
+          }
+        });
+    return inserted;
+  }
+
+  absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
+      const DataProcessorConfig& config, std::optional<Preface> preface,
+      const Tokenizer* tokenizer,
+      const std::vector<std::vector<int>>& stop_token_ids,
+      bool enable_constrained_decoding) const {
+    auto it = creators_.find(config.index());
+    if (it == creators_.end()) {
+      return absl::UnimplementedError(
+          "ModelDataProcessor for the requested model family is not registered "
+          "or is disabled in this build.");
+    }
+    return it->second(config, std::move(preface), tokenizer, stop_token_ids,
+                      enable_constrained_decoding);
+  }
+
+ private:
+  template <typename ConfigT, size_t I = 0>
+  static constexpr size_t VariantIndex() {
+    static_assert(I < std::variant_size_v<DataProcessorConfig>,
+                  "ConfigT is not an alternative of DataProcessorConfig");
+    if constexpr (std::is_same_v<
+                      ConfigT,
+                      std::variant_alternative_t<I, DataProcessorConfig>>) {
+      return I;
+    } else {
+      return VariantIndex<ConfigT, I + 1>();
+    }
+  }
+
+  // Note: Do not use absl::flat_hash_map here, as its control block pointers
+  // may differ across Windows DLL boundaries (see b/508692203).
+  std::unordered_map<size_t, Creator> creators_;
 };
 
 }  // namespace litert::lm

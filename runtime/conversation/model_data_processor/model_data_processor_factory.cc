@@ -18,10 +18,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/base/call_once.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -29,30 +30,82 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#ifdef ENABLE_FASTVLM_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
+#ifdef ENABLE_FUNCTION_GEMMA_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
+#ifdef ENABLE_GEMMA3_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/gemma3_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
+#ifdef ENABLE_GEMMA4_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/gemma4_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
+#ifdef ENABLE_LFM2_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/lfm2_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
+#ifdef ENABLE_MINICPM5_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/minicpm5_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/minicpm5_data_processor_config.h"
+#ifdef ENABLE_MINICPMV_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#ifdef ENABLE_QWEN3_DATA_PROCESSOR
 #include "runtime/conversation/model_data_processor/qwen3_data_processor.h"
+#endif
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
+namespace {
+
+void EnsureBuiltinProcessorsRegistered() {
+  static absl::once_flag once;
+  absl::call_once(once, []() {
+    auto& reg = ModelDataProcessorRegistry::Instance();
+    reg.Register<GenericDataProcessor, GenericDataProcessorConfig>();
+#ifdef ENABLE_GEMMA3_DATA_PROCESSOR
+    reg.Register<Gemma3DataProcessor, Gemma3DataProcessorConfig>();
+#endif
+#ifdef ENABLE_GEMMA4_DATA_PROCESSOR
+    reg.Register<Gemma4DataProcessor, Gemma4DataProcessorConfig>();
+#endif
+#ifdef ENABLE_FUNCTION_GEMMA_DATA_PROCESSOR
+    reg.Register<FunctionGemmaDataProcessor,
+                 FunctionGemmaDataProcessorConfig>();
+#endif
+#ifdef ENABLE_QWEN3_DATA_PROCESSOR
+    reg.Register<Qwen3DataProcessor, Qwen3DataProcessorConfig>();
+#endif
+#ifdef ENABLE_FASTVLM_DATA_PROCESSOR
+    reg.Register<FastVlmDataProcessor, FastVlmDataProcessorConfig>();
+#endif
+#ifdef ENABLE_MINICPM5_DATA_PROCESSOR
+    reg.Register<MiniCpm5DataProcessor, MiniCpm5DataProcessorConfig>();
+#endif
+#ifdef ENABLE_MINICPMV_DATA_PROCESSOR
+    reg.Register<MiniCpmVDataProcessor, MiniCpmVDataProcessorConfig>();
+#endif
+#ifdef ENABLE_LFM2_DATA_PROCESSOR
+    reg.Register<Lfm2DataProcessor, Lfm2DataProcessorConfig>();
+#endif
+  });
+}
+
+}  // namespace
 
 absl::StatusOr<std::string> GetTokenString(
     const proto::TokenUnion& token_union) {
@@ -636,49 +689,10 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     const Tokenizer* tokenizer,
     const std::vector<std::vector<int>>& stop_token_ids,
     bool enable_constrained_decoding) {
-  if (std::holds_alternative<Gemma3DataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating Gemma3DataProcessor";
-    return Gemma3DataProcessor::Create(
-        std::get<Gemma3DataProcessorConfig>(config), preface, tokenizer,
-        stop_token_ids, enable_constrained_decoding);
-  } else if (std::holds_alternative<Lfm2DataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating Lfm2DataProcessor";
-    return Lfm2DataProcessor::Create(std::get<Lfm2DataProcessorConfig>(config),
-                                     preface, tokenizer, stop_token_ids,
-                                     enable_constrained_decoding);
-  } else if (std::holds_alternative<MiniCpm5DataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating MiniCpm5DataProcessor";
-    return MiniCpm5DataProcessor::Create(
-        std::get<MiniCpm5DataProcessorConfig>(config), preface);
-  } else if (std::holds_alternative<Qwen3DataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating Qwen3DataProcessor";
-    return Qwen3DataProcessor::Create(
-        std::get<Qwen3DataProcessorConfig>(config), preface);
-  } else if (std::holds_alternative<GenericDataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating GenericDataProcessor";
-    return GenericDataProcessor::Create(
-        std::get<GenericDataProcessorConfig>(config));
-  } else if (std::holds_alternative<FunctionGemmaDataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating FunctionGemmaDataProcessor";
-    return FunctionGemmaDataProcessor::Create(
-        std::get<FunctionGemmaDataProcessorConfig>(config), preface, tokenizer,
-        stop_token_ids, enable_constrained_decoding);
-  } else if (std::holds_alternative<Gemma4DataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating Gemma4DataProcessor";
-    return Gemma4DataProcessor::Create(
-        std::get<Gemma4DataProcessorConfig>(config), preface, tokenizer,
-        stop_token_ids, enable_constrained_decoding);
-  } else if (std::holds_alternative<FastVlmDataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating FastVlmDataProcessor";
-    return FastVlmDataProcessor::Create(
-        std::get<FastVlmDataProcessorConfig>(config));
-  } else if (std::holds_alternative<MiniCpmVDataProcessorConfig>(config)) {
-    ABSL_VLOG(1) << "Creating MiniCpmVDataProcessor";
-    return MiniCpmVDataProcessor::Create(
-        std::get<MiniCpmVDataProcessorConfig>(config));
-  } else {
-    return absl::InvalidArgumentError("Unsupported data processor config type");
-  }
+  EnsureBuiltinProcessorsRegistered();
+  return ModelDataProcessorRegistry::Instance().Create(
+      config, std::move(preface), tokenizer, stop_token_ids,
+      enable_constrained_decoding);
 }
 
 absl::Status ValidateVisualTokenBudget(const DataProcessorArguments& args,
