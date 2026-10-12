@@ -118,9 +118,20 @@ AudioPreprocessorMiniAudio::Create(const AudioPreprocessorConfig& config) {
     return absl::InvalidArgumentError("Frame length must be positive.");
   }
   auto mel_filterbank = std::make_unique<MelFilterbank>();
-  LITERT_RETURN_IF_ERROR(mel_filterbank->Initialize(
-      config.GetFftBins(), config.GetSampleRateHz(), config.GetNumMelBins(),
-      config.GetMelLowHz(), config.GetMelHighHz()));
+  if (config.GetSlaneyMel()) {
+    LITERT_RETURN_IF_ERROR(mel_filterbank->InitializeSlaney(
+        config.GetFftBins(), config.GetSampleRateHz(), config.GetNumMelBins(),
+        config.GetMelLowHz(), config.GetMelHighHz(),
+        config.GetPowerSpectrum()));
+  } else {
+    if (config.GetPowerSpectrum()) {
+      return absl::InvalidArgumentError(
+          "Power spectrum is only supported with Slaney mel filterbanks.");
+    }
+    LITERT_RETURN_IF_ERROR(mel_filterbank->Initialize(
+        config.GetFftBins(), config.GetSampleRateHz(), config.GetNumMelBins(),
+        config.GetMelLowHz(), config.GetMelHighHz()));
+  }
   return absl::WrapUnique(
       new AudioPreprocessorMiniAudio(config, std::move(mel_filterbank)));
 }
