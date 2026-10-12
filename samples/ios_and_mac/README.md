@@ -36,8 +36,16 @@ Swift Package Manager (SPM):
 1. In Xcode, select **File** > **Add Package Dependencies...**
 2. In the search bar at the top right, enter the GitHub repository URL:
    `https://github.com/google-ai-edge/LiteRT-LM.git`
-3. Select the package from the list and click **Add Package**.
-4. Select the target app you want to add the dependency to and click **Finish**.
+3.  Under **Dependency Rule**, choose your channel:
+    *   **Stable Release (Recommended):** Select **Exact Version** or **Up to
+        Next Major Version** (e.g., `0.18.0`).
+    *   **Nightly (Latest):** Select **Branch** and enter `nightly` to
+        automatically receive daily prebuilt updates.
+    *   **Nightly (Pin to Specific Date):** Select **Exact Version** and enter a
+        nightly tag (e.g., `0.19.0-nightly.20261010`) to lock onto a specific
+        day's build.
+4.  Select the target app you want to add the dependency to and click **Add
+    Package**.
 
 > [!NOTE]
 > If you see an error like `no such module LiteRTLM` after adding the package:
@@ -48,6 +56,21 @@ Swift Package Manager (SPM):
 > 5. Click the **`+`** button.
 > 6. Select **LiteRTLM Package** -> **LiteRTLM**.
 > 7. Click **Add**.
+
+> [!TIP] **Resolving Dependency Issues (e.g., Missing Dependencies or Git
+> LFS):**
+>
+> If Xcode flags an issue or warning while adding dependencies:
+>
+> 1.  Click **Add Anyway** in Xcode.
+> 2.  Open Terminal in your project directory and run:
+>
+>     ```bash
+>     GIT_LFS_SKIP_SMUDGE=1 xcodebuild \
+>       -resolvePackageDependencies -project YourApp.xcodeproj
+>     ```
+> 3.  In Xcode, navigate to **File** > **Packages** > **Resolve Package
+>     Versions** to complete resolution.
 
 ### 2. Add a Model File
 
@@ -76,6 +99,7 @@ It demonstrates how to:
 ## Running the App
 
 ### On iOS
+
 1. Connect your physical iPhone to your Mac using a cable.
 2. In Xcode, select your iPhone's name from the run destination menu at the
    top center of the window.
@@ -83,15 +107,16 @@ It demonstrates how to:
    your device!
 
 ### On macOS
+
 1. In Xcode, select **My Mac** from the run destination menu at the top center
    of the window.
 2. Click the **Run** button (or press `Cmd + R`) to build and run the app on
    your Mac!
 
-> [!IMPORTANT]
-> If you are using a locally built, unsigned version of the library on Mac,
-  macOS may block it with a "Malware" warning. To bypass this for local testing,
-  run this command in your Mac terminal:
+> [!IMPORTANT] If you are using a locally built, unsigned version of the library
+> on Mac, macOS may block it with a "Malware" warning. To bypass this for local
+> testing, run this command in your Mac terminal:
+>
 > ```bash
 > xattr -rd com.apple.quarantine path/to/CLiteRTLM.xcframework
 > ```

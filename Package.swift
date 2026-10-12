@@ -32,7 +32,9 @@ let package = Package(
     ),
   ],
   targets: [
-    // The Prebuilt Binary Target for iOS
+    // The Prebuilt Binary Target for iOS (Official Stable Release)
+    // For nightly builds or pinning to specific nightly dates, switch to the 'nightly' branch or see:
+    // https://github.com/google-ai-edge/LiteRT-LM/tree/main/samples/ios_and_mac#1-add-dependency
     .binaryTarget(
       name: "CLiteRTLM",
       url:
