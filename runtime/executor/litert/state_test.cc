@@ -14,6 +14,9 @@
 
 #include "runtime/executor/litert/state.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>  // NOLINT
 #include <limits>
 #include <memory>
@@ -31,6 +34,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
@@ -171,6 +175,130 @@ TEST_F(LitertStateTest, OutOfPlaceDynamicKVNotResizeable) {
   EXPECT_THAT(kv_cache_->Resize(*compiled_model_, kDecodeSignatureRunner, 100),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
+
+void FillBuffer(TensorBuffer& buffer, uint8_t value) {
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t size, buffer.PackedSize());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_addr,
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kWrite));
+  std::memset(lock_and_addr.second, value, size);
+}
+
+void ExpectBufferFilledWith(TensorBuffer& buffer, uint8_t value) {
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t size, buffer.PackedSize());
+  ASSERT_GT(size, 0u);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_addr,
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kRead));
+  const auto* data = static_cast<const uint8_t*>(lock_and_addr.second);
+  for (size_t i = 0; i < size; ++i) {
+    ASSERT_EQ(data[i], value) << "Mismatch at byte " << i;
+  }
+}
+
+TEST_F(LitertStateTest, IsHostMemoryForCpuState) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kPingPong,
+                                  /*batch_size=*/1));
+  EXPECT_TRUE(kv_cache_->IsHostMemory());
+}
+
+TEST_F(LitertStateTest, CopyContentsFromKeepsExistingBuffers) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LitertState> source,
+      LitertState::Create(*env_, *compiled_model_, kDecodeSignatureRunner,
+                          /*executor_metadata=*/nullptr,
+                          LitertState::AllocationPolicy::kInplace,
+                          /*batch_size=*/1));
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto source_buffers,
+        source->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    ASSERT_FALSE(source_buffers.input_buffers.empty());
+    for (auto& [_, buffer] : source_buffers.input_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 7));
+    }
+  }
+  ASSERT_OK_AND_ASSIGN(
+      auto before,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+
+  ASSERT_OK(kv_cache_->CopyContentsFrom(*source));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto after,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_EQ(after.input_buffers.size(), before.input_buffers.size());
+  for (auto& [name, buffer] : after.input_buffers) {
+    // The underlying buffers must not be replaced, only their contents.
+    EXPECT_EQ(buffer.Get(), before.input_buffers.at(name).Get()) << name;
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 7)) << name;
+  }
+}
+
+TEST_F(LitertStateTest, CopyContentsFromPreservesPingPongInputBank) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kPingPong,
+                                  /*batch_size=*/1));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LitertState> source,
+      LitertState::Create(*env_, *compiled_model_, kDecodeSignatureRunner,
+                          /*executor_metadata=*/nullptr,
+                          LitertState::AllocationPolicy::kPingPong,
+                          /*batch_size=*/1));
+  // Run one "step" on the source so that its latest state lives in bank 2,
+  // which will be the input bank of the next step.
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto step,
+        source->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    ASSERT_FALSE(step.output_buffers.empty());
+    for (auto& [_, buffer] : step.output_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 9));
+    }
+  }
+
+  ASSERT_OK(kv_cache_->CopyContentsFrom(*source));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto next,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_FALSE(next.input_buffers.empty());
+  for (auto& [name, buffer] : next.input_buffers) {
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 9)) << name;
+  }
+}
+
+TEST_F(LitertStateTest, CopyContentsFromRejectsMismatchedAllocationPolicy) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LitertState> source,
+      LitertState::Create(*env_, *compiled_model_, kDecodeSignatureRunner,
+                          /*executor_metadata=*/nullptr,
+                          LitertState::AllocationPolicy::kPingPong,
+                          /*batch_size=*/1));
+  EXPECT_THAT(kv_cache_->CopyContentsFrom(*source),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+#ifndef _WIN32
+TEST_F(LitertStateTest, CopyContentsFromRejectsMismatchedNumEntries) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestDynamicModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1));
+  ASSERT_OK_AND_ASSIGN(auto source_interface, kv_cache_->DeepCopy());
+  auto* source = dynamic_cast<LitertState*>(source_interface.get());
+  ASSERT_NE(source, nullptr);
+  ASSERT_OK(source->Resize(*compiled_model_, kDecodeSignatureRunner, 16));
+  EXPECT_THAT(kv_cache_->CopyContentsFrom(*source),
+              StatusIs(absl::StatusCode::kInternal));
+}
+#endif  // !_WIN32
 
 }  // namespace
 }  // namespace litert::lm

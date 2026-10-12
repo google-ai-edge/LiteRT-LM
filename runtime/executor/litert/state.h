@@ -79,6 +79,21 @@ class LitertState : public StateInterface {
 
   absl::Status Clear() override;
 
+  // Returns true if all state buffers are backed by host memory.
+  bool IsHostMemory() const;
+
+  // Copies the contents of all state buffers (both banks for kPingPong) and
+  // the ping-pong bank index from `other` into this state's existing buffers,
+  // without reallocating them. `other` must have the same allocation policy,
+  // batch size, number of entries and set of state buffers. The buffer types
+  // may differ (e.g. restoring a host memory snapshot into GPU buffers).
+  //
+  // This is currently used to restore host memory snapshots of Metal state
+  // buffers, which costs a full host -> device copy per restore.
+  // TODO: b/572018960 - Revisit once LiteRT supports keeping Metal snapshots
+  // in device memory so that restores can swap buffers instead of copying.
+  absl::Status CopyContentsFrom(const LitertState& other);
+
   // Resizes the KV cache to the given number of entries (sequence length).
   // Note: Resize is a no-op if the requested size is smaller than the current
   // size.

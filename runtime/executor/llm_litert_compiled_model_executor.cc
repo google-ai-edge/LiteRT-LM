@@ -1569,11 +1569,28 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
   if (state == nullptr) {
     return absl::OkStatus();
   }
-  if (state->GetBatchSize() > 1) {
-    decode_state_ = std::move(state);
-  } else {
-    state_ = std::move(state);
+  std::unique_ptr<StateInterface>& target =
+      state->GetBatchSize() > 1 ? decode_state_ : state_;
+
+  // `CloneState()` may snapshot GPU (e.g. Metal) state buffers into host
+  // memory (see `CopyTensorBuffer()`). Swapping such a snapshot in as the live
+  // state does not work: GPU delegates cannot bind host buffers for in-place
+  // KV caches and keep using the previously bound device buffers, which hold
+  // another session's KV cache. Instead, copy the snapshot contents into the
+  // existing device buffers.
+  // TODO: b/572018960 - This adds a full host -> device KV cache copy on every
+  // restore. Once LiteRT fixes the Metal buffer allocation leak (or provides
+  // device-side snapshots), keep snapshots in device memory, drop the Metal
+  // special case in `CopyTensorBuffer()` and remove this copy path to avoid
+  // paying this penalty.
+  auto* current = dynamic_cast<LitertState*>(target.get());
+  auto* restored = dynamic_cast<LitertState*>(state.get());
+  if (current != nullptr && restored != nullptr && !current->IsHostMemory() &&
+      restored->IsHostMemory()) {
+    return current->CopyContentsFrom(*restored);
   }
+
+  target = std::move(state);
   return absl::OkStatus();
 }
 
@@ -2075,8 +2092,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                           compiled_model->GetSignatureKeys());
   for (absl::string_view key : signature_keys) {
     if (absl::StartsWith(key, kPrefillSignatureRunner) &&
-        (selected.empty() ||
-         absl::c_find(selected, key) != selected.end())) {
+        (selected.empty() || absl::c_find(selected, key) != selected.end())) {
       prefill_signature_key = std::string(key);
       break;
     }

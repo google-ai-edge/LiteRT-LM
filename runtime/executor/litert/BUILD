@@ -68,6 +68,7 @@ cc_test(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/test:matchers",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",

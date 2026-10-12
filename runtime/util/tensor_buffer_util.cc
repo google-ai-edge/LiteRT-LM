@@ -54,6 +54,9 @@ absl::StatusOr<::litert::TensorBuffer> CopyTensorBuffer(
   if (tensor_buffer.IsMetalMemory()) {
     // b/505373949#comment13: A temporary fix to create a host memory buffer to
     // copy from the metal memory buffer to avoid memory leak:
+    // TODO: b/572018960 - Remove once the Metal leak is fixed in LiteRT; this
+    // also forces a host -> device copy in
+    // `LlmLiteRtCompiledModelExecutorBase::RestoreState()`.
     LITERT_ASSIGN_OR_RETURN(
         auto buffer,
         ::litert::TensorBuffer::CreateManaged(

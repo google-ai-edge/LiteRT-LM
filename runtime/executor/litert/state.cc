@@ -195,6 +195,22 @@ absl::Status BroadcastAndCopyBuffer(TensorBuffer& dst, int dst_batch_size,
   return absl::OkStatus();
 }
 
+// Copies the contents of `src` into `dst`. Both buffers must have the same
+// packed size, but may have different buffer types.
+absl::Status CopyBufferContents(TensorBuffer& dst, const TensorBuffer& src) {
+  LITERT_ASSIGN_OR_RETURN(size_t src_size, src.PackedSize());
+  LITERT_ASSIGN_OR_RETURN(size_t dst_size, dst.PackedSize());
+  RET_CHECK_EQ(src_size, dst_size);
+  LITERT_ASSIGN_OR_RETURN(
+      auto src_lock_and_addr,
+      TensorBufferScopedLock::Create(src, TensorBuffer::LockMode::kRead));
+  LITERT_ASSIGN_OR_RETURN(
+      auto dst_lock_and_addr,
+      TensorBufferScopedLock::Create(dst, TensorBuffer::LockMode::kWrite));
+  memcpy(dst_lock_and_addr.second, src_lock_and_addr.second, dst_size);
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<LitertState>> LitertState::Create(
@@ -286,6 +302,56 @@ absl::StatusOr<std::unique_ptr<StateInterface>> LitertState::DeepCopy() const {
   copy->bank_1_is_input_ = bank_1_is_input_;
 
   return copy;
+}
+
+bool LitertState::IsHostMemory() const {
+  auto is_host = [](const StateBuffer& state_buffer) {
+    auto buffer_type = state_buffer.buffer.BufferType();
+    return buffer_type && *buffer_type == TensorBufferType::kHostMemory;
+  };
+  for (const auto& [_, state_buffer] : bank_1_state_buffers_) {
+    if (!is_host(state_buffer)) return false;
+  }
+  if (bank_2_state_buffers_.has_value()) {
+    for (const auto& [_, state_buffer] : *bank_2_state_buffers_) {
+      if (!is_host(state_buffer)) return false;
+    }
+  }
+  return true;
+}
+
+absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
+  if (this == &other) {
+    return absl::OkStatus();
+  }
+  RET_CHECK(allocation_policy_ == other.allocation_policy_)
+      << "Allocation policy mismatch.";
+  RET_CHECK_EQ(batch_size_, other.batch_size_);
+  RET_CHECK_EQ(num_entries_, other.num_entries_);
+  RET_CHECK_EQ(bank_2_state_buffers_.has_value(),
+               other.bank_2_state_buffers_.has_value());
+
+  auto copy_bank = [](absl::flat_hash_map<std::string, StateBuffer>& dst,
+                      const absl::flat_hash_map<std::string, StateBuffer>& src)
+      -> absl::Status {
+    RET_CHECK_EQ(dst.size(), src.size());
+    for (auto& [name, state_buffer] : dst) {
+      auto it = src.find(name);
+      RET_CHECK(it != src.end()) << "Missing state buffer: " << name;
+      ABSL_RETURN_IF_ERROR(
+          CopyBufferContents(state_buffer.buffer, it->second.buffer));
+    }
+    return absl::OkStatus();
+  };
+
+  ABSL_RETURN_IF_ERROR(
+      copy_bank(bank_1_state_buffers_, other.bank_1_state_buffers_));
+  if (bank_2_state_buffers_.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        copy_bank(*bank_2_state_buffers_, *other.bank_2_state_buffers_));
+  }
+  bank_1_is_input_ = other.bank_1_is_input_;
+  return absl::OkStatus();
 }
 
 bool LitertState::Contains(absl::string_view tensor_name) const {
