@@ -35,7 +35,8 @@ namespace litert::omni::asr {
 class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
   static absl::StatusOr<std::unique_ptr<TdtDecoder>> Create(
-      LiteRtRunner* absl_nonnull runner, int decode_start_token_id = 8192,
+      LiteRtRunner* absl_nonnull runner,
+      std::vector<int> decode_start_token_ids = {8192},
       int decode_statefully_after = 4);
 
   ~TdtDecoder() override = default;
@@ -51,7 +52,7 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<TensorBuffer> decode_output_buffers,
       std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
       size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
-      int decode_start_token_id, int decode_statefully_after);
+      int blank_token_id, int decode_statefully_after);
 
   LiteRtRunner& runner_;
   std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner_;
@@ -61,7 +62,7 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
   const size_t max_time_index_;
   const size_t num_token_ids_;
   const size_t num_logits_per_token_;
-  const int decode_start_token_id_;
+  const int blank_token_id_;
   const int decode_statefully_after_;
 };
 

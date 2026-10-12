@@ -42,14 +42,15 @@ class LmEngineDecoder : public LiteRtSpeechRecognizer::Decoder {
   //   engine_runner: Non-null pointer to LiteRtLmEngineRunner.
   //   prompt: Optional text prompt prefix (e.g. transcription instruction).
   //   max_output_tokens: Maximum number of decoded tokens, or <= 0 for default.
-  //   decode_start_token_id: Optional start token ID.
+  //   decode_start_token_ids: Must be empty (start tokens are handled by the
+  //     prompt/engine).
   //   decode_stop_token_id: Optional explicit stop token ID to terminate
   //     decoding, in addition to any stop tokens in the model metadata.
   //   decode_skip_until_token_id: If >= 0, tokens up to and including this
   //     ID are skipped from the decoded output.
   static absl::StatusOr<std::unique_ptr<LmEngineDecoder>> Create(
       LiteRtLmEngineRunner* absl_nonnull engine_runner, std::string prompt = "",
-      int max_output_tokens = -1, int decode_start_token_id = -1,
+      int max_output_tokens = -1, std::vector<int> decode_start_token_ids = {},
       int decode_stop_token_id = -1, int decode_skip_until_token_id = -1);
 
   ~LmEngineDecoder() override = default;
@@ -60,14 +61,12 @@ class LmEngineDecoder : public LiteRtSpeechRecognizer::Decoder {
  private:
   LmEngineDecoder(LiteRtLmEngineRunner* absl_nonnull engine_runner,
                   std::string prompt, lm::DecodeConfig decode_config,
-                  int decode_start_token_id, int decode_stop_token_id,
-                  int decode_skip_until_token_id,
+                  int decode_stop_token_id, int decode_skip_until_token_id,
                   absl::flat_hash_set<int> stop_tokens);
 
   LiteRtLmEngineRunner& engine_runner_;
   const std::string prompt_;
   const lm::DecodeConfig decode_config_;
-  const int decode_start_token_id_;
   const int decode_stop_token_id_;
   const int decode_skip_until_token_id_;
   const absl::flat_hash_set<int> stop_tokens_;

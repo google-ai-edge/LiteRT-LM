@@ -87,10 +87,16 @@ void ExpectInputTokenId(const lm::ExecutorInputs& inputs,
 
 TEST(LmDecoderTest, CreateWithInvalidMaxDecodeStepsReturnsError) {
   MockLiteRtLmRunner runner;
-  EXPECT_THAT(LmDecoder::Create(&runner, /*decode_start_token_id=*/-1,
+  EXPECT_THAT(LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
                                 /*decode_stop_token_id=*/-1,
                                 /*decode_skip_until_token_id=*/-1,
                                 /*max_decode_steps=*/0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LmDecoderTest, CreateWithNonEmptyDecodeStartTokenIdsReturnsError) {
+  MockLiteRtLmRunner runner;
+  EXPECT_THAT(LmDecoder::Create(&runner, /*decode_start_token_ids=*/{1}),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -130,7 +136,7 @@ TEST(LmDecoderTest, DecodeSuccessfulSequence) {
 
   ASSERT_OK_AND_ASSIGN(
       auto decoder,
-      LmDecoder::Create(&runner, /*decode_start_token_id=*/1,
+      LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
                         /*decode_stop_token_id=*/9));
 
   std::vector<::litert::TensorBuffer> encoder_outputs;
@@ -158,7 +164,7 @@ TEST(LmDecoderTest, DecodeHitsMaxSteps) {
 
   ASSERT_OK_AND_ASSIGN(
       auto decoder,
-      LmDecoder::Create(&runner, /*decode_start_token_id=*/0,
+      LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
                         /*decode_stop_token_id=*/9,
                         /*decode_skip_until_token_id=*/-1,
                         /*max_decode_steps=*/3));
@@ -195,7 +201,7 @@ TEST(LmDecoderTest, DecodeWithDecodeSkipUntilTokenId) {
 
   ASSERT_OK_AND_ASSIGN(
       auto decoder,
-      LmDecoder::Create(&runner, /*decode_start_token_id=*/0,
+      LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
                         /*decode_stop_token_id=*/9,
                         /*decode_skip_until_token_id=*/2));
 
@@ -216,7 +222,7 @@ TEST(LmDecoderTest, DecodeTruncatesTrailingRepetitionLoop) {
   EXPECT_CALL(runner, Reset()).WillOnce(Return(absl::OkStatus()));
   EXPECT_CALL(runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
 
-  // Verifies step 0 passes -1 when decode_start_token_id = -1, then yields
+  // Verifies step 0 passes -1 when decode_start_token_ids is empty, then yields
   // token 1 followed by token 4 repeated 4 times (triggers early break and
   // truncates the 3 extra repeats).
   EXPECT_CALL(runner, Decode(_))
@@ -233,7 +239,7 @@ TEST(LmDecoderTest, DecodeTruncatesTrailingRepetitionLoop) {
       .WillOnce(Return(CreateLogitsBuffer(4)));
 
   ASSERT_OK_AND_ASSIGN(auto decoder,
-                       LmDecoder::Create(&runner, /*decode_start_token_id=*/-1,
+                       LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
                                          /*decode_stop_token_id=*/9,
                                          /*decode_skip_until_token_id=*/-1,
                                          /*max_decode_steps=*/20));
@@ -267,7 +273,7 @@ TEST(LmDecoderTest, DecodeTruncatesTrailingMultiTokenRepetitionLoop) {
       .WillOnce(Return(CreateLogitsBuffer(3)));
 
   ASSERT_OK_AND_ASSIGN(auto decoder,
-                       LmDecoder::Create(&runner, /*decode_start_token_id=*/-1,
+                       LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
                                          /*decode_stop_token_id=*/9,
                                          /*decode_skip_until_token_id=*/-1,
                                          /*max_decode_steps=*/20));

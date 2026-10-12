@@ -68,6 +68,16 @@ TEST(TdtDecoderTest, CreateWithEmptyInputBuffersFails) {
   EXPECT_FALSE(TdtDecoder::Create(&mock_runner).ok());
 }
 
+TEST(TdtDecoderTest, CreateWithInvalidDecodeStartTokenIdsFails) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_FALSE(
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{}).ok());
+  EXPECT_FALSE(
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{-1}).ok());
+  EXPECT_FALSE(
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0, 1}).ok());
+}
+
 TEST(TdtDecoderTest, CreateSuccessfully) {
   MockLiteRtRunner mock_runner;
   EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
@@ -275,7 +285,7 @@ TEST(TdtDecoderTest, StatefulDecodeTransitionAndBlankHandling) {
 
   ASSERT_OK_AND_ASSIGN(auto decoder,
                        TdtDecoder::Create(&mock_runner,
-                                          /*decode_start_token_id=*/0));
+                                          /*decode_start_token_ids=*/{0}));
   std::vector<TensorBuffer> encoder_outputs;
   encoder_outputs.push_back(CreateTestTensorBuffer(1024 * 3, sizeof(float)));
   ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));

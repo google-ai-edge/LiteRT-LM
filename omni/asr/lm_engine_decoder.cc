@@ -41,8 +41,12 @@ namespace litert::omni::asr {
 
 absl::StatusOr<std::unique_ptr<LmEngineDecoder>> LmEngineDecoder::Create(
     LiteRtLmEngineRunner* absl_nonnull engine_runner, std::string prompt,
-    int max_output_tokens, int decode_start_token_id, int decode_stop_token_id,
-    int decode_skip_until_token_id) {
+    int max_output_tokens, std::vector<int> decode_start_token_ids,
+    int decode_stop_token_id, int decode_skip_until_token_id) {
+  if (!decode_start_token_ids.empty()) {
+    return absl::InvalidArgumentError(
+        "LmEngineDecoder does not support non-empty decode_start_token_ids.");
+  }
   absl::flat_hash_set<int> stop_tokens;
   if (decode_stop_token_id >= 0) {
     stop_tokens.insert(decode_stop_token_id);
@@ -82,19 +86,17 @@ absl::StatusOr<std::unique_ptr<LmEngineDecoder>> LmEngineDecoder::Create(
 
   return std::unique_ptr<LmEngineDecoder>(new LmEngineDecoder(
       engine_runner, std::move(prompt), std::move(decode_config),
-      decode_start_token_id, decode_stop_token_id, decode_skip_until_token_id,
+      decode_stop_token_id, decode_skip_until_token_id,
       std::move(stop_tokens)));
 }
 
 LmEngineDecoder::LmEngineDecoder(
     LiteRtLmEngineRunner* absl_nonnull engine_runner, std::string prompt,
-    lm::DecodeConfig decode_config, int decode_start_token_id,
-    int decode_stop_token_id, int decode_skip_until_token_id,
-    absl::flat_hash_set<int> stop_tokens)
+    lm::DecodeConfig decode_config, int decode_stop_token_id,
+    int decode_skip_until_token_id, absl::flat_hash_set<int> stop_tokens)
     : engine_runner_(*engine_runner),
       prompt_(std::move(prompt)),
       decode_config_(std::move(decode_config)),
-      decode_start_token_id_(decode_start_token_id),
       decode_stop_token_id_(decode_stop_token_id),
       decode_skip_until_token_id_(decode_skip_until_token_id),
       stop_tokens_(std::move(stop_tokens)) {}

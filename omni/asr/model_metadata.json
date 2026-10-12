@@ -9,7 +9,7 @@
       "nFrames": 500,
       "preemphasis": 0.97
     },
-    "decodeStartTokenId": 8192,
+    "decodeStartTokenIds": [8192],
     "stateBufferNamePatterns": [
       "encode_output_0_output",
       "decode_args_0",
@@ -37,7 +37,7 @@
     "modelRemoteUrl": "https://huggingface.co/litert-community/moonshine-tiny/resolve/main/moonshine_tiny_5s_i8.litertlm",
     "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/moonshine-tiny/resolve/main/moonshine_tiny_5s_f32_<target>.litertlm",
     "inputMilliseconds": 5000,
-    "decodeStartTokenId": 1,
+    "decodeStartTokenIds": [1],
     "decodeStopTokenId": 2
   },
   "whisper-tiny": {
@@ -49,7 +49,12 @@
       "nFrames": 3000,
       "normType": "whisper"
     },
-    "decodeStartTokenId": 50258,
+    "decodeStartTokenIds": [
+      50258,
+      50259,
+      50359,
+      50363
+    ],
     "decodeStopTokenId": 50257
   },
   "qwen3-asr-0.6b": {
@@ -67,7 +72,6 @@
   "tinygemma-asr": {
     "modelRemoteUrl": "https://huggingface.co/litert-community/TinyGemma-ASR/resolve/main/tiny_gemma_asr_5s_i8.litertlm",
     "inputMilliseconds": 5000,
-    "decodeStartTokenId": 2,
     "decodeStopTokenId": 1,
     "logMelSpectro": {
       "nFFT": 512,

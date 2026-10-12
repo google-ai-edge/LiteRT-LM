@@ -31,8 +31,13 @@ namespace litert::omni::asr {
 // Stateless single-signature autoregressive decoder implementation.
 class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
+  // Creates a StatelessDecoder. If `decode_start_token_ids` is non-empty, seeds
+  // the decoder with those tokens (e.g., a single start token or Whisper's
+  // <|startoftranscript|><|en|><|transcribe|><|notimestamps|> prompt) and
+  // continues decoding after them.
   static absl::StatusOr<std::unique_ptr<StatelessDecoder>> Create(
-      LiteRtRunner* absl_nonnull runner, int decode_start_token_id = -1,
+      LiteRtRunner* absl_nonnull runner,
+      std::vector<int> decode_start_token_ids = {},
       int decode_stop_token_id = -1, int decode_skip_until_token_id = -1);
 
   ~StatelessDecoder() override = default;
@@ -45,15 +50,15 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
                    std::vector<::litert::TensorBuffer> decode_input_buffers,
                    std::vector<::litert::TensorBuffer> decode_output_buffers,
                    size_t num_logits_per_token, size_t num_token_ids,
-                   int decode_start_token_id, int decode_stop_token_id,
-                   int decode_skip_until_token_id);
+                   std::vector<int> decode_start_token_ids,
+                   int decode_stop_token_id, int decode_skip_until_token_id);
 
   LiteRtRunner& runner_;
   std::vector<::litert::TensorBuffer> decode_input_buffers_;
   std::vector<::litert::TensorBuffer> decode_output_buffers_;
   const size_t num_logits_per_token_;
   const size_t num_token_ids_;
-  const int decode_start_token_id_;
+  const std::vector<int> decode_start_token_ids_;
   const int decode_stop_token_id_;
   const int decode_skip_until_token_id_;
 };

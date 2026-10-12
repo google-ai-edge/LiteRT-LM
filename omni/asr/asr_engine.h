@@ -70,7 +70,7 @@ struct AsrEngineConfig {
   bool has_log_mel_config = false;
   LogMelSpectrogramProcessor::LogMelSpectrogramConfig log_mel_config;
 
-  int decode_start_token_id = -1;
+  std::vector<int> decode_start_token_ids;
   int decode_stop_token_id = -1;
   int decode_skip_until_token_id = -1;
   int decode_statefully_after = 4;

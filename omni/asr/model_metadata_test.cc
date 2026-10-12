@@ -89,5 +89,12 @@ TEST(ModelMetadataTest, RejectsInvalidJson) {
       GetConfigFromMetadataJson("whisper-tiny", "{invalid json").status()));
 }
 
+TEST(ModelMetadataTest, PopulatesWhisperStartTokenIds) {
+  ASSERT_OK_AND_ASSIGN(auto whisper_config,
+                       GetConfigFromMetadataJson("whisper-tiny"));
+  EXPECT_THAT(whisper_config.decode_start_token_ids,
+              ::testing::ElementsAre(50258, 50259, 50359, 50363));
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

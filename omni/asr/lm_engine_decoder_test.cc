@@ -65,7 +65,7 @@ TEST(LmEngineDecoderTest, DecodeAssemblesMultimodalInputsAndEmitsTokens) {
 
   auto decoder_or = LmEngineDecoder::Create(
       &mock_runner, /*prompt=*/"Transcribe: ", /*max_output_tokens=*/64,
-      /*decode_start_token_id=*/-1, /*decode_stop_token_id=*/1,
+      /*decode_start_token_ids=*/{}, /*decode_stop_token_id=*/1,
       /*decode_skip_until_token_id=*/100);
   ASSERT_THAT(decoder_or, IsOk());
   auto decoder = std::move(*decoder_or);
@@ -92,6 +92,14 @@ TEST(LmEngineDecoderTest, FailsOnEmptyEncoderOutputs) {
 
   std::vector<TensorBuffer> empty_outputs;
   EXPECT_FALSE(decoder->Decode(empty_outputs).ok());
+}
+
+TEST(LmEngineDecoderTest, FailsOnNonEmptyDecodeStartTokenIds) {
+  MockLiteRtLmEngineRunner mock_runner;
+  EXPECT_FALSE(LmEngineDecoder::Create(&mock_runner, /*prompt=*/"",
+                                       /*max_output_tokens=*/64,
+                                       /*decode_start_token_ids=*/{1})
+                   .ok());
 }
 
 }  // namespace

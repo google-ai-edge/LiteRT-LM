@@ -62,8 +62,9 @@ absl::Status PopulateConfigFromMetadataJson(absl::string_view model_name,
   if (m.contains("inputMilliseconds")) {
     config.input_milliseconds = m["inputMilliseconds"].get<int>();
   }
-  if (m.contains("decodeStartTokenId")) {
-    config.decode_start_token_id = m["decodeStartTokenId"].get<int>();
+  if (m.contains("decodeStartTokenIds")) {
+    config.decode_start_token_ids =
+        m["decodeStartTokenIds"].get<std::vector<int>>();
   }
   if (m.contains("decodeStopTokenId")) {
     config.decode_stop_token_id = m["decodeStopTokenId"].get<int>();

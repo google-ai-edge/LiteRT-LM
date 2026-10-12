@@ -358,7 +358,7 @@ absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
     case AsrEngineConfig::DecoderType::kTdt: {
       ABSL_ASSIGN_OR_RETURN(
           decoder,
-          TdtDecoder::Create(runner.get(), config_.decode_start_token_id,
+          TdtDecoder::Create(runner.get(), config_.decode_start_token_ids,
                              config_.decode_statefully_after));
       break;
     }
@@ -369,24 +369,24 @@ absl::StatusOr<std::unique_ptr<MultiStagedSession>> AsrEngine::CreateSession(
     case AsrEngineConfig::DecoderType::kStateless: {
       ABSL_ASSIGN_OR_RETURN(
           decoder,
-          StatelessDecoder::Create(
-              runner.get(), config_.decode_start_token_id,
-              config_.decode_stop_token_id,
-              config_.decode_skip_until_token_id));
+          StatelessDecoder::Create(runner.get(), config_.decode_start_token_ids,
+                                   config_.decode_stop_token_id,
+                                   config_.decode_skip_until_token_id));
       break;
     }
     case AsrEngineConfig::DecoderType::kLm: {
       if (lm_engine_runner_ != nullptr) {
         ABSL_ASSIGN_OR_RETURN(
-            decoder, LmEngineDecoder::Create(
-                         lm_engine_runner_.get(), std::string(kDefaultPrompt),
-                         kDefaultMaxOutputTokens, config_.decode_start_token_id,
-                         config_.decode_stop_token_id,
-                         config_.decode_skip_until_token_id));
+            decoder,
+            LmEngineDecoder::Create(
+                lm_engine_runner_.get(), std::string(kDefaultPrompt),
+                kDefaultMaxOutputTokens, config_.decode_start_token_ids,
+                config_.decode_stop_token_id,
+                config_.decode_skip_until_token_id));
       } else if (lm_runner_ != nullptr) {
         ABSL_ASSIGN_OR_RETURN(
             decoder,
-            LmDecoder::Create(lm_runner_.get(), config_.decode_start_token_id,
+            LmDecoder::Create(lm_runner_.get(), config_.decode_start_token_ids,
                               config_.decode_stop_token_id,
                               config_.decode_skip_until_token_id));
       } else {

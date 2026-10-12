@@ -73,8 +73,12 @@ absl::StatusOr<std::vector<TensorBuffer>> GetInputBuffersForInference(
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
-    LiteRtRunner* absl_nonnull runner, int decode_start_token_id,
+    LiteRtRunner* absl_nonnull runner, std::vector<int> decode_start_token_ids,
     int decode_statefully_after) {
+  if (decode_start_token_ids.size() != 1 || decode_start_token_ids[0] < 0) {
+    return absl::InvalidArgumentError(
+        "TdtDecoder requires a single non-negative decode_start_token_id.");
+  }
   LITERT_ASSIGN_OR_RETURN(auto inputs,
                           runner->CreateInputBuffers(kDecodeSignatureName));
   // encode output, token ids, input LSTM state 1, input LSTM state 2.
@@ -119,7 +123,8 @@ absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
   return std::unique_ptr<TdtDecoder>(new TdtDecoder(
       runner, std::move(stateful_runner), std::move(inputs), std::move(outputs),
       std::move(stateful_decode_token_ids_buf), max_time_index, num_token_ids,
-      num_logits_per_token, decode_start_token_id, decode_statefully_after));
+      num_logits_per_token, decode_start_token_ids[0],
+      decode_statefully_after));
 }
 
 TdtDecoder::TdtDecoder(
@@ -129,7 +134,7 @@ TdtDecoder::TdtDecoder(
     std::vector<TensorBuffer> decode_output_buffers,
     std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
     size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
-    int decode_start_token_id, int decode_statefully_after)
+    int blank_token_id, int decode_statefully_after)
     : runner_(*runner),
       stateful_runner_(std::move(stateful_runner)),
       decode_input_buffers_(std::move(decode_input_buffers)),
@@ -139,13 +144,11 @@ TdtDecoder::TdtDecoder(
       max_time_index_(max_time_index),
       num_token_ids_(num_token_ids),
       num_logits_per_token_(num_logits_per_token),
-      decode_start_token_id_(decode_start_token_id),
+      blank_token_id_(blank_token_id),
       decode_statefully_after_(decode_statefully_after) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     std::vector<TensorBuffer>& encoder_outputs) {
-  const int blank_token_id = decode_start_token_id_;
-
   if (stateful_runner_) {
     LITERT_RETURN_IF_ERROR(stateful_runner_->Reset());
   }
@@ -160,7 +163,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
   TensorBuffer* current_token_ids_buffer = &decode_input_buffers_[1];
   int num_inference_token_ids = num_token_ids_;
   std::vector<int32_t> token_ids(num_token_ids_, 0);
-  token_ids[0] = decode_start_token_id_;
+  token_ids[0] = blank_token_id_;
   size_t token_index = 0;
   size_t time_index = 0;
 
@@ -213,7 +216,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                                          logits + end_index_of_token_id);
     int token_id = static_cast<int>(
         std::distance(logits + start_index_of_token_id, max_token_it));
-    if (token_id != blank_token_id) {
+    if (token_id != blank_token_id_) {
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = static_cast<int>(time_index)});
       if (num_inference_token_ids > 1) {
@@ -239,9 +242,9 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                                             logits + end_index_of_duration);
     int duration = static_cast<int>(
         std::distance(logits + end_index_of_token_id, max_duration_it));
-    time_index += (duration == 0 && token_id == blank_token_id) ? 1 : duration;
+    time_index += (duration == 0 && token_id == blank_token_id_) ? 1 : duration;
 
-    if (was_stateful_step && token_id != blank_token_id && stateful_runner_) {
+    if (was_stateful_step && token_id != blank_token_id_ && stateful_runner_) {
       // Stateful RNN decoder: adopt the new LSTM states by swapping the input
       // and output state buffers — but only on a non-blank emission. In RNN-T
       // greedy decoding the prediction network advances only when a token is

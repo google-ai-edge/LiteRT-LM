@@ -38,10 +38,8 @@ class LmDecoder : public LiteRtSpeechRecognizer::Decoder {
   //
   // Args:
   //   lm_runner: Non-null pointer to LiteRtLmRunner managing model execution.
-  //   decode_start_token_id: Optional initial prompt token ID fed into the
-  //     decoder at step 0 (e.g. BOS or language token). If < 0, step 0 passes
-  //     the negative value so the executor consumes the pending input token
-  //     held back at the end of Prefill.
+  //   decode_start_token_ids: Must be empty (step 0 passes -1 so the executor
+  //     consumes the pending input token held back at the end of Prefill).
   //   decode_stop_token_id: Optional explicit stop token ID to terminate
   //     decoding (e.g. EOS), in addition to any stop tokens configured in the
   //     model's LLM metadata.
@@ -52,7 +50,8 @@ class LmDecoder : public LiteRtSpeechRecognizer::Decoder {
   //   max_decode_steps: Maximum number of autoregressive decoding steps to
   //     execute before terminating.
   static absl::StatusOr<std::unique_ptr<LmDecoder>> Create(
-      LiteRtLmRunner* absl_nonnull lm_runner, int decode_start_token_id = -1,
+      LiteRtLmRunner* absl_nonnull lm_runner,
+      std::vector<int> decode_start_token_ids = {},
       int decode_stop_token_id = -1, int decode_skip_until_token_id = -1,
       int max_decode_steps = 128);
 
@@ -62,12 +61,11 @@ class LmDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<::litert::TensorBuffer>& encoder_outputs) override;
 
  private:
-  LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner, int decode_start_token_id,
-            int decode_stop_token_id, int decode_skip_until_token_id,
-            int max_decode_steps, absl::flat_hash_set<int> stop_tokens);
+  LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner, int decode_stop_token_id,
+            int decode_skip_until_token_id, int max_decode_steps,
+            absl::flat_hash_set<int> stop_tokens);
 
   LiteRtLmRunner& lm_runner_;
-  const int decode_start_token_id_;
   const int decode_stop_token_id_;
   const int decode_skip_until_token_id_;
   const int max_decode_steps_;

@@ -42,9 +42,13 @@
 namespace litert::omni::asr {
 
 absl::StatusOr<std::unique_ptr<LmDecoder>> LmDecoder::Create(
-    LiteRtLmRunner* absl_nonnull lm_runner, int decode_start_token_id,
-    int decode_stop_token_id, int decode_skip_until_token_id,
-    int max_decode_steps) {
+    LiteRtLmRunner* absl_nonnull lm_runner,
+    std::vector<int> decode_start_token_ids, int decode_stop_token_id,
+    int decode_skip_until_token_id, int max_decode_steps) {
+  if (!decode_start_token_ids.empty()) {
+    return absl::InvalidArgumentError(
+        "LmDecoder does not support non-empty decode_start_token_ids.");
+  }
   if (max_decode_steps <= 0) {
     return absl::InvalidArgumentError("max_decode_steps must be positive.");
   }
@@ -78,17 +82,15 @@ absl::StatusOr<std::unique_ptr<LmDecoder>> LmDecoder::Create(
       }
     }
   }
-  return std::unique_ptr<LmDecoder>(new LmDecoder(
-      lm_runner, decode_start_token_id, decode_stop_token_id,
-      decode_skip_until_token_id, max_decode_steps, std::move(stop_tokens)));
+  return std::unique_ptr<LmDecoder>(
+      new LmDecoder(lm_runner, decode_stop_token_id, decode_skip_until_token_id,
+                    max_decode_steps, std::move(stop_tokens)));
 }
 
 LmDecoder::LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner,
-                     int decode_start_token_id, int decode_stop_token_id,
-                     int decode_skip_until_token_id, int max_decode_steps,
-                     absl::flat_hash_set<int> stop_tokens)
+                     int decode_stop_token_id, int decode_skip_until_token_id,
+                     int max_decode_steps, absl::flat_hash_set<int> stop_tokens)
     : lm_runner_(*lm_runner),
-      decode_start_token_id_(decode_start_token_id),
       decode_stop_token_id_(decode_stop_token_id),
       decode_skip_until_token_id_(decode_skip_until_token_id),
       max_decode_steps_(max_decode_steps),
@@ -110,11 +112,10 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
   // LlmLiteRtCompiledModelExecutorBase::Prefill processes all prompt tokens
   // except the last one and records that final prompt token (e.g. '\n' after
   // `<asr_text>` for qwen3-asr-0.6b) in `ProcessedTokens` via
-  // `AddPendingInputToken`. When `decode_start_token_id_ < 0`, passing a
-  // negative token ID on step 0 instructs Decode to consume that pending
-  // input token rather than invalidating it via `InvalidatePendingInputToken`
-  // and replacing it with an explicit start token ID.
-  int32_t current_token = decode_start_token_id_;
+  // `AddPendingInputToken`. Passing -1 on step 0 instructs Decode to consume
+  // that pending input token rather than invalidating it via
+  // `InvalidatePendingInputToken`.
+  int32_t current_token = -1;
   bool seen_skip_until_token_id = decode_skip_until_token_id_ < 0;
 
   LITERT_ASSIGN_OR_RETURN(auto token_buf,
