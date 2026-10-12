@@ -17,13 +17,19 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/constraint.h"
+#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+#include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
+#endif
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -83,6 +89,28 @@ absl::StatusOr<nlohmann::ordered_json> ResponseTextToMessage(
     absl::string_view response_text, const std::optional<Preface>& preface,
     absl::string_view code_fence_start, absl::string_view code_fence_end,
     SyntaxType syntax_type, const ParserOptions& options);
+
+#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+using GemmaModelConstraintProviderPtr =
+    std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
+                    decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>;
+
+// Creates a GemmaModelConstraintProvider instance from the given tokenizer and
+// stop token IDs. Returns a null unique_ptr if the tokenizer is not a
+// SentencePiece tokenizer.
+absl::StatusOr<GemmaModelConstraintProviderPtr>
+CreateGemmaModelConstraintProvider(
+    const ::litert::support::Tokenizer* tokenizer,
+    const std::vector<std::vector<int>>& stop_token_ids);
+
+// Creates a Constraint instance from tool declarations using the provided
+// GemmaModelConstraintProvider and options. Returns nullptr if `provider` is
+// null.
+absl::StatusOr<std::unique_ptr<Constraint>> CreateGemmaConstraintFromTools(
+    LiteRtLmGemmaModelConstraintProvider* provider,
+    const nlohmann::ordered_json& tools,
+    const LiteRtLmGemmaModelConstraintOptions& options);
+#endif
 
 }  // namespace litert::lm
 
