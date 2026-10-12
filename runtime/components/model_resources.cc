@@ -20,6 +20,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/proto/asr_metadata.pb.h"
@@ -62,6 +63,147 @@ std::string TfLiteModelTypeToWireString(
 
 std::string TfLiteModelTypeToWireString(ModelType model_type) {
   return absl::AsciiStrToLower(ModelTypeToString(model_type));
+}
+
+absl::StatusOr<proto::LlmMetadata::TfLiteModelType>
+ModelTypeToLlmTfLiteModelType(ModelType model_type) {
+  switch (model_type) {
+    case ModelType::kUnknown:
+      return proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED;
+    case ModelType::kTfLitePrefillDecode:
+      return proto::LlmMetadata::TF_LITE_PREFILL_DECODE;
+    case ModelType::kTfLiteEmbedder:
+      return proto::LlmMetadata::TF_LITE_EMBEDDER;
+    case ModelType::kTfLitePerLayerEmbedder:
+      return proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER;
+    case ModelType::kTfLiteAux:
+      return proto::LlmMetadata::TF_LITE_AUX;
+    case ModelType::kTfLiteAudioFrontend:
+      return proto::LlmMetadata::TF_LITE_AUDIO_FRONTEND;
+    case ModelType::kTfLiteAudioEncoderHw:
+      return proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW;
+    case ModelType::kTfLiteAudioAdapter:
+      return proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER;
+    case ModelType::kTfLiteEndOfAudio:
+      return proto::LlmMetadata::TF_LITE_END_OF_AUDIO;
+    case ModelType::kTfLiteVisionAdapter:
+      return proto::LlmMetadata::TF_LITE_VISION_ADAPTER;
+    case ModelType::kTfLiteEndOfVision:
+      return proto::LlmMetadata::TF_LITE_END_OF_VISION;
+    case ModelType::kTfLiteVisionEncoder:
+      return proto::LlmMetadata::TF_LITE_VISION_ENCODER;
+    case ModelType::kArtisanTextDecoder:
+      return proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER;
+    case ModelType::kTfLiteMtpDrafter:
+      return proto::LlmMetadata::TF_LITE_MTP_DRAFTER;
+    case ModelType::kTfLiteMtpAux:
+      return proto::LlmMetadata::TF_LITE_MTP_AUX;
+    case ModelType::kTfLiteTextEncoder:
+      // The text encoder belongs to the embedding capability.
+      break;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("ModelType ", ModelTypeToString(model_type),
+                   " has no LlmMetadata::TfLiteModelType counterpart."));
+}
+
+absl::StatusOr<ModelType> LlmTfLiteModelTypeToModelType(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  switch (model_type) {
+    case proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED:
+      return ModelType::kUnknown;
+    case proto::LlmMetadata::TF_LITE_PREFILL_DECODE:
+      return ModelType::kTfLitePrefillDecode;
+    case proto::LlmMetadata::TF_LITE_EMBEDDER:
+      return ModelType::kTfLiteEmbedder;
+    case proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER:
+      return ModelType::kTfLitePerLayerEmbedder;
+    case proto::LlmMetadata::TF_LITE_AUX:
+      return ModelType::kTfLiteAux;
+    case proto::LlmMetadata::TF_LITE_AUDIO_FRONTEND:
+      return ModelType::kTfLiteAudioFrontend;
+    case proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW:
+      return ModelType::kTfLiteAudioEncoderHw;
+    case proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER:
+      return ModelType::kTfLiteAudioAdapter;
+    case proto::LlmMetadata::TF_LITE_END_OF_AUDIO:
+      return ModelType::kTfLiteEndOfAudio;
+    case proto::LlmMetadata::TF_LITE_VISION_ADAPTER:
+      return ModelType::kTfLiteVisionAdapter;
+    case proto::LlmMetadata::TF_LITE_END_OF_VISION:
+      return ModelType::kTfLiteEndOfVision;
+    case proto::LlmMetadata::TF_LITE_VISION_ENCODER:
+      return ModelType::kTfLiteVisionEncoder;
+    case proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER:
+      return ModelType::kArtisanTextDecoder;
+    case proto::LlmMetadata::TF_LITE_MTP_DRAFTER:
+      return ModelType::kTfLiteMtpDrafter;
+    case proto::LlmMetadata::TF_LITE_MTP_AUX:
+      return ModelType::kTfLiteMtpAux;
+    default:
+      break;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unrecognized LlmMetadata::TfLiteModelType: ",
+                   static_cast<int>(model_type)));
+}
+
+absl::StatusOr<proto::EmbeddingMetadata::TfLiteModelType>
+ModelTypeToEmbeddingTfLiteModelType(ModelType model_type) {
+  switch (model_type) {
+    case ModelType::kUnknown:
+      return proto::EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED;
+    case ModelType::kTfLiteTextEncoder:
+      return proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER;
+    case ModelType::kTfLiteEmbedder:
+      return proto::EmbeddingMetadata::TF_LITE_EMBEDDER;
+    case ModelType::kTfLitePerLayerEmbedder:
+      return proto::EmbeddingMetadata::TF_LITE_PER_LAYER_EMBEDDER;
+    case ModelType::kTfLiteVisionEncoder:
+      return proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER;
+    case ModelType::kTfLiteVisionAdapter:
+      return proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER;
+    case ModelType::kTfLiteEndOfVision:
+      return proto::EmbeddingMetadata::TF_LITE_END_OF_VISION;
+    case ModelType::kTfLiteAudioEncoderHw:
+      return proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW;
+    case ModelType::kTfLiteAudioAdapter:
+      return proto::EmbeddingMetadata::TF_LITE_AUDIO_ADAPTER;
+    default:
+      break;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("ModelType ", ModelTypeToString(model_type),
+                   " has no EmbeddingMetadata::TfLiteModelType counterpart."));
+}
+
+absl::StatusOr<ModelType> EmbeddingTfLiteModelTypeToModelType(
+    proto::EmbeddingMetadata::TfLiteModelType model_type) {
+  switch (model_type) {
+    case proto::EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED:
+      return ModelType::kUnknown;
+    case proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER:
+      return ModelType::kTfLiteTextEncoder;
+    case proto::EmbeddingMetadata::TF_LITE_EMBEDDER:
+      return ModelType::kTfLiteEmbedder;
+    case proto::EmbeddingMetadata::TF_LITE_PER_LAYER_EMBEDDER:
+      return ModelType::kTfLitePerLayerEmbedder;
+    case proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER:
+      return ModelType::kTfLiteVisionEncoder;
+    case proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER:
+      return ModelType::kTfLiteVisionAdapter;
+    case proto::EmbeddingMetadata::TF_LITE_END_OF_VISION:
+      return ModelType::kTfLiteEndOfVision;
+    case proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW:
+      return ModelType::kTfLiteAudioEncoderHw;
+    case proto::EmbeddingMetadata::TF_LITE_AUDIO_ADAPTER:
+      return ModelType::kTfLiteAudioAdapter;
+    default:
+      break;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unrecognized EmbeddingMetadata::TfLiteModelType: ",
+                   static_cast<int>(model_type)));
 }
 
 absl::StatusOr<const litert::Model*> ModelResources::GetTFLiteModel(

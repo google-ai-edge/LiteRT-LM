@@ -22,23 +22,35 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/model_resources_task.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
 
 namespace {
 
+using ::absl_testing::IsOkAndHolds;
+using ::absl_testing::StatusIs;
+using ::litert::lm::EmbeddingTfLiteModelTypeToModelType;
 using ::litert::lm::LitertLmLoader;
+using ::litert::lm::LlmTfLiteModelTypeToModelType;
 using ::litert::lm::ModelAssetBundleResources;
 using ::litert::lm::ModelResourcesLitertLm;
 using ::litert::lm::ModelResourcesTask;
 using ::litert::lm::ModelType;
+using ::litert::lm::ModelTypeToEmbeddingTfLiteModelType;
+using ::litert::lm::ModelTypeToLlmTfLiteModelType;
 using ::litert::lm::ModelTypeToString;
 using ::litert::lm::ScopedFile;
 using ::litert::lm::StringToModelType;
+using ::litert::lm::TfLiteModelTypeToWireString;
+using ::litert::lm::proto::EmbeddingMetadata;
+using ::litert::lm::proto::LlmMetadata;
 
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 TEST(ModelResourcesTest, InitializeWithFileBackedLiteRtModel) {
@@ -302,6 +314,94 @@ TEST(ModelTypeConversionTest, ModelTypeToString) {
   EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteTextEncoder),
             "TF_LITE_TEXT_ENCODER");
   EXPECT_EQ(ModelTypeToString(ModelType::kUnknown), "UNKNOWN");
+}
+
+TEST(ModelTypeBridgeTest, LlmRoundTripAndWireStringParity) {
+  for (const ModelType model_type : {
+           ModelType::kTfLitePrefillDecode,
+           ModelType::kTfLiteEmbedder,
+           ModelType::kTfLitePerLayerEmbedder,
+           ModelType::kTfLiteAux,
+           ModelType::kTfLiteAudioFrontend,
+           ModelType::kTfLiteAudioEncoderHw,
+           ModelType::kTfLiteAudioAdapter,
+           ModelType::kTfLiteEndOfAudio,
+           ModelType::kTfLiteVisionAdapter,
+           ModelType::kTfLiteEndOfVision,
+           ModelType::kTfLiteVisionEncoder,
+           ModelType::kArtisanTextDecoder,
+           ModelType::kTfLiteMtpDrafter,
+           ModelType::kTfLiteMtpAux,
+       }) {
+    SCOPED_TRACE(ModelTypeToString(model_type));
+    ASSERT_OK_AND_ASSIGN(const LlmMetadata::TfLiteModelType proto_model_type,
+                         ModelTypeToLlmTfLiteModelType(model_type));
+    EXPECT_EQ(TfLiteModelTypeToWireString(proto_model_type),
+              TfLiteModelTypeToWireString(model_type));
+    EXPECT_THAT(LlmTfLiteModelTypeToModelType(proto_model_type),
+                IsOkAndHolds(model_type));
+  }
+}
+
+TEST(ModelTypeBridgeTest, LlmUnknownMapsToUnspecified) {
+  EXPECT_THAT(ModelTypeToLlmTfLiteModelType(ModelType::kUnknown),
+              IsOkAndHolds(LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED));
+  EXPECT_THAT(LlmTfLiteModelTypeToModelType(
+                  LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
+              IsOkAndHolds(ModelType::kUnknown));
+}
+
+TEST(ModelTypeBridgeTest, LlmRejectsTextEncoderAndInvalidValues) {
+  EXPECT_THAT(ModelTypeToLlmTfLiteModelType(ModelType::kTfLiteTextEncoder),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(LlmTfLiteModelTypeToModelType(
+                  static_cast<LlmMetadata::TfLiteModelType>(999)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(ModelTypeBridgeTest, EmbeddingRoundTripAndWireStringParity) {
+  for (const ModelType model_type : {
+           ModelType::kTfLiteTextEncoder,
+           ModelType::kTfLiteEmbedder,
+           ModelType::kTfLitePerLayerEmbedder,
+           ModelType::kTfLiteVisionEncoder,
+           ModelType::kTfLiteVisionAdapter,
+           ModelType::kTfLiteEndOfVision,
+           ModelType::kTfLiteAudioEncoderHw,
+           ModelType::kTfLiteAudioAdapter,
+       }) {
+    SCOPED_TRACE(ModelTypeToString(model_type));
+    ASSERT_OK_AND_ASSIGN(
+        const EmbeddingMetadata::TfLiteModelType proto_model_type,
+        ModelTypeToEmbeddingTfLiteModelType(model_type));
+    EXPECT_EQ(TfLiteModelTypeToWireString(proto_model_type),
+              TfLiteModelTypeToWireString(model_type));
+    EXPECT_THAT(EmbeddingTfLiteModelTypeToModelType(proto_model_type),
+                IsOkAndHolds(model_type));
+  }
+}
+
+TEST(ModelTypeBridgeTest, EmbeddingTextEncoderMapsToEmbedding) {
+  EXPECT_THAT(
+      ModelTypeToEmbeddingTfLiteModelType(ModelType::kTfLiteTextEncoder),
+      IsOkAndHolds(EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
+}
+
+TEST(ModelTypeBridgeTest, EmbeddingUnknownMapsToUnspecified) {
+  EXPECT_THAT(ModelTypeToEmbeddingTfLiteModelType(ModelType::kUnknown),
+              IsOkAndHolds(EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED));
+  EXPECT_THAT(EmbeddingTfLiteModelTypeToModelType(
+                  EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
+              IsOkAndHolds(ModelType::kUnknown));
+}
+
+TEST(ModelTypeBridgeTest, EmbeddingRejectsLlmOnlyAndInvalidValues) {
+  EXPECT_THAT(
+      ModelTypeToEmbeddingTfLiteModelType(ModelType::kTfLitePrefillDecode),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(EmbeddingTfLiteModelTypeToModelType(
+                  static_cast<EmbeddingMetadata::TfLiteModelType>(999)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

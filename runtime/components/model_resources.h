@@ -59,6 +59,11 @@ using ::litert::support::SentencePieceTokenizer;
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 using ::litert::support::Tokenizer;
 
+// Deprecated: Use the capability-scoped Protobuf enums instead, e.g.
+// proto::LlmMetadata::TfLiteModelType or proto::EmbeddingMetadata::
+// TfLiteModelType. While migrating, use ModelTypeToLlmTfLiteModelType() /
+// ModelTypeToEmbeddingTfLiteModelType() and their inverse functions below to
+// bridge between the legacy and the Protobuf enums.
 enum class ModelType {
   kUnknown = 0,              // Placeholder for uninitialized model type.
   kTfLitePrefillDecode = 1,  // The base model is used for prefill and decode.
@@ -160,6 +165,55 @@ inline std::string ModelTypeToString(ModelType model_type) {
       return "INVALID";
   }
 }
+
+// Converts a legacy C++ ModelType to the LLM capability-scoped Protobuf enum.
+// Used to bridge the legacy ModelType to proto::LlmMetadata::TfLiteModelType
+// while callers are migrated.
+//
+// args:
+//   model_type: The legacy ModelType to convert.
+// returns:
+//   The matching proto::LlmMetadata::TfLiteModelType. kUnknown maps to
+//   TF_LITE_MODEL_TYPE_UNSPECIFIED. Returns InvalidArgumentError for values
+//   without an LLM counterpart (e.g. kTfLiteTextEncoder, which belongs to the
+//   embedding capability; use ModelTypeToEmbeddingTfLiteModelType() instead).
+absl::StatusOr<proto::LlmMetadata::TfLiteModelType>
+ModelTypeToLlmTfLiteModelType(ModelType model_type);
+
+// Converts the LLM capability-scoped Protobuf enum to the legacy C++ ModelType.
+//
+// args:
+//   model_type: The proto::LlmMetadata::TfLiteModelType to convert.
+// returns:
+//   The matching legacy ModelType. TF_LITE_MODEL_TYPE_UNSPECIFIED maps to
+//   kUnknown. Returns InvalidArgumentError for unrecognized enum values.
+absl::StatusOr<ModelType> LlmTfLiteModelTypeToModelType(
+    proto::LlmMetadata::TfLiteModelType model_type);
+
+// Converts a legacy C++ ModelType to the embedding capability-scoped Protobuf
+// enum. Used to bridge the legacy ModelType to
+// proto::EmbeddingMetadata::TfLiteModelType while callers are migrated, e.g.
+// for embedding models that contain a text encoder.
+//
+// args:
+//   model_type: The legacy ModelType to convert.
+// returns:
+//   The matching proto::EmbeddingMetadata::TfLiteModelType. kUnknown maps to
+//   TF_LITE_MODEL_TYPE_UNSPECIFIED. Returns InvalidArgumentError for values
+//   without an embedding counterpart (e.g. kTfLitePrefillDecode).
+absl::StatusOr<proto::EmbeddingMetadata::TfLiteModelType>
+ModelTypeToEmbeddingTfLiteModelType(ModelType model_type);
+
+// Converts the embedding capability-scoped Protobuf enum to the legacy C++
+// ModelType.
+//
+// args:
+//   model_type: The proto::EmbeddingMetadata::TfLiteModelType to convert.
+// returns:
+//   The matching legacy ModelType. TF_LITE_MODEL_TYPE_UNSPECIFIED maps to
+//   kUnknown. Returns InvalidArgumentError for unrecognized enum values.
+absl::StatusOr<ModelType> EmbeddingTfLiteModelTypeToModelType(
+    proto::EmbeddingMetadata::TfLiteModelType model_type);
 
 // LITE_RUNTIME compatible helper functions converting capability-scoped
 // Protobuf TfLiteModelType enums to canonical lowercase wire strings.
