@@ -45,6 +45,7 @@ cc_library(
         ":minicpm5_data_processor_config",
         ":minicpmv_data_processor_config",
         ":qwen3_data_processor_config",
+        ":qwen3p5_data_processor_config",
     ],
 )
 
@@ -176,6 +177,13 @@ cc_library(
 )
 
 cc_library(
+    name = "qwen3p5_data_processor_config",
+    hdrs = [
+        "qwen3p5_data_processor_config.h",
+    ],
+)
+
+cc_library(
     name = "fastvlm_data_processor_config",
     hdrs = [
         "fastvlm_data_processor_config.h",
@@ -225,6 +233,7 @@ MODEL_DATA_PROCESSOR_FACTORY_COMMON_DEPS = [
     ":minicpmv_data_processor_config",
     ":model_data_processor",
     ":qwen3_data_processor_config",
+    ":qwen3p5_data_processor_config",
     "@com_google_absl//absl/base",
     "@com_google_absl//absl/status",
     "@com_google_absl//absl/status:status_macros",
@@ -253,6 +262,7 @@ cc_library(
     }) + select({
         "//build_config:enable_qwen_processor_setting": [
             ":qwen3_data_processor",
+            ":qwen3p5_data_processor",
         ],
         "//conditions:default": [],
     }) + select({
@@ -321,6 +331,7 @@ cc_test(
         ":model_data_processor",
         ":model_data_processor_factory",
         ":qwen3_data_processor_config",
+        ":qwen3p5_data_processor_config",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
@@ -531,6 +542,52 @@ cc_test(
         ":qwen3_data_processor_config",
         "@com_google_googletest//:gtest_main",
         "@nlohmann_json//:json",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "qwen3p5_data_processor",
+    srcs = ["qwen3p5_data_processor.cc"],
+    hdrs = ["qwen3p5_data_processor.h"],
+    defines = ["ENABLE_QWEN3P5_DATA_PROCESSOR"],
+    deps = [
+        ":model_data_processor",
+        ":qwen3p5_data_processor_config",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_test(
+    name = "qwen3p5_data_processor_test",
+    srcs = ["qwen3p5_data_processor_test.cc"],
+    data = [
+        "//models/qwen3_5:chat_template.jinja",
+    ],
+    deps = [
+        ":model_data_processor",
+        ":processor_test_utils",
+        ":qwen3p5_data_processor",
+        ":qwen3p5_data_processor_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/components:prompt_template",
+        "//runtime/components/tool_use:parser_utils_lite",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
         "//runtime/util:test_utils",

@@ -359,6 +359,7 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
           prompt_templates.model().prefix());
     case proto::LlmModelType::kQwen3:
     case proto::LlmModelType::kQwen2P5:
+    case proto::LlmModelType::kQwen3P5:
     case proto::LlmModelType::kGenericModel:
     case proto::LlmModelType::kGemma4:
     return absl::Substitute(
@@ -404,6 +405,8 @@ absl::string_view GetModelTypeName(const proto::LlmModelType& model_type) {
       return "qwen3";
     case proto::LlmModelType::kQwen2P5:
       return "qwen2p5";
+    case proto::LlmModelType::kQwen3P5:
+      return "qwen3p5";
     case proto::LlmModelType::kGemma4:
       return "gemma4";
     case proto::LlmModelType::kFastVlm:
@@ -438,6 +441,7 @@ std::optional<int> GetRollbackStopTokenId(const proto::LlmModelType& model_type,
     case proto::LlmModelType::kGemma3:
     case proto::LlmModelType::kQwen3:
     case proto::LlmModelType::kQwen2P5:
+    case proto::LlmModelType::kQwen3P5:
     case proto::LlmModelType::kFastVlm:
     case proto::LlmModelType::kLfm2:
     case proto::LlmModelType::kMinicpm5:

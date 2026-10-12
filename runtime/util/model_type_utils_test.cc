@@ -218,6 +218,9 @@ TEST(ModelTypeUtilsTest, GetModelTypeName) {
   model_type.mutable_qwen2p5();
   EXPECT_EQ(GetModelTypeName(model_type), "qwen2p5");
 
+  model_type.mutable_qwen3p5();
+  EXPECT_EQ(GetModelTypeName(model_type), "qwen3p5");
+
   model_type.mutable_gemma4();
   EXPECT_EQ(GetModelTypeName(model_type), "gemma4");
 
@@ -266,6 +269,9 @@ TEST(ModelTypeUtilsTest, GetRollbackStopTokenIdOtherModels) {
   EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
 
   model_type.mutable_gemma3n();
+  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
+
+  model_type.mutable_qwen3p5();
   EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
 
   model_type.mutable_function_gemma()->set_function_response_start(
