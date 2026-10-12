@@ -12,7 +12,7 @@ sampler_params {
 }
 max_num_tokens: 4096
 llm_model_type {
-  generic_model {
+  qwen3p5 {
   }
 }
 jinja_prompt_template:
