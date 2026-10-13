@@ -69,6 +69,7 @@ cc_library(
         ":chinese_g2p",
         ":cjk_blob",
         ":common",
+        ":japanese_g2p",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -106,6 +107,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "//support/util:test_utils",
@@ -315,6 +317,32 @@ cc_test(
         ":cjk_test_blobs",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "cjk_lattice",
+    srcs = ["cjk_lattice.cc"],
+    hdrs = ["cjk_lattice.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_test(
+    name = "cjk_lattice_test",
+    srcs = ["cjk_lattice_test.cc"],
+    deps = [
+        ":cjk_lattice",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings",
         "//support/util:test_utils",
     ],
@@ -325,6 +353,64 @@ cc_library(
     testonly = True,
     srcs = ["cjk_test_blobs.cc"],
     hdrs = ["cjk_test_blobs.h"],
+    deps = ["@com_google_absl//absl/container:flat_hash_map"],
+)
+
+cc_library(
+    name = "mecab_lattice",
+    srcs = ["mecab_lattice.cc"],
+    hdrs = ["mecab_lattice.h"],
+    deps = [
+        ":cjk_blob",
+        ":cjk_lattice",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "mecab_lattice_test",
+    srcs = ["mecab_lattice_test.cc"],
+    deps = [
+        ":cjk_blob",
+        ":cjk_lattice",
+        ":cjk_test_blobs",
+        ":mecab_lattice",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "japanese_g2p",
+    srcs = ["japanese_g2p.cc"],
+    hdrs = ["japanese_g2p.h"],
+    deps = [
+        ":cjk_blob",
+        ":cjk_lattice",
+        ":mecab_lattice",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "japanese_g2p_test",
+    srcs = ["japanese_g2p_test.cc"],
+    deps = [
+        ":cjk_blob",
+        ":cjk_test_blobs",
+        ":japanese_g2p",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:status_matchers",
+        "//support/util:test_utils",
+    ],
 )
 
 cc_library(

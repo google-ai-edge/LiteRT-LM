@@ -43,6 +43,7 @@
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/common.h"
+#include "omni/tts/kokoro/japanese_g2p.h"
 #include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
@@ -50,6 +51,10 @@ namespace litert::omni::tts {
 ABSL_CONST_INIT absl::Mutex KokoroPhonemizer::espeak_mutex_(absl::kConstInit);
 
 namespace {
+
+constexpr absl::string_view kMissingJapaneseLexiconError =
+    "Japanese TTS requires a bundled 'ja-lexicon' section in the .litertlm "
+    "model container; espeak-ng fallback is disabled for Japanese.";
 
 // Thread-safe one-time initialization of the process-global espeak-ng C
 // library.
@@ -137,6 +142,9 @@ MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice) {
   if (normalized == "cmn" || normalized == "zh") {
     return MisakiFlavor::kChinese;
   }
+  if (normalized == "ja") {
+    return MisakiFlavor::kJapanese;
+  }
   return MisakiFlavor::kEspeakGeneric;
 }
 
@@ -150,6 +158,9 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
   std::string clean_ipa = absl::StrReplaceAll(
       raw_ipa, {{"\u0361", ""}, {"\xCD\xA1", ""}, {"^", ""}});
 
+  if (flavor == MisakiFlavor::kJapanese) {
+    return clean_ipa;
+  }
   if (flavor == MisakiFlavor::kChinese) {
     return absl::StrReplaceAll(clean_ipa, {
                                               {"aɪ", "I"},
@@ -670,8 +681,15 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     ABSL_ASSIGN_OR_RETURN(kokoro::CjkBlob blob,
                           kokoro::CjkBlob::Create(cjk_lexicon));
     phonemizer->cjk_blob_ = std::make_unique<kokoro::CjkBlob>(std::move(blob));
-    if (phonemizer->language_ == "cmn" ||
-        phonemizer->cjk_blob_->Contains("w-frq")) {
+    if (phonemizer->language_ == "ja" ||
+        phonemizer->cjk_blob_->Contains("sys-da")) {
+      ABSL_ASSIGN_OR_RETURN(
+          kokoro::JapaneseG2p ja_g2p,
+          kokoro::JapaneseG2p::Create(*phonemizer->cjk_blob_));
+      phonemizer->japanese_g2p_ =
+          std::make_unique<kokoro::JapaneseG2p>(std::move(ja_g2p));
+    } else if (phonemizer->language_ == "cmn" ||
+               phonemizer->cjk_blob_->Contains("w-frq")) {
       ABSL_ASSIGN_OR_RETURN(
           kokoro::ChineseG2p zh_g2p,
           kokoro::ChineseG2p::Create(*phonemizer->cjk_blob_, parent_dir));
@@ -726,6 +744,13 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
   auto it = merged_lexicon_.find(lower_word);
   if (it != merged_lexicon_.end()) {
     return it->second;
+  }
+
+  if (language_ == "ja") {
+    if (japanese_g2p_ == nullptr) {
+      return absl::FailedPreconditionError(kMissingJapaneseLexiconError);
+    }
+    return japanese_g2p_->TextToIpa(word);
   }
 
   if (ContainsHanzi(word)) {
@@ -841,6 +866,12 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
     text = normalized_text;
   }
 
+  if (language_ == "ja") {
+    if (japanese_g2p_ == nullptr) {
+      return absl::FailedPreconditionError(kMissingJapaneseLexiconError);
+    }
+    return japanese_g2p_->TextToIpa(text);
+  }
   if (language_ == "cmn" && chinese_g2p_ == nullptr) {
     return absl::FailedPreconditionError(
         "Chinese TTS requires a bundled 'zh-lexicon' section in the "

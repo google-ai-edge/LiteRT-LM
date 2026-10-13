@@ -26,6 +26,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
+#include "omni/tts/kokoro/japanese_g2p.h"
 #include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
@@ -50,6 +51,8 @@ enum class MisakiFlavor {
   // Misaki Mandarin Chinese normalization (lang_code 'z', voice prefix
   // "zf"/"zm", espeak voice "cmn").
   kChinese,
+  // Misaki Japanese normalization (lang_code 'j', voice prefix "jf"/"jm").
+  kJapanese,
 };
 
 // Maps a canonical espeak voice name ("en-us", "en-gb", "es", "cmn", etc.) to
@@ -344,6 +347,7 @@ class KokoroPhonemizer {
   // front end built over it (`ja-lexicon` -> `japanese_g2p_`, `zh-lexicon` ->
   // `chinese_g2p_`).
   std::unique_ptr<kokoro::CjkBlob> cjk_blob_;
+  std::unique_ptr<kokoro::JapaneseG2p> japanese_g2p_;
   std::unique_ptr<kokoro::ChineseG2p> chinese_g2p_;
 };
 

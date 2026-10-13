@@ -33,6 +33,7 @@
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -940,6 +941,119 @@ TEST(PhonemizerTest, StripLanguageSwitches) {
   EXPECT_EQ(StripLanguageSwitches("(en)tʃˈaɪniːz(ja)lˈe̞tə"), "tʃˈaɪniːzlˈe̞tə");
   EXPECT_EQ(StripLanguageSwitches("a(pt-br)b"), "ab");
   EXPECT_EQ(StripLanguageSwitches("(hello)"), "(hello)");
+}
+
+std::string BuildMinimalJapaneseBlobForPhonemizerTest() {
+  using ::litert::omni::tts::kokoro::BuildCjkBlob;
+  using ::litert::omni::tts::kokoro::BuildMecabCharProperty;
+  using ::litert::omni::tts::kokoro::BuildMecabConnectionMatrix;
+  using ::litert::omni::tts::kokoro::BuildMecabDoubleArray;
+  using ::litert::omni::tts::kokoro::BuildMecabFeatures;
+  using ::litert::omni::tts::kokoro::BuildMecabToken;
+  using ::litert::omni::tts::kokoro::PackMecabCharInfo;
+
+  std::vector<uint32_t> char_records(0x3100,
+                                     PackMecabCharInfo(1, 0, 0, true, false));
+  char_records[' '] = PackMecabCharInfo(1 << 1, 1, 0, true, false);
+  for (int cp = 0x3040; cp <= 0x309F; ++cp) {
+    char_records[cp] = PackMecabCharInfo(1 << 6, 6, 2, true, false);
+  }
+  char_records[0x3002] = PackMecabCharInfo(1 << 3, 3, 0, true, false);
+
+  const std::vector<std::string> categories = {
+      "DEFAULT",  "SPACE",    "KANJI",        "SYMBOL", "NUMERIC", "ALPHA",
+      "HIRAGANA", "KATAKANA", "KANJINUMERIC", "GREEK",  "CYRILLIC"};
+  std::vector<uint32_t> sys_offsets;
+  const std::string sys_features = BuildMecabFeatures(
+      {
+          "名詞,普通名詞,一般,*,*,キョー,キョウ,1",
+          "助詞,係助詞,*,*,*,ワ,ハ,*",
+          "名詞,普通名詞,一般,*,*,テンキ,テンキ,1",
+          "助動詞,*,*,*,助動詞-デス,デス,デス,*",
+          "補助記号,句点,*,*,*,*,,*",
+          "形容詞,非自立可能,*,*,形容詞,イー,イイ,1",
+      },
+      sys_offsets);
+  std::string sys_tokens;
+  for (uint32_t off : sys_offsets) {
+    sys_tokens += BuildMecabToken(1, 1, 1, 100, off);
+  }
+  const std::string sys_da = BuildMecabDoubleArray({
+      {"今日", (0 << 8) | 1},
+      {"は", (1 << 8) | 1},
+      {"天気", (2 << 8) | 1},
+      {"です", (3 << 8) | 1},
+      {"。", (4 << 8) | 1},
+      {"いい", (5 << 8) | 1},
+  });
+
+  std::vector<uint32_t> unk_offsets;
+  std::vector<std::string> unk_records(categories.size(),
+                                       "名詞,普通名詞,一般,*,*,*,*");
+  const std::string unk_features = BuildMecabFeatures(unk_records, unk_offsets);
+  std::string unk_tokens;
+  std::vector<std::pair<std::string, int>> unk_entries;
+  for (size_t i = 0; i < categories.size(); ++i) {
+    unk_tokens += BuildMecabToken(1, 1, 1, 5000, unk_offsets[i]);
+    unk_entries.push_back({categories[i], static_cast<int>((i << 8) | 1)});
+  }
+
+  using ::litert::omni::tts::kokoro::AppendUint32;
+  std::string w_idx;
+  std::string w_key;
+  AppendUint32(0, w_idx);
+  w_key.append("天気");
+  w_key.push_back('\0');
+  AppendUint32(static_cast<uint32_t>(w_key.size()), w_idx);
+
+  return BuildCjkBlob({
+      {"sys-da", sys_da},
+      {"sys-tok", sys_tokens},
+      {"sys-feat", sys_features},
+      {"matrix", BuildMecabConnectionMatrix(2, 2, {0, 0, 0, 0})},
+      {"char", BuildMecabCharProperty(categories, char_records, 0x3100)},
+      {"unk-da", BuildMecabDoubleArray(unk_entries)},
+      {"unk-tok", unk_tokens},
+      {"unk-feat", unk_features},
+      {"w-idx", w_idx},
+      {"w-key", w_key},
+  });
+}
+
+TEST(PhonemizerTest, JapaneseWithoutLexiconFailsWithPrecondition) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "ja"));
+  EXPECT_THAT(phonemizer->TextToIpa("今日はいい天気です。"),
+              ::absl_testing::StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(phonemizer->WordToIpa("今日"),
+              ::absl_testing::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(PhonemizerTest, JapaneseWithBundledLexiconUsesJapaneseG2p) {
+  const std::string ja_blob = BuildMinimalJapaneseBlobForPhonemizerTest();
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer,
+      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "ja", {}, "", ja_blob));
+
+  ASSERT_OK_AND_ASSIGN(std::string ipa,
+                       phonemizer->TextToIpa("今日はいい天気です。"));
+  EXPECT_EQ(ipa, "kʲoː βa iː teŋkʲi desɨ.");
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds("今日はいい天気です。"));
+  EXPECT_GT(tokens.size(), 4);
+  EXPECT_EQ(tokens.front(), 0);
+  EXPECT_EQ(tokens.back(), 0);
+
+  // Initializing under en-us with a ja-lexicon blob (containing sys-da and
+  // w-idx) and switching to ja via SetLanguage retains japanese_g2p_ without
+  // attempting to parse ja-lexicon as a Chinese lexicon.
+  ASSERT_OK_AND_ASSIGN(auto switched_phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us",
+                                                {}, "", ja_blob));
+  switched_phonemizer->SetLanguage("ja");
+  EXPECT_THAT(switched_phonemizer->TextToIpa("今日はいい天気です。"),
+              ::absl_testing::IsOkAndHolds("kʲoː βa iː teŋkʲi desɨ."));
 }
 
 }  // namespace
