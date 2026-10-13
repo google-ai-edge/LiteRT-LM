@@ -413,8 +413,9 @@ class EngineTests: XCTestCase {
 
   func testEngineTeardownAndHandleNilDoesNotCrash() async throws {
     func scopeToTriggerEngineTeardown() async throws {
+      // swift-format-ignore
       let modelResource =
-        + "runtime/testdata/test_lm_new_metadata.task"
+        "runtime/testdata/test_lm_new_metadata.task"
       let modelPath = testDataPath(forResource: modelResource)
       let engineConfig = try EngineConfig(
         modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())

@@ -58,7 +58,6 @@ let package = Package(
       path: "swift",
       exclude: [
         "apple_fm",
-        "device_tests",
         "ModelInfoTests.swift",
         "EngineTests.swift",
         "EmbeddingEngineTests.swift",
