@@ -25,7 +25,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/lora.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -46,7 +45,7 @@ LoraManager::LoraManager(const litert::CompiledModel& compiled_model,
 
 absl::Status LoraManager::LoadLoRA(uint32_t lora_id,
                                    const ModelAssets& model_assets) {
-  if (lora_data_.contains(lora_id)) {
+  if (lora_data_.contains(lora_id) || loras_.contains(lora_id)) {
     return absl::AlreadyExistsError("LoRA ID already exists");
   }
   ABSL_ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());

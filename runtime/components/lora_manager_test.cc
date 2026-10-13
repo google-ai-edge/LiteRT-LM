@@ -28,7 +28,6 @@
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
@@ -40,7 +39,6 @@ namespace {
 
 using ::litert::CompiledModel;
 using ::litert::Environment;
-using ::litert::Model;
 using ::litert::Options;
 using ::testing::status::StatusIs;
 
@@ -185,6 +183,18 @@ TEST_F(LoraManagerTest, LoadMultipleLoRAsSuccess) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets_twos,
                        ModelAssets::Create(GetLoraTwosFilePath()));
   ASSERT_OK(lora_manager_->LoadLoRA(1, model_assets_twos));
+}
+
+TEST_F(LoraManagerTest, LoadDuplicateLoRAIdFailsBeforeAndAfterUse) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets_ones,
+                       ModelAssets::Create(GetLoraOnesFilePath()));
+  ASSERT_OK(lora_manager_->LoadLoRA(0, model_assets_ones));
+  EXPECT_THAT(lora_manager_->LoadLoRA(0, model_assets_ones),
+              StatusIs(absl::StatusCode::kAlreadyExists));
+
+  ASSERT_OK(lora_manager_->UseLoRA(0));
+  EXPECT_THAT(lora_manager_->LoadLoRA(0, model_assets_ones),
+              StatusIs(absl::StatusCode::kAlreadyExists));
 }
 
 TEST_F(LoraManagerTest, SwitchBetweenLoRAs) {
