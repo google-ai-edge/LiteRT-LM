@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LOG_MEL_SPECTROGRAM_PROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LOG_MEL_SPECTROGRAM_PROCESSOR_H_
 
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -83,6 +84,7 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
 
   const int sample_rate_hz_;
   const LogMelSpectrogramConfig config_;
+  const size_t window_samples_;
   std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
       preprocessor_;
 };

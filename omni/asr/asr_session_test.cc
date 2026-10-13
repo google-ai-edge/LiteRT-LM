@@ -180,7 +180,7 @@ TEST_F(AsrSessionTest, AudioInputSourceValidatesMetadataAndInputTypes) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(AsrSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
+TEST_F(AsrSessionTest, OverlapAndUnpaddedRemainderOnFlushAndReset) {
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input = input_source.get();
   // Interval = 3 samples, overlap = 1 sample (step = 2 samples).
@@ -198,12 +198,12 @@ TEST_F(AsrSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
   ASSERT_TRUE(std::holds_alternative<TextOutput>(out1));
   EXPECT_EQ(std::get<TextOutput>(out1).unconfirmed_text, "w_1 w_2 w_3");
 
-  // Flush() zero-pads the remaining [3, 4] to [3, 4, 0] and flushes the merger,
+  // Flush() emits the remaining [3, 4] unpadded (the preprocessor is
+  // responsible for padding to the model window) and flushes the merger,
   // without marking the stream finished if EndOfInput was not sent.
   ASSERT_OK_AND_ASSIGN(OmniSession::Output flushed, session->Flush());
   ASSERT_TRUE(std::holds_alternative<TextOutput>(flushed));
-  EXPECT_EQ(std::get<TextOutput>(flushed).confirmed_text,
-            "w_1 w_2 w_3 w_4 w_0");
+  EXPECT_EQ(std::get<TextOutput>(flushed).confirmed_text, "w_1 w_2 w_3 w_4");
 
   // Pushing more audio after Flush() continues to work without Reset().
   ASSERT_OK(raw_input->PushInput(
@@ -222,8 +222,7 @@ TEST_F(AsrSessionTest, OverlapAndZeroPadRemainderOnFlushAndReset) {
       OmniSession::AudioInput{.pcm_samples = {7.0f, 8.0f, 9.0f}}));
   ASSERT_OK_AND_ASSIGN(OmniSession::Output flushed2, session->Flush());
   ASSERT_TRUE(std::holds_alternative<TextOutput>(flushed2));
-  EXPECT_EQ(std::get<TextOutput>(flushed2).confirmed_text,
-            "w_7 w_8 w_9 w_0 w_0");
+  EXPECT_EQ(std::get<TextOutput>(flushed2).confirmed_text, "w_7 w_8 w_9");
 }
 
 TEST_F(AsrSessionTest,
@@ -263,7 +262,7 @@ TEST_F(AsrSessionTest,
   raw_input->Finish();
   ASSERT_OK_AND_ASSIGN(OmniSession::Output out2, session->ProcessNext());
   ASSERT_TRUE(std::holds_alternative<TextOutput>(out2));
-  EXPECT_EQ(std::get<TextOutput>(out2).unconfirmed_text, "w_4 w_5 w_0");
+  EXPECT_EQ(std::get<TextOutput>(out2).unconfirmed_text, "w_4 w_5");
 
   EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kOutOfRange));
 }
@@ -280,7 +279,7 @@ TEST_F(AsrSessionTest, ProcessAsyncWithEndOfInputAndRemainderPadding) {
                        BuildFakeAsrSession(std::move(audio_source), &pool));
 
   // Push 2 samples (< interval=3) followed by EndOfInput. ScheduleInternal()
-  // pads the remainder to [5, 6, 0], and EOS flushes the text merger.
+  // emits the unpadded remainder [5, 6], and EOS flushes the text merger.
   ASSERT_OK(raw_input->PushInput(
       OmniSession::AudioInput{.pcm_samples = {5.0f, 6.0f}}));
   raw_input->Finish();
@@ -305,7 +304,35 @@ TEST_F(AsrSessionTest, ProcessAsyncWithEndOfInputAndRemainderPadding) {
   done.WaitForNotification();
   EXPECT_THAT(terminal_status, StatusIs(absl::StatusCode::kOutOfRange));
   ASSERT_FALSE(outputs.empty());
-  EXPECT_EQ(outputs.back().confirmed_text, "w_5 w_6 w_0");
+  EXPECT_EQ(outputs.back().confirmed_text, "w_5 w_6");
+}
+
+TEST_F(AsrSessionTest,
+       FinishWithoutNewSamplesAfterFullIntervalDoesNotEmitOverlapRemainder) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input = input_source.get();
+  // Interval = 3 samples, overlap = 1 sample.
+  auto audio_source = CreateAudioInputSource(
+      std::move(input_source), /*sample_rate_hz=*/16000, /*num_channels=*/1,
+      /*samples_per_interval=*/3, /*overlap_samples=*/1);
+  ASSERT_OK_AND_ASSIGN(auto session,
+                       BuildFakeAsrSession(std::move(audio_source)));
+
+  // Push exactly one full interval (3 samples), then Finish() with no new
+  // samples. The retained overlap sample [3] must not be emitted as a phantom
+  // remainder chunk at EOS.
+  ASSERT_OK(raw_input->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f, 3.0f}}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out1, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(out1));
+  EXPECT_EQ(std::get<TextOutput>(out1).unconfirmed_text, "w_1 w_2 w_3");
+
+  raw_input->Finish();
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kOutOfRange));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output eos_flush, session->Flush());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(eos_flush));
+  EXPECT_EQ(std::get<TextOutput>(eos_flush).confirmed_text, "w_1 w_2 w_3");
+  EXPECT_EQ(std::get<TextOutput>(eos_flush).unconfirmed_text, "");
 }
 
 }  // namespace

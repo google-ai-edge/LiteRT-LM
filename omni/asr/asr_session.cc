@@ -156,6 +156,7 @@ class AudioInputSource : public AudioSource {
   void ResetInternal() override {
     input_source_->Reset();
     buffer_.clear();
+    has_unpushed_samples_ = false;
     is_finished_ = false;
   }
 
@@ -163,7 +164,7 @@ class AudioInputSource : public AudioSource {
     return (!is_finished_ &&
             (input_source_->NeedSchedule() || input_source_->HasOutput())) ||
            buffer_.size() >= samples_per_interval_ ||
-           (is_finished_ && !buffer_.empty());
+           (is_finished_ && has_unpushed_samples_);
   }
 
   absl::Status ScheduleInternal() override {
@@ -176,10 +177,11 @@ class AudioInputSource : public AudioSource {
       return absl::OkStatus();
     }
     if (is_finished_) {
-      if (buffer_.empty()) {
+      if (!has_unpushed_samples_) {
+        buffer_.clear();
         return absl::OutOfRangeError("End of audio stream reached.");
       }
-      PushPaddedRemainder();
+      PushRemainder();
       return absl::OkStatus();
     }
     return absl::NotFoundError("Not enough audio samples for an interval.");
@@ -194,8 +196,10 @@ class AudioInputSource : public AudioSource {
       ABSL_RETURN_IF_ERROR(DrainAvailableInputs());
     }
 
-    if (!buffer_.empty()) {
-      PushPaddedRemainder();
+    if (has_unpushed_samples_) {
+      PushRemainder();
+    } else if (is_finished_) {
+      buffer_.clear();
     }
     return absl::OkStatus();
   }
@@ -253,6 +257,15 @@ class AudioInputSource : public AudioSource {
       if (audio_input == nullptr) {
         return absl::InvalidArgumentError("ASR Session requires AudioInput.");
       }
+      if (!audio_input->pcm_samples.empty()) {
+        // Newly arrived PCM samples in `buffer_` have not been emitted in any
+        // interval yet. Tracking this explicitly is needed because when
+        // `buffer_.size() <= overlap_samples_`, `buffer_.size()` alone cannot
+        // distinguish unpushed samples of a short stream from the
+        // already-pushed `overlap_samples_` tail retained by
+        // `PushNextInterval()`.
+        has_unpushed_samples_ = true;
+      }
       if (buffer_.empty()) {
         std::swap(buffer_, audio_input->pcm_samples);
       } else {
@@ -269,17 +282,17 @@ class AudioInputSource : public AudioSource {
     std::vector<float> output(buffer_.begin() + step, buffer_.end());
     std::swap(output, buffer_);
     output.resize(samples_per_interval_);
+    has_unpushed_samples_ = buffer_.size() > overlap_samples_;
     PushOutput(std::move(output));
   }
 
-  void PushPaddedRemainder() {
-    // Zero-pad any remaining samples in `buffer_` (including retained
-    // overlap samples from the previous chunk) to `samples_per_interval_`
-    // and emit a final chunk so the recognizer can process the tail with
-    // trailing silence context.
-    buffer_.resize(samples_per_interval_, 0.0f);
+  void PushRemainder() {
+    // Emit remaining samples unpadded; the downstream AudioPreprocessor pads to
+    // the model window after computing normalization statistics over real
+    // audio.
     std::vector<float> output;
     std::swap(output, buffer_);
+    has_unpushed_samples_ = false;
     PushOutput(std::move(output));
   }
 
@@ -289,6 +302,10 @@ class AudioInputSource : public AudioSource {
   const size_t samples_per_interval_;
   const size_t overlap_samples_;
   std::vector<float> buffer_;
+  // True when `buffer_` contains samples that have not yet been emitted by
+  // `PushNextInterval()` or `PushRemainder()` (as opposed to only the retained
+  // `overlap_samples_` tail from the previous full interval).
+  bool has_unpushed_samples_ = false;
   bool is_finished_ = false;
 };
 
@@ -349,7 +366,12 @@ AsrSessionFactory::CreateMultiStagedSession(
             ToLogMelConfig(metadata_.log_mel_spectrogram_config()),
             raw_audio_source));
   } else {
-    preprocessor = std::make_unique<DummyPreprocessor>(raw_audio_source);
+    // Raw-PCM models take a fixed `input_milliseconds` window; the audio source
+    // leaves the final chunk of a stream unpadded, so pad it here.
+    const int samples_per_interval = static_cast<int>(
+        metadata_.sample_rate_hz() * (metadata_.input_milliseconds() / 1000.0));
+    preprocessor = std::make_unique<DummyPreprocessor>(raw_audio_source,
+                                                       samples_per_interval);
   }
 
   AudioPreprocessor* raw_preprocessor = preprocessor.get();

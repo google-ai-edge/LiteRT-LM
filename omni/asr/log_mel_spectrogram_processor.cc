@@ -90,6 +90,105 @@ std::vector<float> ComputeStd(const std::vector<std::vector<float>>& mel_spec,
   return result;
 }
 
+// Trims >= 2 s (20 x 100 ms blocks) of trailing room noise (< 6e-3 RMS and
+// < 5% of peak block RMS) so normalizing a short utterance in a 5 s window
+// does not include seconds of background silence.
+int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
+                          int hop_length) {
+  constexpr int kBlockFrames = 10;
+  constexpr int kMinSilentBlocks = 20;
+  if (valid_frames < (kMinSilentBlocks + 1) * kBlockFrames) {
+    return valid_frames;
+  }
+  const int num_blocks = valid_frames / kBlockFrames;
+  const size_t block_samples = static_cast<size_t>(kBlockFrames) * hop_length;
+  std::vector<float> block_rms(num_blocks, 0.0f);
+  for (int b = 0; b < num_blocks; ++b) {
+    double sum_sq = 0.0;
+    for (size_t i = 0; i < block_samples; ++i) {
+      const float s = raw_speech[b * block_samples + i];
+      sum_sq += static_cast<double>(s) * s;
+    }
+    block_rms[b] = static_cast<float>(std::sqrt(sum_sq / block_samples));
+  }
+  const float limit = std::min(
+      6e-3f, 0.05f * *std::max_element(block_rms.begin(), block_rms.end()));
+  int last_active = 0;
+  for (int b = 0; b < num_blocks; ++b) {
+    if (block_rms[b] > limit) last_active = b + 1;
+  }
+  if (last_active > 0 && num_blocks - last_active >= kMinSilentBlocks) {
+    valid_frames =
+        std::min(valid_frames, std::max(7, last_active + 1) * kBlockFrames);
+    raw_speech.resize(static_cast<size_t>(valid_frames) * hop_length);
+  }
+  return valid_frames;
+}
+
+void NormalizeWhisperMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
+                                    int stat_frames, int num_frames) {
+  float max_val = -std::numeric_limits<float>::infinity();
+  for (size_t m = 0; m < mel_spec.size(); ++m) {
+    for (int f = 0; f < num_frames; ++f) {
+      mel_spec[m][f] = mel_spec[m][f] / kLn10;
+      if (f < stat_frames && mel_spec[m][f] > max_val) {
+        max_val = mel_spec[m][f];
+      }
+    }
+  }
+  float clip_val = max_val - 8.0f;
+  for (size_t m = 0; m < mel_spec.size(); ++m) {
+    for (int f = 0; f < num_frames; ++f) {
+      mel_spec[m][f] = (std::max(mel_spec[m][f], clip_val) + 4.0f) / 4.0f;
+    }
+  }
+}
+
+void ZeroPadNormalizedMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
+                                     int stat_frames, int num_frames) {
+  // AudioPreprocessorMiniAudio applies fixed kUsmMelMean and kUsmMelStdDev
+  // normalization across all frames, turning zero-padded audio in
+  // [stat_frames, num_frames) into non-zero negative values
+  // ((log(mel_floor) - mean) / std). Overwrite the padded tail with 0.0f so it
+  // represents the normalized mean and does not distort encoders without a
+  // length mask.
+  for (size_t m = 0; m < mel_spec.size(); ++m) {
+    for (int f = stat_frames; f < num_frames; ++f) {
+      mel_spec[m][f] = 0.0f;
+    }
+  }
+}
+
+void NormalizeStandardMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
+                                     int stat_frames, int num_frames) {
+  auto means = ComputeMean(mel_spec, stat_frames);
+  auto stds = ComputeStd(mel_spec, means, stat_frames);
+  for (size_t m = 0; m < mel_spec.size(); ++m) {
+    float mean = means[m];
+    float std = stds[m] + kEpsilon;
+    for (int f = 0; f < num_frames; ++f) {
+      mel_spec[m][f] = (f < stat_frames) ? (mel_spec[m][f] - mean) / std : 0.0f;
+    }
+  }
+}
+
+std::vector<float> FlattenMelSpectrogram(
+    const std::vector<std::vector<float>>& mel_spec, int n_frames, int n_mels,
+    bool transpose) {
+  std::vector<float> result(n_frames * n_mels, 0.0f);
+  for (size_t m = 0; m < mel_spec.size(); ++m) {
+    for (size_t f = 0;
+         f < mel_spec[m].size() && f < static_cast<size_t>(n_frames); ++f) {
+      if (transpose) {
+        result[f * n_mels + m] = mel_spec[m][f];
+      } else {
+        result[m * n_frames + f] = mel_spec[m][f];
+      }
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<LogMelSpectrogramProcessor>>
@@ -144,10 +243,14 @@ LogMelSpectrogramProcessor::LogMelSpectrogramProcessor(
     int sample_rate_hz, const LogMelSpectrogramConfig& config,
     Stage<std::vector<float>>* absl_nonnull audio_source,
     std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
-        preprocessor)
+    preprocessor)
     : AudioPreprocessor(audio_source),
       sample_rate_hz_(sample_rate_hz),
       config_(config),
+      window_samples_(config_.n_frames > 0
+                          ? static_cast<size_t>(config_.n_frames) *
+                                config_.hop_length
+                          : 0),
       preprocessor_(std::move(preprocessor)) {}
 
 void LogMelSpectrogramProcessor::ResetInternal() {
@@ -183,6 +286,22 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
         "AudioPreprocessorMiniAudio is not initialized.");
   }
 
+  // Only trim trailing room noise for kStandard and normalize_mel, where
+  // per-utterance statistics are computed over [0, stat_frames) and frames
+  // >= stat_frames are zeroed out for encoders without a length mask. Whisper
+  // (kWhisper) normalizes by the global peak and is trained on 30 s windows
+  // where padded silence is clipped to (max_val - 4.0) / 4.0 rather than 0.0.
+  if (config_.n_frames > 0 &&
+      (config_.norm_type == NormType::kStandard || config_.normalize_mel)) {
+    valid_frames =
+        TrimTrailingRoomNoise(raw_speech, valid_frames, config_.hop_length);
+  }
+
+  if (window_samples_ > 0 && raw_speech.size() < window_samples_) {
+    raw_speech.resize(window_samples_, 0.0f);
+  }
+
+  preprocessor_->Reset();
   litert::support::InputAudio input_audio(std::move(raw_speech));
   ABSL_ASSIGN_OR_RETURN(auto processed_audio,
                         preprocessor_->Preprocess(input_audio));
@@ -195,6 +314,7 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
                              ->Read<float>(absl::MakeSpan(log_mel_flat)));
 
   int num_frames = log_mel_flat.size() / config_.n_mels;
+  const int stat_frames = std::min(valid_frames, num_frames);
   std::vector<std::vector<float>> mel_spec(config_.n_mels,
                                            std::vector<float>(num_frames));
   for (int f = 0; f < num_frames; ++f) {
@@ -204,53 +324,18 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
   }
 
   if (config_.norm_type == NormType::kWhisper) {
-    float max_val = -std::numeric_limits<float>::infinity();
-    for (size_t m = 0; m < mel_spec.size(); ++m) {
-      for (int f = 0; f < valid_frames && f < mel_spec[m].size(); ++f) {
-        mel_spec[m][f] = mel_spec[m][f] / kLn10;
-        if (mel_spec[m][f] > max_val) {
-          max_val = mel_spec[m][f];
-        }
-      }
-    }
-
-    float clip_val = max_val - 8.0f;
-    for (size_t m = 0; m < mel_spec.size(); ++m) {
-      for (int f = 0; f < valid_frames && f < mel_spec[m].size(); ++f) {
-        mel_spec[m][f] = (std::max(mel_spec[m][f], clip_val) + 4.0f) / 4.0f;
-      }
-    }
+    NormalizeWhisperMelSpectrogram(mel_spec, stat_frames, num_frames);
   } else if (config_.normalize_mel) {
-    // AudioPreprocessorMiniAudio applies kUsmMelMean and kUsmMelStdDev.
+    ZeroPadNormalizedMelSpectrogram(mel_spec, stat_frames, num_frames);
   } else {
-    auto means = ComputeMean(mel_spec, valid_frames);
-    auto stds = ComputeStd(mel_spec, means, valid_frames);
-    for (size_t m = 0; m < mel_spec.size(); ++m) {
-      float mean = means[m];
-      float std = stds[m] + kEpsilon;
-      for (int f = 0; f < valid_frames && f < mel_spec[m].size(); ++f) {
-        mel_spec[m][f] = (mel_spec[m][f] - mean) / std;
-      }
-    }
+    NormalizeStandardMelSpectrogram(mel_spec, stat_frames, num_frames);
   }
 
   int n_frames = (config_.n_frames > 0)
                      ? config_.n_frames
                      : (mel_spec.empty() ? 0 : mel_spec[0].size());
-  std::vector<float> result(n_frames * config_.n_mels, 0.0f);
-  for (size_t m = 0; m < mel_spec.size(); ++m) {
-    for (size_t f = 0; f < mel_spec[m].size(); ++f) {
-      if (f >= n_frames) break;
-      float value = (f < valid_frames) ? mel_spec[m][f] : 0.0f;
-      if (config_.transpose) {
-        result[f * config_.n_mels + m] = value;
-      } else {
-        result[m * n_frames + f] = value;
-      }
-    }
-  }
-
-  return result;
+  return FlattenMelSpectrogram(mel_spec, n_frames, config_.n_mels,
+                               config_.transpose);
 }
 
 }  // namespace litert::omni::asr

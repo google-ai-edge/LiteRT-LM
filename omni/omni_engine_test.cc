@@ -460,15 +460,15 @@ TEST_F(OmniSessionTest, MultiStagedSessionAsrFlushDrainsStages) {
       MultiStagedSession::Create(std::move(stages), raw_output_stage, &pool));
 
   // Push partial audio (2 samples < samples_per_interval=4). `Flush()` causes
-  // `AudioInputSource` to zero-pad and emit the final chunk, then schedules
-  // and flushes all stages until idle.
+  // `AudioInputSource` to emit the final (unpadded) chunk, then schedules and
+  // flushes all stages until idle.
   ASSERT_OK(raw_input_source->PushInput(
       OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
 
   ASSERT_OK_AND_ASSIGN(auto flushed, session->Flush());
   ASSERT_TRUE(std::holds_alternative<OmniSession::TextOutput>(flushed));
   EXPECT_EQ(std::get<OmniSession::TextOutput>(flushed).confirmed_text,
-            "w_1 w_2 w_0 w_0");
+            "w_1 w_2");
   for (const auto& stage : session->stages()) {
     EXPECT_TRUE(stage->IsIdle());
     EXPECT_FALSE(stage->NeedSchedule());

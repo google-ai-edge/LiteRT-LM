@@ -15,15 +15,11 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_DUMMY_PREPROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_DUMMY_PREPROCESSOR_H_
 
-#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "omni/asr/audio_preprocessor.h"
-#include "omni/asr/utils.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -34,29 +30,19 @@ namespace litert::omni::asr {
 class DummyPreprocessor : public AudioPreprocessor {
  public:
   explicit DummyPreprocessor(
-      Stage<std::vector<float>>* absl_nonnull audio_source)
-      : AudioPreprocessor(audio_source) {}
+      Stage<std::vector<float>>* absl_nonnull audio_source,
+      int pad_to_num_samples = 0);
 
   ~DummyPreprocessor() override = default;
 
  protected:
-  absl::Status ScheduleInternal() override {
-    auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
-    ABSL_ASSIGN_OR_RETURN(auto raw_speech, audio_source_.GetOutput());
-    // Models that consume raw PCM waveforms directly (such as moonshine-tiny)
-    // apply internal normalization inside the encoder subgraph. Feeding digital
-    // silence or near-silent background noise causes that internal
-    // normalization to amplify near-zero inputs and make the autoregressive
-    // decoder hallucinate text (e.g. "Thank you."). Emit an empty feature
-    // vector on silent chunks so LiteRtSpeechRecognizer skips encoder/decoder
-    // execution.
-    if (IsSilentAudio(raw_speech)) {
-      PushOutput(std::vector<float>());
-      return absl::OkStatus();
-    }
-    PushOutput(std::move(raw_speech));
-    return absl::OkStatus();
-  }
+  absl::Status ScheduleInternal() override;
+
+ private:
+  // Fixed PCM input window size expected by the model (in samples). Short final
+  // chunks emitted by the audio source are padded up to this length; 0 disables
+  // padding.
+  const int pad_to_num_samples_;
 };
 
 }  // namespace litert::omni::asr

@@ -99,6 +99,7 @@ cc_library(
 
 cc_library(
     name = "dummy_preprocessor",
+    srcs = ["dummy_preprocessor.cc"],
     hdrs = ["dummy_preprocessor.h"],
     deps = [
         ":audio_preprocessor",
@@ -115,6 +116,7 @@ cc_test(
     name = "log_mel_spectrogram_processor_test",
     srcs = ["log_mel_spectrogram_processor_test.cc"],
     deps = [
+        ":dummy_preprocessor",
         ":log_mel_spectrogram_processor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
