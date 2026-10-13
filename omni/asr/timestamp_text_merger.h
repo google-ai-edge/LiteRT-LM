@@ -27,20 +27,32 @@
 
 namespace litert::omni::asr {
 
-// Aligns and merges overlapping word streams from consecutive audio chunks
-// based on word timestamps and windowed Levenshtein distance.
+// Aligns and merges overlapping word streams from consecutive audio chunks.
+//
+// When words carry timestamps (TDT / CTC decoders) the merge is time-based:
+// words of the previous chunk that lie before the current chunk are
+// confirmed; inside the overlap of the two windows the words are aligned by
+// text and time, the previous chunk's words are kept up to a pivot
+// (`pivot_factor` of the overlap, where they still had context on both sides)
+// and the current chunk's words are used after it. Without timestamps a
+// seam-run Levenshtein alignment on word counts is used instead.
 // It works better for live audio streaming than LevenshteinTextMerger.
 class TimestampTextMerger : public TextMerger {
  public:
   explicit TimestampTextMerger(
       Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer,
       float overlap_ratio = 0.5f, int search_window = 4,
-      int max_levenshtein_distance = 3, float pivot_factor = 0.6f);
+      float pivot_factor = 0.6f);
 
   // Returns cached unconfirmed words.
   // It's only used for testing. Not thread-safe.
   absl::Span<const std::string> unconfirmed_words_for_testing() const {
     return prev_words_;
+  }
+  // Returns the absolute start of the next chunk in timestamp units.
+  // It's only used for testing. Not thread-safe.
+  double stream_timestamp_offset_for_testing() const {
+    return stream_timestamp_offset_ms_;
   }
 
  private:
@@ -49,21 +61,36 @@ class TimestampTextMerger : public TextMerger {
   absl::Status ScheduleInternal() override;
 
   absl::Status Execute();
+  // Time-based merge of `curr_words` (absolute `curr_timestamps`, one per
+  // word) into the previous chunk's unconfirmed words; updates `prev_words_`,
+  // `prev_timestamps_` and `last_confirmed_words_`.
+  void MergeByTime(absl::Span<const std::string> curr_words,
+                   absl::Span<const int> curr_timestamps);
+  // Merge by word counts and seam-run alignment, used when timestamps are
+  // unavailable. Re-seeds `prev_timestamps_` when `curr_timestamps` are usable.
+  void MergeByWordCount(absl::Span<const std::string> curr_words,
+                        absl::Span<const int> curr_timestamps);
   void LogAndPushOutput(MergeResult output);
-  void UpdateStreamTimestampOffset(std::optional<int> max_chunk_timestamp_ms,
-                                   absl::Span<const int> curr_timestamps);
+  // Advances the stream offset by the hop of a chunk ending at `chunk_end_ms`
+  // (relative to its start).
+  void UpdateStreamTimestampOffset(int chunk_end_ms);
 
   const float overlap_ratio_;
   const int search_window_;
-  const int max_levenshtein_distance_;
   const float pivot_factor_;
 
   std::vector<std::string> prev_words_;
   std::vector<int> prev_timestamps_;
   std::vector<std::string> last_confirmed_words_;
-  int prev_word_index_of_unconfirmed_ = -1;
-  int prev_word_index_of_pivot_ = -1;
-  int stream_timestamp_offset_ms_ = 0;
+  // Absolute start of the current chunk (sum of the previous chunks' steps).
+  // Kept as a double: the step is `end_of_chunk * (1 - overlap_ratio)`, which
+  // is fractional in encoder frames.
+  double stream_timestamp_offset_ms_ = 0.0;
+  // Absolute end of the previous chunk's window (-1 if unknown).
+  double prev_chunk_end_ms_ = -1.0;
+  // Duration of the most recent non-empty chunk, used to advance
+  // `stream_timestamp_offset_ms_` across silent chunks that carry no sentinel.
+  int last_chunk_end_ms_ = 0;
 };
 
 }  // namespace litert::omni::asr

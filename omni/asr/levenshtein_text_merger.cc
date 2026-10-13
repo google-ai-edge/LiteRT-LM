@@ -28,6 +28,22 @@
 #include "omni/asr/text_merger.h"
 
 namespace litert::omni::asr {
+namespace {
+
+std::vector<std::string> ExtractChunkWords(
+    absl::Span<const Detokenizer::Word> chunk_words) {
+  std::vector<std::string> words;
+  words.reserve(chunk_words.size());
+  for (const auto& word : chunk_words) {
+    if (word.IsEndOfChunk()) {
+      break;
+    }
+    words.push_back(word.text);
+  }
+  return words;
+}
+
+}  // namespace
 
 void LevenshteinTextMerger::ResetInternal() {
   unconfirmed_words_.clear();
@@ -43,15 +59,7 @@ absl::Status LevenshteinTextMerger::ScheduleInternal() {
 absl::Status LevenshteinTextMerger::Execute() {
   ABSL_ASSIGN_OR_RETURN(auto curr_chunk_words, detokenizer_.GetOutput());
 
-  std::vector<std::string> curr_strings;
-  curr_strings.reserve(curr_chunk_words.size());
-  for (const auto& word : curr_chunk_words) {
-    if (word.IsEndOfChunk()) {
-      break;
-    }
-    curr_strings.push_back(word.text);
-  }
-
+  std::vector<std::string> curr_strings = ExtractChunkWords(curr_chunk_words);
   if (curr_strings.empty()) {
     PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
     return absl::OkStatus();
@@ -64,54 +72,12 @@ absl::Status LevenshteinTextMerger::Execute() {
     return absl::OkStatus();
   }
 
-  auto align_codes = AlignTokens(unconfirmed_words_, curr_strings);
-
-  // Find the longest contiguous run of kCorrect matches (preferring later runs
-  // in unconfirmed_words_ on ties) so an isolated stopword match before a
-  // chunk-boundary deletion does not drop words from unconfirmed_words_.
-  size_t best_run_len = 0;
-  size_t first_matching_hyp_idx = curr_strings.size();
-  size_t first_matching_ref_idx = unconfirmed_words_.size();
-
-  size_t cur_run_len = 0;
-  size_t cur_run_ref_idx = 0;
-  size_t cur_run_hyp_idx = 0;
-
-  size_t ref_idx = 0;
-  size_t hyp_idx = 0;
-  for (const auto& code : align_codes) {
-    if (code == AlignCode::kCorrect) {
-      if (cur_run_len == 0) {
-        cur_run_ref_idx = ref_idx;
-        cur_run_hyp_idx = hyp_idx;
-      }
-      ++cur_run_len;
-      if (cur_run_len > best_run_len ||
-          (cur_run_len == best_run_len && cur_run_len >= 2)) {
-        best_run_len = cur_run_len;
-        first_matching_ref_idx = cur_run_ref_idx;
-        first_matching_hyp_idx = cur_run_hyp_idx;
-      }
-    } else {
-      cur_run_len = 0;
-    }
-    if (code == AlignCode::kDeletion || code == AlignCode::kSubstitution ||
-        code == AlignCode::kCorrect) {
-      ref_idx++;
-    }
-    if (code == AlignCode::kInsertion || code == AlignCode::kSubstitution ||
-        code == AlignCode::kCorrect) {
-      hyp_idx++;
-    }
-  }
-
-  // Ignore a single 1-word match if it is not near the chunk boundary.
-  if (best_run_len == 1 &&
-      (first_matching_ref_idx + 2 < unconfirmed_words_.size() ||
-       first_matching_hyp_idx > 1)) {
-    first_matching_ref_idx = unconfirmed_words_.size();
-    first_matching_hyp_idx = curr_strings.size();
-  }
+  const std::vector<WordIndexPair> best_run = FindBestSeamMatchRun(
+      unconfirmed_words_, 0, curr_strings, curr_strings.size());
+  const size_t first_matching_ref_idx =
+      best_run.empty() ? unconfirmed_words_.size() : best_run.front().first;
+  const size_t first_matching_hyp_idx =
+      best_run.empty() ? curr_strings.size() : best_run.front().second;
 
   std::vector<std::string> confirmed;
   confirmed.reserve(first_matching_ref_idx);

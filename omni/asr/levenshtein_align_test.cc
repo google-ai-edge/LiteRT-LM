@@ -24,6 +24,8 @@ namespace litert::omni::asr {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::Pair;
 
 TEST(LevenshteinAlignTest, EmptyInputs) {
   std::vector<std::string> ref = {};
@@ -65,6 +67,11 @@ TEST(LevenshteinAlignTest, Canonicalize) {
 }
 
 TEST(LevenshteinAlignTest, CloseEnoughTest) {
+  EXPECT_TRUE(CloseEnoughCanonical("cat", "cat"));
+  EXPECT_FALSE(CloseEnoughCanonical("cat", "car"));
+  EXPECT_TRUE(CloseEnoughCanonical("hello", "hella"));
+  EXPECT_FALSE(CloseEnoughCanonical("hello", "heyyy"));
+
   EXPECT_TRUE(CloseEnoughStr("cat", "cat"));
   EXPECT_FALSE(CloseEnoughStr(
       "cat", "car"));  // min_len <= 3 requiring exact prefix match
@@ -85,6 +92,49 @@ TEST(LevenshteinAlignTest, DedupWordsTest) {
   std::vector<std::string> prev = {"the", "stale", "smell", "of"};
   std::vector<std::string> curr = {"smell", "of", "old", "beer"};
   EXPECT_THAT(DedupWords(prev, curr), ElementsAre("old", "beer"));
+}
+
+TEST(LevenshteinAlignTest, FindBestSeamMatchRunPrefersLongestContiguousRun) {
+  std::vector<std::string> prev = {"read", "the",   "book", "on",
+                                   "the",  "table", "today"};
+  std::vector<std::string> curr = {"the", "the", "table", "today", "please"};
+  EXPECT_THAT(FindBestSeamMatchRun(prev, 0, curr, curr.size()),
+              ElementsAre(Pair(4, 1), Pair(5, 2), Pair(6, 3)));
+}
+
+TEST(LevenshteinAlignTest, FindBestSeamMatchRunFallsBackToDirectBoundaryScan) {
+  // Global edit distance pairs scattered single matches across substitutions,
+  // while the boundary has a 2-word contiguous run ("right now").
+  std::vector<std::string> prev = {"a", "x1", "b",     "x2",
+                                   "c", "x3", "right", "now"};
+  std::vector<std::string> curr = {"right", "now", "a", "y1",
+                                   "b",     "y2",  "c", "y3"};
+  EXPECT_THAT(FindBestSeamMatchRun(prev, 0, curr, curr.size()),
+              ElementsAre(Pair(6, 0), Pair(7, 1)));
+}
+
+TEST(LevenshteinAlignTest, FindBestSeamMatchRunFindsGappedPairWithContentWord) {
+  // "didn't" vs "did not" splits the boundary overlap into two aligned matches
+  // ("really" and "understand") separated by a small gap.
+  std::vector<std::string> prev = {"we", "really", "didn't", "understand"};
+  std::vector<std::string> curr = {"really", "did", "not", "understand", "it"};
+  EXPECT_THAT(FindBestSeamMatchRun(prev, 0, curr, curr.size()),
+              ElementsAre(Pair(1, 0), Pair(3, 3)));
+}
+
+TEST(LevenshteinAlignTest, FindBestSeamMatchRunValidatesSingleWordMatches) {
+  // A single-word match right at the end of `prev` and start of `curr` is kept.
+  std::vector<std::string> prev = {"alpha", "bravo", "charlie"};
+  std::vector<std::string> curr = {"charlie", "delta", "echo"};
+  EXPECT_THAT(FindBestSeamMatchRun(prev, 0, curr, curr.size()),
+              ElementsAre(Pair(2, 0)));
+
+  // An interior single-word stopword match is rejected.
+  std::vector<std::string> prev_interior = {"alpha", "the", "bravo", "charlie"};
+  std::vector<std::string> curr_interior = {"delta", "echo", "the", "foxtrot"};
+  EXPECT_THAT(FindBestSeamMatchRun(prev_interior, 0, curr_interior,
+                                   curr_interior.size()),
+              IsEmpty());
 }
 
 }  // namespace

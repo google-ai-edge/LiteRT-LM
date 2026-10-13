@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
@@ -27,7 +28,7 @@
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
-#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK, ASSERT_OK_AND_ASSIGN
 
 namespace litert::omni::asr {
 namespace {
@@ -244,21 +245,190 @@ TEST(TimestampTextMergerTest, SilencePausePreventsMisalignment) {
   auto res1 = GetMergeResult(merger);
   ASSERT_OK(res1);
 
-  // Chunk 2 starts after long silence (first word at 4500ms)
+  // Chunk 2 starts after long silence (first word at 4500ms). Its window
+  // starts at 2500 ms, after both words of chunk 1, which are therefore final.
   word_stage.PushWordsWithEndOfChunkTimestamp(
       {{"hello", 4500}, {"again", 4800}},
       /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
   auto res2 = GetMergeResult(merger);
   ASSERT_OK(res2);
-  EXPECT_EQ(res2->confirmed_text, "");
-  EXPECT_EQ(res2->unconfirmed_text, "hello world hello again");
+  EXPECT_EQ(res2->confirmed_text, "hello world");
+  EXPECT_EQ(res2->unconfirmed_text, "hello again");
 
   ASSERT_OK(merger.Flush());
   auto res_flush = GetMergeResult(merger);
   ASSERT_OK(res_flush);
-  EXPECT_EQ(res_flush->confirmed_text, "hello world hello again");
+  EXPECT_EQ(res_flush->confirmed_text, "hello again");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
+}
+
+TEST(TimestampTextMergerTest, KeepsPreviousWordsMissingFromCurrentChunkStart) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"stale", 1000},
+                                               {"smell", 2000},
+                                               {"of", 2500},
+                                               {"old", 3200},
+                                               {"beer", 3600},
+                                               {"lingers", 4000},
+                                               {"it", 4400},
+                                               {"takes", 4800}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (from 3000 ms) did not recognize "old beer" at its start.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"lingers", 1000}, {"it", 1400}, {"takes", 1800}, {"heat", 2200}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the stale smell of");
+  EXPECT_EQ(res2->unconfirmed_text, "old beer lingers it takes heat");
+}
+
+TEST(TimestampTextMergerTest, KeepsPreviousTailWhereCurrentChunkHasGap) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"stale", 1000},
+                                               {"smell", 2000},
+                                               {"of", 2500},
+                                               {"old", 3200},
+                                               {"beer", 3600},
+                                               {"lingers", 4000},
+                                               {"it", 4100},
+                                               {"takes", 4500},
+                                               {"heat", 4700}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (from 3000 ms) heard nothing between "it" and "to": the previous
+  // chunk's "takes heat" is kept and the new word "to" is added.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"old", 200},
+                                               {"beer", 600},
+                                               {"lingers", 1000},
+                                               {"it", 1100},
+                                               {"to", 2600}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the stale smell of");
+  EXPECT_EQ(res2->unconfirmed_text, "old beer lingers it takes heat to");
+}
+
+TEST(TimestampTextMergerTest, CurrentChunkWinsAfterPivotWhereItHeardWords) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // "ta kes" at the end of chunk 1 was heard as two words.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"stale", 1000},
+                                               {"smell", 2000},
+                                               {"of", 2500},
+                                               {"old", 3200},
+                                               {"beer", 3600},
+                                               {"lingers", 4000},
+                                               {"it", 4300},
+                                               {"ta", 4600},
+                                               {"kes", 4800}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"old", 200},
+                                               {"beer", 600},
+                                               {"lingers", 1000},
+                                               {"it", 1300},
+                                               {"takes", 1700},
+                                               {"heat", 2200}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the stale smell of");
+  EXPECT_EQ(res2->unconfirmed_text, "old beer lingers it takes heat");
+}
+
+TEST(TimestampTextMergerTest, ChunkAfterEmptyWindowConfirmsPreviousWords) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"hello", 500}, {"world", 1000}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000 ms) is silent.
+  word_stage.PushWordsWithEndOfChunkTimestamp({}, /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "");
+  EXPECT_EQ(res2->unconfirmed_text, "hello world");
+
+  // Chunk 3 (6000-11000 ms) does not overlap the window of "hello world".
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"new", 500}, {"words", 900}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res3 = GetMergeResult(merger);
+  ASSERT_OK(res3);
+  EXPECT_EQ(res3->confirmed_text, "hello world");
+  EXPECT_EQ(res3->unconfirmed_text, "new words");
+}
+
+TEST(TimestampTextMergerTest, PartialWordAtWindowStartIsDropped) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"quick", 1000},
+                                               {"brown", 1500},
+                                               {"fox", 2000},
+                                               {"jumps", 2900},
+                                               {"over", 3400},
+                                               {"the", 3800},
+                                               {"lazy", 4200},
+                                               {"dog", 4600}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 starts at 3000 ms, in the middle of "jumps", and decodes its tail.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"umps", 0},
+                                               {"over", 400},
+                                               {"the", 800},
+                                               {"lazy", 1200},
+                                               {"dog", 1600},
+                                               {"and", 2200},
+                                               {"runs", 2600}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the quick brown fox jumps");
+  EXPECT_EQ(res2->unconfirmed_text, "over the lazy dog and runs");
+}
+
+TEST(TimestampTextMergerTest, StreamOffsetKeepsFractionalStep) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Encoder-frame timestamps: 63 frames per chunk, step 37.8 frames.
+  for (int i = 0; i < 5; ++i) {
+    word_stage.PushWordsWithEndOfChunkTimestamp({{"word", 10}},
+                                                /*end_ts_ms=*/63);
+    ASSERT_OK(merger.Schedule());
+    ASSERT_OK(GetMergeResult(merger));
+  }
+  EXPECT_NEAR(merger.stream_timestamp_offset_for_testing(), 5 * 37.8, 0.01);
 }
 
 TEST(TimestampTextMergerTest, RepeatedWordsHandlingWithTimestamps) {
@@ -322,6 +492,205 @@ TEST(TimestampTextMergerTest, SequentialMergeFlowWithoutTimestamps) {
   ASSERT_OK(res2);
   EXPECT_EQ(res2->confirmed_text, "hello world");
   EXPECT_EQ(res2->unconfirmed_text, "this is a test");
+}
+
+TEST(TimestampTextMergerTest,
+     ShortWordBetweenMatchedWordsBeforePivotIsPreserved) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  // Chunk 1 (frames 0..63): missed short word "I" between "were." (42) and
+  // "know" (47). Both 42 and 47 are within tol.substitution (4.725 frames) of
+  // frame 44, but > 1.0 frame away.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"as", 35}, {"it", 38}, {"were.", 42}, {"know", 47}, {"most", 52}},
+      /*end_ts_ms=*/63);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (step=31.5 -> chunk_start_ms=32): decodes "were." (10 -> 42),
+  // "I" (12 -> 44), "know" (15 -> 47), "most" (20 -> 52), "of" (24 -> 56).
+  // Because "were." and "know" in prev are matched, they do not suppress "I"
+  // (at 44 < pivot) via covered_by_prev.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"as", 3},
+                                               {"it", 6},
+                                               {"were.", 10},
+                                               {"I", 12},
+                                               {"know", 15},
+                                               {"most", 20},
+                                               {"of", 24}},
+                                              /*end_ts_ms=*/63);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  ASSERT_OK(merger.Flush());
+  ASSERT_OK_AND_ASSIGN(auto flushed, GetMergeResult(merger));
+  EXPECT_EQ(flushed.confirmed_text, "as it were. I know most of");
+}
+
+TEST(TimestampTextMergerTest,
+     MergedTimestampsRemainSortedWhenShiftedCurrentOnlyWordPrecedesPair) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000).
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"stale", 1000},
+                                               {"smell", 2000},
+                                               {"alpha", 3200},
+                                               {"beta", 3600},
+                                               {"gamma", 3800},
+                                               {"delta", 4400},
+                                               {"eps", 4800}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000) emits every shared word 300 ms later than chunk 1
+  // (shift = +300) and hears an extra word "new" between "beta" and "gamma".
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"alpha", 500},
+                                               {"beta", 900},
+                                               {"new", 950},
+                                               {"gamma", 1100},
+                                               {"delta", 1700},
+                                               {"eps", 2100},
+                                               {"zeta", 2500},
+                                               {"eta", 3300},
+                                               {"theta", 3700}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the stale smell");
+  EXPECT_EQ(res2->unconfirmed_text,
+            "alpha beta new gamma delta eps zeta eta theta");
+
+  // Chunk 3 (6000-11000) hears "eta" but misses "theta" (gap) and adds
+  // "kappa". With the time-based merge preserved, "theta" (6700 < pivot 7200)
+  // is kept.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"eta", 300}, {"kappa", 3500}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res3 = GetMergeResult(merger);
+  ASSERT_OK(res3);
+  EXPECT_EQ(res3->confirmed_text, "alpha beta new gamma delta eps zeta");
+  EXPECT_EQ(res3->unconfirmed_text, "eta theta kappa");
+}
+
+TEST(TimestampTextMergerTest, SilentChunkWithoutSentinelAdvancesStreamOffset) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000).
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"stale", 1000},
+                                               {"smell", 2000},
+                                               {"of", 2900},
+                                               {"lingers", 4000},
+                                               {"it", 4400},
+                                               {"takes", 4800}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+  EXPECT_NEAR(merger.stream_timestamp_offset_for_testing(), 3000, 0.01);
+
+  // Chunk 2 (3000-8000) is silent: no words, no end-of-chunk sentinel.
+  word_stage.PushWords({});
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+  EXPECT_NEAR(merger.stream_timestamp_offset_for_testing(), 6000, 0.01);
+
+  // Chunk 3 (6000-11000): "the end" right after the silence.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 200}, {"end", 600}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res3 = GetMergeResult(merger);
+  ASSERT_OK(res3);
+  EXPECT_EQ(res3->confirmed_text, "the stale smell of lingers it takes");
+  EXPECT_EQ(res3->unconfirmed_text, "the end");
+}
+
+TEST(TimestampTextMergerTest,
+     NewWordAtWindowStartNotDroppedAfterFullySpokenPreviousWord) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000) heard "fox" at 2900 ms, missed "over" at 3000 ms, and
+  // heard "the lazy dog" at 3800..4600 ms.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"quick", 1000},
+                                               {"brown", 1500},
+                                               {"fox", 2900},
+                                               {"the", 3800},
+                                               {"lazy", 4200},
+                                               {"dog", 4600}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000) hears "over" at 0 ms (3000 ms absolute), which is not
+  // a partial suffix of "fox" and should be preserved.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"over", 0}, {"the", 800}, {"lazy", 1200}, {"dog", 1600}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the quick brown fox");
+  EXPECT_EQ(res2->unconfirmed_text, "over the lazy dog");
+}
+
+TEST(TimestampTextMergerTest, MissedWordAfterMatchedInWindowWordIsKept) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000) heard "the" at 3000 but missed "big" at 3250.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"see", 500}, {"the", 3000}, {"lazy", 3800}, {"dog", 4200}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000) hears "the big lazy dog runs".
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"the", 0}, {"big", 250}, {"lazy", 800}, {"dog", 1200}, {"runs", 2000}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "see");
+  EXPECT_EQ(res2->unconfirmed_text, "the big lazy dog runs");
+}
+
+TEST(TimestampTextMergerTest, WordCountPrevTailBranchReseedsTimestamps) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 without timestamps.
+  word_stage.PushWords({"a", "b", "c", "d", "e", "f", "g", "h"});
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (0-5000) with timestamps: only "e f g" (fewer words after the
+  // pivot than the previous tail) -> MergeByWordCount, prev-tail branch.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"e", 100}, {"f", 3500}, {"g", 4000}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 3 (3000-8000) with timestamps overlapping chunk 2's window: hears
+  // "f" at 500 (3500 absolute) and "i" at 2500 (5500 absolute), missing "g"
+  // and "h" (both synthesized at 4000 < pivot 4200). Because chunk 2 re-seeded
+  // prev_timestamps_, chunk 3 uses MergeByTime and preserves "g h" before the
+  // pivot.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"f", 500}, {"i", 2500}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res3 = GetMergeResult(merger);
+  ASSERT_OK(res3);
+  EXPECT_EQ(res3->confirmed_text, "e");
+  EXPECT_EQ(res3->unconfirmed_text, "f g h i");
 }
 
 }  // namespace

@@ -17,14 +17,20 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/absl_vlog_is_on.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -37,128 +43,349 @@
 namespace litert::omni::asr {
 namespace {
 
-std::vector<int> MergeTimestamps(absl::Span<const int> prev_timestamps,
-                                 absl::Span<const int> curr_timestamps,
-                                 int prev_word_index_of_unconfirmed,
-                                 int prev_word_index_of_pivot,
-                                 size_t num_merged_words) {
-  if (num_merged_words == 0) {
-    return {};
-  }
+// Alignment costs. A substitution (same acoustic event, different words) is
+// cheaper than an insertion plus a deletion but costlier than a match plus an
+// indel, so a matching word is never traded for two substitutions. Pairing
+// words whose timestamps disagree costs more than an indel pair, so it never
+// happens.
+constexpr int kMatchCost = 0;
+constexpr int kIndelCost = 2;
+constexpr int kSubstitutionCost = 3;
+constexpr int kFarPairCost = 5;
 
-  if (prev_timestamps.empty() || prev_word_index_of_unconfirmed == -1 ||
-      prev_word_index_of_unconfirmed >=
-          static_cast<int>(prev_timestamps.size()) ||
-      prev_word_index_of_unconfirmed == prev_word_index_of_pivot) {
-    return std::vector<int>(curr_timestamps.begin(), curr_timestamps.end());
-  }
+enum class AlignOp { kPair, kPrevOnly, kCurrOnly };
 
-  size_t num_words_from_prev =
-      prev_word_index_of_pivot - prev_word_index_of_unconfirmed;
-  if (num_words_from_prev >
-      prev_timestamps.size() - prev_word_index_of_unconfirmed) {
-    num_words_from_prev =
-        prev_timestamps.size() - prev_word_index_of_unconfirmed;
-  }
+// Timestamp tolerances of a merge, in timestamp units, scaled from the length
+// of the overlap. Emission times of the same word differ between the two
+// windows: near the end of its window the previous chunk tends to emit early
+// (up to ~40% of the overlap has been observed), the current chunk rarely
+// emits earlier than the previous one did.
+struct Tolerances {
+  // Max |dt| for two different words to be the same acoustic event.
+  double substitution;
+  // Max (prev - curr) for close-enough words to be the same word.
+  double match_early;
+  // Max (curr - prev) for close-enough words to be the same word.
+  double match_late;
+};
 
-  std::vector<int> result(
-      prev_timestamps.begin() + prev_word_index_of_unconfirmed,
-      prev_timestamps.begin() + prev_word_index_of_unconfirmed +
-          num_words_from_prev);
-  if (num_merged_words > num_words_from_prev) {
-    size_t num_words_from_curr = num_merged_words - num_words_from_prev;
-    if (num_words_from_curr <= curr_timestamps.size()) {
-      result.insert(result.end(), curr_timestamps.end() - num_words_from_curr,
-                    curr_timestamps.end());
-    } else {
-      result.insert(result.end(), curr_timestamps.begin(),
-                    curr_timestamps.end());
-    }
-  }
-  return result;
+bool HasUsableTimestamps(absl::Span<const std::string> words,
+                         absl::Span<const int> timestamps) {
+  return !words.empty() && timestamps.size() == words.size() &&
+         absl::c_is_sorted(timestamps);
 }
 
-std::vector<std::string> MergeIntoUnconfirmedText(
-    absl::Span<const std::string> prev_words,
-    absl::Span<const int> prev_timestamps,
-    absl::Span<const std::string> curr_words,
-    absl::Span<const int> curr_timestamps, float overlap_ratio,
-    float pivot_factor, int prev_word_index_of_unconfirmed,
-    int prev_word_index_of_pivot) {
-  if (prev_word_index_of_unconfirmed == -1 ||
-      prev_word_index_of_unconfirmed >= static_cast<int>(prev_words.size())) {
-    return std::vector<std::string>(curr_words.begin(), curr_words.end());
+bool HasDistinctTimestamps(absl::Span<const int> timestamps) {
+  return !timestamps.empty() && timestamps.back() > timestamps.front();
+}
+
+std::vector<std::vector<bool>> BuildCloseEnoughMatrix(
+    absl::Span<const std::string> canon_prev,
+    absl::Span<const std::string> canon_curr) {
+  std::vector<std::vector<bool>> matrix(
+      canon_prev.size(), std::vector<bool>(canon_curr.size(), false));
+  for (size_t i = 0; i < canon_prev.size(); ++i) {
+    for (size_t j = 0; j < canon_curr.size(); ++j) {
+      matrix[i][j] = CloseEnoughCanonical(canon_prev[i], canon_curr[j]);
+    }
+  }
+  return matrix;
+}
+
+// Returns the shift that best maps the current chunk's timestamps onto the
+// previous chunk's: the most frequent `curr - prev` difference among pairs of
+// close-enough words (>= 2 canonical chars) in the overlap region within
+// `max_shift`, with ties broken towards 0. At least two supporting pairs are
+// required, otherwise 0 is returned. This absorbs a systematic emission delay
+// between the two windows.
+int EstimateTimestampShift(absl::Span<const std::string> canon_prev,
+                           absl::Span<const int> prev_timestamps,
+                           absl::Span<const std::string> canon_curr,
+                           absl::Span<const int> curr_timestamps,
+                           double stream_offset_ms, double prev_end_ms,
+                           double max_shift) {
+  std::map<int, int> support;
+  const double min_prev_ts = stream_offset_ms - 2.0 * max_shift;
+  const double max_curr_ts = prev_end_ms + 2.0 * max_shift;
+  for (size_t i = 0; i < canon_prev.size(); ++i) {
+    if (canon_prev[i].size() < 2 || prev_timestamps[i] < min_prev_ts) continue;
+    for (size_t j = 0; j < canon_curr.size(); ++j) {
+      if (canon_curr[j].size() < 2 || curr_timestamps[j] > max_curr_ts) {
+        continue;
+      }
+      const int shift = curr_timestamps[j] - prev_timestamps[i];
+      if (std::abs(shift) > max_shift) continue;
+      if (CloseEnoughCanonical(canon_prev[i], canon_curr[j])) ++support[shift];
+    }
+  }
+  int best_shift = 0;
+  int best_support = 1;
+  for (const auto& [shift, count] : support) {
+    if (count > best_support ||
+        (count == best_support && std::abs(shift) < std::abs(best_shift))) {
+      best_shift = shift;
+      best_support = count;
+    }
+  }
+  return best_shift;
+}
+
+int PairCost(bool is_close_enough, double prev_time, double curr_time,
+             const Tolerances& tol) {
+  const double dt = curr_time - prev_time;
+  if (is_close_enough) {
+    return (dt >= -tol.match_early && dt <= tol.match_late) ? kMatchCost
+                                                            : kFarPairCost;
+  }
+  return std::fabs(dt) <= tol.substitution ? kSubstitutionCost : kFarPairCost;
+}
+
+// Monotone alignment of the overlapping words of the two chunks: a Levenshtein
+// alignment in which words may only be paired when their timestamps agree
+// (see `Tolerances`). Words that are far apart in time are never paired.
+std::vector<AlignOp> AlignOverlap(
+    const std::vector<std::vector<bool>>& close_matrix,
+    absl::Span<const int> prev_timestamps, absl::Span<const double> curr_times,
+    const Tolerances& tol) {
+  const size_t num_prev = prev_timestamps.size();
+  const size_t num_curr = curr_times.size();
+
+  std::vector<std::vector<int>> cost(num_prev + 1,
+                                     std::vector<int>(num_curr + 1, 0));
+  for (size_t i = 0; i <= num_prev; ++i) cost[i][0] = i * kIndelCost;
+  for (size_t j = 0; j <= num_curr; ++j) cost[0][j] = j * kIndelCost;
+  for (size_t i = 1; i <= num_prev; ++i) {
+    for (size_t j = 1; j <= num_curr; ++j) {
+      const int pair_cost =
+          PairCost(close_matrix[i - 1][j - 1], prev_timestamps[i - 1],
+                   curr_times[j - 1], tol);
+      cost[i][j] =
+          std::min({cost[i - 1][j - 1] + pair_cost, cost[i - 1][j] + kIndelCost,
+                    cost[i][j - 1] + kIndelCost});
+    }
   }
 
-  bool use_timestamps = !curr_timestamps.empty() && !prev_timestamps.empty() &&
-                        (prev_timestamps.back() > prev_timestamps.front() ||
-                         curr_timestamps.back() > curr_timestamps.front());
-  size_t num_words_before_pivot_in_current = 0;
-  if (use_timestamps) {
-    int timestamp_at_pivot =
-        (prev_word_index_of_pivot >= static_cast<int>(prev_timestamps.size()))
-            ? prev_timestamps.back() + 1
-            : prev_timestamps[prev_word_index_of_pivot];
-    for (int ts : curr_timestamps) {
-      if (ts < timestamp_at_pivot) {
-        num_words_before_pivot_in_current++;
+  std::vector<AlignOp> ops;
+  ops.reserve(num_prev + num_curr);
+  size_t i = num_prev;
+  size_t j = num_curr;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0) {
+      const int pair_cost =
+          PairCost(close_matrix[i - 1][j - 1], prev_timestamps[i - 1],
+                   curr_times[j - 1], tol);
+      if (cost[i][j] == cost[i - 1][j - 1] + pair_cost) {
+        ops.push_back(AlignOp::kPair);
+        --i;
+        --j;
+        continue;
       }
     }
-  } else {
-    int num_words_overlap_in_current = std::max<int>(
-        std::ceil(curr_words.size() * overlap_ratio),
-        static_cast<int>(prev_words.size()) - prev_word_index_of_unconfirmed);
-    num_words_before_pivot_in_current = std::min<size_t>(
-        static_cast<size_t>(
-            std::ceil(num_words_overlap_in_current * pivot_factor)),
-        curr_words.size());
+    const bool prev_only_ok =
+        i > 0 && cost[i][j] == cost[i - 1][j] + kIndelCost;
+    const bool curr_only_ok =
+        j > 0 && cost[i][j] == cost[i][j - 1] + kIndelCost;
+    // When both are optimal, emit (walking backwards) the later word first so
+    // that unmatched words of the two chunks interleave in time order.
+    if (prev_only_ok &&
+        (!curr_only_ok || prev_timestamps[i - 1] >= curr_times[j - 1])) {
+      ops.push_back(AlignOp::kPrevOnly);
+      --i;
+    } else {
+      ops.push_back(AlignOp::kCurrOnly);
+      --j;
+    }
   }
+  std::reverse(ops.begin(), ops.end());
+  return ops;
+}
 
-  size_t num_words_in_prev_unconfirmed = std::max<int>(
-      0, prev_word_index_of_pivot - prev_word_index_of_unconfirmed);
-  num_words_before_pivot_in_current = std::min<size_t>(
-      num_words_before_pivot_in_current, num_words_in_prev_unconfirmed);
-
-  size_t num_words_after_pivot_in_current =
-      curr_words.size() - num_words_before_pivot_in_current;
-  if (num_words_after_pivot_in_current <
-      prev_words.size() - prev_word_index_of_pivot) {
-    return std::vector<std::string>(
-        prev_words.begin() + prev_word_index_of_unconfirmed, prev_words.end());
+bool HasWordWithin(absl::Span<const double> times, double time,
+                   double tolerance) {
+  for (double t : times) {
+    if (std::fabs(t - time) <= tolerance) return true;
   }
+  return false;
+}
 
-  std::vector<std::string> result;
-  for (int i = prev_word_index_of_unconfirmed; i < prev_word_index_of_pivot;
-       ++i) {
-    result.push_back(prev_words[i]);
+// Marks which words in `prev_ov_words` were paired with a close-enough word in
+// `curr_words` by `ops`.
+std::vector<bool> FindMatchedPrevOverlapWords(
+    const std::vector<std::vector<bool>>& close_matrix,
+    absl::Span<const AlignOp> ops) {
+  std::vector<bool> prev_ov_matched(close_matrix.size(), false);
+  size_t pi = 0;
+  size_t cj = 0;
+  for (AlignOp op : ops) {
+    if (op == AlignOp::kPair) {
+      if (close_matrix[pi][cj]) {
+        prev_ov_matched[pi] = true;
+      }
+      ++pi;
+      ++cj;
+    } else if (op == AlignOp::kPrevOnly) {
+      ++pi;
+    } else {
+      ++cj;
+    }
   }
-  std::vector<std::string> curr_tail(
-      curr_words.begin() + num_words_before_pivot_in_current, curr_words.end());
-  std::vector<std::string> deduped_tail =
-      DedupWords(absl::MakeSpan(result), absl::MakeSpan(curr_tail));
-  result.insert(result.end(), deduped_tail.begin(), deduped_tail.end());
-  return result;
+  return prev_ov_matched;
+}
+
+// A current-only word before the pivot is kept only where the previous chunk
+// heard nothing: it is dropped when the previous chunk has an unpaired or
+// substituted overlap word at about the same time. Words in `prev` that are
+// already matched to their counterpart in `curr` only cover their own frame
+// (`<= 1.0`), so short function words between matched words are not dropped.
+bool IsCoveredByPrev(absl::Span<const int> prev_ov_ts,
+                     const std::vector<bool>& prev_ov_matched, double time,
+                     const Tolerances& tol) {
+  for (size_t idx = 0; idx < prev_ov_ts.size(); ++idx) {
+    const double limit = prev_ov_matched[idx] ? 1.0 : tol.substitution;
+    if (std::fabs(prev_ov_ts[idx] - time) <= limit) return true;
+  }
+  return false;
+}
+
+bool IsPartialOrMatchingBoundaryWord(absl::string_view canon_prev,
+                                     absl::string_view canon_curr) {
+  if (canon_curr.size() <= 2) return true;
+  if (absl::EndsWith(canon_prev, canon_curr) ||
+      CloseEnoughCanonical(canon_prev, canon_curr)) {
+    return true;
+  }
+  return canon_prev.size() >= 4 && canon_curr.size() >= 4 &&
+         canon_prev.substr(canon_prev.size() - 2) ==
+             canon_curr.substr(canon_curr.size() - 2);
+}
+
+// Returns true when a current-only word at `time` starts the window while the
+// previous chunk was mid-speech at the boundary (the tail of a word that
+// started before `chunk_start` and was cut by the window start). Only previous
+// words that started before `chunk_start` can cut the current word at the
+// window start, and only when `canon_curr_word` looks like a partial
+// suffix/fragment or repeat of that word, so genuinely new words missed by the
+// previous chunk are preserved.
+bool IsCutAtWindowStart(absl::Span<const std::string> canon_prev_words,
+                        absl::Span<const int> prev_timestamps,
+                        absl::string_view canon_curr_word, double chunk_start,
+                        double time, const Tolerances& tol) {
+  if (time > chunk_start + tol.substitution) return false;
+  for (size_t idx = 0; idx < prev_timestamps.size(); ++idx) {
+    const int ts = prev_timestamps[idx];
+    if (ts >= chunk_start - tol.match_early && ts < chunk_start &&
+        ts <= time + tol.substitution &&
+        (time - ts <= tol.match_early || time <= chunk_start + 1.0) &&
+        IsPartialOrMatchingBoundaryWord(canon_prev_words[idx],
+                                        canon_curr_word)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AppendMergedWord(std::vector<std::string>& merged_words,
+                      std::vector<int>& merged_timestamps,
+                      absl::string_view word, int timestamp_ms) {
+  const int monotone_ts =
+      merged_timestamps.empty()
+          ? timestamp_ms
+          : std::max(timestamp_ms, merged_timestamps.back());
+  merged_words.emplace_back(word);
+  merged_timestamps.push_back(monotone_ts);
+}
+
+// Walks the overlap alignment `ops` around `pivot` and appends the surviving
+// unconfirmed words and non-decreasing timestamps into `merged_words` and
+// `merged_timestamps`:
+// - Paired words (`kPair`) come from `prev` before `pivot` and `curr` after it.
+// - Unpaired `prev` words (`kPrevOnly`) are kept before `pivot`, or after
+//   `pivot` when `curr` heard nothing at about the same time.
+// - Unpaired `curr` words (`kCurrOnly`) are kept after `pivot`, or before
+//   `pivot` when `prev` neither covered that time nor cut a word at the window
+//   start.
+void MergeAlignedOverlap(absl::Span<const std::string> canon_prev_words,
+                         absl::Span<const int> prev_timestamps,
+                         absl::Span<const std::string> prev_ov_words,
+                         absl::Span<const int> prev_ov_ts,
+                         absl::Span<const std::string> curr_words,
+                         absl::Span<const std::string> canon_curr_words,
+                         absl::Span<const int> curr_timestamps,
+                         absl::Span<const double> curr_times,
+                         const std::vector<std::vector<bool>>& close_matrix,
+                         absl::Span<const AlignOp> ops, double chunk_start,
+                         double pivot, const Tolerances& tol,
+                         std::vector<std::string>& merged_words,
+                         std::vector<int>& merged_timestamps) {
+  const std::vector<bool> prev_ov_matched =
+      FindMatchedPrevOverlapWords(close_matrix, ops);
+
+  merged_words.reserve(prev_ov_words.size() + curr_words.size());
+  merged_timestamps.reserve(prev_ov_words.size() + curr_words.size());
+  size_t i = 0;
+  size_t j = 0;
+  for (AlignOp op : ops) {
+    switch (op) {
+      case AlignOp::kPair:
+        // Before the pivot the previous chunk had more context, after it the
+        // current one has.
+        if (prev_ov_ts[i] < pivot - 1e-4) {
+          AppendMergedWord(merged_words, merged_timestamps, prev_ov_words[i],
+                           prev_ov_ts[i]);
+        } else {
+          AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
+                           curr_timestamps[j]);
+        }
+        ++i;
+        ++j;
+        break;
+      case AlignOp::kPrevOnly:
+        if (prev_ov_ts[i] < pivot ||
+            !HasWordWithin(curr_times, prev_ov_ts[i], tol.substitution)) {
+          AppendMergedWord(merged_words, merged_timestamps, prev_ov_words[i],
+                           prev_ov_ts[i]);
+        }
+        ++i;
+        break;
+      case AlignOp::kCurrOnly:
+        if (curr_times[j] >= pivot) {
+          AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
+                           curr_timestamps[j]);
+        } else if (!IsCoveredByPrev(prev_ov_ts, prev_ov_matched, curr_times[j],
+                                    tol) &&
+                   !IsCutAtWindowStart(canon_prev_words, prev_timestamps,
+                                       canon_curr_words[j], chunk_start,
+                                       curr_times[j], tol)) {
+          AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
+                           static_cast<int>(std::lround(curr_times[j])));
+        }
+        ++j;
+        break;
+    }
+  }
+  for (; j < curr_words.size(); ++j) {
+    AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
+                     curr_timestamps[j]);
+  }
 }
 
 }  // namespace
 
 TimestampTextMerger::TimestampTextMerger(
     Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer,
-    float overlap_ratio, int search_window, int max_levenshtein_distance,
-    float pivot_factor)
+    float overlap_ratio, int search_window, float pivot_factor)
     : TextMerger(detokenizer),
       overlap_ratio_(overlap_ratio),
       search_window_(search_window),
-      max_levenshtein_distance_(max_levenshtein_distance),
       pivot_factor_(pivot_factor) {}
 
 void TimestampTextMerger::ResetInternal() {
   prev_words_.clear();
   prev_timestamps_.clear();
   last_confirmed_words_.clear();
-  prev_word_index_of_unconfirmed_ = -1;
-  prev_word_index_of_pivot_ = -1;
-  stream_timestamp_offset_ms_ = 0;
+  stream_timestamp_offset_ms_ = 0.0;
+  prev_chunk_end_ms_ = -1.0;
+  last_chunk_end_ms_ = 0;
 }
 
 absl::Status TimestampTextMerger::ScheduleInternal() {
@@ -171,11 +398,14 @@ absl::Status TimestampTextMerger::ScheduleInternal() {
 absl::Status TimestampTextMerger::Execute() {
   LITERT_ASSIGN_OR_RETURN(auto curr_chunk_words, detokenizer_.GetOutput());
   if (curr_chunk_words.empty()) {
+    UpdateStreamTimestampOffset(last_chunk_end_ms_);
     LogAndPushOutput(
         {"", prev_words_.empty() ? "" : absl::StrJoin(prev_words_, " ")});
     return absl::OkStatus();
   }
 
+  const int chunk_start_ms =
+      static_cast<int>(std::lround(stream_timestamp_offset_ms_));
   std::vector<std::string> curr_words;
   std::vector<int> curr_timestamps;
   std::optional<int> max_chunk_timestamp_ms;
@@ -189,13 +419,21 @@ absl::Status TimestampTextMerger::Execute() {
     }
     curr_words.push_back(word.text);
     if (word.timestamp_ms.has_value()) {
-      curr_timestamps.push_back(word.timestamp_ms.value() +
-                                stream_timestamp_offset_ms_);
+      curr_timestamps.push_back(word.timestamp_ms.value() + chunk_start_ms);
     }
+  }
+  // End of the chunk relative to its start; falls back to the last word's
+  // timestamp (or the previous chunk's duration for a silent chunk) when the
+  // decoder does not report the end of the chunk.
+  const int chunk_end_ms = max_chunk_timestamp_ms.value_or(
+      curr_timestamps.empty() ? last_chunk_end_ms_
+                              : curr_timestamps.back() - chunk_start_ms);
+  if (chunk_end_ms > 0) {
+    last_chunk_end_ms_ = chunk_end_ms;
   }
 
   if (curr_words.empty()) {
-    UpdateStreamTimestampOffset(max_chunk_timestamp_ms, curr_timestamps);
+    UpdateStreamTimestampOffset(chunk_end_ms);
     LogAndPushOutput(
         {"", prev_words_.empty() ? "" : absl::StrJoin(prev_words_, " ")});
     return absl::OkStatus();
@@ -209,81 +447,193 @@ absl::Status TimestampTextMerger::Execute() {
   if (prev_words_.empty()) {
     prev_words_ = curr_words;
     prev_timestamps_ = curr_timestamps;
-    UpdateStreamTimestampOffset(max_chunk_timestamp_ms, curr_timestamps);
+    prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
+    UpdateStreamTimestampOffset(chunk_end_ms);
     LogAndPushOutput({"", absl::StrJoin(prev_words_, " ")});
     return absl::OkStatus();
   }
 
-  int middle_index_to_search = 0;
-  if (!prev_timestamps_.empty() && !curr_timestamps.empty() &&
-      (prev_timestamps_.back() > prev_timestamps_.front() ||
-       curr_timestamps.back() > curr_timestamps.front())) {
-    int target_timestamp = curr_timestamps.front();
-    int found_idx = -1;
-    for (size_t i = 0; i < prev_timestamps_.size(); ++i) {
-      if (prev_timestamps_[i] >= target_timestamp) {
-        found_idx = static_cast<int>(i);
-        break;
-      }
-    }
-    middle_index_to_search =
-        (found_idx != -1)
-            ? found_idx
-            : static_cast<int>(prev_words_.size() * (1 - overlap_ratio_));
+  // Chunks whose words all share one timestamp carry no timing information
+  // unless the decoder reports the end of the chunk.
+  const bool curr_has_usable_ts =
+      HasUsableTimestamps(curr_words, curr_timestamps);
+  const bool use_time = prev_chunk_end_ms_ >= 0.0 &&
+                        HasUsableTimestamps(prev_words_, prev_timestamps_) &&
+                        curr_has_usable_ts &&
+                        (max_chunk_timestamp_ms.has_value() ||
+                         HasDistinctTimestamps(prev_timestamps_) ||
+                         HasDistinctTimestamps(curr_timestamps));
+  if (use_time) {
+    MergeByTime(curr_words, curr_timestamps);
   } else {
-    middle_index_to_search =
-        static_cast<int>(prev_words_.size() * (1 - overlap_ratio_));
-  }
-
-  int min_distance = max_levenshtein_distance_;
-  prev_word_index_of_unconfirmed_ = std::min<int>(
-      middle_index_to_search + search_window_ + 1, prev_words_.size());
-
-  for (int i = -search_window_; i <= search_window_; ++i) {
-    int start_index =
-        std::clamp<int>(middle_index_to_search + i, 0, prev_words_.size());
-    int end_index =
-        std::min<int>(start_index + curr_words.size(), prev_words_.size());
-    if (start_index >= end_index) continue;
-
-    auto prev_sub = absl::MakeSpan(prev_words_)
-                        .subspan(start_index, end_index - start_index);
-    auto curr_sub = absl::MakeSpan(curr_words)
-                        .subspan(0, std::min<size_t>(end_index - start_index,
-                                                     curr_words.size()));
-
-    int dist = ComputeLevenshteinDistanceWords(CanonicalizeWords(prev_sub),
-                                               CanonicalizeWords(curr_sub));
-    if (dist < min_distance) {
-      min_distance = dist;
-      prev_word_index_of_unconfirmed_ = start_index;
+    if (curr_has_usable_ts) {
+      ABSL_LOG_FIRST_N(INFO, 5)
+          << "TimestampTextMerger: falling back to MergeByWordCount "
+          << "(prev_words=" << prev_words_.size()
+          << ", prev_timestamps=" << prev_timestamps_.size() << ")";
     }
+    MergeByWordCount(curr_words, curr_timestamps);
   }
-
-  int unconfirmed_until_pivot = std::ceil(
-      (prev_words_.size() - prev_word_index_of_unconfirmed_) * pivot_factor_);
-  prev_word_index_of_pivot_ =
-      std::min<int>(prev_word_index_of_unconfirmed_ + unconfirmed_until_pivot,
-                    prev_words_.size());
-
-  last_confirmed_words_ = std::vector<std::string>(
-      prev_words_.begin(),
-      prev_words_.begin() + prev_word_index_of_unconfirmed_);
-
-  std::vector<std::string> unconfirmed_merged = MergeIntoUnconfirmedText(
-      prev_words_, prev_timestamps_, curr_words, curr_timestamps,
-      overlap_ratio_, pivot_factor_, prev_word_index_of_unconfirmed_,
-      prev_word_index_of_pivot_);
-
-  prev_timestamps_ = MergeTimestamps(
-      prev_timestamps_, curr_timestamps, prev_word_index_of_unconfirmed_,
-      prev_word_index_of_pivot_, unconfirmed_merged.size());
-  prev_words_ = unconfirmed_merged;
-  UpdateStreamTimestampOffset(max_chunk_timestamp_ms, curr_timestamps);
+  prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
+  UpdateStreamTimestampOffset(chunk_end_ms);
 
   LogAndPushOutput({absl::StrJoin(last_confirmed_words_, " "),
                     absl::StrJoin(prev_words_, " ")});
   return absl::OkStatus();
+}
+
+void TimestampTextMerger::MergeByTime(absl::Span<const std::string> curr_words,
+                                      absl::Span<const int> curr_timestamps) {
+  if (prev_chunk_end_ms_ <= stream_timestamp_offset_ms_) {
+    // The window that produced the previous words ends before this chunk
+    // (e.g. an empty chunk in between): the previous words are final.
+    last_confirmed_words_ = std::move(prev_words_);
+    prev_words_.assign(curr_words.begin(), curr_words.end());
+    prev_timestamps_.assign(curr_timestamps.begin(), curr_timestamps.end());
+    return;
+  }
+
+  const double overlap_len = prev_chunk_end_ms_ - stream_timestamp_offset_ms_;
+  const Tolerances tol = {
+      .substitution = std::max(1.0, 0.15 * overlap_len),
+      .match_early = std::max(2.0, 0.25 * overlap_len),
+      .match_late = std::max(2.0, 0.5 * overlap_len),
+  };
+
+  const std::vector<std::string> canon_prev_words =
+      CanonicalizeWords(prev_words_);
+  const std::vector<std::string> canon_curr_words =
+      CanonicalizeWords(curr_words);
+
+  // Express the current chunk's word timestamps and both overlap window bounds
+  // in the previous chunk's word clock by subtracting `shift` (`curr - prev`).
+  const int shift = EstimateTimestampShift(
+      canon_prev_words, prev_timestamps_, canon_curr_words, curr_timestamps,
+      stream_timestamp_offset_ms_, prev_chunk_end_ms_, tol.match_early);
+  const double chunk_start = stream_timestamp_offset_ms_ - shift;
+  const double prev_end = prev_chunk_end_ms_ - shift;
+  const double pivot = chunk_start + pivot_factor_ * (prev_end - chunk_start);
+  std::vector<double> curr_times;
+  curr_times.reserve(curr_timestamps.size());
+  for (int ts : curr_timestamps) curr_times.push_back(ts - shift);
+
+  // Previous words before the current chunk are final.
+  size_t num_confirmed = 0;
+  while (num_confirmed < prev_timestamps_.size() &&
+         prev_timestamps_[num_confirmed] < chunk_start) {
+    ++num_confirmed;
+  }
+  last_confirmed_words_.assign(prev_words_.begin(),
+                               prev_words_.begin() + num_confirmed);
+  const auto prev_ov_words =
+      absl::MakeConstSpan(prev_words_).subspan(num_confirmed);
+  const auto canon_prev_ov_words =
+      absl::MakeConstSpan(canon_prev_words).subspan(num_confirmed);
+  const auto prev_ov_ts =
+      absl::MakeConstSpan(prev_timestamps_).subspan(num_confirmed);
+
+  // Current words well beyond the previous window are new; the margin lets
+  // the last words of the previous window, emitted early, find their pair.
+  size_t num_overlap = 0;
+  while (num_overlap < curr_times.size() &&
+         curr_times[num_overlap] < prev_end + tol.match_late) {
+    ++num_overlap;
+  }
+
+  const auto close_matrix = BuildCloseEnoughMatrix(
+      canon_prev_ov_words,
+      absl::MakeConstSpan(canon_curr_words).subspan(0, num_overlap));
+  const std::vector<AlignOp> ops = AlignOverlap(
+      close_matrix, prev_ov_ts,
+      absl::MakeConstSpan(curr_times).subspan(0, num_overlap), tol);
+
+  std::vector<std::string> merged_words;
+  std::vector<int> merged_timestamps;
+  MergeAlignedOverlap(canon_prev_words, prev_timestamps_, prev_ov_words,
+                      prev_ov_ts, curr_words, canon_curr_words, curr_timestamps,
+                      curr_times, close_matrix, ops, chunk_start, pivot, tol,
+                      merged_words, merged_timestamps);
+
+  ABSL_VLOG(2) << "MergeByTime: shift=" << shift
+               << " chunk_start=" << chunk_start << " prev_end=" << prev_end
+               << " pivot=" << pivot << " confirmed=" << num_confirmed
+               << " overlap prev/curr=" << prev_ov_words.size() << "/"
+               << num_overlap;
+
+  prev_words_ = std::move(merged_words);
+  prev_timestamps_ = std::move(merged_timestamps);
+  if (ABSL_VLOG_IS_ON(2)) {
+    std::string words;
+    for (size_t k = 0; k < prev_words_.size(); ++k) {
+      absl::StrAppend(&words, k == 0 ? "" : " ", prev_words_[k], "(",
+                      prev_timestamps_[k], ")");
+    }
+    ABSL_VLOG(2) << "MergeByTime: unconfirmed=" << words;
+  }
+}
+
+void TimestampTextMerger::MergeByWordCount(
+    absl::Span<const std::string> curr_words,
+    absl::Span<const int> curr_timestamps) {
+  const bool curr_has_usable_ts =
+      HasUsableTimestamps(curr_words, curr_timestamps);
+  if (!prev_words_.empty() && !curr_words.empty()) {
+    const size_t n_prev = prev_words_.size();
+    const size_t n_curr = curr_words.size();
+    const size_t min_prev =
+        (n_prev > 8)
+            ? std::max<size_t>(
+                  1, static_cast<size_t>(std::max<int>(
+                         0, static_cast<int>(n_prev * (1.0f - overlap_ratio_)) -
+                                search_window_ - 2)))
+            : 0;
+    const size_t max_curr = std::min<size_t>(
+        n_curr, static_cast<size_t>(std::ceil(n_curr * overlap_ratio_)) +
+                    search_window_ + 4);
+    const std::vector<WordIndexPair> best_run =
+        FindBestSeamMatchRun(prev_words_, min_prev, curr_words, max_curr);
+    if (!best_run.empty()) {
+      const auto [p0, c0] = best_run.front();
+      const auto [p_piv, c_piv] = best_run[best_run.size() / 2];
+      const int unconfirmed_idx =
+          std::clamp<int>(static_cast<int>(p0) - static_cast<int>(c0),
+                          static_cast<int>(min_prev), static_cast<int>(p0));
+      last_confirmed_words_.assign(prev_words_.begin(),
+                                   prev_words_.begin() + unconfirmed_idx);
+      const size_t prefix_len = p_piv - static_cast<size_t>(unconfirmed_idx);
+      std::vector<std::string> unconfirmed_merged(
+          prev_words_.begin() + unconfirmed_idx, prev_words_.begin() + p_piv);
+      if (n_curr - c_piv >= n_prev - p_piv) {
+        unconfirmed_merged.insert(unconfirmed_merged.end(),
+                                  curr_words.begin() + c_piv, curr_words.end());
+      } else {
+        unconfirmed_merged.insert(unconfirmed_merged.end(),
+                                  prev_words_.begin() + p_piv,
+                                  prev_words_.end());
+      }
+      prev_words_ = std::move(unconfirmed_merged);
+      prev_timestamps_.clear();
+      if (curr_has_usable_ts) {
+        prev_timestamps_.reserve(prev_words_.size());
+        for (size_t k = 0; k < prev_words_.size(); ++k) {
+          const int c_idx =
+              std::clamp<int>(static_cast<int>(c_piv) + static_cast<int>(k) -
+                                  static_cast<int>(prefix_len),
+                              0, static_cast<int>(n_curr) - 1);
+          prev_timestamps_.push_back(curr_timestamps[c_idx]);
+        }
+      }
+      return;
+    }
+  }
+
+  last_confirmed_words_ = std::move(prev_words_);
+  prev_words_.assign(curr_words.begin(), curr_words.end());
+  if (curr_has_usable_ts) {
+    prev_timestamps_.assign(curr_timestamps.begin(), curr_timestamps.end());
+  } else {
+    prev_timestamps_.clear();
+  }
 }
 
 absl::Status TimestampTextMerger::FlushInternal() {
@@ -292,27 +642,19 @@ absl::Status TimestampTextMerger::FlushInternal() {
     prev_words_.clear();
     prev_timestamps_.clear();
     last_confirmed_words_.clear();
-    prev_word_index_of_unconfirmed_ = -1;
-    prev_word_index_of_pivot_ = -1;
+    prev_chunk_end_ms_ = -1.0;
+    last_chunk_end_ms_ = 0;
     LogAndPushOutput(std::move(result));
   }
   return absl::OkStatus();
 }
 
-void TimestampTextMerger::UpdateStreamTimestampOffset(
-    std::optional<int> max_chunk_timestamp_ms,
-    absl::Span<const int> curr_timestamps) {
+void TimestampTextMerger::UpdateStreamTimestampOffset(int chunk_end_ms) {
   if (overlap_ratio_ <= 0.0f) return;
-
-  int max_ts =
-      max_chunk_timestamp_ms.has_value()
-          ? max_chunk_timestamp_ms.value()
-          : (curr_timestamps.empty()
-                 ? 0
-                 : curr_timestamps.back() - stream_timestamp_offset_ms_);
-  int timestamp_step = static_cast<int>(max_ts * (1.0f - overlap_ratio_));
-  if (timestamp_step > 0) {
-    stream_timestamp_offset_ms_ += timestamp_step;
+  // Kept fractional: with encoder-frame timestamps the step is not a whole
+  // number of frames, and truncating it drifts by a frame every few chunks.
+  if (chunk_end_ms > 0) {
+    stream_timestamp_offset_ms_ += chunk_end_ms * (1.0 - overlap_ratio_);
   }
 }
 
