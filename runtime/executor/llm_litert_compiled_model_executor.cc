@@ -570,6 +570,22 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
   return absl::OkStatus();
 }
 
+absl::Status
+LlmLiteRtCompiledModelExecutorBase::ClearLinearAttentionStateIfFirstStep() {
+  // A prefill at step 0 starts a new sequence. The KV cache can be reused as
+  // is because positions after the current step are masked, but a linear
+  // attention state still holds every token processed before, e.g. the
+  // previous conversation on a shared engine.
+  if (llm_context_->runtime_state().current_step != 0) {
+    return absl::OkStatus();
+  }
+  auto* litert_state = dynamic_cast<LitertState*>(state_.get());
+  if (litert_state == nullptr || !litert_state->HasLinearAttentionState()) {
+    return absl::OkStatus();
+  }
+  return litert_state->ClearLinearAttentionState();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     absl::string_view prefill_signature,
     absl::flat_hash_map<absl::string_view, TensorBuffer>& prefill_input_buffers,
@@ -1942,6 +1958,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   // the decode output candidate.
   constexpr int kTokenIndexToReduce = 0;
   LITERT_RETURN_IF_ERROR(PrepareFirstPrefillAfterDecode(kTokenIndexToReduce));
+  LITERT_RETURN_IF_ERROR(ClearLinearAttentionStateIfFirstStep());
 
   LITERT_ASSIGN_OR_RETURN(auto token_ids_buffer, inputs.GetTextTokenIdsPtr());
   LITERT_ASSIGN_OR_RETURN(auto tensor_type, token_ids_buffer->TensorType());
@@ -2271,6 +2288,7 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::Prefill(
 
   // Only accept batch size 1 for now.
   LITERT_RETURN_IF_ERROR(PrepareFirstPrefillAfterDecode(0));
+  LITERT_RETURN_IF_ERROR(ClearLinearAttentionStateIfFirstStep());
 
   if (embedding_lookup_ != nullptr) {
     ABSL_RETURN_IF_ERROR(embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
