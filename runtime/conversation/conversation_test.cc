@@ -4851,6 +4851,12 @@ TEST(AppendMessageTest, CancelProcessDuringSendMessageAsyncWithArray) {
       ConversationConfig::Builder()
           .SetSessionConfig(session_config)
           .SetOverwritePromptTemplate(PromptTemplate(template_text))
+          // `RenderSingleTurnTemplate` skips JSON array messages, so a
+          // non-empty preface is needed for `session_inputs` to be non-empty;
+          // otherwise `SendMessageAsync` never calls `RunPrefillAsync`.
+          .SetPreface(JsonPreface{
+              .messages = {{{"role", "system"},
+                            {"content", "You are a helpful assistant."}}}})
           .Build(*mock_engine));
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));

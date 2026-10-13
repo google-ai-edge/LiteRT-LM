@@ -654,6 +654,10 @@ absl::Status Conversation::SendMessageAsync(
                             optional_args.args.value_or(std::monostate())));
 
   if (is_appending_message) {
+    if (session_inputs.empty()) {
+      user_callback(Message());
+      return absl::OkStatus();
+    }
     ABSL_ASSIGN_OR_RETURN(
         auto task_controller,
         session_->RunPrefillAsync(
@@ -795,6 +799,20 @@ absl::Status Conversation::SendMessageAsync(
               open_channel_name, config_.return_error_on_max_tokens_reached(),
               config_.stream_tool_calls(),
               config_.stream_tool_calls_channel_name()));
+
+  if (session_inputs.empty()) {
+    auto decode_task_controller = session_->RunDecodeAsync(
+        [callback = internal_callback](absl::StatusOr<Responses> responses) {
+          (*callback)(responses);
+        },
+        decode_config);
+    if (decode_task_controller.ok()) {
+      AddTaskController(task_group_id, std::move(*decode_task_controller));
+    } else {
+      (*internal_callback)(decode_task_controller.status());
+    }
+    return absl::OkStatus();
+  }
 
   ABSL_ASSIGN_OR_RETURN(
       auto prefill_task_controller,
