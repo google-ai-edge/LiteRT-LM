@@ -199,7 +199,7 @@ absl::Status ToLogMelSpectrogram(const AudioPreprocessorConfig& config,
   std::vector<double> tmp_log_mel(config.GetNumMelBins(), 0);
   for (int i = 0; i < frames; ++i) {
     LITERT_RETURN_IF_ERROR(mel_filterbank.ToMelSpectrum(
-        absl::MakeSpan(spectrograms_double.data() + i * fft_bins, fft_bins),
+        absl::MakeSpan(spectrograms_double).subspan(i * fft_bins, fft_bins),
         &tmp_log_mel));
     for (int j = 0; j < tmp_log_mel.size(); ++j) {
       float log_mel;
