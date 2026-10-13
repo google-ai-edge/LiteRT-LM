@@ -81,7 +81,6 @@
 #include "runtime/util/lora_util.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/tensor_buffer_util.h"
-#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 
@@ -94,6 +93,95 @@ using ::absl::Span;
 constexpr absl::string_view kPrefillSignatureRunner = "prefill";
 constexpr absl::string_view kDecodeSignatureRunner = "decode";
 constexpr int kDynamicDimValue = -1;
+// Input of GPU models exported with runtime-BMM LoRA. It holds the channel
+// range of the LoRA BMM ops (see ml_drift::LlmRuntimeParams) and is not a LoRA
+// weight.
+constexpr absl::string_view kLoRAParamTensorName = "lora_param_tensor";
+
+bool IsLoRABufferInput(absl::string_view name) {
+  return IsLoRAInputName(name) || name == kLoRAParamTensorName;
+}
+
+absl::Status InitializeBuffer(TensorBuffer& buffer) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto buffer_lock_and_addr,
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kWrite));
+  LITERT_ASSIGN_OR_RETURN(auto packed_size, buffer.PackedSize());
+  memset(buffer_lock_and_addr.second, 0, packed_size);
+  return absl::OkStatus();
+}
+
+// Initializes `lora_param_tensor` for models exported with GPU runtime-BMM
+// LoRA when running without an active LoRA. Even when the LoRA weight buffers
+// are zeroed, `lora_param_tensor` must cover the full channel range `[0,
+// lora_param_end)` so that `runtime_bmm_a` writes zeros across the entire
+// intermediate activation buffer rather than returning early and leaving
+// uninitialized GPU memory for `runtime_bmm_b` to read.
+absl::Status InitializeLoRAParamBuffer(
+    const CompiledModel& compiled_model, absl::string_view signature_name,
+    absl::Span<const absl::string_view> input_names,
+    TensorBuffer& param_buffer) {
+  std::vector<std::vector<int32_t>> lora_dims;
+  for (absl::string_view input_name : input_names) {
+    if (!IsLoRAInputName(input_name)) {
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(auto tensor_type, compiled_model.GetInputTensorType(
+                                                  signature_name, input_name));
+    const auto dims = tensor_type.Layout().Dimensions();
+    lora_dims.emplace_back(dims.begin(), dims.end());
+  }
+
+  int64_t lora_param_end = 0;
+  if (!lora_dims.empty()) {
+    int32_t model_rank = 0;
+    for (int32_t candidate : lora_dims[0]) {
+      if (candidate <= 0 || (model_rank > 0 && candidate >= model_rank)) {
+        continue;
+      }
+      if (std::all_of(lora_dims.begin(), lora_dims.end(),
+                      [candidate](const std::vector<int32_t>& dims) {
+                        return std::find(dims.begin(), dims.end(), candidate) !=
+                               dims.end();
+                      })) {
+        model_rank = candidate;
+      }
+    }
+    if (model_rank > 0) {
+      for (const auto& dims : lora_dims) {
+        int64_t num_elements = 1;
+        for (int32_t dim : dims) {
+          num_elements *= dim;
+        }
+        lora_param_end = std::max(lora_param_end, num_elements / model_rank);
+      }
+    }
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
+                          TensorBufferScopedLock::Create(
+                              param_buffer, TensorBuffer::LockMode::kWrite));
+  LITERT_ASSIGN_OR_RETURN(auto param_size, param_buffer.PackedSize());
+  memset(lock_and_addr.second, 0, param_size);
+  if (param_size >= 2 * sizeof(int32_t)) {
+    int32_t* params = static_cast<int32_t*>(lock_and_addr.second);
+    std::fill(params, params + param_size / sizeof(int32_t),
+              static_cast<int32_t>(lora_param_end));
+    params[0] = 0;
+  }
+  return absl::OkStatus();
+}
+
+absl::Status InitializeLoRABufferInput(
+    const CompiledModel& compiled_model, absl::string_view signature_name,
+    absl::Span<const absl::string_view> input_names,
+    absl::string_view input_name, TensorBuffer& buffer) {
+  if (input_name == kLoRAParamTensorName) {
+    return InitializeLoRAParamBuffer(compiled_model, signature_name,
+                                     input_names, buffer);
+  }
+  return InitializeBuffer(buffer);
+}
 
 void ClampMaxNumTokens(LlmExecutorSettings& executor_settings,
                        int model_max_num_tokens) {
@@ -437,6 +525,21 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
             prefill_signature, signatures_.input_int32_param.value()));
     prefill_input_buffers[signatures_.input_int32_param.value()] =
         std::move(param_tensor_buffer);
+  }
+  LITERT_ASSIGN_OR_RETURN(auto signature,
+                          compiled_model_->FindSignature(prefill_signature));
+  const auto prefill_input_names = signature.InputNames();
+  for (auto input_name : prefill_input_names) {
+    if (!IsLoRABufferInput(input_name)) {
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_buffer,
+        compiled_model_->CreateInputBuffer(prefill_signature, input_name));
+    ABSL_RETURN_IF_ERROR(InitializeLoRABufferInput(
+        *compiled_model_, prefill_signature, prefill_input_names, input_name,
+        input_buffer));
+    prefill_input_buffers[input_name] = std::move(input_buffer);
   }
   return absl::OkStatus();
 }
@@ -1616,7 +1719,7 @@ LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
-  std::optional<uint32_t> lora_id;
+  std::optional<uint32_t> lora_id = llm_context_->processed_context().lora_id();
   ABSL_ASSIGN_OR_RETURN(auto state, CloneState());
   ProcessedTokens new_processed_tokens =
       llm_context_->processed_context().processed_tokens();
@@ -2134,17 +2237,19 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
-  for (auto input_name : decode_signature.InputNames()) {
-    if (IsLoRAInputName(input_name)) {
-      // We let LoraManager handle LoRA inputs.
-      continue;
-    }
+  const auto decode_input_names = decode_signature.InputNames();
+  for (auto input_name : decode_input_names) {
     if (state->Contains(input_name)) {
       continue;
     }
     LITERT_ASSIGN_OR_RETURN(
         auto input_buffer,
         compiled_model->CreateInputBuffer(kDecodeSignatureRunner, input_name));
+    if (IsLoRABufferInput(input_name)) {
+      ABSL_RETURN_IF_ERROR(InitializeLoRABufferInput(
+          *compiled_model, kDecodeSignatureRunner, decode_input_names,
+          input_name, input_buffer));
+    }
     decode_input_buffers[input_name] = std::move(input_buffer);
   }
   LITERT_ASSIGN_OR_RETURN(
@@ -2379,13 +2484,15 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::DecodeInternal(
     current_kv_len = new_kv_len;
   }
 
-  ABSL_RETURN_IF_ERROR(ResolveDynamicShape(*compiled_model_, "decode",
-                                           signatures_.input_attn_mask.value(),
-                                           current_kv_len));
-  LITERT_ASSIGN_OR_RETURN(
-      decode_input_buffers_[signatures_.input_attn_mask.value()],
-      compiled_model_->CreateInputBuffer("decode",
-                                         signatures_.input_attn_mask.value()));
+  if (signatures_.input_attn_mask.has_value()) {
+    ABSL_RETURN_IF_ERROR(ResolveDynamicShape(
+        *compiled_model_, "decode", signatures_.input_attn_mask.value(),
+        current_kv_len));
+    LITERT_ASSIGN_OR_RETURN(
+        decode_input_buffers_[signatures_.input_attn_mask.value()],
+        compiled_model_->CreateInputBuffer(
+            "decode", signatures_.input_attn_mask.value()));
+  }
 
   return LlmLiteRtCompiledModelExecutorBase::DecodeInternal(token,
                                                             output_logits);
@@ -2478,7 +2585,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
 
-  for (auto input_name : decode_signature.InputNames()) {
+  const auto decode_input_names = decode_signature.InputNames();
+  for (auto input_name : decode_input_names) {
     if (state->Contains(input_name)) {
       continue;
     }
@@ -2489,6 +2597,11 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       LITERT_ASSIGN_OR_RETURN(auto input_buffer,
                               compiled_model->CreateInputBuffer(
                                   kDecodeSignatureRunner, input_name));
+      if (IsLoRABufferInput(input_name)) {
+        ABSL_RETURN_IF_ERROR(InitializeLoRABufferInput(
+            *compiled_model, kDecodeSignatureRunner, decode_input_names,
+            input_name, input_buffer));
+      }
       decode_input_buffers[input_name] = std::move(input_buffer);
     }
   }

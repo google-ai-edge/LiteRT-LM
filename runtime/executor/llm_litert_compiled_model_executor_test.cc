@@ -1432,9 +1432,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
   ASSERT_OK_AND_ASSIGN(
       auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
                          std::move(executor_settings), env, *model_resources));
-  auto step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 0);
+  ASSERT_OK_AND_ASSIGN(int step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 0);
 
   // Prefill 5 tokens.
   ExecutorInputs inputs;
@@ -1444,9 +1443,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
   EXPECT_TRUE(input_tokens_buffer);
   inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs));
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5);
   auto step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4);
@@ -1463,9 +1461,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
       EXPECT_EQ(output_tokens[0][0], output_tokens[j][0]);
     }
   }
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5 + kDecodeSteps);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5 + kDecodeSteps);
   step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4 + kDecodeSteps);
@@ -1478,13 +1475,12 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
   // Prefill once again, and see the token candidate is reduced one.
   ExecutorInputs inputs_next;
   input_tokens_buffer =
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens.data(), 1), {1, 1});
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens).first(1), {1, 1});
   EXPECT_TRUE(input_tokens_buffer);
   inputs_next.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs_next));
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5 + kDecodeSteps + 1);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5 + kDecodeSteps + 1);
   step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4 + kDecodeSteps + 1);
@@ -1508,9 +1504,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
                          std::move(executor_settings), env, *model_resources));
   ASSERT_NE(executor, nullptr);
-  auto step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 0);
+  ASSERT_OK_AND_ASSIGN(int step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 0);
 
   // Prefill 5 tokens.
   ExecutorInputs inputs;
@@ -1519,9 +1514,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
   inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs));
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5);
   auto step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4);
@@ -1532,14 +1526,13 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   constexpr int kDecodeSteps = 20;
   ExecutorInputs decode_inputs;
   for (int i = 0; i < kDecodeSteps; ++i) {
-    auto logits = executor->DecodeLogits(decode_inputs);
-    EXPECT_OK(logits);
-    auto logits_type = logits->TensorType();
+    ASSERT_OK_AND_ASSIGN(auto logits, executor->DecodeLogits(decode_inputs));
+    auto logits_type = logits.TensorType();
     EXPECT_TRUE(logits_type);
     EXPECT_EQ(logits_type->ElementType(), ElementType::Float32);
     EXPECT_EQ(logits_type->Layout().Dimensions(),
               Dimensions({kMaxDecodeBatchSize, 1, kVocabSize}));
-    auto logits_span = ReferTensorBufferAsSpan<float>(*logits);
+    auto logits_span = ReferTensorBufferAsSpan<float>(logits);
     EXPECT_TRUE(logits_span);
     EXPECT_EQ(logits_span->size(), kMaxDecodeBatchSize * kVocabSize);
     // Check the first logit of the first candidate vs the first logit of the
@@ -1561,10 +1554,9 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
     decode_inputs.SetTextData(
         ExecutorTextData(std::move(*input_tokens_buffer)));
   }
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
   // First pending tokens were processed.
-  EXPECT_EQ(*step, 5 + kDecodeSteps);
+  EXPECT_EQ(step, 5 + kDecodeSteps);
   step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4 + kDecodeSteps);
@@ -1574,12 +1566,11 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Prefill once again, and see the token candidate is reduced one.
   ExecutorInputs inputs_next;
   input_tokens_buffer =
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens.data(), 1), {1, 1});
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens).first(1), {1, 1});
   inputs_next.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs_next));
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5 + kDecodeSteps + 1);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5 + kDecodeSteps + 1);
   step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4 + kDecodeSteps);
@@ -1604,9 +1595,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
                          std::move(executor_settings), env, *model_resources));
   ASSERT_NE(executor, nullptr);
-  auto step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 0);
+  ASSERT_OK_AND_ASSIGN(int step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 0);
 
   // Prefill 5 tokens.
   ExecutorInputs inputs;
@@ -1615,9 +1605,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
   inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs));
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5);
   auto step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4);
@@ -1633,14 +1622,13 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   EXPECT_TRUE(input_tokens_buffer);
   decode_inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   for (int i = 0; i < kDecodeSteps; ++i) {
-    auto logits = executor->DecodeLogits(decode_inputs);
-    EXPECT_OK(logits);
-    auto logits_type = logits->TensorType();
+    ASSERT_OK_AND_ASSIGN(auto logits, executor->DecodeLogits(decode_inputs));
+    auto logits_type = logits.TensorType();
     EXPECT_TRUE(logits_type);
     EXPECT_EQ(logits_type->ElementType(), ElementType::Float32);
     EXPECT_EQ(logits_type->Layout().Dimensions(),
               Dimensions({kMaxDecodeBatchSize, 1, kVocabSize}));
-    auto logits_span = ReferTensorBufferAsSpan<float>(*logits);
+    auto logits_span = ReferTensorBufferAsSpan<float>(logits);
     EXPECT_TRUE(logits_span);
     EXPECT_EQ(logits_span->size(), kMaxDecodeBatchSize * kVocabSize);
     // Check the first logit of the first candidate vs the first logit of the
@@ -1651,10 +1639,9 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
                 logits_span->at((kMaxDecodeBatchSize - 1) * kVocabSize));
     }
   }
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
   // First pending tokens were ignored.
-  EXPECT_EQ(*step, 5 + kDecodeSteps);
+  EXPECT_EQ(step, 5 + kDecodeSteps);
   step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4 + kDecodeSteps);
@@ -1664,12 +1651,11 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Prefill once again, and see the token candidate is reduced one.
   ExecutorInputs inputs_next;
   input_tokens_buffer =
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens.data(), 1), {1, 1});
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens).first(1), {1, 1});
   inputs_next.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs_next));
-  step = executor->GetCurrentStep();
-  EXPECT_OK(step);
-  EXPECT_EQ(*step, 5 + kDecodeSteps + 1);
+  ASSERT_OK_AND_ASSIGN(step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 5 + kDecodeSteps + 1);
   step_and_token =
       executor->processed_tokens_for_testing().GetNextUnprocessedToken();
   EXPECT_EQ(step_and_token.step, 4 + kDecodeSteps);
