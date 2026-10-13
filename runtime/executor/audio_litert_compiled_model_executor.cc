@@ -60,6 +60,7 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
+#include "runtime/util/lora_util.h"
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
 
@@ -180,11 +181,32 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
       return absl::FailedPreconditionError(
           "LoRA manager is not initialized. Please load LoRA first.");
     }
-    return lora_manager_->UseLoRA(lora_id.value());
+    ABSL_RETURN_IF_ERROR(lora_manager_->UseLoRA(lora_id.value()));
+    ABSL_ASSIGN_OR_RETURN(auto lora_buffers, lora_manager_->GetLoRABuffers());
+    for (auto& [name, buffer] : lora_buffers) {
+      input_buffers_map_[name] = std::move(buffer);
+    }
+    is_lora_enabled_ = true;
+    return absl::OkStatus();
   }
 
-  // TODO: b/515389724 - Support unloading/clearing LoRA buffers from
-  // input_buffers_map_ when LoRA is deactivated for subsequent audio calls.
+  is_lora_enabled_ = false;
+  LITERT_ASSIGN_OR_RETURN(auto signature, compiled_model_.GetSignature(0));
+  for (auto& [input_name, input_buffer] : input_buffers_map_) {
+    if (!IsLoRABufferInputName(input_name)) {
+      continue;
+    }
+    auto new_buffer =
+        compiled_model_.CreateInputBuffer(signature.Key(), input_name);
+    if (!new_buffer) {
+      LITERT_ASSIGN_OR_RETURN(auto tensor_type, input_buffer.TensorType());
+      LITERT_ASSIGN_OR_RETURN(auto packed_size, input_buffer.PackedSize());
+      LITERT_ASSIGN_OR_RETURN(new_buffer, TensorBuffer::CreateManagedHostMemory(
+                                              tensor_type, packed_size));
+    }
+    ABSL_RETURN_IF_ERROR(InitializeBuffer(*new_buffer));
+    input_buffer = std::move(*new_buffer);
+  }
   return absl::OkStatus();
 }
 
@@ -342,6 +364,9 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
 absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::ClearInputBuffers() {
   for (auto& [input_name, input_buffer] : input_buffers_map_) {
+    if (IsLoRABufferInputName(input_name)) {
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
                             TensorBufferScopedLock::Create(
                                 input_buffer, TensorBuffer::LockMode::kWrite));
@@ -547,6 +572,9 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::ClearInputBuffers() {
 
 absl::Status AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Reset() {
   for (auto& [input_name, input_buffer] : input_buffers_map_) {
+    if (IsLoRABufferInputName(input_name)) {
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
                             TensorBufferScopedLock::Create(
                                 input_buffer, TensorBuffer::LockMode::kWrite));
@@ -867,7 +895,8 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
   }
 
   auto& input_buffers_map = audio_encoder_->GetMutableInputBuffersMap();
-  if (audio_encoder_->GetMutableLoraManager() != nullptr) {
+  if (audio_encoder_->IsLoRAEnabled() &&
+      audio_encoder_->GetMutableLoraManager() != nullptr) {
     auto current_lora_id =
         audio_encoder_->GetMutableLoraManager()->GetCurrentLoRAId();
     if (current_lora_id.has_value()) {
@@ -1119,9 +1148,9 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
       executor_settings_.GetAudioBufferingEnabled()) {
     auto& buffered_spectrogram =
         audio_encoder_->GetMutableBufferedSpectrogram();
-    buffered_spectrogram.insert(buffered_spectrogram.end(),
-                                spectrogram_host_buffer.begin(),
-                                spectrogram_host_buffer.end());
+    buffered_spectrogram.insert(
+        buffered_spectrogram.end(), spectrogram_host_buffer.begin(),
+        spectrogram_host_buffer.begin() + total_frames * feature_dim);
     // Return empty embeddings with 0 valid tokens.
     ExecutorAudioData audio_data;
     audio_data.SetValidTokens(0);
@@ -1202,7 +1231,7 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
     buffered_spectrogram.insert(
         buffered_spectrogram.end(),
         spectrogram_host_buffer.begin() + pos * feature_dim,
-        spectrogram_host_buffer.end());
+        spectrogram_host_buffer.begin() + total_frames * feature_dim);
   } else {
     audio_encoder_->GetMutableBufferedSpectrogram().clear();
   }
@@ -1316,6 +1345,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
       // Skip audio input buffers.
       continue;
     }
+    if (IsLoRABufferInputName(name)) {
+      // Skip LoRA input buffers as they are weights, not streaming state.
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto new_buffer, CopyTensorBuffer(env_, buffer));
     if (name == kPrevMaskName) {
       LITERT_ASSIGN_OR_RETURN(auto prev_mask_type, new_buffer.TensorType());
@@ -1347,6 +1380,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CloneContext() {
       // Skip audio input buffers.
       continue;
     }
+    if (IsLoRABufferInputName(name)) {
+      // Skip LoRA input buffers as they are weights, not streaming state.
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto new_buffer, CopyTensorBuffer(env_, buffer));
     state_buffers[name] = std::move(new_buffer);
   }
@@ -1370,6 +1407,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::RestoreContext(
     if (name == kSegmentValuesName || name == kSegmentMaskName) {
       // Skip the segment values and mask buffers as they are not part of the
       // state.
+      continue;
+    }
+    if (IsLoRABufferInputName(name)) {
+      // Skip LoRA input buffers as they are weights, not streaming state.
       continue;
     }
 

@@ -171,6 +171,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   absl::StatusOr<ExecutorStats> StopProfiling() override;
 
  private:
+  friend class AudioLiteRtCompiledModelExecutorTestPeer;
+
   // The Audio Encoder LiteRT CompiledModel wrapper manage the input and
   // output buffers of the audio encoder model. It is not expected to be used
   // directly by the user. It is used by the AudioLiteRtCompiledModelExecutor
@@ -249,6 +251,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
     LoraManager* GetMutableLoraManager() { return lora_manager_.get(); }
 
+    bool IsLoRAEnabled() const { return is_lora_enabled_; }
+
     const std::vector<float>& GetBufferedSpectrogram() const {
       return buffered_spectrogram_;
     }
@@ -284,6 +288,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     absl::flat_hash_map<absl::string_view, TensorBuffer> output_buffers_map_;
 
     std::unique_ptr<LoraManager> lora_manager_;
+    bool is_lora_enabled_ = false;
 
     std::vector<float> buffered_spectrogram_;
   };

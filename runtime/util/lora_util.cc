@@ -83,4 +83,8 @@ bool IsLoRAInputName(absl::string_view name) {
   return RE2::FullMatch(name, *kLoRAInputNamePattern);
 }
 
+bool IsLoRABufferInputName(absl::string_view name) {
+  return IsLoRAInputName(name) || name == "lora_param_tensor";
+}
+
 }  // namespace litert::lm

@@ -1839,16 +1839,27 @@ TEST_P(ExecutionManagerTest,
       const SessionId session_4,
       execution_manager_->RegisterNewSession(session_config_2));
 
+  // Fifth session without an audio scoped LoRA file must call
+  // UseLoRA(std::nullopt) so the previous session's audio LoRA does not leak
+  // into non-LoRA sessions.
+  ASSERT_OK_AND_ASSIGN(auto session_config_no_lora,
+                       CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(
+      const SessionId session_5,
+      execution_manager_->RegisterNewSession(session_config_no_lora));
+
   EXPECT_THAT(fake_audio_executor_ptr->loaded_lora_ids_, ElementsAre(0, 1));
   EXPECT_THAT(
       fake_audio_executor_ptr->used_lora_ids_,
       ElementsAre(std::optional<uint32_t>(0), std::optional<uint32_t>(0),
-                  std::optional<uint32_t>(0), std::optional<uint32_t>(1)));
+                  std::optional<uint32_t>(0), std::optional<uint32_t>(1),
+                  std::nullopt));
 
   EXPECT_OK(execution_manager_->ReleaseSession(session_1));
   EXPECT_OK(execution_manager_->ReleaseSession(session_2));
   EXPECT_OK(execution_manager_->ReleaseSession(session_3));
   EXPECT_OK(execution_manager_->ReleaseSession(session_4));
+  EXPECT_OK(execution_manager_->ReleaseSession(session_5));
 }
 
 TEST_P(ExecutionManagerTest,
