@@ -47,6 +47,8 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert  // IWYU pragma: keep
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
