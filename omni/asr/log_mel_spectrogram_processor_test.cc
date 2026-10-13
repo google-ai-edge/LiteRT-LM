@@ -413,5 +413,33 @@ TEST(LogMelSpectrogramProcessorTest,
   EXPECT_TRUE(has_non_zero_dither);
 }
 
+TEST(LogMelSpectrogramProcessorTest,
+     WhisperNormalizationUsesCenteredReflectPaddingFraming) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  // 1.0 s -> 100 centered frames (vs 98 unpadded).
+  constexpr int kSamples = 16000;
+  const std::vector<float> audio = MakeTestAudio(kSamples);
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+              .n_fft = 400,
+              .n_mels = kNMels,
+              .hop_length = kHop,
+              .norm_type = LogMelSpectrogramProcessor::NormType::kWhisper},
+          &source));
+  source.PushChunk(audio);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  // With `center=True` reflect padding of `n_fft / 2 = 200` on the left and
+  // `n_fft - hop_length - n_fft / 2 = 40` on the right, 16,000 samples yield
+  // exactly `16,000 / 160 = 100` STFT frames.
+  EXPECT_EQ(result.size(), (kSamples / kHop) * kNMels);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

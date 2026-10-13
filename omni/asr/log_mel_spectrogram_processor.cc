@@ -56,6 +56,21 @@ int GetSmallestPowerOfTwoGreaterOrEqualTo(int n) {
   return p;
 }
 
+// Returns the FFT size for STFT computation. If config.fft_length is unset,
+// Whisper uses config.n_fft directly (e.g., 400 -> 201 frequency bins) to
+// match WhisperFeatureExtractor's Slaney mel filterbank resolution, whereas
+// other models round config.n_fft up to the next power of two.
+int GetFftLength(
+    const LogMelSpectrogramProcessor::LogMelSpectrogramConfig& config) {
+  if (config.fft_length > 0) {
+    return config.fft_length;
+  }
+  if (config.norm_type == LogMelSpectrogramProcessor::NormType::kWhisper) {
+    return config.n_fft;
+  }
+  return GetSmallestPowerOfTwoGreaterOrEqualTo(config.n_fft);
+}
+
 std::vector<float> ComputeMean(const std::vector<std::vector<float>>& mel_spec,
                                int n_frames) {
   std::vector<float> result(mel_spec.size(), 0.0f);
@@ -123,6 +138,32 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     raw_speech.resize(static_cast<size_t>(valid_frames) * hop_length);
   }
   return valid_frames;
+}
+
+// Applies center=True reflect padding around raw_speech so each STFT window of
+// length n_fft is centered at frame * hop_length, matching
+// WhisperFeatureExtractor (torch.stft(..., center=True,
+// pad_mode="reflect")[:, :-1]). Standard/USM models (kStandard / normalize_mel)
+// use unpadded causal STFT framing directly from AudioPreprocessorMiniAudio
+// without pre-centering.
+void PutSamplesInCenter(std::vector<float>& raw_speech, int n_fft,
+                        int hop_length) {
+  if (raw_speech.size() <= static_cast<size_t>(n_fft)) {
+    return;
+  }
+  const size_t left_pad = static_cast<size_t>(n_fft / 2);
+  const size_t right_pad =
+      static_cast<size_t>(std::max(0, n_fft - hop_length - n_fft / 2));
+  std::vector<float> padded;
+  padded.reserve(left_pad + raw_speech.size() + right_pad);
+  for (size_t i = left_pad; i >= 1; --i) {
+    padded.push_back(raw_speech[i]);
+  }
+  padded.insert(padded.end(), raw_speech.begin(), raw_speech.end());
+  for (size_t i = 1; i <= right_pad; ++i) {
+    padded.push_back(raw_speech[raw_speech.size() - 1 - i]);
+  }
+  raw_speech = std::move(padded);
 }
 
 void NormalizeWhisperMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
@@ -207,9 +248,6 @@ LogMelSpectrogramProcessor::Create(
   if (config.n_mels <= 0) {
     return absl::InvalidArgumentError("n_mels must be positive.");
   }
-  int fft_length = config.fft_length > 0
-                       ? config.fft_length
-                       : GetSmallestPowerOfTwoGreaterOrEqualTo(config.n_fft);
   float mel_high_hz =
       config.mel_high_hz > 0.0f ? config.mel_high_hz : sample_rate_hz / 2.0f;
   litert::support::AudioPreprocessorConfig preprocessor_config =
@@ -217,7 +255,7 @@ LogMelSpectrogramProcessor::Create(
           sample_rate_hz, /*num_channels=*/1,
           /*frame_length=*/config.n_fft,
           /*hop_length=*/config.hop_length,
-          /*fft_length=*/fft_length,
+          /*fft_length=*/GetFftLength(config),
           /*input_scale=*/config.input_scale,
           /*pre_emphasis_factor=*/config.preemphasis,
           /*num_mel_bins=*/config.n_mels,
@@ -227,7 +265,8 @@ LogMelSpectrogramProcessor::Create(
           /*normalize_mel=*/config.normalize_mel,
           /*add_floor_to_mel_before_log=*/config.add_floor_to_mel_before_log,
           /*semicausal_padding=*/false,
-          /*non_zero_hanning=*/true, /*periodic_hanning=*/true,
+          /*non_zero_hanning=*/config.norm_type != NormType::kWhisper,
+          /*periodic_hanning=*/true,
           litert::support::AudioPreprocessorConfig::FftPaddingType::kRight);
   preprocessor_config.SetSlaneyMel(config.slaney_mel);
   preprocessor_config.SetPowerSpectrum(config.power_spectrum);
@@ -299,6 +338,9 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
 
   if (window_samples_ > 0 && raw_speech.size() < window_samples_) {
     raw_speech.resize(window_samples_, 0.0f);
+  }
+  if (config_.norm_type == NormType::kWhisper) {
+    PutSamplesInCenter(raw_speech, config_.n_fft, config_.hop_length);
   }
 
   preprocessor_->Reset();
