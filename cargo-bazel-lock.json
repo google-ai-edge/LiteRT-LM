@@ -1,5 +1,5 @@
 {
-  "checksum": "20049f10a79f00181a9539fea0856272132a35998d3a9b121911c98310f8fe8a",
+  "checksum": "44d7f4272315edf539fcda9cf908fb929f532d9225bb446ad1218935ed156f86",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -581,6 +581,60 @@
       ],
       "license_file": null
     },
+    "bit-set 0.5.3": {
+      "name": "bit-set",
+      "version": "0.5.3",
+      "package_url": "https://github.com/contain-rs/bit-set",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/bit-set/0.5.3/download",
+          "sha256": "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "bit_set",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "bit_set",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "std"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "bit-vec 0.6.3",
+              "target": "bit_vec"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2015",
+        "version": "0.5.3"
+      },
+      "license": "MIT/Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
     "bit-set 0.8.0": {
       "name": "bit-set",
       "version": "0.8.0",
@@ -630,6 +684,51 @@
         "version": "0.8.0"
       },
       "license": "Apache-2.0 OR MIT",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
+    "bit-vec 0.6.3": {
+      "name": "bit-vec",
+      "version": "0.6.3",
+      "package_url": "https://github.com/contain-rs/bit-vec",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/bit-vec/0.6.3/download",
+          "sha256": "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "bit_vec",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "bit_vec",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "std"
+          ],
+          "selects": {}
+        },
+        "edition": "2015",
+        "version": "0.6.3"
+      },
+      "license": "MIT/Apache-2.0",
       "license_ids": [
         "Apache-2.0",
         "MIT"
@@ -2274,6 +2373,70 @@
       ],
       "license_file": "LICENSE"
     },
+    "fancy-regex 0.13.0": {
+      "name": "fancy-regex",
+      "version": "0.13.0",
+      "package_url": "https://github.com/fancy-regex/fancy-regex",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/fancy-regex/0.13.0/download",
+          "sha256": "531e46835a22af56d1e3b66f04844bed63158bc094a628bec1d321d9b4c44bf2"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "fancy_regex",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "fancy_regex",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "default",
+            "perf",
+            "std",
+            "unicode"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "bit-set 0.5.3",
+              "target": "bit_set"
+            },
+            {
+              "id": "regex-automata 0.4.14",
+              "target": "regex_automata"
+            },
+            {
+              "id": "regex-syntax 0.8.9",
+              "target": "regex_syntax"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2018",
+        "version": "0.13.0"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
+    },
     "fc_parser 0.1.0": {
       "name": "fc_parser",
       "version": "0.1.0",
@@ -3605,6 +3768,10 @@
           ],
           "selects": {}
         },
+        "rundir": {
+          "common": ".",
+          "selects": {}
+        },
         "links": "cplusplus"
       },
       "license": "MIT OR Apache-2.0",
@@ -4504,152 +4671,6 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "onig 6.5.1": {
-      "name": "onig",
-      "version": "6.5.1",
-      "package_url": "https://github.com/iwillspeak/rust-onig",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/onig/6.5.1/download",
-          "sha256": "336b9c63443aceef14bea841b899035ae3abe89b7c486aaf4c5bd8aafedac3f0"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "onig",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "onig",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "bitflags 2.10.0",
-              "target": "bitflags"
-            },
-            {
-              "id": "once_cell 1.21.3",
-              "target": "once_cell"
-            },
-            {
-              "id": "onig_sys 69.9.1",
-              "target": "onig_sys"
-            }
-          ],
-          "selects": {
-            "cfg(windows)": [
-              {
-                "id": "libc 0.2.180",
-                "target": "libc"
-              }
-            ]
-          }
-        },
-        "edition": "2021",
-        "version": "6.5.1"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": "LICENSE.md"
-    },
-    "onig_sys 69.9.1": {
-      "name": "onig_sys",
-      "version": "69.9.1",
-      "package_url": "https://github.com/iwillspeak/rust-onig",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/onig_sys/69.9.1/download",
-          "sha256": "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "onig_sys",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        },
-        {
-          "BuildScript": {
-            "crate_name": "build_script_build",
-            "crate_root": "build.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "onig_sys",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "onig_sys 69.9.1",
-              "target": "build_script_build"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "69.9.1"
-      },
-      "build_script_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "compile_data_glob_excludes": [
-          "**/*.rs"
-        ],
-        "data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "cc 1.2.55",
-              "target": "cc"
-            },
-            {
-              "id": "pkg-config 0.3.32",
-              "target": "pkg_config"
-            }
-          ],
-          "selects": {}
-        },
-        "links": "onig"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": "LICENSE.md"
-    },
     "parking_lot 0.12.5": {
       "name": "parking_lot",
       "version": "0.12.5",
@@ -4869,45 +4890,6 @@
         "data_glob": [
           "**"
         ]
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "pkg-config 0.3.32": {
-      "name": "pkg-config",
-      "version": "0.3.32",
-      "package_url": "https://github.com/rust-lang/pkg-config-rs",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/pkg-config/0.3.32/download",
-          "sha256": "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "pkg_config",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "pkg_config",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2018",
-        "version": "0.3.32"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -5937,12 +5919,17 @@
         "crate_features": {
           "common": [
             "alloc",
+            "dfa",
+            "dfa-build",
             "dfa-onepass",
+            "dfa-search",
             "hybrid",
             "meta",
+            "nfa",
             "nfa-backtrack",
             "nfa-pikevm",
             "nfa-thompson",
+            "perf",
             "perf-inline",
             "perf-literal",
             "perf-literal-multisubstring",
@@ -7119,7 +7106,7 @@
         ],
         "crate_features": {
           "common": [
-            "onig"
+            "fancy-regex"
           ],
           "selects": {}
         },
@@ -7136,6 +7123,10 @@
             {
               "id": "esaxx-rs 0.1.10",
               "target": "esaxx_rs"
+            },
+            {
+              "id": "fancy-regex 0.13.0",
+              "target": "fancy_regex"
             },
             {
               "id": "getrandom 0.2.17",
@@ -7160,10 +7151,6 @@
             {
               "id": "monostate 0.1.18",
               "target": "monostate"
-            },
-            {
-              "id": "onig 6.5.1",
-              "target": "onig"
             },
             {
               "id": "rand 0.8.5",
