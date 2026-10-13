@@ -528,6 +528,70 @@ class ServeTest(parameterized.TestCase):
     ):
       openai_handler._translate_openai_message(message, None)
 
+  def test_translate_openai_message_tool_arguments_dict_and_formats(self):
+    # Test arguments as a dict (Issue #3800).
+    msg_dict = {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "list_files", "arguments": {"path": "."}},
+        }],
+    }
+    translated = openai_handler._translate_openai_message(msg_dict)
+    self.assertEqual(
+        translated["tool_calls"][0]["function"]["arguments"],
+        {"path": "."},
+    )
+
+    # Test arguments as None.
+    msg_none_args = {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call_2",
+            "type": "function",
+            "function": {"name": "test_func", "arguments": None},
+        }],
+    }
+    translated_none = openai_handler._translate_openai_message(msg_none_args)
+    self.assertEqual(
+        translated_none["tool_calls"][0]["function"]["arguments"],
+        {},
+    )
+
+    # Test arguments as invalid JSON string.
+    msg_invalid_json = {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call_3",
+            "type": "function",
+            "function": {"name": "test_func", "arguments": "{invalid"},
+        }],
+    }
+    translated_invalid = openai_handler._translate_openai_message(
+        msg_invalid_json
+    )
+    self.assertEqual(
+        translated_invalid["tool_calls"][0]["function"]["arguments"],
+        {},
+    )
+
+    # Test function is None or malformed.
+    msg_malformed = {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": "call_4", "function": None},
+            "not_a_dict",
+        ],
+    }
+    translated_malformed = openai_handler._translate_openai_message(
+        msg_malformed
+    )
+    self.assertEqual(
+        translated_malformed["tool_calls"][0]["function"]["arguments"],
+        {},
+    )
+
   def test_cors_headers_disabled_by_default(self):
     server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
     port = server.server_port

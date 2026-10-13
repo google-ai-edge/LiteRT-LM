@@ -25,6 +25,7 @@ from typing import Any
 import urllib.request
 
 import litert_lm
+
 from litert_lm_cli import config as cli_config
 
 
@@ -283,12 +284,19 @@ class OpenAIStreamFormatter(abc.ABC):
     return format_sse_final()
 
 
-def _parse_tool_arguments(args_str: str) -> dict[str, Any]:
-  """Parses a JSON string of arguments into a dictionary, returning empty dict on error."""
-  try:
-    return json.loads(args_str)
-  except json.JSONDecodeError:
-    return {}
+def _parse_tool_arguments(args: Any) -> dict[str, Any]:
+  """Parses a JSON string or dictionary of arguments into a dictionary, returning empty dict on error."""
+  if isinstance(args, dict):
+    return args
+  if isinstance(args, (str, bytes, bytearray)):
+    try:
+      parsed = json.loads(args)
+      if isinstance(parsed, dict):
+        return parsed
+    except (json.JSONDecodeError, TypeError):
+      return {}
+  return {}
+
 
 
 def build_name_by_tool_call_id_map(
@@ -389,18 +397,22 @@ def translate_openai_message(
 
   if role == "assistant" and "tool_calls" in msg:
     openai_tool_calls = msg.get("tool_calls", [])
-    litert_tool_calls = [
-        {
-            "type": "function",
-            "function": {
-                "name": tc.get("function", {}).get("name"),
-                "arguments": _parse_tool_arguments(
-                    tc.get("function", {}).get("arguments", "{}")
-                ),
-            },
-        }
-        for tc in openai_tool_calls
-    ]
+    if not isinstance(openai_tool_calls, list):
+      openai_tool_calls = []
+    litert_tool_calls = []
+    for tc in openai_tool_calls:
+      if not isinstance(tc, dict):
+        continue
+      func = tc.get("function")
+      if not isinstance(func, dict):
+        func = {}
+      litert_tool_calls.append({
+          "type": "function",
+          "function": {
+              "name": func.get("name"),
+              "arguments": _parse_tool_arguments(func.get("arguments")),
+          },
+      })
     return {
         "role": "assistant",
         "tool_calls": litert_tool_calls,
