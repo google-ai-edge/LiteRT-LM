@@ -302,5 +302,159 @@ TEST_F(LitertStateTest, CopyContentsFromRejectsMismatchedNumEntries) {
 }
 #endif  // !_WIN32
 
+// Returns executor metadata for the static test model that declares the state
+// buffer `linear_attention_name` as a linear attention state and the other
+// buffers as global KV caches. All KV cache buffers are [1, 1, 128, 128].
+proto::ExecutorMetadata CreateExecutorMetadata(
+    absl::string_view linear_attention_name) {
+  struct KvCache {
+    absl::string_view name;
+    proto::StateBuffer::Type type;
+    int sequence_axis;
+  };
+  constexpr KvCache kKvCaches[] = {
+      {"kv_cache_k_0", proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE, 2},
+      {"kv_cache_k_1", proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE, 2},
+      {"kv_cache_v_0", proto::StateBuffer::TYPE_GLOBAL_VALUE_CACHE, 3},
+      {"kv_cache_v_1", proto::StateBuffer::TYPE_GLOBAL_VALUE_CACHE, 3},
+  };
+  proto::ExecutorMetadata executor_metadata;
+  for (const KvCache& kv_cache : kKvCaches) {
+    proto::StateBuffer* state_buffer =
+        executor_metadata.mutable_llm_executor_metadata()->add_state_buffers();
+    state_buffer->set_decode_input_name(std::string(kv_cache.name));
+    state_buffer->set_decode_output_name(std::string(kv_cache.name));
+    if (kv_cache.name == linear_attention_name) {
+      // A linear attention state has no sequence axis.
+      state_buffer->set_type(proto::StateBuffer::TYPE_LINEAR_ATTENTION);
+    } else {
+      state_buffer->set_type(kv_cache.type);
+      state_buffer->set_sequence_axis(kv_cache.sequence_axis);
+    }
+  }
+  return executor_metadata;
+}
+
+TEST_F(LitertStateTest,
+       ClearLinearAttentionStateClearsOnlyLinearAttentionBuffer) {
+  const proto::ExecutorMetadata executor_metadata =
+      CreateExecutorMetadata(/*linear_attention_name=*/"kv_cache_k_0");
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1, &executor_metadata));
+  EXPECT_TRUE(kv_cache_->HasLinearAttentionState());
+  ASSERT_OK_AND_ASSIGN(
+      auto buffers,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_EQ(buffers.input_buffers.size(), 4u);
+  for (auto& [_, buffer] : buffers.input_buffers) {
+    ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 7));
+  }
+
+  ASSERT_OK(kv_cache_->ClearLinearAttentionState());
+
+  for (auto& [name, buffer] : buffers.input_buffers) {
+    const uint8_t expected_value = name == "kv_cache_k_0" ? 0 : 7;
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, expected_value))
+        << name;
+  }
+}
+
+TEST_F(LitertStateTest,
+       ClearLinearAttentionStateClearsLinearAttentionBufferOfAnyLayer) {
+  // Same as above, but with the second layer's key cache declared, so that
+  // the test does not depend on one buffer name.
+  const proto::ExecutorMetadata executor_metadata =
+      CreateExecutorMetadata(/*linear_attention_name=*/"kv_cache_k_1");
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1, &executor_metadata));
+  EXPECT_TRUE(kv_cache_->HasLinearAttentionState());
+  ASSERT_OK_AND_ASSIGN(
+      auto buffers,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_EQ(buffers.input_buffers.size(), 4u);
+  for (auto& [_, buffer] : buffers.input_buffers) {
+    ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 7));
+  }
+
+  ASSERT_OK(kv_cache_->ClearLinearAttentionState());
+
+  for (auto& [name, buffer] : buffers.input_buffers) {
+    const uint8_t expected_value = name == "kv_cache_k_1" ? 0 : 7;
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, expected_value))
+        << name;
+  }
+}
+
+TEST_F(LitertStateTest, ClearLinearAttentionStateIsNoOpWithoutLinearAttention) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1));
+  EXPECT_FALSE(kv_cache_->HasLinearAttentionState());
+  ASSERT_OK_AND_ASSIGN(
+      auto buffers,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_FALSE(buffers.input_buffers.empty());
+  for (auto& [_, buffer] : buffers.input_buffers) {
+    ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 7));
+  }
+
+  ASSERT_OK(kv_cache_->ClearLinearAttentionState());
+
+  for (auto& [name, buffer] : buffers.input_buffers) {
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 7)) << name;
+  }
+}
+
+TEST_F(LitertStateTest, ClearLinearAttentionStateClearsBothPingPongBanks) {
+  const proto::ExecutorMetadata executor_metadata =
+      CreateExecutorMetadata(/*linear_attention_name=*/"kv_cache_k_0");
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kPingPong,
+                                  /*batch_size=*/1, &executor_metadata));
+  // The first step returns bank 1 as inputs and bank 2 as outputs.
+  ASSERT_OK_AND_ASSIGN(
+      auto first_step,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  for (auto* buffers :
+       {&first_step.input_buffers, &first_step.output_buffers}) {
+    for (auto& [_, buffer] : *buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 7));
+    }
+  }
+
+  ASSERT_OK(kv_cache_->ClearLinearAttentionState());
+
+  ASSERT_OK_AND_ASSIGN(
+      auto second_step,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_OK_AND_ASSIGN(
+      auto third_step,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  for (auto* step : {&first_step, &second_step, &third_step}) {
+    for (auto* buffers : {&step->input_buffers, &step->output_buffers}) {
+      ASSERT_EQ(buffers->size(), 4u);
+      for (auto& [name, buffer] : *buffers) {
+        const uint8_t expected_value = name == "kv_cache_k_0" ? 0 : 7;
+        ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, expected_value))
+            << name;
+      }
+    }
+  }
+}
+
+TEST_F(LitertStateTest, DeepCopyHasLinearAttentionState) {
+  const proto::ExecutorMetadata executor_metadata =
+      CreateExecutorMetadata(/*linear_attention_name=*/"kv_cache_k_0");
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1, &executor_metadata));
+  ASSERT_OK_AND_ASSIGN(auto copy_interface, kv_cache_->DeepCopy());
+  auto* copy = dynamic_cast<LitertState*>(copy_interface.get());
+  ASSERT_NE(copy, nullptr);
+  EXPECT_TRUE(copy->HasLinearAttentionState());
+}
+
 }  // namespace
 }  // namespace litert::lm

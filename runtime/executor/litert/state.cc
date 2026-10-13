@@ -212,6 +212,14 @@ absl::Status CopyBufferContents(TensorBuffer& dst, const TensorBuffer& src) {
   return absl::OkStatus();
 }
 
+// Returns true if the state buffer `name` of `type` holds a linear attention /
+// convolution state.
+bool IsLinearAttentionState(proto::StateBuffer::Type type,
+                            absl::string_view name) {
+  return type == proto::StateBuffer::TYPE_LINEAR_ATTENTION ||
+         IsLinearAttentionStateName(name);
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<LitertState>> LitertState::Create(
@@ -367,6 +375,32 @@ absl::Status LitertState::Clear() {
   if (bank_2_state_buffers_.has_value()) {
     for (auto& [_, state_buffer] : *bank_2_state_buffers_) {
       LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
+    }
+  }
+  return absl::OkStatus();
+}
+
+bool LitertState::HasLinearAttentionState() const {
+  // Both banks hold the same set of state buffers.
+  for (const auto& [name, state_buffer] : bank_1_state_buffers_) {
+    if (IsLinearAttentionState(state_buffer.type, name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+absl::Status LitertState::ClearLinearAttentionState() {
+  for (auto& [name, state_buffer] : bank_1_state_buffers_) {
+    if (IsLinearAttentionState(state_buffer.type, name)) {
+      LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
+    }
+  }
+  if (bank_2_state_buffers_.has_value()) {
+    for (auto& [name, state_buffer] : *bank_2_state_buffers_) {
+      if (IsLinearAttentionState(state_buffer.type, name)) {
+        LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
+      }
     }
   }
   return absl::OkStatus();

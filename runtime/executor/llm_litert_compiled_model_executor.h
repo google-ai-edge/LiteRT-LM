@@ -379,6 +379,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // When output_batch_size_ > 1, It selects only one set of KV cache buffers.
   absl::Status PrepareFirstPrefillAfterDecode(int token_index_to_reduce);
 
+  // Zeroes out the linear attention state before a prefill that starts at
+  // step 0. No-op for models without such a state.
+  absl::Status ClearLinearAttentionStateIfFirstStep();
+
   // Prepares the first decode step.
   // When output_batch_size_ > 1, It broadcasts KV cache buffers to
   // output_batch_size_ times for the rest of the decode steps.

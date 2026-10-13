@@ -80,6 +80,16 @@ class LitertState : public StateInterface {
 
   absl::Status Clear() override;
 
+  // Returns true if any state buffer holds a linear attention / convolution
+  // state, i.e. TYPE_LINEAR_ATTENTION or a "kv_cache_c_" / "kv_cache_r_" name.
+  bool HasLinearAttentionState() const;
+
+  // Zeroes out only the linear attention / convolution state buffers, in both
+  // banks for kPingPong. The KV cache can be reused for a new sequence because
+  // its entries are masked by position, but these states are a running summary
+  // of every token processed so far, so a new sequence must start from zeros.
+  absl::Status ClearLinearAttentionState();
+
   // Returns true if all state buffers are backed by host memory.
   bool IsHostMemory() const;
 
