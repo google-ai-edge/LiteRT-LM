@@ -37,6 +37,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "support/tokenizer/tokenizer.h"
@@ -174,6 +175,14 @@ class SessionAdvanced : public SessionInterface {
   // Rewinds the session to the given checkpoint.
   absl::Status RewindToCheckpoint(absl::string_view label) override;
 
+  // Save the current step and processed context with the name `label`. Saved
+  // contexts are single-use and are consumed upon restore.
+  absl::Status SaveContext(absl::string_view label) override;
+
+  // Restores the session to the given saved context, restoring and consuming
+  // the processed context.
+  absl::Status RestoreContext(absl::string_view label) override;
+
   // Rewinds the session to a specific step number.
   absl::Status RewindToStep(int step) override;
 
@@ -293,6 +302,7 @@ class SessionAdvanced : public SessionInterface {
     int step;
     SessionState state;
     absl::flat_hash_set<TaskId> last_task_ids;
+    std::unique_ptr<ProcessedContext> processed_context = nullptr;
   };
 
   // The checkpoint map for the session.

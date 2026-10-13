@@ -262,6 +262,15 @@ class ExecutionManager {
   virtual absl::Status SetCurrentStep(const SessionInfo& session_info,
                                       int target_step) = 0;
 
+  // Saves the processed context of the session.
+  virtual absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext(
+      const SessionInfo& session_info) = 0;
+
+  // Restores the processed context of the session.
+  virtual absl::Status RestoreContext(
+      const SessionInfo& session_info,
+      std::unique_ptr<ProcessedContext> processed_context) = 0;
+
   // Returns the audio executor properties.
   virtual absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const = 0;

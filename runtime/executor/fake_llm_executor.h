@@ -117,6 +117,33 @@ class FakeLlmExecutor : public LlmExecutor {
     return absl::OkStatus();
   };
 
+  class FakeProcessedContext : public ProcessedContext {
+   public:
+    std::optional<uint32_t> lora_id() const override { return lora_id_; }
+    void set_lora_id(std::optional<uint32_t> lora_id) override {
+      lora_id_ = lora_id;
+    }
+    ProcessedTokens& processed_tokens() override { return processed_tokens_; }
+
+   private:
+    std::optional<uint32_t> lora_id_;
+    ProcessedTokens processed_tokens_;
+  };
+
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const override {
+    return std::make_unique<FakeProcessedContext>();
+  }
+
+  absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) override {
+    if (dynamic_cast<FakeProcessedContext*>(processed_context.get()) ==
+        nullptr) {
+      return absl::InvalidArgumentError("Invalid processed context.");
+    }
+    return absl::OkStatus();
+  }
+
   absl::StatusOr<const ProcessedTokens*> GetProcessedTokens() const override {
     return &processed_tokens_;
   }

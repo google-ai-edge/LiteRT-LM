@@ -1313,6 +1313,23 @@ absl::Status ThreadedExecutionManager::SetCurrentStep(
   return llm_executor->SetCurrentStep(target_step);
 }
 
+absl::StatusOr<std::unique_ptr<ProcessedContext>>
+ThreadedExecutionManager::SaveContext(const SessionInfo& session_info) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  return llm_executor->SaveContext();
+}
+
+absl::Status ThreadedExecutionManager::RestoreContext(
+    const SessionInfo& session_info,
+    std::unique_ptr<ProcessedContext> processed_context) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  return llm_executor->RestoreContext(std::move(processed_context));
+}
+
 absl::StatusOr<AudioExecutorProperties>
 ThreadedExecutionManager::GetAudioExecutorProperties() const {
   return resource_manager_->GetAudioExecutorProperties();

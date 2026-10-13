@@ -1257,6 +1257,56 @@ TEST_F(SessionAdvancedTest, SaveAndRewindCheckpoint) {
               StatusIs(absl::StatusCode::kNotFound));
 }
 
+TEST_F(SessionAdvancedTest, SaveAndRestoreContext) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+
+  EXPECT_OK(session->RunPrefill(inputs));
+
+  EXPECT_OK(session->SaveCheckpoint("regular-checkpoint"));
+  EXPECT_OK(session->SaveContext("context-1"));
+
+  auto decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetMaxOutputTokens(2);
+  ASSERT_OK_AND_ASSIGN(auto responses1, session->RunDecode(decode_config));
+  EXPECT_EQ(responses1.GetTexts().size(), 1);
+  EXPECT_EQ(responses1.GetTexts()[0], "How'");
+  EXPECT_THAT(responses1.GetTokenIds()[0], testing::ElementsAre(224, 24));
+  ASSERT_OK_AND_ASSIGN(auto text_from_ids1,
+                       tokenizer_->TokenIdsToText(responses1.GetTokenIds()[0]));
+  EXPECT_EQ(text_from_ids1, responses1.GetTexts()[0]);
+
+  EXPECT_OK(session->SaveContext("context-2"));
+
+  // Restoring a regular checkpoint (without saved context) should fail.
+  EXPECT_THAT(session->RestoreContext("regular-checkpoint"),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  EXPECT_OK(session->RestoreContext("context-1"));
+
+  decode_config.SetMaxOutputTokens(2);
+  ASSERT_OK_AND_ASSIGN(auto responses3, session->RunDecode(decode_config));
+  EXPECT_EQ(responses3.GetTexts().size(), 1);
+  EXPECT_EQ(responses3.GetTexts()[0], "How'");
+  EXPECT_THAT(responses3.GetTokenIds()[0], testing::ElementsAre(224, 24));
+  ASSERT_OK_AND_ASSIGN(auto text_from_ids3,
+                       tokenizer_->TokenIdsToText(responses3.GetTokenIds()[0]));
+  EXPECT_EQ(text_from_ids3, responses3.GetTexts()[0]);
+
+  // Saved contexts are single-use and consumed upon restore.
+  EXPECT_THAT(session->RestoreContext("context-1"),
+              StatusIs(absl::StatusCode::kNotFound));
+
+  // Checkpoints created after the target step should be pruned.
+  EXPECT_THAT(session->RestoreContext("context-2"),
+              StatusIs(absl::StatusCode::kNotFound));
+
+  EXPECT_THAT(session->RestoreContext("non-existent"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
 TEST_F(SessionAdvancedTest, GetCurrentStep) {
   ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
 

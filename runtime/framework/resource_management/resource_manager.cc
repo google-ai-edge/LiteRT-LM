@@ -396,6 +396,16 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->RestoreContext(std::move(llm_context));
   }
 
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const override {
+    return llm_executor_->SaveContext();
+  }
+
+  absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) override {
+    return llm_executor_->RestoreContext(std::move(processed_context));
+  }
+
   absl::Status UpdateRuntimeConfig(
       const RuntimeConfig& runtime_config) override {
     return llm_executor_->UpdateRuntimeConfig(runtime_config);

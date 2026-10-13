@@ -69,8 +69,6 @@ namespace {
 constexpr absl::string_view kChannelsKey = "channels";
 constexpr absl::string_view kChannelContentCheckpoint =
     "channel_content_checkpoint";
-constexpr absl::string_view kStartContentCheckpoint =
-    "start_content_checkpoint";
 
 bool IsEmptyInputError(const absl::Status& status) {
   return absl::IsInvalidArgument(status) &&
@@ -605,10 +603,6 @@ absl::Status Conversation::SendMessageAsync(
     checkpoint_after_user_prefill_ = false;
   };
 
-  if (!config_.enable_rewinding() && was_history_empty) {
-    ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kStartContentCheckpoint));
-  }
-
   // If the prompt template itself opens a channel at the end of the user
   // prefill (e.g. `<think>\n`), save the checkpoint before prefilling the user
   // message so that the open channel start tag can also be stripped on rewind.
@@ -618,6 +612,8 @@ absl::Status Conversation::SendMessageAsync(
       open_channel_name.has_value()) {
     if (config_.enable_rewinding()) {
       ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kChannelContentCheckpoint));
+    } else {
+      ABSL_RETURN_IF_ERROR(session_->SaveContext(kChannelContentCheckpoint));
     }
     absl::MutexLock lock(history_mutex_);
     checkpoint_message_index_ = history_.size() - num_messages_added;
@@ -828,13 +824,13 @@ absl::Status Conversation::SendMessageAsync(
               // start the decode process.
               if (config_.filter_channel_content_from_kv_cache() &&
                   !open_channel_name.has_value()) {
-                if (config_.enable_rewinding()) {
-                  auto save_status =
-                      session_->SaveCheckpoint(kChannelContentCheckpoint);
-                  if (!save_status.ok()) {
-                    (*callback)(save_status);
-                    return;
-                  }
+                auto save_status =
+                    config_.enable_rewinding()
+                        ? session_->SaveCheckpoint(kChannelContentCheckpoint)
+                        : session_->SaveContext(kChannelContentCheckpoint);
+                if (!save_status.ok()) {
+                  (*callback)(save_status);
+                  return;
                 }
                 absl::MutexLock lock(history_mutex_);
                 checkpoint_message_index_ = history_.size();
@@ -1129,10 +1125,8 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
     ABSL_RETURN_IF_ERROR(
         session_->RewindToCheckpoint(kChannelContentCheckpoint));
   } else {
-    // Otherwise rewind to the beginning.
-    ABSL_RETURN_IF_ERROR(session_->RewindToCheckpoint(kStartContentCheckpoint));
-    checkpoint_message_index_ = 0;
-    add_generation_prompt_to_old = false;
+    // Otherwise restore the saved context.
+    ABSL_RETURN_IF_ERROR(session_->RestoreContext(kChannelContentCheckpoint));
   }
 
   // Get the InputData vector for the messages from the checkpoint onward.

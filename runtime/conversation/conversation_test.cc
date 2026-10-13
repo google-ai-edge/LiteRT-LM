@@ -171,7 +171,10 @@ class MockSession : public SessionInterface {
   MOCK_METHOD(absl::Status, WaitUntilDone, (), (override));
   MOCK_METHOD(absl::Status, SaveCheckpoint, (absl::string_view label),
               (override));
+  MOCK_METHOD(absl::Status, SaveContext, (absl::string_view label), (override));
   MOCK_METHOD(absl::Status, RewindToCheckpoint, (absl::string_view label),
+              (override));
+  MOCK_METHOD(absl::Status, RestoreContext, (absl::string_view label),
               (override));
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
 };
@@ -2301,11 +2304,6 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
   {
     testing::InSequence seq;
 
-    // When rewinding to intermediate checkpoints is disabled, a single
-    // start_content_checkpoint is saved before the first user turn.
-    EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("start_content_checkpoint"))
-        .WillOnce(Return(absl::OkStatus()));
-
     EXPECT_CALL(
         *mock_session_ptr,
         RunPrefillAsync(ElementsAre(VariantWith<InputText>(testing::Property(
@@ -2320,6 +2318,11 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
           return nullptr;
         });
 
+    // When rewinding is disabled, the context is saved after prefilling
+    // the user turn.
+    EXPECT_CALL(*mock_session_ptr, SaveContext("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+
     EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
         .WillOnce([](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
                          user_callback,
@@ -2331,19 +2334,15 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
           return nullptr;
         });
 
-    // Rewind all the way to start_content_checkpoint and refill the full
-    // stripped history from the beginning.
-    EXPECT_CALL(*mock_session_ptr,
-                RewindToCheckpoint("start_content_checkpoint"))
+    // Restore the saved context and refill the stripped assistant message.
+    EXPECT_CALL(*mock_session_ptr, RestoreContext("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
 
     EXPECT_CALL(
         *mock_session_ptr,
         RunPrefillAsync(
             ElementsAre(VariantWith<InputText>(testing::Property(
-                &InputText::GetRawTextString,
-                "<start_of_turn>user\nHow are you?<end_of_turn>\n"
-                "<start_of_turn>assistant\nI am good.<end_of_turn>\n"))),
+                &InputText::GetRawTextString, "I am good.<end_of_turn>\n"))),
             testing::_))
         .WillOnce([](const std::vector<InputData>& contents,
                      absl::AnyInvocable<void(absl::StatusOr<Responses>)>
@@ -2373,6 +2372,9 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
           return nullptr;
         });
 
+    EXPECT_CALL(*mock_session_ptr, SaveContext("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+
     EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
         .WillOnce([](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
                          user_callback,
@@ -2384,21 +2386,15 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
           return nullptr;
         });
 
-    // Rewind all the way to start_content_checkpoint and refill both turns
-    // without channel content.
-    EXPECT_CALL(*mock_session_ptr,
-                RewindToCheckpoint("start_content_checkpoint"))
+    // Restore the saved context and refill the stripped assistant message.
+    EXPECT_CALL(*mock_session_ptr, RestoreContext("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
 
     EXPECT_CALL(
         *mock_session_ptr,
         RunPrefillAsync(
             ElementsAre(VariantWith<InputText>(testing::Property(
-                &InputText::GetRawTextString,
-                "<start_of_turn>user\nHow are you?<end_of_turn>\n"
-                "<start_of_turn>assistant\nI am good.<end_of_turn>\n"
-                "<start_of_turn>user\nThat's great.<end_of_turn>\n"
-                "<start_of_turn>assistant\nThank you.<end_of_turn>\n"))),
+                &InputText::GetRawTextString, "Thank you.<end_of_turn>\n"))),
             testing::_))
         .WillOnce([](const std::vector<InputData>& contents,
                      absl::AnyInvocable<void(absl::StatusOr<Responses>)>

@@ -40,6 +40,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -530,6 +531,60 @@ absl::Status SessionAdvanced::RewindToCheckpoint(absl::string_view label) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
   return execution_manager_lock->SetCurrentStep(*session_info_, target_step);
+}
+
+absl::Status SessionAdvanced::SaveContext(absl::string_view label) {
+  absl::MutexLock lock(mutex_);
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr) {
+    return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  ABSL_ASSIGN_OR_RETURN(int current_step,
+                        execution_manager_lock->GetCurrentStep(*session_info_));
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<ProcessedContext> processed_context,
+                        execution_manager_lock->SaveContext(*session_info_));
+  checkpoint_map_[label] = {current_step, session_state_, last_task_ids_,
+                            std::move(processed_context)};
+  return absl::OkStatus();
+}
+
+absl::Status SessionAdvanced::RestoreContext(absl::string_view label) {
+  absl::MutexLock lock(mutex_);
+
+  // Look up the checkpoint step.
+  auto it = checkpoint_map_.find(label);
+  if (it == checkpoint_map_.end()) {
+    return absl::NotFoundError(absl::StrCat("Checkpoint not found: ", label));
+  }
+  if (it->second.processed_context == nullptr) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Checkpoint does not contain context: ", label));
+  }
+  int target_step = it->second.step;
+  session_state_ = it->second.state;
+  // Restore the task dependencies. This is necessary to prevent task-dependency
+  // errors when a task is failed before the rewind. Otherwise, if the task
+  // failed, because of the dependency chain, all tasks after the rewind point
+  // would be considered as failed then finished immediately.
+  last_task_ids_ = it->second.last_task_ids;
+  std::unique_ptr<ProcessedContext> processed_context =
+      std::move(it->second.processed_context);
+  checkpoint_map_.erase(it);
+
+  // Remove all checkpoints after the current step.
+  absl::erase_if(checkpoint_map_, [target_step](const auto& pair) {
+    return pair.second.step > target_step;
+  });
+
+  // Get the execution manager, set the current step, and restore context.
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr) {
+    return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  ABSL_RETURN_IF_ERROR(
+      execution_manager_lock->SetCurrentStep(*session_info_, target_step));
+  return execution_manager_lock->RestoreContext(*session_info_,
+                                                std::move(processed_context));
 }
 
 absl::Status SessionAdvanced::RewindToStep(int step) {

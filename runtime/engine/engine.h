@@ -323,6 +323,22 @@ class SessionInterface {
     return absl::UnimplementedError("RewindToCheckpoint not implemented.");
   }
 
+  // Save the current step and processed context with the name `label`. You can
+  // later restore to this context using `RestoreContext(label)`.
+  // Saved contexts are single-use and are consumed upon restore.
+  // If the label already exists, it will be overwritten.
+  virtual absl::Status SaveContext(absl::string_view label) {
+    return absl::UnimplementedError("SaveContext not implemented.");
+  }
+
+  // Restores the session to the given saved context, restoring and consuming
+  // the processed context. The saved context itself and any checkpoints after
+  // the restored step will be removed. Returns an error if the label does not
+  // exist.
+  virtual absl::Status RestoreContext(absl::string_view label) {
+    return absl::UnimplementedError("RestoreContext not implemented.");
+  }
+
   // Rewinds the session to a specific step number.
   virtual absl::Status RewindToStep(int step) {
     return absl::UnimplementedError("RewindToStep not implemented.");

@@ -242,6 +242,15 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::Status SetCurrentStep(const SessionInfo& session_info,
                               int target_step) override;
 
+  // Saves the processed context of the session.
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext(
+      const SessionInfo& session_info) override;
+
+  // Restores the processed context of the session.
+  absl::Status RestoreContext(
+      const SessionInfo& session_info,
+      std::unique_ptr<ProcessedContext> processed_context) override;
+
   // Returns the audio executor properties.
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override;

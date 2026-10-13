@@ -215,6 +215,22 @@ class LlmExecutorBase {
         "RestoreContext not implemented for backend: ", ExecutorBackendName()));
   };
 
+  // Saves the processed context from the executor and returns it as an opaque
+  // container to the caller.
+  virtual absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const {
+    return absl::UnimplementedError(absl::StrCat(
+        "SaveContext not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Restores the processed context of the executor with the provided processed
+  // context.
+  virtual absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) {
+    return absl::UnimplementedError(absl::StrCat(
+        "RestoreContext not implemented for backend: ", ExecutorBackendName()));
+  }
+
   // ------------Profiling APIs------------:
   // Starts profiling if supported by the underlying executor/backend.
   virtual absl::Status StartProfiling() {
