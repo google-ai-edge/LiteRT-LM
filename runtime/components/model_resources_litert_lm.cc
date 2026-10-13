@@ -139,6 +139,15 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
   return model_map_[key].get();
 }
 
+bool ModelResourcesLitertLm::HasTFLiteModel(ModelType model_type) {
+  if (GetTFLiteModelSectionFileRegion(model_type).ok()) {
+    return true;
+  }
+  const std::string key =
+      absl::AsciiStrToLower(TfLiteModelTypeToWireString(model_type));
+  return model_map_.contains(key);
+}
+
 std::optional<std::string>
 ModelResourcesLitertLm::GetTFLiteModelBackendConstraint(ModelType model_type) {
   return litert_lm_loader_->GetTFLiteModelBackendConstraint(model_type);
