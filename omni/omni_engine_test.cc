@@ -235,7 +235,7 @@ TEST(OmniEngineTest, ResolvesAsrModelAndForwardsOptions) {
       .num_threads = 8,
   };
   EXPECT_THAT(OmniEngine::Create("moonshine-tiny", options),
-              StatusIs(absl::StatusCode::kNotFound,
+              StatusIs(absl::StatusCode::kInvalidArgument,
                        HasSubstr("/custom/asr_cache/moonshine-tiny.litertlm")));
 }
 

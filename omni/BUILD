@@ -27,6 +27,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "@com_google_protobuf//:protobuf_lite",
     ],
 )
 
@@ -83,10 +84,69 @@ cc_library(
 )
 
 cc_library(
+    name = "omni_registry",
+    srcs = ["omni_registry.cc"],
+    hdrs = ["omni_registry.h"],
+    deps = [
+        ":omni_engine_header",
+        ":omni_session",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc/options:litert_cpu_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_qualcomm_options",
+        "//runtime/components:model_resources",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_test(
+    name = "omni_registry_test",
+    srcs = ["omni_registry_test.cc"],
+    deps = [
+        ":omni_engine_header",
+        ":omni_registry",
+        ":omni_session",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//runtime/components:model_resources",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_session_config_cc_proto",
+        "//runtime/proto:tts_session_config_cc_proto",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "omni_engine",
     srcs = ["omni_engine.cc"],
     hdrs = ["omni_engine.h"],
     deps = [
+        ":omni_registry",
         ":omni_session",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
@@ -94,9 +154,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "//omni/asr:asr_engine",
-        "//omni/asr:asr_session",
-        "//omni/asr:model_metadata",
         "//omni/text2image:text2image_engine",
         "//omni/text2image:text2image_session",
         "//omni/text2image/flux2:flux2_model_config",
@@ -126,6 +183,7 @@ cc_test(
         "//omni/asr:audio_source",
         "//omni/asr:detokenizer",
         "//omni/asr:levenshtein_text_merger",
+        "//omni/asr:moonshine",  # build_cleaner: keep
         "//omni/asr:speech_recognizer",
         "//omni/base:io_types",
         "//omni/base:stage",

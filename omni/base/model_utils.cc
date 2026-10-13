@@ -35,6 +35,7 @@
 #include <TargetConditionals.h>
 #endif
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -57,6 +58,7 @@
 #include "litert/experimental/custom_ops/bidirectional_lstm/bidirectional_lstm_custom_op.h"  // from @litert
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "omni/omni_engine.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/model_resources_task.h"
@@ -73,12 +75,25 @@
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/huggingface_tokenizer.h"
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni {
 
 namespace {
+
+lm::Backend ToLmBackend(OmniEngine::Settings::Backend backend) {
+  switch (backend) {
+    case OmniEngine::Settings::Backend::kGpu:
+      return lm::Backend::GPU;
+    case OmniEngine::Settings::Backend::kNpu:
+      return lm::Backend::NPU;
+    case OmniEngine::Settings::Backend::kCpu:
+    default:
+      return lm::Backend::CPU;
+  }
+}
 
 class TfLiteModelResources : public lm::ModelResources {
  public:
@@ -190,6 +205,30 @@ std::string JoinPath(absl::string_view dir, absl::string_view filename) {
 }
 
 }  // namespace
+
+ModelOptions ToLmModelOptions(const OmniEngine::Settings& settings) {
+  ModelOptions lm_options;
+  lm_options.backend = ToLmBackend(settings.backend);
+  lm_options.num_threads = settings.num_threads > 0 ? settings.num_threads : 4;
+  lm_options.cache_dir =
+      settings.cache_dir.empty() ? ":nocache" : settings.cache_dir;
+  return lm_options;
+}
+
+absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>> CreateTokenizer(
+    lm::ModelResources* absl_nullable lm_resources,
+    absl::string_view tokenizer_path) {
+  if (lm_resources != nullptr) {
+    return lm_resources->GetTokenizer();
+  }
+  if (tokenizer_path.empty()) {
+    return absl::InvalidArgumentError(
+        "Tokenizer path must be provided when not using a .litertlm model.");
+  }
+  ABSL_RETURN_IF_ERROR(CheckFileReadable(tokenizer_path));
+  return ::litert::support::HuggingFaceTokenizer::CreateFromFile(
+      tokenizer_path);
+}
 
 absl::Status CheckFileReadable(absl::string_view path) {
   std::string path_str(path);
@@ -338,6 +377,31 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
   ABSL_VLOG(2) << absl::StrCat("Compiled model created successfully with ",
                                target_gpu ? "GPU" : "CPU", " backend");
   return std::move(compiled_model);
+}
+
+absl::StatusOr<std::unique_ptr<CompiledModel>> CreateCompiledModel(
+    const OmniEngine::Settings& settings, Environment& env, Options& options,
+    lm::ModelResources* absl_nullable lm_resources,
+    absl::string_view model_type) {
+  if (lm_resources != nullptr) {
+    ABSL_ASSIGN_OR_RETURN(absl::string_view model_buffer,
+                          lm_resources->GetTFLiteModelBuffer(model_type));
+    LITERT_ASSIGN_OR_RETURN(
+        auto comp_model,
+        CompiledModel::Create(
+            env,
+            BufferRef<uint8_t>(
+                reinterpret_cast<const uint8_t*>(model_buffer.data()),
+                model_buffer.size()),
+            options));
+    return std::make_unique<CompiledModel>(std::move(comp_model));
+  }
+
+  ABSL_RETURN_IF_ERROR(CheckFileReadable(settings.model_path));
+  LITERT_ASSIGN_OR_RETURN(
+      auto comp_model,
+      CompiledModel::Create(env, settings.model_path, options));
+  return std::make_unique<CompiledModel>(std::move(comp_model));
 }
 
 absl::StatusOr<CompiledModel> CreateCompiledModelFromBuffer(

@@ -42,6 +42,8 @@ message LogMelSpectrogramConfig {
   optional bool transpose = 12;
   optional NormType norm_type = 13;
   optional int32 hop_length = 14;
+  optional bool slaney_mel = 15;
+  optional bool power_spectrum = 16;
 }
 
 // Model-specific parameters for Automatic Speech Recognition (ASR) models.
@@ -71,14 +73,10 @@ message AsrMetadata {
   optional LogMelSpectrogramConfig log_mel_spectrogram_config = 4;
 
   // Token IDs for decoding control.
-  optional int32 decode_start_token_id = 5;
+  repeated int32 decode_start_token_ids = 5;
   optional int32 decode_stop_token_id = 6;
   optional int32 decode_skip_until_token_id = 7;
   optional int32 decode_statefully_after = 8;
   optional int32 vocab_size = 9;
   optional int32 blank_token_id = 10;
-
-  // Patterns for state and intermediate buffer tensor names to be declared as
-  // external/buffer-storage tensors on GPU.
-  repeated string state_buffer_name_patterns = 11;
 }

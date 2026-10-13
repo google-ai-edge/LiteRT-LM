@@ -16,120 +16,47 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_ENGINE_H_
 
 #include <memory>
-#include <string>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
+#include "omni/asr/asr_session.h"
 #include "omni/asr/audio_source.h"
-#include "omni/asr/log_mel_spectrogram_processor.h"
-#include "omni/base/litert_lm_engine_runner.h"
-#include "omni/base/litert_lm_runner.h"
 #include "omni/multi_staged_session.h"
 #include "omni/omni_engine.h"
-#include "runtime/components/model_resources.h"
-#include "runtime/framework/threadpool.h"
-#include "support/tokenizer/tokenizer.h"
+#include "runtime/proto/asr_metadata.pb.h"
+#include "runtime/proto/asr_session_config.pb.h"
 
 namespace litert::omni::asr {
 
-struct AsrEngineConfig {
-  enum class DecoderType {
-    kUnspecified = 0,
-    kCtc = 1,
-    kTdt = 2,
-    kStateless = 3,
-    kLm = 4,
-  };
-
-  enum class TextMergerType {
-    kLevenshtein = 0,
-    kTimestamp = 1,
-  };
-
-  std::string model_name;
-  std::string model_path;
-  std::string tokenizer_path;
-  std::string model_url;
-  std::string tokenizer_url;
-
-  int sample_rate_hz = 16000;
-  int input_milliseconds = 5000;
-
-  DecoderType decoder_type = DecoderType::kTdt;
-  OmniEngine::Options::Backend backend = OmniEngine::Options::Backend::kCpu;
-  TextMergerType text_merger_type = TextMergerType::kTimestamp;
-  int num_threads = 4;
-  float overlap_ratio = 0.4f;
-
-  bool has_log_mel_config = false;
-  LogMelSpectrogramProcessor::LogMelSpectrogramConfig log_mel_config;
-
-  std::vector<int> decode_start_token_ids;
-  int decode_stop_token_id = -1;
-  int decode_skip_until_token_id = -1;
-  int decode_statefully_after = 4;
-  int vocab_size = 0;
-  int blank_token_id = 0;
-
-  // Patterns for state and intermediate buffer tensor names (e.g., recurrent
-  // states, encoder outputs) to be declared as external tensors for GPU
-  // (ml_drift).
-  std::vector<std::string> state_buffer_name_patterns;
-
-  std::string cache_dir = "/tmp/asr_models";
-};
-
-// Engine that manages model loading, tokenizer instantiation, and ASR session
-// creation.
+// Thin ASR wrapper around `OmniEngine`.
+// TODO: Remove AsrEngine once TTS and Text2Image move to static registry.
 class AsrEngine {
  public:
-  using FileDownloader = absl::AnyInvocable<absl::Status(
-      absl::string_view url, absl::string_view target_path) const>;
+  struct Settings {
+    OmniEngine::Settings engine_settings;
+    lm::proto::AsrSessionConfig session_config;
+    lm::proto::AsrMetadata metadata;
+  };
 
-  // Creates an AsrEngine. Downloads missing model/tokenizer files using
-  // downloader callback.
   static absl::StatusOr<std::unique_ptr<AsrEngine>> Create(
-      AsrEngineConfig config, FileDownloader downloader = nullptr);
+      absl::string_view model_name, Settings settings = {});
 
   ~AsrEngine() = default;
 
-  // Instantiates components based on configuration and returns a new
-  // MultiStagedSession.
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateSession(
       std::unique_ptr<AudioSource> absl_nonnull audio_source);
 
-  const AsrEngineConfig& config() const { return config_; }
+  const Settings& settings() const { return settings_; }
 
  private:
-  AsrEngine(AsrEngineConfig config,
-            std::shared_ptr<::litert::lm::ModelResources> absl_nullable
-                model_resources,
-            std::unique_ptr<::litert::support::Tokenizer> absl_nonnull
-                tokenizer,
-            std::unique_ptr<::litert::Environment> absl_nonnull environment,
-            std::unique_ptr<::litert::CompiledModel> absl_nullable
-                compiled_model,
-            std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool,
-            std::unique_ptr<LiteRtLmRunner> lm_runner = nullptr,
-            std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner = nullptr);
+  AsrEngine(Settings settings,
+            std::unique_ptr<OmniEngine> absl_nonnull omni_engine,
+            AsrSessionFactory* absl_nonnull asr_session_factory);
 
-  static absl::Status EnsureFilesDownloaded(AsrEngineConfig& config,
-                                            const FileDownloader& downloader);
-
-  AsrEngineConfig config_;
-  std::shared_ptr<::litert::lm::ModelResources> absl_nullable model_resources_;
-  std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer_;
-  std::unique_ptr<::litert::Environment> absl_nonnull environment_;
-  std::unique_ptr<::litert::CompiledModel> absl_nullable compiled_model_;
-  std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool_;
-  std::unique_ptr<LiteRtLmRunner> absl_nullable lm_runner_;
-  std::unique_ptr<LiteRtLmEngineRunner> absl_nullable lm_engine_runner_;
+  Settings settings_;
+  std::unique_ptr<OmniEngine> absl_nonnull omni_engine_;
+  AsrSessionFactory* absl_nonnull asr_session_factory_;
 };
 
 }  // namespace litert::omni::asr

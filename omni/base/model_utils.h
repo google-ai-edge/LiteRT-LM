@@ -18,19 +18,24 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "omni/omni_engine.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni {
 
@@ -81,6 +86,29 @@ struct ModelOptions {
   std::vector<std::string> external_tensor_patterns;
 };
 
+// Converts `OmniEngine::Settings` to `ModelOptions` for LM runners.
+//
+// args
+// - settings: `OmniEngine::Settings` containing model_path, cache_dir, backend,
+//   and num_threads.
+//
+// returns
+// - Populated `ModelOptions` instance.
+ModelOptions ToLmModelOptions(const OmniEngine::Settings& settings);
+
+// Creates a tokenizer from `lm_resources` if non-null, or from
+// `tokenizer_path` otherwise.
+//
+// args
+// - lm_resources: Optional opened `lm::ModelResources` container.
+// - tokenizer_path: Fallback filesystem path to a tokenizer file.
+//
+// returns
+// - Unique pointer to `Tokenizer` on success, or error status on failure.
+absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>> CreateTokenizer(
+    lm::ModelResources* absl_nullable lm_resources,
+    absl::string_view tokenizer_path);
+
 // Checks if a file exists and is readable at the specified path.
 //
 // args
@@ -111,6 +139,13 @@ absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
                                      absl::string_view filename);
 
 // Downloads a file from `url` to `target_path` using curl.
+//
+// args
+// - url: Remote URL to download from.
+// - target_path: Destination filesystem path.
+//
+// returns
+// - absl::OkStatus() on success, or error status on failure.
 absl::Status DownloadFileWithCurl(absl::string_view url,
                                   absl::string_view target_path);
 
@@ -118,9 +153,22 @@ absl::Status DownloadFileWithCurl(absl::string_view url,
 // `model_folder` is a `.litertlm` regular file, returns it directly; if it is a
 // directory, returns the first `.litertlm` regular file inside it; otherwise
 // returns an empty string.
+//
+// args
+// - model_folder: Path to a `.litertlm` file or directory.
+//
+// returns
+// - Resolved `.litertlm` file path, or empty string if none is found.
 std::string ResolveLitertLmPath(absl::string_view model_folder);
 
 // Creates a shared lm::ModelResources from a .litertlm container file path.
+//
+// args
+// - model_path: Path to the `.litertlm` container file.
+//
+// returns
+// - Shared pointer to `lm::ModelResources` on success, or error status on
+//   failure.
 absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
     absl::string_view model_path);
 
@@ -136,6 +184,33 @@ absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
 absl::StatusOr<CompiledModel> CreateCompiledModel(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename);
+
+// Compiles a `CompiledModel` for `model_type` from `lm_resources` if non-null,
+// or from `settings.model_path` otherwise.
+//
+// args
+// - settings: `OmniEngine::Settings` containing model_path and cache_dir.
+// - env: LiteRT environment instance.
+// - options: Pre-configured LiteRT compilation options.
+// - lm_resources: Optional opened `lm::ModelResources` container.
+// - model_type: Wire-string or enum model type identifier within the
+//   `.litertlm` container.
+//
+// returns
+// - Unique pointer to `CompiledModel` on success, or error status on failure.
+absl::StatusOr<std::unique_ptr<CompiledModel>> CreateCompiledModel(
+    const OmniEngine::Settings& settings, Environment& env, Options& options,
+    lm::ModelResources* absl_nullable lm_resources,
+    absl::string_view model_type);
+
+template <typename ModelTypeT,
+          typename = std::enable_if_t<std::is_enum_v<ModelTypeT>>>
+absl::StatusOr<std::unique_ptr<CompiledModel>> CreateCompiledModel(
+    const OmniEngine::Settings& settings, Environment& env, Options& options,
+    lm::ModelResources* absl_nullable lm_resources, ModelTypeT model_type) {
+  return CreateCompiledModel(settings, env, options, lm_resources,
+                             lm::TfLiteModelTypeToWireString(model_type));
+}
 
 // Creates and compiles a LiteRT model from an in-memory buffer.
 //

@@ -535,14 +535,31 @@ cc_library(
     srcs = ["asr_session.cc"],
     hdrs = ["asr_session.h"],
     deps = [
-        ":asr_engine",
+        ":audio_preprocessor",
         ":audio_source",
+        ":dummy_preprocessor",
+        ":levenshtein_text_merger",
+        ":litert_speech_recognizer",
+        ":log_mel_spectrogram_processor",
+        ":text_merger",
+        ":timestamp_text_merger",
+        ":tokenizer_detokenizer",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_environment",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
         "//omni:omni_session",
+        "//omni/base:litert_runner",
+        "//omni/base:stage",
+        "//runtime/components:model_resources",
+        "//runtime/framework:threadpool",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_session_config_cc_proto",
+        "//support/tokenizer",
     ],
 )
 
@@ -572,54 +589,258 @@ cc_test(
 )
 
 cc_library(
-    name = "asr_engine",
-    srcs = ["asr_engine.cc"],
-    hdrs = ["asr_engine.h"],
-    data = ["model_metadata.json"],
+    name = "parakeet_tdt",
+    srcs = ["parakeet_tdt.cc"],
     deps = [
-        ":audio_preprocessor",
+        ":asr_session",
         ":audio_source",
-        ":ctc_decoder",
-        ":dummy_preprocessor",
-        ":levenshtein_text_merger",
-        ":litert_speech_recognizer",
-        ":lm_decoder",
-        ":lm_engine_decoder",
-        ":log_mel_spectrogram_processor",
-        ":stateless_decoder",
         ":tdt_decoder",
-        ":text_merger",
-        ":timestamp_text_merger",
-        ":tokenizer_detokenizer",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@litert//litert/cc:litert_buffer_ref",
-        "@litert//litert/cc:litert_common",
+        "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_options",
-        "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
-        "@litert//litert/cc/options:litert_qualcomm_options",
         "//omni:multi_staged_session",
         "//omni:omni_engine_header",
-        "//omni/base:litert_lm_engine_runner",
-        "//omni/base:litert_lm_runner",
+        "//omni:omni_registry",
+        "//omni:omni_session",
         "//omni/base:litert_runner",
         "//omni/base:model_utils",
-        "//omni/base:stage",
         "//runtime/components:model_resources",
-        "//runtime/executor:executor_settings_base",
-        "//runtime/framework:threadpool",
         "//runtime/proto:asr_metadata_cc_proto",
         "//runtime/proto:asr_model_type_cc_proto",
         "//support/tokenizer",
-        "//support/tokenizer:huggingface_tokenizer",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "parakeet_ctc",
+    srcs = ["parakeet_ctc.cc"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":ctc_decoder",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//omni/base:litert_runner",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
+        "//support/tokenizer",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "moonshine",
+    srcs = ["moonshine.cc"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":stateless_decoder",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//omni/base:litert_runner",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
+        "//support/tokenizer",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "whisper",
+    srcs = ["whisper.cc"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":stateless_decoder",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//omni/base:litert_runner",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
+        "//support/tokenizer",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "qwen3_asr",
+    srcs = ["qwen3_asr.cc"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":lm_decoder",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//omni/base:litert_lm_runner",
+        "//omni/base:litert_runner",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
+        "//support/tokenizer",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "tinygemma_asr",
+    srcs = ["tinygemma_asr.cc"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":lm_engine_decoder",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine_header",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//omni/base:litert_lm_engine_runner",
+        "//omni/base:litert_runner",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_model_type_cc_proto",
+        "//runtime/proto:asr_session_config_cc_proto",
+        "//support/tokenizer",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "asr_engine",
+    srcs = ["asr_engine.cc"],
+    hdrs = ["asr_engine.h"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":moonshine",  # build_cleaner: keep
+        ":parakeet_ctc",  # build_cleaner: keep
+        ":parakeet_tdt",  # build_cleaner: keep
+        ":qwen3_asr",  # build_cleaner: keep
+        ":tinygemma_asr",  # build_cleaner: keep
+        ":whisper",  # build_cleaner: keep
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "//omni:multi_staged_session",
+        "//omni:omni_engine",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:asr_session_config_cc_proto",
+    ],
+)
+
+cc_test(
+    name = "asr_engine_test",
+    srcs = ["asr_engine_test.cc"],
+    deps = [
+        ":asr_engine",
+        ":model_metadata",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni:omni_engine_header",
+        "//omni:omni_registry",
+        "//omni:omni_session",
+        "//runtime/components:model_resources",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "asr_registration_test",
+    srcs = ["asr_registration_test.cc"],
+    deps = [
+        ":parakeet_tdt",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//omni:omni_registry",
+        "//support/util:test_utils",
     ],
 )
 
@@ -642,36 +863,8 @@ cc_binary(
         "//omni:omni_session",
         "//omni/base:model_utils",
         "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/proto:asr_session_config_cc_proto",
     ],
-)
-
-genrule(
-    name = "model_metadata_embedded_h",
-    srcs = ["model_metadata.json"],
-    outs = ["model_metadata_embedded.h"],
-    cmd = """
-cat << 'EOF' > $@
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_EMBEDDED_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_EMBEDDED_H_
-
-namespace litert::omni::asr {
-
-inline constexpr char kEmbeddedModelMetadataJson[] = R"json(
-EOF
-cat $< >> $@
-cat << 'EOF' >> $@
-)json";
-
-}  // namespace litert::omni::asr
-
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_EMBEDDED_H_
-EOF
-""",
-)
-
-cc_library(
-    name = "model_metadata_embedded",
-    hdrs = ["model_metadata_embedded.h"],
 )
 
 cc_library(
@@ -679,14 +872,12 @@ cc_library(
     srcs = ["model_metadata.cc"],
     hdrs = ["model_metadata.h"],
     deps = [
-        ":asr_engine",
-        ":log_mel_spectrogram_processor",
-        ":model_metadata_embedded",
+        ":asr_engine",  # build_cleaner: keep
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@nlohmann_json//:json",  # TPMonster:discouraged-dependencies
+        "//omni:omni_registry",
+        "//runtime/proto:asr_metadata_cc_proto",
     ],
 )
 
@@ -694,7 +885,6 @@ cc_test(
     name = "model_metadata_test",
     srcs = ["model_metadata_test.cc"],
     deps = [
-        ":asr_engine",
         ":model_metadata",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",

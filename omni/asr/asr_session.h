@@ -19,9 +19,18 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/asr/audio_source.h"
+#include "omni/asr/litert_speech_recognizer.h"
+#include "omni/base/litert_runner.h"
+#include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
 #include "omni/omni_session.h"
+#include "runtime/components/model_resources.h"
+#include "runtime/framework/threadpool.h"
+#include "runtime/proto/asr_metadata.pb.h"
+#include "runtime/proto/asr_session_config.pb.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni {
 class OmniSessionTest;
@@ -29,19 +38,47 @@ class OmniSessionTest;
 
 namespace litert::omni::asr {
 
-// `OmniSessionFactory` implementation backed by `AsrEngine`.
+// Base `OmniSessionFactory` implementation for ASR models.
 class AsrSessionFactory : public OmniSessionFactory {
  public:
-  static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
-      AsrEngineConfig config);
+  AsrSessionFactory(
+      const OmniEngine::Settings& settings,
+      const MessageLite* absl_nullable session_config,
+      const MessageLite* absl_nullable metadata,
+      ::litert::Environment env,
+      std::shared_ptr<lm::ModelResources> absl_nullable model_resources,
+      std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer);
+
   ~AsrSessionFactory() override;
 
   absl::StatusOr<std::unique_ptr<OmniSession>> Create(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
       override;
 
+  const lm::proto::AsrMetadata& metadata() const { return metadata_; }
+  const lm::proto::AsrSessionConfig& session_config() const {
+    return session_config_;
+  }
+
+ protected:
+  // Subclasses override this to call `CreateMultiStagedSession` below with
+  // `audio_source` built from `input_source` by this class, and `encoder` and
+  // `decoder` instantiated by subclasses.
+  virtual absl::StatusOr<std::unique_ptr<MultiStagedSession>>
+  CreateWithAudioSource(
+      std::unique_ptr<AudioSource> absl_nonnull audio_source) = 0;
+
+  // Builds the ASR stage pipeline (`AudioSource` -> `AudioPreprocessor` ->
+  // `LiteRtSpeechRecognizer` -> `TokenizerDetokenizer` -> `TextMerger`) and
+  // returns a `MultiStagedSession`.
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateMultiStagedSession(
+      std::unique_ptr<AudioSource> absl_nonnull audio_source,
+      std::unique_ptr<LiteRtRunner> absl_nonnull encoder,
+      std::unique_ptr<LiteRtSpeechRecognizer::Decoder> absl_nonnull decoder);
+
  private:
   friend class ::litert::omni::OmniSessionTest;
+  friend class AsrEngine;
   friend class AsrSessionTest;
 
   static std::unique_ptr<AudioSource> CreateAudioInputSource(
@@ -49,10 +86,12 @@ class AsrSessionFactory : public OmniSessionFactory {
       int sample_rate_hz, int num_channels, int samples_per_interval,
       int overlap_samples);
 
-  explicit AsrSessionFactory(
-      std::unique_ptr<AsrEngine> absl_nonnull asr_engine);
-
-  std::unique_ptr<AsrEngine> asr_engine_;
+  lm::proto::AsrSessionConfig session_config_;
+  lm::proto::AsrMetadata metadata_;
+  std::unique_ptr<::litert::Environment> absl_nonnull environment_;
+  std::shared_ptr<lm::ModelResources> absl_nullable model_resources_;
+  std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer_;
+  std::unique_ptr<::litert::lm::ThreadPool> absl_nonnull thread_pool_;
 };
 
 }  // namespace litert::omni::asr

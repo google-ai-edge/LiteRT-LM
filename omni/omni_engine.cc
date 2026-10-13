@@ -24,11 +24,8 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
-#include "omni/asr/asr_session.h"
-#include "omni/asr/model_metadata.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
 #include "omni/text2image/text2image_engine.h"
@@ -42,54 +39,27 @@
 namespace litert::omni {
 namespace {
 
-lm::Backend ToBackend(OmniEngine::Options::Backend backend) {
+lm::Backend ToBackend(OmniEngine::Settings::Backend backend) {
   switch (backend) {
-    case OmniEngine::Options::Backend::kGpu:
+    case OmniEngine::Settings::Backend::kGpu:
       return lm::Backend::GPU;
-    case OmniEngine::Options::Backend::kNpu:
+    case OmniEngine::Settings::Backend::kNpu:
       return lm::Backend::NPU;
-    case OmniEngine::Options::Backend::kCpu:
+    case OmniEngine::Settings::Backend::kCpu:
     default:
       return lm::Backend::CPU;
   }
 }
 
-void ApplyOptionsToAsrConfig(const OmniEngine::Options& options,
-                             asr::AsrEngineConfig& asr_config) {
-  asr_config.backend = options.backend;
-  if (!options.cache_dir.empty()) {
-    asr_config.cache_dir = options.cache_dir;
-  }
-  if (options.num_threads > 0) {
-    asr_config.num_threads = options.num_threads;
-  }
-  if (asr_config.model_path.empty() && !asr_config.model_url.empty()) {
-    std::string ext =
-        std::filesystem::path(asr_config.model_url).extension().string();
-    if (ext.empty()) {
-      ext = ".tflite";
-    }
-    asr_config.model_path = (std::filesystem::path(asr_config.cache_dir) /
-                             absl::StrCat(asr_config.model_name, ext))
-                                .string();
-  }
-  if (asr_config.tokenizer_path.empty() && !asr_config.tokenizer_url.empty()) {
-    asr_config.tokenizer_path =
-        (std::filesystem::path(asr_config.cache_dir) /
-         absl::StrCat(asr_config.model_name, "_tokenizer.json"))
-            .string();
-  }
-}
-
 tts::TtsEngineSettings BuildTtsSettings(absl::string_view model_folder,
                                         tts::ModelConfig model_config,
-                                        const OmniEngine::Options& options) {
+                                        const OmniEngine::Settings& settings) {
   tts::TtsEngineSettings tts_settings;
   tts_settings.model_folder = std::string(model_folder);
-  tts_settings.cache_dir = options.cache_dir;
-  tts_settings.backend = ToBackend(options.backend);
-  if (options.num_threads > 0) {
-    tts_settings.num_threads = options.num_threads;
+  tts_settings.cache_dir = settings.cache_dir;
+  tts_settings.backend = ToBackend(settings.backend);
+  if (settings.num_threads > 0) {
+    tts_settings.num_threads = settings.num_threads;
   }
   tts_settings.model_config = std::move(model_config);
   return tts_settings;
@@ -97,62 +67,51 @@ tts::TtsEngineSettings BuildTtsSettings(absl::string_view model_folder,
 
 text2image::Text2ImageEngine::Settings BuildText2ImageSettings(
     absl::string_view model_folder, text2image::ModelConfig model_config,
-    const OmniEngine::Options& options) {
+    const OmniEngine::Settings& settings) {
   text2image::Text2ImageEngine::Settings text2image_settings;
   text2image_settings.model_folder = std::string(model_folder);
-  text2image_settings.cache_dir = options.cache_dir;
-  text2image_settings.backend = ToBackend(options.backend);
-  if (options.num_threads > 0) {
-    text2image_settings.num_threads = options.num_threads;
+  text2image_settings.cache_dir = settings.cache_dir;
+  text2image_settings.backend = ToBackend(settings.backend);
+  if (settings.num_threads > 0) {
+    text2image_settings.num_threads = settings.num_threads;
   }
   text2image_settings.model_config = std::move(model_config);
   return text2image_settings;
 }
 
-// Instantiates an `OmniSessionFactory` for `model_name` and `options`.
-// TODO(b/538727793): Determine whether static registry is the way to go or not.
+// Instantiates an `OmniSessionFactory` for `model_name` and `settings`.
 absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
-    absl::string_view model_name, const OmniEngine::Options& options) {
-  // 1. Check if `model_name` matches a known ASR model in
-  // `model_metadata.json`.
-  asr::AsrEngineConfig asr_config;
-  if (asr::PopulateConfigFromMetadataJson(model_name, /*json_str=*/"",
-                                          asr_config)
-          .ok()) {
-    ApplyOptionsToAsrConfig(options, asr_config);
-    return asr::AsrSessionFactory::CreateFactory(std::move(asr_config));
-  }
-
-  // 2. Check if `model_name` is a known TTS or Text2Image model name.
+    absl::string_view model_name, const OmniEngine::Settings& settings) {
+  // 1. Check if `model_name` is a known TTS or Text2Image model name.
   const std::string lower_name = absl::AsciiStrToLower(model_name);
   const std::string model_folder =
-      options.cache_dir.empty()
-          ? std::string(model_name)
-          : (std::filesystem::path(options.cache_dir) / std::string(model_name))
-                .string();
+      settings.cache_dir.empty() ? std::string(model_name)
+                                 : (std::filesystem::path(settings.cache_dir) /
+                                    std::string(model_name))
+                                       .string();
   if (lower_name == "kokoro" || lower_name == "kokoro-82m") {
     return tts::TtsSessionFactory::CreateFactory(
-        BuildTtsSettings(model_folder, tts::KokoroModelConfig{}, options));
+        BuildTtsSettings(model_folder, tts::KokoroModelConfig{}, settings));
   }
   if (lower_name == "qwen3-tts" || lower_name == "qwen3") {
     return tts::TtsSessionFactory::CreateFactory(
-        BuildTtsSettings(model_folder, tts::Qwen3TtsModelConfig{}, options));
+        BuildTtsSettings(model_folder, tts::Qwen3TtsModelConfig{}, settings));
   }
   if (lower_name == "bonsai-flux2" || lower_name == "bonsai_flux2" ||
       lower_name == "flux2") {
     return text2image::Text2ImageSessionFactory::CreateFactory(
         BuildText2ImageSettings(model_folder, text2image::Flux2ModelConfig{},
-                                options));
+                                settings));
   }
   if (lower_name == "flux2-klein" || lower_name == "flux2_klein" ||
       lower_name == "flux.2-klein-4b") {
     text2image::Flux2ModelConfig config;
     config.is_klein = true;
     return text2image::Text2ImageSessionFactory::CreateFactory(
-        BuildText2ImageSettings(model_folder, std::move(config), options));
+        BuildText2ImageSettings(model_folder, std::move(config), settings));
   }
 
-  // 3. Check if `model_name` is a directory path containing recognizable TTS
+  // 2. Check if `model_name` is a directory path containing recognizable TTS
   // model files.
   auto detected_tts = tts::DetectModelType(model_name);
   if (detected_tts.ok()) {
@@ -163,10 +122,10 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
       model_config = tts::Qwen3TtsModelConfig{};
     }
     return tts::TtsSessionFactory::CreateFactory(
-        BuildTtsSettings(model_name, std::move(model_config), options));
+        BuildTtsSettings(model_name, std::move(model_config), settings));
   }
 
-  // 4. Check if `model_name` is a directory path containing recognizable
+  // 3. Check if `model_name` is a directory path containing recognizable
   // Text2Image model files.
   auto detected_text2image = text2image::DetectModelType(model_name);
   if (detected_text2image.ok()) {
@@ -179,11 +138,11 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
       model_config = std::move(config);
     }
     return text2image::Text2ImageSessionFactory::CreateFactory(
-        BuildText2ImageSettings(model_name, std::move(model_config), options));
+        BuildText2ImageSettings(model_name, std::move(model_config), settings));
   }
 
-  return absl::NotFoundError(
-      absl::StrCat("Unsupported or unknown Omni model: ", model_name));
+  // 4. Delegate to `OmniRegistry` for registered models.
+  return OmniRegistry::Get().CreateSessionFactory(model_name, settings);
 }
 
 }  // namespace
@@ -195,13 +154,13 @@ OmniEngine::OmniEngine(
       session_factory_(std::move(session_factory)) {}
 
 absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
-    absl::string_view model_name, const Options& options) {
+    absl::string_view model_name, const Settings& settings) {
   if (model_name.empty()) {
     return absl::InvalidArgumentError("model_name must not be empty.");
   }
 
   ABSL_ASSIGN_OR_RETURN(std::unique_ptr<OmniSessionFactory> session_factory,
-                        CreateSessionFactory(model_name, options));
+                        CreateSessionFactory(model_name, settings));
   return Create(model_name, std::move(session_factory));
 }
 

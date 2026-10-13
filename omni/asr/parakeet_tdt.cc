@@ -1,0 +1,174 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <iterator>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "omni/asr/asr_session.h"
+#include "omni/asr/audio_source.h"
+#include "omni/asr/tdt_decoder.h"
+#include "omni/base/litert_runner.h"
+#include "omni/base/model_utils.h"
+#include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
+#include "omni/omni_session.h"
+#include "runtime/components/model_resources.h"
+#include "runtime/proto/asr_metadata.pb.h"
+#include "runtime/proto/asr_model_type.pb.h"
+#include "support/tokenizer/tokenizer.h"
+
+namespace litert::omni::asr {
+namespace {
+
+constexpr absl::string_view kModelNames[] = {
+    "parakeet-tdt-0.6b-v3",
+    "parakeet-tdt-0.6b-v3-int8",
+    "parakeet-tdt",
+    "parakeet-tdt-int8",
+};
+
+// Resolves configs and instantiates encoder, decoder, and sessions on demand.
+class ParakeetTdtSessionFactory : public AsrSessionFactory {
+ public:
+  static lm::proto::AsrMetadata ResolveMetadata(
+      const MessageLite* absl_nullable metadata) {
+    lm::proto::AsrMetadata resolved;
+    if (metadata != nullptr) {
+      resolved.CheckTypeAndMergeFrom(*metadata);
+    }
+    if (!resolved.has_asr_model_type()) {
+      resolved.mutable_asr_model_type()->mutable_parakeet();
+    }
+    if (resolved.decode_start_token_ids_size() == 0) {
+      resolved.add_decode_start_token_ids(8192);
+    }
+    auto* mel = resolved.mutable_log_mel_spectrogram_config();
+    if (!mel->has_n_fft()) mel->set_n_fft(512);
+    if (!mel->has_n_mels()) mel->set_n_mels(128);
+    if (!mel->has_n_frames()) mel->set_n_frames(500);
+    if (!mel->has_preemphasis()) mel->set_preemphasis(0.97f);
+    if (!mel->has_slaney_mel()) mel->set_slaney_mel(true);
+    if (!mel->has_power_spectrum()) mel->set_power_spectrum(true);
+    if (!mel->has_mel_floor()) mel->set_mel_floor(5.960464477539063e-08f);
+    return resolved;
+  }
+
+  ParakeetTdtSessionFactory(
+      const OmniEngine::Settings& settings,
+      const MessageLite* absl_nullable session_config,
+      const MessageLite* absl_nullable metadata,
+      ::litert::Environment env,
+      std::shared_ptr<lm::ModelResources> absl_nullable lm_resources,
+      std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer,
+      std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model)
+      : AsrSessionFactory(settings, session_config, metadata, std::move(env),
+                          std::move(lm_resources), std::move(tokenizer)),
+        compiled_model_(std::move(compiled_model)) {}
+
+ protected:
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithAudioSource(
+      std::unique_ptr<AudioSource> absl_nonnull audio_source) override {
+    auto encoder = std::make_unique<LiteRtRunnerImpl>(compiled_model_.get());
+    std::vector<int> start_token_ids(
+        metadata().decode_start_token_ids().begin(),
+        metadata().decode_start_token_ids().end());
+    ABSL_ASSIGN_OR_RETURN(
+        auto decoder,
+        TdtDecoder::Create(encoder.get(), std::move(start_token_ids),
+                           metadata().decode_statefully_after()));
+    return CreateMultiStagedSession(std::move(audio_source), std::move(encoder),
+                                    std::move(decoder));
+  }
+
+ private:
+  std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model_;
+};
+
+// Instantiates common objects shared among sessions, then returns the session
+// factory.
+absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
+GetParakeetTdtSessionFactory(
+    absl::string_view model_name, const OmniEngine::Settings& settings,
+    const MessageLite* absl_nullable session_config,
+    const MessageLite* absl_nullable metadata,
+    ::litert::Environment& env, ::litert::Options& options,
+    std::shared_ptr<lm::ModelResources> absl_nullable lm_resources) {
+  if (!absl::c_linear_search(kModelNames, model_name)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected model_name: ", model_name));
+  }
+  if (lm_resources == nullptr) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "lm_resources must not be null (model_path: ", settings.model_path,
+        ")."));
+  }
+  if (settings.backend == OmniEngine::Settings::Backend::kGpu) {
+    constexpr absl::string_view kStateBufferPatterns[] = {
+        "encode_output_0_output",   "decode_args_0",
+        "decode_1_args_0",          "decode_1_args_2",
+        "decode_1_args_3",          "decode_1_output_1_output",
+        "decode_1_output_2_output", "decode_output_1_output",
+        "decode_output_2_output",
+    };
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                            options.GetOptions<::litert::GpuOptions>());
+    for (absl::string_view pattern : kStateBufferPatterns) {
+      gpu_options.AddExternalTensorPattern(pattern.data());
+      gpu_options.AddBufferStorageTensorPattern(pattern.data());
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto compiled_model,
+      CreateCompiledModel(settings, env, options, lm_resources.get(),
+                          lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER));
+  ABSL_ASSIGN_OR_RETURN(
+      auto tokenizer,
+      CreateTokenizer(lm_resources.get(), settings.tokenizer_path));
+  lm::proto::AsrMetadata resolved_metadata =
+      ParakeetTdtSessionFactory::ResolveMetadata(metadata);
+  return std::make_unique<ParakeetTdtSessionFactory>(
+      settings, session_config, &resolved_metadata, std::move(env),
+      std::move(lm_resources), std::move(tokenizer), std::move(compiled_model));
+}
+
+[[maybe_unused]] const bool kParakeetTdtRegistered = [] {
+  ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
+      .model_names = {std::begin(kModelNames), std::end(kModelNames)},
+      .get_session_factory = &GetParakeetTdtSessionFactory,
+      .session_config_type_id = "Asr",
+      .model_remote_url =
+          "https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3/"
+          "resolve/main/parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm",
+  }));
+  return true;
+}();
+
+}  // namespace
+}  // namespace litert::omni::asr

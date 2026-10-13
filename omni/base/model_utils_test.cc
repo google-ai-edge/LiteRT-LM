@@ -26,10 +26,14 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "omni/omni_engine.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/asr_metadata.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni {
@@ -156,6 +160,49 @@ TEST(ModelUtilsTest, CreateLmEngineRunnerNonExistent) {
     EXPECT_THAT(CreateLmEngineRunner(*env_expected, options, "model.litertlm"),
                 StatusIs(absl::StatusCode::kNotFound));
   }
+}
+
+TEST(ModelUtilsTest, ToLmModelOptionsMapsEngineSettings) {
+  OmniEngine::Settings settings{
+      .backend = OmniEngine::Settings::Backend::kGpu,
+      .cache_dir = "/tmp/custom_cache",
+      .num_threads = 6,
+  };
+  ModelOptions opts = ToLmModelOptions(settings);
+  EXPECT_EQ(opts.backend, lm::Backend::GPU);
+  EXPECT_EQ(opts.cache_dir, "/tmp/custom_cache");
+  EXPECT_EQ(opts.num_threads, 6);
+
+  settings.backend = OmniEngine::Settings::Backend::kNpu;
+  settings.cache_dir.clear();
+  settings.num_threads = 0;
+  opts = ToLmModelOptions(settings);
+  EXPECT_EQ(opts.backend, lm::Backend::NPU);
+  EXPECT_EQ(opts.cache_dir, ":nocache");
+  EXPECT_EQ(opts.num_threads, 4);
+}
+
+TEST(ModelUtilsTest, CreateTokenizerReturnsInvalidArgumentWhenMissing) {
+  EXPECT_THAT(CreateTokenizer(/*resources=*/nullptr, /*tokenizer_path=*/""),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(ModelUtilsTest, CreateCompiledModelFromEngineSettingsNonExistent) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  auto options = Options::Create();
+  ASSERT_TRUE(options.HasValue());
+  OmniEngine::Settings settings{
+      .model_path = "/non/existent/model.tflite",
+  };
+  EXPECT_THAT(
+      CreateCompiledModel(settings, *env, *options, /*lm_resources=*/nullptr,
+                          lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER),
+      StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(CreateCompiledModel(settings, *env, *options,
+                                  /*lm_resources=*/nullptr,
+                                  lm::ModelType::kTfLiteAudioEncoderHw),
+              StatusIs(absl::StatusCode::kNotFound));
 }
 
 }  // namespace

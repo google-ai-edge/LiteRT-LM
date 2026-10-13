@@ -20,102 +20,45 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {
 
-TEST(ModelMetadataTest, EmbeddedJsonIsNonEmpty) {
-  EXPECT_FALSE(GetEmbeddedModelMetadataJson().empty());
-}
-
-TEST(ModelMetadataTest, LoadsSupportedModelsFromEmbeddedJson) {
+TEST(ModelMetadataTest, PopulatesSupportedModelsFromRegistry) {
   const std::vector<std::string> models = {
       "parakeet-tdt-0.6b-v3", "parakeet-ctc-0.6b", "moonshine-tiny",
       "whisper-tiny",         "qwen3-asr-0.6b",    "tinygemma-asr",
   };
 
   for (const auto& model_name : models) {
-    ASSERT_OK_AND_ASSIGN(auto config, GetConfigFromMetadataJson(model_name));
-    EXPECT_EQ(config.model_name, model_name);
-    EXPECT_GT(config.input_milliseconds, 0);
-    EXPECT_EQ(config.decoder_type, AsrEngineConfig::DecoderType::kUnspecified);
+    AsrEngineConfig config;
+    ASSERT_OK(PopulateConfigFromMetadataJson(model_name, "{}", config));
+    EXPECT_EQ(config.metadata.sample_rate_hz(), 16000);
+    EXPECT_EQ(config.metadata.input_milliseconds(),
+              model_name == "whisper-tiny" ? 30000 : 5000);
     EXPECT_THAT(config.model_url, ::testing::EndsWith(".litertlm"));
     EXPECT_TRUE(config.tokenizer_url.empty());
   }
 }
 
-TEST(ModelMetadataTest, ResolvesDecoderTypeForTfliteModels) {
-  constexpr absl::string_view kTfliteMetadataJson = R"json({
-    "parakeet-tdt-0.6b-v3": {
-      "modelRemoteUrl": "https://example.com/parakeet_tdt.tflite",
-      "inputMilliseconds": 5000
-    },
-    "parakeet-ctc-0.6b": {
-      "modelRemoteUrl": "https://example.com/parakeet_ctc.tflite",
-      "inputMilliseconds": 5000
-    },
-    "moonshine-tiny": {
-      "modelRemoteUrl": "https://example.com/moonshine_tiny.tflite",
-      "inputMilliseconds": 5000
-    }
-  })json";
+TEST(ModelMetadataTest, PreservesCallerOverrides) {
+  AsrEngineConfig config;
+  config.model_url = "https://example.com/custom.tflite";
+  config.metadata.set_sample_rate_hz(24000);
+  config.metadata.set_input_milliseconds(10000);
 
-  ASSERT_OK_AND_ASSIGN(
-      auto tdt_config,
-      GetConfigFromMetadataJson("parakeet-tdt-0.6b-v3", kTfliteMetadataJson));
-  EXPECT_EQ(tdt_config.decoder_type, AsrEngineConfig::DecoderType::kTdt);
-
-  ASSERT_OK_AND_ASSIGN(
-      auto ctc_config,
-      GetConfigFromMetadataJson("parakeet-ctc-0.6b", kTfliteMetadataJson));
-  EXPECT_EQ(ctc_config.decoder_type, AsrEngineConfig::DecoderType::kCtc);
-
-  ASSERT_OK_AND_ASSIGN(
-      auto stateless_config,
-      GetConfigFromMetadataJson("moonshine-tiny", kTfliteMetadataJson));
-  EXPECT_EQ(stateless_config.decoder_type,
-            AsrEngineConfig::DecoderType::kStateless);
+  ASSERT_OK(
+      PopulateConfigFromMetadataJson("parakeet-tdt-0.6b-v3", "{}", config));
+  EXPECT_EQ(config.model_url, "https://example.com/custom.tflite");
+  EXPECT_EQ(config.metadata.sample_rate_hz(), 24000);
+  EXPECT_EQ(config.metadata.input_milliseconds(), 10000);
 }
 
 TEST(ModelMetadataTest, RejectsUnknownModel) {
+  AsrEngineConfig config;
   EXPECT_TRUE(absl::IsNotFound(
-      GetConfigFromMetadataJson("nonexistent-model").status()));
-}
-
-TEST(ModelMetadataTest, RejectsInvalidJson) {
-  EXPECT_TRUE(absl::IsInvalidArgument(
-      GetConfigFromMetadataJson("whisper-tiny", "{invalid json").status()));
-}
-
-TEST(ModelMetadataTest, PopulatesSlaneyMelAndWhisperStartTokenIds) {
-  ASSERT_OK_AND_ASSIGN(auto whisper_config,
-                       GetConfigFromMetadataJson("whisper-tiny"));
-  EXPECT_TRUE(whisper_config.log_mel_config.slaney_mel);
-  EXPECT_TRUE(whisper_config.log_mel_config.power_spectrum);
-  EXPECT_FLOAT_EQ(whisper_config.log_mel_config.mel_floor, 1e-10f);
-  EXPECT_THAT(whisper_config.decode_start_token_ids,
-              ::testing::ElementsAre(50258, 50259, 50359, 50363));
-
-  ASSERT_OK_AND_ASSIGN(auto parakeet_config,
-                       GetConfigFromMetadataJson("parakeet-tdt-0.6b-v3"));
-  EXPECT_TRUE(parakeet_config.log_mel_config.slaney_mel);
-  EXPECT_TRUE(parakeet_config.log_mel_config.power_spectrum);
-}
-
-TEST(ModelMetadataTest, RejectsUnsupportedMelScale) {
-  constexpr absl::string_view kInvalidMelScaleJson = R"json({
-    "whisper-tiny": {
-      "inputMilliseconds": 30000,
-      "logMelSpectro": {
-        "melScale": "Slaney"
-      }
-    }
-  })json";
-  EXPECT_TRUE(absl::IsInvalidArgument(
-      GetConfigFromMetadataJson("whisper-tiny", kInvalidMelScaleJson)
-          .status()));
+      PopulateConfigFromMetadataJson("nonexistent-model", "{}", config)));
 }
 
 }  // namespace

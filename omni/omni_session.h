@@ -24,8 +24,11 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
+#include "google/protobuf/message_lite.h"  // from @com_google_protobuf  // IWYU pragma: export
 
 namespace litert::omni {
+
+using MessageLite = ::google::protobuf::MessageLite;
 
 // Pure interface for a unified session processing multimodal inputs (`Input`)
 // and producing multimodal outputs (`Output`).

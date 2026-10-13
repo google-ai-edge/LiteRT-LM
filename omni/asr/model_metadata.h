@@ -15,26 +15,26 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_H_
 
+#include <string>
+
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
+#include "runtime/proto/asr_metadata.pb.h"
 
 namespace litert::omni::asr {
 
-// Returns the compile-time embedded model_metadata.json content.
-absl::string_view GetEmbeddedModelMetadataJson();
+// TODO: Remove AsrEngineConfig and PopulateConfigFromMetadataJson once all
+// clients move to Omni API.
+struct AsrEngineConfig {
+  std::string model_url;
+  std::string tokenizer_url;
+  lm::proto::AsrMetadata metadata;
+};
 
-// Populates AsrEngineConfig for the given model_name from JSON metadata.
-// If json_str is empty, uses GetEmbeddedModelMetadataJson().
+// Populates `AsrEngineConfig` for `model_name` from `OmniRegistry`.
 absl::Status PopulateConfigFromMetadataJson(absl::string_view model_name,
                                             absl::string_view json_str,
                                             AsrEngineConfig& config);
-
-// Returns an AsrEngineConfig populated from JSON metadata for model_name.
-// If json_str is empty, uses GetEmbeddedModelMetadataJson().
-absl::StatusOr<AsrEngineConfig> GetConfigFromMetadataJson(
-    absl::string_view model_name, absl::string_view json_str = "");
 
 }  // namespace litert::omni::asr
 

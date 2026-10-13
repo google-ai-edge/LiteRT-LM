@@ -59,6 +59,7 @@ cc_library(
     deps = [
         ":litert_lm_engine_runner",
         ":litert_lm_runner",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -83,6 +84,7 @@ cc_library(
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
         "@litert//litert/experimental/custom_ops/bidirectional_lstm:bidirectional_lstm_custom_op",
+        "//omni:omni_engine_header",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",
@@ -101,6 +103,7 @@ cc_library(
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
         "//support/tokenizer",
+        "//support/tokenizer:huggingface_tokenizer",
         "//support/util:convert_tensor_buffer",
     ],
 )
@@ -116,10 +119,14 @@ cc_test(
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_options",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
+        "//omni:omni_engine_header",
+        "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
+        "//runtime/proto:asr_metadata_cc_proto",
         "//support/util:test_utils",
     ],
 )
