@@ -17,8 +17,7 @@
 import {Cleanup} from './cleanup.js';
 import {Conversation} from './conversation.js';
 import {ConversationConfig} from './conversation_config.js';
-import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
-import {getGlobalLiteRtLm} from './global_litertlm.js';
+import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {Session} from './session.js';
@@ -142,10 +141,18 @@ export class Engine implements Deletable {
             config.sessionConfig || {}, this.wasm);
         const prefaceJson =
             config.preface ? JSON.stringify(config.preface) : '';
+        const usesAutosizedRingbuffers =
+            this.settings.backend === Backend.GPU_ARTISAN &&
+            Boolean(
+                (this.settings.mainExecutorSettings?.backendConfig as
+                 GpuArtisanConfig | undefined)
+                    ?.use_autosized_ringbuffers);
+        const filterChannelContentFromKvCache =
+            config.filterChannelContentFromKvCache ?? usesAutosizedRingbuffers;
         wasmConfig = this.wasm.ConversationConfig.createCustom(
             this.engine, wasmSessionConfig, !!config.enableConstrainedDecoding,
-            !!config.prefillPrefaceOnInit,
-            !!config.filterChannelContentFromKvCache, prefaceJson);
+            !!config.prefillPrefaceOnInit, filterChannelContentFromKvCache,
+            prefaceJson);
       } else {
         wasmConfig = this.wasm.ConversationConfig.createDefault(this.engine);
       }

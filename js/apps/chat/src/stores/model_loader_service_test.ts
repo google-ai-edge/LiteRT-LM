@@ -17,7 +17,7 @@
 import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {ModelLoaderService} from './model_loader_service.js';
+import {ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
 
 describe('ModelLoaderService', () => {
@@ -434,6 +434,26 @@ describe('ModelLoaderService', () => {
 
       settingsStore.topK = 64;
       expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+  });
+
+  describe('suppressKnownWasmWarnings', () => {
+    it('suppresses mel_filterbank and GetProfileSummary warnings while keeping others', () => {
+      const warnSpy = jasmine.createSpy('warn');
+      const fakeConsole = {warn: warnSpy};
+
+      suppressKnownWasmWarnings(fakeConsole);
+      // Calling again should be idempotent.
+      suppressKnownWasmWarnings(fakeConsole);
+
+      fakeConsole.warn(
+          'W1013 21:59:11.435000 2400640 mel_filterbank.cc:163] Missing 10 bands  starting at 0 in mel-frequency design. Perhaps too many channels or not enough frequency resolution in spectrum. (fft_length: 257 sample_rate: 16000 mel_channel_count: 128 lower_frequency_limit: 0 upper_frequency_limit: 8000');
+      fakeConsole.warn(
+          'W1013 21:59:09.739000 2400640 tasks.cc:612] Failed to get prefill profile summary: UNIMPLEMENTED: GetProfileSummary not implemented for backend: GpuArtisan\n=== Source Location Trace: ===\n./runtime/executor/llm_executor_base.h:250');
+      fakeConsole.warn('Some legitimate warning message');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith('Some legitimate warning message');
     });
   });
 });

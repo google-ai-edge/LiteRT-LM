@@ -21,6 +21,38 @@ import {teeStream} from '../tee_stream.js';
 import {LocalDirectoryService} from './local_directory_service.js';
 import {CustomModel, ModelSettings} from './settings_store.js';
 
+const SUPPRESSED_WARNING_PATTERNS = [
+  /mel_filterbank\.cc:.*Missing \d+ bands\s+starting at \d+ in mel-frequency design\./,
+  /tasks\.cc:.*Failed to get (?:prefill|decode) profile summary: UNIMPLEMENTED: GetProfileSummary not implemented for backend: GpuArtisan/,
+];
+
+/**
+ * Wraps `console.warn` to suppress known noisy WASM runtime warnings in the
+ * chat app.
+ */
+export function suppressKnownWasmWarnings(
+    consoleObj: Pick<Console, 'warn'> = console) {
+  const flaggedWarn = consoleObj.warn as unknown as {
+    __litertLmWarningsSuppressed?: boolean;
+  };
+  if (flaggedWarn.__litertLmWarningsSuppressed) {
+    return;
+  }
+  const originalWarn = consoleObj.warn;
+  const wrappedWarn = function(this: unknown, ...args: unknown[]) {
+    if (args.length > 0 && typeof args[0] === 'string') {
+      const msg = args[0];
+      if (SUPPRESSED_WARNING_PATTERNS.some(pattern => pattern.test(msg))) {
+        return;
+      }
+    }
+    return originalWarn.apply(this, args);
+  };
+  (wrappedWarn as unknown as {__litertLmWarningsSuppressed?: boolean})
+      .__litertLmWarningsSuppressed = true;
+  consoleObj.warn = wrappedWarn;
+}
+
 /**
  * Service responsible for downloading, caching, and building the GPU WASM
  * engine.
@@ -159,6 +191,7 @@ export class ModelLoaderService {
     try {
       if (!this.isWasmLoaded) {
         this.updateStatus('Loading LiteRT WASM runtime...');
+        suppressKnownWasmWarnings();
         const wasmPath = import.meta.env.DEV ? '/wasm' : undefined;
         await this.loadWasm(wasmPath);
         this.isWasmLoaded = true;
@@ -280,13 +313,13 @@ export class ModelLoaderService {
           backendConfig: {
             num_output_candidates: 1,
             wait_for_weight_uploads: true,
-            num_decode_steps_per_sync: 1,
+            num_decode_steps_per_sync: 3,
             sequence_batch_size: 0,
             supported_lora_ranks: [] as number[],
             max_top_k: Math.max(1, settings.topK),
             enable_decode_logits: false,
             enable_external_embeddings: false,
-            use_submodel: true,
+            use_submodel: false,
             use_autosized_ringbuffers: true,
           } as GpuArtisanConfig
         },

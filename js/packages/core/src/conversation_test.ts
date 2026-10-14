@@ -15,8 +15,9 @@
  */
 
 import {Conversation} from './conversation.js';
+import {Engine} from './engine.js';
 import {Mutex} from './mutex.js';
-import {Conversation as WasmConversation, Engine as WasmEngine} from './wasm_binding_types.js';
+import {Backend, Conversation as WasmConversation, Engine as WasmEngine} from './wasm_binding_types.js';
 
 describe('Conversation', () => {
   let mockWasmConversation: jasmine.SpyObj<WasmConversation>;
@@ -105,4 +106,93 @@ describe('Conversation', () => {
     finishSend();
     await p;
   });
+
+  describe('Engine.createConversation filterChannelContentFromKvCache', () => {
+    let createCustomSpy: jasmine.Spy;
+    let mockSessionConfig: {delete: jasmine.Spy};
+    let mockConversationConfig: {delete: jasmine.Spy};
+
+    function createTestEngine(
+        backend: Backend, useAutosizedRingbuffers = false): Engine {
+      mockSessionConfig = {delete: jasmine.createSpy('sessionConfig.delete')};
+      mockConversationConfig = {
+        delete: jasmine.createSpy('conversationConfig.delete')
+      };
+      createCustomSpy = jasmine.createSpy('createCustom')
+                            .and.returnValue(mockConversationConfig);
+      const mockWasm = {
+        SessionConfig: {
+          createDefault: () => mockSessionConfig,
+        },
+        ConversationConfig: {
+          createCustom: createCustomSpy,
+          createDefault:
+              jasmine.createSpy('createDefault').and.returnValue(
+                  mockConversationConfig),
+        },
+        Conversation: {
+          create: jasmine.createSpy('Conversation.create')
+                      .and.resolveTo(mockWasmConversation),
+        },
+      };
+      return Object.assign(Object.create(Engine.prototype), {
+        wasm: mockWasm,
+        engine: mockWasmEngine,
+        settings: {
+          backend,
+          mainExecutorSettings: {
+            backendConfig: {
+              use_autosized_ringbuffers: useAutosizedRingbuffers,
+            },
+          },
+        },
+        mutexes: mockMutexes,
+      }) as Engine;
+    }
+
+    it('defaults filterChannelContentFromKvCache to true for GPU_ARTISAN with use_autosized_ringbuffers',
+       async () => {
+         const engine = createTestEngine(Backend.GPU_ARTISAN, true);
+         await engine.createConversation({});
+         expect(createCustomSpy)
+             .toHaveBeenCalledWith(
+                 mockWasmEngine, mockSessionConfig, false, false, true, '');
+       });
+
+    it('defaults filterChannelContentFromKvCache to false for GPU_ARTISAN without use_autosized_ringbuffers',
+       async () => {
+         const engine = createTestEngine(Backend.GPU_ARTISAN, false);
+         await engine.createConversation({});
+         expect(createCustomSpy)
+             .toHaveBeenCalledWith(
+                 mockWasmEngine, mockSessionConfig, false, false, false, '');
+       });
+
+    it('defaults filterChannelContentFromKvCache to false for non-GPU_ARTISAN',
+       async () => {
+         const engine = createTestEngine(Backend.CPU, true);
+         await engine.createConversation({});
+         expect(createCustomSpy)
+             .toHaveBeenCalledWith(
+                 mockWasmEngine, mockSessionConfig, false, false, false, '');
+       });
+
+    it('respects explicit filterChannelContentFromKvCache override',
+       async () => {
+         const gpuArtisanEngine = createTestEngine(Backend.GPU_ARTISAN, true);
+         await gpuArtisanEngine.createConversation(
+             {filterChannelContentFromKvCache: false});
+         expect(createCustomSpy)
+             .toHaveBeenCalledWith(
+                 mockWasmEngine, mockSessionConfig, false, false, false, '');
+
+         const cpuEngine = createTestEngine(Backend.CPU, false);
+         await cpuEngine.createConversation(
+             {filterChannelContentFromKvCache: true});
+         expect(createCustomSpy)
+             .toHaveBeenCalledWith(
+                 mockWasmEngine, mockSessionConfig, false, false, true, '');
+       });
+  });
 });
+
