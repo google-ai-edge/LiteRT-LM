@@ -94,6 +94,44 @@ if(NOT TARGET safeint)
   include_directories(SYSTEM "${safeint_SOURCE_DIR}")
 endif()
 
+if(NOT TARGET mldrift_serialization_gen)
+  include(FetchContent)
+
+  FetchContent_Declare(
+      ml_drift
+      GIT_REPOSITORY https://github.com/google-ai-edge/ml-drift.git
+      GIT_TAG 1b18771f44c0be3d972847b31a80f6dc3d6964b5
+  )
+  FetchContent_GetProperties(ml_drift)
+  if(NOT ml_drift_POPULATED)
+      FetchContent_Populate(ml_drift)
+  endif()
+
+  include_directories(SYSTEM "${ml_drift_SOURCE_DIR}")
+
+  set(MLDRIFT_SERIALIZATION_BASE_FBS "${ml_drift_SOURCE_DIR}/ml_drift/common/task/serialization_base.fbs")
+  set(MLDRIFT_SERIALIZATION_BASE_H "${ml_drift_SOURCE_DIR}/ml_drift/common/task/serialization_base_generated.h")
+  set(MLDRIFT_CL_PROGRAM_CACHE_FBS "${ml_drift_SOURCE_DIR}/ml_drift/cl/compiled_program_cache.fbs")
+  set(MLDRIFT_CL_PROGRAM_CACHE_H "${ml_drift_SOURCE_DIR}/ml_drift/cl/compiled_program_cache_generated.h")
+  add_custom_command(
+      OUTPUT "${MLDRIFT_SERIALIZATION_BASE_H}" "${MLDRIFT_CL_PROGRAM_CACHE_H}"
+      COMMAND flatc --cpp --scoped-enums
+              -I "${ml_drift_SOURCE_DIR}"
+              -o "${ml_drift_SOURCE_DIR}/ml_drift/common/task"
+              "${MLDRIFT_SERIALIZATION_BASE_FBS}"
+      COMMAND flatc --cpp --scoped-enums
+              -I "${ml_drift_SOURCE_DIR}"
+              -o "${ml_drift_SOURCE_DIR}/ml_drift/cl"
+              "${MLDRIFT_CL_PROGRAM_CACHE_FBS}"
+      DEPENDS "${MLDRIFT_SERIALIZATION_BASE_FBS}" "${MLDRIFT_CL_PROGRAM_CACHE_FBS}"
+      COMMENT "Generating ML Drift FlatBuffer headers"
+  )
+  add_custom_target(mldrift_serialization_gen DEPENDS
+      "${MLDRIFT_SERIALIZATION_BASE_H}"
+      "${MLDRIFT_CL_PROGRAM_CACHE_H}"
+  )
+endif()
+
 # TFLite configuration
 set(TFLITE_SOURCE_DIR "${LITERTLM_TFLITE_SRC_DIR}" CACHE PATH "Path to TFLite source directory" FORCE)
 set(TFLITE_BUILD_DIR "${LITERTLM_TFLITE_BUILD_DIR}" CACHE PATH "Path to TFLite build directory" FORCE)
@@ -111,6 +149,7 @@ include_directories(
   "${LITERTLM_TENSORFLOW_SRC_DIR}"
   "${LITERTLM_TFLITE_BUILD_DIR}"
   "${LITERTLM_TFLITE_BUILD_DIR}/xnnpack/include"
+  "${LITERTLM_TFLITE_BUILD_DIR}/pthreadpool-source/include"
   "${LITERTLM_TFLITE_BUILD_DIR}/FP16-source/include"
   "${LITERTLM_TFLITE_BUILD_DIR}/ruy"
   "${LITERTLM_TFLITE_BUILD_DIR}/gemmlowp"

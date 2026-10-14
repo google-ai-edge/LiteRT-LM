@@ -33,6 +33,7 @@ set(LITERTLM_LITERT_INCLUDE_PATHS
   "${LITERTLM_LITERT_SRC_DIR}/core/include"
   "${LITERTLM_LITERT_BUILD_DIR}/runtime/include"
   "${LITERTLM_LITERT_BUILD_DIR}/include"
+  "${LITERTLM_LITERT_BUILD_DIR}/_deps/ml_drift-src"
   "${LITERTLM_LITERT_SRC_DIR}/../support"
   "${LITERTLM_LITERT_BUILD_DIR}/c/include"
   CACHE PATH "")
