@@ -21,11 +21,6 @@ import katexStylesText from 'katex/dist/katex.min.css?inline';
 export const katexStyles = unsafeCSS(katexStylesText);
 
 
-/** Sets the HTML content of an iframe using standard srcdoc. */
-export function setIframeHtml(iframe: HTMLIFrameElement, html: string) {
-  iframe.srcdoc = html;
-}
-
 /** Sets the HTML content of a sandboxed iframe using standard srcdoc and sandbox attribute. */
 export function setSandboxIframeHtml(iframe: HTMLIFrameElement, html: string) {
   iframe.setAttribute('sandbox', 'allow-scripts');

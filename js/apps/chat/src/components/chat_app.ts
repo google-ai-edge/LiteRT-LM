@@ -20,7 +20,7 @@ import './learn_more_drawer';
 
 import {css, html, LitElement} from 'lit';
 import {customElement, property} from 'lit/decorators.js';
-import {registerAppServiceWorker, setIframeHtml} from './util.js';
+import {registerAppServiceWorker, setSandboxIframeHtml} from './util.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {sharedStyles} from '../styles/shared_styles.js';
@@ -329,7 +329,7 @@ export class LitertLmChatApp extends LitElement {
           this.renderRoot.querySelector('#preview-iframe') as HTMLIFrameElement;
 
       if (iframe) {
-        setIframeHtml(iframe, code);
+        setSandboxIframeHtml(iframe, code);
         this.isPreviewOpen = true;
       }
     } catch (err) {
@@ -364,7 +364,7 @@ export class LitertLmChatApp extends LitElement {
     const iframe =
         this.renderRoot.querySelector('#preview-iframe') as HTMLIFrameElement;
     if (iframe) {
-      setIframeHtml(iframe, '');
+      setSandboxIframeHtml(iframe, '');
     }
   }
 

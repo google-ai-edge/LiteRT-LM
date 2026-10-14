@@ -177,6 +177,8 @@ describe('litert-lm-chat-app', () => {
     const iframe = element.shadowRoot!.querySelector('#preview-iframe') as HTMLIFrameElement;
     expect(iframe).toBeTruthy();
     expect(iframe.srcdoc).toContain('<h1>Hello</h1>');
+    expect(iframe.getAttribute('sandbox')).toContain('allow-scripts');
+    expect((iframe as HTMLIFrameElement & {csp?: string}).csp).toBeFalsy();
 
     // Close preview
     const closeBtn = element.shadowRoot!.querySelector('#btn-close-preview') as HTMLButtonElement;
@@ -185,5 +187,7 @@ describe('litert-lm-chat-app', () => {
 
     expect(element.isPreviewOpen).toBeFalse();
     expect(iframe.srcdoc).toBe('');
+    expect(iframe.getAttribute('sandbox')).toContain('allow-scripts');
+    expect((iframe as HTMLIFrameElement & {csp?: string}).csp).toBeFalsy();
   });
 });
