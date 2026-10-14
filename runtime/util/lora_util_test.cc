@@ -223,5 +223,24 @@ TEST_F(IsLoRAInputNameTest, RejectsEmptyAndMalformedStrings) {
   EXPECT_FALSE(IsLoRAInputName("just_a_string"));
 }
 
+TEST(IsLoRABufferInputNameTest, MatchesLoRAWeightInputs) {
+  EXPECT_TRUE(IsLoRABufferInputName("query_w_prime_left_0"));
+  EXPECT_TRUE(IsLoRABufferInputName("lora_atten_o_b_prime_weight_12"));
+  EXPECT_TRUE(IsLoRABufferInputName("value_w_prime_right3"));
+  EXPECT_TRUE(IsLoRABufferInputName("transformer.layer_0.attn.q.w_prime_left"));
+}
+
+TEST(IsLoRABufferInputNameTest, MatchesLoRAParamTensor) {
+  EXPECT_TRUE(IsLoRABufferInputName("lora_param_tensor"));
+}
+
+TEST(IsLoRABufferInputNameTest, RejectsOtherModelInputs) {
+  EXPECT_FALSE(IsLoRABufferInputName("src_inputs"));
+  EXPECT_FALSE(IsLoRABufferInputName("mask"));
+  EXPECT_FALSE(IsLoRABufferInputName("prev_mask"));
+  EXPECT_FALSE(IsLoRABufferInputName("lora_param_tensor_0"));
+  EXPECT_FALSE(IsLoRABufferInputName(""));
+}
+
 }  // namespace
 }  // namespace litert::lm

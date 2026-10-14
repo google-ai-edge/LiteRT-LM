@@ -22,12 +22,14 @@
 #include <ios>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -46,6 +48,18 @@
 #include "runtime/util/test_utils.h"     //NOLINT
 
 namespace litert::lm {
+
+class AudioLiteRtCompiledModelExecutorTestPeer {
+ public:
+  static absl::flat_hash_map<absl::string_view, TensorBuffer>&
+  GetMutableInputBuffersMap(AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_encoder_->GetMutableInputBuffersMap();
+  }
+  static bool IsLoRAEnabled(const AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_encoder_->IsLoRAEnabled();
+  }
+};
+
 namespace {
 
 constexpr absl::string_view kTestAudioModelPath =
@@ -54,6 +68,8 @@ constexpr absl::string_view kTestAudioStreamingModelPath =
     "litert_lm/runtime/testdata/dummy_audio_streaming.litertlm";
 constexpr absl::string_view kTestAudioNoMaskModelPath =
     "litert_lm/runtime/testdata/dummy_audio_no_mask.litertlm";
+constexpr absl::string_view kTestLoRAModelPath =
+    "litert_lm/runtime/testdata/test_lora_rank32_f16_all_ones.tflite";
 constexpr int kNoMaskEmbeddingDimensions = 5;
 constexpr int kSpectrogramFrequencySlots = 8;
 constexpr int kSpectrogramSequenceLength = 10;
@@ -101,6 +117,57 @@ CreateAudioExecutor(Environment& env, const std::string& model_path,
   // Create the audio executor.
   return litert::lm::AudioLiteRtCompiledModelExecutor::Create(
       audio_executor_settings, env);
+}
+
+absl::StatusOr<ModelAssets> CreatePatchedLoRAModelAssets(
+    absl::Span<const uint8_t> payload_bytes, absl::string_view temp_filename) {
+  const std::filesystem::path src_lora_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      std::string(kTestLoRAModelPath);
+  std::ifstream src_file(src_lora_path, std::ios::binary);
+  if (!src_file.is_open()) {
+    return absl::InternalError("Failed to open test LoRA model file.");
+  }
+  constexpr size_t kFlatBufferHeaderBytes = 20480;
+  constexpr size_t kAlignedDataOffset = 65536;
+  std::string lora_bytes(kFlatBufferHeaderBytes, '\0');
+  src_file.read(lora_bytes.data(), kFlatBufferHeaderBytes);
+  lora_bytes.resize(kAlignedDataOffset, '\0');
+
+  // Rename "post_w_prime_right_34" (at 1944) to "key_w_prime_left0" and point
+  // its Buffer entry (at 1984) to offset 65536 with size payload_bytes.size().
+  const std::string from_tensor_name("\x15\0\0\0post_w_prime_right_34\0\0\0",
+                                     28);
+  const std::string to_tensor_name("\x11\0\0\0key_w_prime_left0\0\0\0\0\0\0\0",
+                                   28);
+  const size_t name_pos = lora_bytes.find(from_tensor_name);
+  if (name_pos == std::string::npos) {
+    return absl::InternalError("Failed to find tensor name in test LoRA file.");
+  }
+  lora_bytes.replace(name_pos, from_tensor_name.size(), to_tensor_name);
+
+  const uint64_t data_offset = kAlignedDataOffset;
+  const uint64_t data_size = payload_bytes.size();
+  std::string buffer_entry(16, '\0');
+  for (int i = 0; i < 8; ++i) {
+    buffer_entry[i] = static_cast<char>((data_offset >> (8 * i)) & 0xFF);
+    buffer_entry[8 + i] = static_cast<char>((data_size >> (8 * i)) & 0xFF);
+  }
+  lora_bytes.replace(name_pos + 40, buffer_entry.size(), buffer_entry);
+  lora_bytes.append(reinterpret_cast<const char*>(payload_bytes.data()),
+                    payload_bytes.size());
+  lora_bytes.resize(2 * kAlignedDataOffset, '\0');
+
+  const std::filesystem::path temp_lora_path =
+      std::filesystem::path(::testing::TempDir()) / std::string(temp_filename);
+  {
+    std::ofstream dst_file(temp_lora_path, std::ios::binary | std::ios::trunc);
+    if (!dst_file.is_open()) {
+      return absl::InternalError("Failed to write patched LoRA file.");
+    }
+    dst_file.write(lora_bytes.data(), lora_bytes.size());
+  }
+  return ModelAssets::Create(temp_lora_path.string());
 }
 // TODO: b/441514829 - Enable the tests on Windows once the bug is fixed.
 #if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
@@ -862,6 +929,442 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
   ASSERT_OK_AND_ASSIGN(auto flush_after_new_restore, audio_executor->Flush());
   EXPECT_EQ(flush_after_new_restore.GetValidTokens(), 0);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StaticEncoder_LoRABuffersPreservedAcrossMultiWindowAndReset) {
+  const std::filesystem::path src_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      std::string(kTestAudioModelPath);
+  std::ifstream src_file(src_model_path, std::ios::binary);
+  ASSERT_TRUE(src_file.is_open());
+  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
+                          std::istreambuf_iterator<char>());
+
+  // Swap the two entries in SubGraph.inputs (at 18004) so "src_inputs"
+  // (tensor 1, shape [1, 10, 8]) is input 0 (used by audio_executor_utils when
+  // "mask" is absent), and redirect "mask" (uoffset 4 at 16600) to
+  // "CONVERSION_METADATA" (at 16640, relative uoffset 40 = 0x28) renamed to
+  // "key_w_prime_left0".
+  const std::string from_subgraph_inputs("\x02\0\0\0\x00\0\0\0\x01\0\0\0", 12);
+  const std::string to_subgraph_inputs("\x02\0\0\0\x01\0\0\0\x00\0\0\0", 12);
+  const size_t vec_pos = model_bytes.find(from_subgraph_inputs);
+  ASSERT_NE(vec_pos, std::string::npos);
+  model_bytes.replace(vec_pos, from_subgraph_inputs.size(), to_subgraph_inputs);
+
+  const std::string from_mask_entry("\x04\0\0\0\x04\0\0\0mask", 12);
+  const std::string to_mask_entry("\x28\0\0\0\x04\0\0\0mask", 12);
+  const size_t mask_pos = model_bytes.find(from_mask_entry);
+  ASSERT_NE(mask_pos, std::string::npos);
+  const std::string from_metadata("\x13\0\0\0CONVERSION_METADATA", 23);
+  const std::string to_lora_name("\x11\0\0\0key_w_prime_left0\0\0", 23);
+  const size_t metadata_pos = model_bytes.find(from_metadata, mask_pos);
+  ASSERT_EQ(metadata_pos - mask_pos, 40);
+  model_bytes.replace(mask_pos, from_mask_entry.size(), to_mask_entry);
+  model_bytes.replace(metadata_pos, from_metadata.size(), to_lora_name);
+
+  const std::filesystem::path temp_model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      "dummy_audio_only_lora.litertlm";
+  {
+    std::ofstream dst_file(temp_model_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(dst_file.is_open());
+    dst_file.write(model_bytes.data(), model_bytes.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, temp_model_path.string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  auto& input_buffers_map =
+      AudioLiteRtCompiledModelExecutorTestPeer::GetMutableInputBuffersMap(
+          *audio_executor);
+  ASSERT_TRUE(input_buffers_map.contains("key_w_prime_left0"));
+
+  // 1. Verify LoRA input buffer is zero-initialized on Create when no LoRA is
+  // loaded.
+  ASSERT_OK_AND_ASSIGN(
+      auto initial_lora_data,
+      GetDataAsVector<uint8_t>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(initial_lora_data, ::testing::Each(uint8_t{0}));
+
+  // 2. LoadLoRA(0) and UseLoRA(0) via the real LoraManager pipeline, and verify
+  // multi-window Encode() and Reset() do not wipe the bound LoRA buffer or the
+  // LoRA weights stored inside LoraManager.
+  std::vector<uint8_t> non_zero_lora(initial_lora_data.size(), 1);
+  ASSERT_OK_AND_ASSIGN(
+      auto lora_assets,
+      CreatePatchedLoRAModelAssets(non_zero_lora, "static_audio_lora.tflite"));
+  ASSERT_OK(audio_executor->LoadLoRA(0, lora_assets));
+  ASSERT_OK(audio_executor->UseLoRA(0));
+  EXPECT_TRUE(
+      AudioLiteRtCompiledModelExecutorTestPeer::IsLoRAEnabled(*audio_executor));
+
+  // Encode 20 frames (2 full windows of 10 frames). In this dummy graph, the
+  // second input ("key_w_prime_left0") drives mask_out, so both windows
+  // produce 5 valid tokens (10 total) only if "key_w_prime_left0" remains all
+  // ones across both window 0 and window 1.
+  std::vector<float> multi_window_spec(
+      2 * kSpectrogramSequenceLength * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto spec_buffer,
+      CreateTensorBuffer<const float>(
+          multi_window_spec,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, 2 * kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+  ASSERT_OK_AND_ASSIGN(auto encode_result, audio_executor->Encode(spec_buffer));
+  EXPECT_EQ(encode_result.GetValidTokens(), 2 * kEmbeddingSequenceLength);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto after_encode_lora_data,
+      GetDataAsVector<uint8_t>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_encode_lora_data, ::testing::Each(uint8_t{1}));
+
+  // Reset() must also preserve bound LoRA buffers while clearing non-LoRA input
+  // buffers.
+  ASSERT_OK(audio_executor->Reset());
+  ASSERT_OK_AND_ASSIGN(
+      auto after_reset_lora_data,
+      GetDataAsVector<uint8_t>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_reset_lora_data, ::testing::Each(uint8_t{1}));
+
+  // 3. UseLoRA(std::nullopt) must replace the bound LoRA buffer with a fresh
+  // zero-initialized buffer WITHOUT zeroing the shared LoRA buffer inside
+  // LoraManager.
+  ASSERT_OK(audio_executor->UseLoRA(std::nullopt));
+  EXPECT_FALSE(
+      AudioLiteRtCompiledModelExecutorTestPeer::IsLoRAEnabled(*audio_executor));
+  ASSERT_OK_AND_ASSIGN(
+      auto after_unload_lora_data,
+      GetDataAsVector<uint8_t>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_unload_lora_data, ::testing::Each(uint8_t{0}));
+
+  // Encoding with LoRA disabled now sees the zeroed "key_w_prime_left0" buffer
+  // (producing 0 valid tokens), and re-enabling UseLoRA(0) without reloading
+  // restores the non-zero LoRA weights from LoraManager.
+  ASSERT_OK_AND_ASSIGN(auto base_encode_result,
+                       audio_executor->Encode(spec_buffer));
+  EXPECT_EQ(base_encode_result.GetValidTokens(), 0);
+
+  ASSERT_OK(audio_executor->UseLoRA(0));
+  EXPECT_TRUE(
+      AudioLiteRtCompiledModelExecutorTestPeer::IsLoRAEnabled(*audio_executor));
+  ASSERT_OK_AND_ASSIGN(auto reenabled_encode_result,
+                       audio_executor->Encode(spec_buffer));
+  EXPECT_EQ(reenabled_encode_result.GetValidTokens(),
+            2 * kEmbeddingSequenceLength);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StaticEncoder_MultiWindowPartialChunkMasksTrailingFramesAndKeepsLoRA) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  auto& input_buffers_map =
+      AudioLiteRtCompiledModelExecutorTestPeer::GetMutableInputBuffersMap(
+          *audio_executor);
+  std::vector<float> lora_weights(16, 2.5f);
+  ASSERT_OK_AND_ASSIGN(
+      auto shared_lora_buffer,
+      CreateTensorBuffer<const float>(
+          lora_weights, RankedTensorType(GetElementType<float>(),
+                                         Layout(Dimensions({1, 16})))));
+  auto bound_lora_buffer = shared_lora_buffer.Duplicate();
+  ASSERT_TRUE(bound_lora_buffer.HasValue());
+  input_buffers_map["post_w_prime_right0"] = std::move(*bound_lora_buffer);
+
+  // 15 frames = 1 full window (10 frames -> 5 tokens) + 1 partial window
+  // (5 frames -> 3 tokens), total 8 valid tokens.
+  constexpr int kTotalFrames = 15;
+  std::vector<float> spec_data(kTotalFrames * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto spec_buffer,
+      CreateTensorBuffer<const float>(
+          spec_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kTotalFrames,
+                                              kSpectrogramFrequencySlots})))));
+  ASSERT_OK_AND_ASSIGN(auto result, audio_executor->Encode(spec_buffer));
+  EXPECT_EQ(result.GetValidTokens(), 8);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto lora_after,
+      GetDataAsVector<float>(input_buffers_map.at("post_w_prime_right0")));
+  EXPECT_THAT(lora_after, ::testing::Each(2.5f));
+  ASSERT_OK_AND_ASSIGN(auto shared_lora_after,
+                       GetDataAsVector<float>(shared_lora_buffer));
+  EXPECT_THAT(shared_lora_after, ::testing::Each(2.5f));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_LoRABuffersPreservedAcrossContextsMultiWindowAndReset) {
+  const std::filesystem::path src_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      std::string(kTestAudioStreamingModelPath);
+  std::ifstream src_file(src_model_path, std::ios::binary);
+  ASSERT_TRUE(src_file.is_open());
+  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
+                          std::istreambuf_iterator<char>());
+
+  // Swap tensor 0 ("feature_state_0") and tensor 3 ("src_inputs" [1, 10, 8]) in
+  // SubGraph.inputs (at 18180), rename "segment_mask" to "prev_mask" (so
+  // IsStreamingEncoder detects "prev_" and Initialize sets the mask buffer to
+  // all 1s), and redirect "prev_key_0" (uoffset 4 at 16676) to
+  // "CONVERSION_METADATA" (at 16748, relative uoffset 72 = 0x48) renamed to
+  // "key_w_prime_left0".
+  const std::string from_subgraph_inputs(
+      "\x04\0\0\0\x00\0\0\0\x01\0\0\0\x02\0\0\0\x03\0\0\0", 20);
+  const std::string to_subgraph_inputs(
+      "\x04\0\0\0\x03\0\0\0\x01\0\0\0\x02\0\0\0\x00\0\0\0", 20);
+  const size_t vec_pos = model_bytes.find(from_subgraph_inputs);
+  ASSERT_NE(vec_pos, std::string::npos);
+  model_bytes.replace(vec_pos, from_subgraph_inputs.size(), to_subgraph_inputs);
+
+  const std::string from_seg_mask("\x0c\0\0\0segment_mask", 16);
+  const std::string to_prev_mask("\x09\0\0\0prev_mask\0\0\0", 16);
+  const size_t seg_mask_pos = model_bytes.find(from_seg_mask);
+  ASSERT_NE(seg_mask_pos, std::string::npos);
+  model_bytes.replace(seg_mask_pos, from_seg_mask.size(), to_prev_mask);
+
+  const std::string from_prev_key("\x04\0\0\0\x0a\0\0\0prev_key_0", 18);
+  const std::string to_prev_key("\x48\0\0\0\x0a\0\0\0prev_key_0", 18);
+  const size_t prev_key_pos = model_bytes.find(from_prev_key);
+  ASSERT_NE(prev_key_pos, std::string::npos);
+  const std::string from_metadata("\x13\0\0\0CONVERSION_METADATA", 23);
+  const std::string to_lora_name("\x11\0\0\0key_w_prime_left0\0\0", 23);
+  const size_t metadata_pos = model_bytes.find(from_metadata, prev_key_pos);
+  ASSERT_EQ(metadata_pos - prev_key_pos, 72);
+  model_bytes.replace(prev_key_pos, from_prev_key.size(), to_prev_key);
+  model_bytes.replace(metadata_pos, from_metadata.size(), to_lora_name);
+
+  const std::filesystem::path temp_model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      "dummy_audio_streaming_lora.litertlm";
+  {
+    std::ofstream dst_file(temp_model_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(dst_file.is_open());
+    dst_file.write(model_bytes.data(), model_bytes.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, temp_model_path.string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+
+  auto& input_buffers_map =
+      AudioLiteRtCompiledModelExecutorTestPeer::GetMutableInputBuffersMap(
+          *audio_executor);
+  ASSERT_TRUE(input_buffers_map.contains("key_w_prime_left0"));
+
+  // 1. Verify zero-initialization on Create when no LoRA is loaded.
+  ASSERT_OK_AND_ASSIGN(
+      auto initial_lora_data,
+      GetDataAsVector<float>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(initial_lora_data, ::testing::Each(0.0f));
+
+  // 2. LoadLoRA(0) and UseLoRA(0) via the real LoraManager pipeline.
+  std::vector<float> non_zero_lora(initial_lora_data.size(), 3.5f);
+  absl::Span<const uint8_t> lora_bytes(
+      reinterpret_cast<const uint8_t*>(non_zero_lora.data()),
+      non_zero_lora.size() * sizeof(float));
+  ASSERT_OK_AND_ASSIGN(
+      auto lora_assets,
+      CreatePatchedLoRAModelAssets(lora_bytes, "streaming_audio_lora.tflite"));
+  ASSERT_OK(audio_executor->LoadLoRA(0, lora_assets));
+  ASSERT_OK(audio_executor->UseLoRA(0));
+
+  // 3. CreateNewContext() must skip LoRA buffers and leave the bound LoRA
+  // buffer untouched.
+  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
+  auto* new_streaming_context =
+      static_cast<AudioStreamingContext*>(new_context.get());
+  EXPECT_FALSE(
+      new_streaming_context->state_buffers().contains("key_w_prime_left0"));
+  EXPECT_TRUE(
+      new_streaming_context->state_buffers().contains("feature_state_0"));
+
+  // 4. CloneContext() must skip LoRA buffers.
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
+  auto* cloned_streaming_context =
+      static_cast<AudioStreamingContext*>(cloned_context.get());
+  EXPECT_FALSE(
+      cloned_streaming_context->state_buffers().contains("key_w_prime_left0"));
+
+  // 5. RestoreContext() must not overwrite or zero the bound LoRA buffer.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
+  ASSERT_OK_AND_ASSIGN(
+      auto after_restore_lora_data,
+      GetDataAsVector<float>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_restore_lora_data, ::testing::Each(3.5f));
+
+  // 6. Multi-window streaming Encode() (19 frames -> 2 windows at pos=0 and
+  // pos=7, plus 5 buffered frames) + Flush() + Reset() must preserve LoRA.
+  std::vector<float> stream_spec(19 * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto stream_spec_buffer,
+      CreateTensorBuffer<const float>(
+          stream_spec,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 19, kSpectrogramFrequencySlots})))));
+  ASSERT_OK_AND_ASSIGN(auto stream_encode_data,
+                       audio_executor->Encode(stream_spec_buffer));
+  EXPECT_EQ(stream_encode_data.GetValidTokens(), 2 * kEmbeddingSequenceLength);
+
+  ASSERT_OK_AND_ASSIGN(auto flush_data, audio_executor->Flush());
+  EXPECT_EQ(flush_data.GetValidTokens(), kEmbeddingSequenceLength);
+
+  ASSERT_OK(audio_executor->Reset());
+  ASSERT_OK_AND_ASSIGN(
+      auto after_reset_lora_data,
+      GetDataAsVector<float>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_reset_lora_data, ::testing::Each(3.5f));
+
+  // 7. UseLoRA(std::nullopt) replaces the encoder's LoRA buffer with a
+  // zero-initialized buffer without zeroing LoraManager's stored LoRA weights,
+  // so a subsequent UseLoRA(0) restores the 3.5f weights.
+  ASSERT_OK(audio_executor->UseLoRA(std::nullopt));
+  ASSERT_OK_AND_ASSIGN(
+      auto after_unload_lora_data,
+      GetDataAsVector<float>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_unload_lora_data, ::testing::Each(0.0f));
+
+  ASSERT_OK(audio_executor->UseLoRA(0));
+  ASSERT_OK_AND_ASSIGN(
+      auto after_reload_lora_data,
+      GetDataAsVector<float>(input_buffers_map.at("key_w_prime_left0")));
+  EXPECT_THAT(after_reload_lora_data, ::testing::Each(3.5f));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_LoRAParamTensorZeroInitializedAndPreserved) {
+  const std::filesystem::path src_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      std::string(kTestAudioStreamingModelPath);
+  std::ifstream src_file(src_model_path, std::ios::binary);
+  ASSERT_TRUE(src_file.is_open());
+  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
+                          std::istreambuf_iterator<char>());
+
+  const std::string from_subgraph_inputs(
+      "\x04\0\0\0\x00\0\0\0\x01\0\0\0\x02\0\0\0\x03\0\0\0", 20);
+  const std::string to_subgraph_inputs(
+      "\x04\0\0\0\x03\0\0\0\x01\0\0\0\x02\0\0\0\x00\0\0\0", 20);
+  const size_t vec_pos = model_bytes.find(from_subgraph_inputs);
+  ASSERT_NE(vec_pos, std::string::npos);
+  model_bytes.replace(vec_pos, from_subgraph_inputs.size(), to_subgraph_inputs);
+
+  const std::string from_seg_mask("\x0c\0\0\0segment_mask", 16);
+  const std::string to_prev_mask("\x09\0\0\0prev_mask\0\0\0", 16);
+  const size_t seg_mask_pos = model_bytes.find(from_seg_mask);
+  ASSERT_NE(seg_mask_pos, std::string::npos);
+  model_bytes.replace(seg_mask_pos, from_seg_mask.size(), to_prev_mask);
+
+  const std::string from_prev_key("\x04\0\0\0\x0a\0\0\0prev_key_0", 18);
+  const std::string to_prev_key("\x48\0\0\0\x0a\0\0\0prev_key_0", 18);
+  const size_t prev_key_pos = model_bytes.find(from_prev_key);
+  ASSERT_NE(prev_key_pos, std::string::npos);
+  const std::string from_metadata("\x13\0\0\0CONVERSION_METADATA", 23);
+  const std::string to_lora_param("\x11\0\0\0lora_param_tensor\0\0", 23);
+  const size_t metadata_pos = model_bytes.find(from_metadata, prev_key_pos);
+  ASSERT_EQ(metadata_pos - prev_key_pos, 72);
+  model_bytes.replace(prev_key_pos, from_prev_key.size(), to_prev_key);
+  model_bytes.replace(metadata_pos, from_metadata.size(), to_lora_param);
+
+  const std::filesystem::path temp_model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      "dummy_audio_streaming_lora_param.litertlm";
+  {
+    std::ofstream dst_file(temp_model_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(dst_file.is_open());
+    dst_file.write(model_bytes.data(), model_bytes.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, temp_model_path.string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+
+  auto& input_buffers_map =
+      AudioLiteRtCompiledModelExecutorTestPeer::GetMutableInputBuffersMap(
+          *audio_executor);
+  ASSERT_TRUE(input_buffers_map.contains("lora_param_tensor"));
+  ASSERT_OK_AND_ASSIGN(
+      auto initial_param_data,
+      GetDataAsVector<float>(input_buffers_map.at("lora_param_tensor")));
+  EXPECT_THAT(initial_param_data, ::testing::Each(0.0f));
+
+  std::vector<float> non_zero_param(initial_param_data.size(), 16.0f);
+  auto param_tensor_type =
+      input_buffers_map.at("lora_param_tensor").TensorType();
+  ASSERT_TRUE(param_tensor_type.HasValue());
+  ASSERT_OK_AND_ASSIGN(
+      auto shared_param_buffer,
+      CreateTensorBuffer<const float>(non_zero_param, *param_tensor_type));
+  auto bound_param_buffer = shared_param_buffer.Duplicate();
+  ASSERT_TRUE(bound_param_buffer.HasValue());
+  input_buffers_map["lora_param_tensor"] = std::move(*bound_param_buffer);
+
+  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
+  auto* new_streaming_context =
+      static_cast<AudioStreamingContext*>(new_context.get());
+  EXPECT_FALSE(
+      new_streaming_context->state_buffers().contains("lora_param_tensor"));
+  ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
+  ASSERT_OK(audio_executor->Reset());
+
+  ASSERT_OK_AND_ASSIGN(
+      auto after_reset_param_data,
+      GetDataAsVector<float>(input_buffers_map.at("lora_param_tensor")));
+  EXPECT_THAT(after_reset_param_data, ::testing::Each(16.0f));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_BufferedSpectrogramSlicesToValidFramesOnly) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+
+  // Pass a 10-frame tensor where only the first 4 frames are marked valid in
+  // the mask (total_frames = 4 < window_size = 10). Only 4 frames should be
+  // buffered.
+  std::vector<float> spec_data(10 * kSpectrogramFrequencySlots, 1.0f);
+  std::vector<uint8_t> mask_data = {1, 1, 1, 1, 0, 0, 0, 0, 0, 0};
+  ASSERT_OK_AND_ASSIGN(
+      auto spec_buffer,
+      CreateTensorBuffer<const float>(
+          spec_data,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
+  ASSERT_OK_AND_ASSIGN(
+      auto mask_buffer,
+      CreateTensorBuffer<const uint8_t>(
+          mask_data, RankedTensorType(GetElementType<uint8_t>(),
+                                      Layout(Dimensions({1, 10})))));
+  ASSERT_OK_AND_ASSIGN(auto encode_data,
+                       audio_executor->Encode(spec_buffer, mask_buffer));
+  EXPECT_EQ(encode_data.GetValidTokens(), 0);
+
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
+  auto* streaming_context =
+      static_cast<AudioStreamingContext*>(cloned_context.get());
+  EXPECT_EQ(streaming_context->buffered_spectrogram().size(),
+            4 * kSpectrogramFrequencySlots);
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)

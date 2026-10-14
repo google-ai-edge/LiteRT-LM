@@ -313,9 +313,8 @@ class LockedLlmExecutor : public LlmExecutor {
     // TODO: b/409401231 - Add unit tests for the new_inputs creation.
     LITERT_ASSIGN_OR_RETURN(
         auto new_inputs_token_ids,
-        CopyToTensorBuffer(
-            absl::MakeConstSpan(input_ids_vec.data(), input_ids_vec.size()),
-            {1, static_cast<int>(input_ids_vec.size())}));
+        CopyToTensorBuffer(absl::MakeConstSpan(input_ids_vec),
+                           {1, static_cast<int>(input_ids_vec.size())}));
     std::optional<ExecutorVisionData> new_vision_data = std::nullopt;
     std::optional<ExecutorAudioData> new_audio_data = std::nullopt;
     if (inputs.GetVisionDataPtr().ok()) {
@@ -646,6 +645,14 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
         /*lora_path=*/audio_lora_key,
         /*has_scoped_lora_file=*/true);
     ABSL_RETURN_IF_ERROR(audio_executor->UseLoRA(audio_lora_id.value()));
+  } else {
+    absl::MutexLock audio_lock(audio_executor_mutex_);
+    if (audio_executor_ != nullptr) {
+      absl::Status status = audio_executor_->UseLoRA(std::nullopt);
+      if (!status.ok() && !absl::IsUnimplemented(status)) {
+        return status;
+      }
+    }
   }
 
   auto runtime_config = RuntimeConfig{
