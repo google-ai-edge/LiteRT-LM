@@ -130,6 +130,7 @@ cc_library(
     name = "speech_recognizer",
     hdrs = ["speech_recognizer.h"],
     deps = [
+        ":audio_preprocessor",
         "@com_google_absl//absl/base:nullability",
         "//omni/base:stage",
     ],
@@ -174,6 +175,7 @@ cc_test(
     name = "ctc_decoder_test",
     srcs = ["ctc_decoder_test.cc"],
     deps = [
+        ":audio_preprocessor",
         ":ctc_decoder",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:status_matchers",
@@ -246,6 +248,7 @@ cc_test(
     name = "tdt_decoder_test",
     srcs = ["tdt_decoder_test.cc"],
     deps = [
+        ":audio_preprocessor",
         ":tdt_decoder",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
@@ -348,6 +351,7 @@ cc_library(
     srcs = ["litert_speech_recognizer.cc"],
     hdrs = ["litert_speech_recognizer.h"],
     deps = [
+        ":audio_preprocessor",
         ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
@@ -367,6 +371,7 @@ cc_test(
     name = "litert_speech_recognizer_test",
     srcs = ["litert_speech_recognizer_test.cc"],
     deps = [
+        ":audio_preprocessor",
         ":litert_speech_recognizer",
         ":speech_recognizer",
         "@com_google_googletest//:gtest_main",

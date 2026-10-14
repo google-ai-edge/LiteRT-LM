@@ -31,6 +31,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/asr/audio_preprocessor.h"
 #include "omni/base/mock_litert_runner.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -297,6 +298,176 @@ TEST(TdtDecoderTest, StatefulDecodeTransitionAndBlankHandling) {
   EXPECT_EQ(tokens[1].timestamp_ms, 0);
   EXPECT_TRUE(tokens[2].IsEndOfChunk());
   EXPECT_EQ(tokens[2].timestamp_ms, 3);
+}
+
+TEST(TdtDecoderTest, DecodeRangeValidFractionBoundsDecoding) {
+  constexpr size_t kNumFrames = 8;
+  constexpr size_t kLogitsPerFrame = 10;  // 5 token logits + 5 durations.
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        auto buf0 =
+            CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames, sizeof(float));
+        // Every frame emits non-blank token (1 + frame % 4) with duration 1,
+        // i.e. one token per decoded frame.
+        std::vector<float> logits(kLogitsPerFrame * kNumFrames, 0.0f);
+        for (size_t frame = 0; frame < kNumFrames; ++frame) {
+          logits[frame * kLogitsPerFrame + 1 + frame % 4] = 1.0f;
+          logits[frame * kLogitsPerFrame + 6] = 1.0f;
+        }
+        EXPECT_TRUE(buf0.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        buffers.push_back(std::move(buf0));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly(Return(absl::OkStatus()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+
+  // 25% of the window is real audio: round(0.25 * 8) = 2 valid frames are
+  // decoded; the end-of-chunk token still marks the window end.
+  ASSERT_OK_AND_ASSIGN(
+      auto tokens,
+      decoder->Decode(encoder_outputs,
+                      PreprocessedAudio::DecodeRange{.valid_fraction = 0.25f}));
+  constexpr size_t kExpectedFrames = 2;
+  ASSERT_EQ(tokens.size(), kExpectedFrames + 1);
+  EXPECT_EQ(tokens[kExpectedFrames - 1].timestamp_ms, kExpectedFrames - 1);
+  EXPECT_TRUE(tokens.back().IsEndOfChunk());
+  EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames);
+
+  // Omitting decode_range decodes the whole window.
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+
+  // Fractions outside (0, 1) mean "decode everything".
+  ASSERT_OK_AND_ASSIGN(
+      tokens, decoder->Decode(encoder_outputs, PreprocessedAudio::DecodeRange{
+                                                   .valid_fraction = 1.0f}));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+  ASSERT_OK_AND_ASSIGN(
+      tokens, decoder->Decode(encoder_outputs, PreprocessedAudio::DecodeRange{
+                                                   .valid_fraction = 0.0f}));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+
+  // Frames are counted by their center: round(0.9 * 8) = round(7.2) = 7.
+  ASSERT_OK_AND_ASSIGN(
+      tokens, decoder->Decode(encoder_outputs, PreprocessedAudio::DecodeRange{
+                                                   .valid_fraction = 0.9f}));
+  EXPECT_EQ(tokens.size(), 7 + 1);
+
+  // valid frames is capped at the window length.
+  ASSERT_OK_AND_ASSIGN(
+      tokens,
+      decoder->Decode(encoder_outputs,
+                      PreprocessedAudio::DecodeRange{
+                          .valid_fraction = 0.95f}));  // round(7.6) = 8.
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+}
+
+TEST(TdtDecoderTest, DecodeRangeStartFractionDropsAndShiftsEarlyTokens) {
+  constexpr size_t kNumFrames = 8;
+  constexpr size_t kLogitsPerFrame = 10;  // 5 token logits + 5 durations.
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        auto buf0 =
+            CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames, sizeof(float));
+        // Frame f emits non-blank token (1 + f % 4) with duration 1.
+        std::vector<float> logits(kLogitsPerFrame * kNumFrames, 0.0f);
+        for (size_t frame = 0; frame < kNumFrames; ++frame) {
+          logits[frame * kLogitsPerFrame + 1 + frame % 4] = 1.0f;
+          logits[frame * kLogitsPerFrame + 6] = 1.0f;
+        }
+        EXPECT_TRUE(buf0.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        buffers.push_back(std::move(buf0));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+  int num_runs = 0;
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&num_runs](absl::string_view,
+                                  absl::Span<const TensorBuffer>,
+                                  absl::Span<const TensorBuffer>) {
+        ++num_runs;
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+
+  // The first half of the window was already reported with the previous
+  // chunk: floor(0.5 * 8) = 4 frames are still decoded (the prediction network
+  // is autoregressive) but their tokens are dropped, and the remaining
+  // timestamps, including the end-of-chunk marker, are relative to frame 4.
+  ASSERT_OK_AND_ASSIGN(
+      auto tokens,
+      decoder->Decode(encoder_outputs,
+                      PreprocessedAudio::DecodeRange{.start_fraction = 0.5f}));
+  EXPECT_EQ(num_runs, kNumFrames);
+  ASSERT_EQ(tokens.size(), 4 + 1);
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(tokens[i].token_id, 1 + (4 + i) % 4) << "i=" << i;
+    EXPECT_EQ(tokens[i].timestamp_ms, i) << "i=" << i;
+  }
+  EXPECT_TRUE(tokens.back().IsEndOfChunk());
+  EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames - 4);
+
+  // Omitting decode_range reports the whole window again.
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), kNumFrames + 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 0);
+  EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames);
+
+  // Both ends at once: report frames [floor(0.25 * 8), round(0.75 * 8)) = [2,
+  // 6).
+  ASSERT_OK_AND_ASSIGN(
+      tokens, decoder->Decode(encoder_outputs, PreprocessedAudio::DecodeRange{
+                                                   .start_fraction = 0.25f,
+                                                   .valid_fraction = 0.75f}));
+  ASSERT_EQ(tokens.size(), 4 + 1);
+  EXPECT_EQ(tokens[0].token_id, 1 + 2 % 4);
+  EXPECT_EQ(tokens[0].timestamp_ms, 0);
+  EXPECT_EQ(tokens[3].timestamp_ms, 3);
+  EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames - 2);
 }
 
 }  // namespace

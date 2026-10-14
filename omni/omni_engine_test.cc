@@ -84,7 +84,7 @@ class FakeAudioPreprocessor : public asr::AudioPreprocessor {
     } else if (!pcm_samples.ok()) {
       return pcm_samples.status();
     }
-    PushOutput(std::move(*pcm_samples));
+    PushOutput({.features = std::move(*pcm_samples)});
     SetState(State::kIdle);
     return absl::OkStatus();
   }
@@ -105,7 +105,7 @@ class FakeSpeechRecognizer : public asr::SpeechRecognizer {
       return mel_features.status();
     }
     std::vector<asr::SpeechRecognizer::DecodedToken> tokens;
-    for (float val : *mel_features) {
+    for (float val : mel_features->features) {
       tokens.push_back({static_cast<int>(val), 100});
     }
     PushOutput(std::move(tokens));

@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LM_DECODER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -58,7 +59,11 @@ class LmDecoder : public LiteRtSpeechRecognizer::Decoder {
   ~LmDecoder() override = default;
 
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
-      std::vector<::litert::TensorBuffer>& encoder_outputs) override;
+      std::vector<::litert::TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
 
  private:
   LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner, int decode_stop_token_id,

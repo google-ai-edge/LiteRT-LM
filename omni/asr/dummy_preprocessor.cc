@@ -46,7 +46,7 @@ absl::Status DummyPreprocessor::ScheduleInternal() {
   // vector on silent chunks so LiteRtSpeechRecognizer skips encoder/decoder
   // execution.
   if (IsSilentAudio(raw_speech)) {
-    PushOutput(std::vector<float>());
+    PushOutput(PreprocessedAudio{});
     return absl::OkStatus();
   }
 
@@ -66,7 +66,7 @@ absl::Status DummyPreprocessor::ScheduleInternal() {
                       (3.5e-3f / 2147483648.0f);
     }
   }
-  PushOutput(std::move(raw_speech));
+  PushOutput(PreprocessedAudio{.features = std::move(raw_speech)});
   return absl::OkStatus();
 }
 

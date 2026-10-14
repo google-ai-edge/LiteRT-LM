@@ -15,6 +15,7 @@
 #include "omni/asr/tdt_decoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -148,7 +149,29 @@ TdtDecoder::TdtDecoder(
       decode_statefully_after_(decode_statefully_after) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
-    std::vector<TensorBuffer>& encoder_outputs) {
+    std::vector<TensorBuffer>& encoder_outputs,
+    std::optional<DecodeRange> decode_range) {
+  // Only decode encoder frames backed by real audio; the zero-padded tail of
+  // a short final chunk otherwise yields repeated / hallucinated tokens. Tokens
+  // before `first_reported_time_index` belong to audio already reported with
+  // the previous chunk (a final chunk shifted back to fill the window).
+  size_t effective_max_time_index = max_time_index_;
+  size_t first_reported_time_index = 0;
+  if (decode_range.has_value()) {
+    if (decode_range->valid_fraction > 0.0f &&
+        decode_range->valid_fraction < 1.0f) {
+      effective_max_time_index =
+          std::min(max_time_index_, static_cast<size_t>(std::lround(
+                                        decode_range->valid_fraction *
+                                        static_cast<float>(max_time_index_))));
+    }
+    if (decode_range->start_fraction > 0.0f &&
+        decode_range->start_fraction < 1.0f) {
+      first_reported_time_index = static_cast<size_t>(std::floor(
+          decode_range->start_fraction * static_cast<float>(max_time_index_)));
+    }
+  }
+
   if (stateful_runner_) {
     LITERT_RETURN_IF_ERROR(stateful_runner_->Reset());
   }
@@ -167,7 +190,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
   size_t token_index = 0;
   size_t time_index = 0;
 
-  while (time_index < max_time_index_) {
+  while (time_index < effective_max_time_index) {
     LITERT_RETURN_IF_ERROR(current_token_ids_buffer->Write<int32_t>(
         absl::MakeConstSpan(token_ids)));
 
@@ -217,8 +240,12 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     int token_id = static_cast<int>(
         std::distance(logits + start_index_of_token_id, max_token_it));
     if (token_id != blank_token_id_) {
-      decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
-          .token_id = token_id, .timestamp_ms = static_cast<int>(time_index)});
+      if (time_index >= first_reported_time_index) {
+        decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
+            .token_id = token_id,
+            .timestamp_ms =
+                static_cast<int>(time_index - first_reported_time_index)});
+      }
       if (num_inference_token_ids > 1) {
         ++token_index;
         if (token_index < num_inference_token_ids) {
@@ -256,7 +283,8 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
 
   decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
       .token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
-      .timestamp_ms = static_cast<int>(max_time_index_)});
+      .timestamp_ms =
+          static_cast<int>(max_time_index_ - first_reported_time_index)});
 
   return decoded_tokens;
 }

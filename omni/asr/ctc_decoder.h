@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_CTC_DECODER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -32,8 +33,15 @@ class CtcDecoder : public LiteRtSpeechRecognizer::Decoder {
 
   ~CtcDecoder() override = default;
 
+  // When `decode_range` is provided, logit frames
+  // `[floor(start_fraction * num_frames), round(valid_fraction * num_frames))`
+  // are reported, with timestamps relative to the first reported frame.
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
-      std::vector<::litert::TensorBuffer>& encoder_outputs) override;
+      std::vector<::litert::TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
 
  private:
   explicit CtcDecoder(int vocab_size);

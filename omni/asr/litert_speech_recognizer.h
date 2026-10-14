@@ -16,12 +16,14 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LITERT_SPEECH_RECOGNIZER_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
@@ -35,16 +37,27 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
   // Interface for decoding the ASR encoder output into token IDs.
   class Decoder {
    public:
+    using DecodeRange = PreprocessedAudio::DecodeRange;
+
     virtual ~Decoder() = default;
 
-    // Decodes encoder output buffers into token IDs and optional timestamps.
+    // Decodes encoder output buffers into token IDs and optional timestamps,
+    // optionally bounded to `decode_range` along the time axis.
     virtual absl::StatusOr<std::vector<DecodedToken>> Decode(
-        std::vector<::litert::TensorBuffer>& encoder_outputs) = 0;
+        std::vector<::litert::TensorBuffer>& encoder_outputs,
+        std::optional<DecodeRange> decode_range) = 0;
+
+    // Decodes encoder output buffers into token IDs and optional timestamps
+    // without `decode_range`.
+    absl::StatusOr<std::vector<DecodedToken>> Decode(
+        std::vector<::litert::TensorBuffer>& encoder_outputs) {
+      return Decode(encoder_outputs, /*decode_range=*/std::nullopt);
+    }
   };
 
   static absl::StatusOr<std::unique_ptr<LiteRtSpeechRecognizer>> Create(
       std::unique_ptr<LiteRtRunner> absl_nonnull runner,
-      Stage<std::vector<float>>* absl_nonnull audio_preprocessor,
+      Stage<PreprocessedAudio>* absl_nonnull audio_preprocessor,
       std::unique_ptr<Decoder> absl_nonnull decoder);
 
   ~LiteRtSpeechRecognizer() override = default;
@@ -57,10 +70,16 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
  private:
   LiteRtSpeechRecognizer(
       std::unique_ptr<LiteRtRunner> absl_nonnull runner,
-      Stage<std::vector<float>>* absl_nonnull audio_preprocessor,
+      Stage<PreprocessedAudio>* absl_nonnull audio_preprocessor,
       std::unique_ptr<Decoder> absl_nonnull decoder,
       std::vector<::litert::TensorBuffer> encode_input_buffers,
       std::vector<::litert::TensorBuffer> encode_output_buffers);
+
+  // Retries encoding and decoding with `preprocessed_audio.centered_features`
+  // when a full valid window collapses in the primary pass.
+  absl::StatusOr<std::vector<DecodedToken>> MaybeRetryWithCenteredFeatures(
+      const PreprocessedAudio& preprocessed_audio,
+      std::vector<DecodedToken> decoded_tokens);
 
   const std::unique_ptr<LiteRtRunner> absl_nonnull runner_;
   const std::unique_ptr<Decoder> absl_nonnull decoder_;

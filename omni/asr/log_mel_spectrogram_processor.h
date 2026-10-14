@@ -15,8 +15,10 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LOG_MEL_SPECTROGRAM_PROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LOG_MEL_SPECTROGRAM_PROCESSOR_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -77,16 +79,34 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
       int sample_rate_hz, const LogMelSpectrogramConfig& config,
       Stage<std::vector<float>>* absl_nonnull audio_source,
       std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
-          preprocessor);
+      preprocessor,
+      std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nullable
+      centered_preprocessor);
 
-  // Processes raw speech (float vector) into model input features.
-  absl::StatusOr<std::vector<float>> Process(std::vector<float> raw_speech);
+  // Whether a chunk shorter than the model window that follows a full window
+  // (the final chunk of a long stream) is shifted back to end at the end of
+  // the audio instead of being padded. Done for the standard per-feature
+  // normalization (the encoders it feeds have no length mask and their
+  // output degrades on padded windows); the Whisper-style path keeps padding,
+  // as Whisper was trained on padded 30 s windows.
+  bool ShiftsShortChunkBack() const;
+
+  // Processes raw speech (float vector) into model input features and decode
+  // range.
+  absl::StatusOr<PreprocessedAudio> Process(std::vector<float> raw_speech);
+
+  std::optional<std::vector<float>> ComputeCenteredFeatures();
 
   const int sample_rate_hz_;
   const LogMelSpectrogramConfig config_;
   const size_t window_samples_;
   std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
       preprocessor_;
+  std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nullable
+  centered_preprocessor_;
+  // Last `n_frames * hop_length` samples of the most recent full-size chunk.
+  std::vector<float> previous_window_;
+  float peak_speech_rms_ = 0.0f;
 };
 
 }  // namespace litert::omni::asr

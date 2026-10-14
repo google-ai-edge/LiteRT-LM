@@ -15,9 +15,11 @@
 #include "omni/asr/ctc_decoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -39,7 +41,8 @@ absl::StatusOr<std::unique_ptr<CtcDecoder>> CtcDecoder::Create(int vocab_size) {
 CtcDecoder::CtcDecoder(int vocab_size) : vocab_size_(vocab_size) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
-    std::vector<::litert::TensorBuffer>& encoder_outputs) {
+    std::vector<::litert::TensorBuffer>& encoder_outputs,
+    std::optional<DecodeRange> decode_range) {
   if (encoder_outputs.empty()) {
     return std::vector<SpeechRecognizer::DecodedToken>();
   }
@@ -57,9 +60,29 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
   // Decodes the model output (FloatArray logits) into an array of token IDs.
   // Performs CTC decoding (collapse repeats -> remove blanks) and text cleanup.
   const int num_frames = static_cast<int>(total_floats / vocab_size_);
+  // Only report frames backed by new, real audio: the zero-padded tail of a
+  // short final chunk otherwise yields spurious tokens, and the head of a
+  // final chunk shifted back to fill the window was already reported with the
+  // previous chunk. Repeats are still collapsed from frame 0 so a token that
+  // straddles the start boundary is not re-emitted as new.
+  int frames_to_decode = num_frames;
+  int first_reported_frame = 0;
+  if (decode_range.has_value()) {
+    if (decode_range->valid_fraction > 0.0f &&
+        decode_range->valid_fraction < 1.0f) {
+      frames_to_decode =
+          std::min(num_frames, static_cast<int>(std::lround(
+                                   decode_range->valid_fraction * num_frames)));
+    }
+    if (decode_range->start_fraction > 0.0f &&
+        decode_range->start_fraction < 1.0f) {
+      first_reported_frame = static_cast<int>(
+          std::floor(decode_range->start_fraction * num_frames));
+    }
+  }
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
   int previous_token_id = -1;
-  for (int t = 0; t < num_frames; ++t) {
+  for (int t = 0; t < frames_to_decode; ++t) {
     const int start = t * vocab_size_;
     const int end = start + vocab_size_;
     auto max_it =
@@ -69,16 +92,19 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
     if (token_id == previous_token_id) {
       continue;
     }
+    previous_token_id = token_id;
+    if (t < first_reported_frame) {
+      continue;
+    }
     // Timestamp is the index of the token in the original list of logits
     // as the input of CTC has logits for every sample in the input audio.
     decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
-        .token_id = token_id, .timestamp_ms = t});
-    previous_token_id = token_id;
+        .token_id = token_id, .timestamp_ms = t - first_reported_frame});
   }
 
   decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
       .token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
-      .timestamp_ms = num_frames});
+      .timestamp_ms = num_frames - first_reported_frame});
 
   return decoded_tokens;
 }

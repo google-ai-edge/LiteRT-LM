@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LM_ENGINE_DECODER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,7 +57,11 @@ class LmEngineDecoder : public LiteRtSpeechRecognizer::Decoder {
   ~LmEngineDecoder() override = default;
 
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
-      std::vector<::litert::TensorBuffer>& encoder_outputs) override;
+      std::vector<::litert::TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
 
  private:
   LmEngineDecoder(LiteRtLmEngineRunner* absl_nonnull engine_runner,

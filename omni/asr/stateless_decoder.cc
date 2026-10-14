@@ -118,7 +118,8 @@ StatelessDecoder::StatelessDecoder(
       decode_skip_until_token_id_(decode_skip_until_token_id) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>>
-StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
+StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs,
+                         std::optional<DecodeRange> /*decode_range*/) {
   std::vector<::litert::TensorBuffer> inputs;
   inputs.reserve(decode_input_buffers_.size());
   // Pass encoder outputs to the first set of input buffers.

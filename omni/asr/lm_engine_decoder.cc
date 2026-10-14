@@ -102,7 +102,8 @@ LmEngineDecoder::LmEngineDecoder(
       stop_tokens_(std::move(stop_tokens)) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>>
-LmEngineDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
+LmEngineDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs,
+                        std::optional<DecodeRange> /*decode_range*/) {
   if (encoder_outputs.empty()) {
     return absl::InvalidArgumentError("Encoder outputs cannot be empty.");
   }

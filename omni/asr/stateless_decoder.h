@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -43,7 +44,11 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
   ~StatelessDecoder() override = default;
 
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
-      std::vector<::litert::TensorBuffer>& encoder_outputs) override;
+      std::vector<::litert::TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
 
  private:
   StatelessDecoder(LiteRtRunner* absl_nonnull runner,

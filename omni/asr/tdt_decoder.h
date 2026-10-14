@@ -41,8 +41,19 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
 
   ~TdtDecoder() override = default;
 
+  // When `decode_range` is provided (see `Decoder::DecodeRange`), encoder
+  // frames `[floor(start_fraction * max_time_index),
+  // round(valid_fraction * max_time_index))` are reported, i.e. frames whose
+  // center lies in real audio (frames straddling the padding boundary
+  // otherwise emit stray partial tokens), with timestamps relative to the
+  // first reported frame. Frames before the start are still decoded (the
+  // prediction network is autoregressive) but their tokens are dropped.
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
-      std::vector<TensorBuffer>& encoder_outputs) override;
+      std::vector<TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
 
  private:
   TdtDecoder(

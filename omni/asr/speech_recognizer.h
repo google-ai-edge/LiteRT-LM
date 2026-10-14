@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "omni/asr/audio_preprocessor.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -40,7 +41,7 @@ class SpeechRecognizer
   using DecodedToken = ::litert::omni::asr::DecodedToken;
 
   explicit SpeechRecognizer(
-      Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
+      Stage<PreprocessedAudio>* absl_nonnull audio_preprocessor)
       : audio_preprocessor_(*audio_preprocessor) {}
 
   ~SpeechRecognizer() override = default;
@@ -50,7 +51,7 @@ class SpeechRecognizer
     return audio_preprocessor_.HasOutput();
   }
 
-  Stage<std::vector<float>>& audio_preprocessor_;
+  Stage<PreprocessedAudio>& audio_preprocessor_;
 };
 
 }  // namespace litert::omni::asr

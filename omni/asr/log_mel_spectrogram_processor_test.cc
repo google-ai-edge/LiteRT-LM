@@ -56,7 +56,7 @@ TEST(LogMelSpectrogramProcessorTest, ProcessEmptyAudioReturnsEmptyVector) {
   dummy_source.PushChunk(std::vector<float>());
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_TRUE(result.empty());
+  EXPECT_TRUE(result.features.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest, ProcessSilenceAudioReturnsEmptyVector) {
@@ -70,7 +70,7 @@ TEST(LogMelSpectrogramProcessorTest, ProcessSilenceAudioReturnsEmptyVector) {
   dummy_source.PushChunk(std::vector<float>(16000, 0.0f));
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_TRUE(result.empty());
+  EXPECT_TRUE(result.features.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest, ProcessDummyAudioReturnsCorrectShape) {
@@ -93,12 +93,12 @@ TEST(LogMelSpectrogramProcessorTest, ProcessDummyAudioReturnsCorrectShape) {
   dummy_source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_FALSE(result.empty());
+  EXPECT_FALSE(result.features.empty());
   int feature_size = 80;
-  EXPECT_EQ(result.size() % feature_size, 0);
+  EXPECT_EQ(result.features.size() % feature_size, 0);
 
   bool has_non_zero = false;
-  for (float val : result) {
+  for (float val : result.features) {
     if (val != 0.0f) {
       has_non_zero = true;
       break;
@@ -128,18 +128,18 @@ TEST(LogMelSpectrogramProcessorTest,
   dummy_source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_FALSE(result.empty());
+  EXPECT_FALSE(result.features.empty());
 
   // In standard normalization, features across valid frames should have roughly
   // zero mean and unit variance.
   int n_mels = 80;
-  int num_frames = result.size() / n_mels;
+  int num_frames = result.features.size() / n_mels;
   EXPECT_GT(num_frames, 0);
 
   for (int m = 0; m < n_mels; ++m) {
     float sum = 0.0f;
     for (int f = 0; f < num_frames; ++f) {
-      sum += result[m * num_frames + f];
+      sum += result.features[m * num_frames + f];
     }
     float mean = sum / num_frames;
     EXPECT_THAT(mean, FloatNear(0.0f, 1e-3f));
@@ -167,7 +167,7 @@ TEST(LogMelSpectrogramProcessorTest,
   dummy_source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_FALSE(result.empty());
+  EXPECT_FALSE(result.features.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest,
@@ -190,7 +190,7 @@ TEST(LogMelSpectrogramProcessorTest,
   dummy_source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_FALSE(result.empty());
+  EXPECT_FALSE(result.features.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest, ProcessPadsToExpectedNumberOfFrames) {
@@ -209,7 +209,7 @@ TEST(LogMelSpectrogramProcessorTest, ProcessPadsToExpectedNumberOfFrames) {
   dummy_source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_EQ(result.size(), 800);
+  EXPECT_EQ(result.features.size(), 800);
 }
 
 std::vector<float> MakeTestAudio(int num_samples) {
@@ -246,17 +246,17 @@ TEST(LogMelSpectrogramProcessorTest,
   source.PushChunk(MakeTestAudio(kSpeechSamples));
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  ASSERT_EQ(result.size(), kWindowFrames * kNMels);
+  ASSERT_EQ(result.features.size(), kWindowFrames * kNMels);
 
   for (int m = 0; m < kNMels; ++m) {
     double sum = 0.0;
     for (int f = 0; f < kValidFrames; ++f) {
-      sum += result[m * kWindowFrames + f];
+      sum += result.features[m * kWindowFrames + f];
     }
     const double mean = sum / kValidFrames;
     double sum_sq = 0.0;
     for (int f = 0; f < kValidFrames; ++f) {
-      const float v = result[m * kWindowFrames + f];
+      const float v = result.features[m * kWindowFrames + f];
       sum_sq += (v - mean) * (v - mean);
     }
     EXPECT_THAT(mean, testing::DoubleNear(0.0, 1e-3)) << "mel=" << m;
@@ -264,7 +264,7 @@ TEST(LogMelSpectrogramProcessorTest,
                 testing::DoubleNear(1.0, 1e-2))
         << "mel=" << m;
     for (int f = kValidFrames; f < kWindowFrames; ++f) {
-      ASSERT_EQ(result[m * kWindowFrames + f], 0.0f);
+      ASSERT_EQ(result.features[m * kWindowFrames + f], 0.0f);
     }
   }
 }
@@ -288,7 +288,7 @@ TEST(LogMelSpectrogramProcessorTest, SchedulePullsFromSourceAndPushesFeatures) {
   ASSERT_OK(processor->Schedule());
   EXPECT_TRUE(processor->HasOutput());
   ASSERT_OK_AND_ASSIGN(auto output, processor->GetOutput());
-  EXPECT_FALSE(output.empty());
+  EXPECT_FALSE(output.features.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest,
@@ -320,9 +320,9 @@ TEST(LogMelSpectrogramProcessorTest,
   dummy_source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  EXPECT_FALSE(result.empty());
+  EXPECT_FALSE(result.features.empty());
   constexpr int kUsmMelBins = 128;
-  EXPECT_EQ(result.size() % kUsmMelBins, 0);
+  EXPECT_EQ(result.features.size() % kUsmMelBins, 0);
   EXPECT_TRUE(processor->config().transpose);
 }
 
@@ -354,7 +354,7 @@ TEST(LogMelSpectrogramProcessorTest,
   fresh_source.PushChunk(second);
   ASSERT_OK(fresh_processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto second_fresh, fresh_processor->GetOutput());
-  EXPECT_EQ(second_after_first, second_fresh);
+  EXPECT_EQ(second_after_first.features, second_fresh.features);
 }
 
 TEST(LogMelSpectrogramProcessorTest,
@@ -376,12 +376,14 @@ TEST(LogMelSpectrogramProcessorTest,
   source.PushChunk(audio);
   ASSERT_OK(processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
-  ASSERT_EQ(result.size(), kWindowFrames * kNMels);
+  ASSERT_EQ(result.features.size(), kWindowFrames * kNMels);
   // 10 active 100 ms blocks + 1 margin block = 110 valid frames.
-  EXPECT_NE(result[109], 0.0f);
+  EXPECT_NE(result.features[109], 0.0f);
+  ASSERT_TRUE(result.decode_range.has_value());
+  EXPECT_FLOAT_EQ(result.decode_range->valid_fraction, 110.0f / 500.0f);
   for (int m = 0; m < kNMels; ++m) {
     for (int f = 110; f < kWindowFrames; ++f) {
-      ASSERT_EQ(result[m * kWindowFrames + f], 0.0f);
+      ASSERT_EQ(result.features[m * kWindowFrames + f], 0.0f);
     }
   }
 }
@@ -395,20 +397,21 @@ TEST(LogMelSpectrogramProcessorTest,
   source.PushChunk(std::vector<float>(kSpeechSamples, 0.0f));
   ASSERT_OK(processor.Schedule());
   ASSERT_OK_AND_ASSIGN(auto silent_out, processor.GetOutput());
-  EXPECT_TRUE(silent_out.empty());
+  EXPECT_TRUE(silent_out.features.empty());
 
   const std::vector<float> speech = MakeTestAudio(kSpeechSamples);
   source.PushChunk(speech);
   ASSERT_OK(processor.Schedule());
   ASSERT_OK_AND_ASSIGN(auto padded_out, processor.GetOutput());
-  ASSERT_EQ(padded_out.size(), kWindowSamples);
+  ASSERT_EQ(padded_out.features.size(), kWindowSamples);
   for (int i = 0; i < kSpeechSamples; ++i) {
-    ASSERT_FLOAT_EQ(padded_out[i], speech[i]);
+    ASSERT_FLOAT_EQ(padded_out.features[i], speech[i]);
   }
   bool has_non_zero_dither = false;
   for (int i = kSpeechSamples; i < kWindowSamples; ++i) {
-    EXPECT_LE(std::abs(padded_out[i]), 3.5e-3f);
-    has_non_zero_dither = has_non_zero_dither || (padded_out[i] != 0.0f);
+    EXPECT_LE(std::abs(padded_out.features[i]), 3.5e-3f);
+    has_non_zero_dither =
+        has_non_zero_dither || (padded_out.features[i] != 0.0f);
   }
   EXPECT_TRUE(has_non_zero_dither);
 }
@@ -438,7 +441,306 @@ TEST(LogMelSpectrogramProcessorTest,
   // With `center=True` reflect padding of `n_fft / 2 = 200` on the left and
   // `n_fft - hop_length - n_fft / 2 = 40` on the right, 16,000 samples yield
   // exactly `16,000 / 160 = 100` STFT frames.
-  EXPECT_EQ(result.size(), (kSamples / kHop) * kNMels);
+  EXPECT_EQ(result.features.size(), (kSamples / kHop) * kNMels);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     ShortChunkAfterFullWindowIsShiftedBackOverPreviousWindow) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWindowSamples = kWindowFrames * kHop;
+  constexpr int kTailSamples = 16000 * 2;  // 2 s final chunk.
+  // A 7 s stream: one full 5 s window followed by a 2 s final chunk.
+  const std::vector<float> stream =
+      MakeTestAudio(kWindowSamples + kTailSamples);
+  const std::vector<float> first(stream.begin(),
+                                 stream.begin() + kWindowSamples);
+  const std::vector<float> tail(stream.begin() + kWindowSamples, stream.end());
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+  source.PushChunk(first);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto first_result, processor->GetOutput());
+  ASSERT_TRUE(first_result.decode_range.has_value());
+  EXPECT_EQ(first_result.decode_range->start_fraction, 0.0f);
+  EXPECT_EQ(first_result.decode_range->valid_fraction, 1.0f);
+
+  source.PushChunk(tail);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto shifted_result, processor->GetOutput());
+  ASSERT_EQ(shifted_result.features.size(), kWindowFrames * kNMels);
+  // The chunk was rebuilt as the last 5 s of the stream: 3 s of it were
+  // already covered by the previous window, all of it is real audio.
+  ASSERT_TRUE(shifted_result.decode_range.has_value());
+  EXPECT_THAT(shifted_result.decode_range->start_fraction,
+              FloatNear(static_cast<float>(kWindowSamples - kTailSamples) /
+                            kWindowSamples,
+                        1e-6f));
+  EXPECT_EQ(shifted_result.decode_range->valid_fraction, 1.0f);
+
+  // Same features as processing the stream's last window directly on a fresh
+  // processor, i.e. no padding or stale STFT queue samples are involved.
+  DummyAudioSource reference_source;
+  ASSERT_OK_AND_ASSIGN(auto reference, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &reference_source));
+  reference_source.PushChunk(
+      std::vector<float>(stream.end() - kWindowSamples, stream.end()));
+  ASSERT_OK(reference->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto reference_result, reference->GetOutput());
+  ASSERT_TRUE(reference_result.decode_range.has_value());
+  EXPECT_EQ(reference_result.decode_range->start_fraction, 0.0f);
+  EXPECT_EQ(shifted_result.features, reference_result.features);
+
+  // Reset forgets the previous window: a short chunk is padded again.
+  processor->Reset();
+  source.PushChunk(tail);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto padded_result, processor->GetOutput());
+  ASSERT_TRUE(padded_result.decode_range.has_value());
+  EXPECT_EQ(padded_result.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(padded_result.decode_range->valid_fraction,
+                  static_cast<float>(kTailSamples / kHop) / kWindowFrames);
+  EXPECT_EQ(padded_result.features[0 * kWindowFrames + kWindowFrames - 1],
+            0.0f);
+}
+
+TEST(LogMelSpectrogramProcessorTest, WhisperShortChunkIsPaddedNotShifted) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWindowSamples = kWindowFrames * kHop;
+  const std::vector<float> stream = MakeTestAudio(kWindowSamples + 16000);
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+              .n_fft = 400,
+              .n_mels = kNMels,
+              .hop_length = kHop,
+              .n_frames = kWindowFrames,
+              .norm_type = LogMelSpectrogramProcessor::NormType::kWhisper},
+          &source));
+  source.PushChunk(
+      std::vector<float>(stream.begin(), stream.begin() + kWindowSamples));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK(processor->GetOutput().status());
+  source.PushChunk(
+      std::vector<float>(stream.begin() + kWindowSamples, stream.end()));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto tail_result, processor->GetOutput());
+  ASSERT_TRUE(tail_result.decode_range.has_value());
+  EXPECT_EQ(tail_result.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(tail_result.decode_range->valid_fraction,
+                  static_cast<float>(16000 / kHop) / kWindowFrames);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     OverlappingShortFinalChunkDeduplicatesOverlapWhenShiftedBack) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWindowSamples = kWindowFrames * kHop;
+  constexpr int kOverlapSamples = 200 * kHop;  // 2 s overlap.
+  constexpr int kNewSamples = 100 * kHop;      // 1 s new samples.
+  // 6 s stream: 5 s first window, then 3 s final chunk (2 s overlap + 1 s new).
+  const std::vector<float> stream = MakeTestAudio(kWindowSamples + kNewSamples);
+  const std::vector<float> first(stream.begin(),
+                                 stream.begin() + kWindowSamples);
+  const std::vector<float> overlapping_tail(
+      stream.begin() + kWindowSamples - kOverlapSamples, stream.end());
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+  source.PushChunk(first);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK(processor->GetOutput().status());
+
+  source.PushChunk(overlapping_tail);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto shifted_result, processor->GetOutput());
+
+  DummyAudioSource reference_source;
+  ASSERT_OK_AND_ASSIGN(auto reference, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &reference_source));
+  reference_source.PushChunk(
+      std::vector<float>(stream.end() - kWindowSamples, stream.end()));
+  ASSERT_OK(reference->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto reference_result, reference->GetOutput());
+  EXPECT_EQ(shifted_result.features, reference_result.features);
+  ASSERT_TRUE(shifted_result.centered_features.has_value());
+  EXPECT_FALSE(shifted_result.centered_features->empty());
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     SkippedSilentOrRoomNoiseChunkClearsPreviousWindowForSubsequentShortChunk) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWindowSamples = kWindowFrames * kHop;
+  constexpr int kShortSamples = 200 * kHop;
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+
+  // Full speech chunk followed by a full silent chunk, then a short speech
+  // chunk. The skipped silent chunk breaks stream continuity, so the short
+  // chunk must be zero-padded rather than shifted back over the pre-silence
+  // window.
+  source.PushChunk(MakeTestAudio(kWindowSamples));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK(processor->GetOutput().status());
+
+  source.PushChunk(std::vector<float>(kWindowSamples, 0.0f));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto silent_result, processor->GetOutput());
+  EXPECT_TRUE(silent_result.features.empty());
+
+  source.PushChunk(MakeTestAudio(kShortSamples));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto after_silence_result, processor->GetOutput());
+  ASSERT_TRUE(after_silence_result.decode_range.has_value());
+  EXPECT_EQ(after_silence_result.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(after_silence_result.decode_range->valid_fraction,
+                  200.0f / kWindowFrames);
+
+  // Likewise, a full room-noise follow-up chunk skipped by
+  // IsRoomNoiseFollowUpChunk must clear `previous_window_`.
+  source.PushChunk(MakeTestAudio(kWindowSamples));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK(processor->GetOutput().status());
+
+  std::vector<float> room_noise = MakeTestAudio(kWindowSamples);
+  for (float& s : room_noise) s *= 0.005f;
+  source.PushChunk(room_noise);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto noise_result, processor->GetOutput());
+  EXPECT_TRUE(noise_result.features.empty());
+
+  source.PushChunk(MakeTestAudio(kShortSamples));
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto after_noise_result, processor->GetOutput());
+  ASSERT_TRUE(after_noise_result.decode_range.has_value());
+  EXPECT_EQ(after_noise_result.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(after_noise_result.decode_range->valid_fraction,
+                  200.0f / kWindowFrames);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     ShortFinalChunkWithTrailingRoomNoiseTrimsSilenceAndShiftsBack) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWindowSamples = kWindowFrames * kHop;
+  constexpr int kActiveTailFrames = 100;  // 1.0 s speech.
+  constexpr int kSilentTailFrames = 250;  // 2.5 s room noise (>= 2.0 s).
+  constexpr int kTailFrames = kActiveTailFrames + kSilentTailFrames;
+  const std::vector<float> stream =
+      MakeTestAudio((kWindowFrames + kTailFrames) * kHop);
+  const std::vector<float> first(stream.begin(),
+                                 stream.begin() + kWindowSamples);
+  std::vector<float> tail(stream.begin() + kWindowSamples, stream.end());
+  for (int i = kActiveTailFrames * kHop; i < kTailFrames * kHop; ++i) {
+    tail[i] *= 0.005f;
+  }
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+  source.PushChunk(first);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK(processor->GetOutput().status());
+
+  source.PushChunk(tail);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  // 10 active 100 ms blocks + 1 margin block = 110 trimmed frames shifted back
+  // over the 500-frame previous window -> start_fraction = (500 - 110) / 500.
+  ASSERT_TRUE(result.decode_range.has_value());
+  EXPECT_FLOAT_EQ(result.decode_range->start_fraction, 390.0f / kWindowFrames);
+  EXPECT_FLOAT_EQ(result.decode_range->valid_fraction, 1.0f);
+  EXPECT_NE(result.features[496], 0.0f);
+  ASSERT_TRUE(result.centered_features.has_value());
+  EXPECT_NE((*result.centered_features)[kWindowFrames - 1], 0.0f);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     ShiftedShortChunkDoesNotTrimReconstructedWindowInCenteredFeatures) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWindowSamples = kWindowFrames * kHop;
+  constexpr int kOverlapFrames = 200;
+  constexpr int kNewFrames = 5;
+  std::vector<float> stream =
+      MakeTestAudio((kWindowFrames + kNewFrames) * kHop);
+  // 195 frames of quiet audio at the tail of the first window (< 20 silent
+  // blocks, so the first window is not trimmed) plus 5 new quiet frames in the
+  // 205-frame overlapping final chunk (< 210 frames, so the final chunk is not
+  // trimmed on entry, while its first block [300, 310) still contains active
+  // speech). The reconstructed 500-frame window [5, 505) has 20 trailing silent
+  // blocks.
+  for (int i = 305 * kHop; i < (kWindowFrames + kNewFrames) * kHop; ++i) {
+    stream[i] *= 0.005f;
+  }
+  const std::vector<float> first(stream.begin(),
+                                 stream.begin() + kWindowSamples);
+  const std::vector<float> tail(
+      stream.begin() + (kWindowFrames - kOverlapFrames) * kHop, stream.end());
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+  source.PushChunk(first);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK(processor->GetOutput().status());
+
+  source.PushChunk(tail);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  ASSERT_TRUE(result.decode_range.has_value());
+  EXPECT_FLOAT_EQ(
+      result.decode_range->start_fraction,
+      static_cast<float>(kWindowFrames - (kOverlapFrames + kNewFrames)) /
+          kWindowFrames);
+  EXPECT_FLOAT_EQ(result.decode_range->valid_fraction, 1.0f);
+  ASSERT_TRUE(result.centered_features.has_value());
+  ASSERT_EQ(result.centered_features->size(), kWindowFrames * kNMels);
+  // Centered features must not run TrimTrailingRoomNoise on the reconstructed
+  // window and zero out the trailing frames in [start_fraction, 1.0).
+  EXPECT_NE((*result.centered_features)[kWindowFrames - 1], 0.0f);
 }
 
 }  // namespace

@@ -24,6 +24,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/asr/audio_preprocessor.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
@@ -65,6 +66,46 @@ TEST(CtcDecoderTest, DecodeIncludesEndOfChunkToken) {
   ASSERT_GE(tokens.size(), 1);
   EXPECT_TRUE(tokens.back().IsEndOfChunk());
   EXPECT_EQ(tokens.back().timestamp_ms, 2);
+}
+
+TEST(CtcDecoderTest, DecodeRangeValidFractionBoundsDecoding) {
+  constexpr int kNumFrames = 8;
+  ASSERT_OK_AND_ASSIGN(auto decoder, CtcDecoder::Create(/*vocab_size=*/2));
+  // Frame t emits token (t % 2), so every frame yields a new token.
+  alignas(64) float logits[kNumFrames * 2];
+  for (int t = 0; t < kNumFrames; ++t) {
+    logits[t * 2] = (t % 2 == 0) ? 1.0f : 0.0f;
+    logits[t * 2 + 1] = (t % 2 == 0) ? 0.0f : 1.0f;
+  }
+  ::litert::RankedTensorType tensor_type(
+      ::litert::ElementType::Float32,
+      ::litert::Layout(::litert::Dimensions{kNumFrames, 2}));
+  auto buffer_or = ::litert::TensorBuffer::CreateFromHostMemory(
+      tensor_type, logits, sizeof(logits));
+  ASSERT_TRUE(buffer_or.HasValue());
+  std::vector<::litert::TensorBuffer> outputs;
+  outputs.push_back(std::move(*buffer_or));
+
+  // 25% of the window is real audio: round(0.25 * 8) = 2 valid frames are
+  // decoded; the end-of-chunk token still marks the window end.
+  ASSERT_OK_AND_ASSIGN(auto tokens,
+                       decoder->Decode(outputs, PreprocessedAudio::DecodeRange{
+                                                    .valid_fraction = 0.25f}));
+  constexpr int kExpectedFrames = 2;
+  ASSERT_EQ(tokens.size(), kExpectedFrames + 1);
+  EXPECT_EQ(tokens[kExpectedFrames - 1].timestamp_ms, kExpectedFrames - 1);
+  EXPECT_TRUE(tokens.back().IsEndOfChunk());
+  EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames);
+
+  // Omitting decode_range decodes the whole window.
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(outputs));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
+
+  // Fractions outside (0, 1) mean "decode everything".
+  ASSERT_OK_AND_ASSIGN(tokens,
+                       decoder->Decode(outputs, PreprocessedAudio::DecodeRange{
+                                                    .valid_fraction = 0.0f}));
+  EXPECT_EQ(tokens.size(), kNumFrames + 1);
 }
 
 }  // namespace
