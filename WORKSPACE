@@ -439,6 +439,9 @@ http_archive(
         "sed -i -e 's|#include \"third_party/protobuf/|#include \"google/protobuf/|g' *.h *.cc",
         "rm -rf third_party/protobuf-lite third_party/protobuf third_party/absl third_party/abseil-cpp",
     ],
+    # TODO: b/570513475 remove this patch once we guarantee that sentencepiece tokenizer is properly
+    # prepared for all supported models.
+    patches = ["@//third_party/sentencepiece:sentencepiece.patch"],
     sha256 = "92381f713e094a15a1ccff1ac4a5315a4c4b82a99ac1332d6ac53c9dc8e1bcf1",
     strip_prefix = "sentencepiece-0.2.2",
     url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.2.tar.gz",

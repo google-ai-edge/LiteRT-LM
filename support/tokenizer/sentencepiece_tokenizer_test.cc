@@ -32,6 +32,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
+#include "sentencepiece_model.pb.h"  // from @sentencepiece
 
 namespace litert::support {
 namespace {
@@ -242,6 +243,27 @@ TEST(SentencePieceTokenizerTest, TokensTokenIdsToTextOutOfRange) {
   std::vector<std::string> tokens = tokenizer->GetTokens();
   EXPECT_THAT(tokenizer->TokenIdsToText({10000}),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(SentencePieceTokenizerTest, CreateFromBufferBpeWithSingleNullPiece) {
+  ASSERT_OK_AND_ASSIGN(std::string model_buffer,
+                       GetContents(GetSentencePieceModelPath()));
+  sentencepiece::ModelProto model_proto;
+  ASSERT_TRUE(model_proto.ParseFromString(model_buffer));
+  model_proto.clear_self_test_data();
+  model_proto.mutable_trainer_spec()->set_model_type(
+      sentencepiece::TrainerSpec::BPE);
+  model_proto.mutable_trainer_spec()->set_byte_fallback(false);
+  const int null_piece_id = model_proto.pieces_size();
+  auto* null_piece = model_proto.add_pieces();
+  null_piece->set_piece(std::string("\0", 1));
+  null_piece->set_score(-100.0f);
+  null_piece->set_type(sentencepiece::ModelProto::SentencePiece::NORMAL);
+
+  ASSERT_OK_AND_ASSIGN(auto tokenizer, SentencePieceTokenizer::CreateFromBuffer(
+                                           model_proto.SerializeAsString()));
+  EXPECT_THAT(tokenizer->TokenToId(absl::string_view("\0", 1)),
+              IsOkAndHolds(null_piece_id));
 }
 
 }  // namespace

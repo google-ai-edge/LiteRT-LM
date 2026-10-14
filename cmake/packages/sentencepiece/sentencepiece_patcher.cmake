@@ -46,6 +46,12 @@ file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/absl")
 file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/protobuf")
 file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/protobuf-lite")
 
+patch_file_content("${LITERTLM_SENTENCEPIECE_SRC_DIR}/src/model_interface.cc"
+    "if (sp.piece().find('\\0') != absl::string_view::npos) {"
+    "if (sp.piece().find('\\0') != absl::string_view::npos &&\n        !(sp.piece() == absl::string_view(\"\\0\", 1) &&\n          sp.type() == ModelProto::SentencePiece::NORMAL &&\n          model_proto_->trainer_spec().model_type() == TrainerSpec::BPE &&\n          !model_proto_->trainer_spec().byte_fallback())) {"
+    FALSE
+)
+
 message(STATUS "[LiteRTLM] Performing header canonicalization in ${LITERTLM_SENTENCEPIECE_SRC_DIR}...")
 
 file(GLOB_RECURSE SP_SOURCES

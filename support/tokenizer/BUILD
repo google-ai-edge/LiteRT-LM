@@ -87,6 +87,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "//support/util:test_utils",
+        "@sentencepiece//:sentencepiece_model_cc_proto",
     ],
 )
 
