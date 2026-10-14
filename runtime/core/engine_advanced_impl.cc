@@ -70,6 +70,10 @@
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "runtime/util/streamed_weights_manager.h"
 #include "schema/core/litertlm_header_schema_generated.h"
+#include "schema/core/litertlm_read.h"
+#ifdef ENABLE_HUGGINGFACE_TOKENIZER
+#include "support/tokenizer/huggingface_tokenizer.h"
+#endif  // ENABLE_HUGGINGFACE_TOKENIZER
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/sentencepiece_tokenizer.h"
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
@@ -985,8 +989,47 @@ EngineAdvancedImpl::CreateStreamingWeights(
         break;
       }
       case schema::AnySectionDataType_HF_Tokenizer_Zlib: {
+#ifdef ENABLE_HUGGINGFACE_TOKENIZER
+        ABSL_LOG(INFO) << "Processing section data type: HF_Tokenizer_Zlib";
+        if (engine_settings.IsBenchmarkEnabled()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+              BenchmarkInfo::InitPhase::kTokenizer));
+        }
+        std::vector<uint8_t> compressed_buffer(
+            section_metadata->end_offset() - section_metadata->begin_offset());
+        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
+            reinterpret_cast<char*>(compressed_buffer.data()), 0,
+            compressed_buffer.size()));
+
+        std::vector<uint8_t> decompressed_buffer;
+        ABSL_RETURN_IF_ERROR(schema::DecompressData(compressed_buffer.data(),
+                                                    compressed_buffer.size(),
+                                                    &decompressed_buffer));
+
+        std::string json_data(
+            reinterpret_cast<const char*>(decompressed_buffer.data()),
+            decompressed_buffer.size());
+        ABSL_ASSIGN_OR_RETURN(
+            tokenizer,
+            ::litert::support::HuggingFaceTokenizer::CreateFromJson(json_data));
+        ABSL_LOG(INFO) << "HuggingFaceTokenizer created.";
+
+        if (engine_settings.IsBenchmarkEnabled()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
+              BenchmarkInfo::InitPhase::kTokenizer));
+        }
+
+        ABSL_RETURN_IF_ERROR(maybe_set_engine_settings());
+
+        break;
+#else
+        ABSL_RETURN_IF_ERROR(section->data_stream->Discard(
+            0,
+            section_metadata->end_offset() - section_metadata->begin_offset()));
         return absl::UnimplementedError(
-            "Streaming HF_Tokenizer_Zlib section is not supported yet.");
+            "HuggingFace tokenizer found, but LiteRT LM was built with "
+            "--define=DISABLE_HUGGINGFACE_TOKENIZER=1.");
+#endif  // ENABLE_HUGGINGFACE_TOKENIZER
       }
       case schema::AnySectionDataType_ExecutorMetadataProto: {
         ABSL_LOG(INFO) << "Processing section data type: ExecutorMetadataProto";

@@ -107,11 +107,15 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/util:logging",
     "//runtime/util:streamed_weights_manager",
     "//schema/core:litertlm_header_schema",
+    "//schema/core:litertlm_read",
     "@litert//litert/cc:litert_buffer_ref",
     "@litert//litert/cc:litert_compiled_model",
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_model",
-]
+] + select({
+    "//runtime/components:disable_huggingface_tokenizer": [],
+    "//conditions:default": ["//support/tokenizer:huggingface_tokenizer"],
+})
 
 cc_library(
     name = "engine_advanced_impl",

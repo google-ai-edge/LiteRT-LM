@@ -540,6 +540,36 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   EXPECT_EQ(responses->GetTexts().size(), 1);
   EXPECT_FALSE(responses->GetTexts()[0].empty());
 }
+
+#ifdef ENABLE_HUGGINGFACE_TOKENIZER
+TEST(EngineTest, CreateEngine_StreamedModelLoading_HfTokenizer) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
+
+  std::shared_ptr<FileDataStream> file_stream;
+  ASSERT_OK_AND_ASSIGN(file_stream,
+                       FileDataStream::Create(model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+
+  auto engine_settings =
+      EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  absl::StatusOr<std::unique_ptr<Engine>> llm = CreateEngine(*engine_settings);
+  // test_hf_tokenizer.litertlm only has HF_Tokenizer_Zlib section, so tokenizer
+  // loading succeeds but engine creation fails because no TFLiteModel section
+  // was provided to initialize the environment.
+  EXPECT_THAT(llm, testing::status::StatusIs(
+                       absl::StatusCode::kInternal,
+                       "Environment was not initialized during streaming."));
+}
+#endif  // ENABLE_HUGGINGFACE_TOKENIZER
 #endif  // ENGINE_ADVANCED
 
 // TODO (b/397975034): Add more tests for Engine.
