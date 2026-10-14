@@ -29,7 +29,7 @@ namespace litert::lm {
 //
 // It wraps an optional user-defined constraint (`user_constraint`) using the
 // decorator pattern, forwarding constraint logic to it. When the budget of
-// thinking tokens is exceeded, it overrides the allowed token list to force the
+// thinking tokens is reached, it overrides the allowed token list to force the
 // generation of the thinking end-delimiters (`end_token_ids`, such as
 // `<channel|>`), after which it transitions control back to the wrapped
 // constraint for content generation.
@@ -71,6 +71,9 @@ class ThinkingBudgetConstraint : public Constraint {
     std::unique_ptr<Constraint::State> user_state = nullptr;
   };
 
+  // `budget` is the maximum number of thinking tokens allowed. A value of 0
+  // forces `end_token_ids` as soon as thinking starts, and a negative value
+  // means unlimited.
   ThinkingBudgetConstraint(Constraint* absl_nullable user_constraint,
                            int budget, std::vector<int> start_token_ids,
                            std::vector<int> end_token_ids, int vocab_size)
