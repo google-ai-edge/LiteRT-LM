@@ -14,6 +14,7 @@
 
 #include "omni/asr/tdt_decoder.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -300,6 +301,299 @@ TEST(TdtDecoderTest, StatefulDecodeTransitionAndBlankHandling) {
   EXPECT_EQ(tokens[2].timestamp_ms, 3);
 }
 
+TEST(
+    TdtDecoderTest,
+    ZeroDurationNonBlankLoopRollsBackFrameBurstAndStopsAfterMaxSymbolsPerStep) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 2, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(20, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillRepeatedly([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 1, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode_1"))
+      .WillRepeatedly([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(20, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+
+  int run_step = 0;
+  EXPECT_CALL(mock_runner, Run(_, _, _))
+      .WillRepeatedly([&run_step](absl::string_view signature,
+                                  absl::Span<const TensorBuffer> inputs,
+                                  absl::Span<const TensorBuffer> outputs) {
+        ++run_step;
+        if (run_step > 10) {
+          return absl::ResourceExhaustedError(
+              "Infinite decode loop on zero-duration non-blank token");
+        }
+        std::vector<float> logits(20, 0.0f);
+        if (run_step == 1) {
+          // Frame 0 emits token 1 with duration 1, advancing to frame 1.
+          logits[1] = 1.0f;
+          logits[6] = 1.0f;
+        } else {
+          // Frame 1 loops on non-blank token 3 with duration 0.
+          logits[10 + 3] = 1.0f;
+          logits[10 + 5] = 1.0f;
+        }
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       TdtDecoder::Create(&mock_runner,
+                                          /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(1024 * 2, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  // 1 step at frame 0 + (max_symbols_per_step=3 + 1 overflow step) at frame 1.
+  // The 3 zero-duration tokens at frame 1 are rolled back; token 1 at frame 0
+  // is preserved.
+  EXPECT_EQ(run_step, 5);
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 0);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+  EXPECT_EQ(tokens[1].timestamp_ms, 2);
+}
+
+TEST(TdtDecoderTest, CreateWithNonPositiveMaxSymbolsPerStepFails) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_FALSE(TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0},
+                                  /*decode_statefully_after=*/4,
+                                  /*max_symbols_per_step=*/0)
+                   .ok());
+  EXPECT_FALSE(TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0},
+                                  /*decode_statefully_after=*/4,
+                                  /*max_symbols_per_step=*/-1)
+                   .ok());
+}
+
+TEST(TdtDecoderTest, CreateWithInsufficientOutputBuffersFails) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 1, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+
+  EXPECT_FALSE(TdtDecoder::Create(&mock_runner).ok());
+}
+
+TEST(TdtDecoderTest, DecodeAdvancesTimeIndexOnZeroDurationBlank) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 2, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        auto buf0 = CreateTestTensorBuffer(20, sizeof(float));
+        // Both frames emit blank token (0) with duration 0 (index 5).
+        std::vector<float> logits(20, 0.0f);
+        logits[0] = 1.0f;
+        logits[5] = 1.0f;
+        logits[10 + 0] = 1.0f;
+        logits[10 + 5] = 1.0f;
+        EXPECT_TRUE(buf0.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        buffers.push_back(std::move(buf0));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .Times(2)
+      .WillRepeatedly(Return(absl::OkStatus()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(1024 * 2, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 1);
+  EXPECT_TRUE(tokens[0].IsEndOfChunk());
+  EXPECT_EQ(tokens[0].timestamp_ms, 2);
+}
+
+TEST(TdtDecoderTest,
+     StatelessDecodeStopsWhenTokenBufferIsFullWithoutStatefulRunner) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 3, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(2, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(60, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  int run_step = 0;
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&run_step](absl::string_view,
+                                  absl::Span<const TensorBuffer>,
+                                  absl::Span<const TensorBuffer> outputs) {
+        ++run_step;
+        std::vector<float> logits(60, 0.0f);
+        if (run_step == 1) {
+          logits[1] = 1.0f;  // token 1 at token_index 0, frame 0
+          logits[5] = 1.0f;  // duration 0
+        } else if (run_step == 2) {
+          logits[10 + 2] = 1.0f;  // token 2 at token_index 1, frame 0
+          logits[10 + 5] = 1.0f;  // duration 0
+        }
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(1024 * 3, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  EXPECT_EQ(run_step, 2);
+  ASSERT_EQ(tokens.size(), 3);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[1].token_id, 2);
+  EXPECT_TRUE(tokens[2].IsEndOfChunk());
+}
+
+TEST(TdtDecoderTest,
+     CustomMaxSymbolsPerStepResetsWhenPositiveDurationAdvances) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 2, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(20, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  int run_step = 0;
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&run_step](absl::string_view,
+                                  absl::Span<const TensorBuffer>,
+                                  absl::Span<const TensorBuffer> outputs) {
+        ++run_step;
+        std::vector<float> logits(20, 0.0f);
+        if (run_step == 1) {
+          // Frame 0, step 1: emit token 1 with duration 0.
+          logits[1] = 1.0f;
+          logits[5] = 1.0f;
+        } else if (run_step == 2) {
+          // Frame 0, step 2: emit token 2 with duration 1 (advances to frame
+          // 1 and resets per-frame symbol counter).
+          logits[2] = 1.0f;
+          logits[6] = 1.0f;
+        } else if (run_step == 3) {
+          // Frame 1, step 1: emit token 3 with duration 0.
+          logits[10 + 3] = 1.0f;
+          logits[10 + 5] = 1.0f;
+        } else {
+          // Frame 1, step 2: emit token 3 with duration 1 (2nd symbol at frame
+          // 1 <= max_symbols_per_step = 2, then advances to frame 2).
+          logits[10 + 3] = 1.0f;
+          logits[10 + 6] = 1.0f;
+        }
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0},
+                         /*decode_statefully_after=*/4,
+                         /*max_symbols_per_step=*/2));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(1024 * 2, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  EXPECT_EQ(run_step, 4);
+  ASSERT_EQ(tokens.size(), 5);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 0);
+  EXPECT_EQ(tokens[1].token_id, 2);
+  EXPECT_EQ(tokens[1].timestamp_ms, 0);
+  EXPECT_EQ(tokens[2].token_id, 3);
+  EXPECT_EQ(tokens[2].timestamp_ms, 1);
+  EXPECT_EQ(tokens[3].token_id, 3);
+  EXPECT_EQ(tokens[3].timestamp_ms, 1);
+  EXPECT_TRUE(tokens[4].IsEndOfChunk());
+  EXPECT_EQ(tokens[4].timestamp_ms, 2);
+}
+
 TEST(TdtDecoderTest, DecodeRangeValidFractionBoundsDecoding) {
   constexpr size_t kNumFrames = 8;
   constexpr size_t kLogitsPerFrame = 10;  // 5 token logits + 5 durations.
@@ -468,6 +762,520 @@ TEST(TdtDecoderTest, DecodeRangeStartFractionDropsAndShiftsEarlyTokens) {
   EXPECT_EQ(tokens[0].timestamp_ms, 0);
   EXPECT_EQ(tokens[3].timestamp_ms, 3);
   EXPECT_EQ(tokens.back().timestamp_ms, kNumFrames - 2);
+}
+
+TEST(TdtDecoderTest, PrematureSosZeroDurationBurstResetsToSos) {
+  constexpr size_t kNumFrames = 4;
+  constexpr size_t kNumTokenSlots = 4;
+  constexpr size_t kLogitsPerSlot = 10;
+  constexpr size_t kLogitsPerFrame = kNumTokenSlots * kLogitsPerSlot;
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(
+            CreateTestTensorBuffer(kNumTokenSlots, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames,
+                                                 sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([](absl::string_view,
+                         absl::Span<const TensorBuffer> inputs,
+                         absl::Span<const TensorBuffer> outputs) {
+        std::vector<float> logits(kLogitsPerFrame * kNumFrames, 0.0f);
+        // Frame 0 slot 0: emit premature token 1 with duration 1.
+        logits[0 * kLogitsPerFrame + 0 * kLogitsPerSlot + 1] = 10.0f;
+        logits[0 * kLogitsPerFrame + 0 * kLogitsPerSlot + 6] = 1.0f;
+        // Frame 1 slots 1..3: zero-duration burst of token 3 (exceeding
+        // max_symbols_per_step = 2), triggering reset_to_sos().
+        for (size_t s = 1; s < kNumTokenSlots; ++s) {
+          const size_t base = 1 * kLogitsPerFrame + s * kLogitsPerSlot;
+          logits[base + 3] = 10.0f;
+          logits[base + 5] = 1.0f;  // duration 0
+        }
+        // Frame 2 slot 0 (after reset to <sos>): emit valid token 2 with
+        // duration 2.
+        logits[2 * kLogitsPerFrame + 0 * kLogitsPerSlot + 2] = 10.0f;
+        logits[2 * kLogitsPerFrame + 0 * kLogitsPerSlot + 7] = 1.0f;
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0},
+                         /*decode_statefully_after=*/4,
+                         /*max_symbols_per_step=*/2));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 2);
+  EXPECT_EQ(tokens[0].timestamp_ms, 2);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+}
+
+TEST(TdtDecoderTest,
+     NearThresholdSosTokenSelectsLocalMinimumWithoutLookaheadWinner) {
+  constexpr size_t kNumFrames = 50;
+  constexpr size_t kNumTokenSlots = 2;
+  constexpr size_t kLogitsPerSlot = 10;  // 5 token logits + 5 durations.
+  constexpr size_t kLogitsPerFrame = kNumTokenSlots * kLogitsPerSlot;
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(
+            CreateTestTensorBuffer(kNumTokenSlots, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames,
+                                                 sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  std::vector<float> active_logits(kLogitsPerFrame * kNumFrames, 0.0f);
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&active_logits](absl::string_view,
+                                       absl::Span<const TensorBuffer>,
+                                       absl::Span<const TensorBuffer> outputs) {
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(logits_buf.Write<float>(absl::MakeConstSpan(active_logits))
+                        .HasValue());
+        return absl::OkStatus();
+      });
+
+  auto init_all_blank = [&]() {
+    std::fill(active_logits.begin(), active_logits.end(), 0.0f);
+    for (size_t f = 0; f < kNumFrames; ++f) {
+      for (size_t s = 0; s < kNumTokenSlots; ++s) {
+        const size_t base = f * kLogitsPerFrame + s * kLogitsPerSlot;
+        active_logits[base + 0] = 10.0f;  // blank = 10, non-blank = 0 (gap 10)
+        active_logits[base + 6] = 1.0f;   // duration = 1
+      }
+    }
+  };
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+
+  // Case 1: gap > 3.0 at t=31 (blank=10.0, tok1=6.5 -> gap=3.5) stays blank.
+  init_all_blank();
+  active_logits[31 * kLogitsPerFrame + 1] = 6.5f;
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 1);
+  EXPECT_TRUE(tokens[0].IsEndOfChunk());
+
+  // Case 2: gap <= 3.0 at local minimum t=31 (blank=10.0, tok1=8.0 -> gap=2.0,
+  // t=32 has gap=2.5), but t=34 inside the 12-frame lookahead has a natural
+  // non-blank winner (blank=4.0, tok2=9.0 -> gap=-5.0): t=31 stays blank and
+  // only the natural winner at t=34 is emitted.
+  init_all_blank();
+  active_logits[31 * kLogitsPerFrame + 1] = 8.0f;
+  active_logits[32 * kLogitsPerFrame + 1] = 7.5f;
+  active_logits[34 * kLogitsPerFrame + 0] = 4.0f;
+  active_logits[34 * kLogitsPerFrame + 2] = 9.0f;
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 2);
+  EXPECT_EQ(tokens[0].timestamp_ms, 34);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+
+  // Case 3: gap <= 3.0 at local minimum t=31 (blank=10.0, tok3=8.0 -> gap=2.0,
+  // t=32 has gap=2.5) with no natural non-blank winner in the next 12 frames:
+  // best non-blank token (tok3) is emitted at t=31.
+  init_all_blank();
+  active_logits[31 * kLogitsPerFrame + 3] = 8.0f;
+  active_logits[32 * kLogitsPerFrame + 3] = 7.5f;
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 3);
+  EXPECT_EQ(tokens[0].timestamp_ms, 31);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+}
+
+TEST(TdtDecoderTest,
+     MidChunkDeadZoneResetsOnceRewindsAndHandlesPrefixRetention) {
+  constexpr size_t kNumFrames = 55;
+  constexpr size_t kNumTokenSlots = 8;
+  constexpr size_t kLogitsPerSlot = 10;
+  constexpr size_t kLogitsPerFrame = kNumTokenSlots * kLogitsPerSlot;
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(
+            CreateTestTensorBuffer(kNumTokenSlots, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames,
+                                                 sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  auto set_frame_all_slots = [&](std::vector<float>& logits, size_t frame,
+                                 int token_id, int duration) {
+    for (size_t s = 0; s < kNumTokenSlots; ++s) {
+      const size_t base = frame * kLogitsPerFrame + s * kLogitsPerSlot;
+      std::fill_n(logits.begin() + base, kLogitsPerSlot, 0.0f);
+      logits[base + token_id] = 10.0f;
+      logits[base + 5 + duration] = 1.0f;
+    }
+  };
+
+  size_t early_token_frame = 10;
+  bool saw_non_blank_since_sos = false;
+  int reset_count = 0;
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&](absl::string_view,
+                          absl::Span<const TensorBuffer> inputs,
+                          absl::Span<const TensorBuffer> outputs) {
+        std::vector<int32_t> token_ids(kNumTokenSlots, 0);
+        auto& tok_buf = const_cast<TensorBuffer&>(inputs[1]);
+        EXPECT_TRUE(
+            tok_buf.Read<int32_t>(absl::MakeSpan(token_ids)).HasValue());
+        if (token_ids[1] != 0) {
+          saw_non_blank_since_sos = true;
+        } else if (saw_non_blank_since_sos) {
+          ++reset_count;
+          saw_non_blank_since_sos = false;
+        }
+
+        std::vector<float> logits(kLogitsPerFrame * kNumFrames, 0.0f);
+        for (size_t f = 0; f < kNumFrames; ++f) {
+          set_frame_all_slots(logits, f, /*token_id=*/0, /*duration=*/1);
+        }
+        if (reset_count == 0) {
+          // Before reset: emit token 1 at `early_token_frame`, then blanks.
+          set_frame_all_slots(logits, early_token_frame, /*token_id=*/1,
+                              /*duration=*/1);
+        } else {
+          // After reset (rewound to `early_token_frame + 3`): emit 5 tokens
+          // spanning > 4 frames so `TrimAbortiveMidChunkSosReset` keeps them,
+          // followed by >= 16 blank frames (a second dead zone).
+          const size_t rewind_frame = early_token_frame + 3;
+          set_frame_all_slots(logits, rewind_frame, /*token_id=*/2,
+                              /*duration=*/1);
+          set_frame_all_slots(logits, rewind_frame + 1, /*token_id=*/2,
+                              /*duration=*/1);
+          set_frame_all_slots(logits, rewind_frame + 2, /*token_id=*/2,
+                              /*duration=*/1);
+          set_frame_all_slots(logits, rewind_frame + 3, /*token_id=*/2,
+                              /*duration=*/3);
+          set_frame_all_slots(logits, rewind_frame + 6, /*token_id=*/2,
+                              /*duration=*/1);
+        }
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+
+  // Case 1: early emission at t=10 (> 8) -> prefix token at t=10 is kept,
+  // reset fires once at t=26 (>= 25 and >= 10+16), rewinds to t=13 (10+3),
+  // and the second dead zone after t=19 does not reset again.
+  early_token_frame = 10;
+  saw_non_blank_since_sos = false;
+  reset_count = 0;
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  EXPECT_EQ(reset_count, 1);
+  ASSERT_EQ(tokens.size(), 7);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 10);
+  EXPECT_EQ(tokens[1].token_id, 2);
+  EXPECT_EQ(tokens[1].timestamp_ms, 13);
+  EXPECT_EQ(tokens[5].token_id, 2);
+  EXPECT_EQ(tokens[5].timestamp_ms, 19);
+  EXPECT_TRUE(tokens[6].IsEndOfChunk());
+
+  // Case 2: early emission at t=5 (<= 8) -> prefix token at t=5 is cleared on
+  // reset, time rewinds to t=8 (5+3), and only the post-reset tokens remain.
+  early_token_frame = 5;
+  saw_non_blank_since_sos = false;
+  reset_count = 0;
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  EXPECT_EQ(reset_count, 1);
+  ASSERT_EQ(tokens.size(), 6);
+  EXPECT_EQ(tokens[0].token_id, 2);
+  EXPECT_EQ(tokens[0].timestamp_ms, 8);
+  EXPECT_EQ(tokens[4].token_id, 2);
+  EXPECT_EQ(tokens[4].timestamp_ms, 14);
+  EXPECT_TRUE(tokens[5].IsEndOfChunk());
+}
+
+TEST(TdtDecoderTest,
+     TrimAbortiveMidChunkSosResetDropsShortOrLatePostResetTail) {
+  constexpr size_t kNumFrames = 55;
+  constexpr size_t kNumTokenSlots = 8;
+  constexpr size_t kLogitsPerSlot = 10;
+  constexpr size_t kLogitsPerFrame = kNumTokenSlots * kLogitsPerSlot;
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(
+            CreateTestTensorBuffer(kNumTokenSlots, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames,
+                                                 sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  auto set_frame_all_slots = [&](std::vector<float>& logits, size_t frame,
+                                 int token_id, int duration) {
+    for (size_t s = 0; s < kNumTokenSlots; ++s) {
+      const size_t base = frame * kLogitsPerFrame + s * kLogitsPerSlot;
+      std::fill_n(logits.begin() + base, kLogitsPerSlot, 0.0f);
+      logits[base + token_id] = 10.0f;
+      logits[base + 5 + duration] = 1.0f;
+    }
+  };
+
+  std::vector<size_t> post_reset_token_frames;
+  bool saw_prefix_token = false;
+  bool after_reset = false;
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&](absl::string_view,
+                          absl::Span<const TensorBuffer> inputs,
+                          absl::Span<const TensorBuffer> outputs) {
+        std::vector<int32_t> token_ids(kNumTokenSlots, 0);
+        auto& tok_buf = const_cast<TensorBuffer&>(inputs[1]);
+        EXPECT_TRUE(
+            tok_buf.Read<int32_t>(absl::MakeSpan(token_ids)).HasValue());
+        if (token_ids[1] != 0 && !after_reset) {
+          saw_prefix_token = true;
+        } else if (saw_prefix_token && token_ids[1] == 0) {
+          after_reset = true;
+        }
+
+        std::vector<float> logits(kLogitsPerFrame * kNumFrames, 0.0f);
+        for (size_t f = 0; f < kNumFrames; ++f) {
+          set_frame_all_slots(logits, f, /*token_id=*/0, /*duration=*/1);
+        }
+        if (!after_reset) {
+          // Emit prefix token 1 at t=9 (> 8, so prefix is kept on reset).
+          set_frame_all_slots(logits, /*frame=*/9, /*token_id=*/1,
+                              /*duration=*/1);
+        } else {
+          for (size_t f : post_reset_token_frames) {
+            set_frame_all_slots(logits, f, /*token_id=*/2, /*duration=*/1);
+          }
+        }
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0}));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+
+  // Case 1: post-reset tail of <= 4 tokens (even spanning > 4 frames) is
+  // trimmed.
+  saw_prefix_token = false;
+  after_reset = false;
+  post_reset_token_frames = {12, 14, 16, 18};
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 9);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+
+  // Case 2: post-reset tail of > 4 tokens but spanning <= 4 frames (t=12..16)
+  // is trimmed.
+  saw_prefix_token = false;
+  after_reset = false;
+  post_reset_token_frames = {12, 13, 14, 15, 16};
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 9);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+
+  // Case 3: post-reset tail of > 4 tokens spanning > 4 frames, but starting
+  // > 20 frames after reset_origin_time_index=9 (t=30 > 29), is trimmed.
+  saw_prefix_token = false;
+  after_reset = false;
+  post_reset_token_frames = {30, 32, 34, 36, 38};
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 9);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+}
+
+TEST(TdtDecoderTest,
+     PostBurstZeroDurationTokensAreSuppressedUntilPositiveDuration) {
+  constexpr size_t kNumFrames = 50;
+  constexpr size_t kNumTokenSlots = 8;
+  constexpr size_t kLogitsPerSlot = 10;
+  constexpr size_t kLogitsPerFrame = kNumTokenSlots * kLogitsPerSlot;
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(
+            CreateTestTensorBuffer(kNumTokenSlots, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames,
+                                                 sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  auto set_frame_all_slots = [&](std::vector<float>& logits, size_t frame,
+                                 int token_id, int duration) {
+    for (size_t s = 0; s < kNumTokenSlots; ++s) {
+      const size_t base = frame * kLogitsPerFrame + s * kLogitsPerSlot;
+      std::fill_n(logits.begin() + base, kLogitsPerSlot, 0.0f);
+      logits[base + token_id] = 10.0f;
+      logits[base + 5 + duration] = 1.0f;
+    }
+  };
+
+  int run_step = 0;
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&](absl::string_view, absl::Span<const TensorBuffer>,
+                          absl::Span<const TensorBuffer> outputs) {
+        ++run_step;
+        std::vector<float> logits(kLogitsPerFrame * kNumFrames, 0.0f);
+        for (size_t f = 0; f < kNumFrames; ++f) {
+          set_frame_all_slots(logits, f, /*token_id=*/0, /*duration=*/4);
+        }
+        if (run_step <= 3) {
+          // Steps 1..3 (t=0, 1, 2): emit 3 tokens (tokens_since_sos = 3 > 2,
+          // so a subsequent burst is non-premature).
+          set_frame_all_slots(logits, static_cast<size_t>(run_step - 1),
+                              /*token_id=*/1, /*duration=*/1);
+        } else if (run_step <= 6) {
+          // Steps 4..6 (t=3): zero-duration burst of 3 tokens (>
+          // max_symbols_per_step = 2), rolling back t=3 and setting
+          // prev_frame_had_burst = true.
+          set_frame_all_slots(logits, /*frame=*/3, /*token_id=*/4,
+                              /*duration=*/0);
+        } else if (run_step == 7) {
+          // Step 7 (t=4, first step after burst): dur=0 token 2 is suppressed
+          // from decoded_tokens because prev_frame_had_burst is true.
+          set_frame_all_slots(logits, /*frame=*/4, /*token_id=*/2,
+                              /*duration=*/0);
+        } else if (run_step == 8) {
+          // Step 8 (t=4, second step): dur=1 token 3 is kept and clears
+          // prev_frame_had_burst.
+          set_frame_all_slots(logits, /*frame=*/4, /*token_id=*/3,
+                              /*duration=*/1);
+        } else if (run_step == 9) {
+          // Step 9 (t=5): dur=0 token 2 is now kept because the dur>0 token at
+          // t=4 cleared prev_frame_had_burst (and fills the 8th stateless slot,
+          // ending decoding).
+          set_frame_all_slots(logits, /*frame=*/5, /*token_id=*/2,
+                              /*duration=*/0);
+        }
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(
+            logits_buf.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0},
+                         /*decode_statefully_after=*/4,
+                         /*max_symbols_per_step=*/2));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 6);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 0);
+  EXPECT_EQ(tokens[1].token_id, 1);
+  EXPECT_EQ(tokens[1].timestamp_ms, 1);
+  EXPECT_EQ(tokens[2].token_id, 1);
+  EXPECT_EQ(tokens[2].timestamp_ms, 2);
+  EXPECT_EQ(tokens[3].token_id, 3);
+  EXPECT_EQ(tokens[3].timestamp_ms, 4);
+  EXPECT_EQ(tokens[4].token_id, 2);
+  EXPECT_EQ(tokens[4].timestamp_ms, 5);
+  EXPECT_TRUE(tokens[5].IsEndOfChunk());
+  EXPECT_EQ(tokens[5].timestamp_ms, kNumFrames);
 }
 
 }  // namespace

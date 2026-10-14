@@ -34,10 +34,13 @@ namespace litert::omni::asr {
 // stateful decoding.
 class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
+  // `max_symbols_per_step` caps the number of non-blank tokens emitted at a
+  // single encoder time frame via zero-duration steps before rolling back the
+  // frame burst and advancing to the next frame.
   static absl::StatusOr<std::unique_ptr<TdtDecoder>> Create(
       LiteRtRunner* absl_nonnull runner,
       std::vector<int> decode_start_token_ids = {8192},
-      int decode_statefully_after = 4);
+      int decode_statefully_after = 4, int max_symbols_per_step = 3);
 
   ~TdtDecoder() override = default;
 
@@ -63,7 +66,8 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<TensorBuffer> decode_output_buffers,
       std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
       size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
-      int blank_token_id, int decode_statefully_after);
+      int blank_token_id, int decode_statefully_after,
+      int max_symbols_per_step);
 
   LiteRtRunner& runner_;
   std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner_;
@@ -75,6 +79,7 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
   const size_t num_logits_per_token_;
   const int blank_token_id_;
   const int decode_statefully_after_;
+  const int max_symbols_per_step_;
 };
 
 }  // namespace litert::omni::asr
