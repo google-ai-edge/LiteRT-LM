@@ -86,6 +86,15 @@ struct ModelOptions {
   std::vector<std::string> external_tensor_patterns;
 };
 
+// Converts `OmniEngine::Settings::Backend` to `lm::Backend`.
+//
+// args
+// - backend: `OmniEngine::Settings::Backend` enum value.
+//
+// returns
+// - Corresponding `lm::Backend` enum value.
+lm::Backend ToLmBackend(OmniEngine::Settings::Backend backend);
+
 // Converts `OmniEngine::Settings` to `ModelOptions` for LM runners.
 //
 // args

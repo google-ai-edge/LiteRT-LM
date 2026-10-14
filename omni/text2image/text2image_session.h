@@ -20,9 +20,14 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
+#include "omni/base/model_resources.h"
+#include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "omni/text2image/prompt_source.h"
-#include "omni/text2image/text2image_engine.h"
+#include "runtime/framework/threadpool.h"
+#include "runtime/proto/text2image_metadata.pb.h"
+#include "runtime/proto/text2image_session_config.pb.h"
 
 namespace litert::omni {
 class OmniSessionTest;
@@ -30,29 +35,59 @@ class OmniSessionTest;
 
 namespace litert::omni::text2image {
 
-// `OmniSessionFactory` implementation backed by `Text2ImageEngine`.
+// Base `OmniSessionFactory` implementation for Text-to-Image models.
 class Text2ImageSessionFactory : public OmniSessionFactory {
  public:
-  static absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateFactory(
-      Text2ImageEngine::Settings settings);
+  Text2ImageSessionFactory(
+      const OmniEngine::Settings& settings,
+      const MessageLite* absl_nullable session_config,
+      const lm::proto::Text2ImageMetadata& metadata,
+      std::shared_ptr<ModelResources> absl_nullable model_resources);
+
   ~Text2ImageSessionFactory() override;
 
   absl::StatusOr<std::unique_ptr<OmniSession>> Create(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
       override;
 
+  const lm::proto::Text2ImageMetadata& metadata() const { return metadata_; }
+  const lm::proto::Text2ImageSessionConfig& session_config() const {
+    return session_config_;
+  }
+  const OmniEngine::Settings& engine_settings() const {
+    return engine_settings_;
+  }
+  std::shared_ptr<ModelResources> model_resources() const {
+    return model_resources_;
+  }
+
+  // Resolves the default `ImageGenInputMetadata` parameters for
+  // `session_config`, applying any model-specific defaults.
+  virtual ImageGenInputMetadata ResolveDefaultPromptParams(
+      const lm::proto::Text2ImageSessionConfig& session_config = {}) const = 0;
+
+ protected:
+  virtual absl::StatusOr<std::unique_ptr<MultiStagedSession>>
+  CreateWithPromptSource(
+      const lm::proto::Text2ImageSessionConfig& session_config,
+      std::unique_ptr<PromptSource> absl_nullable prompt_source) = 0;
+
+  lm::ThreadPool* thread_pool() const { return thread_pool_.get(); }
+
  private:
   friend class ::litert::omni::OmniSessionTest;
+  friend class Text2ImageEngine;
   friend class Text2ImageSessionTest;
 
   static std::unique_ptr<PromptSource> CreatePromptInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       ImageGenInputMetadata default_params = {});
 
-  explicit Text2ImageSessionFactory(
-      std::unique_ptr<Text2ImageEngine> absl_nonnull text2image_engine);
-
-  std::unique_ptr<Text2ImageEngine> text2image_engine_;
+  OmniEngine::Settings engine_settings_;
+  lm::proto::Text2ImageSessionConfig session_config_;
+  lm::proto::Text2ImageMetadata metadata_;
+  std::shared_ptr<ModelResources> absl_nullable model_resources_;
+  std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool_;
 };
 
 }  // namespace litert::omni::text2image

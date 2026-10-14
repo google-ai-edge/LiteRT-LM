@@ -15,9 +15,6 @@
 #include "omni/text2image/text2image_engine.h"
 
 #include <cstdint>
-#include <filesystem>  // NOLINT
-#include <fstream>
-#include <ios>
 #include <memory>
 #include <string>
 #include <utility>
@@ -26,35 +23,31 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
-#include "flatbuffers/buffer.h"  // from @flatbuffers
-#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
-#include "omni/text2image/flux2/flux2_model_config.h"
 #include "omni/text2image/image_decoder.h"
 #include "omni/text2image/prompt_source.h"
 #include "omni/text2image/text2image_session.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
-#include "runtime/proto/image_gen_model_type.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
-#include "schema/core/litertlm_header_schema_generated.h"
+#include "runtime/proto/text2image_session_config.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::text2image {
-
-struct Text2ImageEngineTestingPeer {
-  static std::unique_ptr<Text2ImageEngine> CreateWithSettings(
-      const Text2ImageEngine::Settings& settings) {
-    return std::unique_ptr<Text2ImageEngine>(new Text2ImageEngine(
-        settings, /*resources=*/nullptr, /*thread_pool=*/nullptr));
-  }
-};
 
 class Text2ImageSessionTest : public ::testing::Test {
  protected:
@@ -68,50 +61,8 @@ class Text2ImageSessionTest : public ::testing::Test {
 
 namespace {
 
-using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
-
-void WriteDummyBonsaiLitertLmFile(const std::filesystem::path& path) {
-  lm::proto::Text2ImageMetadata meta;
-  meta.mutable_image_gen_model_type()
-      ->mutable_bonsai_flux2()
-      ->mutable_flux2_params()
-      ->set_seq_len(128);
-  std::string meta_bytes = meta.SerializeAsString();
-
-  flatbuffers::FlatBufferBuilder builder(1024);
-  uint64_t meta_begin = 256;
-  uint64_t meta_end = meta_begin + meta_bytes.size();
-  auto text2image_meta_section = lm::schema::CreateSectionObject(
-      builder, /*items=*/0, meta_begin, meta_end,
-      lm::schema::AnySectionDataType_Text2ImageMetadataProto);
-
-  std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
-      text2image_meta_section};
-  auto section_metadata = lm::schema::CreateSectionMetadata(
-      builder, builder.CreateVector(sections));
-  auto metadata =
-      lm::schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
-  builder.Finish(metadata);
-
-  std::ofstream file(path, std::ios::binary);
-  file.write("LITERTLM", 8);
-  uint32_t major = 1, minor = 0, patch = 0, padding = 0;
-  file.write(reinterpret_cast<const char*>(&major), sizeof(uint32_t));
-  file.write(reinterpret_cast<const char*>(&minor), sizeof(uint32_t));
-  file.write(reinterpret_cast<const char*>(&patch), sizeof(uint32_t));
-  file.write(reinterpret_cast<const char*>(&padding), sizeof(uint32_t));
-  uint64_t header_end_offset = 32 + builder.GetSize();
-  file.write(reinterpret_cast<const char*>(&header_end_offset),
-             sizeof(uint64_t));
-  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
-             builder.GetSize());
-  if (header_end_offset < meta_begin) {
-    std::string pad(meta_begin - header_end_offset, '\0');
-    file.write(pad.data(), pad.size());
-  }
-  file.write(meta_bytes.data(), meta_bytes.size());
-}
+using ::testing::IsSupersetOf;
 
 class FakeImageDecoder : public ImageDecoder {
  public:
@@ -145,6 +96,63 @@ class FakeImageDecoder : public ImageDecoder {
   PromptSource* prompt_source_;
 };
 
+class FakeText2ImageSessionFactory : public Text2ImageSessionFactory {
+ public:
+  FakeText2ImageSessionFactory(const OmniEngine::Settings& settings,
+                               const MessageLite* absl_nullable session_config,
+                               const lm::proto::Text2ImageMetadata& metadata)
+      : Text2ImageSessionFactory(settings, session_config, metadata,
+                                 /*model_resources=*/nullptr) {}
+
+  ImageGenInputMetadata ResolveDefaultPromptParams(
+      const lm::proto::Text2ImageSessionConfig& session_config) const override {
+    ImageGenInputMetadata params{
+        .width = session_config.has_width() ? session_config.width()
+                                            : this->session_config().width(),
+        .height = session_config.has_height() ? session_config.height()
+                                              : this->session_config().height(),
+        .num_inference_steps =
+            session_config.has_num_inference_steps()
+                ? session_config.num_inference_steps()
+                : this->session_config().num_inference_steps(),
+        .seed =
+            session_config.has_seed()
+                ? static_cast<uint64_t>(session_config.seed())
+                : (this->session_config().has_seed()
+                       ? static_cast<uint64_t>(this->session_config().seed())
+                       : 42),
+    };
+    if (params.width <= 0) params.width = 256;
+    if (params.height <= 0) params.height = 256;
+    if (params.num_inference_steps <= 0) params.num_inference_steps = 4;
+    return params;
+  }
+
+ protected:
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithPromptSource(
+      const lm::proto::Text2ImageSessionConfig& session_config,
+      std::unique_ptr<PromptSource> absl_nullable prompt_source) override {
+    lm::proto::Text2ImageSessionConfig effective_config =
+        this->session_config();
+    effective_config.MergeFrom(session_config);
+    if (effective_config.width() != effective_config.height()) {
+      return absl::InvalidArgumentError(
+          "FLUX.2 requires square image dimensions (width == height).");
+    }
+    if (prompt_source == nullptr) {
+      prompt_source = std::make_unique<PushPromptSource>(
+          ResolveDefaultPromptParams(effective_config));
+    }
+    auto decoder = std::make_unique<FakeImageDecoder>(prompt_source.get());
+    Stage<Output>* raw_output_stage = decoder.get();
+    std::vector<std::unique_ptr<internal::StageBase>> stages;
+    stages.push_back(std::move(prompt_source));
+    stages.push_back(std::move(decoder));
+    return MultiStagedSession::Create(std::move(stages), raw_output_stage,
+                                      thread_pool());
+  }
+};
+
 TEST(PushPromptSourceTest, PushScheduleAndFinish) {
   PushPromptSource source(ImageGenInputMetadata{
       .width = 256, .height = 256, .num_inference_steps = 4, .seed = 99});
@@ -167,113 +175,73 @@ TEST(PushPromptSourceTest, PushScheduleAndFinish) {
               StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
-void WriteDummyKleinLitertLmFile(const std::filesystem::path& path) {
-  lm::proto::Text2ImageMetadata meta;
-  meta.mutable_image_gen_model_type()
-      ->mutable_flux2_klein()
-      ->mutable_flux2_params()
-      ->set_seq_len(256);
-  std::string meta_bytes = meta.SerializeAsString();
-
-  flatbuffers::FlatBufferBuilder builder(1024);
-  uint64_t meta_begin = 256;
-  uint64_t meta_end = meta_begin + meta_bytes.size();
-  auto text2image_meta_section = lm::schema::CreateSectionObject(
-      builder, /*items=*/0, meta_begin, meta_end,
-      lm::schema::AnySectionDataType_Text2ImageMetadataProto);
-
-  std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
-      text2image_meta_section};
-  auto section_metadata = lm::schema::CreateSectionMetadata(
-      builder, builder.CreateVector(sections));
-  auto metadata =
-      lm::schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
-  builder.Finish(metadata);
-
-  std::ofstream file(path, std::ios::binary);
-  file.write("LITERTLM", 8);
-  uint32_t major = 1, minor = 0, patch = 0, padding = 0;
-  file.write(reinterpret_cast<const char*>(&major), sizeof(uint32_t));
-  file.write(reinterpret_cast<const char*>(&minor), sizeof(uint32_t));
-  file.write(reinterpret_cast<const char*>(&patch), sizeof(uint32_t));
-  file.write(reinterpret_cast<const char*>(&padding), sizeof(uint32_t));
-  uint64_t header_end_offset = 32 + builder.GetSize();
-  file.write(reinterpret_cast<const char*>(&header_end_offset),
-             sizeof(uint64_t));
-  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
-             builder.GetSize());
-  if (header_end_offset < meta_begin) {
-    std::string pad(meta_begin - header_end_offset, '\0');
-    file.write(pad.data(), pad.size());
-  }
-  file.write(meta_bytes.data(), meta_bytes.size());
+TEST(Text2ImageEngineRegistrationTest, AllDefaultModelsAreRegistered) {
+  EXPECT_THAT(OmniRegistry::Get().GetRegisteredModels(),
+              IsSupersetOf({"bonsai-flux2", "bonsai_flux2", "flux2",
+                            "flux2-klein", "flux2_klein", "flux.2-klein-4b"}));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("bonsai-flux2"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("flux2-klein"));
+  EXPECT_FALSE(
+      OmniRegistry::Get().IsModelRegistered("unknown-text2image-model"));
 }
 
-TEST(DetectModelTypeTest, DetectsBonsaiFlux2FromLitertLmFileAndFolder) {
-  std::filesystem::path temp_dir =
-      std::filesystem::path(::testing::TempDir()) / "bonsai_litertlm_dir";
-  std::filesystem::create_directories(temp_dir);
-  std::filesystem::path litertlm_file = temp_dir / "bonsai_flux2.litertlm";
-  WriteDummyBonsaiLitertLmFile(litertlm_file);
-
-  EXPECT_THAT(DetectModelType(litertlm_file.string()),
-              IsOkAndHolds(ModelType::BONSAI_FLUX2));
-  EXPECT_THAT(DetectModelType(temp_dir.string()),
-              IsOkAndHolds(ModelType::BONSAI_FLUX2));
-  std::filesystem::remove_all(temp_dir);
+TEST(Text2ImageEngineRegistrationTest, RejectsUnknownModelOnCreate) {
+  EXPECT_THAT(Text2ImageEngine::Create("unknown-text2image-model", {}),
+              StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST(DetectModelTypeTest, DetectsFlux2KleinFromLitertLmFileAndFolder) {
-  std::filesystem::path temp_dir =
-      std::filesystem::path(::testing::TempDir()) / "klein_litertlm_dir";
-  std::filesystem::create_directories(temp_dir);
-  std::filesystem::path litertlm_file = temp_dir / "flux2_klein.litertlm";
-  WriteDummyKleinLitertLmFile(litertlm_file);
-
-  EXPECT_THAT(DetectModelType(litertlm_file.string()),
-              IsOkAndHolds(ModelType::FLUX2_KLEIN));
-  EXPECT_THAT(DetectModelType(temp_dir.string()),
-              IsOkAndHolds(ModelType::FLUX2_KLEIN));
-  std::filesystem::remove_all(temp_dir);
-}
-
-TEST(DetectModelTypeTest, RejectsEmptyOrUnknownFolder) {
-  EXPECT_THAT(DetectModelType(""),
-              StatusIs(absl::StatusCode::kInvalidArgument));
-
-  std::filesystem::path temp_dir =
-      std::filesystem::path(::testing::TempDir()) / "empty_text2image_dir";
-  std::filesystem::create_directories(temp_dir);
-  EXPECT_THAT(DetectModelType(temp_dir.string()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
-  std::filesystem::remove_all(temp_dir);
-}
-
-TEST(Text2ImageEngineTest, GetModelTypeAndResolveDefaultPromptParams) {
+TEST(Text2ImageEngineTest, CreateFailsWhenModelContainerIsMissingOrIncomplete) {
   Text2ImageEngine::Settings settings;
-  EXPECT_EQ(settings.GetModelType(), ModelType::UNSPECIFIED);
+  settings.engine_settings.model_path = "/nonexistent/flux2_model_dir";
+  for (const auto& model_name :
+       {"bonsai-flux2", "bonsai_flux2", "flux2", "flux2-klein", "flux2_klein",
+        "flux.2-klein-4b"}) {
+    EXPECT_THAT(Text2ImageEngine::Create(model_name, settings),
+                StatusIs(absl::StatusCode::kNotFound));
+  }
+}
 
-  Flux2ModelConfig flux2_config;
-  flux2_config.img_size = 256;
-  flux2_config.steps = 4;
-  settings.model_config = flux2_config;
-  EXPECT_EQ(settings.GetModelType(), ModelType::BONSAI_FLUX2);
+TEST(Text2ImageEngineTest,
+     DynamicRegisterResolveDefaultPromptParamsAndCreateSession) {
+  ASSERT_OK(
+      OmniRegistry::Get().RegisterSessionFactory(OmniRegistry::RegistrySpec{
+          .model_names = {"fake-text2image-model"},
+          .get_session_factory =
+              [](absl::string_view /*model_name*/,
+                 const OmniEngine::Settings& settings,
+                 const MessageLite* absl_nullable session_config,
+                 const MessageLite* absl_nullable metadata,
+                 ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+                 std::shared_ptr<::litert::lm::ModelResources> absl_nullable
+                 /*lm_resources*/)
+              -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+            lm::proto::Text2ImageMetadata resolved_meta;
+            if (metadata != nullptr) {
+              resolved_meta.CheckTypeAndMergeFrom(*metadata);
+            }
+            return std::make_unique<FakeText2ImageSessionFactory>(
+                settings, session_config, resolved_meta);
+          },
+          .session_config_type_id = "Text2Image",
+      }));
+  absl::Cleanup cleanup = [] {
+    OmniRegistry::Get().UnregisterModel("fake-text2image-model");
+  };
 
-  Flux2ModelConfig klein_config = flux2_config;
-  klein_config.is_klein = true;
-  settings.model_config = klein_config;
-  EXPECT_EQ(settings.GetModelType(), ModelType::FLUX2_KLEIN);
-  settings.model_config = flux2_config;
-
-  auto engine = Text2ImageEngineTestingPeer::CreateWithSettings(settings);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       Text2ImageEngine::Create("fake-text2image-model", {}));
   ImageGenInputMetadata resolved_defaults =
       engine->ResolveDefaultPromptParams({});
   EXPECT_EQ(resolved_defaults.width, 256);
   EXPECT_EQ(resolved_defaults.height, 256);
   EXPECT_EQ(resolved_defaults.num_inference_steps, 4);
+  EXPECT_EQ(resolved_defaults.seed, 42);
 
-  Text2ImageEngine::SessionSettings custom_input{
-      .width = 512, .height = 512, .num_inference_steps = 8, .seed = 77};
+  lm::proto::Text2ImageSessionConfig custom_input;
+  custom_input.set_width(512);
+  custom_input.set_height(512);
+  custom_input.set_num_inference_steps(8);
+  custom_input.set_seed(77);
   ImageGenInputMetadata resolved_custom =
       engine->ResolveDefaultPromptParams(custom_input);
   EXPECT_EQ(resolved_custom.width, 512);
@@ -281,22 +249,11 @@ TEST(Text2ImageEngineTest, GetModelTypeAndResolveDefaultPromptParams) {
   EXPECT_EQ(resolved_custom.num_inference_steps, 8);
   EXPECT_EQ(resolved_custom.seed, 77);
 
-  EXPECT_THAT(engine->CreateSession(Text2ImageEngine::SessionSettings{
-                  .width = 512, .height = 256}),
+  lm::proto::Text2ImageSessionConfig non_square_config;
+  non_square_config.set_width(512);
+  non_square_config.set_height(256);
+  EXPECT_THAT(engine->CreateSession(non_square_config),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(engine->CreateSession(
-                  Text2ImageEngine::SessionSettings{.width = 256, .height = 0}),
-              StatusIs(absl::StatusCode::kInvalidArgument));
-}
-
-TEST(Text2ImageEngineTest, CreateFailsWhenModelContainerIsMissingOrIncomplete) {
-  Text2ImageEngine::Settings settings;
-  settings.model_folder = "/nonexistent/flux2_model_dir";
-  settings.model_config = Flux2ModelConfig{};
-  EXPECT_THAT(Text2ImageEngine::Create(settings),
-              StatusIs(absl::StatusCode::kNotFound));
-  EXPECT_THAT(Text2ImageSessionFactory::CreateFactory(settings),
-              StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST_F(Text2ImageSessionTest, ProcessNextFlushAndProcessAsync) {

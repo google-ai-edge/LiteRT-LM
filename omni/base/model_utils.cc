@@ -83,18 +83,6 @@ namespace litert::omni {
 
 namespace {
 
-lm::Backend ToLmBackend(OmniEngine::Settings::Backend backend) {
-  switch (backend) {
-    case OmniEngine::Settings::Backend::kGpu:
-      return lm::Backend::GPU;
-    case OmniEngine::Settings::Backend::kNpu:
-      return lm::Backend::NPU;
-    case OmniEngine::Settings::Backend::kCpu:
-    default:
-      return lm::Backend::CPU;
-  }
-}
-
 class TfLiteModelResources : public lm::ModelResources {
  public:
   static absl::StatusOr<std::unique_ptr<TfLiteModelResources>> Create(
@@ -205,6 +193,18 @@ std::string JoinPath(absl::string_view dir, absl::string_view filename) {
 }
 
 }  // namespace
+
+lm::Backend ToLmBackend(OmniEngine::Settings::Backend backend) {
+  switch (backend) {
+    case OmniEngine::Settings::Backend::kGpu:
+      return lm::Backend::GPU;
+    case OmniEngine::Settings::Backend::kNpu:
+      return lm::Backend::NPU;
+    case OmniEngine::Settings::Backend::kCpu:
+    default:
+      return lm::Backend::CPU;
+  }
+}
 
 ModelOptions ToLmModelOptions(const OmniEngine::Settings& settings) {
   ModelOptions lm_options;

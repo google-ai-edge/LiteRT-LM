@@ -154,9 +154,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "//omni/text2image:text2image_engine",
-        "//omni/text2image:text2image_session",
-        "//omni/text2image/flux2:flux2_model_config",
         "//omni/tts:tts_engine",
         "//omni/tts:tts_session",
         "//omni/tts/kokoro:kokoro_model_config",
@@ -187,6 +184,7 @@ cc_test(
         "//omni/asr:speech_recognizer",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "//omni/text2image:bonsai_flux2",  # build_cleaner: keep
         "//omni/tts:stream_text_source",
         "//omni/tts:text_chunk_utils",
         "//omni/tts:text_source",
