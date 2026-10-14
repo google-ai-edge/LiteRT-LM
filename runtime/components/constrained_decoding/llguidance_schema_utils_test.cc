@@ -350,5 +350,67 @@ get_weather(location="Mountain View")
 ```)");
 }
 
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceAuto) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kFunctionCallsOnly;
+  ASSERT_OK(ApplyToolChoiceToOptions(nlohmann::ordered_json("auto"), options));
+  EXPECT_EQ(options.constraint_mode,
+            LlgConstraintMode::kTextAndOrFunctionCalls);
+  EXPECT_THAT(options.allowed_function_names, testing::IsEmpty());
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceNone) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(ApplyToolChoiceToOptions(nlohmann::ordered_json("none"), options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kTextOnly);
+  EXPECT_THAT(options.allowed_function_names, testing::IsEmpty());
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceRequired) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(
+      ApplyToolChoiceToOptions(nlohmann::ordered_json("required"), options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kFunctionCallsRequired);
+  EXPECT_THAT(options.allowed_function_names, testing::IsEmpty());
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceForcedFunction) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  nlohmann::ordered_json tool_choice = nlohmann::ordered_json::parse(R"({
+    "type": "function",
+    "function": {
+      "name": "get_weather"
+    }
+  })");
+  ASSERT_OK(ApplyToolChoiceToOptions(tool_choice, options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kFunctionCallsRequired);
+  EXPECT_THAT(options.allowed_function_names,
+              testing::ElementsAre("get_weather"));
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceNull) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(ApplyToolChoiceToOptions(nlohmann::ordered_json(nullptr), options));
+  EXPECT_EQ(options.constraint_mode,
+            LlgConstraintMode::kTextAndOrFunctionCalls);
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceInvalid) {
+  LlgConstraintsOptions options;
+  EXPECT_FALSE(
+      ApplyToolChoiceToOptions(nlohmann::ordered_json("invalid"), options)
+          .ok());
+  EXPECT_FALSE(
+      ApplyToolChoiceToOptions(nlohmann::ordered_json(123), options).ok());
+  EXPECT_FALSE(
+      ApplyToolChoiceToOptions(
+          nlohmann::ordered_json::parse(R"({"type": "tool"})"), options)
+          .ok());
+}
+
 }  // namespace
 }  // namespace litert::lm

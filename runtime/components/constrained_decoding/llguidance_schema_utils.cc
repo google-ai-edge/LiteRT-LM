@@ -18,6 +18,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
 #include "runtime/components/constrained_decoding/llg_python_tool_calls.h"
@@ -38,6 +39,42 @@ absl::StatusOr<std::string> CreateLarkGrammarForTools(
       return CreateLarkGrammarForPythonToolCalls(tools_array, options);
   }
   return absl::InvalidArgumentError("Unknown function call format.");
+}
+
+absl::Status ApplyToolChoiceToOptions(const nlohmann::ordered_json& tool_choice,
+                                      LlgConstraintsOptions& options) {
+  if (tool_choice.is_null()) {
+    return absl::OkStatus();
+  }
+  if (tool_choice.is_string()) {
+    const std::string mode_str = tool_choice.get<std::string>();
+    if (mode_str == "auto") {
+      options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+    } else if (mode_str == "none") {
+      options.constraint_mode = LlgConstraintMode::kTextOnly;
+    } else if (mode_str == "required") {
+      options.constraint_mode = LlgConstraintMode::kFunctionCallsRequired;
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrFormat("Unsupported tool_choice string: %s", mode_str));
+    }
+    return absl::OkStatus();
+  }
+  if (tool_choice.is_object()) {
+    if (tool_choice.contains("type") && tool_choice["type"] == "function" &&
+        tool_choice.contains("function") &&
+        tool_choice["function"].contains("name") &&
+        tool_choice["function"]["name"].is_string()) {
+      options.allowed_function_names = {
+          tool_choice["function"]["name"].get<std::string>()};
+      options.constraint_mode = LlgConstraintMode::kFunctionCallsRequired;
+      return absl::OkStatus();
+    }
+    return absl::InvalidArgumentError(
+        "Invalid tool_choice object format. Expected {\"type\": \"function\", "
+        "\"function\": {\"name\": \"...\"}}");
+  }
+  return absl::InvalidArgumentError("tool_choice must be a string or object.");
 }
 
 }  // namespace litert::lm

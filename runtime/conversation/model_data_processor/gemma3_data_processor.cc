@@ -295,7 +295,8 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::FormatTools(
 
 absl::StatusOr<std::unique_ptr<Constraint>>
 Gemma3DataProcessor::CreateConstraint(
-    const nlohmann::ordered_json& tools) const {
+    const nlohmann::ordered_json& tools,
+    const nlohmann::ordered_json& tool_choice) const {
 #if defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
   return absl::FailedPreconditionError(
       "Constrained decoding is disabled at build time, but it was requested "
@@ -317,6 +318,15 @@ Gemma3DataProcessor::CreateConstraint(
   }
 
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // The FST path only supports the default "auto" tool choice, which
+  // matches its text and/or function calls constraint.
+  if (!tool_choice.is_null() &&
+      !(tool_choice.is_string() && tool_choice.get<std::string>() == "auto")) {
+    return absl::FailedPreconditionError(
+        "tool_choice other than \"auto\" requires LLGuidance tool call "
+        "constraints. Build with "
+        "--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable them.");
+  }
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatPythonStyle,
       .code_fence_start = config_.code_fence_start.c_str(),
@@ -338,6 +348,10 @@ Gemma3DataProcessor::CreateConstraint(
   options.code_fence_start = config_.code_fence_start;
   options.code_fence_end = config_.code_fence_end;
   options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+
+  if (!tool_choice.is_null()) {
+    ABSL_RETURN_IF_ERROR(ApplyToolChoiceToOptions(tool_choice, options));
+  }
 
   ABSL_ASSIGN_OR_RETURN(
       std::string lark_grammar,

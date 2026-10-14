@@ -327,7 +327,8 @@ absl::StatusOr<nlohmann::ordered_json> FunctionGemmaDataProcessor::FormatTools(
 
 absl::StatusOr<std::unique_ptr<Constraint>>
 FunctionGemmaDataProcessor::CreateConstraint(
-    const nlohmann::ordered_json& tools) const {
+    const nlohmann::ordered_json& tools,
+    const nlohmann::ordered_json& tool_choice) const {
   if (constraint_provider_ == nullptr) {
     return nullptr;
   }
@@ -344,6 +345,15 @@ FunctionGemmaDataProcessor::CreateConstraint(
   }
 
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // The FST path only supports the default "auto" tool choice.
+  const bool is_auto_tool_choice =
+      tool_choice.is_string() && tool_choice.get<std::string>() == "auto";
+  if (!tool_choice.is_null() && !is_auto_tool_choice) {
+    return absl::FailedPreconditionError(
+        "tool_choice other than \"auto\" requires LLGuidance tool call "
+        "constraints. Build with "
+        "--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable them.");
+  }
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatFcStyle,
       .code_fence_start = config_.code_fence_start.c_str(),
@@ -360,6 +370,9 @@ FunctionGemmaDataProcessor::CreateConstraint(
     default:
       gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
       break;
+  }
+  if (is_auto_tool_choice) {
+    gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
   }
   std::string functions_str = functions.dump();
   LiteRtLmConstraint* constraint =
@@ -385,6 +398,9 @@ FunctionGemmaDataProcessor::CreateConstraint(
     default:
       options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
       break;
+  }
+  if (!tool_choice.is_null()) {
+    ABSL_RETURN_IF_ERROR(ApplyToolChoiceToOptions(tool_choice, options));
   }
   ABSL_ASSIGN_OR_RETURN(std::string lark_grammar,
                         CreateLarkGrammarForFcToolCalls(functions, options));
