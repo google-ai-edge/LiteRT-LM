@@ -248,6 +248,8 @@ TEST(ComputeMedianMetricsTest, NoMetrics) {
   EXPECT_FALSE(aggregated.peak_mem_mb.has_value());
   EXPECT_FALSE(aggregated.peak_private_mb.has_value());
   EXPECT_FALSE(aggregated.peak_dmabuf_mb.has_value());
+  EXPECT_FALSE(aggregated.peak_accelerator_mb.has_value());
+  EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb, testing::IsEmpty());
 }
 
 TEST(ComputeMedianMetricsTest, OddNumberOfIterations) {
@@ -336,6 +338,78 @@ TEST(ComputeMedianMetricsTest, MetricsWithoutBenchmarkInfoAreSkipped) {
   EXPECT_FALSE(aggregated.peak_mem_mb.has_value());
   EXPECT_FALSE(aggregated.peak_private_mb.has_value());
   EXPECT_FALSE(aggregated.peak_dmabuf_mb.has_value());
+  EXPECT_FALSE(aggregated.peak_accelerator_mb.has_value());
+  EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb, testing::IsEmpty());
+}
+
+// Returns a LitertLmMetrics with only the accelerator memory fields populated.
+LitertLmMetrics CreateAcceleratorMetrics(float peak_accelerator_mb,
+                                         float local_mb, float non_local_mb) {
+  LitertLmMetrics metrics;
+  metrics.peak_accelerator_mb = peak_accelerator_mb;
+  metrics.peak_accelerator_breakdown_mb = {{"local", local_mb},
+                                           {"non-local", non_local_mb}};
+  return metrics;
+}
+
+TEST(ComputeMedianMetricsTest, AcceleratorMemoryMedianIncludesBreakdown) {
+  const std::vector<LitertLmMetrics> metrics = {
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/300.0f,
+                               /*local_mb=*/250.0f, /*non_local_mb=*/50.0f),
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/100.0f,
+                               /*local_mb=*/80.0f, /*non_local_mb=*/20.0f),
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/200.0f,
+                               /*local_mb=*/150.0f, /*non_local_mb=*/50.0f),
+  };
+
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
+
+  EXPECT_EQ(aggregated.num_iterations, 3);
+  EXPECT_EQ(aggregated.peak_accelerator_mb, 200.0f);
+  // Each category is aggregated independently.
+  EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb,
+              testing::ElementsAre(testing::Pair("local", 150.0f),
+                                   testing::Pair("non-local", 50.0f)));
+}
+
+TEST(ComputeMedianMetricsTest, AcceleratorMemoryIgnoresUnsupportedIterations) {
+  std::vector<LitertLmMetrics> metrics = {
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/400.0f,
+                               /*local_mb=*/400.0f, /*non_local_mb=*/0.0f),
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/200.0f,
+                               /*local_mb=*/200.0f, /*non_local_mb=*/0.0f),
+  };
+  // An iteration on which accelerator memory tracking was unsupported leaves
+  // the metric unset and must not drag the median down.
+  metrics.push_back(LitertLmMetrics());
+
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
+
+  EXPECT_EQ(aggregated.num_iterations, 3);
+  EXPECT_EQ(aggregated.peak_accelerator_mb, 300.0f);
+  EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb,
+              testing::ElementsAre(testing::Pair("local", 300.0f),
+                                   testing::Pair("non-local", 0.0f)));
+}
+
+TEST(ComputeMedianMetricsTest, AcceleratorMemoryAggregatesSupportedZero) {
+  // Zero is a real measurement on a supported platform (e.g. a CPU-only run)
+  // and must be aggregated rather than treated as unsupported.
+  const std::vector<LitertLmMetrics> metrics = {
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/0.0f,
+                               /*local_mb=*/0.0f, /*non_local_mb=*/0.0f),
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/0.0f,
+                               /*local_mb=*/0.0f, /*non_local_mb=*/0.0f),
+      CreateAcceleratorMetrics(/*peak_accelerator_mb=*/90.0f,
+                               /*local_mb=*/90.0f, /*non_local_mb=*/0.0f),
+  };
+
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
+
+  EXPECT_EQ(aggregated.peak_accelerator_mb, 0.0f);
+  EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb,
+              testing::ElementsAre(testing::Pair("local", 0.0f),
+                                   testing::Pair("non-local", 0.0f)));
 }
 
 // Following tests are for various model file metadata and tokenizer types.

@@ -31,6 +31,7 @@ using ::testing::Contains;
 using ::testing::FloatEq;
 using ::testing::Pair;
 using ::testing::SizeIs;
+using ::testing::UnorderedElementsAre;
 
 TEST(MetricsUtilTest, EmptyMetrics) {
   LitertLmMetrics metrics;
@@ -38,6 +39,9 @@ TEST(MetricsUtilTest, EmptyMetrics) {
   metrics.peak_private_mb = 10.0f;
   metrics.peak_dmabuf_mb = 348.7f;
   metrics.dmabuf_buffer_count = 14;
+  metrics.peak_accelerator_mb = 512.25f;
+  metrics.peak_accelerator_breakdown_mb = {{"local", 500.0f},
+                                           {"non-local", 12.25f}};
 
   ASSERT_OK_AND_ASSIGN(auto proto, ToProto(metrics));
 
@@ -45,9 +49,32 @@ TEST(MetricsUtilTest, EmptyMetrics) {
   EXPECT_THAT(proto.peak_private_mb(), FloatEq(10.0f));
   EXPECT_THAT(proto.peak_dmabuf_mb(), FloatEq(348.7f));
   EXPECT_EQ(proto.dmabuf_buffer_count(), 14);
+  EXPECT_THAT(proto.peak_accelerator_mb(), FloatEq(512.25f));
+  EXPECT_THAT(proto.peak_accelerator_breakdown_mb(),
+              UnorderedElementsAre(Pair("local", FloatEq(500.0f)),
+                                   Pair("non-local", FloatEq(12.25f))));
   EXPECT_FALSE(proto.has_benchmark_params());
   EXPECT_THAT(proto.init_phase_durations_us(), SizeIs(0));
   EXPECT_THAT(proto.mark_durations_us(), SizeIs(0));
+}
+
+TEST(MetricsUtilTest, UnsupportedAcceleratorMemoryLeavesFieldsEmpty) {
+  LitertLmMetrics metrics;
+
+  ASSERT_OK_AND_ASSIGN(auto proto, ToProto(metrics));
+
+  EXPECT_FALSE(proto.has_peak_accelerator_mb());
+  EXPECT_THAT(proto.peak_accelerator_breakdown_mb(), SizeIs(0));
+}
+
+TEST(MetricsUtilTest, ZeroAcceleratorMemoryIsDistinctFromUnsupported) {
+  LitertLmMetrics metrics;
+  metrics.peak_accelerator_mb = 0.0f;
+
+  ASSERT_OK_AND_ASSIGN(auto proto, ToProto(metrics));
+
+  EXPECT_TRUE(proto.has_peak_accelerator_mb());
+  EXPECT_THAT(proto.peak_accelerator_mb(), FloatEq(0.0f));
 }
 
 TEST(MetricsUtilTest, WithBenchmarkInfo) {

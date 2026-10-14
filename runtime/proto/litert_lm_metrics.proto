@@ -65,6 +65,15 @@ message LitertLmMetrics {
 
   // Number of active DMA-BUF buffers at peak memory measurement.
   int64 dmabuf_buffer_count = 11;
+
+  // Peak accelerator (GPU / NPU) memory used by the process in megabytes. Unset
+  // when accelerator memory tracking is not supported on the platform or peak
+  // memory reporting is disabled.
+  optional float peak_accelerator_mb = 12;
+
+  // Breakdown of peak_accelerator_mb into platform-specific categories, in
+  // megabytes, keyed by the category name.
+  map<string, float> peak_accelerator_breakdown_mb = 13;
 }
 
 message LitertLmMetricsList {

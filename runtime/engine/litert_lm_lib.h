@@ -23,6 +23,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/log_severity.h"  // from @com_google_absl
@@ -158,6 +159,13 @@ struct LitertLmMetrics {
   float peak_private_mb = 0.0f;
   float peak_dmabuf_mb = 0.0f;
   int64_t dmabuf_buffer_count = 0;
+  // Peak accelerator (GPU / NPU) memory used by the process, in MB. Unset when
+  // accelerator memory tracking is not supported on the platform or peak memory
+  // reporting is disabled.
+  std::optional<float> peak_accelerator_mb;
+  // Breakdown of `peak_accelerator_mb` into platform-specific categories, in
+  // MB.
+  std::vector<std::pair<std::string, float>> peak_accelerator_breakdown_mb;
 };
 
 // Aggregated (median) statistics of the metrics collected over multiple
@@ -180,6 +188,12 @@ struct AggregatedLitertLmMetrics {
   std::optional<float> peak_mem_mb;
   std::optional<float> peak_private_mb;
   std::optional<float> peak_dmabuf_mb;
+  std::optional<float> peak_accelerator_mb;
+  // Median of each peak accelerator memory breakdown category, in MB, keyed by
+  // the category name. Like `init_phases`, each category is aggregated
+  // independently, so unlike a single iteration's breakdown the medians do not
+  // necessarily sum to `peak_accelerator_mb`.
+  absl::btree_map<std::string, float> peak_accelerator_breakdown_mb;
 };
 
 // Computes the median of each benchmark metric across the per-iteration

@@ -71,6 +71,25 @@ target_link_libraries(runtime_engine_dmabuf_util
 )
 
 # ==============================================================================
+# Accelerator Memory Monitor
+# ==============================================================================
+add_litertlm_library(runtime_engine_accelerator_memory_monitor STATIC
+  accelerator_memory_monitor.cc
+)
+add_library(LiteRTLM::Runtime::Engine::AcceleratorMemoryMonitor ALIAS runtime_engine_accelerator_memory_monitor)
+
+target_include_directories(runtime_engine_accelerator_memory_monitor
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_engine_accelerator_memory_monitor
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Engine Settings
 # ==============================================================================
 add_litertlm_library(runtime_engine_engine_settings STATIC
@@ -215,6 +234,7 @@ target_link_libraries(runtime_engine_libs INTERFACE
   LiteRTLM::Runtime::Engine::EmbeddingEngineInterface
   LiteRTLM::Runtime::Engine::CpuAffinityUtils
   LiteRTLM::Runtime::Engine::DmaBufUtil
+  LiteRTLM::Runtime::Engine::AcceleratorMemoryMonitor
   LiteRTLM::Runtime::Engine::Settings
   LiteRTLM::Runtime::Engine::EmbeddingEngineSettings
   LiteRTLM::Runtime::Engine::IoTypes
