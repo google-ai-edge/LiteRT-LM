@@ -28,6 +28,27 @@ unit	十	百	千	万	亿
 # Normalize ideographic number zero 〇 (U+3007) to 零 (U+96F6).
 rule	〇	零
 
+# Thousands separators: 1,234,567 -> 1234567. RE2 replaces non-overlapping
+# matches, so two passes cover numbers up to 10^9.
+rule	(\d),(\d\d\d)\b	\1\2
+rule	(\d),(\d\d\d)\b	\1\2
+
+# Numeric dates, before the fraction rule below can claim the slashes:
+# 2026-01-15 / 2026/01/15 -> 二零二六年一月十五日, 01/01/2026 -> 二零二六年一月一日.
+rule	\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b	#1年@2月@3日
+rule	\b(\d{1,2})/(\d{1,2})/(\d{4})\b	#3年@2月@1日
+
+# Phone numbers and other hyphen-separated digit groups are read one digit at
+# a time: 10-5555-0199 -> 一零五五五五零一九九. A leading "+" is read 加.
+rule	\+(\d+)	加#1
+rule	\b(\d+)-(\d+)-(\d+)\b	#1#2#3
+rule	\b(\d{2,})-(\d{4,})\b	#1#2
+
+# Room and identification numbers are read digit by digit: 房间号是1025 ->
+# 房间号是一零二五, 1025室 -> 一零二五室.
+rule	(房间号|房号|门牌号|编号|号码|学号|工号)(是|为)?(\d+)	\1\2#3
+rule	(\d{3,})(室|号房)	#1\2
+
 # Fractions: 3/4 -> 4分之3 -> 四分之三.
 rule	(\d+)/(\d+)	\2分之\1
 
@@ -51,8 +72,9 @@ rule	(-?\d+(?:\.\d+)?)\s*°	\1度
 # Anchored with \b so 5+ digit cardinals like 10000年 fall through to @1 below.
 rule	\b(\d{4})\s*年	#1年
 
-# Negative numbers: -5 -> 负5 -> 负五.
-rule	-(\d+)	负\1
+# Negative numbers: -5 -> 负5 -> 负五. Only a minus sign that does not follow a
+# digit or letter (a hyphen between digit groups was handled above).
+rule	(^|[^\w])-(\d+)	\1负\2
 
 # The fractional part of a decimal is read one digit at a time while the
 # integer part is read as a cardinal: 3.14 -> 三点一四.

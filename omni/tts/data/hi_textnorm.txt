@@ -1,0 +1,71 @@
+# Hindi text normalization for the Kokoro TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# The phonemizer hands whole clauses to espeak-ng, which reads plain cardinals
+# (including lakh/crore) itself. This table rewrites what espeak-ng reads
+# poorly or not at all: Devanagari digits, Indian digit grouping (1,00,000),
+# decimals, percent, rupee amounts, clock times, fractions and phone numbers.
+
+# `#N` reads digits one at a time; each digit becomes a separate word.
+digit	0	 0
+digit	1	 1
+digit	2	 2
+digit	3	 3
+digit	4	 4
+digit	5	 5
+digit	6	 6
+digit	7	 7
+digit	8	 8
+digit	9	 9
+
+map	fraction	1/2	आधा
+map	fraction	1/4	एक चौथाई
+map	fraction	3/4	तीन चौथाई
+map	fraction	1/3	एक तिहाई
+map	fraction	2/3	दो तिहाई
+
+# Half past: 1:30 -> डेढ़, 2:30 -> ढाई, otherwise साढ़े <hour>.
+map	half	1	डेढ़
+map	half	01	डेढ़
+map	half	2	ढाई
+map	half	02	ढाई
+
+# Devanagari digits -> ASCII digits, so the rules below and espeak-ng see one
+# digit system.
+rule	०	0
+rule	१	1
+rule	२	2
+rule	३	3
+rule	४	4
+rule	५	5
+rule	६	6
+rule	७	7
+rule	८	8
+rule	९	9
+
+# Phone numbers are read digit by digit: +91 98765-43210.
+rule	\+(\d{1,3})\s?(\d{4,5})-(\d{5})\b	#1 #2 #3
+
+# Digit grouping commas (Indian 1,00,000 and international 12,999).
+rule	(\d),(\d)	\1\2
+rule	(\d),(\d)	\1\2
+
+# Clock times: 10:30 -> साढ़े 10, 1:30 -> डेढ़, 10:15 -> सवा 10.
+rule	\b0?([12]):30\b	{half:\1}
+rule	\b0?(\d{1,2}):30\b	साढ़े \1
+rule	\b0?(\d{1,2}):15\b	सवा \1
+rule	\b0?(\d{1,2}):00\b	\1
+rule	\b0?(\d{1,2}):(\d\d)\b	\1 बजकर \2 मिनट
+
+# Fractions: 3/4 -> तीन चौथाई.
+rule	\b(\d/\d)\b	{fraction:\1}
+
+# Rupees: ₹450.50 -> 450 रुपए और 50 पैसे.
+rule	₹\s?(\d+)\.(\d\d)\b	\1 रुपए और \2 पैसे
+rule	₹\s?(\d+)	\1 रुपए
+
+# Decimals and percent: 2.5 -> 2 दशमलव 5, 50% -> 50 प्रतिशत.
+rule	(\d)\.(\d+)	\1 दशमलव#2
+rule	(\d)\s?%	\1 प्रतिशत

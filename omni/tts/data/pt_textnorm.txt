@@ -1,0 +1,124 @@
+# Brazilian Portuguese text normalization for the Kokoro TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# The phonemizer hands whole clauses to espeak-ng, which reads plain cardinals
+# itself. This table rewrites what espeak-ng reads poorly or not at all:
+# locale number separators (1.500,50), currency (R$), temperatures, clock
+# times, slash dates, common fractions, ordinals and a few abbreviations.
+
+map	month	1	janeiro
+map	month	01	janeiro
+map	month	2	fevereiro
+map	month	02	fevereiro
+map	month	3	março
+map	month	03	março
+map	month	4	abril
+map	month	04	abril
+map	month	5	maio
+map	month	05	maio
+map	month	6	junho
+map	month	06	junho
+map	month	7	julho
+map	month	07	julho
+map	month	8	agosto
+map	month	08	agosto
+map	month	9	setembro
+map	month	09	setembro
+map	month	10	outubro
+map	month	11	novembro
+map	month	12	dezembro
+
+# Afternoon hours on a 12-hour clock.
+map	pm	13	uma
+map	pm	14	duas
+map	pm	15	três
+map	pm	16	quatro
+map	pm	17	cinco
+map	pm	18	seis
+map	pm	19	sete
+map	pm	20	oito
+map	pm	21	nove
+map	pm	22	dez
+map	pm	23	onze
+
+map	fraction	1/2	meio
+map	fraction	1/3	um terço
+map	fraction	2/3	dois terços
+map	fraction	1/4	um quarto
+map	fraction	3/4	três quartos
+
+map	ordinal	1	primeiro
+map	ordinal	2	segundo
+map	ordinal	3	terceiro
+map	ordinal	4	quarto
+map	ordinal	5	quinto
+map	ordinal	6	sexto
+map	ordinal	7	sétimo
+map	ordinal	8	oitavo
+map	ordinal	9	nono
+map	ordinal	10	décimo
+
+# `#N` reads digits one at a time; each digit becomes a separate word.
+digit	0	 0
+digit	1	 1
+digit	2	 2
+digit	3	 3
+digit	4	 4
+digit	5	 5
+digit	6	 6
+digit	7	 7
+digit	8	 8
+digit	9	 9
+
+# Phone numbers are read digit by digit: +55 (11) 91234-5678.
+rule	\+(\d{1,3}) \((\d{2})\) (\d{4,5})-(\d{4})\b	mais #1 #2 #3 #4
+rule	\((\d{2})\) (\d{4,5})-(\d{4})\b	#1 #2 #3
+
+# Abbreviations.
+rule	\bSra\.	senhora
+rule	\bSr\.	senhor
+rule	\bDra\.	doutora
+rule	\bDr\.	doutor
+rule	(\d)\s*[Aa]\.\s?[Mm]\.	\1 horas da manhã
+rule	(\d)\s*[Pp]\.\s?[Mm]\.	\1 horas da tarde
+
+# Ordinals: 2º lugar -> segundo lugar.
+rule	\b(\d{1,2})[º°]	{ordinal:\1}
+
+# Clock times: 14:30 -> duas e meia da tarde, 09:00 -> nove horas da manhã.
+rule	\b(1[3-9]|2[0-3]):30\b	{pm:\1} e meia da tarde
+rule	\b(1[3-9]|2[0-3]):00\b	{pm:\1} horas da tarde
+rule	\b(1[3-9]|2[0-3]):([0-5]\d)\b	{pm:\1} e \2 da tarde
+rule	\b0?(\d|1[0-2]):00\b	\1 horas da manhã
+rule	\b0?(\d|1[0-2]):30\b	\1 e meia da manhã
+rule	\b0?(\d{1,2}):([0-5]\d)\b	\1 e \2
+
+# Slash dates (day/month/year): 01/01/2026 -> primeiro de janeiro de 2026.
+rule	\b0?1/(\d{1,2})/(\d{4})\b	primeiro de {month:\1} de \2
+rule	\b(\d{1,2})/(\d{1,2})/(\d{4})\b	\1 de {month:\2} de \3
+rule	\b(\d/\d)\b	{fraction:\1}
+
+# Thousands separators.
+rule	(\d)\.(\d\d\d)\b	\1\2
+rule	(\d)\.(\d\d\d)\b	\1\2
+rule	(\d)\.(\d\d\d)\b	\1\2
+
+# Currency: the symbol precedes the amount but the unit follows it.
+rule	R\$\s?(\d+)\s?M\b	\1 milhões de reais
+rule	R\$\s?(\d+),(\d\d)\b	\1 reais e \2 centavos
+rule	R\$\s?(\d+)	\1 reais
+rule	€\s?(\d+),(\d\d)\b	\1 euros e \2 centavos
+rule	€\s?(\d+)	\1 euros
+rule	\$\s?(\d+),(\d\d)\b	\1 dólares e \2 centavos
+rule	\$\s?(\d+)	\1 dólares
+
+# Temperatures.
+rule	-\s?(\d+(?:,\d+)?)\s?°\s?C\b	menos \1 graus Celsius
+rule	(\d)\s?°\s?C\b	\1 graus Celsius
+rule	(\d)\s?°	\1 graus
+
+# Decimal comma and percent.
+rule	(\d),(\d)	\1 vírgula \2
+rule	(\d)\s?%	\1 por cento

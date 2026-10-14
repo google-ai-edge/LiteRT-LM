@@ -56,6 +56,14 @@ size_t Utf8CharLength(absl::string_view text) {
   return 1;
 }
 
+// A parsed `{name:\N}` map lookup inside a replacement template.
+struct MapLookup {
+  absl::string_view name;
+  size_t group = 0;
+  // Length in bytes of the whole `{name:\N}` token.
+  size_t length = 0;
+};
+
 // Reports whether `replacement` uses a `#N` or `@N` expansion, which requires
 // the digit glyph table (`#N` and `@N`) or unit table (`@N`).
 void CheckExpansionUsage(absl::string_view replacement, bool& uses_digits,
@@ -76,6 +84,42 @@ void CheckExpansionUsage(absl::string_view replacement, bool& uses_digits,
   }
 }
 
+// Parses a `{name:\N}` map lookup starting at `replacement[pos]` (which must be
+// '{'). Returns false if the text there is not a well-formed lookup, in which
+// case the '{' is an ordinary character.
+bool ParseMapLookup(absl::string_view replacement, size_t pos,
+                    MapLookup& lookup) {
+  const size_t close = replacement.find('}', pos);
+  if (close == absl::string_view::npos) return false;
+  const absl::string_view body = replacement.substr(pos + 1, close - pos - 1);
+  const size_t colon = body.find(':');
+  if (colon == absl::string_view::npos || colon == 0 ||
+      body.size() != colon + 3 || body[colon + 1] != '\\' ||
+      !absl::ascii_isdigit(body[colon + 2])) {
+    return false;
+  }
+  lookup.name = body.substr(0, colon);
+  lookup.group = static_cast<size_t>(body[colon + 2] - '0');
+  lookup.length = close - pos + 1;
+  return true;
+}
+
+// Appends the name of every map that `replacement` looks up to `names`.
+void CollectMapReferences(absl::string_view replacement,
+                          std::vector<std::string>& names) {
+  for (size_t i = 0; i < replacement.size(); ++i) {
+    if (replacement[i] == '\\') {
+      ++i;  // Skip the escaped character.
+      continue;
+    }
+    MapLookup lookup;
+    if (replacement[i] == '{' && ParseMapLookup(replacement, i, lookup)) {
+      names.emplace_back(lookup.name);
+      i += lookup.length - 1;
+    }
+  }
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<TextNormalizer>> TextNormalizer::Create(
@@ -84,6 +128,7 @@ absl::StatusOr<std::unique_ptr<TextNormalizer>> TextNormalizer::Create(
   bool needs_digits = false;
   bool needs_units = false;
   int digits_defined = 0;
+  std::vector<std::string> referenced_maps;
 
   int line_number = 0;
   for (absl::string_view line : absl::StrSplit(rule_table, '\n')) {
@@ -162,13 +207,38 @@ absl::StatusOr<std::unique_ptr<TextNormalizer>> TextNormalizer::Create(
             kMaxGroup, " are addressable"));
       }
       CheckExpansionUsage(fields[2], needs_digits, needs_units);
+      CollectMapReferences(fields[2], referenced_maps);
       normalizer->rules_.push_back(
           Rule{std::move(pattern), std::string(fields[2])});
+    } else if (fields[0] == "map") {
+      if (fields.size() != 4) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "text normalizer rule table line ", line_number,
+            ": `map` takes 3 tab-separated fields, got ", fields.size() - 1));
+      }
+      if (fields[1].empty() || fields[2].empty()) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("text normalizer rule table line ", line_number,
+                         ": `map` name and key must be non-empty"));
+      }
+      auto& entries = normalizer->maps_[fields[1]];
+      if (!entries.emplace(fields[2], fields[3]).second) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "text normalizer rule table line ", line_number, ": map `",
+            fields[1], "` defines key \"", fields[2], "\" twice"));
+      }
     } else {
       return absl::InvalidArgumentError(
           absl::StrCat("text normalizer rule table line ", line_number,
                        ": unknown record type \"", fields[0],
-                       "\", expected `digit`, `unit`, or `rule`"));
+                       "\", expected `digit`, `unit`, `map`, or `rule`"));
+    }
+  }
+
+  for (const std::string& name : referenced_maps) {
+    if (!normalizer->maps_.contains(name)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "text normalizer rule table references undefined map `", name, "`"));
     }
   }
 
@@ -323,6 +393,21 @@ void TextNormalizer::ExpandReplacement(
       ExpandCardinal(groups[group], out);
       continue;
     }
+    if (MapLookup lookup; c == '{' && ParseMapLookup(replacement, i, lookup)) {
+      i += lookup.length - 1;
+      if (lookup.group >= groups.size()) continue;
+      const absl::string_view key = groups[lookup.group];
+      if (const auto map_it = maps_.find(lookup.name); map_it != maps_.end()) {
+        if (const auto entry = map_it->second.find(key);
+            entry != map_it->second.end()) {
+          out.append(entry->second);
+          continue;
+        }
+      }
+      // Keys missing from the map pass through unchanged.
+      out.append(key);
+      continue;
+    }
     out.push_back(c);
   }
 }
@@ -344,7 +429,7 @@ std::string TextNormalizer::ApplyRule(const Rule& rule,
     out.append(text.substr(pos, match_begin - pos));
     ExpandReplacement(
         rule.replacement,
-        absl::MakeConstSpan(groups.data(), static_cast<size_t>(group_count)),
+        absl::MakeConstSpan(groups).first(static_cast<size_t>(group_count)),
         out);
     if (match_end == match_begin) {
       // An empty match would spin forever. Emit one character and move on.

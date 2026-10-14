@@ -1,0 +1,132 @@
+# Spanish text normalization for the Kokoro TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# The phonemizer hands whole clauses to espeak-ng, which reads plain cardinals
+# itself. This table rewrites what espeak-ng reads poorly or not at all:
+# locale number separators (1.500,50), currency, temperatures, clock times,
+# slash dates, common fractions and a few abbreviations.
+#
+# RE2 has no lookaround, so rules consume the neighbouring character they need
+# and put it back in the replacement.
+
+map	month	1	enero
+map	month	01	enero
+map	month	2	febrero
+map	month	02	febrero
+map	month	3	marzo
+map	month	03	marzo
+map	month	4	abril
+map	month	04	abril
+map	month	5	mayo
+map	month	05	mayo
+map	month	6	junio
+map	month	06	junio
+map	month	7	julio
+map	month	07	julio
+map	month	8	agosto
+map	month	08	agosto
+map	month	9	septiembre
+map	month	09	septiembre
+map	month	10	octubre
+map	month	11	noviembre
+map	month	12	diciembre
+
+# Afternoon hours on a 12-hour clock.
+map	pm	13	una
+map	pm	14	dos
+map	pm	15	tres
+map	pm	16	cuatro
+map	pm	17	cinco
+map	pm	18	seis
+map	pm	19	siete
+map	pm	20	ocho
+map	pm	21	nueve
+map	pm	22	diez
+map	pm	23	once
+
+map	fraction	1/2	un medio
+map	fraction	1/3	un tercio
+map	fraction	2/3	dos tercios
+map	fraction	1/4	un cuarto
+map	fraction	3/4	tres cuartos
+
+# `#N` reads digits one at a time; each digit becomes a separate word.
+digit	0	 0
+digit	1	 1
+digit	2	 2
+digit	3	 3
+digit	4	 4
+digit	5	 5
+digit	6	 6
+digit	7	 7
+digit	8	 8
+digit	9	 9
+
+map	ordinal	1	primero
+map	ordinal	2	segundo
+map	ordinal	3	tercero
+map	ordinal	4	cuarto
+map	ordinal	5	quinto
+map	ordinal	6	sexto
+map	ordinal	7	séptimo
+map	ordinal	8	octavo
+map	ordinal	9	noveno
+map	ordinal	10	décimo
+map	ordinal	11	undécimo
+map	ordinal	12	duodécimo
+
+# Phone numbers are read digit by digit: +34 91 123 4567.
+rule	\+(\d{1,3}) (\d{2,3}) (\d{3}) (\d{3,4})\b	más #1 #2 #3 #4
+
+# Ordinals: 1.º -> primero, 12.º -> duodécimo.
+rule	\b(\d{1,2})\.?º	{ordinal:\1}
+
+# Abbreviations espeak-ng spells letter by letter.
+rule	\bpág\.	página
+rule	\bIng\.	ingeniero
+rule	\bDª\.?	doña
+rule	\bD\.(\s+[A-ZÁÉÍÓÚÑ])	don\1
+
+# Abbreviations.
+rule	\bEE\.\s?UU\.	Estados Unidos
+rule	\bSra\.	señora
+rule	\bSr\.	señor
+rule	\bDra\.	doctora
+rule	\bDr\.	doctor
+rule	\betc\.	etcétera
+rule	(\d)\s*[Aa]\.\s?[Mm]\.	\1 de la mañana
+rule	(\d)\s*[Pp]\.\s?[Mm]\.	\1 de la tarde
+
+# Clock times: 15:30 -> tres y treinta de la tarde, 18:00 h -> seis de la tarde.
+rule	\b(1[3-9]|2[0-3]):00(?:\s*h\b\.?)?	{pm:\1} de la tarde
+rule	\b(1[3-9]|2[0-3]):([0-5]\d)(?:\s*h\b\.?)?	{pm:\1} y \2 de la tarde
+rule	\b(\d{1,2}):00(?:\s*h\b\.?)?	\1 en punto
+rule	\b(\d{1,2}):([0-5]\d)(?:\s*h\b\.?)?	\1 y \2
+
+# Slash dates (day/month/year) and common fractions.
+rule	\b(\d{1,2})/(\d{1,2})/(\d{4})\b	\1 de {month:\2} de \3
+rule	\b(\d/\d)\b	{fraction:\1}
+
+# Thousands separators.
+rule	(\d)\.(\d\d\d)\b	\1\2
+rule	(\d)\.(\d\d\d)\b	\1\2
+rule	(\d)\.(\d\d\d)\b	\1\2
+
+# Currency: the symbol precedes the amount but the unit follows it.
+rule	€\s?(\d+),(\d\d)\b	\1 euros con \2 céntimos
+rule	(\d+),(\d\d)\s?€	\1 euros con \2 céntimos
+rule	€\s?(\d+)	\1 euros
+rule	(\d+)\s?€	\1 euros
+rule	\$\s?(\d+),(\d\d)\b	\1 dólares con \2 centavos
+rule	\$\s?(\d+)	\1 dólares
+
+# Temperatures.
+rule	-\s?(\d+(?:,\d+)?)\s?°\s?C\b	\1 grados Celsius bajo cero
+rule	(\d)\s?°\s?C\b	\1 grados Celsius
+rule	(\d)\s?°	\1 grados
+
+# Decimal comma and percent.
+rule	(\d),(\d)	\1 coma \2
+rule	(\d)\s?%	\1 por ciento

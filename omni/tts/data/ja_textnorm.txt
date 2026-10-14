@@ -1,0 +1,206 @@
+# Japanese text normalization for the TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# `JapaneseG2p` (`ja-lexicon`, MeCab + UniDic) has no reading for a bare run of
+# ASCII digits. Like misaki's `JAG2P._normalize_text` (num2kana), this table
+# spells every number out in hiragana, preceded by a space, before
+# segmentation:
+#   * cardinals, e.g. 1500 -> せんごひゃく, 300 -> さんびゃく, 11000 ->
+#     いちまんいっせん (num2kana's readings, including its sound changes);
+#   * `〜`/`～` before a number is read から, as in misaki;
+#   * full-width digits, thousands separators, decimals, numeric dates and
+#     times, fractions, currency, percent, and degrees;
+#   * the sound changes a counter causes in the number before it (1本 ->
+#     いっぽん, 3階 -> さんがい, 1人 -> ひとり, 4日 -> よっか), which num2kana
+#     leaves to MeCab.
+#
+# Spelled-out numbers are wrapped in ⟦ ⟧ while the table runs so that the
+# fix-up and counter rules only ever touch generated text. The last rule
+# removes the brackets.
+
+digit	0	ゼロ
+digit	1	いち
+digit	2	に
+digit	3	さん
+digit	4	よん
+digit	5	ご
+digit	6	ろく
+digit	7	なな
+digit	8	はち
+digit	9	きゅう
+unit	じゅう	ひゃく	せん	まん	おく
+
+# Full-width digits -> ASCII.
+map	fw	０	0
+map	fw	１	1
+map	fw	２	2
+map	fw	３	3
+map	fw	４	4
+map	fw	５	5
+map	fw	６	6
+map	fw	７	7
+map	fw	８	8
+map	fw	９	9
+rule	([０-９])	{fw:\1}
+
+# A wave dash before a number is a range: 3〜5 -> 3から5 (misaki).
+rule	[〜～](\d)	から\1
+
+# Thousands separators: 1,234,567 -> 1234567. Two passes cover 10^9.
+rule	(\d)[,，](\d\d\d)\b	\1\2
+rule	(\d)[,，](\d\d\d)\b	\1\2
+
+# Numeric dates and clock times.
+rule	\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b	\1年\2月\3日
+rule	\b(\d{1,2}):00\b	\1時
+rule	\b(\d{1,2}):(\d{2})\b	\1時\2分
+
+# Fractions: 3/4 -> 4分の3.
+rule	(\d+)/(\d+)	\2分の\1
+
+# Currency symbols precede the amount but the unit is read after it.
+rule	[¥￥]\s*(\d+(?:\.\d+)?)	\1円
+rule	\$\s*(\d+(?:\.\d+)?)	\1ドル
+rule	€\s*(\d+(?:\.\d+)?)	\1ユーロ
+
+# Percent and degrees.
+rule	(\d)\s*[%％]	\1パーセント
+rule	(\d)\s*(?:°C|℃)	\1度
+
+# A minus sign that does not follow a digit or letter: -5℃ -> マイナス5度.
+rule	(^|[^\w])-(\d)	\1マイナス\2
+
+# Decimals: the integer part is a cardinal, the fraction is read digit by
+# digit: 3.14 -> さんてんいちよん.
+rule	(\d+)\.(\d+)	 ⟦@1⟧てん⟦#2⟧
+
+# Remaining integers are cardinals.
+rule	(\d+)	 ⟦@1⟧
+
+# The cardinal expansion is written for Chinese numerals; adapt it to
+# Japanese. A zero inside a number is silent: 105 -> ひゃくご.
+rule	⟦([^⟧]*?)(じゅう|ひゃく|せん|まん|おく)ゼロ	⟦\1\2
+rule	⟦([^⟧]*?)(じゅう|ひゃく|せん|まん|おく)ゼロ	⟦\1\2
+rule	⟦([^⟧]*?)(じゅう|ひゃく|せん|まん|おく)ゼロ	⟦\1\2
+# いち is not said before じゅう or ひゃく, nor before せん at the start of a
+# group; after まん/おく num2kana reads 1000 as いっせん.
+rule	⟦([^⟧]*?)いち(じゅう|ひゃく)	⟦\1\2
+rule	⟦([^⟧]*?)いち(じゅう|ひゃく)	⟦\1\2
+rule	⟦([^⟧]*?)(まん|おく)いちせん	⟦\1\2いっせん
+rule	⟦([^⟧]*?)(まん|おく)いちせん	⟦\1\2いっせん
+rule	⟦いちせん	⟦せん
+# Sound changes: 300 さんびゃく, 600 ろっぴゃく, 800 はっぴゃく, 3000
+# さんぜん, 8000 はっせん.
+map	sc	さんひゃく	さんびゃく
+map	sc	ろくひゃく	ろっぴゃく
+map	sc	はちひゃく	はっぴゃく
+map	sc	さんせん	さんぜん
+map	sc	はちせん	はっせん
+rule	⟦([^⟧]*?)(さんひゃく|ろくひゃく|はちひゃく|さんせん|はちせん)	⟦\1{sc:\2}
+rule	⟦([^⟧]*?)(さんひゃく|ろくひゃく|はちひゃく|さんせん|はちせん)	⟦\1{sc:\2}
+
+# Counters. A trailing いち/ろく/はち/じゅう/ひゃく geminates before a k, s,
+# t, h, or p counter, and h becomes p after it (いっぽん) or b after さん
+# (さんぼん).
+map	soku	いち	いっ
+map	soku	ろく	ろっ
+map	soku	はち	はっ
+map	soku	じゅう	じゅっ
+map	soku	ひゃく	ひゃっ
+map	soku	びゃく	びゃっ
+map	soku	ぴゃく	ぴゃっ
+
+# h-row counters: 本 ほん, 匹 ひき, 杯 はい, 分 ふん.
+map	hh	本	ほん
+map	hh	匹	ひき
+map	hh	杯	はい
+map	hh	分	ふん
+map	hp	本	ぽん
+map	hp	匹	ぴき
+map	hp	杯	ぱい
+map	hp	分	ぷん
+map	hb	本	ぼん
+map	hb	匹	びき
+map	hb	杯	ばい
+map	hb	分	ぷん
+# 分 in a fraction is ぶん: 4分の3 -> よんぶんのさん.
+rule	⟧分の	⟧ぶんの
+rule	(いち|ろく|はち|じゅう|ひゃく|びゃく|ぴゃく)⟧(本|匹|杯|分)	{soku:\1}⟧{hp:\2}
+rule	(さん|せん|まん)⟧(本|匹|杯|分)	\1⟧{hb:\2}
+rule	よん⟧分	よん⟧ぷん
+rule	⟧(本|匹|杯|分)	⟧{hh:\1}
+
+# k/s/t-row counters.
+map	ks	個口	こぐち
+map	ks	個	こ
+map	ks	回	かい
+map	ks	階	かい
+map	ks	冊	さつ
+map	ks	足	そく
+map	ks	歳	さい
+map	ks	才	さい
+map	ks	週間	しゅうかん
+map	ks	件	けん
+map	ks	曲	きょく
+map	ks	ヶ月	かげつ
+map	ks	ヵ月	かげつ
+map	ks	か月	かげつ
+map	ks	カ月	かげつ
+map	ks	ケ月	かげつ
+rule	⟦にじゅう⟧(歳|才)	⟦はたち⟧
+rule	さん⟧階	さん⟧がい
+rule	さん⟧足	さん⟧ぞく
+rule	(いち|ろく|はち|じゅう|ひゃく|びゃく|ぴゃく)⟧(個口|個|回|階|冊|足|歳|才|週間|件|曲|ヶ月|ヵ月|か月|カ月|ケ月)	{soku:\1}⟧{ks:\2}
+rule	⟧(個口|個|回|階|冊|足|歳|才|週間|件|曲|ヶ月|ヵ月|か月|カ月|ケ月)	⟧{ks:\1}
+
+# People: 1人 ひとり, 2人 ふたり, 4人 よにん, otherwise にん.
+rule	⟦いち⟧人	⟦ひとり⟧
+rule	⟦に⟧人	⟦ふたり⟧
+rule	よん⟧人	よ⟧にん
+rule	⟧人	⟧にん
+
+# Native counting: 1つ ひとつ ... 9つ ここのつ.
+map	tsu	いち	ひとつ
+map	tsu	に	ふたつ
+map	tsu	さん	みっつ
+map	tsu	よん	よっつ
+map	tsu	ご	いつつ
+map	tsu	ろく	むっつ
+map	tsu	なな	ななつ
+map	tsu	はち	やっつ
+map	tsu	きゅう	ここのつ
+rule	⟦(いち|に|さん|よん|ご|ろく|なな|はち|きゅう)⟧つ	⟦{tsu:\1}⟧
+
+# Days of the month and day counts. 1日 (ついたち or いちにち) is left to
+# MeCab.
+map	day	に	ふつか
+map	day	さん	みっか
+map	day	よん	よっか
+map	day	ご	いつか
+map	day	ろく	むいか
+map	day	なな	なのか
+map	day	はち	ようか
+map	day	きゅう	ここのか
+map	day	じゅう	とおか
+map	day	じゅうよん	じゅうよっか
+map	day	にじゅう	はつか
+map	day	にじゅうよん	にじゅうよっか
+rule	⟦(に|さん|よん|ご|ろく|なな|はち|きゅう|じゅう|じゅうよん|にじゅう|にじゅうよん)⟧日	⟦{day:\1}⟧
+
+# Months and hours with irregular readings: 4月 しがつ, 7月 しちがつ, 9月
+# くがつ; 4時 よじ, 7時 しちじ, 9時 くじ. Also 4年 よねん, 4円 よえん.
+rule	⟦よん⟧月	⟦し⟧がつ
+rule	⟦なな⟧月	⟦しち⟧がつ
+rule	⟦きゅう⟧月	⟦く⟧がつ
+rule	⟧月	⟧がつ
+rule	よん⟧時	よ⟧じ
+rule	なな⟧時	しち⟧じ
+rule	きゅう⟧時	く⟧じ
+rule	⟧時	⟧じ
+rule	よん⟧年	よ⟧ねん
+rule	よん⟧円	よ⟧えん
+
+# Drop the brackets.
+rule	⟦([^⟧]*)⟧	\1

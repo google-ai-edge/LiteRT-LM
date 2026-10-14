@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -54,6 +55,10 @@ namespace litert::omni::tts {
 //       previous one, so a table can layer rewrites: recognize a percentage
 //       first, then let a later rule reach the decimal point inside it.
 //
+//   map <TAB> <name> <TAB> <key> <TAB> <value>
+//       One entry of a named lookup table (month names, abbreviations, small
+//       fractions, ...), referenced from replacements as `{name:\N}`.
+//
 // Within a replacement:
 //   \1 through \9   the capture group, verbatim.
 //   #1 through #9   the capture group with every ASCII digit replaced by its
@@ -63,6 +68,8 @@ namespace litert::omni::tts {
 //   @1 through @9   the capture group expanded as a cardinal integer using the
 //                   `digit` and `unit` tables (e.g. "24" -> "二十四",
 //                   "10000" -> "一万").
+//   {name:\1}       the capture group looked up in map `name`; a key missing
+//                   from the map is copied through verbatim.
 //   \\  \#  \@      a literal backslash, '#', or '@'.
 //   \t  \n          a literal tab or newline.
 //
@@ -132,6 +139,10 @@ class TextNormalizer {
   // Place-value units (10, 100, 1000, 10^4, 10^8) for `@N` cardinal expansion.
   std::array<std::string, 5> units_;
   bool has_units_ = false;
+  // Named lookup tables from `map` records: map name -> key -> value.
+  absl::flat_hash_map<std::string,
+                      absl::flat_hash_map<std::string, std::string>>
+      maps_;
 };
 
 }  // namespace litert::omni::tts

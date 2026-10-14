@@ -312,6 +312,54 @@ class KokoroPhonemizer {
 
   absl::StatusOr<std::string> WordToIpaViaEspeak(absl::string_view word) const;
 
+  // Phonemizes text for espeak-backed languages the way Host Kokoro does
+  // (misaki `EspeakG2P` over the `phonemizer` espeak backend): the text is
+  // split only at punctuation marks, each punctuation-free chunk is handed to
+  // espeak-ng whole so that its sentence-level text processing (numbers,
+  // currency and unit symbols, abbreviations, unstressed function words,
+  // liaison) applies, and the punctuation runs are restored verbatim.
+  //
+  // args
+  // - text: Input text, already text-normalized.
+  //
+  // returns
+  // - Raw (pre-Misaki-normalization) IPA, or an error status on failure.
+  absl::StatusOr<std::string> ClauseLevelTextToIpa(
+      absl::string_view text) const;
+
+  // Phonemizes one punctuation-free chunk with espeak-ng, routing words that
+  // hit `merged_lexicon_` to their lexicon pronunciation.
+  //
+  // args
+  // - chunk: Punctuation-free text chunk.
+  //
+  // returns
+  // - IPA for the chunk with words separated by single spaces, or an error
+  //   status on failure.
+  absl::StatusOr<std::string> ChunkToIpa(absl::string_view chunk) const;
+
+  // Phonemizes a run of words with espeak-ng and appends it to `ipa`,
+  // separated by a space. Clears `run`.
+  //
+  // args
+  // - run: Words to phonemize together; whitespace-only runs are skipped.
+  // - ipa: IPA accumulated so far.
+  //
+  // returns
+  // - Error status if espeak-ng fails.
+  absl::Status AppendEspeakRunIpa(std::string& run, std::string& ipa) const;
+
+  // Phonemizes a punctuation-free chunk via ChunkToIpa and appends it to
+  // `ipa`. Clears `chunk`.
+  //
+  // args
+  // - chunk: Punctuation-free text chunk; whitespace-only chunks are skipped.
+  // - ipa: IPA accumulated so far.
+  //
+  // returns
+  // - Error status on failure.
+  absl::Status AppendChunkIpa(std::string& chunk, std::string& ipa) const;
+
   // Converts an accumulated word token into its IPA representation and appends
   // it to the combined IPA string.
   //

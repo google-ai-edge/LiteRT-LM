@@ -424,22 +424,34 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
       },
       {
           .prompt = "The quick brown fox jumps over the lazy dog.",
+          // espeak-ng phonemizes the whole clause, so "over" carries
+          // secondary stress in context.
           .valid_ipa_candidates =
-              {"ðə kwˈɪk bɹˈWn fˈɑks ʤˈʌmps ˈOvəɹ ðə lˈAzi dˈɑɡ."},
-          .valid_token_candidates = {{0,   81, 83,  16,  53, 65,  156, 102, 53,
-                                      16,  44, 123, 156, 39, 56,  16,  48,  156,
-                                      69,  53, 61,  16,  82, 156, 138, 55,  58,
-                                      61,  16, 156, 31,  64, 83,  123, 16,  81,
-                                      83,  16, 54,  156, 24, 68,  51,  16,  46,
-                                      156, 69, 92,  4,   0}},
+              {"ðə kwˈɪk bɹˈWn fˈɑks ʤˈʌmps ˌOvəɹ ðə lˈAzi dˈɑɡ.",
+               "ðə kwˈɪk bɹˈWn fˈɑks ʤˈʌmps ˈOvəɹ ðə lˈAzi dˈɑɡ."},
+          .valid_token_candidates =
+              {{0,   81, 83, 16,  53,  65, 156, 102, 53, 16, 44,  123, 156,
+                39,  56, 16, 48,  156, 69, 53,  61,  16, 82, 156, 138, 55,
+                58,  61, 16, 157, 31,  64, 83,  123, 16, 81, 83,  16,  54,
+                156, 24, 68, 51,  16,  46, 156, 69,  92, 4,  0},
+               {0,   81, 83, 16,  53,  65, 156, 102, 53, 16, 44,  123, 156,
+                39,  56, 16, 48,  156, 69, 53,  61,  16, 82, 156, 138, 55,
+                58,  61, 16, 156, 31,  64, 83,  123, 16, 81, 83,  16,  54,
+                156, 24, 68, 51,  16,  46, 156, 69,  92, 4,  0}},
       },
       {
           .prompt = "Kokoro is an open-source text-to-speech model.",
+          // In clause context espeak-ng reduces the article "an" to /ən/.
           .valid_ipa_candidates =
-              {"kˈOkəɹO ɪz æn ˈOpənsˈoɹs tˈɛksttəspˈiʧ mˈɑdᵊl.",
+              {"kˈOkəɹO ɪz ən ˈOpənsˈoɹs tˈɛksttəspˈiʧ mˈɑdᵊl.",
+               "kˈOkəɹO ɪz æn ˈOpənsˈoɹs tˈɛksttəspˈiʧ mˈɑdᵊl.",
                "kˈOkəɹO ɪz æn ˈOpənsˈɔɹs tˈɛksttəspˈiʧ mˈɑdᵊl."},
           .valid_token_candidates =
               {{0,   53, 156, 31,  53, 83,  123, 31, 16, 102, 68, 16,
+                83,  56, 16,  156, 31, 58,  83,  56, 61, 156, 57, 123,
+                61,  16, 62,  156, 86, 53,  61,  62, 62, 83,  61, 58,
+                156, 51, 133, 16,  55, 156, 69,  46, 42, 54,  4,  0},
+               {0,   53, 156, 31,  53, 83,  123, 31, 16, 102, 68, 16,
                 72,  56, 16,  156, 31, 58,  83,  56, 61, 156, 57, 123,
                 61,  16, 62,  156, 86, 53,  61,  62, 62, 83,  61, 58,
                 156, 51, 133, 16,  55, 156, 69,  46, 42, 54,  4,  0},
@@ -641,8 +653,14 @@ TEST(PhonemizerTest, NormalizeMisakiPhonemesFlavors) {
   EXPECT_EQ(NormalizeMisakiPhonemes("x", MisakiFlavor::kEspeakGeneric), "x");
   EXPECT_EQ(NormalizeMisakiPhonemes("aː", MisakiFlavor::kEspeakGeneric), "aː");
   EXPECT_EQ(NormalizeMisakiPhonemes("r", MisakiFlavor::kEspeakGeneric), "r");
-  EXPECT_EQ(NormalizeMisakiPhonemes("tʃ", MisakiFlavor::kEspeakGeneric), "ʧ");
-  EXPECT_EQ(NormalizeMisakiPhonemes("dʒ", MisakiFlavor::kEspeakGeneric), "ʤ");
+  // Only phoneme pairs that espeak-ng ties are merged (misaki EspeakG2P.E2M);
+  // an untied pair spans two phonemes and is left alone.
+  EXPECT_EQ(NormalizeMisakiPhonemes("t͡ʃ", MisakiFlavor::kEspeakGeneric), "ʧ");
+  EXPECT_EQ(NormalizeMisakiPhonemes("d͡ʒ", MisakiFlavor::kEspeakGeneric), "ʤ");
+  EXPECT_EQ(NormalizeMisakiPhonemes("t^s", MisakiFlavor::kEspeakGeneric), "ʦ");
+  EXPECT_EQ(NormalizeMisakiPhonemes("ts", MisakiFlavor::kEspeakGeneric), "ts");
+  EXPECT_EQ(NormalizeMisakiPhonemes("kaʊzˈata", MisakiFlavor::kEspeakGeneric),
+            "kaʊzˈata");
 }
 
 TEST(PhonemizerTest, SpanishPhonemization) {

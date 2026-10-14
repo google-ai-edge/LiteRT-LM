@@ -14,10 +14,14 @@
 
 #include "omni/tts/text_chunk_utils.h"
 
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
 namespace litert::omni::tts {
@@ -221,6 +225,50 @@ TEST(TextChunkUtilsTest, MultiByteContinuationBufferTerminates) {
       ExtractNextChunk("日本語テキスト", 0, /*is_finished=*/false, config);
   ASSERT_TRUE(chunk.has_value());
   EXPECT_GT(chunk->next_start_index, 0);
+}
+
+// Collects every chunk ExtractNextChunk produces for a finished `text`.
+std::vector<std::string> ChunkAll(absl::string_view text) {
+  TextChunkConfig config;
+  std::vector<std::string> chunks;
+  size_t start = 0;
+  while (auto chunk =
+             ExtractNextChunk(text, start, /*is_finished=*/true, config)) {
+    chunks.emplace_back(absl::StripAsciiWhitespace(chunk->chunk));
+    start = chunk->next_start_index;
+  }
+  return chunks;
+}
+
+TEST(TextChunkUtilsTest, PeriodsInsideNumbersDoNotSplit) {
+  EXPECT_THAT(ChunkAll("Cuesta €1.500,50 al mes. Es caro."),
+              ::testing::ElementsAre("Cuesta €1.500,50 al mes.", "Es caro."));
+  EXPECT_THAT(ChunkAll("It rose by 12.5% to reach $6.50 today."),
+              ::testing::ElementsAre("It rose by 12.5% to reach $6.50 today."));
+}
+
+TEST(TextChunkUtilsTest, AbbreviationPeriodsDoNotSplit) {
+  EXPECT_THAT(ChunkAll("Los EE.UU. enviaron ayuda. Fin."),
+              ::testing::ElementsAre("Los EE.UU. enviaron ayuda.", "Fin."));
+  EXPECT_THAT(ChunkAll("Dr. Smith met J. Doe at 10 a.m. sharp."),
+              ::testing::ElementsAre("Dr. Smith met J. Doe at 10 a.m. sharp."));
+  EXPECT_THAT(ChunkAll("Lea el cap. 3 de la pág. 12 hoy."),
+              ::testing::ElementsAre("Lea el cap. 3 de la pág. 12 hoy."));
+  EXPECT_THAT(
+      ChunkAll("El tren llega a las 18:00 h. a la estación."),
+      ::testing::ElementsAre("El tren llega a las 18:00 h. a la estación."));
+}
+
+TEST(TextChunkUtilsTest, SentenceFinalPeriodsStillSplit) {
+  EXPECT_THAT(ChunkAll("He left. She stayed! Then rain."),
+              ::testing::ElementsAre("He left.", "She stayed!", "Then rain."));
+  // A period at the end of a still-streaming buffer ends the sentence after an
+  // ordinary word, but not after a number or an abbreviation that may
+  // continue ("$6." + "50", "Dr." + " Smith").
+  TextChunkConfig config;
+  EXPECT_TRUE(FindFirstDelimiter("It ended.", config).found());
+  EXPECT_FALSE(FindFirstDelimiter("It costs $6.", config).found());
+  EXPECT_FALSE(FindFirstDelimiter("Ask Dr.", config).found());
 }
 
 }  // namespace

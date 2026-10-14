@@ -1,0 +1,191 @@
+# English text normalization for the Kokoro TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# The phonemizer hands whole clauses to espeak-ng, which already reads plain
+# cardinals, ordinals ("2nd"), percent signs and most letter acronyms. This
+# table only rewrites what espeak-ng reads differently from Host Kokoro's
+# misaki English front end (the reference the on-device engine is compared
+# against):
+#   * four-digit numbers are read as years: 2026 -> twenty twenty-six,
+#     1500 -> fifteen hundred, 1990s -> nineteen nineties;
+#   * currency amounts are read with units and cents: $6.50 -> six dollars and
+#     fifty cents, £45.50 -> forty-five pounds and fifty pence;
+#   * decimals are read with "point" and digit by digit: 0.05 -> zero point
+#     zero five;
+#   * slashes and hyphens between digits are dropped (2 1/2, 1-800-555-0199);
+#   * a few abbreviations that espeak-ng spells or pauses on (e.g., i.e.,
+#     p.m., Dr., ASAP).
+#
+# RE2 has no lookaround, so rules consume the neighbouring character they need
+# and put it back in the replacement.
+
+# `#N` reads digits one at a time; each digit becomes a separate word.
+digit	0	 0
+digit	1	 1
+digit	2	 2
+digit	3	 3
+digit	4	 4
+digit	5	 5
+digit	6	 6
+digit	7	 7
+digit	8	 8
+digit	9	 9
+
+map	decade	10	tens
+map	decade	20	twenties
+map	decade	30	thirties
+map	decade	40	forties
+map	decade	50	fifties
+map	decade	60	sixties
+map	decade	70	seventies
+map	decade	80	eighties
+map	decade	90	nineties
+
+map	month	1	January
+map	month	01	January
+map	month	2	February
+map	month	02	February
+map	month	3	March
+map	month	03	March
+map	month	4	April
+map	month	04	April
+map	month	5	May
+map	month	05	May
+map	month	6	June
+map	month	06	June
+map	month	7	July
+map	month	07	July
+map	month	8	August
+map	month	08	August
+map	month	9	September
+map	month	09	September
+map	month	10	October
+map	month	11	November
+map	month	12	December
+map	day	1	1st
+map	day	01	1st
+map	day	2	2nd
+map	day	02	2nd
+map	day	3	3rd
+map	day	03	3rd
+map	day	4	4th
+map	day	04	4th
+map	day	5	5th
+map	day	05	5th
+map	day	6	6th
+map	day	06	6th
+map	day	7	7th
+map	day	07	7th
+map	day	8	8th
+map	day	08	8th
+map	day	9	9th
+map	day	09	9th
+map	day	10	10th
+map	day	11	11th
+map	day	12	12th
+map	day	13	13th
+map	day	14	14th
+map	day	15	15th
+map	day	16	16th
+map	day	17	17th
+map	day	18	18th
+map	day	19	19th
+map	day	20	20th
+map	day	21	21st
+map	day	22	22nd
+map	day	23	23rd
+map	day	24	24th
+map	day	25	25th
+map	day	26	26th
+map	day	27	27th
+map	day	28	28th
+map	day	29	29th
+map	day	30	30th
+map	day	31	31st
+map	fraction	1/2	one half
+map	fraction	1/3	one third
+map	fraction	2/3	two thirds
+map	fraction	1/4	one quarter
+map	fraction	3/4	three quarters
+
+# Slash dates are month/day/year: 08/24/2026 -> August 24th 2026 (the year
+# is then read by the year rules below).
+rule	\b(\d{1,2})/(\d{1,2})/(\d{4})\b	{month:\1} {day:\2} \3
+
+# Years, before thousands separators are removed (misaki reads "1,500" as a
+# cardinal but "1500" as a year). A year is a four-digit number that is not
+# part of a longer number, a decimal, a time, a date or a phone number.
+rule	(^|[^\w.,:/$£€-])([1-9]\d)([1-9]0)s\b	\1\2 {decade:\3}
+rule	(^|[^\w.,:/$£€-])([1-9])000($|[^\w.,:/-]|[.,:](?:\s|$))	\1\2 thousand\3
+rule	(^|[^\w.,:/$£€-])200([1-9])($|[^\w.,:/-]|[.,:](?:\s|$))	\1two thousand and \2\3
+rule	(^|[^\w.,:/$£€-])([1-9]\d)00($|[^\w.,:/-]|[.,:](?:\s|$))	\1\2 hundred\3
+rule	(^|[^\w.,:/$£€-])([1-9]\d)0([1-9])($|[^\w.,:/-]|[.,:](?:\s|$))	\1\2 oh \3\4
+rule	(^|[^\w.,:/$£€-])([1-9]\d)([1-9]\d)($|[^\w.,:/-]|[.,:](?:\s|$))	\1\2 \3\4
+
+# Thousands separators. Three passes cover up to 10^12; RE2 replaces
+# non-overlapping matches, so "1,234,567" needs two.
+rule	(\d),(\d\d\d)\b	\1\2
+rule	(\d),(\d\d\d)\b	\1\2
+rule	(\d),(\d\d\d)\b	\1\2
+
+# Currency: the symbol precedes the amount but the unit follows it.
+rule	\$1\.(\d\d)\b	1 dollar and \1 cents
+rule	\$(\d+)\.0(\d)\b	\1 dollars and \2 cents
+rule	\$(\d+)\.(\d\d)\b	\1 dollars and \2 cents
+rule	\$1\b	1 dollar
+rule	\$(\d+)	\1 dollars
+rule	£1\.(\d\d)\b	1 pound and \1 pence
+rule	£(\d+)\.0(\d)\b	\1 pounds and \2 pence
+rule	£(\d+)\.(\d\d)\b	\1 pounds and \2 pence
+rule	£1\b	1 pound
+rule	£(\d+)	\1 pounds
+rule	€1\.(\d\d)\b	1 euro and \1 cents
+rule	€(\d+)\.0(\d)\b	\1 euros and \2 cents
+rule	€(\d+)\.(\d\d)\b	\1 euros and \2 cents
+rule	€1\b	1 euro
+rule	€(\d+)	\1 euros
+
+# Decimals: "12.5" -> "12 point 5", "0.05" -> "0 point 0 5".
+rule	(\d)\.(\d+)	\1 point#2
+
+# Clock times: "9:00" -> "9", "09:15" -> "9:15" (read "nine fifteen").
+rule	\b0(\d):(\d\d)\b	\1:\2
+rule	\b(\d{1,2}):00\b	\1
+
+# Fractions: 2 1/2 -> 2 and a half, 3/4 -> three quarters.
+rule	(\d) 1/2\b	\1 and a half
+rule	(\d) 1/4\b	\1 and a quarter
+rule	(\d) 3/4\b	\1 and three quarters
+rule	(^|[^\d/])(\d/\d)($|[^\d/])	\1{fraction:\2} \3
+
+# Units and identifiers.
+rule	\bkm/h\b	kilometers per hour
+rule	\b([A-Z]{2,})-(\d+)-([A-Z]{2,})-(\d+)\b	\1 #2 \3 #4
+rule	\b([A-Z]{2,})-(\d+)-([A-Z]{2,})\b	\1 #2 \3
+
+# Slashes and hyphens between digits are not read aloud.
+rule	(\d)/(\d)	\1 \2
+rule	(\d)/(\d)	\1 \2
+rule	(\d)-(\d)	\1 \2
+rule	(\d)-(\d)	\1 \2
+
+# Abbreviations espeak-ng spells letter by letter with pauses, or reads as a
+# different word.
+map	ampm	a	AM
+map	ampm	A	AM
+map	ampm	p	PM
+map	ampm	P	PM
+rule	\b[Ee]\.g\.	E G
+rule	\b[Ii]\.e\.	I E
+rule	\b([AaPp])\.[Mm]\.	{ampm:\1}
+rule	\bDr\.(\s+[A-Z])	Doctor\1
+rule	\bASAP\b	A-sap
+rule	\bext\.(\s*\d)	extension\1
+# Dotted letter acronyms (D.C., U.S.) are read as letters without pauses.
+rule	\b([A-Z])\.([A-Z])\.([A-Z])\.	\1\2\3
+rule	\b([A-Z])\.([A-Z])\.	\1\2
+# The period of an abbreviation inside a sentence is not a sentence break.
+rule	\b(etc|Corp|Inc|Ltd|Co)\.(\s*[,;:!?]|\s+[a-z])	\1\2
+rule	\b(p|pp|No|no)\.(\s+\d)	\1\2

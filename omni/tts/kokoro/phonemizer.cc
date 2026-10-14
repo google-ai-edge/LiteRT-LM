@@ -26,6 +26,7 @@
 #include "absl/base/const_init.h"  // from @com_google_absl
 #include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -36,6 +37,7 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
+#include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "espeak-ng/espeak_ng.h"  // from @espeak_ng
@@ -84,6 +86,42 @@ absl::Status EnsureEspeakInitialized(absl::string_view parent_dir) {
 // immediately after an opening bracket or quotation mark.
 bool IsOpenPunctuation(char ch) {
   return ch == '(' || ch == '[' || ch == '{' || ch == '"' || ch == '\'';
+}
+
+// Punctuation marks at which Host Kokoro splits text before handing it to
+// espeak-ng: `phonemizer.punctuation._DEFAULT_MARKS`.
+bool IsPhonemizerMark(absl::string_view symbol) {
+  static const absl::NoDestructor<absl::flat_hash_set<absl::string_view>>
+      kMarks({";", ":", ",", ".", "!", "?", "¡", "¿", "—", "…", "\"",
+              "«", "»", "“", "”", "(", ")", "{", "}", "[", "]"});
+  return kMarks->contains(symbol);
+}
+
+bool IsAsciiSpace(absl::string_view symbol) {
+  return symbol.size() == 1 &&
+         absl::ascii_isspace(static_cast<unsigned char>(symbol[0]));
+}
+
+// In tie mode espeak-ng also ties the letters of its language-switch flags
+// (`(e͡n)`). Drops tie characters inside parentheses so StripLanguageSwitches
+// still recognizes the flags.
+std::string RemoveTiesInsideParentheses(absl::string_view phonemes) {
+  constexpr absl::string_view kTie = "\u0361";
+  std::string out;
+  out.reserve(phonemes.size());
+  bool inside = false;
+  size_t i = 0;
+  while (i < phonemes.size()) {
+    if (inside && absl::string_view(phonemes).substr(i, kTie.size()) == kTie) {
+      i += kTie.size();
+      continue;
+    }
+    if (phonemes[i] == '(') inside = true;
+    if (phonemes[i] == ')') inside = false;
+    out.push_back(phonemes[i]);
+    ++i;
+  }
+  return out;
 }
 
 }  // namespace
@@ -150,6 +188,29 @@ MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice) {
 
 std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
                                     MisakiFlavor flavor) {
+  if (flavor == MisakiFlavor::kEspeakGeneric) {
+    // misaki.espeak.EspeakG2P.E2M rules (used for es, fr-fr, hi, it, pt-br).
+    // They only merge phoneme pairs that espeak-ng *ties* into one phoneme
+    // (`t͡s`, `a͡ʊ`); an untied `ts` / `aʊ` spans two phonemes (vingt-six,
+    // causata) and must stay as is. Preserves Spanish jota ('x'), trill ('r'),
+    // and vowel length marker ('ː').
+    std::string tied = absl::StrReplaceAll(raw_ipa, {{"^", "\u0361"}});
+    tied = absl::StrReplaceAll(tied, {
+                                         {"a\u0361ɪ", "I"},
+                                         {"a\u0361ʊ", "W"},
+                                         {"d\u0361z", "ʣ"},
+                                         {"d\u0361ʒ", "ʤ"},
+                                         {"e\u0361ɪ", "A"},
+                                         {"o\u0361ʊ", "O"},
+                                         {"ə\u0361ʊ", "Q"},
+                                         {"s\u0361s", "S"},
+                                         {"t\u0361s", "ʦ"},
+                                         {"t\u0361ʃ", "ʧ"},
+                                         {"ɔ\u0361ɪ", "Y"},
+                                     });
+    return absl::StrReplaceAll(tied, {{"\u0361", ""}, {"-", ""}});
+  }
+
   // Step 1: Remove the Unicode tie-bar accent (U+0361 COMBINING DOUBLE INVERTED
   // BREVE, encoded in UTF-8 as 2 bytes: 0xCD 0xA1) and '^' tie marker.
   // eSpeak-ng uses this tie bar to connect multi-character affricates (e.g.,
@@ -171,25 +232,6 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
                                               {"əʊ", "Q"},
                                               {"tʃ", "ʧ"},
                                               {"dʒ", "ʤ"},
-                                          });
-  }
-
-  if (flavor == MisakiFlavor::kEspeakGeneric) {
-    // misaki.espeak.EspeakG2P.E2M rules (used for es, fr-fr, hi, it, pt-br):
-    // Preserves Spanish jota ('x'), trill ('r'), and vowel length marker ('ː').
-    return absl::StrReplaceAll(clean_ipa, {
-                                              {"aɪ", "I"},
-                                              {"aʊ", "W"},
-                                              {"dz", "ʣ"},
-                                              {"dʒ", "ʤ"},
-                                              {"eɪ", "A"},
-                                              {"oʊ", "O"},
-                                              {"əʊ", "Q"},
-                                              {"ss", "S"},
-                                              {"ts", "ʦ"},
-                                              {"tʃ", "ʧ"},
-                                              {"ɔɪ", "Y"},
-                                              {"-", ""},
                                           });
   }
 
@@ -805,8 +847,14 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpaViaEspeak(
   // phoneme_mode = 0x02: Flag bit 1 (espeakPHONEMES_IPA = 0x02) directs
   // espeak_TextToPhonemes to produce standard International Phonetic Alphabet
   // (IPA) UTF-8 strings rather than espeak's internal ASCII phonetic
-  // representation.
-  constexpr int phoneme_mode = 0x02;
+  // representation. For the misaki `EspeakG2P` languages, bit 7 plus a U+0361
+  // tie character in bits 8-23 additionally tie the characters of
+  // multi-character phonemes (`t͡s`), exactly like Host `phonemizer` does, so
+  // that NormalizeMisakiPhonemes can tell an affricate from two phonemes.
+  const int phoneme_mode =
+      FlavorForLanguage(language_) == MisakiFlavor::kEspeakGeneric
+          ? (0x02 | (1 << 7) | (0x0361 << 8))
+          : 0x02;
 
   std::string res;
   while (text_ptr != nullptr && *static_cast<const char*>(text_ptr) != '\0') {
@@ -823,7 +871,8 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpaViaEspeak(
     }
   }
 
-  std::string stripped = StripLanguageSwitches(res);
+  std::string stripped =
+      StripLanguageSwitches(RemoveTiesInsideParentheses(res));
   if (stripped.size() != res.size()) {
     ABSL_LOG(WARNING) << "espeak-ng could not phonemize \"" << word
                       << "\" in voice \"" << espeak_voice_
@@ -856,6 +905,137 @@ absl::Status KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
   return absl::OkStatus();
 }
 
+absl::Status KokoroPhonemizer::AppendEspeakRunIpa(std::string& run,
+                                                  std::string& ipa) const {
+  if (absl::StripAsciiWhitespace(run).empty()) {
+    run.clear();
+    return absl::OkStatus();
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string run_ipa, WordToIpaViaEspeak(run));
+  run.clear();
+  if (!ipa.empty()) ipa += ' ';
+  ipa += run_ipa;
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::string> KokoroPhonemizer::ChunkToIpa(
+    absl::string_view chunk) const {
+  // Words with a lexicon override are phonemized on their own; the runs of
+  // words between them still reach espeak-ng together.
+  std::string ipa;
+  std::string pending;
+  for (absl::string_view word : absl::StrSplit(chunk, ' ')) {
+    if (const auto it = merged_lexicon_.find(absl::AsciiStrToLower(word));
+        !word.empty() && it != merged_lexicon_.end()) {
+      ABSL_RETURN_IF_ERROR(AppendEspeakRunIpa(pending, ipa));
+      if (!ipa.empty()) ipa += ' ';
+      ipa += it->second;
+      continue;
+    }
+    if (!pending.empty()) pending += ' ';
+    pending.append(word.data(), word.size());
+  }
+  ABSL_RETURN_IF_ERROR(AppendEspeakRunIpa(pending, ipa));
+  // espeak-ng may emit one line per clause; merge them like `phonemizer`.
+  ipa = absl::StrReplaceAll(ipa, {{"\n", " "}});
+  while (absl::StrContains(ipa, "  ")) {
+    ipa = absl::StrReplaceAll(ipa, {{"  ", " "}});
+  }
+  return std::string(absl::StripAsciiWhitespace(ipa));
+}
+
+absl::Status KokoroPhonemizer::AppendChunkIpa(std::string& chunk,
+                                              std::string& ipa) const {
+  if (absl::StripAsciiWhitespace(chunk).empty()) {
+    chunk.clear();
+    return absl::OkStatus();
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string chunk_ipa, ChunkToIpa(chunk));
+  chunk.clear();
+  ipa += chunk_ipa;
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::string> KokoroPhonemizer::ClauseLevelTextToIpa(
+    absl::string_view text) const {
+  // misaki.espeak.EspeakG2P: angle quotes become curly quotes, then
+  // parentheses are hidden as angle quotes and restored at the end. Script
+  // specific sentence punctuation (Devanagari danda, en dash, fullwidth marks)
+  // is first folded onto the marks Kokoro's vocabulary knows.
+  std::string prepared;
+  prepared.reserve(text.size());
+  const auto& unicode_punct_map = GetUnicodePunctuationMap();
+  for (size_t pos = 0; pos < text.size();) {
+    size_t len = 0;
+    DecodeUtf8Char(text, pos, &len);
+    if (len == 0) len = 1;
+    const absl::string_view symbol = text.substr(pos, len);
+    pos += len;
+    if (const auto it = unicode_punct_map.find(symbol);
+        it != unicode_punct_map.end()) {
+      absl::StrAppend(&prepared, it->second);
+    } else {
+      absl::StrAppend(&prepared, symbol);
+    }
+  }
+  prepared = absl::StrReplaceAll(
+      prepared, {{"«", "“"}, {"»", "”"}, {"(", "«"}, {")", "»"}});
+
+  // `phonemizer` Punctuation.preserve: split at runs matching
+  // (\s*[marks]+\s*)+ and keep each run verbatim.
+  std::string ipa;
+  std::string chunk;
+  std::string run;     // Current punctuation run, including surrounding spaces.
+  std::string spaces;  // Whitespace seen after a chunk, not yet assigned.
+  bool run_has_mark = false;
+
+  size_t i = 0;
+  while (i < prepared.size()) {
+    size_t char_len = 0;
+    DecodeUtf8Char(prepared, i, &char_len);
+    if (char_len == 0) char_len = 1;
+    const absl::string_view symbol =
+        absl::string_view(prepared).substr(i, char_len);
+    i += char_len;
+
+    if (IsPhonemizerMark(symbol)) {
+      if (!run_has_mark) {
+        ABSL_RETURN_IF_ERROR(AppendChunkIpa(chunk, ipa));
+        run = spaces;  // Leading whitespace belongs to the mark run.
+        spaces.clear();
+        run_has_mark = true;
+      }
+      run.append(symbol.data(), symbol.size());
+      continue;
+    }
+    if (IsAsciiSpace(symbol)) {
+      if (run_has_mark) {
+        run.append(symbol.data(), symbol.size());
+      } else {
+        spaces.append(symbol.data(), symbol.size());
+      }
+      continue;
+    }
+    // A word character ends any punctuation run.
+    if (run_has_mark) {
+      ipa += run;
+      run.clear();
+      run_has_mark = false;
+    }
+    if (!spaces.empty()) {
+      chunk += spaces;
+      spaces.clear();
+    }
+    chunk.append(symbol.data(), symbol.size());
+  }
+  ABSL_RETURN_IF_ERROR(AppendChunkIpa(chunk, ipa));
+  if (run_has_mark) ipa += run;
+
+  // Restore parentheses hidden above.
+  ipa = absl::StrReplaceAll(ipa, {{"«", "("}, {"»", ")"}});
+  return std::string(absl::StripAsciiWhitespace(ipa));
+}
+
 absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
     absl::string_view text) const {
   // Rewrite digits and symbols into pronounceable words before tokenizing, so
@@ -877,6 +1057,13 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
         "Chinese TTS requires a bundled 'zh-lexicon' section in the "
         ".litertlm model container; espeak-ng fallback is disabled for "
         "Chinese.");
+  }
+
+  // espeak-backed languages follow Host Kokoro's clause-level path so that
+  // espeak-ng sees whole clauses rather than isolated words.
+  if (language_ != "cmn" && language_ != "ja") {
+    ABSL_ASSIGN_OR_RETURN(std::string clause_ipa, ClauseLevelTextToIpa(text));
+    return NormalizeMisakiPhonemes(clause_ipa, FlavorForLanguage(language_));
   }
 
   std::string combined_ipa;

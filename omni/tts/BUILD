@@ -22,14 +22,27 @@ cc_library(
     name = "text_chunk_utils",
     srcs = ["text_chunk_utils.cc"],
     hdrs = ["text_chunk_utils.h"],
-    deps = ["@com_google_absl//absl/strings"],
+    deps = [
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
+    ],
 )
 
 # Rule tables consumed by :text_normalizer. These ship as data alongside the
 # model, so that language-specific normalization stays out of the binary.
 filegroup(
     name = "text_normalizer_rule_tables",
-    srcs = ["data/zh_textnorm.txt"],
+    srcs = [
+        "data/en_textnorm.txt",
+        "data/es_textnorm.txt",
+        "data/fr_textnorm.txt",
+        "data/hi_textnorm.txt",
+        "data/it_textnorm.txt",
+        "data/ja_textnorm.txt",
+        "data/pt_textnorm.txt",
+        "data/zh_textnorm.txt",
+    ],
 )
 
 cc_library(
@@ -37,6 +50,7 @@ cc_library(
     srcs = ["text_normalizer.cc"],
     hdrs = ["text_normalizer.h"],
     deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",

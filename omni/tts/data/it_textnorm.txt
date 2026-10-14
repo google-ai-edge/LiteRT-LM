@@ -1,0 +1,328 @@
+# Italian text normalization for the Kokoro TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# The phonemizer hands whole clauses to espeak-ng. This table rewrites what
+# espeak-ng reads poorly or not at all: locale number separators (1.500,50),
+# currency, temperatures, clock times, slash dates, common fractions,
+# ordinals and a few abbreviations.
+#
+# It then spells out every remaining number, ordinal and Roman numeral in
+# words, so espeak-ng's own number reader never runs for Italian: that reader
+# (LookupNum2 in the bundled espeak-ng) indexes before the start of a buffer
+# for Italian single digits and whole-word numbers. Numbers are split into
+# the same words espeak-ng would speak (2026 -> due mila ventisei,
+# 1500 -> mille cinquecento, 108 -> cento otto) to keep Host parity.
+
+map	month	1	gennaio
+map	month	01	gennaio
+map	month	2	febbraio
+map	month	02	febbraio
+map	month	3	marzo
+map	month	03	marzo
+map	month	4	aprile
+map	month	04	aprile
+map	month	5	maggio
+map	month	05	maggio
+map	month	6	giugno
+map	month	06	giugno
+map	month	7	luglio
+map	month	07	luglio
+map	month	8	agosto
+map	month	08	agosto
+map	month	9	settembre
+map	month	09	settembre
+map	month	10	ottobre
+map	month	11	novembre
+map	month	12	dicembre
+
+map	fraction	1/2	un mezzo
+map	fraction	1/3	un terzo
+map	fraction	2/3	due terzi
+map	fraction	1/4	un quarto
+map	fraction	3/4	tre quarti
+
+# Number words.
+map	n99	0	zero
+map	n99	1	uno
+map	n99	2	due
+map	n99	3	tre
+map	n99	4	quattro
+map	n99	5	cinque
+map	n99	6	sei
+map	n99	7	sette
+map	n99	8	otto
+map	n99	9	nove
+map	n99	10	dieci
+map	n99	11	undici
+map	n99	12	dodici
+map	n99	13	tredici
+map	n99	14	quattordici
+map	n99	15	quindici
+map	n99	16	sedici
+map	n99	17	diciassette
+map	n99	18	diciotto
+map	n99	19	diciannove
+map	n99	20	venti
+map	n99	21	ventuno
+map	n99	22	ventidue
+map	n99	23	ventitré
+map	n99	24	ventiquattro
+map	n99	25	venticinque
+map	n99	26	ventisei
+map	n99	27	ventisette
+map	n99	28	ventotto
+map	n99	29	ventinove
+map	n99	30	trenta
+map	n99	31	trentuno
+map	n99	32	trentadue
+map	n99	33	trentatré
+map	n99	34	trentaquattro
+map	n99	35	trentacinque
+map	n99	36	trentasei
+map	n99	37	trentasette
+map	n99	38	trentotto
+map	n99	39	trentanove
+map	n99	40	quaranta
+map	n99	41	quarantuno
+map	n99	42	quarantadue
+map	n99	43	quarantatré
+map	n99	44	quarantaquattro
+map	n99	45	quarantacinque
+map	n99	46	quarantasei
+map	n99	47	quarantasette
+map	n99	48	quarantotto
+map	n99	49	quarantanove
+map	n99	50	cinquanta
+map	n99	51	cinquantuno
+map	n99	52	cinquantadue
+map	n99	53	cinquantatré
+map	n99	54	cinquantaquattro
+map	n99	55	cinquantacinque
+map	n99	56	cinquantasei
+map	n99	57	cinquantasette
+map	n99	58	cinquantotto
+map	n99	59	cinquantanove
+map	n99	60	sessanta
+map	n99	61	sessantuno
+map	n99	62	sessantadue
+map	n99	63	sessantatré
+map	n99	64	sessantaquattro
+map	n99	65	sessantacinque
+map	n99	66	sessantasei
+map	n99	67	sessantasette
+map	n99	68	sessantotto
+map	n99	69	sessantanove
+map	n99	70	settanta
+map	n99	71	settantuno
+map	n99	72	settantadue
+map	n99	73	settantatré
+map	n99	74	settantaquattro
+map	n99	75	settantacinque
+map	n99	76	settantasei
+map	n99	77	settantasette
+map	n99	78	settantotto
+map	n99	79	settantanove
+map	n99	80	ottanta
+map	n99	81	ottantuno
+map	n99	82	ottantadue
+map	n99	83	ottantatré
+map	n99	84	ottantaquattro
+map	n99	85	ottantacinque
+map	n99	86	ottantasei
+map	n99	87	ottantasette
+map	n99	88	ottantotto
+map	n99	89	ottantanove
+map	n99	90	novanta
+map	n99	91	novantuno
+map	n99	92	novantadue
+map	n99	93	novantatré
+map	n99	94	novantaquattro
+map	n99	95	novantacinque
+map	n99	96	novantasei
+map	n99	97	novantasette
+map	n99	98	novantotto
+map	n99	99	novantanove
+map	n99	00	zero
+map	n99	01	uno
+map	n99	02	due
+map	n99	03	tre
+map	n99	04	quattro
+map	n99	05	cinque
+map	n99	06	sei
+map	n99	07	sette
+map	n99	08	otto
+map	n99	09	nove
+map	h	0	
+map	h	1	cento
+map	h	2	duecento
+map	h	3	trecento
+map	h	4	quattrocento
+map	h	5	cinquecento
+map	h	6	seicento
+map	h	7	settecento
+map	h	8	ottocento
+map	h	9	novecento
+map	ordsmall	uno	primo
+map	ordsmall	due	secondo
+map	ordsmall	tre	terzo
+map	ordsmall	quattro	quarto
+map	ordsmall	cinque	quinto
+map	ordsmall	sei	sesto
+map	ordsmall	sette	settimo
+map	ordsmall	otto	ottavo
+map	ordsmall	nove	nono
+map	ordsmall	dieci	decimo
+map	roman	II	2
+map	roman	III	3
+map	roman	IV	4
+map	roman	V	5
+map	roman	VI	6
+map	roman	VII	7
+map	roman	VIII	8
+map	roman	IX	9
+map	roman	X	10
+map	roman	XI	11
+map	roman	XII	12
+map	roman	XIII	13
+map	roman	XIV	14
+map	roman	XV	15
+map	roman	XVI	16
+map	roman	XVII	17
+map	roman	XVIII	18
+map	roman	XIX	19
+map	roman	XX	20
+map	roman	XXI	21
+map	roman	XXII	22
+map	roman	XXIII	23
+map	roman	XXIV	24
+map	roman	XXV	25
+map	roman	XXVI	26
+map	roman	XXVII	27
+map	roman	XXVIII	28
+map	roman	XXIX	29
+map	roman	XXX	30
+map	roman	XXXI	31
+map	roman	XXXII	32
+map	roman	XXXIII	33
+map	roman	XXXIV	34
+map	roman	XXXV	35
+map	roman	XXXVI	36
+map	roman	XXXVII	37
+map	roman	XXXVIII	38
+map	roman	XXXIX	39
+map	roman	XL	40
+map	roman	XLI	41
+map	roman	XLII	42
+map	roman	XLIII	43
+map	roman	XLIV	44
+map	roman	XLV	45
+map	roman	XLVI	46
+map	roman	XLVII	47
+map	roman	XLVIII	48
+map	roman	XLIX	49
+
+# `#N` reads digits one at a time; each digit becomes a separate word.
+digit	0	 zero
+digit	1	 uno
+digit	2	 due
+digit	3	 tre
+digit	4	 quattro
+digit	5	 cinque
+digit	6	 sei
+digit	7	 sette
+digit	8	 otto
+digit	9	 nove
+
+# Phone numbers are read digit by digit: +39 02 1234567.
+rule	\+(\d{1,3}) (\d{2,4}) (\d{5,8})\b	più #1 #2 #3
+
+# Abbreviations.
+rule	\bdott\.	dottor
+rule	\bDott\.	Dottor
+rule	\bsig\.	signor
+rule	\bS\.p\.A\.	esse pi a
+
+# Temperatures.
+rule	-\s?(\d+(?:,\d+)?)\s?°\s?C\b	meno \1 gradi Celsius
+rule	(\d)\s?°\s?C\b	\1 gradi Celsius
+
+# Ordinals (1º, 21º) and Roman numerals (XXI secolo, Papa Giovanni XXIII)
+# are marked ⟪N⟫ here and become ordinal words at the end of the table.
+# espeak-ng reads all-caps Roman numerals from II to XLIX, and V./X. with a
+# dot, as ordinals.
+rule	\b(\d{1,3})[ºª]	⟪\1⟫
+rule	\b(10|[1-9])°	⟪\1⟫
+rule	\b(XLIX|XLVIII|XLVII|XLVI|XLV|XLIV|XLIII|XLII|XLI|XL|XXXIX|XXXVIII|XXXVII|XXXVI|XXXV|XXXIV|XXXIII|XXXII|XXXI|XXX|XXIX|XXVIII|XXVII|XXVI|XXV|XXIV|XXIII|XXII|XXI|XX|XIX|XVIII|XVII|XVI|XV|XIV|XIII|XII|XI|IX|VIII|VII|VI|IV|III|II)\b	⟪{roman:\1}⟫
+rule	\b([VX])\.	⟪{roman:\1}⟫.
+
+# Clock times: 10:15 -> dieci e un quarto, 14:30 -> quattordici e trenta.
+rule	\b(\d{1,2}):15\b	\1 e un quarto
+rule	\b(\d{1,2}):00\b	\1
+rule	\b(\d{1,2}):([0-5]\d)\b	\1 e \2
+
+# Slash dates (day/month/year) and common fractions.
+rule	\b(\d{1,2})/(\d{1,2})/(\d{4})\b	\1 {month:\2} \3
+rule	\b(\d/\d)\b	{fraction:\1}
+
+# Thousands separators.
+rule	(\d)\.(\d\d\d)\b	\1\2
+rule	(\d)\.(\d\d\d)\b	\1\2
+rule	(\d)\.(\d\d\d)\b	\1\2
+
+# Currency: the symbol precedes the amount but the unit follows it.
+rule	€\s?(\d+),(\d\d)\b	\1 euro e \2 centesimi
+rule	(\d+),(\d\d)\s?€	\1 euro e \2 centesimi
+rule	€\s?(\d+)	\1 euro
+rule	(\d+)\s?€	\1 euro
+rule	\$\s?(\d+),(\d\d)\b	\1 dollari e \2 centesimi
+rule	\$\s?(\d+)	\1 dollari
+
+# Temperatures without a unit.
+rule	(\d)\s?°	\1 gradi
+
+# Decimal comma and percent.
+rule	(\d),(\d)	\1 virgola \2
+rule	(\d)\s?%	\1 per cento
+
+# A minus sign before a number that does not follow a digit or letter.
+rule	(^|[^\w])-(\d)	\1meno \2
+
+# Spell out every remaining number. Keep the words apart from adjacent letters
+# (A4 -> A quattro).
+rule	(\pL)(\d)	\1 \2
+rule	(\d)(\pL)	\1 \2
+rule	(\d+)	⟦\1⟧
+# A number with a leading zero (a code such as 007, or the minutes of 14:05)
+# is read one digit at a time.
+rule	⟦(0\d+)⟧	#1
+# More than 12 digits: one digit at a time.
+rule	⟦(\d{13,})⟧	#1
+# Split into miliardi / milioni / migliaia groups of three digits.
+rule	⟦(\d{1,3})(\d{9})⟧	⟦B\1⟧⟦\2⟧
+rule	⟦(\d{1,3})(\d{6})⟧	⟦M\1⟧⟦\2⟧
+rule	⟦(\d{1,3})(\d{3})⟧	⟦K\1⟧⟦\2⟧
+rule	⟦[BMK]0+⟧	
+rule	⟧⟦0+⟧	⟧
+rule	⟧⟦	⟧ ⟦
+rule	⟦K0*1⟧	mille
+rule	⟦M0*1⟧	un milione
+rule	⟦B0*1⟧	un miliardo
+rule	⟦K(\d+)⟧	⟦\1⟧ mila
+rule	⟦M(\d+)⟧	⟦\1⟧ milioni
+rule	⟦B(\d+)⟧	⟦\1⟧ miliardi
+# Hundreds: 108 -> cento otto, 500 -> cinquecento.
+rule	⟦0(\d\d)⟧	{n99:\1}
+rule	⟦(\d)00⟧	{h:\1}
+rule	⟦(\d)0(\d)⟧	{h:\1} {n99:\2}
+rule	⟦(\d)(\d\d)⟧	{h:\1} {n99:\2}
+rule	⟦(\d\d?)⟧	{n99:\1}
+
+# Ordinal words: primo..decimo, then drop the final vowel and add -esimo
+# (ventuno -> ventunesimo, cento -> centesimo, ventitré -> ventitreesimo).
+rule	⟪\s*(uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)⟫	{ordsmall:\1}
+rule	⟪\s*([^⟫]*)tré⟫	\1treesimo
+rule	⟪\s*([^⟫]*)sei⟫	\1seiesimo
+rule	⟪\s*([^⟫]*)[aeiou]⟫	\1esimo
+rule	⟪\s*([^⟫]*)⟫	\1
