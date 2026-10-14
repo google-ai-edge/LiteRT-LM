@@ -874,7 +874,12 @@ cc_library(
     srcs = ["model_metadata.cc"],
     hdrs = ["model_metadata.h"],
     deps = [
-        ":asr_engine",  # build_cleaner: keep
+        ":moonshine",  # build_cleaner: keep
+        ":parakeet_ctc",  # build_cleaner: keep
+        ":parakeet_tdt",  # build_cleaner: keep
+        ":qwen3_asr",  # build_cleaner: keep
+        ":tinygemma_asr",  # build_cleaner: keep
+        ":whisper",  # build_cleaner: keep
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
