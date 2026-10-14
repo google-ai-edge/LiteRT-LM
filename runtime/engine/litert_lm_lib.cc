@@ -776,6 +776,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
         settings.use_hw_cache_update_for_npu;
     npu_settings.use_hw_ple_for_npu = settings.use_hw_ple_for_npu;
     npu_settings.enable_npu_debug_logging = settings.enable_npu_debug_logging;
+    npu_settings.dynamic_kv_cache_initial_size =
+        settings.npu_dynamic_kv_cache_initial_size;
+    npu_settings.dynamic_kv_cache_growth_step =
+        settings.npu_dynamic_kv_cache_growth_step;
     executor_settings.SetBackendConfig(npu_settings);
   }
   const std::optional<Backend> sampler_backend = GetSamplerBackend(settings);
