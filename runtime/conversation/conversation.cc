@@ -25,6 +25,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -610,6 +611,11 @@ absl::Status Conversation::SendMessageAsync(
   // (PostUserPrefill) right before decoding starts.
   if (config_.filter_channel_content_from_kv_cache() && !is_appending_message &&
       open_channel_name.has_value()) {
+    // `SaveCheckpoint` and `SaveContext` read session state synchronously on
+    // the calling thread rather than scheduling a dependent task, so wait for
+    // any background KV-cache refill task from the previous turn to finish
+    // first.
+    ABSL_RETURN_IF_ERROR(session_->WaitUntilDone());
     if (config_.enable_rewinding()) {
       ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kChannelContentCheckpoint));
     } else {
@@ -710,17 +716,18 @@ absl::Status Conversation::SendMessageAsync(
   // `complete_message_callback` synchronously before invoking
   // `user_callback(Message())` (the null completion sentinel). When channel
   // content must be stripped from the KV cache, `complete_message_callback`
-  // sets `*defer_completion = true` so `wrapped_user_callback` suppresses that
-  // immediate `Message()` sentinel and instead emits `Message()` only after the
-  // rewind + `RunPrefillAsync` task finishes (`TaskState::kDone`). This ensures
-  // the KV cache cleanup completes before the caller is notified that the turn
-  // is done.
-  auto defer_completion = std::make_shared<bool>(false);
+  // rewinds to the checkpoint and schedules the refill `RunPrefillAsync` task
+  // asynchronously in the background without blocking
+  // `user_callback(Message())` (unless scheduling the refill fails
+  // synchronously, in which case
+  // `*suppress_completion = true` prevents emitting `Message()` after the
+  // error status).
+  auto suppress_completion = std::make_shared<bool>(false);
 
   absl::AnyInvocable<void(absl::StatusOr<Message>)> wrapped_user_callback =
       [shared_user_callback,
-       defer_completion](absl::StatusOr<Message> message) {
-        if (message.ok() && message->is_null() && *defer_completion) {
+       suppress_completion](absl::StatusOr<Message> message) {
+        if (message.ok() && message->is_null() && *suppress_completion) {
           return;
         }
         (*shared_user_callback)(std::move(message));
@@ -730,7 +737,7 @@ absl::Status Conversation::SendMessageAsync(
   auto task_group_id = optional_args.task_group_id;
 
   absl::AnyInvocable<void(Message)> complete_message_callback =
-      [this, shared_user_callback, defer_completion,
+      [this, shared_user_callback, suppress_completion,
        optional_args =
            std::move(optional_args)](const Message& complete_message) {
         absl::StatusOr<std::vector<InputData>> refill_session_inputs;
@@ -744,49 +751,36 @@ absl::Status Conversation::SendMessageAsync(
             return;
           }
 
-          // Eagerly rewind to the checkpoint and refill the model response
-          // without channel content before signaling completion to the caller.
-          *defer_completion = true;
+          // Rewind to the checkpoint and schedule refilling the model response
+          // without channel content asynchronously in the background.
           refill_session_inputs = RewindAndGetInputDataVector(optional_args);
         }
         if (!refill_session_inputs.ok()) {
+          *suppress_completion = true;
           (*shared_user_callback)(refill_session_inputs.status());
           return;
         }
         if (refill_session_inputs->empty()) {
-          *defer_completion = false;
           return;
         }
 
         auto refill_task_controller = session_->RunPrefillAsync(
-            *refill_session_inputs,
-            [shared_user_callback](absl::StatusOr<Responses> responses) {
-              if (!responses.ok()) {
-                auto status = IgnoreEmptyInputError(responses.status());
-                if (!status.ok()) {
-                  (*shared_user_callback)(status);
-                } else {
-                  (*shared_user_callback)(Message());
-                }
-                return;
-              }
-              if (responses->GetTaskState() == TaskState::kDone) {
-                (*shared_user_callback)(Message());
-              } else if (responses->GetTaskState() == TaskState::kCancelled ||
-                         responses->GetTaskState() ==
-                             TaskState::kDependentTaskCancelled) {
-                (*shared_user_callback)(absl::CancelledError("Task cancelled"));
-              } else if (IsTaskEndState(responses->GetTaskState())) {
-                (*shared_user_callback)(absl::InternalError(absl::StrCat(
-                    "Prefill failed with task state: ",
-                    TaskStateToString(responses->GetTaskState()))));
+            *refill_session_inputs, [](absl::StatusOr<Responses> responses) {
+              if (!responses.ok() && !IsEmptyInputError(responses.status())) {
+                ABSL_LOG(ERROR)
+                    << "Failed to refill KV cache after channel filtering: "
+                    << responses.status();
               }
             });
         if (refill_task_controller.ok()) {
           AddTaskController(optional_args.task_group_id,
                             std::move(*refill_task_controller));
         } else {
-          (*shared_user_callback)(refill_task_controller.status());
+          auto status = IgnoreEmptyInputError(refill_task_controller.status());
+          if (!status.ok()) {
+            *suppress_completion = true;
+            (*shared_user_callback)(status);
+          }
         }
       };
 
@@ -905,6 +899,10 @@ absl::Status Conversation::RunTextScoringAsync(
 }
 
 absl::StatusOr<int> Conversation::GetTokenCount() const {
+  // `GetCurrentStep` reads the session step synchronously without waiting on
+  // queued tasks, so wait for any in-flight tasks (such as background KV-cache
+  // refill after channel filtering) to finish before querying the token count.
+  ABSL_RETURN_IF_ERROR(session_->WaitUntilDone());
   return session_->GetCurrentStep();
 }
 

@@ -3005,8 +3005,9 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
           return nullptr;
         });
 
-    // Expect eager rewind to checkpoint and prefill of the stripped assistant
-    // message before the turn completes.
+    // Expect rewind to checkpoint and async prefill of the stripped assistant
+    // message to be scheduled in the background without blocking turn
+    // completion.
     EXPECT_CALL(*mock_session_ptr,
                 RewindToCheckpoint("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
@@ -3021,7 +3022,10 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
         .WillOnce([](const std::vector<InputData>& contents,
                      absl::AnyInvocable<void(absl::StatusOr<Responses>)>
                          user_callback) {
-          user_callback(Responses(TaskState::kDone));
+          // Do not invoke user_callback(Responses(TaskState::kDone)) here,
+          // verifying that SendMessageAsync still emits the completion
+          // Message() sentinel immediately without waiting for the background
+          // refill task to finish.
           return nullptr;
         });
   }
