@@ -206,6 +206,12 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
                                EmbeddingExecutorSettings::kEncoderName));
       LITERT_RETURN_IF_ERROR(
           SetCommonGpuOptions(executor_settings, gpu_options));
+      // The text encoder is compiled for the GPU only, so it is always fully
+      // delegated to a single delegate. This lets TFLite skip preparing the
+      // CPU kernels before delegation, which otherwise allocates a CPU arena
+      // for every STABLEHLO_COMPOSITE decomposition subgraph that is never
+      // released.
+      gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
       ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
           cache_files.weight_cache_file, cache_files.program_cache_file,
           cache_files.cache_key,

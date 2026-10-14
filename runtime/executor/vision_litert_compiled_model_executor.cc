@@ -93,7 +93,14 @@ constexpr absl::string_view kPositionsXy = "positions_xy";
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const VisionExecutorSettings& executor_settings,
                            litert::GpuOptions& gpu_options) {
-  return ::litert::lm::SetCommonGpuOptions(executor_settings, gpu_options);
+  ABSL_RETURN_IF_ERROR(
+      ::litert::lm::SetCommonGpuOptions(executor_settings, gpu_options));
+  // The vision encoder is compiled for the GPU only, so it is always fully
+  // delegated to a single delegate. This lets TFLite skip preparing the CPU
+  // kernels before delegation, which otherwise allocates a CPU arena for every
+  // STABLEHLO_COMPOSITE decomposition subgraph that is never released.
+  gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
+  return absl::OkStatus();
 }
 
 // Set the default CPU options for the model.
