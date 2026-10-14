@@ -1,0 +1,41 @@
+{
+	"name": "uv",
+	"version": "1.4.0",
+	"description": "Ultrafast UTF-8 data validation",
+	"keywords": [
+		"utf8",
+		"validation"
+	],
+	"homepage": "https://github.com/micnic/uv",
+	"bugs": {
+		"url": "https://github.com/micnic/uv/issues"
+	},
+	"license": "MIT",
+	"author": {
+		"name": "Nicu Micleușanu",
+		"email": "micnic90@gmail.com",
+		"url": "https://github.com/micnic"
+	},
+	"main": "index",
+	"repository": "github:micnic/uv",
+	"files": [
+		"index.d.ts",
+		"index.js"
+	],
+	"types": "index.d.ts",
+	"scripts": {
+		"test": "tap -b test.js",
+		"test-cov-html": "npm test -- --coverage-report=html"
+	},
+	"devDependencies": {
+		"benchmark": "2.x",
+		"eslint": "8.x",
+		"isutf8": "4.x",
+		"tap": "16.x",
+		"typescript": "4.x",
+		"utf-8-validate": "5.x"
+	},
+	"engines": {
+		"node": ">=6.0"
+	}
+}
