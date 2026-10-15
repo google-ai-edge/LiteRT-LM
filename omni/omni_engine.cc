@@ -14,7 +14,6 @@
 
 #include "omni/omni_engine.h"
 
-#include <filesystem>  // NOLINT
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,83 +22,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
-#include "omni/tts/kokoro/kokoro_model_config.h"
-#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
-#include "omni/tts/tts_engine.h"
-#include "omni/tts/tts_session.h"
-#include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni {
-namespace {
-
-lm::Backend ToBackend(OmniEngine::Settings::Backend backend) {
-  switch (backend) {
-    case OmniEngine::Settings::Backend::kGpu:
-      return lm::Backend::GPU;
-    case OmniEngine::Settings::Backend::kNpu:
-      return lm::Backend::NPU;
-    case OmniEngine::Settings::Backend::kCpu:
-    default:
-      return lm::Backend::CPU;
-  }
-}
-
-tts::TtsEngineSettings BuildTtsSettings(absl::string_view model_folder,
-                                        tts::ModelConfig model_config,
-                                        const OmniEngine::Settings& settings) {
-  tts::TtsEngineSettings tts_settings;
-  tts_settings.model_folder = std::string(model_folder);
-  tts_settings.cache_dir = settings.cache_dir;
-  tts_settings.backend = ToBackend(settings.backend);
-  if (settings.num_threads > 0) {
-    tts_settings.num_threads = settings.num_threads;
-  }
-  tts_settings.model_config = std::move(model_config);
-  return tts_settings;
-}
-
-// Instantiates an `OmniSessionFactory` for `model_name` and `settings`.
-absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
-    absl::string_view model_name, const OmniEngine::Settings& settings) {
-  // 1. Check if `model_name` is a known TTS model name.
-  const std::string lower_name = absl::AsciiStrToLower(model_name);
-  const std::string model_folder =
-      settings.cache_dir.empty() ? std::string(model_name)
-                                 : (std::filesystem::path(settings.cache_dir) /
-                                    std::string(model_name))
-                                       .string();
-  if (lower_name == "kokoro" || lower_name == "kokoro-82m") {
-    return tts::TtsSessionFactory::CreateFactory(
-        BuildTtsSettings(model_folder, tts::KokoroModelConfig{}, settings));
-  }
-  if (lower_name == "qwen3-tts" || lower_name == "qwen3") {
-    return tts::TtsSessionFactory::CreateFactory(
-        BuildTtsSettings(model_folder, tts::Qwen3TtsModelConfig{}, settings));
-  }
-
-  // 2. Check if `model_name` is a directory path containing recognizable TTS
-  // model files.
-  auto detected_tts = tts::DetectModelType(model_name);
-  if (detected_tts.ok()) {
-    tts::ModelConfig model_config;
-    if (*detected_tts == tts::ModelType::KOKORO) {
-      model_config = tts::KokoroModelConfig{};
-    } else if (*detected_tts == tts::ModelType::QWEN3_TTS) {
-      model_config = tts::Qwen3TtsModelConfig{};
-    }
-    return tts::TtsSessionFactory::CreateFactory(
-        BuildTtsSettings(model_name, std::move(model_config), settings));
-  }
-
-  // 3. Delegate to `OmniRegistry` for registered models.
-  return OmniRegistry::Get().CreateSessionFactory(model_name, settings);
-}
-
-}  // namespace
 
 OmniEngine::OmniEngine(
     std::string model_name,
@@ -108,13 +35,16 @@ OmniEngine::OmniEngine(
       session_factory_(std::move(session_factory)) {}
 
 absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
-    absl::string_view model_name, const Settings& settings) {
+    absl::string_view model_name, const Settings& settings,
+    const MessageLite* absl_nullable session_config,
+    const MessageLite* absl_nullable metadata) {
   if (model_name.empty()) {
     return absl::InvalidArgumentError("model_name must not be empty.");
   }
 
   ABSL_ASSIGN_OR_RETURN(std::unique_ptr<OmniSessionFactory> session_factory,
-                        CreateSessionFactory(model_name, settings));
+                        OmniRegistry::Get().CreateSessionFactory(
+                            model_name, settings, session_config, metadata));
   return Create(model_name, std::move(session_factory));
 }
 

@@ -14,40 +14,33 @@
 
 #include "omni/tts/tts_engine.h"
 
-#include <algorithm>
-#include <cstddef>
 #include <filesystem>  // NOLINT
 #include <memory>
 #include <string>
 #include <system_error>  // NOLINT: Required for std::error_code.
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "omni/base/io_types.h"
-#include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
-#include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
-#include "omni/tts/kokoro/kokoro_factory.h"
-#include "omni/tts/kokoro/kokoro_model_config.h"
-#include "omni/tts/qwen3_tts/qwen3_tts_factory.h"
-#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
+#include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
+#include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/tts_session.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/framework/threadpool.h"
 #include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/proto/tts_model_type.pb.h"
+#include "runtime/proto/tts_session_config.pb.h"
 
 namespace litert::omni::tts {
 namespace {
@@ -77,6 +70,10 @@ absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
           .ok()) {
     return ModelType::KOKORO;
   }
+  if (lm_resources.GetTFLiteModelBuffer(lm::proto::TtsMetadata::TF_LITE_TALKER)
+          .ok()) {
+    return ModelType::QWEN3_TTS;
+  }
   return ModelType::UNSPECIFIED;
 }
 
@@ -85,10 +82,14 @@ absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
 absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder) {
   if (model_folder.empty()) {
     return absl::InvalidArgumentError(
-        "TtsEngineSettings::model_folder must not be empty.");
+        "TTS model_path must not be empty when detecting model type.");
   }
 
-  const std::string litertlm_path = ResolveLitertLmPath(model_folder);
+  const bool is_litertlm_file =
+      absl::EndsWithIgnoreCase(model_folder, ".litertlm");
+  const std::string litertlm_path = is_litertlm_file
+                                        ? std::string(model_folder)
+                                        : ResolveLitertLmPath(model_folder);
   if (!litertlm_path.empty()) {
     LITERT_ASSIGN_OR_RETURN(auto lm_resources,
                             CreateLmModelResources(litertlm_path));
@@ -96,6 +97,11 @@ absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder) {
                             DetectModelTypeFromLitertLm(*lm_resources));
     if (from_litertlm != ModelType::UNSPECIFIED) {
       return from_litertlm;
+    }
+    if (is_litertlm_file) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unable to determine the TTS model type from .litertlm file '",
+          model_folder, "'."));
     }
   }
 
@@ -139,271 +145,65 @@ absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder) {
 }
 
 absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::Create(
-    const TtsEngineSettings& settings) {
-  TtsEngineSettings resolved_settings = settings;
-  std::shared_ptr<lm::ModelResources> lm_resources = nullptr;
-  const std::string litertlm_path =
-      ResolveLitertLmPath(resolved_settings.model_folder);
-  if (!litertlm_path.empty()) {
-    LITERT_ASSIGN_OR_RETURN(lm_resources,
-                            CreateLmModelResources(litertlm_path));
+    absl::string_view model_name, Settings settings) {
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<OmniSessionFactory> session_factory,
+                        OmniRegistry::Get().CreateSessionFactory(
+                            model_name, settings.engine_settings,
+                            &settings.session_config, &settings.metadata));
+  if (session_factory == nullptr) {
+    return absl::InternalError(
+        "OmniRegistry returned null OmniSessionFactory.");
   }
+  // NOTE: `static_cast<TtsSessionFactory*>` is acceptable here because all
+  // built-in TTS factories inherit from `TtsSessionFactory`, and `TtsEngine`
+  // is transitional and will be removed once all clients migrate to the
+  // unified `OmniEngine` API.
+  auto* tts_factory = static_cast<TtsSessionFactory*>(session_factory.get());
+  settings.engine_settings = tts_factory->engine_settings();
+  settings.metadata = tts_factory->metadata();
+  settings.session_config = tts_factory->session_config();
 
-  if (resolved_settings.GetModelType() == ModelType::UNSPECIFIED) {
-    ModelType model_type = ModelType::UNSPECIFIED;
-    if (lm_resources != nullptr) {
-      LITERT_ASSIGN_OR_RETURN(model_type,
-                              DetectModelTypeFromLitertLm(*lm_resources));
-    }
-    if (model_type == ModelType::UNSPECIFIED) {
-      LITERT_ASSIGN_OR_RETURN(model_type,
-                              DetectModelType(resolved_settings.model_folder));
-    }
-    switch (model_type) {
-      case ModelType::KOKORO:
-        resolved_settings.model_config = KokoroModelConfig{};
-        break;
-      case ModelType::QWEN3_TTS:
-        resolved_settings.model_config = Qwen3TtsModelConfig{};
-        break;
-      case ModelType::UNSPECIFIED:
-        return absl::InvalidArgumentError(
-            absl::StrCat("Unable to determine the TTS model type from ",
-                         resolved_settings.model_folder));
-    }
-  }
-
-  LITERT_ASSIGN_OR_RETURN(auto env, Environment::Create({}));
-  auto shared_env = std::make_shared<Environment>(std::move(env));
-  auto resources = std::make_shared<ModelResources>(shared_env);
-  if (lm_resources != nullptr) {
-    resources->SetLmModelResources(lm_resources);
-  }
-
-  std::vector<std::string> available_voices;
-  if (auto* config =
-          std::get_if<KokoroModelConfig>(&resolved_settings.model_config)) {
-    LITERT_RETURN_IF_ERROR(InitKokoroResources(
-        *config, resolved_settings.model_folder, resolved_settings.cache_dir,
-        resolved_settings.backend, resolved_settings.num_threads, *shared_env,
-        *resources));
-    available_voices = GetAvailableKokoroVoices(resolved_settings.model_folder,
-                                                lm_resources.get());
-  } else if (auto* config = std::get_if<Qwen3TtsModelConfig>(
-                 &resolved_settings.model_config)) {
-    LITERT_RETURN_IF_ERROR(InitQwen3TtsResources(
-        *config, resolved_settings.model_folder, resolved_settings.cache_dir,
-        resolved_settings.backend, resolved_settings.num_threads, *shared_env,
-        *resources));
-    if (!config->speaker_file.empty()) {
-      available_voices.push_back(config->speaker_file);
-    }
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported model_config in TtsEngineSettings: ",
-                     static_cast<int>(resolved_settings.GetModelType())));
-  }
-
-  auto thread_pool = std::make_unique<lm::ThreadPool>(
-      "tts_engine_pool", resolved_settings.num_threads);
-
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<OmniEngine> omni_engine,
+      OmniEngine::Create(model_name, std::move(session_factory)));
   return std::unique_ptr<TtsEngine>(
-      new TtsEngine(resolved_settings, std::move(available_voices), resources,
-                    std::move(thread_pool)));
+      new TtsEngine(std::move(settings), std::move(omni_engine), tts_factory));
+}
+
+TtsEngine::TtsEngine(Settings settings,
+                     std::unique_ptr<OmniEngine> absl_nonnull omni_engine,
+                     TtsSessionFactory* absl_nonnull tts_session_factory)
+    : settings_(std::move(settings)),
+      omni_engine_(std::move(omni_engine)),
+      tts_session_factory_(tts_session_factory) {}
+
+TextChunkConfig TtsEngine::ResolveTextChunkConfig(
+    const lm::proto::TtsSessionConfig& session_config) const {
+  return tts_session_factory_->ResolveTextChunkConfig(session_config);
+}
+
+absl::StatusOr<std::unique_ptr<MultiStagedSession>> TtsEngine::CreateSession(
+    const lm::proto::TtsSessionConfig& session_config,
+    std::unique_ptr<StreamTextSource> absl_nullable text_source) {
+  return tts_session_factory_->CreateWithTextSource(session_config,
+                                                    std::move(text_source));
 }
 
 std::vector<std::string> TtsEngine::GetAvailableLanguages() const {
-  if (settings_.GetModelType() == ModelType::KOKORO) {
-    std::vector<std::string> languages;
-    for (const auto& voice : available_voices_) {
-      std::string kokoro_lang = GetKokoroVoiceLanguage(voice);
-      std::string bcp47 = KokoroCodeToBcp47(kokoro_lang);
-      if (!bcp47.empty()) {
-        languages.push_back(std::move(bcp47));
-      }
-    }
-    std::sort(languages.begin(), languages.end());
-    languages.erase(std::unique(languages.begin(), languages.end()),
-                    languages.end());
-    return languages;
-  }
-  if (settings_.GetModelType() == ModelType::QWEN3_TTS) {
-    return {"en-US", "zh-CN"};
-  }
-  return {};
+  return tts_session_factory_->GetAvailableLanguages();
 }
 
 std::vector<std::string> TtsEngine::GetAvailableVoices(
     absl::string_view language) const {
-  if (language.empty()) {
-    return available_voices_;
-  }
-  std::string target_code = ToKokoroLanguageCode(language);
-  if (target_code.empty()) {
-    return {};
-  }
-  std::vector<std::string> filtered;
-  for (const auto& voice : available_voices_) {
-    std::string voice_lang = GetKokoroVoiceLanguage(voice);
-    if (voice_lang == target_code) {
-      filtered.push_back(voice);
-    }
-  }
-  return filtered;
+  return tts_session_factory_->GetAvailableVoices(language);
 }
 
 bool TtsEngine::HasVoice(absl::string_view voice) const {
-  if (voice.empty()) return false;
-  absl::string_view voice_name = voice;
-  size_t last_slash = voice_name.find_last_of("/\\");
-  if (last_slash != absl::string_view::npos) {
-    voice_name = voice_name.substr(last_slash + 1);
-  }
-  if (absl::EndsWith(voice_name, ".bin")) {
-    voice_name = voice_name.substr(0, voice_name.size() - 4);
-  }
-  for (const auto& v : available_voices_) {
-    if (v == voice || v == voice_name) {
-      return true;
-    }
-  }
-  return false;
+  return tts_session_factory_->HasVoice(voice);
 }
 
 std::string TtsEngine::GetDefaultVoice(absl::string_view language) const {
-  if (settings_.GetModelType() == ModelType::KOKORO) {
-    std::string lang_code = ToKokoroLanguageCode(language);
-    std::string default_voice = GetDefaultKokoroVoice(lang_code);
-    if (HasVoice(default_voice)) {
-      return default_voice;
-    }
-    std::vector<std::string> matching = GetAvailableVoices(language);
-    if (!matching.empty()) {
-      return matching.front();
-    }
-    // No voice matches the requested language. Fall back to an arbitrary
-    // available voice only when no language was requested; otherwise return the
-    // language-specific default so that the caller can report the language as
-    // unsupported instead of silently switching to another language.
-    if (language.empty() && !available_voices_.empty()) {
-      return available_voices_.front();
-    }
-    return default_voice;
-  }
-  if (settings_.GetModelType() == ModelType::QWEN3_TTS) {
-    if (!available_voices_.empty()) {
-      return available_voices_.front();
-    }
-    if (auto* config =
-            std::get_if<Qwen3TtsModelConfig>(&settings_.model_config)) {
-      return config->speaker_file;
-    }
-  }
-  return "";
-}
-
-TextChunkConfig TtsEngine::ResolveTextChunkConfig(
-    const TtsSessionConfig& session_config) const {
-  if (const auto* config =
-          std::get_if<KokoroModelConfig>(&settings_.model_config)) {
-    KokoroModelConfig session_model_config = *config;
-    const std::string kokoro_lang =
-        ToKokoroLanguageCode(session_config.language);
-    if (!kokoro_lang.empty()) {
-      session_model_config.language = kokoro_lang;
-    }
-    return ReviseTextChunkConfigForKokoro(session_model_config,
-                                          session_config.text_chunk_config);
-  }
-  return session_config.text_chunk_config;
-}
-
-absl::StatusOr<std::unique_ptr<MultiStagedSession>> TtsEngine::CreateSession(
-    const TtsSessionConfig& session_config,
-    std::unique_ptr<StreamTextSource> absl_nullable text_source) {
-  if (session_config.language.empty()) {
-    return absl::InvalidArgumentError(
-        "TtsSessionConfig::language must not be empty.");
-  }
-  const std::string kokoro_lang = ToKokoroLanguageCode(session_config.language);
-  if (kokoro_lang.empty()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported language: '", session_config.language, "'"));
-  }
-
-  if (text_source == nullptr) {
-    text_source = std::make_unique<StreamTextSource>(
-        ResolveTextChunkConfig(session_config));
-  }
-
-  std::vector<std::unique_ptr<internal::StageBase>> stages;
-  Stage<Output>* output_stage = nullptr;
-  if (auto* config = std::get_if<KokoroModelConfig>(&settings_.model_config)) {
-    KokoroModelConfig session_model_config = *config;
-    std::string resolved_voice = session_config.voice.value_or("");
-
-    if (!resolved_voice.empty()) {
-      if (!HasVoice(resolved_voice) &&
-          !std::filesystem::exists(resolved_voice)) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Voice '", resolved_voice,
-                         "' is not available in TtsEngine. Call "
-                         "GetAvailableVoices() to inspect available voices."));
-      }
-    } else {
-      resolved_voice = GetDefaultVoice(session_config.language);
-      if (!available_voices_.empty() && !HasVoice(resolved_voice)) {
-        return absl::InvalidArgumentError(absl::StrFormat(
-            "No voice is available for language '%s' (%s). Call "
-            "GetAvailableVoices() to inspect available voices.",
-            session_config.language, kokoro_lang));
-      }
-    }
-
-    std::string voice_lang = GetKokoroVoiceLanguage(resolved_voice);
-    if (!voice_lang.empty() && voice_lang != kokoro_lang) {
-      return absl::InvalidArgumentError(absl::StrFormat(
-          "Voice '%s' (language: %s) conflicts with requested language '%s' "
-          "(%s)",
-          resolved_voice, voice_lang, session_config.language, kokoro_lang));
-    }
-
-    session_model_config.voice_name = resolved_voice;
-    session_model_config.language = kokoro_lang;
-
-    LITERT_RETURN_IF_ERROR(CreateKokoroComponents(
-        session_model_config, settings_.model_folder, std::move(text_source),
-        model_resources_, stages, &output_stage));
-  } else if (auto* config =
-                 std::get_if<Qwen3TtsModelConfig>(&settings_.model_config)) {
-    Qwen3TtsModelConfig session_model_config = *config;
-    if (kokoro_lang == "cmn") {
-      // TODO(b538727793): Support non-English languages for Qwen3-TTS.
-      // Qwen3 TTS language code:
-      // https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base/blob/main/config.json#L115-L126
-      session_model_config.language = "zh-CN";
-    } else {
-      session_model_config.language = "en-US";
-    }
-    const std::string resolved_voice = session_config.voice.value_or("");
-    if (!resolved_voice.empty()) {
-      session_model_config.speaker_file = resolved_voice;
-    }
-    LITERT_RETURN_IF_ERROR(CreateQwen3TtsComponents(
-        session_model_config, settings_.model_folder, std::move(text_source),
-        model_resources_, stages, &output_stage));
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported model_config in TtsEngineSettings: ",
-                     static_cast<int>(settings_.GetModelType())));
-  }
-
-  if (output_stage == nullptr) {
-    return absl::InternalError("Output stage must not be null.");
-  }
-  // The first stage (`stages[0]`) must be `StreamTextSource`.
-  return MultiStagedSession::Create(std::move(stages), output_stage,
-                                    thread_pool_.get());
+  return tts_session_factory_->GetDefaultVoice(language);
 }
 
 }  // namespace litert::omni::tts

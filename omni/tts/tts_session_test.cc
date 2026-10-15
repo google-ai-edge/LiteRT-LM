@@ -30,6 +30,8 @@
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
@@ -244,6 +246,30 @@ TEST_F(TtsSessionTest, TextInputSourceProcessAsyncStreamsAndFlushesTail) {
   EXPECT_THAT(final_status, StatusIs(absl::StatusCode::kOutOfRange));
   // "One." (4 chars) and " Two" (4 chars).
   EXPECT_THAT(lengths, ElementsAre(4.0f, 4.0f));
+}
+
+TEST_F(TtsSessionTest, KokoroAndQwen3TtsRegisteredInOmniRegistry) {
+  OmniEngine::Settings settings;
+  settings.model_path = "/nonexistent/tts_model_dir";
+  for (const auto& model_name :
+       {"kokoro", "kokoro-82m", "qwen3-tts", "qwen3"}) {
+    EXPECT_THAT(OmniRegistry::Get().CreateSessionFactory(model_name, settings),
+                StatusIs(absl::StatusCode::kNotFound));
+  }
+}
+
+TEST_F(TtsSessionTest, LitertLmModelPathIsNotTreatedAsModelDir) {
+  OmniEngine::Settings settings;
+  settings.model_path = "/nonexistent/tts_model.litertlm";
+  for (const auto& model_name : {"kokoro", "qwen3-tts"}) {
+    auto status_or =
+        OmniRegistry::Get().CreateSessionFactory(model_name, settings);
+    EXPECT_THAT(status_or, StatusIs(absl::StatusCode::kNotFound));
+    EXPECT_THAT(status_or.status().message(),
+                testing::HasSubstr("/nonexistent/tts_model.litertlm"));
+    EXPECT_THAT(status_or.status().message(),
+                testing::Not(testing::HasSubstr(".tflite")));
+  }
 }
 
 }  // namespace

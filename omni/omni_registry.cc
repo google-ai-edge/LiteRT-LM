@@ -35,8 +35,8 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/strip.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/strip.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -45,12 +45,14 @@
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#include "omni/base/model_utils.h"
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/proto/asr_metadata.pb.h"
-#include "runtime/proto/asr_model_type.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
+#include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -183,7 +185,15 @@ std::string NormalizeForMatching(absl::string_view str) {
 
 absl::StatusOr<std::shared_ptr<lm::ModelResources>> OpenLitertLmResources(
     absl::string_view model_path) {
-  ABSL_ASSIGN_OR_RETURN(auto scoped_file, lm::ScopedFile::Open(model_path));
+  if (model_path.empty()) {
+    return absl::InvalidArgumentError("model_path must not be empty.");
+  }
+  const std::string resolved_path = ResolveLitertLmPath(model_path);
+  if (resolved_path.empty() || !FileExists(resolved_path)) {
+    return absl::NotFoundError(
+        absl::StrCat("No .litertlm file found at: ", model_path));
+  }
+  ABSL_ASSIGN_OR_RETURN(auto scoped_file, lm::ScopedFile::Open(resolved_path));
   ABSL_ASSIGN_OR_RETURN(auto loader,
                         lm::LitertLmLoader::Create(std::move(scoped_file)));
   ABSL_ASSIGN_OR_RETURN(auto resources,
@@ -223,6 +233,59 @@ OmniEngine::Settings ResolveEngineSettings(
                                   .string();
   }
   return resolved;
+}
+
+template <typename MetadataT>
+void Merge(MetadataT& dst, const MetadataT& src) {
+  dst.MergeFrom(src);
+}
+
+template <>
+void Merge<lm::proto::AsrMetadata>(lm::proto::AsrMetadata& dst,
+                                   const lm::proto::AsrMetadata& src) {
+  if (src.decode_start_token_ids_size() > 0) {
+    dst.clear_decode_start_token_ids();
+  }
+  dst.MergeFrom(src);
+}
+
+template <typename MetadataT>
+const MessageLite* absl_nullable MergeMetadataProto(
+    absl::StatusOr<const MetadataT*> embedded,
+    const MessageLite* absl_nullable caller_metadata,
+    std::unique_ptr<MessageLite>& merged_metadata) {
+  if (!embedded.ok() || *embedded == nullptr) {
+    return caller_metadata;
+  }
+  auto merged = std::make_unique<MetadataT>(**embedded);
+  if (caller_metadata != nullptr) {
+    Merge(*merged, *static_cast<const MetadataT*>(caller_metadata));
+  }
+  merged_metadata = std::move(merged);
+  return merged_metadata.get();
+}
+
+const MessageLite* absl_nullable MergeMetadata(
+    lm::ModelResources* absl_nullable lm_resources,
+    absl::string_view metadata_proto_type_id,
+    const MessageLite* absl_nullable caller_metadata,
+    std::unique_ptr<MessageLite>& merged_metadata) {
+  if (lm_resources == nullptr) {
+    return caller_metadata;
+  }
+  if (metadata_proto_type_id == "litert.lm.proto.AsrMetadata") {
+    return MergeMetadataProto(lm_resources->GetAsrMetadata(), caller_metadata,
+                              merged_metadata);
+  }
+  if (metadata_proto_type_id == "litert.lm.proto.TtsMetadata") {
+    return MergeMetadataProto(lm_resources->GetTtsMetadata(), caller_metadata,
+                              merged_metadata);
+  }
+  if (metadata_proto_type_id == "litert.lm.proto.Text2ImageMetadata") {
+    return MergeMetadataProto(lm_resources->GetText2ImageMetadata(),
+                              caller_metadata, merged_metadata);
+  }
+  return caller_metadata;
 }
 
 // Note: every registered session factory compiles at most one `CompiledModel`
@@ -437,112 +500,37 @@ OmniRegistry::CreateSessionFactory(
     absl::string_view model_name, const OmniEngine::Settings& settings,
     const MessageLite* absl_nullable session_config,
     const MessageLite* absl_nullable metadata) const {
-  std::shared_ptr<lm::ModelResources> lm_resources;
-  std::string candidate_path = settings.model_path.empty()
-                                   ? std::string(model_name)
-                                   : settings.model_path;
-  if (absl::EndsWith(candidate_path, ".litertlm") &&
-      FileExists(candidate_path)) {
-    ABSL_ASSIGN_OR_RETURN(lm_resources, OpenLitertLmResources(candidate_path));
-  }
-
   std::string resolved_model_name(model_name);
   std::string default_model_remote_url;
   std::shared_ptr<SessionFactoryCreator> creator;
   FactoryKey factory_key;
+  bool was_registered_name = false;
 
   {
     absl::MutexLock lock(mutex_);
     auto model_it = models_.find(resolved_model_name);
+    if (model_it == models_.end()) {
+      const std::string lower_name = absl::AsciiStrToLower(resolved_model_name);
+      model_it = models_.find(lower_name);
+      if (model_it != models_.end()) {
+        resolved_model_name = lower_name;
+      }
+    }
+    was_registered_name = (model_it != models_.end());
+
     if (model_it == models_.end() &&
-        (lm_resources != nullptr || metadata != nullptr ||
-         !settings.model_path.empty())) {
-      // 1. Try matching by embedded/caller AsrMetadata model_type.
-      lm::proto::AsrMetadata effective_asr_meta;
-      bool has_asr_meta = false;
-      if (lm_resources != nullptr) {
-        auto asr_meta = lm_resources->GetAsrMetadata();
-        if (asr_meta.ok() && *asr_meta != nullptr) {
-          effective_asr_meta.CheckTypeAndMergeFrom(**asr_meta);
-          has_asr_meta = true;
-        }
-      }
-      if (metadata != nullptr &&
-          metadata->GetTypeName() == "litert.lm.proto.AsrMetadata") {
-        lm::proto::AsrMetadata caller_asr;
-        caller_asr.CheckTypeAndMergeFrom(*metadata);
-        if (caller_asr.decode_start_token_ids_size() > 0) {
-          effective_asr_meta.clear_decode_start_token_ids();
-        }
-        effective_asr_meta.MergeFrom(caller_asr);
-        has_asr_meta = true;
-      }
-      if (has_asr_meta &&
-          effective_asr_meta.asr_model_type().model_type_case() !=
-              lm::proto::AsrModelType::MODEL_TYPE_NOT_SET) {
-        std::string candidate_name;
-        switch (effective_asr_meta.asr_model_type().model_type_case()) {
-          case lm::proto::AsrModelType::kParakeet: {
-            const bool is_tdt =
-                (lm_resources != nullptr &&
-                 lm_resources
-                     ->GetTFLiteModelBuffer(
-                         lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER)
-                     .ok()) ||
-                effective_asr_meta.decode_start_token_ids_size() > 0;
-            candidate_name =
-                is_tdt ? "parakeet-tdt-0.6b-v3" : "parakeet-ctc-0.6b";
-            break;
-          }
-          case lm::proto::AsrModelType::kMoonshine:
-            candidate_name = "moonshine-tiny";
-            break;
-          case lm::proto::AsrModelType::kWhisper:
-            candidate_name = "whisper-tiny";
-            break;
-          case lm::proto::AsrModelType::kQwen3Asr:
-            candidate_name = "qwen3-asr-0.6b";
-            break;
-          default:
-            break;
-        }
-        if (!candidate_name.empty()) {
-          model_it = models_.find(candidate_name);
-          if (model_it != models_.end()) {
-            resolved_model_name = candidate_name;
-          }
-        }
-      }
-      // 2. Fallback: match by normalized substring of model_name or model_path.
-      if (model_it == models_.end()) {
-        const std::string norm_target = NormalizeForMatching(
-            resolved_model_name.empty() ? settings.model_path
-                                        : resolved_model_name);
-        if (!norm_target.empty()) {
-          size_t best_match_len = 0;
-          for (auto it = models_.begin(); it != models_.end(); ++it) {
-            const std::string norm_candidate = NormalizeForMatching(it->first);
-            if (norm_candidate.size() > best_match_len &&
-                absl::StrContains(norm_target, norm_candidate)) {
-              model_it = it;
-              resolved_model_name = it->first;
-              best_match_len = norm_candidate.size();
-            }
-          }
-        }
-      }
-      // 3. Fallback for legacy LLM-based ASR .litertlm packages.
-      if (model_it == models_.end() && lm_resources != nullptr) {
-        auto llm_meta = lm_resources->GetLlmMetadata();
-        if (llm_meta.ok() && *llm_meta != nullptr) {
-          const std::string fallback_name =
-              effective_asr_meta.log_mel_spectrogram_config().normalize_mel()
-                  ? "tinygemma-asr"
-                  : "qwen3-asr-0.6b";
-          model_it = models_.find(fallback_name);
-          if (model_it != models_.end()) {
-            resolved_model_name = fallback_name;
-          }
+        (!settings.model_path.empty() || absl::StrContains(model_name, '/'))) {
+      const std::string norm_target = NormalizeForMatching(
+          resolved_model_name.empty() ? settings.model_path
+                                      : resolved_model_name);
+      size_t best_match_len = 0;
+      for (auto it = models_.begin(); it != models_.end(); ++it) {
+        const std::string norm_candidate = NormalizeForMatching(it->first);
+        if (norm_candidate.size() > best_match_len &&
+            absl::StrContains(norm_target, norm_candidate)) {
+          model_it = it;
+          resolved_model_name = it->first;
+          best_match_len = norm_candidate.size();
         }
       }
     }
@@ -584,6 +572,10 @@ OmniRegistry::CreateSessionFactory(
   }
 
   OmniEngine::Settings settings_with_defaults = settings;
+  if (!was_registered_name && settings_with_defaults.model_path.empty() &&
+      !model_name.empty()) {
+    settings_with_defaults.model_path = std::string(model_name);
+  }
   if (settings_with_defaults.model_remote_url.empty()) {
     settings_with_defaults.model_remote_url =
         std::move(default_model_remote_url);
@@ -591,33 +583,18 @@ OmniRegistry::CreateSessionFactory(
   OmniEngine::Settings resolved_settings =
       ResolveEngineSettings(resolved_model_name, settings_with_defaults);
 
-  if (lm_resources == nullptr &&
-      absl::EndsWith(resolved_settings.model_path, ".litertlm") &&
-      FileExists(resolved_settings.model_path)) {
-    ABSL_ASSIGN_OR_RETURN(lm_resources,
-                          OpenLitertLmResources(resolved_settings.model_path));
+  std::shared_ptr<lm::ModelResources> lm_resources;
+  auto lm_resources_or = OpenLitertLmResources(resolved_settings.model_path);
+  if (lm_resources_or.ok()) {
+    lm_resources = *std::move(lm_resources_or);
+  } else if (!absl::IsNotFound(lm_resources_or.status())) {
+    return lm_resources_or.status();
   }
 
   std::unique_ptr<MessageLite> merged_metadata;
-  const MessageLite* effective_metadata = metadata;
-  if (lm_resources != nullptr &&
-      factory_key.metadata_proto_type_id == "litert.lm.proto.AsrMetadata") {
-    auto asr_metadata = lm_resources->GetAsrMetadata();
-    if (asr_metadata.ok() && *asr_metadata != nullptr) {
-      auto merged_asr =
-          std::make_unique<lm::proto::AsrMetadata>(**asr_metadata);
-      if (metadata != nullptr) {
-        lm::proto::AsrMetadata caller_asr;
-        caller_asr.CheckTypeAndMergeFrom(*metadata);
-        if (caller_asr.decode_start_token_ids_size() > 0) {
-          merged_asr->clear_decode_start_token_ids();
-        }
-        merged_asr->MergeFrom(caller_asr);
-      }
-      merged_metadata = std::move(merged_asr);
-      effective_metadata = merged_metadata.get();
-    }
-  }
+  const MessageLite* effective_metadata =
+      MergeMetadata(lm_resources.get(), factory_key.metadata_proto_type_id,
+                    metadata, merged_metadata);
 
   LITERT_ASSIGN_OR_RETURN(::litert::Environment env,
                           ::litert::Environment::Create({}));

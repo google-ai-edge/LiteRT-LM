@@ -14,9 +14,12 @@
 
 #include "omni/tts/tts_session.h"
 
+#include <cstddef>
 #include <memory>
+#include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
@@ -24,13 +27,31 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/base/model_resources.h"
+#include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
-#include "omni/tts/tts_engine.h"
+#include "runtime/framework/threadpool.h"
+#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/tts_session_config.pb.h"
 
 namespace litert::omni::tts {
 namespace {
+
+lm::proto::TtsSessionConfig ResolveTtsSessionConfig(
+    const MessageLite* absl_nullable session_config) {
+  lm::proto::TtsSessionConfig resolved;
+  if (session_config != nullptr) {
+    resolved.CheckTypeAndMergeFrom(*session_config);
+  }
+  if (!resolved.has_language()) {
+    resolved.set_language("en-US");
+  }
+  return resolved;
+}
 
 // StreamTextSource subclass that pulls `TextInput` payloads from an
 // `OmniSession::InputSource` and yields text chunks to an `OmniSession`.
@@ -114,6 +135,21 @@ class TextInputSource : public StreamTextSource {
 
 }  // namespace
 
+TextChunkConfig ToTextChunkConfig(const lm::proto::TtsTextChunkConfig& proto) {
+  TextChunkConfig config;
+  if (!proto.delimiters().empty()) {
+    config.delimiters.assign(proto.delimiters().begin(),
+                             proto.delimiters().end());
+  }
+  if (proto.has_include_delimiter()) {
+    config.include_delimiter = proto.include_delimiter();
+  }
+  if (proto.has_max_buffer_size() && proto.max_buffer_size() > 0) {
+    config.max_buffer_size = static_cast<size_t>(proto.max_buffer_size());
+  }
+  return config;
+}
+
 std::unique_ptr<StreamTextSource> TtsSessionFactory::CreateTextInputSource(
     std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
     TextChunkConfig config) {
@@ -121,27 +157,89 @@ std::unique_ptr<StreamTextSource> TtsSessionFactory::CreateTextInputSource(
                                            std::move(config));
 }
 
-absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
-TtsSessionFactory::CreateFactory(TtsEngineSettings settings) {
-  ABSL_ASSIGN_OR_RETURN(auto tts_engine,
-                        TtsEngine::Create(std::move(settings)));
-  return std::unique_ptr<OmniSessionFactory>(
-      new TtsSessionFactory(std::move(tts_engine)));
-}
-
 TtsSessionFactory::TtsSessionFactory(
-    std::unique_ptr<TtsEngine> absl_nonnull tts_engine)
-    : tts_engine_(std::move(tts_engine)) {}
+    const OmniEngine::Settings& settings,
+    const MessageLite* absl_nullable session_config,
+    const lm::proto::TtsMetadata& metadata,
+    std::vector<std::string> available_voices,
+    std::shared_ptr<ModelResources> absl_nullable model_resources)
+    : engine_settings_(settings),
+      session_config_(ResolveTtsSessionConfig(session_config)),
+      metadata_(metadata),
+      available_voices_(std::move(available_voices)),
+      model_resources_(std::move(model_resources)),
+      thread_pool_(std::make_unique<lm::ThreadPool>(
+          "tts_engine_pool",
+          settings.num_threads > 0 ? settings.num_threads : 4)) {}
 
 TtsSessionFactory::~TtsSessionFactory() = default;
 
 absl::StatusOr<std::unique_ptr<OmniSession>> TtsSessionFactory::Create(
     std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) {
-  TtsSessionConfig session_config;
   auto text_source = CreateTextInputSource(
-      std::move(input_source),
-      tts_engine_->ResolveTextChunkConfig(session_config));
-  return tts_engine_->CreateSession(session_config, std::move(text_source));
+      std::move(input_source), ResolveTextChunkConfig(session_config_));
+  return CreateWithTextSource(session_config_, std::move(text_source));
+}
+
+std::vector<std::string> TtsSessionFactory::GetAvailableLanguages() const {
+  return {metadata_.supported_languages().begin(),
+          metadata_.supported_languages().end()};
+}
+
+std::vector<std::string> TtsSessionFactory::GetAvailableVoices() const {
+  return GetAvailableVoices("");
+}
+
+std::vector<std::string> TtsSessionFactory::GetAvailableVoices(
+    absl::string_view language) const {
+  if (language.empty()) {
+    return available_voices_;
+  }
+  return {};
+}
+
+bool TtsSessionFactory::HasVoice(absl::string_view voice) const {
+  if (voice.empty()) return false;
+  absl::string_view voice_name = voice;
+  size_t last_slash = voice_name.find_last_of("/\\");
+  if (last_slash != absl::string_view::npos) {
+    voice_name = voice_name.substr(last_slash + 1);
+  }
+  if (absl::EndsWith(voice_name, ".bin")) {
+    voice_name = voice_name.substr(0, voice_name.size() - 4);
+  }
+  for (const auto& v : available_voices_) {
+    if (v == voice || v == voice_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string TtsSessionFactory::GetDefaultVoice(
+    absl::string_view /*language*/) const {
+  if (!available_voices_.empty()) {
+    return available_voices_.front();
+  }
+  return "";
+}
+
+TextChunkConfig TtsSessionFactory::ResolveTextChunkConfig(
+    const lm::proto::TtsSessionConfig& session_config) const {
+  lm::proto::TtsSessionConfig effective = MergeSessionConfig(session_config);
+  return ToTextChunkConfig(effective.text_chunk_config());
+}
+
+lm::proto::TtsSessionConfig TtsSessionFactory::MergeSessionConfig(
+    const lm::proto::TtsSessionConfig& session_config) const {
+  lm::proto::TtsSessionConfig effective = session_config_;
+  effective.MergeFrom(session_config);
+  if (session_config.has_text_chunk_config() &&
+      !session_config.text_chunk_config().delimiters().empty()) {
+    *effective.mutable_text_chunk_config()->mutable_delimiters() =
+        session_config.text_chunk_config().delimiters();
+  }
+  return effective;
 }
 
 }  // namespace litert::omni::tts

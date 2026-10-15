@@ -14,7 +14,10 @@
 
 #include "omni/tts/qwen3_tts/qwen3_tts_factory.h"
 
+#include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,11 +25,15 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "omni/base/io_types.h"
+#include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
 #include "omni/base/stage.h"
@@ -36,9 +43,125 @@
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_vocoder_stage.h"
 #include "omni/tts/stream_text_source.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
+#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/util/scoped_file.h"
 
 namespace litert::omni::tts {
+namespace {
+
+class TalkerLmModelResources : public lm::ModelResources {
+ public:
+  explicit TalkerLmModelResources(std::shared_ptr<lm::ModelResources> inner)
+      : inner_(std::move(inner)) {}
+
+  absl::StatusOr<const Model*> GetTFLiteModel(
+      lm::ModelType model_type) override {
+    if (model_type == lm::ModelType::kTfLitePrefillDecode) {
+      return inner_->GetTFLiteModel(lm::proto::TtsMetadata::TF_LITE_TALKER);
+    }
+    return inner_->GetTFLiteModel(model_type);
+  }
+
+  absl::StatusOr<const Model*> GetTFLiteModel(
+      absl::string_view model_type_str) override {
+    return inner_->GetTFLiteModel(model_type_str);
+  }
+
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      lm::ModelType model_type) override {
+    if (model_type == lm::ModelType::kTfLitePrefillDecode) {
+      return inner_->GetTFLiteModelBuffer(
+          lm::proto::TtsMetadata::TF_LITE_TALKER);
+    }
+    return inner_->GetTFLiteModelBuffer(model_type);
+  }
+
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      absl::string_view model_type_str) override {
+    return inner_->GetTFLiteModelBuffer(model_type_str);
+  }
+
+  absl::StatusOr<std::unique_ptr<lm::Tokenizer>> GetTokenizer() override {
+    return inner_->GetTokenizer();
+  }
+
+  absl::StatusOr<const lm::proto::LlmMetadata*> GetLlmMetadata() override {
+    return inner_->GetLlmMetadata();
+  }
+
+  absl::StatusOr<const lm::proto::ExecutorMetadata*> GetExecutorMetadata()
+      override {
+    return inner_->GetExecutorMetadata();
+  }
+
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      lm::ModelType model_type) override {
+    return inner_->GetTFLiteModelBackendConstraint(model_type);
+  }
+
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      lm::ModelType model_type) override {
+    return inner_->GetTFLiteModelPreferActivationType(model_type);
+  }
+
+  absl::StatusOr<std::reference_wrapper<lm::ScopedFile>> GetScopedFile()
+      override {
+    return inner_->GetScopedFile();
+  }
+
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      lm::ModelType model_type) override {
+    return inner_->GetWeightsSectionOffset(model_type);
+  }
+
+  absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
+      lm::ModelType model_type) override {
+    return inner_->GetTFLiteModelSectionFileRegion(model_type);
+  }
+
+ private:
+  std::shared_ptr<lm::ModelResources> inner_;
+};
+
+absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateTalkerLmRunner(
+    Environment& env, const ModelOptions& options,
+    std::shared_ptr<lm::ModelResources> lm_resources) {
+  std::optional<lm::ModelAssets> model_assets;
+  auto scoped_file_or = lm_resources->GetScopedFile();
+  if (scoped_file_or.ok()) {
+    LITERT_ASSIGN_OR_RETURN(auto dup_file, scoped_file_or->get().Duplicate());
+    auto shared_scoped_file =
+        std::make_shared<lm::ScopedFile>(std::move(dup_file));
+    ABSL_ASSIGN_OR_RETURN(model_assets,
+                          lm::ModelAssets::Create(shared_scoped_file));
+  } else {
+    ABSL_ASSIGN_OR_RETURN(model_assets, lm::ModelAssets::Create(""));
+  }
+  ABSL_ASSIGN_OR_RETURN(auto executor_settings,
+                        lm::LlmExecutorSettings::CreateDefault(
+                            std::move(*model_assets), options.backend));
+  if (options.backend == lm::Backend::CPU && options.num_threads > 0) {
+    lm::CpuConfig cpu_config;
+    cpu_config.number_of_threads = options.num_threads;
+    executor_settings.SetBackendConfig(cpu_config);
+  }
+  if (!options.cache_dir.empty()) {
+    executor_settings.SetCacheDir(options.cache_dir);
+  }
+  auto talker_resources =
+      std::make_unique<TalkerLmModelResources>(std::move(lm_resources));
+  LITERT_ASSIGN_OR_RETURN(auto executor,
+                          lm::CreateLlmLiteRtCompiledModelExecutor(
+                              executor_settings, env, *talker_resources));
+  return std::make_unique<LiteRtLmRunnerImpl>(std::move(executor),
+                                              std::move(talker_resources));
+}
+
+}  // namespace
 
 absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
                                    absl::string_view model_folder,
@@ -51,6 +174,109 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
   model_options.cache_dir = cache_dir;
   model_options.backend = backend;
   model_options.num_threads = num_threads;
+
+  if (!resources.HasLmModelResources() && !model_folder.empty()) {
+    const std::string litertlm_path =
+        absl::EndsWithIgnoreCase(model_folder, ".litertlm")
+            ? std::string(model_folder)
+            : ResolveLitertLmPath(model_folder);
+    if (!litertlm_path.empty()) {
+      LITERT_ASSIGN_OR_RETURN(auto lm_resources,
+                              CreateLmModelResources(litertlm_path));
+      resources.SetLmModelResources(std::move(lm_resources));
+    }
+  }
+
+  if (resources.HasLmModelResources()) {
+    auto lm_resources = resources.GetLmModelResources();
+
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view text_emb_buf,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::TtsMetadata::TF_LITE_TEXT_EMBEDDING));
+    LITERT_ASSIGN_OR_RETURN(
+        auto text_emb, CreateCompiledModelFromBuffer(
+                           env, model_options, text_emb_buf, "text_embedding"));
+    ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+        "text_embedding",
+        std::make_shared<CompiledModel>(std::move(text_emb))));
+
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view text_proj_buf,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::TtsMetadata::TF_LITE_TEXT_PROJECTION));
+    LITERT_ASSIGN_OR_RETURN(
+        auto text_proj,
+        CreateCompiledModelFromBuffer(env, model_options, text_proj_buf,
+                                      "text_projection"));
+    ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+        "text_projection",
+        std::make_shared<CompiledModel>(std::move(text_proj))));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto talker_runner,
+        CreateTalkerLmRunner(env, model_options, lm_resources));
+    ABSL_RETURN_IF_ERROR(
+        resources.AddLmRunner("talker", std::move(talker_runner)));
+
+    LITERT_ASSIGN_OR_RETURN(absl::string_view mtp_buf,
+                            lm_resources->GetTFLiteModelBuffer(
+                                lm::proto::TtsMetadata::TF_LITE_MTP_DRAFTER));
+    ModelOptions mtp_options = model_options;
+    if (mtp_options.backend == lm::Backend::GPU) {
+      LITERT_ASSIGN_OR_RETURN(const Model* mtp_model,
+                              lm_resources->GetTFLiteModel(
+                                  lm::proto::TtsMetadata::TF_LITE_MTP_DRAFTER));
+      LITERT_ASSIGN_OR_RETURN(const auto& in_names,
+                              mtp_model->GetSignatureInputNames(""));
+      for (size_t i = 3; i < in_names.size(); ++i) {
+        mtp_options.external_tensor_patterns.push_back(
+            std::string(in_names[i]));
+      }
+      LITERT_ASSIGN_OR_RETURN(const auto& out_names,
+                              mtp_model->GetSignatureOutputNames(""));
+      for (size_t i = 1; i < out_names.size(); ++i) {
+        mtp_options.external_tensor_patterns.push_back(
+            std::string(out_names[i]));
+      }
+    }
+    LITERT_ASSIGN_OR_RETURN(auto mtp, CreateCompiledModelFromBuffer(
+                                          env, mtp_options, mtp_buf, "mtp"));
+    ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+        "mtp", std::make_shared<CompiledModel>(std::move(mtp))));
+
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view codec_emb_buf,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::TtsMetadata::TF_LITE_CODEC_EMBEDDING));
+    LITERT_ASSIGN_OR_RETURN(
+        auto codec_emb,
+        CreateCompiledModelFromBuffer(env, model_options, codec_emb_buf,
+                                      "codec_embedding"));
+    ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+        "codec_embedding",
+        std::make_shared<CompiledModel>(std::move(codec_emb))));
+
+    LITERT_ASSIGN_OR_RETURN(absl::string_view mtp_emb_buf,
+                            lm_resources->GetTFLiteModelBuffer(
+                                lm::proto::TtsMetadata::TF_LITE_MTP_EMBEDDING));
+    LITERT_ASSIGN_OR_RETURN(
+        auto mtp_emb, CreateCompiledModelFromBuffer(
+                          env, model_options, mtp_emb_buf, "mtp_embedding"));
+    ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+        "mtp_embedding", std::make_shared<CompiledModel>(std::move(mtp_emb))));
+
+    LITERT_ASSIGN_OR_RETURN(absl::string_view codec_buf,
+                            lm_resources->GetTFLiteModelBuffer(
+                                lm::proto::TtsMetadata::TF_LITE_CODEC_DECODER));
+    LITERT_ASSIGN_OR_RETURN(
+        auto codec,
+        CreateCompiledModelFromBuffer(env, model_options, codec_buf, "codec"));
+    ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+        "codec", std::make_shared<CompiledModel>(std::move(codec))));
+
+    return absl::OkStatus();
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto text_emb,

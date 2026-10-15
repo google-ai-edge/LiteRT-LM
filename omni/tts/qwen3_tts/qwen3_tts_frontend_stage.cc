@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <filesystem>  // NOLINT
 #include <memory>
 #include <string>
 #include <utility>
@@ -28,6 +29,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -39,9 +41,48 @@
 #include "omni/tts/qwen3_tts/common.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
+#include "runtime/components/model_resources.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::tts {
+namespace {
+
+absl::StatusOr<std::string> LoadSpeakerEmbeddingBytes(
+    const lm::ModelResources* absl_nullable lm_resources,
+    absl::string_view model_dir, absl::string_view speaker_file) {
+  if (lm_resources != nullptr) {
+    auto* mutable_resources = const_cast<lm::ModelResources*>(lm_resources);
+    std::vector<std::string> candidates;
+    if (!speaker_file.empty()) {
+      candidates.push_back(std::string(speaker_file));
+      std::filesystem::path spk_path{std::string(speaker_file)};
+      if (spk_path.has_stem()) {
+        candidates.push_back(spk_path.stem().string());
+      }
+      if (!spk_path.has_extension()) {
+        candidates.push_back(absl::StrCat(speaker_file, ".bin"));
+      }
+    }
+    candidates.push_back("demo_speaker.bin");
+    candidates.push_back("demo_speaker");
+    candidates.push_back("speaker");
+    for (const auto& name : candidates) {
+      auto buf_or = mutable_resources->GetGenericBinaryDataBuffer(name);
+      if (buf_or.ok()) {
+        return std::string(*buf_or);
+      }
+    }
+    if (absl::EndsWithIgnoreCase(model_dir, ".litertlm")) {
+      return absl::NotFoundError(absl::StrCat(
+          "Speaker embedding '", speaker_file,
+          "' not found in .litertlm container GenericBinaryData sections."));
+    }
+  }
+  return LoadFile(model_dir, speaker_file);
+}
+
+}  // namespace
 
 absl::StatusOr<std::unique_ptr<Qwen3TtsFrontendStage>>
 Qwen3TtsFrontendStage::Create(
@@ -52,12 +93,21 @@ Qwen3TtsFrontendStage::Create(
   auto stage = absl::WrapUnique(
       new Qwen3TtsFrontendStage(text_source, config, std::move(resources)));
 
-  ABSL_ASSIGN_OR_RETURN(
-      std::string tok_json,
-      LoadFile(model_dir, stage->config_.tokenizer_file));
-  ABSL_ASSIGN_OR_RETURN(
-      stage->tokenizer_,
-      support::HuggingFaceTokenizer::CreateFromJson(std::move(tok_json)));
+  if (stage->resources_->HasLmModelResources()) {
+    auto tok_or = stage->resources_->GetLmModelResources()->GetTokenizer();
+    if (tok_or.ok()) {
+      stage->tokenizer_ = *std::move(tok_or);
+    } else if (absl::EndsWithIgnoreCase(model_dir, ".litertlm")) {
+      return tok_or.status();
+    }
+  }
+  if (stage->tokenizer_ == nullptr) {
+    ABSL_ASSIGN_OR_RETURN(std::string tok_json,
+                          LoadFile(model_dir, stage->config_.tokenizer_file));
+    ABSL_ASSIGN_OR_RETURN(
+        stage->tokenizer_,
+        support::HuggingFaceTokenizer::CreateFromJson(std::move(tok_json)));
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       stage->text_embedding_model_,
@@ -97,10 +147,13 @@ Qwen3TtsFrontendStage::Create(
   stage->tts_pad_.assign(sys_embeds.begin() + 2 * qwen3_tts::kHiddenDim,
                          sys_embeds.end());
 
-  // Load speaker embedding from binary file.
-  ABSL_ASSIGN_OR_RETURN(
-      std::string spk_buf,
-      LoadFile(model_dir, stage->config_.speaker_file));
+  // Load speaker embedding from .litertlm container or binary file.
+  ABSL_ASSIGN_OR_RETURN(std::string spk_buf,
+                        LoadSpeakerEmbeddingBytes(
+                            stage->resources_->HasLmModelResources()
+                                ? stage->resources_->GetLmModelResources().get()
+                                : nullptr,
+                            model_dir, stage->config_.speaker_file));
   if (spk_buf.size() != qwen3_tts::kHiddenDim * sizeof(float)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Speaker embedding size is not correct. Expected ",
@@ -119,12 +172,12 @@ absl::StatusOr<std::vector<float>> Qwen3TtsFrontendStage::ProjectText(
 
   for (int r = 0; r < num_rows; ++r) {
     LITERT_RETURN_IF_ERROR(text_proj_input_buffers_[0].Write<float>(
-        absl::MakeConstSpan(rows.data() + r * 2048, 2048)));
+        absl::MakeConstSpan(rows).subspan(r * 2048, 2048)));
     LITERT_RETURN_IF_ERROR(text_projection_model_->Run(
         text_proj_input_buffers_, text_proj_output_buffers_));
     LITERT_RETURN_IF_ERROR(
-        text_proj_output_buffers_[0].Read<float>(absl::MakeSpan(
-            out.data() + r * qwen3_tts::kHiddenDim, qwen3_tts::kHiddenDim)));
+        text_proj_output_buffers_[0].Read<float>(absl::MakeSpan(out).subspan(
+            r * qwen3_tts::kHiddenDim, qwen3_tts::kHiddenDim)));
   }
 
   return out;
@@ -140,7 +193,7 @@ absl::StatusOr<std::vector<float>> Qwen3TtsFrontendStage::EmbedCodecToken(
     LITERT_RETURN_IF_ERROR(codec_embedding_model_->Run(
         codec_emb_input_buffers_, codec_emb_output_buffers_));
     LITERT_RETURN_IF_ERROR(codec_emb_output_buffers_[0].Read<float>(
-        absl::MakeSpan(out.data(), qwen3_tts::kHiddenDim)));
+        absl::MakeSpan(out).first(qwen3_tts::kHiddenDim)));
   }
   return out;
 }
@@ -157,7 +210,7 @@ absl::StatusOr<std::vector<float>> Qwen3TtsFrontendStage::EmbedText(
     LITERT_RETURN_IF_ERROR(text_embedding_model_->Run(
         text_emb_input_buffers_, text_emb_output_buffers_));
     LITERT_RETURN_IF_ERROR(text_emb_output_buffers_[0].Read<float>(
-        absl::MakeSpan(rows.data() + idx * 2048, 2048)));
+        absl::MakeSpan(rows).subspan(idx * 2048, 2048)));
   }
   return ProjectText(rows, num_ids);
 }

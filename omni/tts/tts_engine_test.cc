@@ -25,41 +25,38 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "omni/base/io_types.h"
-#include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
+#include "omni/tts/kokoro.h"
 #include "omni/tts/kokoro/kokoro_factory.h"
-#include "omni/tts/kokoro/kokoro_model_config.h"
-#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/tts_session_config.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
-struct TtsEngineTestingPeer {
-  static std::unique_ptr<TtsEngine> CreateTestEngine(
-      const TtsEngineSettings& settings,
-      std::vector<std::string> available_voices = {}) {
-    auto env = Environment::Create({});
-    auto shared_env = std::make_shared<Environment>(std::move(*env));
-    auto resources = std::make_shared<ModelResources>(shared_env);
-    auto thread_pool = std::make_unique<lm::ThreadPool>("test_pool", 1);
-    return std::unique_ptr<TtsEngine>(
-        new TtsEngine(settings, std::move(available_voices), resources,
-                      std::move(thread_pool)));
-  }
-};
-
 namespace {
+
+using ::absl_testing::StatusIs;
+using ::testing::IsSupersetOf;
 
 struct DummyFrontendOutput {
   std::vector<int> token_ids;
@@ -227,6 +224,41 @@ StreamTextSource& GetTextSource(MultiStagedSession& session) {
   return *static_cast<StreamTextSource*>(session.stages()[0].get());
 }
 
+absl::StatusOr<std::unique_ptr<TtsEngine>> CreateFakeKokoroEngine(
+    std::vector<std::string> available_voices,
+    TtsEngine::Settings settings = {}) {
+  constexpr absl::string_view kFakeModelName = "fake-kokoro-test-model";
+  OmniRegistry::Get().UnregisterModel(kFakeModelName);
+  ABSL_RETURN_IF_ERROR(
+      OmniRegistry::Get().RegisterSessionFactory(OmniRegistry::RegistrySpec{
+          .model_names = {std::string(kFakeModelName)},
+          .get_session_factory =
+              [voices = std::move(available_voices)](
+                  absl::string_view /*model_name*/,
+                  const OmniEngine::Settings& engine_settings,
+                  const MessageLite* absl_nullable session_config,
+                  const MessageLite* absl_nullable metadata,
+                  ::litert::Environment& /*env*/,
+                  ::litert::Options& /*options*/,
+                  std::shared_ptr<::litert::lm::ModelResources> absl_nullable
+                  /*lm_resources*/)
+              -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+            lm::proto::TtsMetadata resolved_meta;
+            if (metadata != nullptr) {
+              resolved_meta.CheckTypeAndMergeFrom(*metadata);
+            }
+            return std::make_unique<KokoroSessionFactory>(
+                engine_settings, session_config, resolved_meta, voices,
+                /*model_resources=*/nullptr);
+          },
+          .session_config_type_id = "Tts",
+      }));
+  absl::Cleanup cleanup = [&] {
+    OmniRegistry::Get().UnregisterModel(kFakeModelName);
+  };
+  return TtsEngine::Create(kFakeModelName, std::move(settings));
+}
+
 // Creates a temporary directory holding the given (empty) model files.
 class ScopedModelDir {
  public:
@@ -251,6 +283,20 @@ class ScopedModelDir {
  private:
   std::filesystem::path model_dir_;
 };
+
+TEST(TtsEngineRegistrationTest, AllDefaultModelsAreRegistered) {
+  EXPECT_THAT(OmniRegistry::Get().GetRegisteredModels(),
+              IsSupersetOf({"kokoro", "kokoro-82m", "qwen3-tts"}));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("kokoro"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("qwen3-tts"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("qwen3"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("unknown-tts-model"));
+}
+
+TEST(TtsEngineRegistrationTest, RejectsUnknownModelOnCreate) {
+  EXPECT_THAT(TtsEngine::Create("unknown-tts-model", {}),
+              StatusIs(absl::StatusCode::kNotFound));
+}
 
 TEST(TtsEngineTest, DetectModelTypeKokoro) {
   ScopedModelDir model_dir(
@@ -289,15 +335,18 @@ TEST(TtsEngineTest, DetectModelTypeFailsOnEmptyOrMissingFolder) {
           .string();
   EXPECT_EQ(DetectModelType(missing_dir).status().code(),
             absl::StatusCode::kInvalidArgument);
+
+  const std::string missing_litertlm =
+      (std::filesystem::path(testing::TempDir()) / "no_such_model.litertlm")
+          .string();
+  auto litertlm_status = DetectModelType(missing_litertlm);
+  EXPECT_EQ(litertlm_status.status().code(), absl::StatusCode::kNotFound);
+  EXPECT_THAT(litertlm_status.status().message(),
+              testing::HasSubstr("no_such_model.litertlm"));
 }
 
-TEST(TtsEngineTest, CreateFailsWhenModelTypeCannotBeDetected) {
-  TtsEngineSettings settings;
-  settings.model_config = std::monostate{};
-
-  auto engine = TtsEngine::Create(settings);
-  EXPECT_FALSE(engine.ok());
-  EXPECT_EQ(engine.status().code(), absl::StatusCode::kInvalidArgument);
+TEST(TtsEngineTest, CreateFailsOnEmptyModelName) {
+  EXPECT_THAT(TtsEngine::Create("", {}), StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(TtsEngineTest, SynthesizeSyncForceFlushOnSession) {
@@ -358,25 +407,21 @@ TEST(TtsEngineTest, SequentialSynthesizeCallsOnSession) {
   EXPECT_GE(std::get<AudioOutput>(out2).pcm_samples.size(), 3);
 }
 
-TEST(TtsEngineTest, TtsSessionConfigDefault) {
-  TtsSessionConfig config;
-  EXPECT_EQ(config.language, "en-US");
-  EXPECT_FALSE(config.voice.has_value());
-  EXPECT_EQ(config.text_chunk_config.max_buffer_size, 0);
-  EXPECT_FALSE(config.text_chunk_config.delimiters.empty());
-}
+TEST(TtsEngineTest, TtsSessionConfigProtoConversion) {
+  lm::proto::TtsSessionConfig config;
+  config.set_language("es");
+  config.set_voice("ef_dora");
+  auto* tc = config.mutable_text_chunk_config();
+  tc->set_max_buffer_size(120);
+  tc->add_delimiters(".");
+  tc->add_delimiters("!");
+  tc->add_delimiters("?");
 
-TEST(TtsEngineTest, TtsSessionConfigCustomLanguageAndVoice) {
-  TtsSessionConfig config;
-  config.language = "es";
-  config.voice = "ef_dora";
-  config.text_chunk_config.max_buffer_size = 120;
-  config.text_chunk_config.delimiters = {".", "!", "?"};
-
-  EXPECT_EQ(config.language, "es");
-  EXPECT_EQ(config.voice, "ef_dora");
-  EXPECT_EQ(config.text_chunk_config.max_buffer_size, 120);
-  EXPECT_EQ(config.text_chunk_config.delimiters.size(), 3);
+  EXPECT_EQ(config.language(), "es");
+  EXPECT_EQ(config.voice(), "ef_dora");
+  TextChunkConfig converted = ToTextChunkConfig(config.text_chunk_config());
+  EXPECT_EQ(converted.max_buffer_size, 120);
+  EXPECT_THAT(converted.delimiters, testing::ElementsAre(".", "!", "?"));
 }
 
 TEST(TtsEngineTest, ToKokoroLanguageCodeMapping) {
@@ -489,11 +534,9 @@ TEST(TtsEngineTest, DefaultKokoroVoicesPerLanguage) {
 
 TEST(TtsEngineTest, TtsEngineAvailableLanguages) {
   ScopedMockKokoroModelDir mock_dir;
-  TtsEngineSettings settings;
-  settings.model_folder = mock_dir.path();
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, GetAvailableKokoroVoices(mock_dir.path()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      CreateFakeKokoroEngine(GetAvailableKokoroVoices(mock_dir.path())));
 
   auto languages = engine->GetAvailableLanguages();
   EXPECT_THAT(languages,
@@ -501,26 +544,28 @@ TEST(TtsEngineTest, TtsEngineAvailableLanguages) {
                                    "ja", "pt-BR", "zh-CN"));
 
   // Engine with a subset of voices returns only those languages.
-  auto subset_engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, {"af_heart", "ef_dora", "em_alex"});
+  ASSERT_OK_AND_ASSIGN(
+      auto subset_engine,
+      CreateFakeKokoroEngine({"af_heart", "ef_dora", "em_alex"}));
   EXPECT_THAT(subset_engine->GetAvailableLanguages(),
               testing::ElementsAre("en-US", "es"));
 
-  // Qwen3-TTS returns en-US and zh-CN.
-  TtsEngineSettings qwen_settings;
-  qwen_settings.model_config = Qwen3TtsModelConfig{};
-  auto qwen_engine = TtsEngineTestingPeer::CreateTestEngine(qwen_settings, {});
-  EXPECT_THAT(qwen_engine->GetAvailableLanguages(),
-              testing::ElementsAre("en-US", "zh-CN"));
+  // Metadata supported_languages fallback when no voices are present.
+  TtsEngine::Settings meta_settings;
+  meta_settings.metadata.add_supported_languages("en-US");
+  meta_settings.metadata.add_supported_languages("zh-CN");
+  meta_settings.metadata.add_supported_languages("ja");
+  ASSERT_OK_AND_ASSIGN(auto meta_engine,
+                       CreateFakeKokoroEngine({}, std::move(meta_settings)));
+  EXPECT_THAT(meta_engine->GetAvailableLanguages(),
+              testing::ElementsAre("en-US", "zh-CN", "ja"));
 }
 
 TEST(TtsEngineTest, TtsEngineAvailableVoicesAll) {
   ScopedMockKokoroModelDir mock_dir;
-  TtsEngineSettings settings;
-  settings.model_folder = mock_dir.path();
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, GetAvailableKokoroVoices(mock_dir.path()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      CreateFakeKokoroEngine(GetAvailableKokoroVoices(mock_dir.path())));
 
   auto voices = engine->GetAvailableVoices();
   EXPECT_EQ(voices.size(), 19);
@@ -531,54 +576,37 @@ TEST(TtsEngineTest, TtsEngineAvailableVoicesAll) {
 
 TEST(TtsEngineTest, TtsEngineAvailableVoicesFilteredByLanguage) {
   ScopedMockKokoroModelDir mock_dir;
-  TtsEngineSettings settings;
-  settings.model_folder = mock_dir.path();
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, GetAvailableKokoroVoices(mock_dir.path()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      CreateFakeKokoroEngine(GetAvailableKokoroVoices(mock_dir.path())));
 
-  auto spanish_voices = engine->GetAvailableVoices("es");
-  EXPECT_THAT(spanish_voices,
+  EXPECT_THAT(engine->GetAvailableVoices("es"),
               testing::ElementsAre("ef_dora", "em_alex", "em_santa"));
-
-  auto italian_voices = engine->GetAvailableVoices("it");
-  EXPECT_THAT(italian_voices, testing::ElementsAre("if_sara", "im_nicola"));
-
-  auto french_voices = engine->GetAvailableVoices("fr");
-  EXPECT_THAT(french_voices, testing::ElementsAre("ff_siwis"));
-
-  auto hindi_voices = engine->GetAvailableVoices("hi");
-  EXPECT_THAT(hindi_voices, testing::ElementsAre("hf_alpha", "hf_beta",
-                                                 "hm_omega", "hm_psi"));
-
-  auto pt_voices = engine->GetAvailableVoices("pt-BR");
-  EXPECT_THAT(pt_voices,
+  EXPECT_THAT(engine->GetAvailableVoices("it"),
+              testing::ElementsAre("if_sara", "im_nicola"));
+  EXPECT_THAT(engine->GetAvailableVoices("fr"),
+              testing::ElementsAre("ff_siwis"));
+  EXPECT_THAT(
+      engine->GetAvailableVoices("hi"),
+      testing::ElementsAre("hf_alpha", "hf_beta", "hm_omega", "hm_psi"));
+  EXPECT_THAT(engine->GetAvailableVoices("pt-BR"),
               testing::ElementsAre("pf_dora", "pm_alex", "pm_santa"));
-
-  auto british_voices = engine->GetAvailableVoices("en-GB");
-  EXPECT_THAT(british_voices, testing::ElementsAre("bf_alice"));
-
-  auto us_voices = engine->GetAvailableVoices("en-US");
-  EXPECT_THAT(us_voices, testing::ElementsAre("af_alloy", "af_heart"));
-
-  auto chinese_voices = engine->GetAvailableVoices("zh-CN");
-  EXPECT_THAT(chinese_voices,
+  EXPECT_THAT(engine->GetAvailableVoices("en-GB"),
+              testing::ElementsAre("bf_alice"));
+  EXPECT_THAT(engine->GetAvailableVoices("en-US"),
+              testing::ElementsAre("af_alloy", "af_heart"));
+  EXPECT_THAT(engine->GetAvailableVoices("zh-CN"),
               testing::ElementsAre("zf_xiaobei", "zf_xiaoxiao"));
-
-  auto japanese_voices = engine->GetAvailableVoices("ja");
-  EXPECT_THAT(japanese_voices, testing::ElementsAre("jf_alpha"));
-
-  auto unsupported_voices = engine->GetAvailableVoices("de");
-  EXPECT_TRUE(unsupported_voices.empty());
+  EXPECT_THAT(engine->GetAvailableVoices("ja"),
+              testing::ElementsAre("jf_alpha"));
+  EXPECT_TRUE(engine->GetAvailableVoices("de").empty());
 }
 
 TEST(TtsEngineTest, TtsEngineHasVoice) {
   ScopedMockKokoroModelDir mock_dir;
-  TtsEngineSettings settings;
-  settings.model_folder = mock_dir.path();
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, GetAvailableKokoroVoices(mock_dir.path()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      CreateFakeKokoroEngine(GetAvailableKokoroVoices(mock_dir.path())));
 
   EXPECT_TRUE(engine->HasVoice("af_heart"));
   EXPECT_TRUE(engine->HasVoice("af_heart.bin"));
@@ -591,11 +619,9 @@ TEST(TtsEngineTest, TtsEngineHasVoice) {
 
 TEST(TtsEngineTest, TtsEngineGetDefaultVoice) {
   ScopedMockKokoroModelDir mock_dir;
-  TtsEngineSettings settings;
-  settings.model_folder = mock_dir.path();
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, GetAvailableKokoroVoices(mock_dir.path()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      CreateFakeKokoroEngine(GetAvailableKokoroVoices(mock_dir.path())));
 
   EXPECT_EQ(engine->GetDefaultVoice("es"), "ef_dora");
   EXPECT_EQ(engine->GetDefaultVoice("it"), "if_sara");
@@ -611,15 +637,13 @@ TEST(TtsEngineTest, TtsEngineGetDefaultVoice) {
 
 TEST(TtsEngineTest, CreateSessionVoiceValidation) {
   ScopedMockKokoroModelDir mock_dir;
-  TtsEngineSettings settings;
-  settings.model_folder = mock_dir.path();
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, GetAvailableKokoroVoices(mock_dir.path()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      CreateFakeKokoroEngine(GetAvailableKokoroVoices(mock_dir.path())));
 
   // 1. Invalid voice returns InvalidArgumentError.
-  TtsSessionConfig invalid_voice_config;
-  invalid_voice_config.voice = "unknown_speaker_xyz";
+  lm::proto::TtsSessionConfig invalid_voice_config;
+  invalid_voice_config.set_voice("unknown_speaker_xyz");
   auto status1 = engine->CreateSession(invalid_voice_config);
   EXPECT_FALSE(status1.ok());
   EXPECT_EQ(status1.status().code(), absl::StatusCode::kInvalidArgument);
@@ -627,9 +651,9 @@ TEST(TtsEngineTest, CreateSessionVoiceValidation) {
               testing::HasSubstr("is not available in TtsEngine"));
 
   // 2. Conflicting voice and language returns InvalidArgumentError.
-  TtsSessionConfig mismatch_config;
-  mismatch_config.language = "es";
-  mismatch_config.voice = "af_heart";  // American English voice
+  lm::proto::TtsSessionConfig mismatch_config;
+  mismatch_config.set_language("es");
+  mismatch_config.set_voice("af_heart");  // American English voice
   auto status2 = engine->CreateSession(mismatch_config);
   EXPECT_FALSE(status2.ok());
   EXPECT_EQ(status2.status().code(), absl::StatusCode::kInvalidArgument);
@@ -637,8 +661,8 @@ TEST(TtsEngineTest, CreateSessionVoiceValidation) {
               testing::HasSubstr("conflicts with requested language"));
 
   // 3. Unsupported BCP-47 language returns InvalidArgumentError.
-  TtsSessionConfig unsupported_lang_config;
-  unsupported_lang_config.language = "de";
+  lm::proto::TtsSessionConfig unsupported_lang_config;
+  unsupported_lang_config.set_language("de");
   auto status3 = engine->CreateSession(unsupported_lang_config);
   EXPECT_FALSE(status3.ok());
   EXPECT_EQ(status3.status().code(), absl::StatusCode::kInvalidArgument);
@@ -646,8 +670,8 @@ TEST(TtsEngineTest, CreateSessionVoiceValidation) {
               testing::HasSubstr("Unsupported language"));
 
   // 4. Empty language returns InvalidArgumentError.
-  TtsSessionConfig empty_lang_config;
-  empty_lang_config.language = "";
+  lm::proto::TtsSessionConfig empty_lang_config;
+  empty_lang_config.set_language("");
   auto status4 = engine->CreateSession(empty_lang_config);
   EXPECT_FALSE(status4.ok());
   EXPECT_EQ(status4.status().code(), absl::StatusCode::kInvalidArgument);
@@ -656,10 +680,8 @@ TEST(TtsEngineTest, CreateSessionVoiceValidation) {
 }
 
 TEST(TtsEngineTest, GetDefaultVoiceStaysWithinRequestedLanguage) {
-  TtsEngineSettings settings;
-  settings.model_config = KokoroModelConfig{};
-  auto engine = TtsEngineTestingPeer::CreateTestEngine(
-      settings, {"af_heart", "am_adam", "af_bella"});
+  ASSERT_OK_AND_ASSIGN(
+      auto engine, CreateFakeKokoroEngine({"af_heart", "am_adam", "af_bella"}));
 
   // No Spanish voice is available: the Spanish default is returned rather than
   // an unrelated English voice.
@@ -669,13 +691,11 @@ TEST(TtsEngineTest, GetDefaultVoiceStaysWithinRequestedLanguage) {
 }
 
 TEST(TtsEngineTest, CreateSessionFailsWhenNoVoiceForRequestedLanguage) {
-  TtsEngineSettings settings;
-  settings.model_config = KokoroModelConfig{};
-  auto engine =
-      TtsEngineTestingPeer::CreateTestEngine(settings, {"af_heart", "am_adam"});
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       CreateFakeKokoroEngine({"af_heart", "am_adam"}));
 
-  TtsSessionConfig config;
-  config.language = "es";
+  lm::proto::TtsSessionConfig config;
+  config.set_language("es");
   auto session = engine->CreateSession(config);
   EXPECT_FALSE(session.ok());
   EXPECT_EQ(session.status().code(), absl::StatusCode::kInvalidArgument);

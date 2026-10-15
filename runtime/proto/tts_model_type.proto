@@ -20,10 +20,19 @@ option java_multiple_files = true;
 option java_outer_classname = "TtsModelTypeOuterClass";
 
 // Kokoro-82M: phoneme-conditioned acoustic predictor + iSTFT neural vocoder.
-message Kokoro {}
+message Kokoro {
+  optional string voice_name = 1;
+  optional string language = 2;
+  optional int32 target_bucket = 3;
+  optional string vocoder_backend = 4;
+}
 
 // Qwen3-TTS: autoregressive talker + MTP drafter + RVQ codec vocoder.
-message Qwen3Tts {}
+message Qwen3Tts {
+  optional string language = 1;
+  optional string speaker_file = 2;
+  optional int32 max_frames = 3;
+}
 
 // Architecture-specific parameters for TTS models.
 message TtsModelType {

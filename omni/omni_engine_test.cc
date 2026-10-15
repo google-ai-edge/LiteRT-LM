@@ -23,10 +23,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "omni/asr/asr_session.h"
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
@@ -36,13 +40,18 @@
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
 #include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/asr_metadata.pb.h"
+#include "runtime/proto/asr_session_config.pb.h"
+#include "runtime/proto/tts_session_config.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni {
@@ -247,7 +256,7 @@ TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {
   };
   EXPECT_THAT(OmniEngine::Create("kokoro", options),
               StatusIs(absl::StatusCode::kNotFound,
-                       HasSubstr("/custom/tts_cache/kokoro")));
+                       HasSubstr("/custom/tts_cache/kokoro.litertlm")));
 }
 
 TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
@@ -256,15 +265,67 @@ TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
       .cache_dir = "/custom/text2image_cache",
       .num_threads = 4,
   };
-  EXPECT_THAT(OmniEngine::Create("bonsai-flux2", options),
-              StatusIs(absl::StatusCode::kNotFound,
-                       HasSubstr("/custom/text2image_cache/bonsai-flux2")));
+  EXPECT_THAT(
+      OmniEngine::Create("bonsai-flux2", options),
+      StatusIs(absl::StatusCode::kNotFound,
+               HasSubstr("/custom/text2image_cache/bonsai-flux2.litertlm")));
 }
 
 TEST(OmniEngineTest, RejectsUnknownModel) {
   EXPECT_THAT(
       OmniEngine::Create("unknown-model-xyz"),
       StatusIs(absl::StatusCode::kNotFound, HasSubstr("unknown-model-xyz")));
+}
+
+TEST(OmniEngineTest, CreateForwardsSessionConfigAndMetadataToRegistry) {
+  float captured_overlap_ratio = 0.0f;
+  int captured_sample_rate_hz = 0;
+
+  ASSERT_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
+      .model_names = {"custom-omni-engine-test-model"},
+      .get_session_factory =
+          [&](absl::string_view /*model_name*/,
+              const OmniEngine::Settings& /*settings*/,
+              const MessageLite* session_cfg, const MessageLite* metadata,
+              ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+              std::shared_ptr<lm::ModelResources> /*lm_resources*/)
+          -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+        if (session_cfg != nullptr) {
+          captured_overlap_ratio =
+              static_cast<const lm::proto::AsrSessionConfig*>(session_cfg)
+                  ->overlap_ratio();
+        }
+        if (metadata != nullptr) {
+          captured_sample_rate_hz =
+              static_cast<const lm::proto::AsrMetadata*>(metadata)
+                  ->sample_rate_hz();
+        }
+        return std::make_unique<FakeOmniSessionFactory>();
+      },
+      .session_config_type_id = "Asr",
+  }));
+  absl::Cleanup cleanup = [] {
+    OmniRegistry::Get().UnregisterModel("custom-omni-engine-test-model");
+  };
+
+  lm::proto::AsrSessionConfig session_config;
+  session_config.set_overlap_ratio(0.25f);
+  lm::proto::AsrMetadata metadata;
+  metadata.set_sample_rate_hz(24000);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      OmniEngine::Create("custom-omni-engine-test-model",
+                         OmniEngine::Settings{}, &session_config, &metadata));
+  EXPECT_FLOAT_EQ(captured_overlap_ratio, 0.25f);
+  EXPECT_EQ(captured_sample_rate_hz, 24000);
+  ASSERT_OK(engine->CreateSession(std::make_unique<PushInputSource>()));
+
+  lm::proto::TtsSessionConfig wrong_session_config;
+  wrong_session_config.set_language("en-US");
+  EXPECT_THAT(OmniEngine::Create("custom-omni-engine-test-model",
+                                 OmniEngine::Settings{}, &wrong_session_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(OmniSessionTest, AsrSessionProcessNextAndFlushWithAudioInput) {

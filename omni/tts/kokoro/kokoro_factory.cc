@@ -84,6 +84,18 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
   ModelOptions vocoder_options =
       MakeModelOptions(model_folder, cache_dir, vocoder_backend, num_threads);
 
+  if (!resources.HasLmModelResources() && !model_folder.empty()) {
+    const std::string litertlm_path =
+        absl::EndsWithIgnoreCase(model_folder, ".litertlm")
+            ? std::string(model_folder)
+            : ResolveLitertLmPath(model_folder);
+    if (!litertlm_path.empty()) {
+      LITERT_ASSIGN_OR_RETURN(auto lm_resources,
+                              CreateLmModelResources(litertlm_path));
+      resources.SetLmModelResources(std::move(lm_resources));
+    }
+  }
+
   std::optional<CompiledModel> acoustic_opt;
   std::optional<CompiledModel> vocoder_opt;
   if (resources.HasLmModelResources()) {

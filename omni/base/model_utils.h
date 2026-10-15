@@ -86,6 +86,18 @@ struct ModelOptions {
   std::vector<std::string> external_tensor_patterns;
 };
 
+// Parses a backend name ("cpu", "gpu", "npu", case-insensitive) into
+// `OmniEngine::Settings::Backend`.
+//
+// args
+// - backend_str: Backend string identifier.
+//
+// returns
+// - Corresponding `OmniEngine::Settings::Backend` on success, or
+//   `InvalidArgumentError` if unsupported.
+absl::StatusOr<OmniEngine::Settings::Backend> ParseOmniBackend(
+    absl::string_view backend_str);
+
 // Converts `OmniEngine::Settings::Backend` to `lm::Backend`.
 //
 // args

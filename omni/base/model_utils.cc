@@ -41,6 +41,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -193,6 +194,22 @@ std::string JoinPath(absl::string_view dir, absl::string_view filename) {
 }
 
 }  // namespace
+
+absl::StatusOr<OmniEngine::Settings::Backend> ParseOmniBackend(
+    absl::string_view backend_str) {
+  const std::string lower = absl::AsciiStrToLower(backend_str);
+  if (lower == "cpu") {
+    return OmniEngine::Settings::Backend::kCpu;
+  }
+  if (lower == "gpu") {
+    return OmniEngine::Settings::Backend::kGpu;
+  }
+  if (lower == "npu") {
+    return OmniEngine::Settings::Backend::kNpu;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unsupported backend: ", backend_str));
+}
 
 lm::Backend ToLmBackend(OmniEngine::Settings::Backend backend) {
   switch (backend) {

@@ -70,9 +70,10 @@ struct OmniEngineSettings {
 }  // namespace internal
 
 // Unified engine creating `OmniSession` instances for the specified
-// `model_name` with pre-defined configurations.
+// `model_name` (or a path containing a registered model name) with registered
+// model and session configurations.
 //
-// Supported ASR model names (from `omni/asr/model_metadata.json`):
+// Supported ASR model names (registered in `omni/asr/`):
 //   - "parakeet-tdt-0.6b-v3"
 //   - "parakeet-ctc-0.6b"
 //   - "moonshine-tiny"
@@ -80,33 +81,31 @@ struct OmniEngineSettings {
 //   - "qwen3-asr-0.6b"
 //   - "tinygemma-asr"
 //
-// Supported TTS model names / paths:
+// Supported TTS model names (registered in `omni/tts/`):
 //   - "kokoro" / "kokoro-82m"
 //   - "qwen3-tts" / "qwen3"
-//   - Any directory of `.tflite` or `.litertlm` model files for Kokoro or
-//     Qwen3-TTS.
 //
-// Supported Text2Image model names / paths:
-//   - "bonsai-flux2" / "flux2-klein" / "flux.2-klein-4b"
-//   - Any directory of `.tflite` or `.litertlm` model files (or `.litertlm`
-//     file path) for Bonsai-FLUX.2.
+// Supported Text2Image model names (registered in `omni/text2image/`):
+//   - "bonsai-flux2" / "flux2" / "flux2-klein" / "flux.2-klein-4b"
 class OmniEngine {
  public:
   using Settings = internal::OmniEngineSettings;
 
-  // TODO: Remove Options alias once callers migrate to Settings.
+  // TODO(b/524681030): Remove Options alias once callers migrate to Settings.
   using Options = Settings;
 
-  // Creates an OmniEngine for the specified `model_name` using pre-defined
-  // model and session configurations and optional runtime `settings`.
-  // TODO: Pass `session_config` and `metadata` when TTS and Text2Image move to
-  // static registration.
+  // Creates an OmniEngine for the specified `model_name` using registered
+  // model and session configurations and optional runtime `settings`,
+  // `session_config`, and `metadata`.
   static absl::StatusOr<std::unique_ptr<OmniEngine>> Create(
-      absl::string_view model_name, const Settings& settings = {});
+      absl::string_view model_name, const Settings& settings = {},
+      const MessageLite* absl_nullable session_config = nullptr,
+      const MessageLite* absl_nullable metadata = nullptr);
 
   // Creates an OmniEngine for the specified `model_name` with a custom
   // `OmniSessionFactory`.
-  // TODO: Remove when TTS and Text2Image move to static registration.
+  // TODO(b/524681030): Remove when TTS and Text2Image move to static
+  // registration.
   static absl::StatusOr<std::unique_ptr<OmniEngine>> Create(
       absl::string_view model_name,
       std::unique_ptr<OmniSessionFactory> absl_nonnull factory);

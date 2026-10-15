@@ -64,6 +64,9 @@ class OmniRegistry {
     std::string session_config_type_id;
     std::optional<std::string> metadata_type_id;
     std::optional<std::string> model_remote_url;
+    // TODO(b/524681030): Add an optional `matches(const lm::ModelResources*,
+    // absl::string_view path)` predicate so each registration can own its
+    // model detection from a path or `.litertlm` container.
   };
 
   // Read-only view of a registered `RegistrySpec` and its resolved proto type

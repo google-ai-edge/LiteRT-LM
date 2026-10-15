@@ -32,7 +32,7 @@
 #include "omni/base/stage.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
-#include "support/tokenizer/huggingface_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::tts {
 
@@ -153,7 +153,7 @@ class Qwen3TtsFrontendStage
 
   Qwen3TtsModelConfig config_;
   std::shared_ptr<ModelResources> resources_;
-  std::unique_ptr<support::HuggingFaceTokenizer> tokenizer_;
+  std::unique_ptr<support::Tokenizer> tokenizer_;
 
   // Required compiled models for text frontend stage
   std::shared_ptr<CompiledModel> text_embedding_model_;

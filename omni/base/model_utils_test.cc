@@ -162,6 +162,23 @@ TEST(ModelUtilsTest, CreateLmEngineRunnerNonExistent) {
   }
 }
 
+TEST(ModelUtilsTest, ParseOmniBackend) {
+  auto cpu = ParseOmniBackend("cpu");
+  ASSERT_THAT(cpu, IsOk());
+  EXPECT_EQ(*cpu, OmniEngine::Settings::Backend::kCpu);
+
+  auto gpu = ParseOmniBackend("GPU");
+  ASSERT_THAT(gpu, IsOk());
+  EXPECT_EQ(*gpu, OmniEngine::Settings::Backend::kGpu);
+
+  auto npu = ParseOmniBackend("Npu");
+  ASSERT_THAT(npu, IsOk());
+  EXPECT_EQ(*npu, OmniEngine::Settings::Backend::kNpu);
+
+  EXPECT_THAT(ParseOmniBackend("unknown"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(ModelUtilsTest, ToLmModelOptionsMapsEngineSettings) {
   OmniEngine::Settings settings{
       .backend = OmniEngine::Settings::Backend::kGpu,
