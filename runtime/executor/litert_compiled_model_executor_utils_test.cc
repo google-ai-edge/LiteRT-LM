@@ -31,7 +31,9 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
@@ -54,6 +56,7 @@
 #include "litert/core/model/model.h"  // from @litert
 #include "litert/core/util/flatbuffer_tools.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/executor_metadata.pb.h"
@@ -1419,6 +1422,89 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
       proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 }
 
+// Writes a .litertlm file whose header declares a per-layer embedder section
+// that extends far past the end of the file: the section is present but can
+// never be mapped. This mirrors a truncated download or an mmap failure on
+// device, where engine creation used to succeed and every inference then
+// failed with "No per-layer embeddings found in inputs".
+void WriteTruncatedPerLayerEmbedderModel(const std::filesystem::path& path) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/kLiteRtLmPrefixSize,
+      /*end_offset=*/1 << 20, schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+
+  std::ofstream file(path, std::ios::binary);
+  ASSERT_TRUE(file.good());
+  file.write("LITERTLM", 8);
+  const uint32_t major_version = 1;
+  const uint32_t minor_version = 0;
+  const uint32_t patch_version = 0;
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), 4);
+  file.write(reinterpret_cast<const char*>(&minor_version), 4);
+  file.write(reinterpret_cast<const char*>(&patch_version), 4);
+  file.write(reinterpret_cast<const char*>(&padding), 4);
+  const uint64_t header_end = kLiteRtLmPrefixSize + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end), 8);
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  ASSERT_TRUE(file.good());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeEmbeddingLookupsFailsWhenPerLayerEmbedderCannotBeMapped) {
+  const auto model_path = std::filesystem::path(::testing::TempDir()) /
+                          "truncated_per_layer_embedder.litertlm";
+  WriteTruncatedPerLayerEmbedderModel(model_path);
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
+  // The per-layer embedder section exists but cannot be mapped, so executor
+  // creation must fail instead of silently running without it.
+  EXPECT_THAT(
+      InitializeEmbeddingLookups(env, *model_resources, embedding_lookup,
+                                 per_layer_embedding_lookup),
+      StatusIs(absl::StatusCode::kInternal));
+  EXPECT_EQ(per_layer_embedding_lookup, nullptr);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeEmbeddingLookupsSkipsAbsentEmbedders) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
+  // Embedder sections that are genuinely absent are optional.
+  EXPECT_OK(InitializeEmbeddingLookups(env, *model_resources, embedding_lookup,
+                                       per_layer_embedding_lookup));
+  EXPECT_EQ(embedding_lookup, nullptr);
+  EXPECT_EQ(per_layer_embedding_lookup, nullptr);
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      AotNpuOverrideEnablesFileBackedLoading) {
   const auto source_model_path =
@@ -1871,10 +1957,17 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 
+// Returns dummy model assets for tests that only need an ExecutorSettingsBase
+// instance and never touch the underlying model.
+ModelAssets DummyModelAssets() {
+  absl::StatusOr<ModelAssets> model_assets = ModelAssets::Create("dummy_path");
+  ABSL_CHECK_OK(model_assets);
+  return *std::move(model_assets);
+}
+
 class DummyExecutorSettings : public ExecutorSettingsBase {
  public:
-  DummyExecutorSettings()
-      : ExecutorSettingsBase(*ModelAssets::Create("dummy_path")) {}
+  DummyExecutorSettings() : ExecutorSettingsBase(DummyModelAssets()) {}
 };
 
 LiteRtDelegatePrecision GetGpuPrecision(const litert::GpuOptions& gpu_options) {

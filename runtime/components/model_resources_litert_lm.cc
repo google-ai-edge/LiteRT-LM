@@ -126,14 +126,8 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
     }
   }
 
-  litert::BufferRef<uint8_t> buffer_ref =
-      litert_lm_loader_->GetTFLiteModel(key);
-  ABSL_VLOG(1) << "model_type: " << key;
-  ABSL_VLOG(1) << "litert model size: " << buffer_ref.Size();
-  if (buffer_ref.Size() == 0) {
-    return absl::NotFoundError(
-        absl::StrCat(model_type_str, " not found in the model."));
-  }
+  ABSL_ASSIGN_OR_RETURN(litert::BufferRef<uint8_t> buffer_ref,
+                        GetTFLiteModelSectionBuffer(key));
   LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
   model_map_[key] = std::make_unique<litert::Model>(std::move(model));
   return model_map_[key].get();
@@ -173,16 +167,29 @@ absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
 absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
     absl::string_view model_type_str) {
   std::string key = absl::AsciiStrToLower(model_type_str);
-  litert::BufferRef<uint8_t> buffer_ref =
-      litert_lm_loader_->GetTFLiteModel(key);
+  ABSL_ASSIGN_OR_RETURN(litert::BufferRef<uint8_t> buffer_ref,
+                        GetTFLiteModelSectionBuffer(key));
+  return buffer_ref.StrView();
+}
 
+absl::StatusOr<litert::BufferRef<uint8_t>>
+ModelResourcesLitertLm::GetTFLiteModelSectionBuffer(absl::string_view key) {
+  auto section_buffer = litert_lm_loader_->GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_TFLiteModel, key));
+  if (absl::IsNotFound(section_buffer.status())) {
+    return absl::NotFoundError(absl::StrCat(key, " not found in the model."));
+  }
+  // A section that exists but fails to map is a broken model file, not a
+  // missing section; propagate it so engine creation fails instead of
+  // producing an executor that silently runs without this model.
+  ABSL_ASSIGN_OR_RETURN(litert::BufferRef<uint8_t> buffer_ref,
+                        std::move(section_buffer));
   ABSL_VLOG(1) << "model_type: " << key;
   ABSL_VLOG(1) << "litert model size: " << buffer_ref.Size();
   if (buffer_ref.Size() == 0) {
-    return absl::NotFoundError(
-        absl::StrCat(model_type_str, " not found in the model."));
+    return absl::NotFoundError(absl::StrCat(key, " not found in the model."));
   }
-  return buffer_ref.StrView();
+  return buffer_ref;
 }
 
 absl::StatusOr<std::unique_ptr<Tokenizer>>

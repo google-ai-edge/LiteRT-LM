@@ -14,16 +14,22 @@
 
 #include "runtime/components/model_resources.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <fstream>
+#include <ios>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/model_resources_task.h"
@@ -32,6 +38,8 @@
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 
 namespace {
 
@@ -46,6 +54,7 @@ using ::litert::lm::ScopedFile;
 using ::litert::lm::TfLiteModelTypeToWireString;
 using ::litert::lm::proto::EmbeddingMetadata;
 using ::litert::lm::proto::LlmMetadata;
+namespace schema = ::litert::lm::schema;
 
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 TEST(ModelResourcesTest, InitializeWithFileBackedLiteRtModel) {
@@ -188,10 +197,10 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFound) {
   // Attempt to get a model type that doesn't exist in the test file.
   EXPECT_THAT(model_resources.value()->GetTFLiteModelBuffer(
                   LlmMetadata::TF_LITE_EMBEDDER),
-              testing::status::StatusIs(absl::StatusCode::kNotFound));
+              StatusIs(absl::StatusCode::kNotFound));
   EXPECT_THAT(
       model_resources.value()->GetTFLiteModel(LlmMetadata::TF_LITE_EMBEDDER),
-      testing::status::StatusIs(absl::StatusCode::kNotFound));
+      StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(ModelResourcesTest, GetTFLiteModelNotFoundTask) {
@@ -211,8 +220,7 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFoundTask) {
   // Attempt to get a model type that doesn't exist in the test file.
   auto tflite_model = model_resources.value()->GetTFLiteModelBuffer(
       LlmMetadata::TF_LITE_EMBEDDER);
-  EXPECT_THAT(tflite_model,
-              testing::status::StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(tflite_model, StatusIs(absl::StatusCode::kNotFound));
 }
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 
@@ -243,7 +251,73 @@ TEST(ModelResourcesTest, GetTFLiteModelSectionFileRegion) {
   // Error case: model type not found in the loader.
   EXPECT_THAT(model_resources->GetTFLiteModelSectionFileRegion(
                   LlmMetadata::TF_LITE_EMBEDDER),
-              testing::status::StatusIs(absl::StatusCode::kNotFound));
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+// Writes a .litertlm file whose header declares a per-layer embedder section
+// that extends far past the end of the file. The section is present, so the
+// loader must fail to map it rather than report it as missing.
+std::string WriteTruncatedPerLayerEmbedderModelFile() {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "model_resources_truncated_per_layer_embedder.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/32, /*end_offset=*/1 << 20,
+      schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+
+  std::ofstream file(test_file_path, std::ios::binary);
+  file.write("LITERTLM", 8);
+  const uint32_t major_version = 1;
+  const uint32_t minor_version = 0;
+  const uint32_t patch_version = 0;
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), 4);
+  file.write(reinterpret_cast<const char*>(&minor_version), 4);
+  file.write(reinterpret_cast<const char*>(&patch_version), 4);
+  file.write(reinterpret_cast<const char*>(&padding), 4);
+  const uint64_t header_end_offset = 32 + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end_offset), 8);
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  return test_file_path.string();
+}
+
+TEST(ModelResourcesTest, GetTFLiteModelPropagatesSectionMapFailure) {
+  const std::string model_path = WriteTruncatedPerLayerEmbedderModelFile();
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+
+  // Present-but-unmappable sections surface the mapping error rather than
+  // kNotFound, so callers that treat kNotFound as "optional model absent"
+  // fail loudly instead of running without the model.
+  EXPECT_THAT(
+      model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+      StatusIs(absl::StatusCode::kInternal));
+  EXPECT_THAT(model_resources->GetTFLiteModelBuffer(
+                  LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+              StatusIs(absl::StatusCode::kInternal));
+
+  // Sections that are absent from the header are still kNotFound.
+  EXPECT_THAT(model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_EMBEDDER),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(
+      model_resources->GetTFLiteModelBuffer(LlmMetadata::TF_LITE_EMBEDDER),
+      StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(ParseLlmTfLiteModelTypeTest, ParsesWireStringsCaseInsensitively) {

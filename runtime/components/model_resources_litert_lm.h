@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_MODEL_RESOURCES_LITERT_LM_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,6 +27,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/any2any_metadata.pb.h"
@@ -141,6 +143,12 @@ class ModelResourcesLitertLm : public ModelResources {
       absl::string_view model_type_str) override;
 
  private:
+  // Returns the TFLite model section for the lower-cased model type `key`.
+  // Returns kNotFound when the section is absent (or empty) and propagates the
+  // loader's error when the section exists but could not be mapped.
+  absl::StatusOr<litert::BufferRef<uint8_t>> GetTFLiteModelSectionBuffer(
+      absl::string_view key);
+
   absl::flat_hash_map<std::string, std::unique_ptr<litert::Model>> model_map_;
   absl::flat_hash_map<std::string, std::unique_ptr<Tokenizer>> tokenizer_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
