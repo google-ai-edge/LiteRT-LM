@@ -60,6 +60,7 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
@@ -85,8 +86,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(
   sampler_params.set_p(0.0f);
   sampler_params.set_temperature(1.0f);
   sampler_params.set_seed(0);
-  return CreateSampler(backend, output_heads, std::move(sampler_params), env,
-                       sequence_size, vocab_size, activation_data_type);
+  return CreateMtpGreedySampler(backend, output_heads,
+                                std::move(sampler_params), env, sequence_size,
+                                vocab_size, activation_data_type);
 }
 
 absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
@@ -196,7 +198,8 @@ absl::Status UpdateCompilationOptions(
       gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
       break;
     }
-    case Backend::CPU: {
+    case Backend::CPU:
+    case Backend::NPU: {
       break;
     }
     default:
@@ -238,6 +241,8 @@ LlmLiteRtMtpDrafter::Create(
       resources, ModelType::kTfLiteMtpDrafter, compilation_options));
   ABSL_ASSIGN_OR_RETURN(auto model,
                         resources.GetTFLiteModel(ModelType::kTfLiteMtpDrafter));
+  ABSL_RETURN_IF_ERROR(AddNvidiaSharedValueCacheOptions(
+      executor_settings.GetBackend(), *model, base_model, compilation_options));
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
       CompiledModel::Create(env, model->Get(), compilation_options));
