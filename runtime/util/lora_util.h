@@ -85,6 +85,12 @@ class MmapBufferRef : public litert::BufferRef<ByteT> {
 // "lora_atten_(q|k|v|o)_(a|b)_prime_weight_[0-num_layers)".
 bool IsLoRAInputName(absl::string_view name);
 
+// Returns true if the buffer for the model input `name` is provided by a LoRA:
+// a LoRA weight input (see IsLoRAInputName()) or "lora_param_tensor". Such
+// buffers are owned by the LoRA and shared with every caller that binds them,
+// so they must not be cleared or overwritten when resetting model inputs.
+bool IsLoRABufferInputName(absl::string_view name);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LORA_UTIL_H_

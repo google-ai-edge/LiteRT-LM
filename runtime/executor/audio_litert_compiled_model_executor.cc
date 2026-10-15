@@ -60,6 +60,7 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
+#include "runtime/util/lora_util.h"
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
 
@@ -342,6 +343,11 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
 absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::ClearInputBuffers() {
   for (auto& [input_name, input_buffer] : input_buffers_map_) {
+    // The LoRA buffers in the map share memory with the buffers owned by the
+    // LoRA; clearing them would erase the LoRA weights for later runs.
+    if (IsLoRABufferInputName(input_name)) {
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
                             TensorBufferScopedLock::Create(
                                 input_buffer, TensorBuffer::LockMode::kWrite));
@@ -547,6 +553,11 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::ClearInputBuffers() {
 
 absl::Status AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Reset() {
   for (auto& [input_name, input_buffer] : input_buffers_map_) {
+    // The LoRA buffers in the map share memory with the buffers owned by the
+    // LoRA; clearing them would erase the LoRA weights for later runs.
+    if (IsLoRABufferInputName(input_name)) {
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
                             TensorBufferScopedLock::Create(
                                 input_buffer, TensorBuffer::LockMode::kWrite));
@@ -1316,6 +1327,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
       // Skip audio input buffers.
       continue;
     }
+    if (IsLoRABufferInputName(name)) {
+      // Skip LoRA buffers as they are not part of the streaming state.
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto new_buffer, CopyTensorBuffer(env_, buffer));
     if (name == kPrevMaskName) {
       LITERT_ASSIGN_OR_RETURN(auto prev_mask_type, new_buffer.TensorType());
@@ -1347,6 +1362,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CloneContext() {
       // Skip audio input buffers.
       continue;
     }
+    if (IsLoRABufferInputName(name)) {
+      // Skip LoRA buffers as they are not part of the streaming state.
+      continue;
+    }
     LITERT_ASSIGN_OR_RETURN(auto new_buffer, CopyTensorBuffer(env_, buffer));
     state_buffers[name] = std::move(new_buffer);
   }
@@ -1370,6 +1389,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::RestoreContext(
     if (name == kSegmentValuesName || name == kSegmentMaskName) {
       // Skip the segment values and mask buffers as they are not part of the
       // state.
+      continue;
+    }
+    if (IsLoRABufferInputName(name)) {
+      // Skip LoRA buffers as they are not part of the streaming state.
       continue;
     }
 

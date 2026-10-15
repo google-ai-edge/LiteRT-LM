@@ -31,6 +31,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -862,6 +863,102 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
   ASSERT_OK_AND_ASSIGN(auto flush_after_new_restore, audio_executor->Flush());
   EXPECT_EQ(flush_after_new_restore.GetValidTokens(), 0);
+}
+
+// Name of the audio LoRA input that test model inputs are renamed to.
+constexpr absl::string_view kTestAudioLoRAInputName = "key_w_prime_left0";
+
+// Returns the 4-byte little-endian length prefix of a FlatBuffer string.
+std::string FlatBufferStringLength(size_t length) {
+  std::string bytes(4, '\0');
+  for (int i = 0; i < 4; ++i) {
+    bytes[i] = static_cast<char>((length >> (8 * i)) & 0xff);
+  }
+  return bytes;
+}
+
+// Writes a copy of the test model `src_model_path` to `dst_path` whose
+// encoder input `input_name` is renamed to kTestAudioLoRAInputName, so that the
+// input is provided by a LoRA. The new name doesn't fit in the signature
+// entry's name string, so the signature entry is pointed at the (longer)
+// tensor name string "serving_default_<input_name>:0", and both are renamed by
+// overwriting the tensor name string.
+absl::Status WriteModelWithLoRAInput(absl::string_view src_model_path,
+                                     absl::string_view input_name,
+                                     const std::string& dst_path) {
+  std::ifstream src_file(
+      std::filesystem::path(::testing::SrcDir()) / std::string(src_model_path),
+      std::ios::binary);
+  if (!src_file.is_open()) {
+    return absl::NotFoundError("Failed to open the test model.");
+  }
+  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
+                          std::istreambuf_iterator<char>());
+  // A signature entry whose name string directly follows its offset field.
+  const std::string from_sig_entry = absl::StrCat(
+      FlatBufferStringLength(4), FlatBufferStringLength(input_name.size()),
+      input_name);
+  const std::string tensor_name =
+      absl::StrCat("serving_default_", input_name, ":0");
+  const std::string from_tensor_name =
+      absl::StrCat(FlatBufferStringLength(tensor_name.size()), tensor_name);
+  const size_t sig_pos = model_bytes.find(from_sig_entry);
+  const size_t tensor_pos = model_bytes.find(from_tensor_name);
+  if (sig_pos == std::string::npos || tensor_pos == std::string::npos ||
+      tensor_pos <= sig_pos ||
+      tensor_name.size() < kTestAudioLoRAInputName.size()) {
+    return absl::NotFoundError("Unexpected test model layout.");
+  }
+  // The signature entry starts with the offset of its name string, relative to
+  // the offset field itself.
+  model_bytes.replace(sig_pos, 4, FlatBufferStringLength(tensor_pos - sig_pos));
+  std::string to_tensor_name =
+      absl::StrCat(FlatBufferStringLength(kTestAudioLoRAInputName.size()),
+                   kTestAudioLoRAInputName);
+  to_tensor_name.resize(from_tensor_name.size(), '\0');
+  model_bytes.replace(tensor_pos, from_tensor_name.size(), to_tensor_name);
+
+  std::ofstream dst_file(dst_path, std::ios::binary | std::ios::trunc);
+  if (!dst_file.is_open()) {
+    return absl::InternalError("Failed to write the test model.");
+  }
+  dst_file.write(model_bytes.data(), model_bytes.size());
+  return absl::OkStatus();
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_LoRAInputNotPartOfStreamingState) {
+  const std::string model_path =
+      (std::filesystem::path(::testing::TempDir()) /
+       "dummy_audio_streaming_lora_input.litertlm")
+          .string();
+  ASSERT_OK(WriteModelWithLoRAInput(kTestAudioStreamingModelPath,
+                                    "segment_mask", model_path));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, model_path, /*max_sequence_length=*/0,
+                          Backend::CPU, /*audio_buffering_enabled=*/true));
+
+  // The LoRA input is not part of the streaming state, so contexts don't hold a
+  // copy of it that RestoreContext() would write back over the LoRA buffer.
+  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
+  auto* new_streaming_context =
+      static_cast<AudioStreamingContext*>(new_context.get());
+  EXPECT_FALSE(
+      new_streaming_context->state_buffers().contains(kTestAudioLoRAInputName));
+  EXPECT_TRUE(
+      new_streaming_context->state_buffers().contains("feature_state_0"));
+
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
+  auto* cloned_streaming_context =
+      static_cast<AudioStreamingContext*>(cloned_context.get());
+  EXPECT_FALSE(cloned_streaming_context->state_buffers().contains(
+      kTestAudioLoRAInputName));
+  EXPECT_TRUE(
+      cloned_streaming_context->state_buffers().contains("feature_state_0"));
+
+  EXPECT_OK(audio_executor->RestoreContext(std::move(new_context)));
+  EXPECT_OK(audio_executor->Reset());
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)
