@@ -24,13 +24,13 @@
 namespace litert::omni::asr {
 namespace {
 
-// Maximum RMS energy (~-60 dBFS) for an audio chunk to be classified as silent.
-constexpr double kSilenceMaxRms = 1e-3;
+// Maximum RMS energy (~-80 dBFS) for an audio chunk to be classified as silent.
+constexpr double kSilenceMaxRms = 1e-4;
 
-// Maximum peak amplitude (~-46 dBFS) for an audio chunk to be classified as
-// silent, preventing short transient clicks or very quiet consonant onsets in
-// mostly-silent windows from being dropped.
-constexpr float kSilenceMaxPeak = 5e-3f;
+// Maximum peak amplitude (~-66 dBFS) for an audio chunk to be classified as
+// silent, preventing short transient clicks, quiet consonant onsets, or
+// low-gain recordings from being dropped.
+constexpr float kSilenceMaxPeak = 5e-4f;
 
 // Minimum number of consecutive repetitions of a k-gram required to classify a
 // trailing sequence as a degenerate repetition loop.

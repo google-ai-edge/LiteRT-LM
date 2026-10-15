@@ -45,16 +45,16 @@ TEST(UtilsTest, IsSilentAudioReturnsTrueForEmptyAndZeroAudio) {
 }
 
 TEST(UtilsTest, IsSilentAudioReturnsTrueBelowRmsAndPeakThresholds) {
-  EXPECT_TRUE(IsSilentAudio(std::vector<float>(1600, 5e-4f)));
+  EXPECT_TRUE(IsSilentAudio(std::vector<float>(1600, 5e-5f)));
 }
 
 TEST(UtilsTest, IsSilentAudioReturnsFalseWhenRmsExceedsThreshold) {
-  EXPECT_FALSE(IsSilentAudio(std::vector<float>(1600, 2e-3f)));
+  EXPECT_FALSE(IsSilentAudio(std::vector<float>(1600, 2e-4f)));
 }
 
 TEST(UtilsTest, IsSilentAudioReturnsFalseWhenPeakExceedsThreshold) {
   std::vector<float> samples(1600, 0.0f);
-  samples[0] = 6e-3f;
+  samples[0] = 6e-4f;
   EXPECT_FALSE(IsSilentAudio(samples));
 }
 
