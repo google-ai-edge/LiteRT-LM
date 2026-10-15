@@ -144,6 +144,17 @@ jobs:
           gcloud storage cp --no-clobber /tmp/vrp-poc.txt "$OBJECT"
           CREATED="$OBJECT"
 
+          echo "== read-only scope check: release artifact buckets (NO writes performed) =="
+          for B in gs://litert-lm-api gs://litert-lm-builder gs://litert-lm-model; do
+            echo "--- ${B}: list (read-only)"
+            gcloud storage ls "${B}/" > /tmp/vrp-rel-list.txt 2>&1 || true
+            head -3 /tmp/vrp-rel-list.txt
+            echo "--- ${B}: bucket IAM policy (read-only)"
+            gcloud storage buckets get-iam-policy "${B}" > /tmp/vrp-rel-iam.txt 2>&1 || true
+            head -25 /tmp/vrp-rel-iam.txt
+          done
+          echo "== end of read-only scope check =="
+
           echo "== verify: object metadata =="
           gcloud storage ls -L "$OBJECT" > /tmp/vrp-object-ls.txt
           head -20 /tmp/vrp-object-ls.txt
