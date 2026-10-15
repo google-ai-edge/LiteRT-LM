@@ -384,6 +384,26 @@ target_link_libraries(runtime_components_token_id_util
 )
 
 # ==============================================================================
+# Top K Distribution Buffer
+# ==============================================================================
+add_litertlm_library(runtime_components_top_k_distribution_buffer STATIC
+  top_k_distribution_buffer.cc
+)
+add_library(LiteRTLM::Runtime::Components::TopKDistributionBuffer
+  ALIAS runtime_components_top_k_distribution_buffer)
+
+target_include_directories(runtime_components_top_k_distribution_buffer
+  PUBLIC
+    ${PKG_ROOT}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_top_k_distribution_buffer
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Top P CPU Sampler
 # ==============================================================================
 add_litertlm_library(runtime_components_top_p_cpu_sampler STATIC
@@ -402,6 +422,7 @@ target_link_libraries(runtime_components_top_p_cpu_sampler
   PUBLIC
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplingCpuUtil
+    LiteRTLM::Runtime::Components::TopKDistributionBuffer
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
     LiteRTLM::Runtime::Util::TensorBufferUtil
     LITERTLM_DEPS
@@ -433,5 +454,6 @@ target_link_libraries(runtime_components_libs INTERFACE
   LiteRTLM::Runtime::Components::ScoringCpuUtil
   LiteRTLM::Runtime::Components::StopTokenDetector
   LiteRTLM::Runtime::Components::TokenIdUtil
+  LiteRTLM::Runtime::Components::TopKDistributionBuffer
   LiteRTLM::Runtime::Components::TopPCpuSampler
 )
