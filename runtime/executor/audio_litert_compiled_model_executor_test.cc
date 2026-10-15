@@ -104,6 +104,52 @@ CreateAudioExecutor(Environment& env, const std::string& model_path,
   return litert::lm::AudioLiteRtCompiledModelExecutor::Create(
       audio_executor_settings, env);
 }
+
+// The dummy streaming model (chunk_size = 10, overlap = 3, stride = 7,
+// shrinking factor = 2) emits output token k with mask segment_mask[2 * k].
+// Valid tokens are projected to `kStreamingValidFrame`, and masked tokens to
+// zeros.
+constexpr std::array<float, kEmbeddingDimensions> kStreamingValidFrame = {
+    1.f, 3.f, 6.f, 10.f, 15.f, 15.f};
+
+// Returns the expected projected embeddings of the dummy streaming model: the
+// first `num_masked_tokens` tokens are zeros (they start with a masked
+// padding frame) and the remaining tokens are `kStreamingValidFrame`.
+std::vector<float> ExpectedStreamingEmbeddings(int num_masked_tokens,
+                                               int num_tokens) {
+  std::vector<float> expected;
+  expected.reserve(num_tokens * kEmbeddingDimensions);
+  expected.insert(expected.end(), num_masked_tokens * kEmbeddingDimensions,
+                  0.0f);
+  for (int i = num_masked_tokens; i < num_tokens; ++i) {
+    expected.insert(expected.end(), kStreamingValidFrame.begin(),
+                    kStreamingValidFrame.end());
+  }
+  return expected;
+}
+
+// Encodes `num_frames` all-ones spectrogram frames and returns the valid
+// projected audio embeddings.
+absl::StatusOr<std::vector<float>> EncodeOnesAndGetEmbeddings(
+    AudioLiteRtCompiledModelExecutor& audio_executor, int num_frames) {
+  std::vector<float> mel_spectrogram_data(
+      num_frames * kSpectrogramFrequencySlots, 1.0f);
+  ABSL_ASSIGN_OR_RETURN(
+      auto mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions(
+                               {1, num_frames, kSpectrogramFrequencySlots})))));
+  ABSL_ASSIGN_OR_RETURN(auto audio_data,
+                        audio_executor.Encode(mel_spectrogram_tensor_buffer));
+  ABSL_ASSIGN_OR_RETURN(auto projected_audio_embeddings_ptr,
+                        audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  ABSL_ASSIGN_OR_RETURN(
+      auto embeddings, GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  embeddings.resize(audio_data.GetValidTokens() * kEmbeddingDimensions);
+  return embeddings;
+}
 // TODO: b/441514829 - Enable the tests on Windows once the bug is fixed.
 #if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
     !defined(__NT__) && !defined(_WIN64)
@@ -483,12 +529,17 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_Streaming_LargeInput) {
                               .string(),
                           /*max_sequence_length=*/0, Backend::CPU));
 
-  // Input size 24.
-  // chunk_size = 10, overlap = 3, stride = 7.
-  // 3 chunks: [0, 10), [7, 17), [14, 24).
-  // Total output tokens: 3 * (10 / 2) = 15.
+  // Input size 24, left padded with 3 masked zero frames for the first chunk
+  // of the stream -> 27 frames.
+  // chunk_size = 10, overlap = 3, stride = 7. Buffering is disabled, so the
+  // trailing frames are flushed.
+  // 4 chunks: [0, 10), [7, 17), [14, 24), [21, 27).
+  // Total output tokens: 3 * (10 / 2) + 6 / 2 = 18.
   constexpr int kInputSequenceLength = 24;
-  constexpr int kExpectedOutputTokens = 15;
+  constexpr int kExpectedOutputTokens = 18;
+  // Tokens 0 and 1 of the first chunk start with padding frames 0 and 2, so
+  // they are masked.
+  constexpr int kExpectedMaskedTokens = 2;
 
   std::vector<float> mel_spectrogram_data(
       kInputSequenceLength * kSpectrogramFrequencySlots, 1.0f);
@@ -519,18 +570,9 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_Streaming_LargeInput) {
   EXPECT_EQ(projected_audio_embeddings_data.size(),
             kExpectedOutputTokens * kEmbeddingDimensions);
 
-  // Each output frame should be [1, 3, 6, 10, 15, 15] as derived.
-  std::vector<float> expected_frame = {1.f, 3.f, 6.f, 10.f, 15.f, 15.f};
-  std::vector<float> expected_embeddings_data;
-  expected_embeddings_data.reserve(kExpectedOutputTokens *
-                                   kEmbeddingDimensions);
-  for (int i = 0; i < kExpectedOutputTokens; ++i) {
-    expected_embeddings_data.insert(expected_embeddings_data.end(),
-                                    expected_frame.begin(),
-                                    expected_frame.end());
-  }
-
-  EXPECT_EQ(projected_audio_embeddings_data, expected_embeddings_data);
+  EXPECT_EQ(projected_audio_embeddings_data,
+            ExpectedStreamingEmbeddings(kExpectedMaskedTokens,
+                                        kExpectedOutputTokens));
   EXPECT_EQ(executor_audio_data.GetValidTokens(), kExpectedOutputTokens);
 }
 
@@ -570,10 +612,13 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
 
   ASSERT_OK_AND_ASSIGN(auto executor_audio_data_encode,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer));
+  // 5 frames < window size 10 -> buffered unpadded, 0 tokens.
   EXPECT_EQ(executor_audio_data_encode.GetValidTokens(), 0);
 
+  // Flush pads the 5 buffered frames with 3 masked zero frames -> 8 frames,
+  // a single chunk [0, 8) -> 8 / 2 = 4 tokens.
   ASSERT_OK_AND_ASSIGN(auto executor_audio_data_flush, audio_executor->Flush());
-  EXPECT_EQ(executor_audio_data_flush.GetValidTokens(), 3);
+  EXPECT_EQ(executor_audio_data_flush.GetValidTokens(), 4);
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
@@ -598,6 +643,7 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
               Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
   ASSERT_OK_AND_ASSIGN(auto audio_data1,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer1));
+  // 5 frames < window size 10 -> buffered unpadded, 0 tokens.
   EXPECT_EQ(audio_data1.GetValidTokens(), 0);
 
   std::vector<float> mel_spectrogram_data2(8 * kSpectrogramFrequencySlots,
@@ -611,10 +657,15 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
               Layout(Dimensions({1, 8, kSpectrogramFrequencySlots})))));
   ASSERT_OK_AND_ASSIGN(auto audio_data2,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer2));
+  // 5 buffered + 8 new frames, left padded with 3 masked zero frames -> 16
+  // frames. Only the full chunk [0, 10) is encoded -> 5 tokens; frames
+  // [7, 16) are buffered.
   EXPECT_EQ(audio_data2.GetValidTokens(), 5);
 
+  // Flush encodes the 9 buffered frames without padding again: a single chunk
+  // [0, 9) -> ceil(9 / 2) = 5 tokens.
   ASSERT_OK_AND_ASSIGN(auto audio_data_flush, audio_executor->Flush());
-  EXPECT_EQ(audio_data_flush.GetValidTokens(), 3);
+  EXPECT_EQ(audio_data_flush.GetValidTokens(), 5);
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
@@ -730,14 +781,17 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(streaming_context2->buffered_spectrogram(),
             streaming_context->buffered_spectrogram());
 
-  // Flush the executor once -> processes 5 buffered frames.
+  // Flush the executor once -> pads the 5 buffered frames with 3 masked zero
+  // frames -> a single chunk [0, 8) -> 4 tokens.
   ASSERT_OK_AND_ASSIGN(auto flush_data1, audio_executor->Flush());
-  EXPECT_EQ(flush_data1.GetValidTokens(), 3);
+  EXPECT_EQ(flush_data1.GetValidTokens(), 4);
 
-  // Restore context -> restores the 5 buffered frames back into executor.
+  // Restore context -> restores the 5 buffered frames back into executor, and
+  // marks the next chunk as the first chunk of the stream again.
   ASSERT_OK(audio_executor->RestoreContext(std::move(cloned_context)));
 
-  // Flush again after restore -> processes restored 5 buffered frames.
+  // Flush again after restore -> processes restored 5 buffered frames with
+  // the same padding.
   ASSERT_OK_AND_ASSIGN(auto flush_data2, audio_executor->Flush());
   EXPECT_EQ(flush_data1.GetValidTokens(), flush_data2.GetValidTokens());
 }
@@ -864,6 +918,119 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
   ASSERT_OK_AND_ASSIGN(auto flush_after_new_restore, audio_executor->Flush());
   EXPECT_EQ(flush_after_new_restore.GetValidTokens(), 0);
+}
+
+// Encoding 10 frames as the first chunk of a stream (no buffering, so the
+// trailing frames are flushed): padded to 13 frames -> chunks [0, 10) and
+// [7, 13) -> 5 + 3 = 8 tokens, the first 2 masked by the padding.
+constexpr int kFirstEncodeTokens = 8;
+constexpr int kFirstEncodeMaskedTokens = 2;
+// Encoding 10 frames later in the stream: no padding -> a single chunk
+// [0, 10) -> 5 tokens, none masked.
+constexpr int kLaterEncodeTokens = 5;
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_PadsOnlyFirstChunkOfStream) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto first_embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(first_embeddings,
+            ExpectedStreamingEmbeddings(kFirstEncodeMaskedTokens,
+                                        kFirstEncodeTokens));
+
+  // A second Encode call on the same stream is not padded again.
+  ASSERT_OK_AND_ASSIGN(auto second_embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(second_embeddings,
+            ExpectedStreamingEmbeddings(
+                /*num_masked_tokens=*/0, kLaterEncodeTokens));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_ResetAndNewContextPadFirstChunkAgain) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+  const std::vector<float> first_chunk_embeddings =
+      ExpectedStreamingEmbeddings(kFirstEncodeMaskedTokens, kFirstEncodeTokens);
+
+  ASSERT_OK_AND_ASSIGN(auto embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(embeddings, first_chunk_embeddings);
+
+  // Reset() starts a new stream, so the next chunk is padded again.
+  ASSERT_OK(audio_executor->Reset());
+  ASSERT_OK_AND_ASSIGN(embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(embeddings, first_chunk_embeddings);
+
+  // A new context starts a new stream, so the next chunk is padded again.
+  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
+  EXPECT_TRUE(
+      static_cast<AudioStreamingContext*>(new_context.get())->IsFirstChunk());
+  ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
+  ASSERT_OK_AND_ASSIGN(embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(embeddings, first_chunk_embeddings);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoder_CloneAndRestoreContextPreserveFirstChunkState) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  // Saved before any encode: the next chunk is the first chunk.
+  ASSERT_OK_AND_ASSIGN(auto context_before_encode,
+                       audio_executor->CloneContext());
+  EXPECT_TRUE(static_cast<AudioStreamingContext*>(context_before_encode.get())
+                  ->IsFirstChunk());
+
+  ASSERT_OK(EncodeOnesAndGetEmbeddings(*audio_executor, 10).status());
+
+  // Saved after the first encode: the next chunk is not the first chunk.
+  ASSERT_OK_AND_ASSIGN(auto context_after_encode,
+                       audio_executor->CloneContext());
+  EXPECT_FALSE(static_cast<AudioStreamingContext*>(context_after_encode.get())
+                   ->IsFirstChunk());
+
+  // AudioStreamingContext::Clone() carries the first-chunk state.
+  ASSERT_OK_AND_ASSIGN(auto cloned_before_encode,
+                       context_before_encode->Clone());
+  EXPECT_TRUE(static_cast<AudioStreamingContext*>(cloned_before_encode.get())
+                  ->IsFirstChunk());
+  ASSERT_OK_AND_ASSIGN(auto cloned_after_encode, context_after_encode->Clone());
+  EXPECT_FALSE(static_cast<AudioStreamingContext*>(cloned_after_encode.get())
+                   ->IsFirstChunk());
+
+  // Restoring the context saved after the first encode does not pad.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(context_after_encode)));
+  ASSERT_OK_AND_ASSIGN(auto embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(embeddings, ExpectedStreamingEmbeddings(/*num_masked_tokens=*/0,
+                                                    kLaterEncodeTokens));
+
+  // Restoring the context saved before any encode pads the next chunk again.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(context_before_encode)));
+  ASSERT_OK_AND_ASSIGN(embeddings,
+                       EncodeOnesAndGetEmbeddings(*audio_executor, 10));
+  EXPECT_EQ(embeddings, ExpectedStreamingEmbeddings(kFirstEncodeMaskedTokens,
+                                                    kFirstEncodeTokens));
 }
 
 // Name of the audio LoRA input that test model inputs are renamed to.

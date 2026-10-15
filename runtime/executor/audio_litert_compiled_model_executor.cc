@@ -213,7 +213,24 @@ absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
   auto context =
       std::make_unique<AudioStreamingContext>(std::move(new_state_buffers));
   context->buffered_spectrogram() = buffered_spectrogram_;
+  context->SetIsFirstChunk(is_first_chunk_);
   return context;
+}
+
+bool AudioStreamingContext::IsFirstChunk() const { return is_first_chunk_; }
+
+void AudioStreamingContext::SetIsFirstChunk(bool is_first_chunk) {
+  is_first_chunk_ = is_first_chunk;
+}
+
+bool AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::IsFirstChunk()
+    const {
+  return is_first_chunk_;
+}
+
+void AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::SetIsFirstChunk(
+    bool is_first_chunk) {
+  is_first_chunk_ = is_first_chunk;
 }
 
 absl::StatusOr<
@@ -585,6 +602,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Reset() {
     }
   }
   buffered_spectrogram_.clear();
+  is_first_chunk_ = true;
   return absl::OkStatus();
 }
 
@@ -1152,6 +1170,37 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
     return audio_data;
   }
 
+  // The first chunk of a stream has no previous frames to use as the left
+  // context of the subsampling convolution. Prepend `overlap_size` masked-out
+  // zero frames, as the streaming encoder is exported and verified against
+  // the non-streaming encoder. Without this padding, every chunk is shifted
+  // by `overlap_size` frames relative to the non-streaming encoder.
+  std::vector<float> padded_spectrogram;
+  std::vector<uint8_t> padded_mask;
+  const std::vector<float>* spectrogram = &spectrogram_host_buffer;
+  const std::vector<uint8_t>* spectrogram_mask = &spectrogram_mask_host_buffer;
+  if (audio_encoder_->IsStreaming() && overlap_size > 0 && total_frames > 0) {
+    auto* streaming_encoder =
+        static_cast<AudioStreamingEncoder*>(audio_encoder_.get());
+    if (streaming_encoder->IsFirstChunk()) {
+      padded_spectrogram.reserve(spectrogram_host_buffer.size() +
+                                 overlap_size * feature_dim);
+      padded_spectrogram.assign(overlap_size * feature_dim, 0.0f);
+      padded_spectrogram.insert(padded_spectrogram.end(),
+                                spectrogram_host_buffer.begin(),
+                                spectrogram_host_buffer.end());
+      padded_mask.reserve(spectrogram_mask_host_buffer.size() + overlap_size);
+      padded_mask.assign(overlap_size, 0);
+      padded_mask.insert(padded_mask.end(),
+                         spectrogram_mask_host_buffer.begin(),
+                         spectrogram_mask_host_buffer.end());
+      spectrogram = &padded_spectrogram;
+      spectrogram_mask = &padded_mask;
+      total_frames += overlap_size;
+      streaming_encoder->SetIsFirstChunk(false);
+    }
+  }
+
   // Calculate N chunks.
   int N = 1;
   if (total_frames > window_size) {
@@ -1188,10 +1237,10 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
          (is_flush && pos + overlap_size < total_frames)) {
     int chunk_len = std::min(window_size, total_frames - pos);
     auto spectrogram_slice =
-        absl::MakeSpan(spectrogram_host_buffer)
+        absl::MakeConstSpan(*spectrogram)
             .subspan(pos * feature_dim, chunk_len * feature_dim);
     auto spectrogram_mask_slice =
-        absl::MakeSpan(spectrogram_mask_host_buffer).subspan(pos, chunk_len);
+        absl::MakeConstSpan(*spectrogram_mask).subspan(pos, chunk_len);
 
     int current_chunk_max_tokens =
         CeilIntDiv(chunk_len, encoder_shrinking_factor_);
@@ -1223,10 +1272,9 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
       executor_settings_.GetAudioBufferingEnabled()) {
     auto& buffered_spectrogram =
         audio_encoder_->GetMutableBufferedSpectrogram();
-    buffered_spectrogram.insert(
-        buffered_spectrogram.end(),
-        spectrogram_host_buffer.begin() + pos * feature_dim,
-        spectrogram_host_buffer.end());
+    buffered_spectrogram.insert(buffered_spectrogram.end(),
+                                spectrogram->begin() + pos * feature_dim,
+                                spectrogram->end());
   } else {
     audio_encoder_->GetMutableBufferedSpectrogram().clear();
   }
@@ -1387,6 +1435,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CloneContext() {
   if (executor_settings_.GetAudioBufferingEnabled()) {
     audio_streaming_context->buffered_spectrogram() = buffered_spectrogram_;
   }
+  audio_streaming_context->SetIsFirstChunk(is_first_chunk_);
   return audio_streaming_context;
 }
 
@@ -1439,6 +1488,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::RestoreContext(
   if (executor_settings_.GetAudioBufferingEnabled()) {
     buffered_spectrogram_ = audio_streaming_context->buffered_spectrogram();
   }
+  is_first_chunk_ = audio_streaming_context->IsFirstChunk();
   return absl::OkStatus();
 }
 

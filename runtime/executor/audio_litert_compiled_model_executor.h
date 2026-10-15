@@ -60,11 +60,27 @@ class AudioStreamingContext : public AudioContext {
   }
   std::vector<float>& buffered_spectrogram() { return buffered_spectrogram_; }
 
+  // Returns whether the next encoded chunk is the first chunk of the stream.
+  //
+  // args: none.
+  // returns: true if no chunk has been encoded since the stream started.
+  bool IsFirstChunk() const;
+
+  // Sets whether the next encoded chunk is the first chunk of the stream.
+  //
+  // args:
+  //   - is_first_chunk: true if no chunk has been encoded yet.
+  // returns: none.
+  void SetIsFirstChunk(bool is_first_chunk);
+
  private:
   // The state buffers of the audio encoder model. It includes the kv caches and
   // the convolution features and masks of the last timestamp.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers_;
   std::vector<float> buffered_spectrogram_;
+  // Whether the next encoded chunk starts the stream and needs the left
+  // context zero padding.
+  bool is_first_chunk_ = true;
 };
 
 // The Audio Executor that uses the LiteRT CompiledModel to run the audio
@@ -395,6 +411,21 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
     bool IsStreaming() const override { return true; }
 
+    // Returns whether the next encoded chunk is the first chunk of the
+    // stream. The first chunk has no previous frames to use as the left
+    // context of the subsampling convolution, so it is zero padded.
+    //
+    // args: none.
+    // returns: true if no chunk has been encoded since the last reset.
+    bool IsFirstChunk() const;
+
+    // Sets whether the next encoded chunk is the first chunk of the stream.
+    //
+    // args:
+    //   - is_first_chunk: true if no chunk has been encoded yet.
+    // returns: none.
+    void SetIsFirstChunk(bool is_first_chunk);
+
     absl::StatusOr<std::unique_ptr<AudioStreamingContext>> CreateNewContext();
 
     absl::StatusOr<std::unique_ptr<AudioStreamingContext>> CloneContext();
@@ -415,6 +446,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     Environment& env_;
     const Model& model_;
     int overlap_size_;
+    bool is_first_chunk_ = true;
   };
 
   // The Audio Adapter LiteRT CompiledModel wrapper manage the input and
