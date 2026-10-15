@@ -162,9 +162,15 @@ TEST_F(AsrSessionTest, AudioInputSourceValidatesMetadataAndInputTypes) {
   ASSERT_OK_AND_ASSIGN(auto session,
                        BuildFakeAsrSession(std::move(audio_source)));
 
-  // Mismatched sample_rate_hz fails.
+  // Non-positive sample_rate_hz fails.
+  ASSERT_OK(raw_input->PushInput(
+      OmniSession::AudioInputMetadata{.sample_rate_hz = 0, .num_channels = 1}));
+  EXPECT_THAT(session->ProcessNext(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Non-positive num_channels fails.
   ASSERT_OK(raw_input->PushInput(OmniSession::AudioInputMetadata{
-      .sample_rate_hz = 8000, .num_channels = 1}));
+      .sample_rate_hz = 16000, .num_channels = 0}));
   EXPECT_THAT(session->ProcessNext(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
@@ -178,6 +184,48 @@ TEST_F(AsrSessionTest, AudioInputSourceValidatesMetadataAndInputTypes) {
   ASSERT_OK(raw_input->PushInput(OmniSession::TextInput{.text = "invalid"}));
   EXPECT_THAT(session->ProcessNext(),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(AsrSessionTest, AudioInputSourceResamplesFromAudioInputMetadata) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input = input_source.get();
+  // Target config: 16 kHz, 4 samples per interval, 2 overlap samples.
+  auto audio_source = CreateAudioInputSource(
+      std::move(input_source), /*sample_rate_hz=*/16000, /*num_channels=*/1,
+      /*samples_per_interval=*/4, /*overlap_samples=*/2);
+  AudioSource* raw_audio_source = audio_source.get();
+  ASSERT_OK_AND_ASSIGN(auto session,
+                       BuildFakeAsrSession(std::move(audio_source)));
+  EXPECT_EQ(raw_audio_source->GetSampleRateHz(), 16000);
+
+  // Configure 24 kHz input via AudioInputMetadata: AudioInputSource resamples
+  // incoming 24 kHz chunks to 16 kHz before buffering into 4-sample intervals.
+  ASSERT_OK(raw_input->PushInput(OmniSession::AudioInputMetadata{
+      .sample_rate_hz = 24000, .num_channels = 1}));
+
+  // 3 samples at 24 kHz resample to 2 samples at 16 kHz (< 4 interval).
+  ASSERT_OK(raw_input->PushInput(OmniSession::AudioInput{{1.0f, 1.0f, 1.0f}}));
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_EQ(raw_audio_source->GetSampleRateHz(), 16000);
+
+  // Pushing 3 more samples at 24 kHz yields 2 more resampled samples (total 4),
+  // completing the 4-sample interval.
+  ASSERT_OK(raw_input->PushInput(OmniSession::AudioInput{{1.0f, 1.0f, 1.0f}}));
+  ASSERT_OK(session->ProcessNext());
+
+  // Reset restores the default 16 kHz input sample rate.
+  session->Reset();
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{{1.0f, 2.0f, 3.0f, 4.0f}}));
+  ASSERT_OK(session->ProcessNext());
+
+  // Configure 8 kHz input after reset: 2 samples at 8 kHz upsample to 4 samples
+  // at 16 kHz, completing the 4-sample interval.
+  session->Reset();
+  ASSERT_OK(raw_input->PushInput(OmniSession::AudioInputMetadata{
+      .sample_rate_hz = 8000, .num_channels = 1}));
+  ASSERT_OK(raw_input->PushInput(OmniSession::AudioInput{{1.0f, 1.0f}}));
+  ASSERT_OK(session->ProcessNext());
 }
 
 TEST_F(AsrSessionTest, OverlapAndUnpaddedRemainderOnFlushAndReset) {

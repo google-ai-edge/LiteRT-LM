@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/asr/audio_preprocessor.h"
+#include "omni/asr/audio_resampler.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/dummy_preprocessor.h"
 #include "omni/asr/levenshtein_text_merger.h"
@@ -138,6 +139,7 @@ class AudioInputSource : public AudioSource {
       int overlap_samples)
       : input_source_(std::move(input_source)),
         sample_rate_hz_(sample_rate_hz),
+        input_sample_rate_hz_(sample_rate_hz),
         num_channels_(num_channels),
         samples_per_interval_(
             static_cast<size_t>(std::max(1, samples_per_interval))),
@@ -155,6 +157,8 @@ class AudioInputSource : public AudioSource {
  protected:
   void ResetInternal() override {
     input_source_->Reset();
+    input_sample_rate_hz_ = sample_rate_hz_;
+    resampler_.Reset();
     buffer_.clear();
     has_unpushed_samples_ = false;
     is_finished_ = false;
@@ -239,17 +243,19 @@ class AudioInputSource : public AudioSource {
       }
       if (const auto* metadata =
               std::get_if<OmniSession::AudioInputMetadata>(&input)) {
-        if (metadata->sample_rate_hz > 0 &&
-            metadata->sample_rate_hz != sample_rate_hz_) {
+        if (metadata->sample_rate_hz <= 0) {
           return absl::InvalidArgumentError(
-              "AudioInputMetadata sample_rate_hz does not match "
-              "AudioInputSource.");
+              "AudioInputMetadata sample_rate_hz must be positive.");
         }
-        if (metadata->num_channels > 0 &&
+        if (metadata->num_channels <= 0 ||
             metadata->num_channels != num_channels_) {
           return absl::InvalidArgumentError(
               "AudioInputMetadata num_channels does not match "
               "AudioInputSource.");
+        }
+        if (metadata->sample_rate_hz != input_sample_rate_hz_) {
+          input_sample_rate_hz_ = metadata->sample_rate_hz;
+          resampler_.Reset();
         }
         continue;
       }
@@ -257,7 +263,13 @@ class AudioInputSource : public AudioSource {
       if (audio_input == nullptr) {
         return absl::InvalidArgumentError("ASR Session requires AudioInput.");
       }
-      if (!audio_input->pcm_samples.empty()) {
+      std::vector<float> pcm_samples = std::move(audio_input->pcm_samples);
+      if (!pcm_samples.empty() && input_sample_rate_hz_ != sample_rate_hz_) {
+        ABSL_ASSIGN_OR_RETURN(  // NOLINT - prefer ABSL_ as consistency
+            pcm_samples, resampler_.Resample(pcm_samples, input_sample_rate_hz_,
+                                             sample_rate_hz_));
+      }
+      if (!pcm_samples.empty()) {
         // Newly arrived PCM samples in `buffer_` have not been emitted in any
         // interval yet. Tracking this explicitly is needed because when
         // `buffer_.size() <= overlap_samples_`, `buffer_.size()` alone cannot
@@ -267,10 +279,9 @@ class AudioInputSource : public AudioSource {
         has_unpushed_samples_ = true;
       }
       if (buffer_.empty()) {
-        std::swap(buffer_, audio_input->pcm_samples);
+        std::swap(buffer_, pcm_samples);
       } else {
-        buffer_.insert(buffer_.end(), audio_input->pcm_samples.begin(),
-                       audio_input->pcm_samples.end());
+        buffer_.insert(buffer_.end(), pcm_samples.begin(), pcm_samples.end());
       }
     }
     return absl::OkStatus();
@@ -298,9 +309,11 @@ class AudioInputSource : public AudioSource {
 
   std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;
   const int sample_rate_hz_;
+  int input_sample_rate_hz_;
   const int num_channels_;
   const size_t samples_per_interval_;
   const size_t overlap_samples_;
+  AudioResampler resampler_;
   std::vector<float> buffer_;
   // True when `buffer_` contains samples that have not yet been emitted by
   // `PushNextInterval()` or `PushRemainder()` (as opposed to only the retained

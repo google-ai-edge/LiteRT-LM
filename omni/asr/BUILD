@@ -65,6 +65,35 @@ cc_test(
 )
 
 cc_library(
+    name = "audio_resampler",
+    srcs = ["audio_resampler.cc"],
+    hdrs = ["audio_resampler.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ] + select({
+        "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
+        "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
+        "//conditions:default": ["@miniaudio"],
+    }),
+)
+
+cc_test(
+    name = "audio_resampler_test",
+    srcs = ["audio_resampler_test.cc"],
+    deps = [
+        ":audio_resampler",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "audio_preprocessor",
     hdrs = ["audio_preprocessor.h"],
     deps = [
@@ -544,6 +573,7 @@ cc_library(
     hdrs = ["asr_session.h"],
     deps = [
         ":audio_preprocessor",
+        ":audio_resampler",
         ":audio_source",
         ":dummy_preprocessor",
         ":levenshtein_text_merger",
