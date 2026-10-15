@@ -693,5 +693,321 @@ TEST(TimestampTextMergerTest, WordCountPrevTailBranchReseedsTimestamps) {
   EXPECT_EQ(res3->unconfirmed_text, "f g h i");
 }
 
+TEST(TimestampTextMergerTest,
+     EstimateTimestampShiftIgnoresSingleCharAndOutOfOverlapWords) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000): "early" is at 2800 ms (before chunk 2's 3000 ms start),
+  // followed by three single-char tokens at 3100, 3500, 3900 and two
+  // multi-char words at 4200 and 4600.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"early", 2800},
+                                               {"a", 3100},
+                                               {"i", 3500},
+                                               {"o", 3900},
+                                               {"signal", 4200},
+                                               {"detected", 4600}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000): the three single-char tokens appear at +300 ms
+  // (3400, 3800, 4200), whereas the multi-char words "signal" and "detected"
+  // have zero shift (4200, 4600). Because single-char words are ignored by
+  // EstimateTimestampShift, shift is 0 (chunk_start = 3000) rather than +300
+  // (which would lower chunk_start to 2700 and leave "early" unconfirmed).
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"a", 400},
+                                               {"i", 800},
+                                               {"o", 1200},
+                                               {"signal", 1200},
+                                               {"detected", 1600},
+                                               {"now", 2500}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "early");
+}
+
+TEST(TimestampTextMergerTest,
+     BoundaryFragmentSharingSubstringOrFollowingNumericWordIsDropped) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000): "station" starts at 2900 ms (just before chunk 2's
+  // 3000 ms boundary).
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"next", 1000}, {"station", 2900}, {"ahead", 3800}, {"now", 4400}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000): hears cut fragment "ational" at 50 ms (3050 ms
+  // absolute), which shares a 3-char substring ("ati"/"tio"/"ion") with
+  // "station" at 2900 ms and is dropped by IsCutAtWindowStart.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"ational", 50}, {"ahead", 800}, {"now", 1400}, {"please", 2200}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "next station");
+  EXPECT_EQ(res2->unconfirmed_text, "ahead now please");
+
+  // Also verify a boundary word following a numeric word at the window start:
+  merger.Reset();
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"room", 1000}, {"105", 2900}, {"is", 3800}, {"open", 4400}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 hears "five" at 50 ms (3050 ms absolute) from the tail of "105".
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"five", 50}, {"is", 800}, {"open", 1400}, {"today", 2200}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res_num = GetMergeResult(merger);
+  ASSERT_OK(res_num);
+  EXPECT_EQ(res_num->confirmed_text, "room 105");
+  EXPECT_EQ(res_num->unconfirmed_text, "is open today");
+}
+
+TEST(TimestampTextMergerTest,
+     DeduplicatesTrailingSuffixOfHyphenatedAndApostropheWords) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000) decodes "twenty-five" at 3400 ms and "it's" at 3900 ms.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"count", 1000},
+                                               {"twenty-five", 3400},
+                                               {"it's", 3900},
+                                               {"ready", 4400}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000) pairs "twenty-five" (before pivot 4200, so kept from
+  // prev) and also emits an unpaired trailing "five" at 4250 ms and "s" right
+  // after "it's". AppendMergedWord deduplicates both trailing suffixes.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"twenty-five", 400},
+                                               {"five", 1250},
+                                               {"it's", 1300},
+                                               {"s", 1350},
+                                               {"ready", 1400},
+                                               {"now", 2200}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "count");
+  EXPECT_EQ(res2->unconfirmed_text, "twenty-five it's ready now");
+}
+
+TEST(TimestampTextMergerTest,
+     PairedSubstitutionAtPivotPrefersPreviousNumericWord) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-63 frames, step=37.8, pivot=37.8 + 0.6*(63-37.8) = 52.92):
+  // Numeric word "25" is at frame 53 (within pivot + 1.0).
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"page", 20}, {"number", 42}, {"is", 48}, {"25", 53}, {"today", 59}},
+      /*end_ts_ms=*/63);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (chunk_start_ms=38) pairs at frame 53 with non-numeric "twenty"
+  // (15 + 38 = 53). Because prev_ov_words[i] starts with a digit and is within
+  // pivot + 1.0, "25" is preferred over "twenty".
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"number", 4}, {"is", 10}, {"twenty", 15}, {"today", 21}, {"ok", 35}},
+      /*end_ts_ms=*/63);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "page");
+  EXPECT_EQ(res2->unconfirmed_text, "number is 25 today ok");
+}
+
+TEST(TimestampTextMergerTest,
+     DropsShortUnpairedTailWordAtEndOfPreviousChunkWindow) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-63 frames) has a short 2-char truncated word "th" right at the
+  // end of the chunk (frame 62 >= prev_end_ms - 1.0).
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"start", 20}, {"reading", 42}, {"now", 48}, {"th", 62}},
+      /*end_ts_ms=*/63);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (chunk_start_ms=38) hears "reading" (42), "now" (48), and
+  // continues with "complete" at frame 75 (37 + 38), leaving "th" at 62
+  // unpaired. Because "th" is a short (<= 3 chars) final word of chunk 1 at
+  // the window end, it is dropped rather than kept as a gap word.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"reading", 4}, {"now", 10}, {"complete", 37}},
+      /*end_ts_ms=*/63);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "start");
+  EXPECT_EQ(res2->unconfirmed_text, "reading now complete");
+}
+
+TEST(TimestampTextMergerTest,
+     BoundaryWordFollowingNumericWordIsNotDroppedWhenNotAnEcho) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000): ends with "100" at 2900 ms.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"cost", 1000}, {"100", 2900}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000): begins with "dollars" at 50 ms (3050 ms absolute).
+  // "dollars" is a valid word starting the next clause and not a spoken echo of
+  // "100" (like "hundred"), so it must NOT be treated as a cut fragment.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"dollars", 50}, {"is", 800}, {"due", 1400}, {"today", 2200}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res = GetMergeResult(merger);
+  ASSERT_OK(res);
+  EXPECT_EQ(res->confirmed_text, "cost 100");
+  EXPECT_EQ(res->unconfirmed_text, "dollars is due today");
+
+  // Also verify "page 25 begins":
+  merger.Reset();
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"page", 1000}, {"25", 2900}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 begins with "begins" at 50 ms. "begins" is not an echo of "25"
+  // (unlike "five" or "twenty"), so it must NOT be treated as a cut fragment.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"begins", 50}, {"with", 800}, {"chapter", 1400}, {"one", 2200}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "page 25");
+  EXPECT_EQ(res2->unconfirmed_text, "begins with chapter one");
+}
+
+TEST(TimestampTextMergerTest,
+     DoesNotDropWordsSharingSubstringOrEndingWithUnrelatedBoundaryWord) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000): ends with "weather" at 2900 ms (just before chunk 2's
+  // 3000 ms boundary).
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"the", 1000}, {"weather", 2900}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000): starts with "the" at 50 ms (3050 ms absolute).
+  // While "weather" and "the" both end in 'e' or share the trigram "the",
+  // "the" is a valid word and not a boundary cut fragment of "weather".
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"the", 50}, {"sky", 800}, {"is", 1400}, {"clear", 2000}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res = GetMergeResult(merger);
+  ASSERT_OK(res);
+  EXPECT_EQ(res->confirmed_text, "the weather");
+  EXPECT_EQ(res->unconfirmed_text, "the sky is clear");
+}
+
+TEST(TimestampTextMergerTest,
+     HyphenatedWordDoesNotDropSubstringsNotPrecededByDelimiter) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000): decodes "re-create" and "well-planned".
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"we", 500}, {"re-create", 2000}, {"well-planned", 3500}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000): hears "well-planned" (3500), followed by valid words
+  // "ed" and "ate". Because neither follows a delimiter in the preceding word,
+  // neither is dropped.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"well-planned", 500}, {"ed", 1200}, {"ate", 1800}, {"lunch", 2500}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res = GetMergeResult(merger);
+  ASSERT_OK(res);
+  EXPECT_EQ(res->confirmed_text, "we re-create");
+  EXPECT_EQ(res->unconfirmed_text, "well-planned ed ate lunch");
+}
+
+TEST(TimestampTextMergerTest,
+     HyphenatedSuffixEchoRespectsProximityGap) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000): decodes "twenty-five" at 3400 ms.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"page", 1000}, {"twenty-five", 3400}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000, overlap_len=2000, tol.match_late=1000 ms):
+  // "five" appears at 2500 ms (5500 ms absolute), well after the overlap and
+  // past tol.match_late from 3400 ms (|5500 - 3400| = 2100 > 1000).
+  // It represents a genuine new sentence ("Five people arrived") and must NOT
+  // be dropped.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"twenty-five", 400},
+       {"five", 2500},
+       {"people", 3100},
+       {"arrived", 3700}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res = GetMergeResult(merger);
+  ASSERT_OK(res);
+  EXPECT_EQ(res->confirmed_text, "page");
+  EXPECT_EQ(res->unconfirmed_text, "twenty-five five people arrived");
+}
+
+TEST(TimestampTextMergerTest,
+     DropsShortUnpairedTailWordAtEndOfPreviousChunkWindowInMilliseconds) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 (0-5000 ms): has a short 2-char truncated word "th" at 4950 ms,
+  // right at the end of the 5000 ms window (within 5000 - tol.substitution).
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"start", 1000}, {"reading", 3200}, {"now", 4200}, {"th", 4950}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK(GetMergeResult(merger));
+
+  // Chunk 2 (3000-8000 ms, chunk_start_ms=3000): hears "reading" (200),
+  // "now" (1200), and continues with "complete" at 2500 (5500 ms absolute),
+  // leaving "th" at 4950 unpaired. Because "th" is at the end of chunk 1's
+  // window, it is dropped as an unconfirmed prev tail.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"reading", 200}, {"now", 1200}, {"complete", 2500}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = GetMergeResult(merger);
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "start");
+  EXPECT_EQ(res2->unconfirmed_text, "reading now complete");
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

@@ -25,7 +25,9 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/absl_vlog_is_on.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -247,12 +249,91 @@ bool IsCoveredByPrev(absl::Span<const int> prev_ov_ts,
   return false;
 }
 
+// Returns true if `canon_curr` matches the spoken number or phonetic suffix of
+// a numeric `canon_prev` token (e.g. "five" after "105" or "twenty" after
+// "20").
+bool MatchesSpokenNumberSuffix(absl::string_view canon_prev,
+                               absl::string_view canon_curr) {
+  if (canon_prev.empty() || canon_prev.back() < '0' ||
+      canon_prev.back() > '9') {
+    return false;
+  }
+
+  static const absl::NoDestructor<
+      absl::flat_hash_map<std::string, std::vector<std::string>>>
+      kSpokenNumberMap([] {
+        constexpr absl::string_view kOnes[] = {
+            "zero", "one", "two",   "three", "four",
+            "five", "six", "seven", "eight", "nine"};
+        constexpr absl::string_view kTeens[] = {
+            "ten",     "eleven",  "twelve",    "thirteen", "fourteen",
+            "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"};
+        constexpr absl::string_view kTens[] = {
+            "",      "",      "twenty",  "thirty", "forty",
+            "fifty", "sixty", "seventy", "eighty", "ninety"};
+
+        absl::flat_hash_map<std::string, std::vector<std::string>> map = {
+            {"0", {"zero", "oh"}},
+            {"00", {"hundred"}},
+            {"000", {"thousand"}},
+        };
+        for (int d = 1; d <= 9; ++d) {
+          map[absl::StrCat(d)] = {std::string(kOnes[d])};
+          map[absl::StrCat("0", d)] = {absl::StrCat("oh", kOnes[d]),
+                                       std::string(kOnes[d])};
+        }
+        for (int t = 0; t <= 9; ++t) {
+          map[absl::StrCat(10 + t)] = {std::string(kTeens[t])};
+        }
+        for (int tens = 2; tens <= 9; ++tens) {
+          map[absl::StrCat(tens, 0)] = {std::string(kTens[tens])};
+          for (int ones = 1; ones <= 9; ++ones) {
+            map[absl::StrCat(tens, ones)] = {
+                absl::StrCat(kTens[tens], kOnes[ones]),
+                std::string(kTens[tens])};
+          }
+        }
+        return map;
+      }());
+
+  for (size_t suffix_len = 1;
+       suffix_len <= std::min<size_t>(3, canon_prev.size()); ++suffix_len) {
+    const absl::string_view suffix =
+        canon_prev.substr(canon_prev.size() - suffix_len);
+    const auto it = kSpokenNumberMap->find(suffix);
+    if (it == kSpokenNumberMap->end()) continue;
+    for (const std::string& cand : it->second) {
+      if (canon_curr == cand || CloseEnoughCanonical(cand, canon_curr) ||
+          absl::EndsWith(cand, canon_curr)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Returns true if `canon_curr` at the start of the current chunk looks like a
+// truncated fragment, phonetic variant, or repeat of `canon_prev` that started
+// just before the window boundary (e.g. a 1-2 character fragment, a suffix or
+// close-enough match, a spoken number suffix matching a numeric token, an
+// overlap where a prefix of `canon_curr` of length >= 3 matches a suffix of
+// `canon_prev`, or both words having length >= 4 with matching 2-character
+// suffix).
 bool IsPartialOrMatchingBoundaryWord(absl::string_view canon_prev,
                                      absl::string_view canon_curr) {
   if (canon_curr.size() <= 2) return true;
   if (absl::EndsWith(canon_prev, canon_curr) ||
       CloseEnoughCanonical(canon_prev, canon_curr)) {
     return true;
+  }
+  if (MatchesSpokenNumberSuffix(canon_prev, canon_curr)) {
+    return true;
+  }
+  for (size_t len = std::min(canon_prev.size(), canon_curr.size()); len >= 3;
+       --len) {
+    if (absl::EndsWith(canon_prev, canon_curr.substr(0, len))) {
+      return true;
+    }
   }
   return canon_prev.size() >= 4 && canon_curr.size() >= 4 &&
          canon_prev.substr(canon_prev.size() - 2) ==
@@ -273,9 +354,8 @@ bool IsCutAtWindowStart(absl::Span<const std::string> canon_prev_words,
   if (time > chunk_start + tol.substitution) return false;
   for (size_t idx = 0; idx < prev_timestamps.size(); ++idx) {
     const int ts = prev_timestamps[idx];
-    if (ts >= chunk_start - tol.match_early && ts < chunk_start &&
-        ts <= time + tol.substitution &&
-        (time - ts <= tol.match_early || time <= chunk_start + 1.0) &&
+    if (ts >= chunk_start - tol.match_early &&
+        ts < chunk_start + tol.substitution && ts < time &&
         IsPartialOrMatchingBoundaryWord(canon_prev_words[idx],
                                         canon_curr_word)) {
       return true;
@@ -284,9 +364,26 @@ bool IsCutAtWindowStart(absl::Span<const std::string> canon_prev_words,
   return false;
 }
 
+// Appends `word` and a monotone (non-decreasing) timestamp to `merged_words`
+// and `merged_timestamps`, skipping `word` when it duplicates the trailing
+// component of an immediately preceding hyphenated or apostrophe-joined word
+// (e.g. "five" after "twenty-five" or "s" after "it's") within
+// `max_suffix_gap`.
 void AppendMergedWord(std::vector<std::string>& merged_words,
                       std::vector<int>& merged_timestamps,
-                      absl::string_view word, int timestamp_ms) {
+                      absl::string_view word, int timestamp_ms,
+                      double max_suffix_gap = -1.0) {
+  if (!merged_words.empty() && merged_words.back().size() > word.size() &&
+      absl::EndsWithIgnoreCase(merged_words.back(), word)) {
+    const char delim =
+        merged_words.back()[merged_words.back().size() - word.size() - 1];
+    if (delim == '-' || delim == '\'') {
+      if (max_suffix_gap < 0 ||
+          std::abs(timestamp_ms - merged_timestamps.back()) <= max_suffix_gap) {
+        return;
+      }
+    }
+  }
   const int monotone_ts =
       merged_timestamps.empty()
           ? timestamp_ms
@@ -314,7 +411,8 @@ void MergeAlignedOverlap(absl::Span<const std::string> canon_prev_words,
                          absl::Span<const double> curr_times,
                          const std::vector<std::vector<bool>>& close_matrix,
                          absl::Span<const AlignOp> ops, double chunk_start,
-                         double pivot, const Tolerances& tol,
+                         double pivot, double prev_end_ms,
+                         const Tolerances& tol,
                          std::vector<std::string>& merged_words,
                          std::vector<int>& merged_timestamps) {
   const std::vector<bool> prev_ov_matched =
@@ -326,38 +424,50 @@ void MergeAlignedOverlap(absl::Span<const std::string> canon_prev_words,
   size_t j = 0;
   for (AlignOp op : ops) {
     switch (op) {
-      case AlignOp::kPair:
+      case AlignOp::kPair: {
         // Before the pivot the previous chunk had more context, after it the
         // current one has.
-        if (prev_ov_ts[i] < pivot - 1e-4) {
+        const bool prefer_prev_numeric =
+            !close_matrix[i][j] && prev_ov_ts[i] <= pivot + tol.substitution &&
+            !prev_ov_words[i].empty() && prev_ov_words[i].front() >= '0' &&
+            prev_ov_words[i].front() <= '9';
+        if (prev_ov_ts[i] < pivot - 1e-4 || prefer_prev_numeric) {
           AppendMergedWord(merged_words, merged_timestamps, prev_ov_words[i],
-                           prev_ov_ts[i]);
+                           prev_ov_ts[i], tol.match_late);
         } else {
           AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
-                           curr_timestamps[j]);
+                           curr_timestamps[j], tol.match_late);
         }
         ++i;
         ++j;
         break;
-      case AlignOp::kPrevOnly:
+      }
+      case AlignOp::kPrevOnly: {
+        const bool is_unconfirmed_prev_tail =
+            i + 1 == prev_ov_words.size() &&
+            prev_ov_ts[i] >= prev_end_ms - tol.substitution &&
+            prev_ov_words[i].size() <= 3 && !curr_times.empty();
         if (prev_ov_ts[i] < pivot ||
-            !HasWordWithin(curr_times, prev_ov_ts[i], tol.substitution)) {
+            (!is_unconfirmed_prev_tail &&
+             !HasWordWithin(curr_times, prev_ov_ts[i], tol.substitution))) {
           AppendMergedWord(merged_words, merged_timestamps, prev_ov_words[i],
-                           prev_ov_ts[i]);
+                           prev_ov_ts[i], tol.match_late);
         }
         ++i;
         break;
+      }
       case AlignOp::kCurrOnly:
         if (curr_times[j] >= pivot) {
           AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
-                           curr_timestamps[j]);
+                           curr_timestamps[j], tol.match_late);
         } else if (!IsCoveredByPrev(prev_ov_ts, prev_ov_matched, curr_times[j],
                                     tol) &&
                    !IsCutAtWindowStart(canon_prev_words, prev_timestamps,
                                        canon_curr_words[j], chunk_start,
                                        curr_times[j], tol)) {
           AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
-                           static_cast<int>(std::lround(curr_times[j])));
+                           static_cast<int>(std::lround(curr_times[j])),
+                           tol.match_late);
         }
         ++j;
         break;
@@ -365,7 +475,7 @@ void MergeAlignedOverlap(absl::Span<const std::string> canon_prev_words,
   }
   for (; j < curr_words.size(); ++j) {
     AppendMergedWord(merged_words, merged_timestamps, curr_words[j],
-                     curr_timestamps[j]);
+                     curr_timestamps[j], tol.match_late);
   }
 }
 
@@ -551,8 +661,8 @@ void TimestampTextMerger::MergeByTime(absl::Span<const std::string> curr_words,
   std::vector<int> merged_timestamps;
   MergeAlignedOverlap(canon_prev_words, prev_timestamps_, prev_ov_words,
                       prev_ov_ts, curr_words, canon_curr_words, curr_timestamps,
-                      curr_times, close_matrix, ops, chunk_start, pivot, tol,
-                      merged_words, merged_timestamps);
+                      curr_times, close_matrix, ops, chunk_start, pivot,
+                      prev_chunk_end_ms_, tol, merged_words, merged_timestamps);
 
   ABSL_VLOG(2) << "MergeByTime: shift=" << shift
                << " chunk_start=" << chunk_start << " prev_end=" << prev_end
