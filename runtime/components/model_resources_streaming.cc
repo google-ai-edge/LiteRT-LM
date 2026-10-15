@@ -43,6 +43,17 @@
 
 namespace litert::lm {
 
+absl::Status ModelResourcesStreaming::AddTFLiteModelBuffer(
+    ModelType model_type, absl::string_view buffer) {
+  SetModelBuffer(model_type, std::vector<char>(buffer.begin(), buffer.end()));
+  return absl::OkStatus();
+}
+
+void ModelResourcesStreaming::ReleaseTFLiteModelBuffer(ModelType model_type) {
+  models_.erase(model_type);
+  model_buffers_.erase(model_type);
+}
+
 absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
     ModelType model_type) {
   auto it = models_.find(model_type);
@@ -55,10 +66,9 @@ absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
     return absl::NotFoundError(absl::StrCat("Model buffer not found for type: ",
                                             static_cast<int>(model_type)));
   }
-
   auto expected_model =
       litert::Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
-          reinterpret_cast<uint8_t*>(buf_it->second.data()),
+          reinterpret_cast<const uint8_t*>(buf_it->second.data()),
           buf_it->second.size()));
   if (!expected_model.HasValue()) {
     return absl::InternalError(
