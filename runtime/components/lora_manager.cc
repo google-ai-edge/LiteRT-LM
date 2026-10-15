@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
@@ -56,17 +57,24 @@ absl::Status LoraManager::LoadLoRA(uint32_t lora_id,
   return absl::OkStatus();
 }
 
-absl::Status LoraManager::UseLoRA(uint32_t lora_id) {
-  if (!lora_data_.contains(lora_id) && !loras_.contains(lora_id)) {
+absl::Status LoraManager::UseLoRA(std::optional<uint32_t> lora_id) {
+  if (!lora_id.has_value()) {
+    current_lora_id_ = std::nullopt;
+    return absl::OkStatus();
+  }
+  if (auto it = loras_.find(*lora_id); it != loras_.end()) {
+    current_lora_id_ = lora_id;
+    return absl::OkStatus();
+  }
+  auto data_it = lora_data_.find(*lora_id);
+  if (data_it == lora_data_.end()) {
     return absl::NotFoundError("LoRA ID not found");
   }
-  if (!loras_.contains(lora_id)) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto lora, LoRA::Create(std::move(lora_data_[lora_id]), compiled_model_,
-                                signature_name_));
-    loras_[lora_id] = std::move(lora);
-    lora_data_.erase(lora_id);
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto lora, LoRA::Create(std::move(data_it->second),
+                              compiled_model_, signature_name_));
+  loras_.try_emplace(*lora_id, std::move(lora));
+  lora_data_.erase(data_it);
   current_lora_id_ = lora_id;
   return absl::OkStatus();
 }
@@ -81,10 +89,11 @@ LoraManager::GetLoRABuffers(absl::string_view signature_name) const {
   if (!current_lora_id_.has_value()) {
     return absl::FailedPreconditionError("No LoRA ID is set");
   }
-  if (!loras_.contains(*current_lora_id_)) {
+  auto it = loras_.find(*current_lora_id_);
+  if (it == loras_.end()) {
     return absl::NotFoundError("LoRA ID not found");
   }
-  return loras_.at(*current_lora_id_)->GetLoRABuffers(signature_name);
+  return it->second->GetLoRABuffers(signature_name);
 }
 
 }  // namespace litert::lm

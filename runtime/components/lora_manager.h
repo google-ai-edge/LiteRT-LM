@@ -56,9 +56,9 @@ class LoraManager {
   // model_assets: Contains the LoRA model to load.
   absl::Status LoadLoRA(uint32_t lora_id, const ModelAssets& model_assets);
 
-  // Sets the current LoRA ID to use. If the LoRA object for the given ID
-  // doesn't exist, it will be created.
-  absl::Status UseLoRA(uint32_t lora_id);
+  // Sets the current LoRA ID to use, or std::nullopt to disable LoRA. If the
+  // LoRA object for the given ID doesn't exist, it will be created.
+  absl::Status UseLoRA(std::optional<uint32_t> lora_id);
 
   // Returns a map of all the LoRA tensor names to their duplicated
   // TensorBuffers for the current LoRA ID.

@@ -199,18 +199,13 @@ absl::Status LoRA::Init() {
     return param_buffer;
   };
 
-  // Whether `input_name` gets a buffer from this class.
-  auto is_lora_buffer_input = [](absl::string_view input_name) {
-    return IsLoRAInputName(input_name) || input_name == kLoRAParamTensorName;
-  };
-
   // Create the buffers for the signature the LoRA was created with. These are
   // kept in a local map and moved into `lora_buffers_by_signature_` at the end:
   // inserting other signatures below may rehash `lora_buffers_by_signature_`,
   // which would invalidate a reference into it.
   absl::flat_hash_map<std::string, TensorBuffer> primary_buffers;
   for (const auto& input_name : input_names) {
-    if (!is_lora_buffer_input(input_name)) {
+    if (!IsLoRABufferInputName(input_name)) {
       continue;
     }
     LITERT_ASSIGN_OR_RETURN(primary_buffers[input_name],
@@ -270,7 +265,7 @@ absl::Status LoRA::Init() {
     absl::flat_hash_map<std::string, TensorBuffer> signature_buffers;
     bool signature_runnable = true;
     for (const auto& input_name : signature_input_names) {
-      if (!is_lora_buffer_input(input_name)) {
+      if (!IsLoRABufferInputName(input_name)) {
         continue;
       }
       auto requirements =

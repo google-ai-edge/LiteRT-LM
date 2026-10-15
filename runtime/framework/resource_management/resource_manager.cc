@@ -666,6 +666,12 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
   if (session_config.AudioModalityEnabled()) {
     ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
     ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    if (session_config.GetAudioScopedLoraFile() == nullptr) {
+      auto use_lora_status = audio_executor->UseLoRA(std::nullopt);
+      if (!use_lora_status.ok() && !absl::IsUnimplemented(use_lora_status)) {
+        return use_lora_status;
+      }
+    }
     auto audio_executor_properties =
         audio_executor->GetAudioExecutorProperties();
     if (audio_executor_properties.ok()) {

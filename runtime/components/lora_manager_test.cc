@@ -120,6 +120,8 @@ TEST_F(LoraManagerTest, GetCurrentLoRAIdSuccess) {
   EXPECT_EQ(lora_manager_->GetCurrentLoRAId(), std::nullopt);
   EXPECT_OK(lora_manager_->UseLoRA(0));
   EXPECT_EQ(lora_manager_->GetCurrentLoRAId(), 0);
+  EXPECT_OK(lora_manager_->UseLoRA(std::nullopt));
+  EXPECT_EQ(lora_manager_->GetCurrentLoRAId(), std::nullopt);
 }
 
 TEST_F(LoraManagerTest, GetLoRABuffersFailsBeforeUse) {

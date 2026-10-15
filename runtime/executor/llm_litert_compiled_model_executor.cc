@@ -2135,8 +2135,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
   for (auto input_name : decode_signature.InputNames()) {
-    if (IsLoRAInputName(input_name)) {
-      // We let LoraManager handle LoRA inputs.
+    if (IsLoRABufferInputName(input_name)) {
+      // We let LoraManager or BindZeroLoRABuffers handle LoRA inputs.
       continue;
     }
     if (state->Contains(input_name)) {
@@ -2479,6 +2479,10 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
 
   for (auto input_name : decode_signature.InputNames()) {
+    if (IsLoRABufferInputName(input_name)) {
+      // We let LoraManager or BindZeroLoRABuffers handle LoRA inputs.
+      continue;
+    }
     if (state->Contains(input_name)) {
       continue;
     }

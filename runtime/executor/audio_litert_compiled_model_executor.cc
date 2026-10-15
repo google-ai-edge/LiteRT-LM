@@ -184,8 +184,21 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
     return lora_manager_->UseLoRA(lora_id.value());
   }
 
-  // TODO: b/515389724 - Support unloading/clearing LoRA buffers from
-  // input_buffers_map_ when LoRA is deactivated for subsequent audio calls.
+  if (lora_manager_ == nullptr ||
+      !lora_manager_->GetCurrentLoRAId().has_value()) {
+    return absl::OkStatus();
+  }
+  ABSL_RETURN_IF_ERROR(lora_manager_->UseLoRA(std::nullopt));
+  LITERT_ASSIGN_OR_RETURN(auto signature, compiled_model_.GetSignature(0));
+  for (auto& [input_name, input_buffer] : input_buffers_map_) {
+    if (IsLoRABufferInputName(input_name)) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto zero_buffer,
+          compiled_model_.CreateInputBuffer(signature.Key(), input_name));
+      ABSL_RETURN_IF_ERROR(InitializeBuffer(zero_buffer));
+      input_buffer = std::move(zero_buffer);
+    }
+  }
   return absl::OkStatus();
 }
 

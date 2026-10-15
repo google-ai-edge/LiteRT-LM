@@ -22,6 +22,7 @@
 #include <ios>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -959,6 +960,7 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
 
   EXPECT_OK(audio_executor->RestoreContext(std::move(new_context)));
   EXPECT_OK(audio_executor->Reset());
+  EXPECT_OK(audio_executor->UseLoRA(std::nullopt));
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)
