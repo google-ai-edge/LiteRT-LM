@@ -27,6 +27,7 @@
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
+#include "omni/tts/kokoro/traditional_chinese_converter.h"
 #include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
@@ -232,17 +233,22 @@ class KokoroPhonemizer {
   //   (e.g. the `"zh-lexicon"` section from the `.litertlm` package). Must
   //   remain mapped and valid for the lifetime of the returned
   //   `KokoroPhonemizer`. Required when `language` is Mandarin ("cmn").
+  // - zh_t2s_dictionary: Optional Traditional -> Simplified Chinese conversion
+  //   table (e.g. the `"zh-t2s"` section), in the format documented in
+  //   kokoro/traditional_chinese_converter.h. When given, Mandarin text is
+  //   converted to Simplified Chinese before text normalization and G2P.
   //
   // returns
   // - Unique pointer to `KokoroPhonemizer` on success, or an error status if
   //   `espeak_data_dir` is missing (for espeak-backed languages),
-  //   `text_norm_rules` is malformed, or `cjk_lexicon` is missing/corrupt for a
-  //   CJK language.
+  //   `text_norm_rules` or `zh_t2s_dictionary` is malformed, or `cjk_lexicon`
+  //   is missing/corrupt for a CJK language.
   static absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> Create(
       absl::string_view espeak_data_dir, absl::string_view language = "en-us",
       const absl::flat_hash_map<std::string, std::string>& custom_lexicon = {},
       absl::string_view text_norm_rules = "",
-      absl::string_view cjk_lexicon = "");
+      absl::string_view cjk_lexicon = "",
+      absl::string_view zh_t2s_dictionary = "");
 
   // Overload for creating KokoroPhonemizer with default "en-us" language and
   // a custom lexicon.
@@ -397,6 +403,10 @@ class KokoroPhonemizer {
   std::unique_ptr<kokoro::CjkBlob> cjk_blob_;
   std::unique_ptr<kokoro::JapaneseG2p> japanese_g2p_;
   std::unique_ptr<kokoro::ChineseG2p> chinese_g2p_;
+  // Converts Traditional Chinese to Simplified before Mandarin text
+  // normalization and G2P. Null when no conversion table was given.
+  std::unique_ptr<kokoro::TraditionalChineseConverter>
+      traditional_chinese_converter_;
 };
 
 }  // namespace litert::omni::tts

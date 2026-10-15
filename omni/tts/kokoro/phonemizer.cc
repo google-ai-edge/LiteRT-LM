@@ -46,6 +46,7 @@
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/common.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
+#include "omni/tts/kokoro/traditional_chinese_converter.h"
 #include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
@@ -685,7 +686,8 @@ absl::StatusOr<std::string> ResolveAndValidateLanguage(
 absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     absl::string_view espeak_data_dir, absl::string_view language,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon,
-    absl::string_view text_norm_rules, absl::string_view cjk_lexicon) {
+    absl::string_view text_norm_rules, absl::string_view cjk_lexicon,
+    absl::string_view zh_t2s_dictionary) {
   if (espeak_data_dir.empty()) {
     return absl::InvalidArgumentError("espeak_data_dir cannot be empty");
   }
@@ -705,6 +707,11 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     ABSL_ASSIGN_OR_RETURN(phonemizer->text_normalizer_,
                           TextNormalizer::Create(text_norm_rules));
     phonemizer->text_norm_language_ = phonemizer->language_;
+  }
+  if (!zh_t2s_dictionary.empty()) {
+    ABSL_ASSIGN_OR_RETURN(
+        phonemizer->traditional_chinese_converter_,
+        kokoro::TraditionalChineseConverter::Create(zh_t2s_dictionary));
   }
 
   // Determine the parent cache directory path expected by espeak_Initialize
@@ -1038,6 +1045,14 @@ absl::StatusOr<std::string> KokoroPhonemizer::ClauseLevelTextToIpa(
 
 absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
     absl::string_view text) const {
+  // The Mandarin rule table and lexicon are Simplified Chinese; bring
+  // Traditional input to Simplified first so that both apply.
+  std::string simplified_text;
+  if (language_ == "cmn" && traditional_chinese_converter_ != nullptr) {
+    simplified_text = traditional_chinese_converter_->Convert(text);
+    text = simplified_text;
+  }
+
   // Rewrite digits and symbols into pronounceable words before tokenizing, so
   // that the rules can see a number whole rather than one word at a time.
   std::string normalized_text;

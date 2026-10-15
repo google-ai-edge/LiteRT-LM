@@ -63,6 +63,11 @@ struct KokoroModelConfig {
   // sections (e.g. "ja-lexicon" -> key "ja", "zh-lexicon" -> key "cmn"),
   // backed by the ModelResources loader.
   absl::flat_hash_map<std::string, absl::string_view> cjk_lexicons;
+  // Zero-copy slice into the bundled "zh-t2s" GenericBinaryData section, a
+  // Traditional -> Simplified Chinese conversion table applied to Mandarin
+  // text before normalization and G2P. Empty when the container has none. See
+  // kokoro/traditional_chinese_converter.h for the format.
+  absl::string_view zh_t2s_dictionary;
 };
 
 }  // namespace litert::omni::tts

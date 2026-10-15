@@ -70,6 +70,7 @@ cc_library(
         ":cjk_blob",
         ":common",
         ":japanese_g2p",
+        ":traditional_chinese_converter",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -425,6 +426,34 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@cppjieba",
+    ],
+)
+
+cc_library(
+    name = "traditional_chinese_converter",
+    srcs = ["traditional_chinese_converter.cc"],
+    hdrs = ["traditional_chinese_converter.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "traditional_chinese_converter_test",
+    srcs = ["traditional_chinese_converter_test.cc"],
+    data = [
+    ],
+    deps = [
+        ":traditional_chinese_converter",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "//support/util:test_utils",
     ],
 )
 

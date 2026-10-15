@@ -45,20 +45,24 @@ constexpr absl::string_view kTextNormSectionSuffix = "-textnorm";
 // (e.g. "ja-lexicon", "zh-lexicon").
 constexpr absl::string_view kLexiconSectionSuffix = "-lexicon";
 
+// Name of the GenericBinaryData section holding the Traditional -> Simplified
+// Chinese conversion table. See kokoro/traditional_chinese_converter.h.
+constexpr absl::string_view kTraditionalChineseSectionName = "zh-t2s";
+
 // Compiles and populates all Kokoro-82M LiteRT models into shared
 // ModelResources.
 //
 // When `resources` carries a .litertlm container, the models are compiled from
 // the container's TF_LITE_ACOUSTIC / TF_LITE_VOCODER sections, espeak-ng data
 // packaged in the container is unpacked into `cache_dir` and recorded in
-// `config.espeak_data_dir`, and any `<lang>-textnorm` or `<lang>-lexicon`
-// sections are recorded as zero-copy views in `config.text_norm_rules` and
-// `config.cjk_lexicons`.
+// `config.espeak_data_dir`, and any `<lang>-textnorm`, `<lang>-lexicon`, or
+// `zh-t2s` sections are recorded in `config.text_norm_rules`,
+// `config.cjk_lexicons`, and `config.zh_t2s_dictionary`.
 //
 // args
 // - config: Kokoro model configuration. `espeak_data_dir`, `text_norm_rules`,
-//   and `cjk_lexicons` are populated when the corresponding sections are
-//   present in the model container.
+//   `cjk_lexicons`, and `zh_t2s_dictionary` are populated when the
+//   corresponding sections are present in the model container.
 // - model_folder: Path to the directory containing the Kokoro models.
 // - cache_dir: Path to the directory for caching model data.
 // - backend: Backend to use for model execution.

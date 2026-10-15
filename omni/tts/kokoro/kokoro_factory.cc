@@ -124,6 +124,11 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
     // Text normalization rule tables and CJK lexicon blobs ride along as data
     // so that language-specific tables stay out of the binary.
     for (const std::string& name : lm_resources->GetGenericBinaryDataNames()) {
+      if (name == kTraditionalChineseSectionName) {
+        ABSL_ASSIGN_OR_RETURN(config.zh_t2s_dictionary,
+                              lm_resources->GetGenericBinaryDataBuffer(name));
+        continue;
+      }
       absl::string_view language(name);
       if (absl::ConsumeSuffix(&language, kTextNormSectionSuffix) &&
           !language.empty()) {

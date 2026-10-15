@@ -927,6 +927,25 @@ TEST(PhonemizerTest, ChineseTextNormalizationMatchesTheWrittenOutForm) {
   EXPECT_EQ(celsius, celsius_written);
 }
 
+TEST(PhonemizerTest, TraditionalChineseIsConvertedBeforeG2p) {
+  const std::string zh_blob = BuildMinimalChineseBlobForPhonemizerTest();
+  // 妳 and 丗 are Traditional/variant forms that the Simplified lexicon lacks.
+  constexpr absl::string_view kT2s = "妳\t你\n丗界\t世界\n";
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn",
+                                                {}, "", zh_blob, kT2s));
+  ASSERT_OK_AND_ASSIGN(std::string simplified,
+                       phonemizer->TextToIpa("你好，世界！"));
+  EXPECT_THAT(phonemizer->TextToIpa("妳好，丗界！"),
+              ::testing::status::IsOkAndHolds(simplified));
+}
+
+TEST(PhonemizerTest, MalformedTraditionalChineseTableIsAnError) {
+  EXPECT_THAT(KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn", {}, "",
+                                       "", "not-an-entry\n"),
+              ::absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(PhonemizerTest, RuleTableStopsApplyingAfterSwitchingLanguage) {
   const std::string rules = ReadMandarinRuleTable();
   ASSERT_FALSE(rules.empty()) << "could not locate zh_textnorm.txt";

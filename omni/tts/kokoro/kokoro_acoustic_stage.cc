@@ -139,7 +139,7 @@ KokoroAcousticStage::Create(
       stage->phonemizer_,
       KokoroPhonemizer::Create(espeak_dir, stage->config_.language,
                                stage->config_.custom_lexicon, text_norm_rules,
-                               cjk_lexicon));
+                               cjk_lexicon, stage->config_.zh_t2s_dictionary));
 
   // Derive static sequence and frame capacities from allocated tensor buffers.
   LITERT_ASSIGN_OR_RETURN(
