@@ -40,7 +40,7 @@
 ABSL_FLAG(std::string, model_name, "parakeet-tdt-0.6b-v3",
           "ASR model name as defined in model metadata presets.");
 ABSL_FLAG(std::string, audio_path, "", "Path to input audio file (WAV).");
-ABSL_FLAG(std::string, cache_dir, "/tmp/asr_models",
+ABSL_FLAG(std::string, cache_dir, "/tmp/omni_models",
           "Cache directory to download and store models and tokenizers.");
 ABSL_FLAG(std::string, backend, "cpu",
           "Hardware backend accelerator: cpu, gpu, or npu.");

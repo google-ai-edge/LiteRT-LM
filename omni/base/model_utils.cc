@@ -344,7 +344,9 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
                             comp_options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(lm::SetCpuOptions(cpu_options, options.num_threads));
 
-    if (!options.cache_dir.empty()) {
+    // ":nocache" is the sentinel set by ToLmModelOptions() when no cache
+    // directory was provided; it must not be used as a real path.
+    if (!options.cache_dir.empty() && options.cache_dir != ":nocache") {
       std::string cache_path = JoinPath(
           options.cache_dir, absl::StrCat(model_name, ".xnnpack_cache"));
       absl::StatusOr<std::variant<std::string, std::shared_ptr<lm::ScopedFile>>>

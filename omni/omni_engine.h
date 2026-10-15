@@ -38,6 +38,24 @@ struct OmniEngineSettings {
   };
 
   Backend backend = Backend::kCpu;
+  // Directory for downloaded model files and compiled-model caches. Caches are
+  // keyed by `<model_name>_<model file id>` so a replaced model file never
+  // reuses stale ones:
+  //   - CPU: XNNPack packed weights in `<key>.xnnpack_cache` (mmap'ed instead
+  //     of held in the native heap).
+  //   - GPU: compiled programs and GPU-layout weights in
+  //     `<key>_mldrift_{program,weight}_cache.bin` (skips shader compilation
+  //     and weight conversion).
+  // This lowers memory and load time at the cost of disk space.
+  //   - Empty: as elsewhere in LiteRT-LM, caches are written next to the model
+  //     file (skipped if that directory is not writable); model files are
+  //     resolved and downloaded under `/tmp/omni_models` unless `model_path`
+  //     is set.
+  //   - ":nocache": no caches; model files are resolved as for empty.
+  //   - Otherwise: model files and caches live here. The directory is created
+  //     if missing. If it is not writable, caches are skipped when the model
+  //     file is in this directory (e.g. read-only pre-installed models);
+  //     otherwise model creation fails with `PermissionDeniedError`.
   std::string cache_dir;
   int num_threads = 4;
 
