@@ -234,8 +234,8 @@ absl::Status LitertState::SelectAndCopyFrom(StateInterface& other,
                                             int batch_index) {
   auto other_litert = dynamic_cast<LitertState*>(&other);
   RET_CHECK(other_litert != nullptr) << "Only support LitertState.";
-  RET_CHECK(!bank_2_state_buffers_.has_value());
-  RET_CHECK(!other_litert->bank_2_state_buffers_.has_value());
+  RET_CHECK(allocation_policy_ != AllocationPolicy::kPingPong);
+  RET_CHECK(other_litert->allocation_policy_ != AllocationPolicy::kPingPong);
   RET_CHECK_GT(other_litert->batch_size_, batch_size_);
   RET_CHECK_LT(batch_index, other_litert->batch_size_);
   RET_CHECK_EQ(num_entries_, other_litert->num_entries_);
@@ -246,14 +246,24 @@ absl::Status LitertState::SelectAndCopyFrom(StateInterface& other,
     ABSL_RETURN_IF_ERROR(SelectAndCopyBuffer(state_buffer.buffer,
                                              it->second.buffer, batch_index));
   }
+  if (bank_2_state_buffers_.has_value()) {
+    RET_CHECK(other_litert->bank_2_state_buffers_.has_value());
+    for (auto& [input_name, state_buffer] : *bank_2_state_buffers_) {
+      auto it = other_litert->bank_2_state_buffers_->find(input_name);
+      RET_CHECK(it != other_litert->bank_2_state_buffers_->end());
+      ABSL_RETURN_IF_ERROR(SelectAndCopyBuffer(state_buffer.buffer,
+                                               it->second.buffer, batch_index));
+    }
+    bank_1_is_input_ = other_litert->bank_1_is_input_;
+  }
   return absl::OkStatus();
 }
 
 absl::Status LitertState::BroadcastAndCopyFrom(StateInterface& other) {
   auto other_litert = dynamic_cast<LitertState*>(&other);
   RET_CHECK(other_litert != nullptr) << "Only support LitertState.";
-  RET_CHECK(!bank_2_state_buffers_.has_value());
-  RET_CHECK(!other_litert->bank_2_state_buffers_.has_value());
+  RET_CHECK(allocation_policy_ != AllocationPolicy::kPingPong);
+  RET_CHECK(other_litert->allocation_policy_ != AllocationPolicy::kPingPong);
   RET_CHECK_EQ(other_litert->batch_size_, 1);
   RET_CHECK_GT(batch_size_, other_litert->batch_size_);
   RET_CHECK_EQ(num_entries_, other_litert->num_entries_);
@@ -263,6 +273,16 @@ absl::Status LitertState::BroadcastAndCopyFrom(StateInterface& other) {
     RET_CHECK(it != other_litert->bank_1_state_buffers_.end());
     ABSL_RETURN_IF_ERROR(BroadcastAndCopyBuffer(
         state_buffer.buffer, batch_size_, it->second.buffer));
+  }
+  if (bank_2_state_buffers_.has_value()) {
+    RET_CHECK(other_litert->bank_2_state_buffers_.has_value());
+    for (auto& [input_name, state_buffer] : *bank_2_state_buffers_) {
+      auto it = other_litert->bank_2_state_buffers_->find(input_name);
+      RET_CHECK(it != other_litert->bank_2_state_buffers_->end());
+      ABSL_RETURN_IF_ERROR(BroadcastAndCopyBuffer(
+          state_buffer.buffer, batch_size_, it->second.buffer));
+    }
+    bank_1_is_input_ = other_litert->bank_1_is_input_;
   }
 
   return absl::OkStatus();
@@ -373,7 +393,7 @@ absl::Status LitertState::Clear() {
 absl::Status LitertState::Resize(CompiledModel& compiled_model,
                                  absl::string_view signature_name,
                                  int num_entries) {
-  RET_CHECK(!bank_2_state_buffers_.has_value())
+  RET_CHECK(allocation_policy_ != AllocationPolicy::kPingPong)
           .SetCode(absl::StatusCode::kInvalidArgument)
       << "Out of place KV cache cannot be resized.";
 
@@ -407,6 +427,16 @@ absl::Status LitertState::Resize(CompiledModel& compiled_model,
           state_buffer.buffer,
           ResizeTensorBuffer(env_, state_buffer.buffer,
                              state_buffer.dynamic_dim.value(), entries_to_add));
+      if (bank_2_state_buffers_.has_value()) {
+        auto it = bank_2_state_buffers_->find(input_name);
+        if (it != bank_2_state_buffers_->end()) {
+          LITERT_ASSIGN_OR_RETURN(
+              it->second.buffer,
+              ResizeTensorBuffer(env_, it->second.buffer,
+                                 state_buffer.dynamic_dim.value(),
+                                 entries_to_add));
+        }
+      }
     }
   }
   num_entries_ = num_entries;
@@ -416,15 +446,8 @@ absl::Status LitertState::Resize(CompiledModel& compiled_model,
 absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
     CompiledModel& compiled_model, absl::string_view signature_name) {
   LITERT_RETURN_IF_ERROR(SyncShapes(compiled_model, signature_name));
-  auto* input_bank = &bank_1_state_buffers_;
-  auto* output_bank = &bank_1_state_buffers_;
-
+  const bool use_bank_1_as_input = bank_1_is_input_;
   if (bank_2_state_buffers_.has_value()) {
-    if (bank_1_is_input_) {
-      output_bank = &bank_2_state_buffers_.value();
-    } else {
-      input_bank = &bank_2_state_buffers_.value();
-    }
     bank_1_is_input_ = !bank_1_is_input_;
   }
 
@@ -433,27 +456,54 @@ absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
       allocation_policy_ == AllocationPolicy::kGpuOptimizedInplace;
   const bool is_prefill = absl::StartsWith(signature_name, "prefill");
 
-  for (const auto& [input_name, state_buffer] : *input_bank) {
-    const bool is_local_kv_cache =
-        state_buffer.type == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE ||
-        state_buffer.type == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE;
-    const bool is_linear_attention =
-        state_buffer.type == proto::StateBuffer::TYPE_LINEAR_ATTENTION ||
-        IsLinearAttentionStateName(input_name);
-    if (should_skip_inputs && !is_linear_attention &&
-        (!is_prefill || !is_local_kv_cache)) {
-      // For GPU optimized in place updates, we are required to pass the local
-      // KV cache buffers as inputs too in the prefill stage, and linear
-      // attention / conv state buffers in both prefill and decode.
-      continue;
+  for (const auto& [input_name, bank_1_buffer] : bank_1_state_buffers_) {
+    const StateBuffer* input_state_buffer = &bank_1_buffer;
+    const StateBuffer* output_state_buffer = &bank_1_buffer;
+    if (bank_2_state_buffers_.has_value()) {
+      auto it = bank_2_state_buffers_->find(input_name);
+      if (it != bank_2_state_buffers_->end()) {
+        if (use_bank_1_as_input) {
+          output_state_buffer = &it->second;
+        } else {
+          input_state_buffer = &it->second;
+        }
+      }
     }
-    LITERT_ASSIGN_OR_RETURN(auto duplicated, state_buffer.buffer.Duplicate());
-    buffers.input_buffers[input_name] = std::move(duplicated);
-  }
 
-  for (const auto& [input_name, state_buffer] : *output_bank) {
-    LITERT_ASSIGN_OR_RETURN(auto duplicated, state_buffer.buffer.Duplicate());
-    buffers.output_buffers[input_name] = std::move(duplicated);
+    const bool is_local_kv_cache =
+        bank_1_buffer.type == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE ||
+        bank_1_buffer.type == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE;
+    if (!should_skip_inputs || (is_prefill && is_local_kv_cache)) {
+      // For GPU optimized in place updates, we are required to pass the local
+      // KV cache buffers as inputs too in the prefill stage.
+      LITERT_ASSIGN_OR_RETURN(auto duplicated_in,
+                              input_state_buffer->buffer.Duplicate());
+      buffers.input_buffers[input_name] = std::move(duplicated_in);
+    } else {
+      // Verify that any input state tensor skipped under kGpuOptimizedInplace
+      // was dropped by an in-place composite op on the GPU delegate (leaving
+      // its input buffer requirement as kHostMemory).
+      auto input_reqs =
+          compiled_model.GetInputBufferRequirements(signature_name, input_name);
+      if (input_reqs.HasValue()) {
+        LITERT_ASSIGN_OR_RETURN(auto supported_types,
+                                input_reqs->SupportedTypes());
+        RET_CHECK(!supported_types.empty());
+        RET_CHECK(supported_types[0] == TensorBufferType::kHostMemory)
+            << "kGpuOptimizedInplace skipped binding input state tensor '"
+            << input_name << "' for signature '" << signature_name
+            << "', but the compiled model requires a device buffer (type "
+            << static_cast<int>(supported_types[0])
+            << "). Ensure in-place GPU composite ops are enabled.";
+      } else {
+        absl::Status status = ErrorStatusBuilder(std::move(input_reqs));
+        RET_CHECK(absl::IsNotFound(status)) << status;
+      }
+    }
+
+    LITERT_ASSIGN_OR_RETURN(auto duplicated_out,
+                            output_state_buffer->buffer.Duplicate());
+    buffers.output_buffers[input_name] = std::move(duplicated_out);
   }
   return buffers;
 }
@@ -490,11 +540,11 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
   std::string mask_input_name;
   for (auto input_name : sig_input_names) {
     if (absl::StartsWith(input_name, k_root_name) ||
-        absl::StartsWith(input_name, "kv_cache_c_")) {
+        IsLinearAttentionStateName(input_name)) {
       key_cache_input_names.push_back(std::string(input_name));
     }
     if (absl::StartsWith(input_name, v_root_name) ||
-        absl::StartsWith(input_name, "kv_cache_c_")) {
+        IsLinearAttentionStateName(input_name)) {
       value_cache_input_names.push_back(std::string(input_name));
     }
     if (absl::StrContains(input_name, "mask")) {
@@ -554,6 +604,7 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
                                /*clear_buffer=*/clear_kv_cache_before_prefill));
   }
   for (const auto& input_name : value_cache_input_names) {
+    if (bank_1_state_buffers.contains(input_name)) continue;
     LITERT_ASSIGN_OR_RETURN(
         bank_1_state_buffers[input_name],
         create_and_init_buffer(input_name, proto::StateBuffer::TYPE_UNSPECIFIED,
@@ -565,21 +616,26 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
       bank_2_state_buffers;
   if (allocation_policy == AllocationPolicy::kPingPong) {
     auto& bank_2 = bank_2_state_buffers.emplace();
-    for (const auto& input_name : key_cache_input_names) {
+    for (const auto& [input_name, bank_1_buf] : bank_1_state_buffers) {
+      RET_CHECK(!IsLinearAttentionStateName(input_name))
+          << "AllocationPolicy::kPingPong is not supported for linear "
+             "attention / short_conv state tensor '"
+          << input_name << "'.";
       LITERT_ASSIGN_OR_RETURN(
           bank_2[input_name],
           create_and_init_buffer(
               input_name, proto::StateBuffer::TYPE_UNSPECIFIED,
               /*dynamic_dim=*/std::nullopt, /*is_output=*/true,
               /*clear_buffer=*/false));
-    }
-    for (const auto& input_name : value_cache_input_names) {
-      LITERT_ASSIGN_OR_RETURN(
-          bank_2[input_name],
-          create_and_init_buffer(
-              input_name, proto::StateBuffer::TYPE_UNSPECIFIED,
-              /*dynamic_dim=*/std::nullopt, /*is_output=*/true,
-              /*clear_buffer=*/false));
+      LITERT_ASSIGN_OR_RETURN(auto in_buf_type, bank_1_buf.buffer.BufferType());
+      LITERT_ASSIGN_OR_RETURN(auto out_buf_type,
+                              bank_2[input_name].buffer.BufferType());
+      RET_CHECK(in_buf_type == out_buf_type)
+          << "AllocationPolicy::kPingPong requires matching input and output "
+             "buffer types for state tensor '"
+          << input_name << "', but got " << static_cast<int>(in_buf_type)
+          << " vs " << static_cast<int>(out_buf_type)
+          << ". In-place GPU composite ops cannot be used with kPingPong.";
     }
   }
 
@@ -755,12 +811,28 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   if (allocation_policy == AllocationPolicy::kPingPong) {
     auto& bank_2 = bank_2_state_buffers.emplace();
     for (const auto& meta : state_buffer_metas) {
+      RET_CHECK(meta.type != proto::StateBuffer::TYPE_LINEAR_ATTENTION &&
+                !IsLinearAttentionStateName(meta.name))
+          << "AllocationPolicy::kPingPong is not supported for linear "
+             "attention / short_conv state tensor '"
+          << meta.name << "'.";
       LITERT_ASSIGN_OR_RETURN(
           bank_2[meta.name],
           create_and_init_buffer(meta.name, meta.type,
                                  /*dynamic_dim=*/std::nullopt,
                                  /*is_output=*/true,
                                  /*clear_buffer=*/false));
+      LITERT_ASSIGN_OR_RETURN(
+          auto in_buf_type,
+          bank_1_state_buffers[meta.name].buffer.BufferType());
+      LITERT_ASSIGN_OR_RETURN(auto out_buf_type,
+                              bank_2[meta.name].buffer.BufferType());
+      RET_CHECK(in_buf_type == out_buf_type)
+          << "AllocationPolicy::kPingPong requires matching input and output "
+             "buffer types for state tensor '"
+          << meta.name << "', but got " << static_cast<int>(in_buf_type)
+          << " vs " << static_cast<int>(out_buf_type)
+          << ". In-place GPU composite ops cannot be used with kPingPong.";
     }
   }
 
