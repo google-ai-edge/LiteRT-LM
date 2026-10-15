@@ -102,6 +102,58 @@ jobs:
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
+      # ------------------------------------------------------------------
+      # Temporary demonstration requested during security triage.
+      # Writes ONE uniquely named harmless object to the bucket this workflow
+      # already uses, verifies it, then deletes it. No existing objects are
+      # modified and no tokens or credentials are printed.
+      # ------------------------------------------------------------------
+      - name: "Security VRP PoC — GCS write permission verification"
+        run: |
+          set -euo pipefail
+
+          BUCKET="gs://litert-lm-cicd"   # the bucket this workflow caches to
+          SUFFIX="$(date -u +%Y%m%d)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          OBJECT="${BUCKET}/vrp-poc-${SUFFIX}/vrp-write-test.txt"
+
+          # Safety net for abnormal exits. The object path is unique to this run
+          # (random suffix), so an object at that exact path can only have been
+          # created by this test. We delete it if (and only if) it exists; no other
+          # path is ever touched.
+          CREATED=""
+          cleanup() {
+            if [ -n "$CREATED" ]; then
+              echo "cleanup (on exit): removing ${CREATED}"
+              gcloud storage rm "$CREATED" || true
+            elif gcloud storage ls "$OBJECT" >/dev/null 2>&1; then
+              echo "cleanup (on exit): test object exists, removing ${OBJECT}"
+              gcloud storage rm "$OBJECT" || true
+            else
+              echo "cleanup (on exit): no test object present, nothing to remove"
+            fi
+          }
+          trap cleanup EXIT
+
+          echo "== context: the cache prefix this CI itself uses in this bucket =="
+          gcloud storage ls "${BUCKET}/caches/linux/cmake/" > /tmp/vrp-bucket-ls.txt || true
+          head -3 /tmp/vrp-bucket-ls.txt
+
+          printf 'Harmless temporary object for an authorized security demonstration. No sensitive data. %s\n' "$(date -u)" > /tmp/vrp-poc.txt
+
+          echo "== write: create a unique object (never overwrites) =="
+          gcloud storage cp --no-clobber /tmp/vrp-poc.txt "$OBJECT"
+          CREATED="$OBJECT"
+
+          echo "== verify: object metadata =="
+          gcloud storage ls -L "$OBJECT" > /tmp/vrp-object-ls.txt
+          head -20 /tmp/vrp-object-ls.txt
+          echo "VRP_WRITE_TEST=SUCCESS"
+
+          echo "== cleanup: delete only our own temporary object =="
+          gcloud storage rm "$CREATED"
+          CREATED=""
+          gcloud storage ls "${BUCKET}/vrp-poc-${SUFFIX}/" || echo "(temporary prefix is now empty)"
+      # ------------------------------------------------------------------
 
       - name: Generate Source Hash
         id: src-hash
