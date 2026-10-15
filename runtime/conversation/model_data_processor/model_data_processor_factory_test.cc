@@ -35,6 +35,7 @@
 #include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/qwen3p5_data_processor_config.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -196,6 +197,38 @@ TEST_F(ModelDataProcessorFactoryTest, CreateQwen3ModelDataProcessor) {
   EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
                                            Gemma3DataProcessorArguments()),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(ModelDataProcessorFactoryTest, CreateQwen3p5ModelDataProcessor) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_qwen3p5();
+  ASSERT_OK_AND_ASSIGN(
+      auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
+  ASSERT_TRUE(std::holds_alternative<Qwen3p5DataProcessorConfig>(config));
+  ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
+  EXPECT_EQ(processor->CodeFenceStart(), "<tool_call>");
+  EXPECT_EQ(processor->CodeFenceEnd(), "</tool_call>");
+  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+                                         Qwen3p5DataProcessorArguments()));
+  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
+                                           Gemma3DataProcessorArguments()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_OK(
+      processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
+                           Qwen3p5DataProcessorArguments()));
+
+  // Ensure the config from the proto will override the default values.
+  llm_model_type.mutable_qwen3p5()->set_code_fence_start("<call>");
+  llm_model_type.mutable_qwen3p5()->set_code_fence_end("</call>");
+  llm_model_type.mutable_qwen3p5()->set_escape_fence_strings(false);
+  ASSERT_OK_AND_ASSIGN(
+      auto config2, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
+  ASSERT_TRUE(std::holds_alternative<Qwen3p5DataProcessorConfig>(config2));
+  const auto& qwen3p5_config = std::get<Qwen3p5DataProcessorConfig>(config2);
+  EXPECT_EQ(qwen3p5_config.code_fence_start, "<call>");
+  EXPECT_EQ(qwen3p5_config.code_fence_end, "</call>");
+  EXPECT_FALSE(qwen3p5_config.escape_fence_strings);
 }
 
 TEST_F(ModelDataProcessorFactoryTest, CreateFunctionGemmaDataProcessor) {
