@@ -21,17 +21,16 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_lm_engine_runner.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
 #include "support/util/convert_tensor_buffer.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {
 
-using ::absl_testing::IsOk;
 using ::testing::_;
 using ::testing::Return;
 
@@ -63,32 +62,30 @@ TEST(LmEngineDecoderTest, DecodeAssemblesMultimodalInputsAndEmitsTokens) {
                           /*token_ids=*/{{100, 10, 20, 1}});
   EXPECT_CALL(mock_runner, Decode(_)).WillOnce(Return(responses));
 
-  auto decoder_or = LmEngineDecoder::Create(
-      &mock_runner, /*prompt=*/"Transcribe: ", /*max_output_tokens=*/64,
-      /*decode_start_token_ids=*/{}, /*decode_stop_token_id=*/1,
-      /*decode_skip_until_token_id=*/100);
-  ASSERT_THAT(decoder_or, IsOk());
-  auto decoder = std::move(*decoder_or);
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      LmEngineDecoder::Create(&mock_runner, /*prompt=*/"Transcribe: ",
+                              /*max_output_tokens=*/64,
+                              /*decode_start_token_ids=*/{},
+                              /*decode_stop_token_id=*/1,
+                              /*decode_skip_until_token_id=*/100));
 
   // Flat audio buffer: 2 frames * 128 mel bins floats.
-  auto audio_tb_or = support::CreateTensorBuffer<float>({2 * 128});
-  ASSERT_TRUE(audio_tb_or.HasValue());
+  auto audio_tb = support::CreateTensorBuffer<float>({2 * 128});
+  ASSERT_TRUE(audio_tb.HasValue());
   std::vector<TensorBuffer> encoder_outputs;
-  encoder_outputs.push_back(std::move(audio_tb_or.Value()));
+  encoder_outputs.push_back(std::move(audio_tb.Value()));
 
-  auto tokens_or = decoder->Decode(encoder_outputs);
-  ASSERT_THAT(tokens_or, IsOk());
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
   // Token 100 was skipped, stop token 1 terminated, leaving tokens 10 and 20.
-  ASSERT_EQ(tokens_or->size(), 2);
-  EXPECT_EQ((*tokens_or)[0].token_id, 10);
-  EXPECT_EQ((*tokens_or)[1].token_id, 20);
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 10);
+  EXPECT_EQ(tokens[1].token_id, 20);
 }
 
 TEST(LmEngineDecoderTest, FailsOnEmptyEncoderOutputs) {
   MockLiteRtLmEngineRunner mock_runner;
-  auto decoder_or = LmEngineDecoder::Create(&mock_runner);
-  ASSERT_THAT(decoder_or, IsOk());
-  auto decoder = std::move(*decoder_or);
+  ASSERT_OK_AND_ASSIGN(auto decoder, LmEngineDecoder::Create(&mock_runner));
 
   std::vector<TensorBuffer> empty_outputs;
   EXPECT_FALSE(decoder->Decode(empty_outputs).ok());
@@ -100,6 +97,39 @@ TEST(LmEngineDecoderTest, FailsOnNonEmptyDecodeStartTokenIds) {
                                        /*max_output_tokens=*/64,
                                        /*decode_start_token_ids=*/{1})
                    .ok());
+}
+
+TEST(LmEngineDecoderTest, TruncatesTrailingRepetitionLoop) {
+  MockLiteRtLmEngineRunner mock_runner;
+  EXPECT_CALL(mock_runner, Reset()).WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(mock_runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
+
+  // Token 10 followed by a runaway repetition loop of token 42 without a stop
+  // token.
+  lm::Responses responses(lm::TaskState::kDone,
+                          /*response_texts=*/{},
+                          /*scores=*/{},
+                          /*token_lengths=*/{},
+                          /*token_ids=*/{{10, 42, 42, 42, 42, 42, 42, 42, 42}});
+  EXPECT_CALL(mock_runner, Decode(_)).WillOnce(Return(responses));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      LmEngineDecoder::Create(&mock_runner, /*prompt=*/"Transcribe: ",
+                              /*max_output_tokens=*/64,
+                              /*decode_start_token_ids=*/{},
+                              /*decode_stop_token_id=*/1));
+  auto audio_tb = support::CreateTensorBuffer<float>({2 * 128});
+  ASSERT_TRUE(audio_tb.HasValue());
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(std::move(audio_tb.Value()));
+
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  // TruncateOnTrailingRepetition keeps the first occurrence of token 42 and
+  // truncates the remaining repetitions.
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 10);
+  EXPECT_EQ(tokens[1].token_id, 42);
 }
 
 }  // namespace

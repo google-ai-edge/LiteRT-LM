@@ -314,6 +314,7 @@ cc_library(
     deps = [
         ":litert_speech_recognizer",
         ":speech_recognizer",
+        ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
@@ -337,12 +338,12 @@ cc_test(
         ":lm_engine_decoder",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_matchers",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:litert_lm_engine_runner",
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",
         "//support/util:convert_tensor_buffer",
+        "//support/util:test_utils",
     ],
 )
 
