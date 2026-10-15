@@ -45,6 +45,11 @@ namespace {
 
 constexpr float kEpsilon = 1e-5f;
 constexpr float kLn10 = 2.302585092994046f;
+// Minimum peak amplitude for unnormalized standard log-mel inputs before
+// scaling up to prevent the power spectrum (`|X[k]|^2`) from collapsing into
+// `mel_floor` (`5.96e-8`) prior to per-utterance mean/std normalization.
+constexpr float kMinStandardNormPeak = 0.02f;
+constexpr float kTargetStandardNormPeak = 0.1f;
 
 int GetSmallestPowerOfTwoGreaterOrEqualTo(int n) {
   if (n > 0 && (n & (n - 1)) == 0) {
@@ -108,12 +113,17 @@ std::vector<float> ComputeStd(const std::vector<std::vector<float>>& mel_spec,
 
 // Trims >= 2 s (20 x 100 ms blocks) of trailing room noise (< 6e-3 RMS and
 // < 5% of peak block RMS) so normalizing a short utterance in a 5 s window
-// does not include seconds of background silence.
+// does not include seconds of background silence. When `decode_valid_frames` is
+// non-null and full trimming does not trigger, bounds `decode_valid_frames` to
+// exclude >= 300 ms (3 blocks) of trailing near-zero digital silence (< 5e-4
+// RMS and < 1% of peak block RMS) without altering `valid_frames`.
 int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
-                          int hop_length) {
+                          int hop_length, int* decode_valid_frames = nullptr) {
   constexpr int kBlockFrames = 10;
   constexpr int kMinSilentBlocks = 20;
-  if (valid_frames < (kMinSilentBlocks + 1) * kBlockFrames) {
+  constexpr int kMinDigitalSilentBlocks = 3;
+  if (decode_valid_frames != nullptr) *decode_valid_frames = valid_frames;
+  if (valid_frames < (kMinDigitalSilentBlocks + 1) * kBlockFrames) {
     return valid_frames;
   }
   const int num_blocks = valid_frames / kBlockFrames;
@@ -127,8 +137,8 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     }
     block_rms[b] = static_cast<float>(std::sqrt(sum_sq / block_samples));
   }
-  const float limit = std::min(
-      6e-3f, 0.05f * *std::max_element(block_rms.begin(), block_rms.end()));
+  const float max_rms = *std::max_element(block_rms.begin(), block_rms.end());
+  const float limit = std::min(6e-3f, 0.05f * max_rms);
   int last_active = 0;
   for (int b = 0; b < num_blocks; ++b) {
     if (block_rms[b] > limit) last_active = b + 1;
@@ -137,6 +147,22 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     valid_frames =
         std::min(valid_frames, std::max(7, last_active + 1) * kBlockFrames);
     raw_speech.resize(static_cast<size_t>(valid_frames) * hop_length);
+    if (decode_valid_frames != nullptr) *decode_valid_frames = valid_frames;
+    return valid_frames;
+  }
+  if (decode_valid_frames != nullptr) {
+    const float digital_limit = std::min(5e-4f, 0.01f * max_rms);
+    int last_digital = 0;
+    for (int b = 0; b < num_blocks; ++b) {
+      if (block_rms[b] > digital_limit) last_digital = b + 1;
+    }
+    if (last_digital > 0 &&
+        num_blocks - last_digital >= kMinDigitalSilentBlocks) {
+      *decode_valid_frames =
+          std::min(valid_frames,
+                   std::max(std::max(7, last_digital + 1) * kBlockFrames,
+                            valid_frames - 2 * kBlockFrames));
+    }
   }
   return valid_frames;
 }
@@ -328,11 +354,38 @@ litert::support::AudioPreprocessorConfig CreateMiniAudioConfig(
   return preprocessor_config;
 }
 
+// Scales active samples `[0, valid_frames * hop_length)` of quiet unnormalized
+// standard log-mel inputs (`0 < peak < kMinStandardNormPeak`) up to
+// `kTargetStandardNormPeak` so that the STFT power spectrum (`|X[k]|^2`) does
+// not collapse into `mel_floor` before per-utterance mean/std normalization.
+void ScaleQuietStandardNormAudio(
+    const LogMelSpectrogramProcessor::LogMelSpectrogramConfig& config,
+    std::vector<float>& raw_speech, int valid_frames) {
+  if (config.norm_type != LogMelSpectrogramProcessor::NormType::kStandard ||
+      config.normalize_mel || valid_frames <= 0 || config.hop_length <= 0) {
+    return;
+  }
+  const size_t active_samples =
+      std::min(raw_speech.size(), static_cast<size_t>(valid_frames) *
+                                      static_cast<size_t>(config.hop_length));
+  float peak = 0.0f;
+  for (size_t i = 0; i < active_samples; ++i) {
+    peak = std::max(peak, std::abs(raw_speech[i]));
+  }
+  if (peak > 0.0f && peak < kMinStandardNormPeak) {
+    const float gain = kTargetStandardNormPeak / peak;
+    for (size_t i = 0; i < active_samples; ++i) {
+      raw_speech[i] *= gain;
+    }
+  }
+}
+
 absl::StatusOr<std::vector<float>> ExtractMelFeatures(
     litert::support::AudioPreprocessorMiniAudio& preprocessor,
     const LogMelSpectrogramProcessor::LogMelSpectrogramConfig& config,
     std::vector<float> raw_speech, int valid_frames) {
   preprocessor.Reset();
+  ScaleQuietStandardNormAudio(config, raw_speech, valid_frames);
   litert::support::InputAudio input_audio(std::move(raw_speech));
   ABSL_ASSIGN_OR_RETURN(auto processed_audio,
                         preprocessor.Preprocess(input_audio));
@@ -488,6 +541,7 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
   }
 
   bool trimmed_trailing_silence = false;
+  int decode_valid_frames = valid_frames;
   // Only trim trailing room noise for kStandard (via ShiftsShortChunkBack())
   // and normalize_mel, where per-utterance statistics are computed over
   // [0, stat_frames) and frames >= stat_frames are zeroed out for encoders
@@ -495,10 +549,13 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
   // is trained on 30 s windows where padded silence is clipped to
   // (max_val - 4.0) / 4.0 rather than 0.0.
   if (ShiftsShortChunkBack() || config_.normalize_mel) {
-    const int trimmed =
-        TrimTrailingRoomNoise(raw_speech, valid_frames, config_.hop_length);
+    const int trimmed = TrimTrailingRoomNoise(
+        raw_speech, valid_frames, config_.hop_length,
+        (is_short_chunk && ShiftsShortChunkBack()) ? &decode_valid_frames
+                                                   : nullptr);
     if (trimmed < valid_frames) {
       valid_frames = trimmed;
+      decode_valid_frames = trimmed;
       trimmed_trailing_silence = true;
       if (!is_short_chunk) {
         previous_window_.clear();
@@ -515,6 +572,7 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
       start_fraction = ShiftShortChunkBackOverPreviousWindow(
           raw_speech, previous_window_, window_samples_, config_.hop_length);
       valid_frames = config_.n_frames;
+      decode_valid_frames = valid_frames;
     } else {
       raw_speech.resize(window_samples_, 0.0f);
     }
@@ -536,9 +594,11 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
   // final chunks (`start_fraction > 0`) and padded tail frames on short chunks
   // (`valid_fraction < 1`).
   const int bounded_valid_frames = std::min(valid_frames, n_frames);
+  const int bounded_decode_valid_frames =
+      std::min(decode_valid_frames, n_frames);
   const float valid_fraction =
-      (config_.n_frames > 0 && bounded_valid_frames > 0)
-          ? std::min(1.0f, static_cast<float>(bounded_valid_frames) /
+      (config_.n_frames > 0 && bounded_decode_valid_frames > 0)
+          ? std::min(1.0f, static_cast<float>(bounded_decode_valid_frames) /
                                static_cast<float>(config_.n_frames))
           : 1.0f;
   // For full valid windows on processors that shift short chunks back, also

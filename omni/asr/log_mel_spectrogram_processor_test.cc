@@ -14,7 +14,9 @@
 
 #include "omni/asr/log_mel_spectrogram_processor.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -741,6 +743,98 @@ TEST(LogMelSpectrogramProcessorTest,
   // Centered features must not run TrimTrailingRoomNoise on the reconstructed
   // window and zero out the trailing frames in [start_fraction, 1.0).
   EXPECT_NE((*result.centered_features)[kWindowFrames - 1], 0.0f);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     LowAmplitudeStandardNormAudioScalesAboveMelFloorBeforeNormalization) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames,
+      .preemphasis = 0.97f,
+      .mel_floor = 5.960464477539063e-08f,
+      .normalize_mel = false,
+      .add_floor_to_mel_before_log = true,
+      .norm_type = LogMelSpectrogramProcessor::NormType::kStandard,
+      .slaney_mel = true,
+      .power_spectrum = true};
+
+  std::vector<float> normal_audio = MakeTestAudio(16000 * 2);
+  float max_abs = 0.0f;
+  for (float s : normal_audio) {
+    max_abs = std::max(max_abs, std::abs(s));
+  }
+  // Scale normal_audio to exact peak = 0.1f (>= kMinStandardNormPeak = 0.02f).
+  for (float& s : normal_audio) {
+    s *= 0.1f / max_abs;
+  }
+  std::vector<float> quiet_audio = normal_audio;
+  // Scale down by 12.5x (peak = 0.008f < kMinStandardNormPeak = 0.02f, which
+  // ScaleQuietStandardNormAudio scales back up to kTargetStandardNormPeak =
+  // 0.1f, while peak >= kSilenceMaxPeak so audio is not dropped as silence).
+  for (float& s : quiet_audio) {
+    s *= 0.08f;
+  }
+
+  DummyAudioSource normal_source;
+  ASSERT_OK_AND_ASSIGN(
+      auto normal_processor,
+      LogMelSpectrogramProcessor::Create(16000, config, &normal_source));
+  normal_source.PushChunk(normal_audio);
+  ASSERT_OK(normal_processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto normal_result, normal_processor->GetOutput());
+
+  DummyAudioSource quiet_source;
+  ASSERT_OK_AND_ASSIGN(
+      auto quiet_processor,
+      LogMelSpectrogramProcessor::Create(16000, config, &quiet_source));
+  quiet_source.PushChunk(quiet_audio);
+  ASSERT_OK(quiet_processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto quiet_result, quiet_processor->GetOutput());
+
+  ASSERT_EQ(quiet_result.features.size(), normal_result.features.size());
+  for (size_t i = 0; i < quiet_result.features.size(); ++i) {
+    EXPECT_THAT(quiet_result.features[i],
+                FloatNear(normal_result.features[i], 1e-4f));
+  }
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     ShortUtteranceWithTrailingDigitalSilenceTrimsValidFrames) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kTotalFrames = 230;   // 2.3 s short utterance.
+  constexpr int kActiveFrames = 200;  // 2.0 s speech + 0.3 s digital silence.
+  std::vector<float> audio = MakeTestAudio(kTotalFrames * kHop);
+  for (int i = kActiveFrames * kHop; i < kTotalFrames * kHop; ++i) {
+    audio[i] *= 0.0002f;
+  }
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       LogMelSpectrogramProcessor::Create(
+                           16000,
+                           LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+                               .n_fft = 512,
+                               .n_mels = kNMels,
+                               .hop_length = kHop,
+                               .n_frames = kWindowFrames},
+                           &source));
+  source.PushChunk(audio);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  // 20 active 100 ms blocks + 1 margin block = 210 decode valid frames, while
+  // mel features remain populated through kTotalFrames (230) so encoder
+  // per-band normalization statistics are unchanged.
+  ASSERT_TRUE(result.decode_range.has_value());
+  EXPECT_FLOAT_EQ(result.decode_range->valid_fraction, 210.0f / kWindowFrames);
+  EXPECT_NE(result.features[210], 0.0f);
+  EXPECT_EQ(result.features[kTotalFrames], 0.0f);
 }
 
 }  // namespace
