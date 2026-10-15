@@ -312,6 +312,34 @@ if(LITERT_LM_ENABLE_QWEN_PROCESSOR)
 endif()
 
 # ==============================================================================
+# Model Data Processor Factory Common
+# ==============================================================================
+add_litertlm_library(runtime_conversation_model_data_processor_factory_common STATIC
+  model_data_processor_factory_common.cc
+)
+add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::FactoryCommon
+  ALIAS runtime_conversation_model_data_processor_factory_common)
+
+target_include_directories(runtime_conversation_model_data_processor_factory_common
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_conversation_model_data_processor_factory_common
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Gemma3Config
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::GenericConfig
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
+    LiteRTLM::Runtime::Conversation::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Model Data Processor Factory
 # ==============================================================================
 add_litertlm_library(runtime_conversation_model_data_processor_factory STATIC
@@ -331,6 +359,7 @@ target_link_libraries(runtime_conversation_model_data_processor_factory
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::FactoryCommon
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Gemma3Config
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Generic
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::GenericConfig
