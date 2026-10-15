@@ -95,7 +95,7 @@ class OpenAIHandler(util.CORSRequestHandler):
       max_completion_tokens: int | None = None,
       include_usage: bool = False,
       response_format: litert_lm.ResponseFormat | None = None,
-  ) -> None:
+  ) -> dict[str, Any] | None:
     """Streams server-sent events using the provided formatter.
 
     Args:
@@ -105,6 +105,10 @@ class OpenAIHandler(util.CORSRequestHandler):
       max_completion_tokens: The maximum number of tokens to generate.
       include_usage: Whether to emit a token usage chunk right before [DONE].
       response_format: Optional response format for constrained decoding.
+
+    Returns:
+      The accumulated LiteRT-LM assistant message dictionary on success, or None
+      if an error occurred during streaming.
     """
     self._headers_sent = True
     self.send_response(200)
@@ -116,6 +120,8 @@ class OpenAIHandler(util.CORSRequestHandler):
       self.wfile.write(formatter.format_initial())
       self.wfile.flush()
 
+      text_parts: list[str] = []
+      all_tool_calls: list[dict[str, Any]] = []
       has_tool_calls = False
       reasoning_tokens = 0
       for chunk in conv.send_message_async(
@@ -127,11 +133,13 @@ class OpenAIHandler(util.CORSRequestHandler):
           reasoning_tokens += 1
         text_output = str(chunk)
         if text_output:
+          text_parts.append(text_output)
           self.wfile.write(formatter.format_delta(text_output))
           self.wfile.flush()
 
         if chunk.tool_calls:
           has_tool_calls = True
+          all_tool_calls.extend(tc.to_json() for tc in chunk.tool_calls)
           if hasattr(formatter, "format_tool_call_delta"):
             self.wfile.write(
                 formatter.format_tool_call_delta(
@@ -151,6 +159,15 @@ class OpenAIHandler(util.CORSRequestHandler):
         self.wfile.flush()
       self.wfile.write(formatter.format_final())
       self.wfile.flush()
+
+      full_text_output = "".join(text_parts)
+      if all_tool_calls:
+        return {
+            "role": "assistant",
+            "tool_calls": all_tool_calls,
+            **({"content": full_text_output} if full_text_output else {}),
+        }
+      return {"role": "assistant", "content": full_text_output or None}
     except Exception as e:  # pylint: disable=broad-exception-caught
       click.echo(
           click.style(
@@ -165,6 +182,7 @@ class OpenAIHandler(util.CORSRequestHandler):
         self.wfile.flush()
       except Exception:  # pylint: disable=broad-exception-caught
         pass
+      return None
 
   def stream_response(
       self,
@@ -175,9 +193,9 @@ class OpenAIHandler(util.CORSRequestHandler):
       max_completion_tokens: int | None = None,
       include_usage: bool = False,
       response_format: litert_lm.ResponseFormat | None = None,
-  ) -> None:
+  ) -> dict[str, Any] | None:
     """Streams server-sent events using the provided formatter."""
-    self._stream_response(
+    return self._stream_response(
         conv,
         prompt,
         formatter,
