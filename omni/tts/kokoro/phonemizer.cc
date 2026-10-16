@@ -52,6 +52,7 @@
 #include "omni/tts/kokoro/hindi_g2p.h"
 #include "omni/tts/kokoro/italian_g2p.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
+#include "omni/tts/kokoro/language_g2p.h"
 #include "omni/tts/kokoro/portuguese_g2p.h"
 #include "omni/tts/kokoro/spanish_g2p.h"
 #include "omni/tts/kokoro/traditional_chinese_converter.h"
@@ -148,6 +149,18 @@ bool IsPhonemizerMark(absl::string_view symbol) {
 bool IsAsciiSpace(absl::string_view symbol) {
   return symbol.size() == 1 &&
          absl::ascii_isspace(static_cast<unsigned char>(symbol[0]));
+}
+
+
+// Creates the rule-based G2P engine `G2p` and registers it for `language`.
+template <typename G2p>
+absl::Status AddLanguageG2p(
+    absl::string_view language,
+    absl::flat_hash_map<std::string, std::unique_ptr<kokoro::LanguageG2p>>&
+        g2ps) {
+  ABSL_ASSIGN_OR_RETURN(G2p g2p, G2p::Create());
+  g2ps[language] = std::make_unique<G2p>(std::move(g2p));
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -686,24 +699,18 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
   auto phonemizer = std::unique_ptr<KokoroPhonemizer>(new KokoroPhonemizer());
   phonemizer->data_dir_ = data_dir;
   phonemizer->language_ = normalized_language;
-  ABSL_ASSIGN_OR_RETURN(kokoro::SpanishG2p es_g2p,
-                        kokoro::SpanishG2p::Create());
-  phonemizer->spanish_g2p_ =
-      std::make_unique<kokoro::SpanishG2p>(std::move(es_g2p));
-  ABSL_ASSIGN_OR_RETURN(kokoro::HindiG2p hi_g2p, kokoro::HindiG2p::Create());
-  phonemizer->hindi_g2p_ =
-      std::make_unique<kokoro::HindiG2p>(std::move(hi_g2p));
-  ABSL_ASSIGN_OR_RETURN(kokoro::PortugueseG2p pt_g2p,
-                        kokoro::PortugueseG2p::Create());
-  phonemizer->portuguese_g2p_ =
-      std::make_unique<kokoro::PortugueseG2p>(std::move(pt_g2p));
-  ABSL_ASSIGN_OR_RETURN(kokoro::ItalianG2p it_g2p,
-                        kokoro::ItalianG2p::Create());
-  phonemizer->italian_g2p_ =
-      std::make_unique<kokoro::ItalianG2p>(std::move(it_g2p));
-  ABSL_ASSIGN_OR_RETURN(kokoro::FrenchG2p fr_g2p, kokoro::FrenchG2p::Create());
-  phonemizer->french_g2p_ =
-      std::make_unique<kokoro::FrenchG2p>(std::move(fr_g2p));
+  // Every rule-based engine is created up front so that `SetLanguage` can
+  // switch to any of their languages later.
+  ABSL_RETURN_IF_ERROR(
+      AddLanguageG2p<kokoro::SpanishG2p>("es", phonemizer->language_g2ps_));
+  ABSL_RETURN_IF_ERROR(
+      AddLanguageG2p<kokoro::HindiG2p>("hi", phonemizer->language_g2ps_));
+  ABSL_RETURN_IF_ERROR(AddLanguageG2p<kokoro::PortugueseG2p>(
+      "pt-br", phonemizer->language_g2ps_));
+  ABSL_RETURN_IF_ERROR(
+      AddLanguageG2p<kokoro::ItalianG2p>("it", phonemizer->language_g2ps_));
+  ABSL_RETURN_IF_ERROR(
+      AddLanguageG2p<kokoro::FrenchG2p>("fr-fr", phonemizer->language_g2ps_));
 
   if (!text_norm_rules.empty()) {
     ABSL_ASSIGN_OR_RETURN(phonemizer->text_normalizer_,
@@ -825,20 +832,9 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
       english_g2p_ != nullptr) {
     return english_g2p_->WordToIpa(word, /*british=*/language_ == "en-gb");
   }
-  if (language_ == "es" && spanish_g2p_ != nullptr) {
-    return spanish_g2p_->WordToIpa(word, custom_lexicon_);
-  }
-  if (language_ == "hi" && hindi_g2p_ != nullptr) {
-    return hindi_g2p_->WordToIpa(word, custom_lexicon_);
-  }
-  if (language_ == "pt-br" && portuguese_g2p_ != nullptr) {
-    return portuguese_g2p_->WordToIpa(word, custom_lexicon_);
-  }
-  if (language_ == "it" && italian_g2p_ != nullptr) {
-    return italian_g2p_->WordToIpa(word, custom_lexicon_);
-  }
-  if (language_ == "fr-fr" && french_g2p_ != nullptr) {
-    return french_g2p_->WordToIpa(word, custom_lexicon_);
+  if (const auto it = language_g2ps_.find(language_);
+      it != language_g2ps_.end()) {
+    return it->second->WordToIpa(word, custom_lexicon_);
   }
 
   if (ContainsHanzi(word)) {
@@ -1115,20 +1111,9 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
     return english_g2p_->TextToIpa(text, /*british=*/language_ == "en-gb",
                                    custom_lexicon_);
   }
-  if (language_ == "es" && spanish_g2p_ != nullptr) {
-    return spanish_g2p_->TextToIpa(text, custom_lexicon_);
-  }
-  if (language_ == "hi" && hindi_g2p_ != nullptr) {
-    return hindi_g2p_->TextToIpa(text, custom_lexicon_);
-  }
-  if (language_ == "pt-br" && portuguese_g2p_ != nullptr) {
-    return portuguese_g2p_->TextToIpa(text, custom_lexicon_);
-  }
-  if (language_ == "it" && italian_g2p_ != nullptr) {
-    return italian_g2p_->TextToIpa(text, custom_lexicon_);
-  }
-  if (language_ == "fr-fr" && french_g2p_ != nullptr) {
-    return french_g2p_->TextToIpa(text, custom_lexicon_);
+  if (const auto it = language_g2ps_.find(language_);
+      it != language_g2ps_.end()) {
+    return it->second->TextToIpa(text, custom_lexicon_);
   }
 
   if (language_ == "ja") {

@@ -1313,13 +1313,13 @@ HindiG2p::HindiG2p(int /*unused*/) {}
 
 absl::StatusOr<HindiG2p> HindiG2p::Create() { return HindiG2p(0); }
 
-absl::StatusOr<std::string> HindiG2p::TextToIpa(
+absl::StatusOr<std::string> HindiG2p::DoTextToIpa(
     absl::string_view text,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   return PhonemizeHindiSentence(text, /*isolated=*/false, custom_lexicon);
 }
 
-absl::StatusOr<std::string> HindiG2p::WordToIpa(
+absl::StatusOr<std::string> HindiG2p::DoWordToIpa(
     absl::string_view word,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   return PhonemizeHindiSentence(word, /*isolated=*/true, custom_lexicon);

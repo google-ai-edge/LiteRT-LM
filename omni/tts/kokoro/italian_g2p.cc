@@ -2668,7 +2668,7 @@ ItalianG2p::ItalianG2p(int /*unused*/) {}
 
 absl::StatusOr<ItalianG2p> ItalianG2p::Create() { return ItalianG2p(0); }
 
-absl::StatusOr<std::string> ItalianG2p::WordToIpa(
+absl::StatusOr<std::string> ItalianG2p::DoWordToIpa(
     absl::string_view word,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::string w = ToLowerUtf8(word);
@@ -2689,7 +2689,7 @@ absl::StatusOr<std::string> ItalianG2p::WordToIpa(
   return RenderTokens(WordTokens(w));
 }
 
-absl::StatusOr<std::string> ItalianG2p::TextToIpa(
+absl::StatusOr<std::string> ItalianG2p::DoTextToIpa(
     absl::string_view text,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::vector<RawToken> raw = TokenizeText(text);

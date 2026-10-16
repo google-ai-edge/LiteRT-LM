@@ -27,12 +27,8 @@
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/english_g2p.h"
-#include "omni/tts/kokoro/french_g2p.h"
-#include "omni/tts/kokoro/hindi_g2p.h"
-#include "omni/tts/kokoro/italian_g2p.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
-#include "omni/tts/kokoro/portuguese_g2p.h"
-#include "omni/tts/kokoro/spanish_g2p.h"
+#include "omni/tts/kokoro/language_g2p.h"
 #include "omni/tts/kokoro/traditional_chinese_converter.h"
 #include "omni/tts/text_normalizer.h"
 
@@ -409,11 +405,10 @@ class KokoroPhonemizer {
   // `japanese_g2p_`, `zh-lexicon` -> `chinese_g2p_`).
   std::unique_ptr<kokoro::CjkBlob> cjk_blob_;
   std::unique_ptr<kokoro::EnglishG2p> english_g2p_;
-  std::unique_ptr<kokoro::SpanishG2p> spanish_g2p_;
-  std::unique_ptr<kokoro::HindiG2p> hindi_g2p_;
-  std::unique_ptr<kokoro::PortugueseG2p> portuguese_g2p_;
-  std::unique_ptr<kokoro::ItalianG2p> italian_g2p_;
-  std::unique_ptr<kokoro::FrenchG2p> french_g2p_;
+  // Rule-based G2P engines that need no bundled lexicon, keyed by normalized
+  // language code ("es", "hi", "pt-br", "it", "fr-fr").
+  absl::flat_hash_map<std::string, std::unique_ptr<kokoro::LanguageG2p>>
+      language_g2ps_;
   std::unique_ptr<kokoro::JapaneseG2p> japanese_g2p_;
   std::unique_ptr<kokoro::ChineseG2p> chinese_g2p_;
   // Converts Traditional Chinese to Simplified before Mandarin text

@@ -1676,13 +1676,13 @@ SpanishG2p::SpanishG2p(int /*unused*/) {}
 
 absl::StatusOr<SpanishG2p> SpanishG2p::Create() { return SpanishG2p(0); }
 
-absl::StatusOr<std::string> SpanishG2p::TextToIpa(
+absl::StatusOr<std::string> SpanishG2p::DoTextToIpa(
     absl::string_view text,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   return PhonemizeSpanish(text, /*isolated=*/false, custom_lexicon);
 }
 
-absl::StatusOr<std::string> SpanishG2p::WordToIpa(
+absl::StatusOr<std::string> SpanishG2p::DoWordToIpa(
     absl::string_view word,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   return PhonemizeSpanish(word, /*isolated=*/true, custom_lexicon);

@@ -20,6 +20,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/language_g2p.h"
 
 namespace litert::omni::tts::kokoro {
 
@@ -41,7 +42,7 @@ namespace litert::omni::tts::kokoro {
 //   `-अय` fronting (`ɛj`), and consonant gemination (`ː`)
 // - Function-word destressing, Devanagari/ASCII number verbalization, and
 //   common symbols (`%`, `/`, `+`, `₹`, `।`, `॥`)
-class HindiG2p {
+class HindiG2p : public LanguageG2p {
  public:
   // Creates a `HindiG2p` instance.
   //
@@ -49,36 +50,18 @@ class HindiG2p {
   // - Initialized `HindiG2p` instance.
   static absl::StatusOr<HindiG2p> Create();
 
-  // Converts a Hindi UTF-8 text string into a Kokoro-compatible IPA string.
-  //
-  // args
-  // - text: Input UTF-8 Hindi text.
-  // - custom_lexicon: Optional map of lowercase word overrides to normalized
-  //   Kokoro IPA strings.
-  //
-  // returns
-  // - Normalized Kokoro IPA string with punctuation preserved.
-  absl::StatusOr<std::string> TextToIpa(
-      absl::string_view text,
-      const absl::flat_hash_map<std::string, std::string>& custom_lexicon = {})
-      const;
-
-  // Converts a single Hindi word into a Kokoro-compatible IPA string.
-  //
-  // args
-  // - word: Input UTF-8 word token.
-  // - custom_lexicon: Optional map of lowercase word overrides to normalized
-  //   Kokoro IPA strings.
-  //
-  // returns
-  // - Normalized Kokoro IPA string for `word`.
-  absl::StatusOr<std::string> WordToIpa(
-      absl::string_view word,
-      const absl::flat_hash_map<std::string, std::string>& custom_lexicon = {})
-      const;
-
  private:
   explicit HindiG2p(int unused);
+
+  // LanguageG2p:
+  absl::StatusOr<std::string> DoTextToIpa(
+      absl::string_view text,
+      const absl::flat_hash_map<std::string, std::string>& custom_lexicon)
+      const override;
+  absl::StatusOr<std::string> DoWordToIpa(
+      absl::string_view word,
+      const absl::flat_hash_map<std::string, std::string>& custom_lexicon)
+      const override;
 };
 
 }  // namespace litert::omni::tts::kokoro

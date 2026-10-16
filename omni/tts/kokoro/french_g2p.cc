@@ -2976,7 +2976,7 @@ FrenchG2p::FrenchG2p(int unused) { (void)unused; }
 
 absl::StatusOr<FrenchG2p> FrenchG2p::Create() { return FrenchG2p(0); }
 
-absl::StatusOr<std::string> FrenchG2p::WordToIpa(
+absl::StatusOr<std::string> FrenchG2p::DoWordToIpa(
     absl::string_view word,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::string lw = ToLowerFrenchUtf8(word);
@@ -2987,7 +2987,7 @@ absl::StatusOr<std::string> FrenchG2p::WordToIpa(
   return StressIsolated(LtsWord(lw), lw);
 }
 
-absl::StatusOr<std::string> FrenchG2p::TextToIpa(
+absl::StatusOr<std::string> FrenchG2p::DoTextToIpa(
     absl::string_view text,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::string prep = PreprocessText(text);

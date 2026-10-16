@@ -20,6 +20,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/language_g2p.h"
 
 namespace litert::omni::tts::kokoro {
 
@@ -34,7 +35,7 @@ namespace litert::omni::tts::kokoro {
 // cross-word sandhi, abbreviations, and cardinal/ordinal/currency/symbol
 // verbalization) emitting Kokoro's Portuguese phoneme inventory directly
 // without depending on `espeak-ng`.
-class PortugueseG2p {
+class PortugueseG2p : public LanguageG2p {
  public:
   // Creates a `PortugueseG2p` instance.
   //
@@ -45,36 +46,18 @@ class PortugueseG2p {
   //   An initialized `PortugueseG2p` instance.
   static absl::StatusOr<PortugueseG2p> Create();
 
-  // Converts a Brazilian Portuguese text string (word, phrase, or sentence)
-  // into a space-joined Kokoro phoneme string with punctuation preserved.
-  //
-  // args:
-  //   text: UTF-8 input text to phonemize.
-  //   custom_lexicon: Optional lowercase word -> Kokoro IPA override map.
-  //
-  // returns:
-  //   The Kokoro phoneme string for `text`, or an error status on failure.
-  absl::StatusOr<std::string> TextToIpa(
-      absl::string_view text,
-      const absl::flat_hash_map<std::string, std::string>& custom_lexicon = {})
-      const;
-
-  // Converts a single isolated Brazilian Portuguese word into a Kokoro phoneme
-  // string.
-  //
-  // args:
-  //   word: UTF-8 word token to phonemize in isolation.
-  //   custom_lexicon: Optional lowercase word -> Kokoro IPA override map.
-  //
-  // returns:
-  //   The Kokoro phoneme string for `word`, or an error status on failure.
-  absl::StatusOr<std::string> WordToIpa(
-      absl::string_view word,
-      const absl::flat_hash_map<std::string, std::string>& custom_lexicon = {})
-      const;
-
  private:
   explicit PortugueseG2p(int unused);
+
+  // LanguageG2p:
+  absl::StatusOr<std::string> DoTextToIpa(
+      absl::string_view text,
+      const absl::flat_hash_map<std::string, std::string>& custom_lexicon)
+      const override;
+  absl::StatusOr<std::string> DoWordToIpa(
+      absl::string_view word,
+      const absl::flat_hash_map<std::string, std::string>& custom_lexicon)
+      const override;
 };
 
 }  // namespace litert::omni::tts::kokoro

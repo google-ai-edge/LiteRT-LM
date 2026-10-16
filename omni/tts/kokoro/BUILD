@@ -80,6 +80,7 @@ cc_library(
         ":hindi_g2p",
         ":italian_g2p",
         ":japanese_g2p",
+        ":language_g2p",
         ":portuguese_g2p",
         ":spanish_g2p",
         ":traditional_chinese_converter",
@@ -494,6 +495,17 @@ cc_test(
 )
 
 cc_library(
+    name = "language_g2p",
+    srcs = ["language_g2p.cc"],
+    hdrs = ["language_g2p.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "unicode_utils",
     srcs = ["unicode_utils.cc"],
     hdrs = ["unicode_utils.h"],
@@ -548,6 +560,7 @@ cc_library(
     srcs = ["spanish_g2p.cc"],
     hdrs = ["spanish_g2p.h"],
     deps = [
+        ":language_g2p",
         ":unicode_utils",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -572,6 +585,7 @@ cc_library(
     srcs = ["hindi_g2p.cc"],
     hdrs = ["hindi_g2p.h"],
     deps = [
+        ":language_g2p",
         ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -597,6 +611,7 @@ cc_library(
     srcs = ["portuguese_g2p.cc"],
     hdrs = ["portuguese_g2p.h"],
     deps = [
+        ":language_g2p",
         ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -622,6 +637,7 @@ cc_library(
     srcs = ["italian_g2p.cc"],
     hdrs = ["italian_g2p.h"],
     deps = [
+        ":language_g2p",
         ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -647,6 +663,7 @@ cc_library(
     srcs = ["french_g2p.cc"],
     hdrs = ["french_g2p.h"],
     deps = [
+        ":language_g2p",
         ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",

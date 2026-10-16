@@ -1518,7 +1518,7 @@ absl::StatusOr<PortugueseG2p> PortugueseG2p::Create() {
   return PortugueseG2p(0);
 }
 
-absl::StatusOr<std::string> PortugueseG2p::WordToIpa(
+absl::StatusOr<std::string> PortugueseG2p::DoWordToIpa(
     absl::string_view word,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::vector<char32_t> cps = ToCodepointsLower(word);
@@ -1546,7 +1546,7 @@ absl::StatusOr<std::string> PortugueseG2p::WordToIpa(
                                         /*use_secondary_stress=*/false);
 }
 
-absl::StatusOr<std::string> PortugueseG2p::TextToIpa(
+absl::StatusOr<std::string> PortugueseG2p::DoTextToIpa(
     absl::string_view text,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::vector<RawToken> raw_tokens = TokenizePortugueseText(text);
