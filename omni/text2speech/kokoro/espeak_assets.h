@@ -45,7 +45,8 @@ inline constexpr char kEspeakDataDirName[] = "espeak-ng-data";
 // args
 // - lm_resources: Container to read the espeak-ng section from.
 // - cache_dir: Directory to unpack into; the system temporary directory is
-//   used when empty.
+//   used when empty or `kNoCacheDir` (which only disables compiled-model
+//   caches).
 //
 // returns
 // - Path of the unpacked espeak-ng data directory, a NotFound error if the

@@ -29,6 +29,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/base/model_cache.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/util/zip_utils.h"
 
@@ -112,9 +113,12 @@ absl::StatusOr<std::string> UnpackEspeakDataFromLitertLm(
       lm_resources.GetGenericBinaryDataBuffer(kEspeakNgSectionName));
 
   std::error_code ec;
+  // `kNoCacheDir` only disables compiled-model caches; espeak-ng still needs
+  // its data on disk, so treat it like an empty `cache_dir`.
+  const bool use_temp_dir = cache_dir.empty() || cache_dir == kNoCacheDir;
   const std::filesystem::path base_dir =
-      cache_dir.empty() ? std::filesystem::temp_directory_path(ec)
-                        : std::filesystem::path(std::string(cache_dir));
+      use_temp_dir ? std::filesystem::temp_directory_path(ec)
+                   : std::filesystem::path(std::string(cache_dir));
   if (ec) {
     return absl::InternalError(absl::StrCat(
         "Failed to resolve a directory for espeak-ng data: ", ec.message()));

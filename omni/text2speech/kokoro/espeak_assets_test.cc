@@ -24,6 +24,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>  // NOLINT: Required by std::filesystem.
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
+#include "omni/base/model_cache.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
@@ -232,6 +234,22 @@ TEST(EspeakAssetsTest, UnpacksArchiveIntoCacheDir) {
   EXPECT_EQ(ReadFile(dir / "phontab"), "phontab-data");
   EXPECT_EQ(ReadFile(dir / "intonations"), "intonation-data");
   EXPECT_EQ(ReadFile(dir / "voices" / "!v" / "Mr serious"), "voice-data");
+}
+
+TEST(EspeakAssetsTest, NoCacheDirUnpacksIntoTempDirectory) {
+  FakeModelResources resources(
+      std::string(kEspeakNgSectionName),
+      MakeStoredZip({{"phontab", "phontab-data"}}));
+
+  ASSERT_OK_AND_ASSIGN(const std::string data_dir,
+                       UnpackEspeakDataFromLitertLm(resources, kNoCacheDir));
+
+  // ":nocache" must never be used as a literal directory name.
+  std::error_code ec;
+  EXPECT_EQ(std::filesystem::path(data_dir),
+            std::filesystem::temp_directory_path(ec) / kEspeakDataDirName);
+  EXPECT_FALSE(std::filesystem::exists(
+      std::filesystem::path(std::string(kNoCacheDir)) / kEspeakDataDirName));
 }
 
 TEST(EspeakAssetsTest, StripsLeadingDataDirComponent) {
