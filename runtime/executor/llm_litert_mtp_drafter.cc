@@ -196,7 +196,8 @@ absl::Status UpdateCompilationOptions(
       gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
       break;
     }
-    case Backend::CPU: {
+    case Backend::CPU:
+    case Backend::NPU: {
       break;
     }
     default:
