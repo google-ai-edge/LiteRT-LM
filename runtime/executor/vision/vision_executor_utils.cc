@@ -27,6 +27,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -37,8 +38,8 @@ constexpr absl::string_view kPositionsXy = "positions_xy";
 absl::StatusOr<VisionExecutorProperties>
 GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
   VisionExecutorProperties properties;
-  auto vision_adapter_model_or =
-      model_resources.GetTFLiteModel(ModelType::kTfLiteVisionAdapter);
+  auto vision_adapter_model_or = model_resources.GetTFLiteModel(
+      proto::LlmMetadata::TF_LITE_VISION_ADAPTER);
   const Model* vision_adapter_model = nullptr;
   if (vision_adapter_model_or.ok()) {
     vision_adapter_model = vision_adapter_model_or.value();
@@ -47,9 +48,9 @@ GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
     return vision_adapter_model_or.status();
   }
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto vision_encoder_model,
-      model_resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+  ABSL_ASSIGN_OR_RETURN(auto vision_encoder_model,
+                        model_resources.GetTFLiteModel(
+                            proto::LlmMetadata::TF_LITE_VISION_ENCODER));
 
   if (vision_adapter_model != nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,

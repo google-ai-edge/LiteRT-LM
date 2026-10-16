@@ -38,6 +38,7 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
@@ -87,9 +88,9 @@ TEST(LlmLiteRtCompiledModelExecutorFactoryTest,
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
 
-  ASSERT_OK_AND_ASSIGN(
-      const litert::Model* litert_model,
-      model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(const litert::Model* litert_model,
+                       model_resources->GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   ASSERT_NE(litert_model, nullptr);
 
   LITERT_ASSERT_OK_AND_ASSIGN(auto decode_signature,
@@ -103,9 +104,9 @@ TEST(LlmLiteRtCompiledModelExecutorFactoryTest,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
                                &signatures));
 
-  ASSERT_OK_AND_ASSIGN(
-      auto model_buffer_view,
-      model_resources->GetTFLiteModelBuffer(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                       model_resources->GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   litert::BufferRef<uint8_t> model_buffer(
       reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
       model_buffer_view.size());

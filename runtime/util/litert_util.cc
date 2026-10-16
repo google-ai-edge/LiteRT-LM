@@ -36,6 +36,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/magic_number_configs_helper.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/scoped_file.h"
@@ -143,7 +144,7 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   bool uses_generic_npu_compiler_plugin = false;
   if (model_resources != nullptr && backend == Backend::NPU) {
     auto aux_model_buffer =
-        model_resources->GetTFLiteModelBuffer(ModelType::kTfLiteAux);
+        model_resources->GetTFLiteModelBuffer(proto::LlmMetadata::TF_LITE_AUX);
     uses_generic_npu_compiler_plugin =
         !aux_model_buffer.ok() || aux_model_buffer->empty();
   }
@@ -221,12 +222,12 @@ absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets) {
   return loader
              ->GetSectionLocation(
                  BufferKey(schema::AnySectionDataType_TFLiteModel,
-                           ModelType::kTfLitePrefillDecode))
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE))
              .ok() &&
          loader
              ->GetSectionLocation(
                  BufferKey(schema::AnySectionDataType_TFLiteWeights,
-                           ModelType::kTfLitePrefillDecode))
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE))
              .ok();
 }
 

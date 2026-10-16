@@ -38,6 +38,8 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
@@ -96,7 +98,7 @@ bool IsValidTfLiteModelTypeWireString(absl::string_view model_type_str) {
           proto::Text2ImageMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
-  return StringToModelType(model_type_str).ok();
+  return false;
 }
 
 }  // namespace
@@ -124,7 +126,8 @@ BufferKey::BufferKey(schema::AnySectionDataType type,
   }
 }
 
-BufferKey::BufferKey(schema::AnySectionDataType type, ModelType model_type_enum)
+BufferKey::BufferKey(schema::AnySectionDataType type,
+                     proto::LlmMetadata::TfLiteModelType model_type_enum)
     : BufferKey(type, TfLiteModelTypeToWireString(model_type_enum)) {}
 
 bool BufferKey::operator==(const BufferKey& other) const {
@@ -422,7 +425,8 @@ absl::StatusOr<std::pair<size_t, size_t>> LitertLmLoader::GetSectionLocation(
 }
 
 std::optional<litert::BufferRef<uint8_t>>
-LitertLmLoader::GetSentencePieceTokenizer(ModelType model_type) {
+LitertLmLoader::GetSentencePieceTokenizer(
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetSentencePieceTokenizer(TfLiteModelTypeToWireString(model_type));
 }
 
@@ -438,7 +442,8 @@ LitertLmLoader::GetSentencePieceTokenizer(absl::string_view model_type_str) {
 }
 
 std::optional<litert::OwningBufferRef<uint8_t>>
-LitertLmLoader::GetHuggingFaceTokenizer(ModelType model_type) {
+LitertLmLoader::GetHuggingFaceTokenizer(
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetHuggingFaceTokenizer(TfLiteModelTypeToWireString(model_type));
 }
 
@@ -472,7 +477,7 @@ LitertLmLoader::GetHuggingFaceTokenizer(absl::string_view model_type_str) {
 }
 
 litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteModel(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
 }
 
@@ -489,7 +494,7 @@ litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteModel(
 }
 
 litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteWeights(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteWeights(TfLiteModelTypeToWireString(model_type));
 }
 
@@ -506,7 +511,7 @@ litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteWeights(
 }
 
 std::optional<std::string> LitertLmLoader::GetTFLiteModelBackendConstraint(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModelBackendConstraint(
       TfLiteModelTypeToWireString(model_type));
 }
@@ -524,7 +529,7 @@ std::optional<std::string> LitertLmLoader::GetTFLiteModelBackendConstraint(
 }
 
 std::optional<std::string> LitertLmLoader::GetTFLiteModelPreferActivationType(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModelPreferActivationType(
       TfLiteModelTypeToWireString(model_type));
 }

@@ -96,6 +96,7 @@ EMBEDDING_ENGINE_DEPS = [
     "//runtime/engine:embedding_engine_settings",
     "//runtime/executor:embedding_executor_base",
     "//runtime/executor:litert_compiled_model_executor_utils",
+    "//runtime/proto:embedding_metadata_cc_proto",
 ]
 
 MODEL_INFO_DEPS = [

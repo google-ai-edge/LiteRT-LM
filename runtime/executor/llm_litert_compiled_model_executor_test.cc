@@ -63,6 +63,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -182,9 +183,9 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
 
-  ASSERT_OK_AND_ASSIGN(
-      const litert::Model* litert_model,
-      model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(const litert::Model* litert_model,
+                       model_resources->GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   ASSERT_NE(litert_model, nullptr);
 
   LITERT_ASSERT_OK_AND_ASSIGN(auto decode_signature,
@@ -198,9 +199,9 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
                                &signatures));
 
-  ASSERT_OK_AND_ASSIGN(
-      auto model_buffer_view,
-      model_resources->GetTFLiteModelBuffer(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                       model_resources->GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   litert::BufferRef<uint8_t> model_buffer(
       reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
       model_buffer_view.size());
@@ -1116,11 +1117,12 @@ class TfLiteModelResources : public ModelResources {
   }
 
   // ModelResources implementation:
-  absl::StatusOr<const Model*> GetTFLiteModel(ModelType model_type) override {
-    if (model_type == ModelType::kTfLitePrefillDecode) {
+  absl::StatusOr<const Model*> GetTFLiteModel(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
       return &model_;
     }
-    if (model_type == ModelType::kTfLiteMtpDrafter) {
+    if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
       if (with_mtp_drafter_) {
         // Reuse the same model for testing MTP drafter creation
         return &model_;
@@ -1132,7 +1134,7 @@ class TfLiteModelResources : public ModelResources {
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("GetTFLiteModelBuffer not implemented.");
   }
 
@@ -1150,12 +1152,12 @@ class TfLiteModelResources : public ModelResources {
   }
 
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
 
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
 
@@ -1164,12 +1166,12 @@ class TfLiteModelResources : public ModelResources {
   }
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("GetWeightsSectionOffset not implemented.");
   }
 
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError(
         "GetTFLiteModelSectionFileRegion not implemented.");
   }
@@ -1730,9 +1732,9 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
                                /*signatures=*/std::nullopt));
 
-  ASSERT_OK_AND_ASSIGN(
-      auto model_buffer_view,
-      model_resources->GetTFLiteModelBuffer(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                       model_resources->GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   litert::BufferRef<uint8_t> model_buffer(
       reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
       model_buffer_view.size());

@@ -51,8 +51,10 @@ cc_library(
     hdrs = ["streamed_weights_manager.h"],
     deps = [
         ":data_stream",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@litert//weight_loader:external_weight_loader",
         "//runtime/components:model_resources",
@@ -70,7 +72,8 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
-        "//runtime/components:model_resources",
+        "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
     ],
 )
 
@@ -523,6 +526,7 @@ cc_library(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:magic_number_configs_helper",
         "//runtime/executor:vision_executor_settings",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//schema/core:litertlm_header_schema",
     ],
 )
@@ -550,6 +554,7 @@ cc_test(
         "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/proto:llm_metadata_cc_proto",
     ],
 )
 
@@ -575,6 +580,8 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_buffer_ref",
         "//runtime/components:model_resources",
+        "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//schema/core:litertlm_header_schema",
         "//schema/core:litertlm_read",
     ],
@@ -597,6 +604,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_buffer_ref",
         "//runtime/components:model_resources",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//schema/core:litertlm_header_schema",
         "//schema/core:litertlm_read",
     ],
@@ -615,6 +623,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "//runtime/components:model_resources",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//schema/core:litertlm_header_schema",
     ],
 )

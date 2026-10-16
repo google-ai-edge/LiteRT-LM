@@ -41,7 +41,9 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -348,17 +350,55 @@ struct ExternalWeightResources {
   litert::Options::ScopedWeightSectionMap sections;
 };
 
-// Returns the external weights for model_type when present. An empty result
-// means the model has embedded weights or its resource format does not support
-// external weight sections.
+// Returns the external weights for the model type wire string
+// `model_type_str` (e.g. "tf_lite_prefill_decode") when present. An empty
+// result means the model has embedded weights or its resource format does not
+// support external weight sections.
+//
+// args:
+//   resources: The model resources to read the weights section from.
+//   model_type_str: The model type wire string.
+// returns:
+//   The external weight resources, or an error if reading the section failed.
 absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
-    ModelResources& resources, ModelType model_type);
+    ModelResources& resources, absl::string_view model_type_str);
 
-// Adds model_type's external weight section to compilation_options when one is
-// present.
+// Returns the external weights for a capability-scoped Protobuf model type
+// enum (e.g. proto::LlmMetadata::TF_LITE_PREFILL_DECODE or
+// proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER). See
+// GetExternalWeightResources(ModelResources&, absl::string_view).
+template <typename TfLiteModelTypeT,
+          typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
+    ModelResources& resources, TfLiteModelTypeT model_type) {
+  return GetExternalWeightResources(resources,
+                                    TfLiteModelTypeToWireString(model_type));
+}
+
+// Adds the external weight section of the model type wire string
+// `model_type_str` to compilation_options when one is present.
+//
+// args:
+//   resources: The model resources to read the weights section from.
+//   model_type_str: The model type wire string.
+//   compilation_options: The compilation options to update.
+// returns:
+//   OkStatus, or an error if reading the section failed.
 absl::Status SetExternalWeightOptions(ModelResources& resources,
-                                      ModelType model_type,
+                                      absl::string_view model_type_str,
                                       litert::Options& compilation_options);
+
+// Adds the external weight section of a capability-scoped Protobuf model type
+// enum to compilation_options when one is present. See
+// SetExternalWeightOptions(ModelResources&, absl::string_view, ...).
+template <typename TfLiteModelTypeT,
+          typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+absl::Status SetExternalWeightOptions(ModelResources& resources,
+                                      TfLiteModelTypeT model_type,
+                                      litert::Options& compilation_options) {
+  return SetExternalWeightOptions(
+      resources, TfLiteModelTypeToWireString(model_type), compilation_options);
+}
 
 // Initializes the embedding lookup and per-layer embedding lookup managers from
 // the given model resources and environment.

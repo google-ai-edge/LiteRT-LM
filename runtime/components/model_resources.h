@@ -229,6 +229,37 @@ std::string TfLiteModelTypeToWireString(
     proto::Text2ImageMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(ModelType model_type);
 
+// Parses a wire string (e.g. "tf_lite_prefill_decode") or enum name (e.g.
+// "TF_LITE_PREFILL_DECODE") into the LLM capability-scoped Protobuf enum. The
+// parsing is case insensitive and LITE_RUNTIME compatible.
+//
+// args:
+//   model_type_str: The wire string or enum name to parse.
+// returns:
+//   The matching proto::LlmMetadata::TfLiteModelType, or InvalidArgumentError
+//   if the string does not name a known LLM model type.
+absl::StatusOr<proto::LlmMetadata::TfLiteModelType> ParseLlmTfLiteModelType(
+    absl::string_view model_type_str);
+
+// True for the capability-scoped Protobuf TfLiteModelType enums, e.g.
+// proto::LlmMetadata::TfLiteModelType or
+// proto::EmbeddingMetadata::TfLiteModelType. Used to constrain the generic
+// per-capability template wrappers that forward to by-name (wire string) APIs.
+template <typename TfLiteModelTypeT>
+constexpr bool kIsTfLiteModelType =
+    std::is_enum_v<TfLiteModelTypeT> &&
+    !std::is_same_v<TfLiteModelTypeT, ModelType>;
+
+// True for the capability-scoped Protobuf TfLiteModelType enums other than the
+// LLM one, e.g. proto::EmbeddingMetadata::TfLiteModelType,
+// proto::TtsMetadata::TfLiteModelType, proto::AsrMetadata::TfLiteModelType or
+// proto::Text2ImageMetadata::TfLiteModelType. Used to route these enums to the
+// by-name (wire string) ModelResources overloads.
+template <typename TfLiteModelTypeT>
+constexpr bool kIsNonLlmTfLiteModelType =
+    kIsTfLiteModelType<TfLiteModelTypeT> &&
+    !std::is_same_v<TfLiteModelTypeT, proto::LlmMetadata::TfLiteModelType>;
+
 // Describes the location of a contiguous region of bytes in a file.
 struct FileRegion {
   size_t offset;
@@ -242,6 +273,17 @@ struct FileRegion {
 // Get*() functions are called, the models are not created yet. And once the
 // models are created, they will be re-used for all the following calls.
 //
+// Every per-model accessor comes in three flavors:
+// - a virtual overload taking proto::LlmMetadata::TfLiteModelType,
+// - a virtual by-name overload taking the wire string (e.g.
+//   "tf_lite_text_encoder"), whose default implementation parses the string
+//   with ParseLlmTfLiteModelType() and dispatches to the LLM enum overload,
+// - a template overload accepting any other capability-scoped Protobuf
+//   TfLiteModelType enum (e.g. proto::EmbeddingMetadata::TfLiteModelType),
+//   which forwards to the by-name overload.
+// Subclasses overriding any member of these overload sets should add
+// `using ModelResources::<Method>;` to keep the other overloads visible.
+//
 // It's not thread-safe.
 class ModelResources {
  public:
@@ -251,24 +293,26 @@ class ModelResources {
   // yet. And the model is created from memory mapped file, so physical memory
   // is only allocated when the model is actually used.
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type);
 
-  // Returns the litert model for the given model type string, for LLM Engine.
+  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
+  virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      ModelType model_type);
+
+  // Returns the litert model for the given model type wire string.
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
       absl::string_view model_type_str);
 
   // Returns the litert model for the given TfLiteModelTypeT, for supported
   // capability-scoped Engines. Here TfLiteModelTypeT is an enum type defined in
   // the capability-scoped metadata proto, e.g.
-  // - proto::LlmMetadata::TfLiteModelType,
   // - proto::EmbeddingMetadata::TfLiteModelType,
   // - proto::TtsMetadata::TfLiteModelType
   // - proto::AsrMetadata::TfLiteModelType
   // - proto::Text2ImageMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
-      typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
-                                  !std::is_same_v<TfLiteModelTypeT, ModelType>>>
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       TfLiteModelTypeT model_type) {
     return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
@@ -281,25 +325,21 @@ class ModelResources {
   // Prefer to use GetTFLiteModel() if possible, as this function will leave
   // the model lifecycle management to the caller.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type);
 
-  // Returns the TFLite model buffer for the given model type string, for LLM
-  // Engine.
+  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
+  virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      ModelType model_type);
+
+  // Returns the TFLite model buffer for the given model type wire string.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       absl::string_view model_type_str);
 
-  // Returns the TFLite model buffer for the given TfLiteModelTypeT, for
-  // supported capability-scoped Engines. Here TfLiteModelTypeT is an enum type
-  // defined in the capability-scoped metadata proto, e.g.
-  // - proto::LlmMetadata::TfLiteModelType,
-  // - proto::EmbeddingMetadata::TfLiteModelType,
-  // - proto::TtsMetadata::TfLiteModelType
-  // - proto::AsrMetadata::TfLiteModelType
-  // - proto::Text2ImageMetadata::TfLiteModelType.
+  // Returns the TFLite model buffer for the given capability-scoped
+  // TfLiteModelTypeT (see GetTFLiteModel above).
   template <
       typename TfLiteModelTypeT,
-      typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
-                                  !std::is_same_v<TfLiteModelTypeT, ModelType>>>
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       TfLiteModelTypeT model_type) {
     return GetTFLiteModelBuffer(TfLiteModelTypeToWireString(model_type));
@@ -312,46 +352,144 @@ class ModelResources {
 
   // Returns the section start offset and end offset.
   virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type);
 
-  // Returns the region of the requested ModelType in the ModelResources.
+  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
+  virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      ModelType model_type);
+
+  // Returns the section start offset and end offset for the given model type
+  // wire string.
+  virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      absl::string_view model_type_str);
+
+  // Returns the section start offset and end offset for the given
+  // capability-scoped TfLiteModelTypeT.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      TfLiteModelTypeT model_type) {
+    return GetWeightsSectionOffset(TfLiteModelTypeToWireString(model_type));
+  }
+
+  // Returns the region of the requested model type in the ModelResources.
   virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type);
+
+  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
+  virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      ModelType model_type);
+
+  // Returns the region of the requested model type wire string in the
+  // ModelResources.
+  virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      absl::string_view model_type_str);
+
+  // Returns the region of the requested capability-scoped TfLiteModelTypeT in
+  // the ModelResources.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      TfLiteModelTypeT model_type) {
+    return GetTFLiteModelSectionFileRegion(
+        TfLiteModelTypeToWireString(model_type));
+  }
 
   // Returns the TFLite model backend constraint. When there is no constraint
   // for the given model type, it will return an nullopt.
   virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type);
+
+  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
+  virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
+      ModelType model_type);
+
+  // Returns the TFLite model backend constraint for the given model type wire
+  // string, or nullopt if there is none.
+  virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
+      absl::string_view model_type_str);
+
+  // Returns the TFLite model backend constraint for the given
+  // capability-scoped TfLiteModelTypeT, or nullopt if there is none.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      TfLiteModelTypeT model_type) {
+    return GetTFLiteModelBackendConstraint(
+        TfLiteModelTypeToWireString(model_type));
+  }
 
   // Returns the TFLite model prefer activation type. When there is no
   // prefer activation type for the given model type, it will return an
   // nullopt.
   virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type);
+
+  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
+  virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type);
+
+  // Returns the TFLite model prefer activation type for the given model type
+  // wire string, or nullopt if there is none.
+  virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
+      absl::string_view model_type_str);
+
+  // Returns the TFLite model prefer activation type for the given
+  // capability-scoped TfLiteModelTypeT, or nullopt if there is none.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      TfLiteModelTypeT model_type) {
+    return GetTFLiteModelPreferActivationType(
+        TfLiteModelTypeToWireString(model_type));
+  }
 
   // Builds a tokenizer instance from the model and returns it.
   virtual absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() = 0;
 
   // Builds a tokenizer instance for the specified model type and returns it.
-  // Defaults to GetTokenizer() when model_type is kTfLitePrefillDecode.
+  // Defaults to GetTokenizer() when model_type is TF_LITE_PREFILL_DECODE.
   virtual absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
-      ModelType model_type) {
-    if (model_type == ModelType::kTfLitePrefillDecode) {
-      return GetTokenizer();
-    }
-    return absl::UnimplementedError(absl::StrCat("GetTokenizer for model type ",
-                                                 ModelTypeToString(model_type),
-                                                 " is not implemented."));
+      proto::LlmMetadata::TfLiteModelType model_type);
+
+  // Builds a tokenizer instance for the specified model type wire string and
+  // returns it.
+  virtual absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
+      absl::string_view model_type_str);
+
+  // Builds a tokenizer instance for the specified capability-scoped
+  // TfLiteModelTypeT and returns it.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
+      TfLiteModelTypeT model_type) {
+    return GetTokenizer(TfLiteModelTypeToWireString(model_type));
   }
 
   // Returns a tokenizer for `model_type`, creating it on first use and
   // re-using it afterwards. Ownership stays with ModelResources; the returned
   // pointer is valid for the lifetime of this object.
   virtual absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
-      ModelType model_type) {
-    return absl::UnimplementedError(
-        absl::StrCat("GetOrCreateTokenizer for model type ",
-                     ModelTypeToString(model_type), " is not implemented."));
+      proto::LlmMetadata::TfLiteModelType model_type);
+
+  // Returns a tokenizer for the model type wire string, creating it on first
+  // use and re-using it afterwards.
+  virtual absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
+      absl::string_view model_type_str);
+
+  // Returns a tokenizer for the capability-scoped TfLiteModelTypeT, creating
+  // it on first use and re-using it afterwards.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
+      TfLiteModelTypeT model_type) {
+    return GetOrCreateTokenizer(TfLiteModelTypeToWireString(model_type));
   }
 
   // Returns the llm metadata.
@@ -399,8 +537,21 @@ class ModelResources {
   // Returns in-memory weights for a specific model type if available.
   // Used by the streaming weights API when running a model on CPU.
   virtual const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-  GetWeightInMemoryMap(ModelType model_type) const {
-    return nullptr;
+  GetWeightInMemoryMap(proto::LlmMetadata::TfLiteModelType model_type) const;
+
+  // Returns in-memory weights for a specific model type wire string if
+  // available, or nullptr otherwise.
+  virtual const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+  GetWeightInMemoryMap(absl::string_view model_type_str) const;
+
+  // Returns in-memory weights for a specific capability-scoped
+  // TfLiteModelTypeT if available, or nullptr otherwise.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+  GetWeightInMemoryMap(TfLiteModelTypeT model_type) const {
+    return GetWeightInMemoryMap(TfLiteModelTypeToWireString(model_type));
   }
 };
 

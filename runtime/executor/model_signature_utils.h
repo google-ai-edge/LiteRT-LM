@@ -22,6 +22,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 
 namespace litert::lm {
 
@@ -65,18 +66,20 @@ struct SelectedVisionSignatureInfo {
 };
 
 // Inspects the given model and extracts all available signatures with their
-// corresponding capacities and dimensions for the specified ModelType.
+// corresponding capacities and dimensions for the specified TfLiteModelType.
 //
 // Supported ModelTypes:
-// - ModelType::kTfLiteTextEncoder
-// - ModelType::kTfLiteVisionEncoder
-// - ModelType::kTfLiteVisionAdapter
+// - proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER
+// - proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER
+// - proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER
 absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
-    const litert::Model& model, ModelType model_type);
+    const litert::Model& model,
+    proto::EmbeddingMetadata::TfLiteModelType model_type);
 
 // Convenience overload that retrieves the model from ModelResources.
 absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
-    ModelResources& resources, ModelType model_type);
+    ModelResources& resources,
+    proto::EmbeddingMetadata::TfLiteModelType model_type);
 
 // Selects signatures to load based on the target capacity range. Loads
 // signatures for lengths in [`min_capacity`, `target_capacity`], plus the

@@ -41,17 +41,25 @@ class ModelResourcesTask : public ModelResources {
   static absl::StatusOr<std::unique_ptr<ModelResources>> Create(
       std::unique_ptr<ModelAssetBundleResources> model_asset_bundle_resources);
 
+  using ModelResources::GetTFLiteModel;
+  using ModelResources::GetTFLiteModelBackendConstraint;
+  using ModelResources::GetTFLiteModelBuffer;
+  using ModelResources::GetTFLiteModelPreferActivationType;
+  using ModelResources::GetTFLiteModelSectionFileRegion;
+  using ModelResources::GetTokenizer;
+  using ModelResources::GetWeightsSectionOffset;
+
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     // Task model does not support backend constraint.
     return std::nullopt;
   };
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     // Task model does not support prefer activation type.
     return std::nullopt;
   };
@@ -63,17 +71,16 @@ class ModelResourcesTask : public ModelResources {
         "GetScopedFile is not implemented for Task model.");
   }
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError(
         "GetWeightsSectionOffset is not implemented for Task model.");
   }
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError(
         "GetTFLiteModelSectionFileRegion is not implemented for Task "
         "model.");
   }
-
 
  private:
   explicit ModelResourcesTask(
@@ -81,7 +88,9 @@ class ModelResourcesTask : public ModelResources {
       : model_asset_bundle_resources_(std::move(model_asset_bundle_resources)) {
   }
 
-  absl::flat_hash_map<ModelType, std::shared_ptr<litert::Model>> model_map_;
+  absl::flat_hash_map<proto::LlmMetadata::TfLiteModelType,
+                      std::shared_ptr<litert::Model>>
+      model_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
   std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 

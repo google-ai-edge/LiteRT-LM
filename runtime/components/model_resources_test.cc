@@ -62,15 +62,15 @@ TEST(ModelResourcesTest, InitializeWithFileBackedLiteRtModel) {
                        LitertLmLoader::Create(std::move(model_file)));
 
   const auto expected_model_size =
-      loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size();
+      loader->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE).Size();
   ASSERT_GT(expected_model_size, 0);
 
   auto model_resources = ModelResourcesLitertLm::Create(
       std::move(loader), /*enable_file_backed_model_loading=*/true);
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 }
@@ -84,13 +84,14 @@ TEST(ModelResourcesTest, InitializeWithValidLitertLmLoader) {
   ASSERT_OK_AND_ASSIGN(auto loader,
                        LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetSentencePieceTokenizer()->Size(), 0);
-  ASSERT_GT(loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
+  ASSERT_GT(loader->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
+            0);
 
   auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 
@@ -98,8 +99,8 @@ TEST(ModelResourcesTest, InitializeWithValidLitertLmLoader) {
   ASSERT_OK(tokenizer);
   ASSERT_NE(tokenizer.value(), nullptr);
 
-  auto prefill_tokenizer =
-      model_resources.value()->GetTokenizer(ModelType::kTfLitePrefillDecode);
+  auto prefill_tokenizer = model_resources.value()->GetTokenizer(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(prefill_tokenizer);
   ASSERT_NE(prefill_tokenizer.value(), nullptr);
 }
@@ -113,15 +114,16 @@ TEST(ModelResourcesTest, InitializeWithExternalWeights) {
   ASSERT_OK_AND_ASSIGN(auto loader,
                        LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetSentencePieceTokenizer()->Size(), 0);
-  ASSERT_GT(loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
-  ASSERT_GT(loader->GetTFLiteWeights(ModelType::kTfLitePrefillDecode).Size(),
+  ASSERT_GT(loader->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
             0);
+  ASSERT_GT(
+      loader->GetTFLiteWeights(LlmMetadata::TF_LITE_PREFILL_DECODE).Size(), 0);
 
   auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 
@@ -166,8 +168,8 @@ TEST(ModelResourcesTest, InitializeWithValidModelAssetBundleResources) {
       std::move(model_asset_bundle_resources.value()));
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 
@@ -189,11 +191,11 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFound) {
   ASSERT_OK(model_resources);
 
   // Attempt to get a model type that doesn't exist in the test file.
+  EXPECT_THAT(model_resources.value()->GetTFLiteModelBuffer(
+                  LlmMetadata::TF_LITE_EMBEDDER),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
   EXPECT_THAT(
-      model_resources.value()->GetTFLiteModelBuffer(ModelType::kTfLiteEmbedder),
-      testing::status::StatusIs(absl::StatusCode::kNotFound));
-  EXPECT_THAT(
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLiteEmbedder),
+      model_resources.value()->GetTFLiteModel(LlmMetadata::TF_LITE_EMBEDDER),
       testing::status::StatusIs(absl::StatusCode::kNotFound));
 }
 
@@ -212,8 +214,8 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFoundTask) {
   ASSERT_OK(model_resources);
 
   // Attempt to get a model type that doesn't exist in the test file.
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModelBuffer(ModelType::kTfLiteEmbedder);
+  auto tflite_model = model_resources.value()->GetTFLiteModelBuffer(
+      LlmMetadata::TF_LITE_EMBEDDER);
   EXPECT_THAT(tflite_model,
               testing::status::StatusIs(absl::StatusCode::kNotFound));
 }
@@ -231,25 +233,22 @@ TEST(ModelResourcesTest, GetTFLiteModelSectionFileRegion) {
                        ModelResourcesLitertLm::Create(std::move(loader)));
 
   // Success case: model is present.
-  ASSERT_OK_AND_ASSIGN(
-      auto file_region,
-      model_resources->GetTFLiteModelSectionFileRegion(
-          ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto file_region,
+                       model_resources->GetTFLiteModelSectionFileRegion(
+                           LlmMetadata::TF_LITE_PREFILL_DECODE));
   EXPECT_GT(file_region.offset, 0);
   EXPECT_GT(file_region.size, 0);
 
   // Compare with the size from GetTFLiteModelBuffer.
-  ASSERT_OK_AND_ASSIGN(
-      auto model_buffer,
-      model_resources->GetTFLiteModelBuffer(
-          ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer,
+                       model_resources->GetTFLiteModelBuffer(
+                           LlmMetadata::TF_LITE_PREFILL_DECODE));
   EXPECT_EQ(file_region.size, model_buffer.size());
 
   // Error case: model type not found in the loader.
-  EXPECT_THAT(
-      model_resources->GetTFLiteModelSectionFileRegion(
-          ModelType::kTfLiteEmbedder),
-      testing::status::StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(model_resources->GetTFLiteModelSectionFileRegion(
+                  LlmMetadata::TF_LITE_EMBEDDER),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(ModelTypeConversionTest, StringToModelType) {
@@ -369,6 +368,8 @@ TEST(ModelTypeBridgeTest, EmbeddingRoundTripAndWireStringParity) {
            ModelType::kTfLiteEndOfVision,
            ModelType::kTfLiteAudioEncoderHw,
            ModelType::kTfLiteAudioAdapter,
+           ModelType::kTfLiteAudioFrontend,
+           ModelType::kTfLiteEndOfAudio,
        }) {
     SCOPED_TRACE(ModelTypeToString(model_type));
     ASSERT_OK_AND_ASSIGN(

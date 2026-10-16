@@ -27,6 +27,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/file_data_stream.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -82,11 +83,11 @@ TEST(LitertLmStreamingLoaderTest, GetTfLiteModelSectionHints) {
   ASSERT_OK(loader.LoadHeader());
 
   EXPECT_EQ(loader.GetTFLiteModelPreferActivationType(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             "fp16");
-  EXPECT_EQ(
-      loader.GetTFLiteModelBackendConstraint(ModelType::kTfLitePrefillDecode),
-      "cpu");
+  EXPECT_EQ(loader.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "cpu");
 }
 
 TEST(LitertLmStreamingLoaderTest, LoadHfTokenizerModel) {

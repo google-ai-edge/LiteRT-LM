@@ -39,6 +39,7 @@
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 
 namespace {
 
@@ -154,16 +155,19 @@ LiteRtLmStatusCode litert_lm_embedding_engine_settings_create(
     if (resources.ok() && *resources != nullptr) {
       if (!vision_backend.has_value() &&
           (*resources)
-              ->GetTFLiteModel(litert::lm::ModelType::kTfLiteVisionEncoder)
+              ->GetTFLiteModel(
+                  litert::lm::proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
               .ok()) {
         vision_backend = *backend;
       }
       if (!audio_backend.has_value() &&
           ((*resources)
-               ->GetTFLiteModel(litert::lm::ModelType::kTfLiteAudioEncoderHw)
+               ->GetTFLiteModel(litert::lm::proto::EmbeddingMetadata::
+                                    TF_LITE_AUDIO_ENCODER_HW)
                .ok() ||
            (*resources)
-               ->GetTFLiteModel(litert::lm::ModelType::kTfLiteAudioFrontend)
+               ->GetTFLiteModel(
+                   litert::lm::proto::EmbeddingMetadata::TF_LITE_AUDIO_FRONTEND)
                .ok())) {
         audio_backend = *backend;
       }

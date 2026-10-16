@@ -31,6 +31,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -53,14 +54,14 @@ class FakeModelResources : public ModelResources {
         adapter_status_(adapter_status) {}
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override {
-    if (model_type == ModelType::kTfLiteVisionEncoder) {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER) {
       if (!encoder_status_.ok()) {
         return encoder_status_;
       }
       return encoder_;
     }
-    if (model_type == ModelType::kTfLiteVisionAdapter) {
+    if (model_type == proto::LlmMetadata::TF_LITE_VISION_ADAPTER) {
       if (!adapter_status_.ok()) {
         return adapter_status_;
       }
@@ -73,22 +74,22 @@ class FakeModelResources : public ModelResources {
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
@@ -103,7 +104,7 @@ class FakeModelResources : public ModelResources {
   }
 
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
 
@@ -174,7 +175,7 @@ TEST(VisionExecutorUtilsTest, GetPropertiesWithoutAdapterMocked) {
 
   ASSERT_OK_AND_ASSIGN(
       auto encoder_model,
-      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+      resources->GetTFLiteModel(proto::LlmMetadata::TF_LITE_VISION_ENCODER));
 
   // Hide the adapter
   FakeModelResources fake_resources(encoder_model, nullptr);

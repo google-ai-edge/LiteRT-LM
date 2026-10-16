@@ -34,6 +34,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/asr_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni {
@@ -257,10 +258,11 @@ TEST(ModelUtilsTest, CreateCompiledModelFromEngineSettingsNonExistent) {
       CreateCompiledModel(settings, *env, *options, /*lm_resources=*/nullptr,
                           lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER),
       StatusIs(absl::StatusCode::kNotFound));
-  EXPECT_THAT(CreateCompiledModel(settings, *env, *options,
-                                  /*lm_resources=*/nullptr,
-                                  lm::ModelType::kTfLiteAudioEncoderHw),
-              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(
+      CreateCompiledModel(settings, *env, *options,
+                          /*lm_resources=*/nullptr,
+                          lm::proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+      StatusIs(absl::StatusCode::kNotFound));
 }
 
 }  // namespace

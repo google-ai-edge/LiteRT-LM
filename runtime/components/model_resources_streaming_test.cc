@@ -63,19 +63,24 @@ class MemoryDataStream : public DataStream {
 
 TEST(ModelResourcesStreamingTest, GetTFLiteModelNotFoundWhenUnset) {
   ModelResourcesStreaming model_resources;
-  EXPECT_EQ(model_resources.GetTFLiteModel(ModelType::kUnknown).status().code(),
-            absl::StatusCode::kNotFound);
+  EXPECT_EQ(
+      model_resources
+          .GetTFLiteModel(proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED)
+          .status()
+          .code(),
+      absl::StatusCode::kNotFound);
 }
 
 TEST(ModelResourcesStreamingTest, SetAndGetModelBuffer) {
   ModelResourcesStreaming model_resources;
   std::string dummy_bytes = "dummy_tflite_model_content";
   model_resources.SetModelBuffer(
-      ModelType::kTfLitePrefillDecode,
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
       std::vector<char>(dummy_bytes.begin(), dummy_bytes.end()));
 
-  ASSERT_OK_AND_ASSIGN(auto buffer, model_resources.GetTFLiteModelBuffer(
-                                        ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto buffer,
+                       model_resources.GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   EXPECT_EQ(buffer, dummy_bytes);
 }
 
@@ -88,43 +93,44 @@ TEST(ModelResourcesStreamingTest, GetScopedFileUnimplementedWhenUnset) {
 TEST(ModelResourcesStreamingTest,
      GetWeightsSectionOffsetUnimplementedWhenUnset) {
   ModelResourcesStreaming model_resources;
-  EXPECT_EQ(
-      model_resources.GetWeightsSectionOffset(ModelType::kUnknown)
-          .status()
-          .code(),
-      absl::StatusCode::kUnimplemented);
+  EXPECT_EQ(model_resources
+                .GetWeightsSectionOffset(
+                    proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED)
+                .status()
+                .code(),
+            absl::StatusCode::kUnimplemented);
 }
 
 TEST(ModelResourcesStreamingTest, SetAndGetTFLiteModelBackendConstraint) {
   ModelResourcesStreaming model_resources;
   EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             std::nullopt);
 
   model_resources.SetTFLiteModelBackendConstraint(
-      ModelType::kTfLitePrefillDecode, "gpu");
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE, "gpu");
   EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             "gpu");
-  EXPECT_EQ(
-      model_resources.GetTFLiteModelBackendConstraint(ModelType::kUnknown),
-      std::nullopt);
+  EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
+            std::nullopt);
 }
 
 TEST(ModelResourcesStreamingTest, SetAndGetTFLiteModelPreferActivationType) {
   ModelResourcesStreaming model_resources;
   EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             std::nullopt);
 
   model_resources.SetTFLiteModelPreferActivationType(
-      ModelType::kTfLitePrefillDecode, "fp16");
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE, "fp16");
   EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             "fp16");
-  EXPECT_EQ(
-      model_resources.GetTFLiteModelPreferActivationType(ModelType::kUnknown),
-      std::nullopt);
+  EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
+                proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
+            std::nullopt);
 }
 
 TEST(ModelResourcesStreamingTest, GetTokenizerUnimplemented) {
@@ -182,27 +188,29 @@ TEST(ModelResourcesStreamingTest, SetAndGetExecutorMetadata) {
 
 TEST(ModelResourcesStreamingTest, SetAndGetWeightsFromStream) {
   ModelResourcesStreaming model_resources;
-  EXPECT_EQ(
-      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder),
-      nullptr);
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            nullptr);
 
   std::string weight_data = "raw_weights_bytes_12345678";
   MemoryDataStream stream(weight_data);
 
-  ASSERT_TRUE(model_resources
-                  .SetWeightsFromStream(ModelType::kTfLiteVisionEncoder, stream,
-                                        weight_data.size())
-                  .ok());
+  ASSERT_TRUE(
+      model_resources
+          .SetWeightsFromStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER,
+                                stream, weight_data.size())
+          .ok());
 
-  const auto* model_map =
-      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder);
+  const auto* model_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER);
   ASSERT_NE(model_map, nullptr);
   auto model_it = model_map->find("tflite_weights");
   ASSERT_NE(model_it, model_map->end());
   EXPECT_EQ(model_it->second.size(), weight_data.size());
 
   // Non-streamed model type should return nullptr.
-  EXPECT_EQ(model_resources.GetWeightInMemoryMap(ModelType::kTfLiteEmbedder),
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_EMBEDDER),
             nullptr);
 }
 
@@ -212,29 +220,31 @@ TEST(ModelResourcesStreamingTest, ReleaseWeightsDropsOnlyTheGivenModelType) {
   std::string vision_data = "vision_weights";
   MemoryDataStream vision_stream(vision_data);
   ASSERT_OK(model_resources.SetWeightsFromStream(
-      ModelType::kTfLiteVisionEncoder, vision_stream, vision_data.size()));
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, vision_stream,
+      vision_data.size()));
 
   std::string adapter_data = "adapter_weights";
   MemoryDataStream adapter_stream(adapter_data);
   ASSERT_OK(model_resources.SetWeightsFromStream(
-      ModelType::kTfLiteVisionAdapter, adapter_stream, adapter_data.size()));
+      proto::LlmMetadata::TF_LITE_VISION_ADAPTER, adapter_stream,
+      adapter_data.size()));
 
-  model_resources.ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
 
-  EXPECT_EQ(
-      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder),
-      nullptr);
-  EXPECT_NE(
-      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionAdapter),
-      nullptr);
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            nullptr);
+  EXPECT_NE(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ADAPTER),
+            nullptr);
 }
 
 TEST(ModelResourcesStreamingTest, ReleaseWeightsWithNothingStoredIsANoOp) {
   ModelResourcesStreaming model_resources;
-  model_resources.ReleaseWeights(ModelType::kTfLiteVisionEncoder);
-  EXPECT_EQ(
-      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder),
-      nullptr);
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            nullptr);
 }
 
 TEST(ModelResourcesStreamingTest, WeightsCanBeSetAgainAfterRelease) {
@@ -243,16 +253,18 @@ TEST(ModelResourcesStreamingTest, WeightsCanBeSetAgainAfterRelease) {
   std::string first_data = "first_weights";
   MemoryDataStream first_stream(first_data);
   ASSERT_OK(model_resources.SetWeightsFromStream(
-      ModelType::kTfLiteVisionEncoder, first_stream, first_data.size()));
-  model_resources.ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, first_stream,
+      first_data.size()));
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
 
   std::string second_data = "second_weights_which_are_longer";
   MemoryDataStream second_stream(second_data);
   ASSERT_OK(model_resources.SetWeightsFromStream(
-      ModelType::kTfLiteVisionEncoder, second_stream, second_data.size()));
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, second_stream,
+      second_data.size()));
 
-  const auto* model_map =
-      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder);
+  const auto* model_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER);
   ASSERT_NE(model_map, nullptr);
   auto model_it = model_map->find("tflite_weights");
   ASSERT_NE(model_it, model_map->end());

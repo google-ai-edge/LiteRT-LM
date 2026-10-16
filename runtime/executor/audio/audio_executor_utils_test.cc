@@ -31,6 +31,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -48,11 +49,11 @@ class FakeModelResources : public ModelResources {
       : encoder_(encoder), adapter_(adapter) {}
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override {
-    if (model_type == ModelType::kTfLiteAudioEncoderHw) {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW) {
       return encoder_;
     }
-    if (model_type == ModelType::kTfLiteAudioAdapter) {
+    if (model_type == proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER) {
       if (adapter_ == nullptr) {
         return absl::NotFoundError("Adapter not found");
       }
@@ -62,22 +63,22 @@ class FakeModelResources : public ModelResources {
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
@@ -91,7 +92,7 @@ class FakeModelResources : public ModelResources {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
 
@@ -137,7 +138,7 @@ TEST(AudioExecutorUtilsTest, GetPropertiesWithoutAdapter) {
 
   ASSERT_OK_AND_ASSIGN(
       auto encoder_model,
-      resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
+      resources->GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
 
   // Hide the adapter
   FakeModelResources fake_resources(encoder_model, nullptr);

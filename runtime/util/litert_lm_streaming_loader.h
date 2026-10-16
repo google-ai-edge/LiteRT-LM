@@ -34,6 +34,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -99,14 +100,14 @@ class LitertLmStreamingLoader {
   // Returns the TFLite model backend constraint.
   // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type);
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       absl::string_view model_type_str);
 
   // Returns the TFLite model section buffer's prefer activation type.
   // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type);
   std::optional<std::string> GetTFLiteModelPreferActivationType(
       absl::string_view model_type_str);
 

@@ -28,6 +28,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -44,16 +45,22 @@
 namespace litert::lm {
 
 absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
-    ModelType model_type) {
-  auto it = models_.find(model_type);
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
+    absl::string_view model_type_str) {
+  const std::string key = absl::AsciiStrToLower(model_type_str);
+  auto it = models_.find(key);
   if (it != models_.end() && it->second != nullptr) {
     return it->second.get();
   }
 
-  auto buf_it = model_buffers_.find(model_type);
+  auto buf_it = model_buffers_.find(key);
   if (buf_it == model_buffers_.end()) {
-    return absl::NotFoundError(absl::StrCat("Model buffer not found for type: ",
-                                            static_cast<int>(model_type)));
+    return absl::NotFoundError(
+        absl::StrCat("Model buffer not found for type: ", key));
   }
 
   auto expected_model =
@@ -62,21 +69,26 @@ absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
           buf_it->second.size()));
   if (!expected_model.HasValue()) {
     return absl::InternalError(
-        absl::StrCat("Failed to create model from buffer for type: ",
-                     static_cast<int>(model_type)));
+        absl::StrCat("Failed to create model from buffer for type: ", key));
   }
   auto model = std::make_unique<litert::Model>(std::move(*expected_model));
   const auto* model_ptr = model.get();
-  models_[model_type] = std::move(model);
+  models_[key] = std::move(model);
   return model_ptr;
 }
 
 absl::StatusOr<absl::string_view> ModelResourcesStreaming::GetTFLiteModelBuffer(
-    ModelType model_type) {
-  auto it = model_buffers_.find(model_type);
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelBuffer(TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<absl::string_view> ModelResourcesStreaming::GetTFLiteModelBuffer(
+    absl::string_view model_type_str) {
+  const std::string key = absl::AsciiStrToLower(model_type_str);
+  auto it = model_buffers_.find(key);
   if (it == model_buffers_.end()) {
-    return absl::NotFoundError(absl::StrCat("Model buffer not found for type: ",
-                                            static_cast<int>(model_type)));
+    return absl::NotFoundError(
+        absl::StrCat("Model buffer not found for type: ", key));
   }
   return absl::string_view(it->second.data(), it->second.size());
 }
@@ -87,13 +99,28 @@ ModelResourcesStreaming::GetScopedFile() {
 }
 
 absl::StatusOr<std::pair<size_t, size_t>>
-ModelResourcesStreaming::GetWeightsSectionOffset(ModelType model_type) {
+ModelResourcesStreaming::GetWeightsSectionOffset(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return absl::UnimplementedError("GetWeightsSectionOffset not implemented.");
+}
+
+absl::StatusOr<std::pair<size_t, size_t>>
+ModelResourcesStreaming::GetWeightsSectionOffset(
+    absl::string_view model_type_str) {
   return absl::UnimplementedError("GetWeightsSectionOffset not implemented.");
 }
 
 std::optional<std::string>
-ModelResourcesStreaming::GetTFLiteModelBackendConstraint(ModelType model_type) {
-  auto it = backend_constraints_.find(model_type);
+ModelResourcesStreaming::GetTFLiteModelBackendConstraint(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelBackendConstraint(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+ModelResourcesStreaming::GetTFLiteModelBackendConstraint(
+    absl::string_view model_type_str) {
+  auto it = backend_constraints_.find(absl::AsciiStrToLower(model_type_str));
   if (it != backend_constraints_.end()) {
     return it->second;
   }
@@ -102,8 +129,16 @@ ModelResourcesStreaming::GetTFLiteModelBackendConstraint(ModelType model_type) {
 
 std::optional<std::string>
 ModelResourcesStreaming::GetTFLiteModelPreferActivationType(
-    ModelType model_type) {
-  auto it = prefer_activation_types_.find(model_type);
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelPreferActivationType(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+ModelResourcesStreaming::GetTFLiteModelPreferActivationType(
+    absl::string_view model_type_str) {
+  auto it =
+      prefer_activation_types_.find(absl::AsciiStrToLower(model_type_str));
   if (it != prefer_activation_types_.end()) {
     return it->second;
   }
@@ -140,24 +175,57 @@ ModelResourcesStreaming::GetExecutorMetadata() {
 }
 
 absl::StatusOr<FileRegion>
-ModelResourcesStreaming::GetTFLiteModelSectionFileRegion(ModelType model_type) {
+ModelResourcesStreaming::GetTFLiteModelSectionFileRegion(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return absl::UnimplementedError(
+      "GetTFLiteModelSectionFileRegion not implemented.");
+}
+
+absl::StatusOr<FileRegion>
+ModelResourcesStreaming::GetTFLiteModelSectionFileRegion(
+    absl::string_view model_type_str) {
   return absl::UnimplementedError(
       "GetTFLiteModelSectionFileRegion not implemented.");
 }
 
 const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-ModelResourcesStreaming::GetWeightInMemoryMap(ModelType model_type) const {
-  auto it = weights_in_memory_per_model_.find(model_type);
+ModelResourcesStreaming::GetWeightInMemoryMap(
+    proto::LlmMetadata::TfLiteModelType model_type) const {
+  return GetWeightInMemoryMap(TfLiteModelTypeToWireString(model_type));
+}
+
+const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+ModelResourcesStreaming::GetWeightInMemoryMap(
+    absl::string_view model_type_str) const {
+  auto it =
+      weights_in_memory_per_model_.find(absl::AsciiStrToLower(model_type_str));
   if (it != weights_in_memory_per_model_.end()) {
     return &it->second;
   }
   return nullptr;
 }
 
-absl::Status ModelResourcesStreaming::SetWeightsFromStream(ModelType model_type,
-                                                           DataStream& stream,
-                                                           size_t size) {
-  auto& storage = weights_storage_[model_type];
+void ModelResourcesStreaming::SetTFLiteModelBackendConstraint(
+    absl::string_view model_type_str, std::string backend_constraint) {
+  backend_constraints_[absl::AsciiStrToLower(model_type_str)] =
+      std::move(backend_constraint);
+}
+
+void ModelResourcesStreaming::SetTFLiteModelPreferActivationType(
+    absl::string_view model_type_str, std::string prefer_activation_type) {
+  prefer_activation_types_[absl::AsciiStrToLower(model_type_str)] =
+      std::move(prefer_activation_type);
+}
+
+void ModelResourcesStreaming::SetModelBuffer(absl::string_view model_type_str,
+                                             std::vector<char> buffer) {
+  model_buffers_[absl::AsciiStrToLower(model_type_str)] = std::move(buffer);
+}
+
+absl::Status ModelResourcesStreaming::SetWeightsFromStream(
+    absl::string_view model_type_str, DataStream& stream, size_t size) {
+  const std::string key = absl::AsciiStrToLower(model_type_str);
+  auto& storage = weights_storage_[key];
   // LiteRT requires host memory tensor buffers to be aligned to
   // LITERT_HOST_MEMORY_BUFFER_ALIGNMENT.
   storage.resize(size + LITERT_HOST_MEMORY_BUFFER_ALIGNMENT);
@@ -178,15 +246,26 @@ absl::Status ModelResourcesStreaming::SetWeightsFromStream(ModelType model_type,
   }
   auto span = absl::MakeConstSpan(
       reinterpret_cast<const std::byte*>(aligned_ptr), size);
-  weights_in_memory_per_model_[model_type]["tflite_weights"] = span;
+  weights_in_memory_per_model_[key]["tflite_weights"] = span;
   return absl::OkStatus();
 }
 
-void ModelResourcesStreaming::ReleaseWeights(ModelType model_type) {
+absl::Status ModelResourcesStreaming::SetVisionWeightsFromStream(
+    absl::string_view model_type_str, DataStream& stream, size_t size) {
+  return SetWeightsFromStream(model_type_str, stream, size);
+}
+
+absl::Status ModelResourcesStreaming::SetAudioWeightsFromStream(
+    absl::string_view model_type_str, DataStream& stream, size_t size) {
+  return SetWeightsFromStream(model_type_str, stream, size);
+}
+
+void ModelResourcesStreaming::ReleaseWeights(absl::string_view model_type_str) {
+  const std::string key = absl::AsciiStrToLower(model_type_str);
   // Drop the spans before the storage they point into, so that no dangling
   // span is observable at any point.
-  weights_in_memory_per_model_.erase(model_type);
-  weights_storage_.erase(model_type);
+  weights_in_memory_per_model_.erase(key);
+  weights_storage_.erase(key);
 }
 
 }  // namespace litert::lm

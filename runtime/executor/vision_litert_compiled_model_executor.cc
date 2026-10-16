@@ -62,6 +62,7 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
@@ -288,7 +289,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
           absl::StrCat("Unsupported encoder backend: ", backend_));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources, ModelType::kTfLiteVisionEncoder, options));
+      resources, proto::LlmMetadata::TF_LITE_VISION_ENCODER, options));
 
   if (!vision_executor_settings_.GetEncoderSelectedSignatures().empty()) {
     std::vector<absl::string_view> selected_signatures;
@@ -304,16 +305,17 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
   }
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kTfLiteVisionEncoder);
+    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
+        proto::LlmMetadata::TF_LITE_VISION_ENCODER));
   }
 #endif
   auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
 #ifdef __EMSCRIPTEN__
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kUnknown);
+    SetCurrentlyCompilingModel("");
   }
 #endif
   LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
@@ -404,7 +406,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
           absl::StrCat("Unsupported adapter backend: ", backend_));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources, ModelType::kTfLiteVisionAdapter, options));
+      resources, proto::LlmMetadata::TF_LITE_VISION_ADAPTER, options));
 
   if (!vision_executor_settings_.GetAdapterSelectedSignatures().empty()) {
     std::vector<absl::string_view> adapter_selected_signatures;
@@ -420,16 +422,17 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
   }
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kTfLiteVisionAdapter);
+    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
+        proto::LlmMetadata::TF_LITE_VISION_ADAPTER));
   }
 #endif
   auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
 #ifdef __EMSCRIPTEN__
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kUnknown);
+    SetCurrentlyCompilingModel("");
   }
 #endif
   LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
@@ -455,13 +458,13 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
     ModelResources& resources) {
   ABSL_ASSIGN_OR_RETURN(
       auto vision_encoder_model,
-      resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_VISION_ENCODER));
   if (!vision_encoder_model) {
     return absl::InternalError("Failed to build LiteRt encoder model.");
   }
   // Vision adapter is optional.
   auto vision_adapter_model =
-      resources.GetTFLiteModel(ModelType::kTfLiteVisionAdapter);
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_VISION_ADAPTER);
   if (!vision_adapter_model.ok() &&
       vision_adapter_model.status().code() != absl::StatusCode::kNotFound) {
     return vision_adapter_model.status();

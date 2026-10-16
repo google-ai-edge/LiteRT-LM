@@ -60,6 +60,7 @@
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/embedding_model_type.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/file_data_stream.h"
@@ -119,10 +120,22 @@ class FakeModelResources : public ModelResources {
         vision_adapter_model_(vision_adapter_model) {}
   ~FakeModelResources() override = default;
 
+  using ModelResources::GetTFLiteModel;
+  using ModelResources::GetTFLiteModelBackendConstraint;
+  using ModelResources::GetTFLiteModelBuffer;
+  using ModelResources::GetTFLiteModelPreferActivationType;
+  using ModelResources::GetTFLiteModelSectionFileRegion;
+  using ModelResources::GetWeightsSectionOffset;
+
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
+
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      absl::string_view model_type) override {
     ++get_tflite_model_call_counts_[model_type];
-    if (model_type == ModelType::kTfLiteVisionEncoder) {
+    if (model_type == "tf_lite_vision_encoder") {
       if (vision_model_ != nullptr) {
         return vision_model_;
       }
@@ -130,13 +143,13 @@ class FakeModelResources : public ModelResources {
         return nullptr;
       }
     }
-    if (model_type == ModelType::kTfLiteVisionAdapter) {
+    if (model_type == "tf_lite_vision_adapter") {
       if (vision_adapter_model_ != nullptr) {
         return vision_adapter_model_;
       }
     }
-    if ((model_type == ModelType::kTfLiteAudioEncoderHw ||
-         model_type == ModelType::kTfLiteAudioFrontend) &&
+    if ((model_type == "tf_lite_audio_encoder_hw" ||
+         model_type == "tf_lite_audio_frontend") &&
         has_audio_) {
       return nullptr;
     }
@@ -144,13 +157,20 @@ class FakeModelResources : public ModelResources {
   }
 
   // Returns how many times GetTFLiteModel() was called for `model_type`.
-  int GetTFLiteModelCallCount(ModelType model_type) const {
-    const auto it = get_tflite_model_call_counts_.find(model_type);
+  int GetTFLiteModelCallCount(
+      proto::LlmMetadata::TfLiteModelType model_type) const {
+    const auto it = get_tflite_model_call_counts_.find(
+        TfLiteModelTypeToWireString(model_type));
     return it == get_tflite_model_call_counts_.end() ? 0 : it->second;
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return delegate_->GetTFLiteModelBuffer(model_type);
+  }
+
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      absl::string_view model_type) override {
     return delegate_->GetTFLiteModelBuffer(model_type);
   }
 
@@ -159,17 +179,32 @@ class FakeModelResources : public ModelResources {
   }
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return delegate_->GetWeightsSectionOffset(model_type);
+  }
+
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      absl::string_view model_type) override {
     return delegate_->GetWeightsSectionOffset(model_type);
   }
 
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return delegate_->GetTFLiteModelBackendConstraint(model_type);
+  }
+
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      absl::string_view model_type) override {
     return delegate_->GetTFLiteModelBackendConstraint(model_type);
   }
 
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return delegate_->GetTFLiteModelPreferActivationType(model_type);
+  }
+
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      absl::string_view model_type) override {
     return delegate_->GetTFLiteModelPreferActivationType(model_type);
   }
 
@@ -195,7 +230,12 @@ class FakeModelResources : public ModelResources {
   }
 
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return delegate_->GetTFLiteModelSectionFileRegion(model_type);
+  }
+
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      absl::string_view model_type) override {
     return delegate_->GetTFLiteModelSectionFileRegion(model_type);
   }
 
@@ -204,7 +244,7 @@ class FakeModelResources : public ModelResources {
   bool has_vision_;
   bool has_audio_;
   std::optional<const proto::EmbeddingMetadata*> metadata_;
-  absl::flat_hash_map<ModelType, int> get_tflite_model_call_counts_;
+  absl::flat_hash_map<std::string, int> get_tflite_model_call_counts_;
   const litert::Model* vision_model_ = nullptr;
   const litert::Model* vision_adapter_model_ = nullptr;
 };
@@ -1193,12 +1233,12 @@ TEST(EmbeddingEngineImplTest, MultimodalEncodersAreReadDuringCreateByDefault) {
       EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
                                   std::move(tokenizer), std::move(settings)));
 
-  EXPECT_GT(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
-      0);
-  EXPECT_GT(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
-      0);
+  EXPECT_GT(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            0);
+  EXPECT_GT(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            0);
 }
 
 TEST(EmbeddingEngineImplTest,
@@ -1227,12 +1267,12 @@ TEST(EmbeddingEngineImplTest,
                                   std::move(tokenizer), std::move(settings)));
 
   // Neither encoder is read while the engine is created.
-  EXPECT_EQ(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
-      0);
-  EXPECT_EQ(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
-      0);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            0);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            0);
 
   EmbeddingOptions options;
   options.normalize = false;
@@ -1245,12 +1285,12 @@ TEST(EmbeddingEngineImplTest,
   EXPECT_THAT(engine->ComputeEmbedding(image_contents, options),
               StatusIs(absl::StatusCode::kInternal,
                        HasSubstr("Vision executor is not available")));
-  EXPECT_GT(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
-      0);
-  EXPECT_EQ(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
-      0);
+  EXPECT_GT(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            0);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            0);
 
   // Likewise, the first audio input triggers the load of the audio encoder.
   std::vector<InputData> audio_contents;
@@ -1258,9 +1298,9 @@ TEST(EmbeddingEngineImplTest,
   EXPECT_THAT(engine->ComputeEmbedding(audio_contents, options),
               StatusIs(absl::StatusCode::kInternal,
                        HasSubstr("Audio executor is not available")));
-  EXPECT_GT(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
-      0);
+  EXPECT_GT(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            0);
 }
 
 TEST(EmbeddingEngineImplTest,
@@ -1301,9 +1341,9 @@ TEST(EmbeddingEngineImplTest,
 
   // Right after Create(), the vision encoder is not compiled and signature info
   // is std::nullopt.
-  EXPECT_EQ(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
-      0);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            0);
   EXPECT_FALSE(engine->GetSelectedVisionSignatureInfo().has_value());
 
   EmbeddingOptions options;
@@ -1317,16 +1357,16 @@ TEST(EmbeddingEngineImplTest,
 
   EXPECT_TRUE(engine->GetSelectedVisionSignatureInfo().has_value());
   EXPECT_EQ(engine->GetSelectedVisionSignatureInfo()->max_num_patches, 70);
-  const int call_count_after_first =
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder);
+  const int call_count_after_first = resources_ptr->GetTFLiteModelCallCount(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER);
   EXPECT_GT(call_count_after_first, 0);
 
   // Subsequent image inputs reuse the compiled vision executor without
   // reloading.
   (void)engine->ComputeEmbedding(image_contents, options);
-  EXPECT_EQ(
-      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
-      call_count_after_first);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            call_count_after_first);
 }
 
 class FakeEmbeddingExecutor : public EmbeddingExecutorBase {

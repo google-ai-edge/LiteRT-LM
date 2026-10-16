@@ -43,6 +43,7 @@
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 #if !defined(LITERT_DISABLE_NPU)
@@ -213,7 +214,7 @@ absl::StatusOr<bool> IsDynamicModelImpl(
 absl::StatusOr<bool> IsDynamicModel(ModelResources& resources) {
   LITERT_ASSIGN_OR_RETURN(
       const litert::Model* model,
-      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   auto executor_metadata_or = resources.GetExecutorMetadata();
   if (executor_metadata_or.ok()) {
@@ -292,7 +293,8 @@ CreateNpuLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
 #if defined(LITERT_DISABLE_NPU)
   return absl::InvalidArgumentError("Only CPU and GPU backends are supported.");
 #else
-  auto aux_model_buffer = resources.GetTFLiteModelBuffer(ModelType::kTfLiteAux);
+  auto aux_model_buffer =
+      resources.GetTFLiteModelBuffer(proto::LlmMetadata::TF_LITE_AUX);
   if (!aux_model_buffer.ok() || aux_model_buffer->empty()) {
     ABSL_LOG(WARNING)
         << "NPU backend requested, but TF_LITE_AUX is not packaged in the "

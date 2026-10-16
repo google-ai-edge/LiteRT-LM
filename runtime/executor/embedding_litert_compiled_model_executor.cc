@@ -63,6 +63,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 
@@ -176,7 +177,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
     ModelResources& resources) {
   ABSL_ASSIGN_OR_RETURN(
       auto text_encoder_model,
-      resources.GetTFLiteModel(ModelType::kTfLiteTextEncoder));
+      resources.GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
   RET_CHECK_NE(text_encoder_model, nullptr) << "TEXT_ENCODER model is null.";
 
   litert::Options options;
@@ -243,7 +244,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
                        GetBackendString(executor_settings.GetBackend())));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources, ModelType::kTfLiteTextEncoder, options));
+      resources, proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER, options));
 
   if (!executor_settings.GetSelectedSignatures().empty()) {
     std::vector<absl::string_view> selected_signatures;
@@ -258,17 +259,18 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
   }
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kTfLiteTextEncoder);
+    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
+        proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
   }
 #endif
   auto compiled_model_status_or =
       CompiledModelWrapper::Create(env, text_encoder_model->Get(), options);
 #ifdef __EMSCRIPTEN__
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kUnknown);
+    SetCurrentlyCompilingModel("");
   }
 #endif
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,

@@ -61,6 +61,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
 #include "runtime/executor/state_interface.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 
@@ -236,15 +237,16 @@ LlmLiteRtMtpDrafter::Create(
   ABSL_RETURN_IF_ERROR(
       UpdateCompilationOptions(executor_settings, compilation_options));
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources, ModelType::kTfLiteMtpDrafter, compilation_options));
-  ABSL_ASSIGN_OR_RETURN(auto model,
-                        resources.GetTFLiteModel(ModelType::kTfLiteMtpDrafter));
+      resources, proto::LlmMetadata::TF_LITE_MTP_DRAFTER, compilation_options));
+  ABSL_ASSIGN_OR_RETURN(
+      auto model,
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
       CompiledModel::Create(env, model->Get(), compilation_options));
   ABSL_ASSIGN_OR_RETURN(
       auto base_model_desc,
-      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 
   return Create(env, std::move(compiled_model), executor_settings, base_model,
                 *base_model_desc, embedding_manager, ple_manager,

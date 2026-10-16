@@ -29,6 +29,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -164,7 +165,8 @@ LitertLmStreamingLoader::GetNextSection() {
 }
 
 std::optional<std::string>
-LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(ModelType model_type) {
+LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModelBackendConstraint(
       TfLiteModelTypeToWireString(model_type));
 }
@@ -184,7 +186,7 @@ LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(
 
 std::optional<std::string>
 LitertLmStreamingLoader::GetTFLiteModelPreferActivationType(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModelPreferActivationType(
       TfLiteModelTypeToWireString(model_type));
 }

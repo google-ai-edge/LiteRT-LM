@@ -134,6 +134,7 @@ cc_library(
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:llm_litert_compiled_model_executor_factory",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:file_format_util",
         "//runtime/util:litert_lm_loader",
@@ -165,6 +166,7 @@ cc_test(
         "//runtime/core:engine_advanced_impl",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:asr_metadata_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//support/util:test_utils",
     ],
 )

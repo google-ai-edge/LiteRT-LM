@@ -30,6 +30,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
@@ -315,20 +316,21 @@ absl::StatusOr<SelectedVisionSignatureInfo> SelectAndApplyVisionSignatures(
 absl::Status ResolveAndValidateSettings(
     ModelResources& resources, EmbeddingEngineSettings& settings,
     const proto::EmbeddingMetadata* metadata_from_file) {
-  LITERT_RETURN_IF_ERROR(
-      settings.ResolveDefaults(metadata_from_file,
-                               resources.GetTFLiteModelPreferActivationType(
-                                   ModelType::kTfLiteTextEncoder),
-                               resources.GetTFLiteModelPreferActivationType(
-                                   ModelType::kTfLiteVisionEncoder),
-                               resources.GetTFLiteModelPreferActivationType(
-                                   ModelType::kTfLiteAudioEncoderHw)));
+  LITERT_RETURN_IF_ERROR(settings.ResolveDefaults(
+      metadata_from_file,
+      resources.GetTFLiteModelPreferActivationType(
+          proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER),
+      resources.GetTFLiteModelPreferActivationType(
+          proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER),
+      resources.GetTFLiteModelPreferActivationType(
+          proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)));
   return settings.Validate(
-      resources.GetTFLiteModelBackendConstraint(ModelType::kTfLiteTextEncoder),
       resources.GetTFLiteModelBackendConstraint(
-          ModelType::kTfLiteVisionEncoder),
+          proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER),
       resources.GetTFLiteModelBackendConstraint(
-          ModelType::kTfLiteAudioEncoderHw));
+          proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER),
+      resources.GetTFLiteModelBackendConstraint(
+          proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW));
 }
 
 // Selects the text encoder signatures to load from the (already validated)
@@ -351,16 +353,31 @@ SetTextEncoderSignaturesFromSettings(ModelResources& resources,
   return text_sig_info;
 }
 
+// Parses a model type wire string into the embedding capability-scoped
+// Protobuf enum. Returns TF_LITE_MODEL_TYPE_UNSPECIFIED for model types that
+// do not belong to the embedding capability.
+proto::EmbeddingMetadata::TfLiteModelType ParseEmbeddingModelType(
+    absl::string_view model_type_str) {
+  proto::EmbeddingMetadata::TfLiteModelType model_type;
+  if (!proto::EmbeddingMetadata::TfLiteModelType_Parse(
+          absl::AsciiStrToUpper(model_type_str), &model_type)) {
+    return proto::EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED;
+  }
+  return model_type;
+}
+
 // Stores a model's weight section into host memory instead of leaving it to be
 // streamed on demand, and publishes it so the GPU weight upload callback can be
 // served from that buffer.
 //
 // Used for Image and Audio Embedding models.
-absl::Status StoreWeightsInHostMemory(ModelResourcesStreaming& resources,
-                                            ModelType model_type,
-                                            DataStream& stream, size_t size) {
+absl::Status StoreWeightsInHostMemory(
+    ModelResourcesStreaming& resources,
+    proto::EmbeddingMetadata::TfLiteModelType model_type, DataStream& stream,
+    size_t size) {
   ABSL_LOG(INFO) << "Reading weights (" << size << " bytes) for model type "
-                 << static_cast<int>(model_type) << " into host memory...";
+                 << proto::EmbeddingMetadata::TfLiteModelType_Name(model_type)
+                 << " into host memory...";
   ABSL_RETURN_IF_ERROR(
       resources.SetWeightsFromStream(model_type, stream, size));
   ABSL_LOG(INFO) << "Weights read.";
@@ -442,7 +459,9 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   // image input, and EnsureVisionExecutorLoaded() checks for the encoder then.
   const bool has_vision_encoder =
       !lazy_load_multimodal_encoders &&
-      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok();
+      resources
+          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
+          .ok();
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
       std::nullopt;
   int vision_max_num_patches = 0;
@@ -544,7 +563,9 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   // Initialize the audio executor.
   std::unique_ptr<AudioExecutor> audio_executor = nullptr;
   if (!lazy_load_multimodal_encoders &&
-      (resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) &&
+      (resources
+           ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)
+           .ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         audio_executor,
@@ -553,9 +574,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
 
   special_tokens.has_end_of_vision_model =
-      resources->GetTFLiteModel(ModelType::kTfLiteEndOfVision).ok();
+      resources->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_VISION)
+          .ok();
   special_tokens.has_end_of_audio_model =
-      resources->GetTFLiteModel(ModelType::kTfLiteEndOfAudio).ok();
+      resources->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_AUDIO)
+          .ok();
 
   // Initialize the image preprocessor if requisite parameters are available in
   // metadata.
@@ -766,17 +789,17 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           return absl::InvalidArgumentError(
               "Model type is not set for TFLiteModel section.");
         }
-        ABSL_ASSIGN_OR_RETURN(
-            const ModelType model_type,
-            StringToModelType(*section->buffer_key.model_type));
+        const std::string& model_type_str = *section->buffer_key.model_type;
+        const proto::EmbeddingMetadata::TfLiteModelType model_type =
+            ParseEmbeddingModelType(model_type_str);
         ABSL_LOG(INFO) << "Caching model from stream for type: "
-                       << static_cast<int>(model_type);
+                       << model_type_str;
         std::vector<char> buffer(section_metadata->end_offset() -
                                  section_metadata->begin_offset());
         ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
             buffer.data(), 0, buffer.size()));
-        streaming_resources->SetModelBuffer(model_type, std::move(buffer));
-        if (model_type == ModelType::kTfLiteTextEncoder &&
+        streaming_resources->SetModelBuffer(model_type_str, std::move(buffer));
+        if (model_type == proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER &&
             owned_env == nullptr) {
           ABSL_ASSIGN_OR_RETURN(
               auto temp_owned_env,
@@ -791,16 +814,17 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           return absl::InvalidArgumentError(
               "Model type is not set for TFLiteWeights section.");
         }
-        ABSL_ASSIGN_OR_RETURN(
-            const ModelType model_type,
-            StringToModelType(*section->buffer_key.model_type));
-        if (model_type == ModelType::kTfLitePerLayerEmbedder) {
+        const std::string& model_type_str = *section->buffer_key.model_type;
+        const proto::EmbeddingMetadata::TfLiteModelType model_type =
+            ParseEmbeddingModelType(model_type_str);
+        if (model_type ==
+            proto::EmbeddingMetadata::TF_LITE_PER_LAYER_EMBEDDER) {
           size_t size =
               section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_RETURN_IF_ERROR(
               streaming_resources->SetPerLayerWeightsFromStream(
                   *section->data_stream, size));
-        } else if (model_type == ModelType::kTfLiteEmbedder) {
+        } else if (model_type == proto::EmbeddingMetadata::TF_LITE_EMBEDDER) {
           size_t size =
               section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_LOG(INFO) << "Reading embedder weights (" << size
@@ -816,7 +840,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
             owned_env =
                 std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
           }
-          if (streaming_resources->GetTFLiteModel(ModelType::kTfLiteEmbedder)
+          if (streaming_resources
+                  ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_EMBEDDER)
                   .ok()) {
             ABSL_LOG(INFO) << "Compiling embedding_lookup on CPU...";
             ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
@@ -824,7 +849,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                 per_layer_embedding_lookup));
             ABSL_LOG(INFO) << "embedding_lookup compiled on CPU.";
           }
-        } else if (model_type == ModelType::kTfLiteTextEncoder) {
+        } else if (model_type ==
+                   proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER) {
           StoreWeightsStream(model_type, std::move(section->data_stream));
           if (owned_env == nullptr) {
             ABSL_ASSIGN_OR_RETURN(
@@ -833,7 +859,9 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
             owned_env =
                 std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
           }
-          if (streaming_resources->GetTFLiteModel(ModelType::kTfLiteTextEncoder)
+          if (streaming_resources
+                  ->GetTFLiteModel(
+                      proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER)
                   .ok()) {
             ABSL_LOG(INFO) << "Compiling text_encoder on stream...";
             // Last chance to resolve settings: compiling freezes them, and
@@ -849,10 +877,14 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                     *streaming_resources));
             ABSL_LOG(INFO) << "text_encoder compiled.";
           }
-        } else if (model_type == ModelType::kTfLiteVisionEncoder ||
-                   model_type == ModelType::kTfLiteVisionAdapter ||
-                   model_type == ModelType::kTfLiteAudioEncoderHw ||
-                   model_type == ModelType::kTfLiteAudioAdapter) {
+        } else if (model_type ==
+                       proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER ||
+                   model_type ==
+                       proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER ||
+                   model_type ==
+                       proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW ||
+                   model_type ==
+                       proto::EmbeddingMetadata::TF_LITE_AUDIO_ADAPTER) {
           // Vision and audio weights are always stored in host memory before
           // being loaded, even when their encoder runs on GPU, due to an issue
           // with streaming float32 weights.
@@ -863,8 +895,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         } else {
           ABSL_LOG(INFO)
               << "Storing TFLiteWeights section stream for model type: "
-              << static_cast<int>(model_type);
-          StoreWeightsStream(model_type, std::move(section->data_stream));
+              << model_type_str;
+          StoreWeightsStream(model_type_str, std::move(section->data_stream));
         }
         break;
       }
@@ -894,7 +926,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
         owned_env->env, *streaming_resources, embedding_lookup,
         per_layer_embedding_lookup));
-    ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(ModelType::kTfLiteEmbedder));
+    ABSL_RETURN_IF_ERROR(
+        ClearStoredWeightsStream(proto::EmbeddingMetadata::TF_LITE_EMBEDDER));
   }
 
   if (!compiled_text_encoder_info.has_value()) {
@@ -908,8 +941,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
             settings.GetMainExecutorSettings(), owned_env->env,
             *streaming_resources));
-    ABSL_RETURN_IF_ERROR(
-        ClearStoredWeightsStream(ModelType::kTfLiteTextEncoder));
+    ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
+        proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
   }
 
   // Default vision_tokens_per_image from metadata if not explicitly set in
@@ -927,7 +960,9 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   // Auto-select vision encoder and adapter signatures if
   // vision_tokens_per_image is set.
   const bool has_vision_encoder =
-      streaming_resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok();
+      streaming_resources
+          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
+          .ok();
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
       std::nullopt;
   if (settings.GetVisionTokensPerImage().has_value()) {
@@ -1029,9 +1064,10 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     // We only need to keep the weights in CPU memory when running on CPU.
     if (settings.GetVisionExecutorSettings()->GetBackend() != Backend::CPU) {
       // Drop the registration that points into the storage before freeing it.
-      ABSL_RETURN_IF_ERROR(
-          ClearStoredWeightsStream(ModelType::kTfLiteVisionEncoder));
-      streaming_resources->ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+      ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
+          proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER));
+      streaming_resources->ReleaseWeights(
+          proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER);
       // Don't clear the vision adapter. It always runs on CPU.
       ABSL_LOG(INFO) << "Released host memory for vision encoder weights.";
     }
@@ -1039,7 +1075,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
 
   // Initialize the audio executor.
   std::unique_ptr<AudioExecutor> audio_executor = nullptr;
-  if ((streaming_resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw)
+  if ((streaming_resources
+           ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)
            .ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
     if (owned_env == nullptr) {
@@ -1055,18 +1092,23 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     // Same as vision encoder above, we only need to keep the weights in CPU
     // memory when running on CPU.
     if (settings.GetAudioExecutorSettings()->GetBackend() != Backend::CPU) {
-      ABSL_RETURN_IF_ERROR(
-          ClearStoredWeightsStream(ModelType::kTfLiteAudioEncoderHw));
-      streaming_resources->ReleaseWeights(ModelType::kTfLiteAudioEncoderHw);
+      ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
+          proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW));
+      streaming_resources->ReleaseWeights(
+          proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW);
       // Don't clear the audio adapter. It always runs on CPU.
       ABSL_LOG(INFO) << "Released host memory for audio encoder weights.";
     }
   }
 
   special_tokens.has_end_of_vision_model =
-      streaming_resources->GetTFLiteModel(ModelType::kTfLiteEndOfVision).ok();
+      streaming_resources
+          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_VISION)
+          .ok();
   special_tokens.has_end_of_audio_model =
-      streaming_resources->GetTFLiteModel(ModelType::kTfLiteEndOfAudio).ok();
+      streaming_resources
+          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_AUDIO)
+          .ok();
 
   std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor =
       nullptr;
@@ -1201,7 +1243,9 @@ absl::Status EmbeddingEngineImpl::EnsureVisionExecutorLoaded() {
   }
   LazyMultimodalLoadingConfig& config = *lazy_multimodal_loading_config_;
   ModelResources& resources = *config.resources;
-  if (!resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
+  if (!resources
+           .GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
+           .ok()) {
     return absl::FailedPreconditionError(
         "Vision executor is not available for image input: the model does not "
         "contain a vision encoder.");
@@ -1239,7 +1283,9 @@ absl::Status EmbeddingEngineImpl::EnsureAudioExecutorLoaded() {
   }
   LazyMultimodalLoadingConfig& config = *lazy_multimodal_loading_config_;
   ModelResources& resources = *config.resources;
-  if (!resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) {
+  if (!resources
+           .GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)
+           .ok()) {
     return absl::FailedPreconditionError(
         "Audio executor is not available for audio input: the model does not "
         "contain an audio encoder.");

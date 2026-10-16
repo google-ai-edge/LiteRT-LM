@@ -33,6 +33,7 @@
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header.h"
@@ -139,7 +140,7 @@ TEST(LitertLmLoaderTest, GetSectionLocationNotFound) {
   auto& loader = *loader_ptr;
 
   BufferKey embedder_key(schema::AnySectionDataType_TFLiteModel,
-                         ModelType::kTfLiteEmbedder);
+                         proto::LlmMetadata::TF_LITE_EMBEDDER);
   EXPECT_THAT(loader.GetSectionLocation(embedder_key),
               StatusIs(absl::StatusCode::kNotFound));
 }
@@ -177,10 +178,13 @@ TEST(LitertLmLoaderTest, InitializeWithSentencePieceFile) {
   auto& loader = *loader_ptr;
   EXPECT_FALSE(loader.GetHuggingFaceTokenizer());
   EXPECT_GT(loader.GetSentencePieceTokenizer()->Size(), 0);
-  EXPECT_GT(loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
+  EXPECT_GT(
+      loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
+      0);
   EXPECT_GT(loader.GetLlmMetadata().Size(), 0);
   // Try to get non-existent TFLite model.
-  EXPECT_EQ(loader.GetTFLiteModel(ModelType::kTfLiteEmbedder).Size(), 0);
+  EXPECT_EQ(loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER).Size(),
+            0);
 }
 
 TEST(LitertLmLoaderTest, InitializeWithHuggingFaceFile) {
@@ -206,9 +210,12 @@ TEST(LitertLmLoaderTest, InitializeWithMemoryMappedFile) {
   auto& loader = *loader_ptr;
   EXPECT_FALSE(loader.GetHuggingFaceTokenizer());
   EXPECT_GT(loader.GetSentencePieceTokenizer()->Size(), 0);
-  EXPECT_GT(loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
+  EXPECT_GT(
+      loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
+      0);
   EXPECT_GT(loader.GetLlmMetadata().Size(), 0);
-  EXPECT_EQ(loader.GetTFLiteModel(ModelType::kTfLiteEmbedder).Size(), 0);
+  EXPECT_EQ(loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER).Size(),
+            0);
 }
 
 TEST(LitertLmLoaderTest, GetSectionLocationSizeMatch) {
@@ -227,11 +234,12 @@ TEST(LitertLmLoaderTest, GetSectionLocationSizeMatch) {
             loader.GetSentencePieceTokenizer()->Size());
 
   BufferKey model_key(schema::AnySectionDataType_TFLiteModel,
-                      ModelType::kTfLitePrefillDecode);
+                      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK_AND_ASSIGN(auto model_location,
                        loader.GetSectionLocation(model_key));
-  EXPECT_EQ(model_location.second - model_location.first,
-            loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size());
+  EXPECT_EQ(
+      model_location.second - model_location.first,
+      loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE).Size());
 
   BufferKey metadata_key(schema::AnySectionDataType_LlmMetadataProto);
   ASSERT_OK_AND_ASSIGN(auto metadata_location,
@@ -292,11 +300,11 @@ TEST(LitertLmLoaderTest, GetTfLiteModelSectionHints) {
   auto& loader = *loader_ptr;
 
   EXPECT_EQ(loader.GetTFLiteModelPreferActivationType(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             "fp16");
-  EXPECT_EQ(
-      loader.GetTFLiteModelBackendConstraint(ModelType::kTfLitePrefillDecode),
-      "cpu");
+  EXPECT_EQ(loader.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "cpu");
 }
 
 TEST(LitertLmLoaderTest, GetScopedFileSuccess) {

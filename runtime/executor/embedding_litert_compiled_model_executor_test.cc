@@ -45,6 +45,7 @@
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
@@ -302,12 +303,17 @@ class FakeEmbeddingModelResources : public ModelResources {
       : embedder_(embedder), encoder_(encoder) {}
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override {
-    if (model_type == ModelType::kTfLiteEmbedder) {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
+
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      absl::string_view model_type_str) override {
+    if (model_type_str == "tf_lite_embedder") {
       if (embedder_ != nullptr) return embedder_;
       return absl::NotFoundError("kTfLiteEmbedder model not found.");
     }
-    if (model_type == ModelType::kTfLiteTextEncoder) {
+    if (model_type_str == "tf_lite_text_encoder") {
       if (encoder_ != nullptr) return encoder_;
       return absl::NotFoundError("kTfLiteTextEncoder model not found.");
     }
@@ -315,7 +321,7 @@ class FakeEmbeddingModelResources : public ModelResources {
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("Unimplemented");
   }
 
@@ -324,17 +330,17 @@ class FakeEmbeddingModelResources : public ModelResources {
   }
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("Unimplemented");
   }
 
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
 
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
 
@@ -347,7 +353,7 @@ class FakeEmbeddingModelResources : public ModelResources {
   }
 
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("Unimplemented");
   }
 

@@ -31,6 +31,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
@@ -403,13 +404,14 @@ class EngineT {
   // Get the reference to the tokenizer for the engine for a specific model
   // type. Defaults to GetTokenizer() for kTfLitePrefillDecode.
   virtual absl::StatusOr<const support::Tokenizer*> GetTokenizer(
-      ModelType model_type) const {
-    if (model_type == ModelType::kTfLitePrefillDecode) {
+      proto::LlmMetadata::TfLiteModelType model_type) const {
+    if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
       return &GetTokenizer();
     }
-    return absl::UnimplementedError(absl::StrCat("GetTokenizer for model type ",
-                                                 ModelTypeToString(model_type),
-                                                 " is not implemented."));
+    return absl::UnimplementedError(
+        absl::StrCat("GetTokenizer for model type ",
+                     proto::LlmMetadata::TfLiteModelType_Name(model_type),
+                     " is not implemented."));
   }
 
   // Get the audio model properties for the session. This is only available

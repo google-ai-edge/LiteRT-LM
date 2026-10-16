@@ -21,6 +21,7 @@
 #include "runtime/engine/litert_lm_lib.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/llm_metadata.pb.h"
 
 namespace litert::lm {
 namespace {
@@ -48,7 +49,8 @@ TEST(SignatureSelectionTest, PrefillRunnersExcludeInactiveSignatures) {
   ASSERT_OK_AND_ASSIGN(auto resources,
                        BuildLiteRtCompiledModelResources(assets));
   ASSERT_OK_AND_ASSIGN(
-      auto model, resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+      auto model,
+      resources->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   ASSERT_OK_AND_ASSIGN(
       auto defaults,
       GetPrefillRunnerSetFromModel(*model, "prefill", "input_pos"));

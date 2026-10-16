@@ -797,6 +797,7 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/proto:asr_metadata_cc_proto",
         "//runtime/proto:asr_model_type_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//support/tokenizer",
     ],
     alwayslink = 1,

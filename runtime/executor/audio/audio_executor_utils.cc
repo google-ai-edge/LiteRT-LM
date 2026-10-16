@@ -28,6 +28,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -58,13 +59,13 @@ bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names,
 absl::StatusOr<AudioExecutorProperties>
 GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
   AudioExecutorProperties properties;
-  ABSL_ASSIGN_OR_RETURN(
-      auto audio_encoder_model,
-      model_resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
+  ABSL_ASSIGN_OR_RETURN(auto audio_encoder_model,
+                        model_resources.GetTFLiteModel(
+                            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
   LITERT_ASSIGN_OR_RETURN(auto input_names,
                           audio_encoder_model->GetSignatureInputNames());
   auto audio_adapter_model_or =
-      model_resources.GetTFLiteModel(ModelType::kTfLiteAudioAdapter);
+      model_resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER);
   bool has_adapter = audio_adapter_model_or.ok();
   properties.is_streaming_model = IsStreamingEncoder(input_names, has_adapter);
 

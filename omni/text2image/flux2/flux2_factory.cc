@@ -45,6 +45,7 @@
 #include "omni/text2image/text_encoder_stage.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/image_gen_model_type.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "support/tokenizer/tokenizer.h"
@@ -430,7 +431,8 @@ absl::Status CreateFlux2Components(
   auto lm_resources = resources->GetLmModelResources();
   auto tok = lm_resources->GetTokenizer();
   if (!tok.ok()) {
-    tok = lm_resources->GetTokenizer(lm::ModelType::kTfLiteTextEncoder);
+    tok = lm_resources->GetTokenizer(
+        lm::proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER);
   }
   if (!tok.ok()) {
     return tok.status();

@@ -30,6 +30,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/metadata_util.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"
@@ -51,23 +52,26 @@ absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesTask::Create(
 }
 
 absl::StatusOr<absl::string_view> ModelResourcesTask::GetTFLiteModelBuffer(
-    ModelType model_type) {
-  std::string model_file = litert::lm::ModelTypeToString(model_type);
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  std::string model_file =
+      litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
   return model_asset_bundle_resources_->GetFile(model_file);
 };
 
 absl::StatusOr<const litert::Model*> ModelResourcesTask::GetTFLiteModel(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   auto it = model_map_.find(model_type);
   if (it != model_map_.end()) {
     return it->second.get();
   }
 
-  std::string model_file = litert::lm::ModelTypeToString(model_type);
+  std::string model_file =
+      litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
   auto buffer = model_asset_bundle_resources_->GetFile(model_file);
   if (!buffer.ok()) {
-    return absl::NotFoundError(absl::StrCat(ModelTypeToString(model_type),
-                                            " not found in the model."));
+    return absl::NotFoundError(
+        absl::StrCat(proto::LlmMetadata::TfLiteModelType_Name(model_type),
+                     " not found in the model."));
   }
   ABSL_VLOG(1) << "litert model size: " << buffer->size();
   auto buffer_ref = BufferRef<uint8_t>(buffer->data(), buffer->size());

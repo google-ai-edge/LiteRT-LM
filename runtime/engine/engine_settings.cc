@@ -185,9 +185,9 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
           ABSL_LOG(WARNING)
               << "Failed to load LitertLm header from data stream: "
               << load_header_status;
-        } else if (streaming_loader.HasSection(
-                       BufferKey(schema::AnySectionDataType_TFLiteModel,
-                                 ModelType::kArtisanTextDecoder))) {
+        } else if (streaming_loader.HasSection(BufferKey(
+                       schema::AnySectionDataType_TFLiteModel,
+                       proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER))) {
           is_text_artisan = true;
         }
       } else {
@@ -216,7 +216,7 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
       if (loader
               .GetSectionLocation(
                   BufferKey(schema::AnySectionDataType_TFLiteModel,
-                            ModelType::kArtisanTextDecoder))
+                            proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER))
               .ok()) {
         is_text_artisan = true;
       }

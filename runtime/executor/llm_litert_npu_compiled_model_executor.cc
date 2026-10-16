@@ -71,6 +71,7 @@
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -2822,7 +2823,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
 
   LITERT_ASSIGN_OR_RETURN(
       const litert::Model* text_decoder_model,
-      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 
   LITERT_ASSIGN_OR_RETURN(int max_sequence_length,
                           DetermineSequenceLength(executor_settings, resources,
@@ -2979,8 +2980,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       kv_cache_init_value, enable_npu_debug_logging,
       context_groups[0].text_decoder_inference_context));
 
-  LITERT_ASSIGN_OR_RETURN(auto npu_auxiliary_lrt_model,
-                          resources.GetTFLiteModel(ModelType::kTfLiteAux));
+  LITERT_ASSIGN_OR_RETURN(
+      auto npu_auxiliary_lrt_model,
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUX));
 
   LITERT_ASSIGN_OR_RETURN(
       auto npu_auxiliary_context,
@@ -3075,8 +3077,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   if (mutable_settings.GetAdvancedSettings().has_value() &&
       mutable_settings.GetAdvancedSettings()->enable_speculative_decoding) {
     auto mtp_drafter_model =
-        resources.GetTFLiteModel(ModelType::kTfLiteMtpDrafter);
-    auto mtp_aux_model = resources.GetTFLiteModel(ModelType::kTfLiteMtpAux);
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_DRAFTER);
+    auto mtp_aux_model =
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_AUX);
 
     if (mtp_drafter_model.ok() && mtp_aux_model.ok()) {
       if (!has_per_layer_embeddings) {

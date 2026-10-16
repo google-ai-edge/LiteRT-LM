@@ -733,6 +733,7 @@ cc_test(
         "//runtime/executor:vision_executor",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:embedding_model_type_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:file_data_stream",

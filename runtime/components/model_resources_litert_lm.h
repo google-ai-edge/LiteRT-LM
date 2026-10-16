@@ -45,21 +45,34 @@ class ModelResourcesLitertLm : public ModelResources {
       std::unique_ptr<LitertLmLoader> litert_lm_loader,
       bool enable_file_backed_model_loading = false);
 
+  using ModelResources::GetOrCreateTokenizer;
+  using ModelResources::GetTFLiteModel;
+  using ModelResources::GetTFLiteModelBackendConstraint;
+  using ModelResources::GetTFLiteModelBuffer;
+  using ModelResources::GetTFLiteModelPreferActivationType;
+  using ModelResources::GetTFLiteModelSectionFileRegion;
+  using ModelResources::GetTokenizer;
+  using ModelResources::GetWeightsSectionOffset;
+
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       absl::string_view model_type_str) override;
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       absl::string_view model_type_str) override;
 
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      absl::string_view model_type_str) override;
 
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      absl::string_view model_type_str) override;
 
   // Returns the tokenizer from the *.litertlm file. If both SentencePiece and
   // HuggingFace tokenizer are present and supported by the current build
@@ -69,7 +82,9 @@ class ModelResourcesLitertLm : public ModelResources {
   // Returns the tokenizer for the specified model type from the *.litertlm
   // file.
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
+      absl::string_view model_type_str) override;
 
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
 
@@ -93,11 +108,15 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override;
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      absl::string_view model_type_str) override;
 
   // Returns the TFLite model section files region.
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      absl::string_view model_type_str) override;
 
  protected:
   explicit ModelResourcesLitertLm(
@@ -112,11 +131,13 @@ class ModelResourcesLitertLm : public ModelResources {
   bool enable_file_backed_model_loading_;
 
   absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
+      absl::string_view model_type_str) override;
 
  private:
   absl::flat_hash_map<std::string, std::unique_ptr<litert::Model>> model_map_;
-  absl::flat_hash_map<ModelType, std::unique_ptr<Tokenizer>> tokenizer_map_;
+  absl::flat_hash_map<std::string, std::unique_ptr<Tokenizer>> tokenizer_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
   std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_;
   std::unique_ptr<proto::TtsMetadata> tts_metadata_;

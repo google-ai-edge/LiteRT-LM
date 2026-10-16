@@ -79,7 +79,8 @@ TEST(EngineTest, CreateEngine_WithoutCache) {
   ABSL_CHECK_OK(llm);
 
   const Tokenizer& default_tok = (*llm)->GetTokenizer();
-  auto prefill_tok = (*llm)->GetTokenizer(ModelType::kTfLitePrefillDecode);
+  auto prefill_tok =
+      (*llm)->GetTokenizer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(prefill_tok);
   EXPECT_EQ(prefill_tok.value(), &default_tok);
 

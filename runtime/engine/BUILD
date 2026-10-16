@@ -41,6 +41,7 @@ cc_library(
         "@com_google_absl//absl/time",
         "@litert//litert/cc:litert_environment",
         "//runtime/components:model_resources",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//support/tokenizer",
     ],
 )
@@ -413,6 +414,7 @@ cc_library(
         "//runtime/executor:embedding_executor_base",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:litert_util",
         "//runtime/util:memory_mapped_file",

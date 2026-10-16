@@ -59,6 +59,7 @@
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
 #include "runtime/util/lora_util.h"
 #include "runtime/util/tensor_buffer_util.h"
@@ -288,19 +289,20 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
                      executor_settings_.GetBackend()));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources_, ModelType::kTfLiteAudioEncoderHw, options));
+      resources_, proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW, options));
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kTfLiteAudioEncoderHw);
+    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
+        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
   }
 #endif
   auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
 #ifdef __EMSCRIPTEN__
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kUnknown);
+    SetCurrentlyCompilingModel("");
   }
 #endif
   LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
@@ -441,19 +443,20 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
                      executor_settings_.GetBackend()));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources_, ModelType::kTfLiteAudioEncoderHw, options));
+      resources_, proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW, options));
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kTfLiteAudioEncoderHw);
+    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
+        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
   }
 #endif
   auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
 #ifdef __EMSCRIPTEN__
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kUnknown);
+    SetCurrentlyCompilingModel("");
   }
 #endif
   LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
@@ -668,19 +671,20 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
         absl::StrCat("Unsupported backend for AudioAdapter: ", backend));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources_, ModelType::kTfLiteAudioAdapter, options));
+      resources_, proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER, options));
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kTfLiteAudioAdapter);
+    SetCurrentlyCompilingModel(
+        TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER));
   }
 #endif
   auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
 #ifdef __EMSCRIPTEN__
   if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(ModelType::kUnknown);
+    SetCurrentlyCompilingModel("");
   }
 #endif
   LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
@@ -746,9 +750,9 @@ AudioLiteRtCompiledModelExecutor::Create(
   }
   ABSL_ASSIGN_OR_RETURN(
       auto audio_encoder_model,
-      resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
   auto audio_adapter_model_or =
-      resources.GetTFLiteModel(ModelType::kTfLiteAudioAdapter);
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER);
   std::unique_ptr<AudioEncoder> audio_encoder;
   LITERT_ASSIGN_OR_RETURN(auto encoder_signature,
                           audio_encoder_model->GetSignature(0));

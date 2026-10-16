@@ -39,6 +39,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -81,8 +82,9 @@ class LitertStateTest : public ::testing::Test {
     LITERT_ASSERT_OK_AND_ASSIGN(
         auto env, Environment::Create(std::vector<Environment::Option>()));
     env_ = std::move(env);
-    ASSERT_OK_AND_ASSIGN(litert_model_, resources_->GetTFLiteModel(
-                                            ModelType::kTfLitePrefillDecode));
+    ASSERT_OK_AND_ASSIGN(
+        litert_model_,
+        resources_->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
     LITERT_ASSERT_OK_AND_ASSIGN(auto compilation_options, Options::Create());
     compilation_options.SetHardwareAccelerators(HwAccelerators::kCpu);
     LITERT_ASSERT_OK_AND_ASSIGN(

@@ -125,7 +125,7 @@ namespace {
 // models and MTP drafter models.
 absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
     const LlmExecutorSettings& executor_settings, Environment& lrt_env,
-    ModelResources& resources, ModelType model_type) {
+    ModelResources& resources, proto::LlmMetadata::TfLiteModelType model_type) {
   ABSL_ASSIGN_OR_RETURN(auto model_buffer_view,
                         resources.GetTFLiteModelBuffer(model_type));
   litert::BufferRef<uint8_t> model_buffer(
@@ -139,7 +139,7 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
   std::optional<ModelSignatures> signatures;
   std::optional<std::string> cache_suffix;
 
-  if (model_type == ModelType::kTfLitePrefillDecode) {
+  if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
     ABSL_ASSIGN_OR_RETURN(auto litert_model,
                           resources.GetTFLiteModel(model_type));
     if (!litert_model || !*litert_model) {
@@ -152,7 +152,7 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
         GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
                                                decode_signature.OutputNames()));
     signatures = sigs;
-  } else if (model_type == ModelType::kTfLiteMtpDrafter) {
+  } else if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
     cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
   }
 
@@ -167,7 +167,7 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
   // LlmLiteRtMtpDrafter::Create in regular non-streaming mode, but in streaming
   // mode, we compile the model ourselves, so we need to set the compilation
   // options here.
-  if (model_type == ModelType::kTfLiteMtpDrafter) {
+  if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
     ABSL_RETURN_IF_ERROR(
         UpdateCompilationOptions(executor_settings, compilation_options));
   }
@@ -180,7 +180,7 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
     // purely from this global, so a stale value would misdirect the next
     // submodel's upload.
     absl::Cleanup reset_compiling_model = [] {
-      SetCurrentlyCompilingModel(ModelType::kUnknown);
+      SetCurrentlyCompilingModel("");
     };
 #endif
     LITERT_ASSIGN_OR_RETURN(
@@ -334,8 +334,8 @@ class EngineAdvancedImpl : public Engine {
   const Tokenizer& GetTokenizer() const override { return *tokenizer_; }
 
   absl::StatusOr<const support::Tokenizer*> GetTokenizer(
-      ModelType model_type) const override {
-    if (model_type == ModelType::kTfLitePrefillDecode) {
+      proto::LlmMetadata::TfLiteModelType model_type) const override {
+    if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
       if (!tokenizer_) {
         return absl::NotFoundError("Primary tokenizer not initialized.");
       }
@@ -526,17 +526,17 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
         tokenizer.get(), llm_metadata, input_prompt_as_hint,
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLitePrefillDecode),
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteVisionEncoder),
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteAudioEncoderHw),
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLitePrefillDecode),
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteVisionEncoder),
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteAudioEncoderHw)));
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
   } else {
     // If the model type is available, wait for the tokenizer to be created
     // after the model is loaded.
@@ -555,17 +555,17 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
         nullptr, llm_metadata, input_prompt_as_hint,
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLitePrefillDecode),
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteVisionEncoder),
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteAudioEncoderHw),
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLitePrefillDecode),
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteVisionEncoder),
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteAudioEncoderHw)));
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
   }
 
   if (benchmark_info.has_value()) {
@@ -642,17 +642,17 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
         tokenizer.get(), llm_metadata, input_prompt_as_hint,
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLitePrefillDecode),
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteVisionEncoder),
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
         model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteAudioEncoderHw),
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLitePrefillDecode),
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteVisionEncoder),
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
         model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteAudioEncoderHw)));
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
     // As we load the tokenizer asynchronously, we need to update the executor
     // settings after the tokenizer is loaded.
     ABSL_RETURN_IF_ERROR(executor->UpdateExecutorSettings(
@@ -726,9 +726,10 @@ EngineAdvancedImpl::CreateStreamingWeights(
   // early error returns, so it is declared first.
   std::unique_ptr<OwnedEnvironment> owned_env;
   auto streaming_model_resources = std::make_unique<ModelResourcesStreaming>();
-  for (ModelType model_type :
-       {ModelType::kTfLitePrefillDecode, ModelType::kTfLiteVisionEncoder,
-        ModelType::kTfLiteAudioEncoderHw}) {
+  for (proto::LlmMetadata::TfLiteModelType model_type :
+       {proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+        proto::LlmMetadata::TF_LITE_VISION_ENCODER,
+        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW}) {
     if (auto bc = loader.GetTFLiteModelBackendConstraint(model_type);
         bc.has_value()) {
       streaming_model_resources->SetTFLiteModelBackendConstraint(
@@ -768,17 +769,17 @@ EngineAdvancedImpl::CreateStreamingWeights(
       ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
           tokenizer.get(), &llm_metadata, input_prompt_as_hint,
           streaming_model_resources->GetTFLiteModelBackendConstraint(
-              ModelType::kTfLitePrefillDecode),
+              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
           streaming_model_resources->GetTFLiteModelBackendConstraint(
-              ModelType::kTfLiteVisionEncoder),
+              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
           streaming_model_resources->GetTFLiteModelBackendConstraint(
-              ModelType::kTfLiteAudioEncoderHw),
+              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
           streaming_model_resources->GetTFLiteModelPreferActivationType(
-              ModelType::kTfLitePrefillDecode),
+              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
           streaming_model_resources->GetTFLiteModelPreferActivationType(
-              ModelType::kTfLiteVisionEncoder),
+              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
           streaming_model_resources->GetTFLiteModelPreferActivationType(
-              ModelType::kTfLiteAudioEncoderHw)));
+              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
       engine_settings_updated = true;
       ABSL_LOG(INFO) << "Engine settings set.";
     } else if (llm_metadata.has_llm_model_type() && !engine_settings_updated) {
@@ -789,17 +790,17 @@ EngineAdvancedImpl::CreateStreamingWeights(
       ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
           /*tokenizer=*/nullptr, &llm_metadata, input_prompt_as_hint,
           streaming_model_resources->GetTFLiteModelBackendConstraint(
-              ModelType::kTfLitePrefillDecode),
+              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
           streaming_model_resources->GetTFLiteModelBackendConstraint(
-              ModelType::kTfLiteVisionEncoder),
+              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
           streaming_model_resources->GetTFLiteModelBackendConstraint(
-              ModelType::kTfLiteAudioEncoderHw),
+              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
           streaming_model_resources->GetTFLiteModelPreferActivationType(
-              ModelType::kTfLitePrefillDecode),
+              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
           streaming_model_resources->GetTFLiteModelPreferActivationType(
-              ModelType::kTfLiteVisionEncoder),
+              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
           streaming_model_resources->GetTFLiteModelPreferActivationType(
-              ModelType::kTfLiteAudioEncoderHw)));
+              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
       engine_settings_updated = true;
       ABSL_LOG(INFO) << "Engine settings set.";
     }
@@ -883,9 +884,9 @@ EngineAdvancedImpl::CreateStreamingWeights(
               "Model type is not set for TFLiteModel section.");
         }
         ABSL_ASSIGN_OR_RETURN(
-            const ModelType model_type,
-            StringToModelType(*section->buffer_key.model_type));
-        if (model_type == ModelType::kUnknown) {
+            const proto::LlmMetadata::TfLiteModelType model_type,
+            ParseLlmTfLiteModelType(*section->buffer_key.model_type));
+        if (model_type == proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
           return absl::UnimplementedError("kUnknown is not implemented");
         }
         if (section->backend_constraint.has_value()) {
@@ -905,7 +906,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
             buffer.data(), 0, buffer.size()));
         streaming_model_resources->SetModelBuffer(model_type,
                                                   std::move(buffer));
-        if (model_type == ModelType::kTfLitePrefillDecode &&
+        if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE &&
             owned_env == nullptr) {
           if (!set_llm_metadata) {
             return absl::InternalError(
@@ -926,10 +927,10 @@ EngineAdvancedImpl::CreateStreamingWeights(
               "Model type is not set for TFLiteWeights section.");
         }
         ABSL_ASSIGN_OR_RETURN(
-            const ModelType model_type,
-            StringToModelType(*section->buffer_key.model_type));
-        if (model_type == ModelType::kTfLitePerLayerEmbedder ||
-            model_type == ModelType::kTfLiteEmbedder) {
+            const proto::LlmMetadata::TfLiteModelType model_type,
+            ParseLlmTfLiteModelType(*section->buffer_key.model_type));
+        if (model_type == proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER ||
+            model_type == proto::LlmMetadata::TF_LITE_EMBEDDER) {
           ABSL_LOG(INFO)
               << "Caching embedder weights from stream (CPU) for model type: "
               << static_cast<int>(model_type);
@@ -938,7 +939,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
           ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
               model_type, *section->data_stream, size));
         } else {
-          if (model_type == ModelType::kTfLiteMtpDrafter) {
+          if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
             const auto& advanced_settings =
                 engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
             if (!advanced_settings.has_value() ||
@@ -957,8 +958,8 @@ EngineAdvancedImpl::CreateStreamingWeights(
             return absl::InternalError(
                 "Environment must be created before compilation.");
           }
-          if ((model_type == ModelType::kTfLitePrefillDecode ||
-               model_type == ModelType::kTfLiteMtpDrafter) &&
+          if ((model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+               model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) &&
               !engine_settings_updated) {
             // The weights stream is consumed by compilation, so the model must
             // be compiled now, and compilation depends on the updated settings.
@@ -968,21 +969,21 @@ EngineAdvancedImpl::CreateStreamingWeights(
                 "models with streamed weights can be compiled. Make sure "
                 "these sections precede the TFLiteWeights sections.");
           }
-          if (model_type == ModelType::kTfLitePrefillDecode) {
+          if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
             ABSL_LOG(INFO) << "Compiling main model from stream...";
             ABSL_ASSIGN_OR_RETURN(
                 compiled_main_model,
                 CompileModel(engine_settings.GetMainExecutorSettings(),
                              owned_env->env, *streaming_model_resources,
-                             ModelType::kTfLitePrefillDecode));
+                             proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
             ABSL_LOG(INFO) << "Main model compiled.";
-          } else if (model_type == ModelType::kTfLiteMtpDrafter) {
+          } else if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
             ABSL_LOG(INFO) << "Compiling drafter model from stream...";
             ABSL_ASSIGN_OR_RETURN(
                 compiled_drafter_model,
                 CompileModel(engine_settings.GetMainExecutorSettings(),
                              owned_env->env, *streaming_model_resources,
-                             ModelType::kTfLiteMtpDrafter));
+                             proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
             ABSL_LOG(INFO) << "Drafter model compiled.";
           }
         }
@@ -1075,7 +1076,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
         compiled_main_model,
         CompileModel(engine_settings.GetMainExecutorSettings(), owned_env->env,
                      *streaming_model_resources,
-                     ModelType::kTfLitePrefillDecode));
+                     proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
     ABSL_LOG(INFO) << "Main model compiled.";
   }
 
@@ -1089,7 +1090,8 @@ EngineAdvancedImpl::CreateStreamingWeights(
     ABSL_ASSIGN_OR_RETURN(
         compiled_drafter_model,
         CompileModel(engine_settings.GetMainExecutorSettings(), owned_env->env,
-                     *streaming_model_resources, ModelType::kTfLiteMtpDrafter));
+                     *streaming_model_resources,
+                     proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
     ABSL_LOG(INFO) << "Drafter model compiled.";
   }
 

@@ -21,7 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -62,6 +62,14 @@ class ModelResourcesStreaming : public ModelResources {
 
   ~ModelResourcesStreaming() override = default;
 
+  using ModelResources::GetTFLiteModel;
+  using ModelResources::GetTFLiteModelBackendConstraint;
+  using ModelResources::GetTFLiteModelBuffer;
+  using ModelResources::GetTFLiteModelPreferActivationType;
+  using ModelResources::GetTFLiteModelSectionFileRegion;
+  using ModelResources::GetWeightInMemoryMap;
+  using ModelResources::GetWeightsSectionOffset;
+
   // Returns the litert::Model for the specified `model_type`.
   // Lazily creates and caches the model from the in-memory flatbuffer stored
   // in `model_buffers_` if not already created. Returns `NotFoundError` if no
@@ -69,13 +77,17 @@ class ModelResourcesStreaming : public ModelResources {
   // ModelResourcesStreaming retains ownership of the returned model, which
   // remains valid until this instance is destroyed.
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      absl::string_view model_type_str) override;
 
   // Returns a string_view over the raw TFLite model flatbuffer bytes for the
   // specified `model_type`, or `NotFoundError` if no buffer has been set.
   // The returned view remains valid for the lifetime of this instance.
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      absl::string_view model_type_str) override;
 
   // Always returns `UnimplementedError` because streamed models do not own a
   // backing ScopedFile on disk.
@@ -84,16 +96,22 @@ class ModelResourcesStreaming : public ModelResources {
   // Always returns `UnimplementedError` because weights section file offsets
   // do not apply to streamed models.
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      absl::string_view model_type_str) override;
 
   // Returns the backend constraint for `model_type` if set, or `std::nullopt`.
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      absl::string_view model_type_str) override;
 
   // Returns the preferred activation type for `model_type` if set, or
   // `std::nullopt`.
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      absl::string_view model_type_str) override;
 
   // Always returns `UnimplementedError` as tokenizer loading is handled
   // separately from streamed model resources.
@@ -115,13 +133,18 @@ class ModelResourcesStreaming : public ModelResources {
   // Always returns `UnimplementedError` because streamed models do not have
   // file regions on disk.
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override;
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      absl::string_view model_type_str) override;
 
   // Returns a pointer to the map of external weight section names to 64-byte
   // aligned in-memory byte spans for `model_type`, or `nullptr` if no weights
   // have been loaded into memory for that model type.
   const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-  GetWeightInMemoryMap(ModelType model_type) const override;
+  GetWeightInMemoryMap(
+      proto::LlmMetadata::TfLiteModelType model_type) const override;
+  const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+  GetWeightInMemoryMap(absl::string_view model_type_str) const override;
 
   // Sets the LLM metadata for this streaming resource instance.
   void SetLlmMetadata(const proto::LlmMetadata& llm_metadata) {
@@ -138,98 +161,197 @@ class ModelResourcesStreaming : public ModelResources {
     executor_metadata_ = std::move(executor_metadata);
   }
 
-  // Sets the backend constraint for a given `model_type`.
-  void SetTFLiteModelBackendConstraint(ModelType model_type,
+  // Sets the backend constraint for a given model type wire string.
+  //
+  // args:
+  //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
+  //   backend_constraint: The backend constraint for the model.
+  void SetTFLiteModelBackendConstraint(absl::string_view model_type_str,
+                                       std::string backend_constraint);
+
+  // Sets the backend constraint for a given capability-scoped Protobuf model
+  // type enum (e.g. proto::LlmMetadata::TF_LITE_PREFILL_DECODE).
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  void SetTFLiteModelBackendConstraint(TfLiteModelTypeT model_type,
                                        std::string backend_constraint) {
-    backend_constraints_[model_type] = std::move(backend_constraint);
+    SetTFLiteModelBackendConstraint(TfLiteModelTypeToWireString(model_type),
+                                    std::move(backend_constraint));
   }
 
-  // Sets the preferred activation type for a given `model_type`.
-  void SetTFLiteModelPreferActivationType(ModelType model_type,
+  // Sets the preferred activation type for a given model type wire string.
+  //
+  // args:
+  //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
+  //   prefer_activation_type: The preferred activation type for the model.
+  void SetTFLiteModelPreferActivationType(absl::string_view model_type_str,
+                                          std::string prefer_activation_type);
+
+  // Sets the preferred activation type for a given capability-scoped Protobuf
+  // model type enum.
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  void SetTFLiteModelPreferActivationType(TfLiteModelTypeT model_type,
                                           std::string prefer_activation_type) {
-    prefer_activation_types_[model_type] = std::move(prefer_activation_type);
+    SetTFLiteModelPreferActivationType(TfLiteModelTypeToWireString(model_type),
+                                       std::move(prefer_activation_type));
   }
 
-  // Sets the flatbuffer model data for a given `model_type`. This stores the
-  // raw flatbuffer in memory so that `GetTFLiteModel` can lazily construct the
-  // `litert::Model` without relying on a persistent stream or file.
-  void SetModelBuffer(ModelType model_type, std::vector<char> buffer) {
-    model_buffers_[model_type] = std::move(buffer);
+  // Sets the flatbuffer model data for a given model type wire string. This
+  // stores the raw flatbuffer in memory so that `GetTFLiteModel` can lazily
+  // construct the `litert::Model` without relying on a persistent stream or
+  // file.
+  //
+  // args:
+  //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
+  //   buffer: The raw TFLite flatbuffer bytes.
+  void SetModelBuffer(absl::string_view model_type_str,
+                      std::vector<char> buffer);
+
+  // Sets the flatbuffer model data for a given capability-scoped Protobuf
+  // model type enum.
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  void SetModelBuffer(TfLiteModelTypeT model_type, std::vector<char> buffer) {
+    SetModelBuffer(TfLiteModelTypeToWireString(model_type), std::move(buffer));
   }
 
   // Reads `size` bytes from `stream` into a 64-byte aligned host memory buffer
   // (`weights_storage_`) and maps it under the `"tflite_weights"` section key
-  // in `weights_in_memory_per_model_[model_type]`.
+  // in `weights_in_memory_per_model_[model_type_str]`.
   // The 64-byte alignment satisfies LiteRT/XNNPACK host tensor memory alignment
   // requirements (`LITERT_HOST_MEMORY_BUFFER_ALIGNMENT`).
-  absl::Status SetWeightsFromStream(ModelType model_type, DataStream& stream,
-                                    size_t size);
+  //
+  // args:
+  //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
+  //   stream: The stream to read the weights from.
+  //   size: The number of bytes to read.
+  // returns:
+  //   OkStatus on success, or the error from reading the stream.
+  absl::Status SetWeightsFromStream(absl::string_view model_type_str,
+                                    DataStream& stream, size_t size);
 
-  // Convenience helper to stream external weights for the per-layer embedder
-  // submodel (`ModelType::kTfLitePerLayerEmbedder`).
-  absl::Status SetPerLayerWeightsFromStream(DataStream& stream, size_t size) {
-    return SetWeightsFromStream(ModelType::kTfLitePerLayerEmbedder, stream,
+  // Streams external weights for a given capability-scoped Protobuf model type
+  // enum. See SetWeightsFromStream(absl::string_view, DataStream&, size_t).
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  absl::Status SetWeightsFromStream(TfLiteModelTypeT model_type,
+                                    DataStream& stream, size_t size) {
+    return SetWeightsFromStream(TfLiteModelTypeToWireString(model_type), stream,
                                 size);
   }
 
+  // Convenience helper to stream external weights for the per-layer embedder
+  // submodel (`TF_LITE_PER_LAYER_EMBEDDER`).
+  absl::Status SetPerLayerWeightsFromStream(DataStream& stream, size_t size) {
+    return SetWeightsFromStream(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER,
+                                stream, size);
+  }
+
   // Convenience helper to stream external weights for the token embedder
-  // submodel (`ModelType::kTfLiteEmbedder`).
+  // submodel (`TF_LITE_EMBEDDER`).
   absl::Status SetEmbedderWeightsFromStream(DataStream& stream, size_t size) {
-    return SetWeightsFromStream(ModelType::kTfLiteEmbedder, stream, size);
+    return SetWeightsFromStream(proto::LlmMetadata::TF_LITE_EMBEDDER, stream,
+                                size);
   }
 
   // Convenience helper to stream external weights for vision encoder submodels.
-  absl::Status SetVisionWeightsFromStream(ModelType model_type,
+  //
+  // args:
+  //   model_type_str: The model type wire string of the vision submodel.
+  //   stream: The stream to read the weights from.
+  //   size: The number of bytes to read.
+  // returns:
+  //   OkStatus on success, or the error from reading the stream.
+  absl::Status SetVisionWeightsFromStream(absl::string_view model_type_str,
+                                          DataStream& stream, size_t size);
+
+  // Convenience helper to stream external weights for vision encoder submodels
+  // identified by a capability-scoped Protobuf model type enum.
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  absl::Status SetVisionWeightsFromStream(TfLiteModelTypeT model_type,
                                           DataStream& stream, size_t size) {
-    return SetWeightsFromStream(model_type, stream, size);
+    return SetVisionWeightsFromStream(TfLiteModelTypeToWireString(model_type),
+                                      stream, size);
   }
 
   // Convenience helper to stream external weights for the vision adapter
-  // submodel (`ModelType::kTfLiteVisionAdapter`).
+  // submodel (`TF_LITE_VISION_ADAPTER`).
   absl::Status SetVisionAdapterWeightsFromStream(DataStream& stream,
                                                  size_t size) {
-    return SetWeightsFromStream(ModelType::kTfLiteVisionAdapter, stream, size);
+    return SetWeightsFromStream(proto::LlmMetadata::TF_LITE_VISION_ADAPTER,
+                                stream, size);
   }
 
   // Convenience helper to stream external weights for audio encoder submodels.
-  absl::Status SetAudioWeightsFromStream(ModelType model_type,
+  //
+  // args:
+  //   model_type_str: The model type wire string of the audio submodel.
+  //   stream: The stream to read the weights from.
+  //   size: The number of bytes to read.
+  // returns:
+  //   OkStatus on success, or the error from reading the stream.
+  absl::Status SetAudioWeightsFromStream(absl::string_view model_type_str,
+                                         DataStream& stream, size_t size);
+
+  // Convenience helper to stream external weights for audio encoder submodels
+  // identified by a capability-scoped Protobuf model type enum.
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  absl::Status SetAudioWeightsFromStream(TfLiteModelTypeT model_type,
                                          DataStream& stream, size_t size) {
-    return SetWeightsFromStream(model_type, stream, size);
+    return SetAudioWeightsFromStream(TfLiteModelTypeToWireString(model_type),
+                                     stream, size);
   }
 
-  // Releases the host memory holding `model_type`'s external weights, and the
-  // spans over it returned by `GetWeightInMemoryMap`. Does nothing if no
-  // weights are stored for `model_type`.
+  // Releases the host memory holding the external weights of the model type
+  // wire string `model_type_str`, and the spans over it returned by
+  // `GetWeightInMemoryMap`. Does nothing if no weights are stored for it.
   //
   // Only call this once you know the weights will not be read again.
   //
   // Callers that also published the section via `StoreWeightsBuffer` must
   // clear that registration first, since it holds a span into this storage.
-  void ReleaseWeights(ModelType model_type);
+  //
+  // args:
+  //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
+  void ReleaseWeights(absl::string_view model_type_str);
+
+  // Releases the external weights of a capability-scoped Protobuf model type
+  // enum. See ReleaseWeights(absl::string_view).
+  template <typename TfLiteModelTypeT,
+            typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+  void ReleaseWeights(TfLiteModelTypeT model_type) {
+    ReleaseWeights(TfLiteModelTypeToWireString(model_type));
+  }
 
  private:
   std::optional<proto::LlmMetadata> llm_metadata_;
   std::optional<proto::EmbeddingMetadata> embedding_metadata_;
   std::optional<proto::ExecutorMetadata> executor_metadata_;
-  absl::flat_hash_map<ModelType, std::string> backend_constraints_;
-  absl::flat_hash_map<ModelType, std::string> prefer_activation_types_;
+  // All per-model maps below are keyed by the lowercase model type wire
+  // string (e.g. "tf_lite_embedder").
+  absl::flat_hash_map<std::string, std::string> backend_constraints_;
+  absl::flat_hash_map<std::string, std::string> prefer_activation_types_;
   // In-memory buffers for model flatbuffers.
   // These are cached from the input stream so that 'GetTFLiteModel' can load
   // models without relying on the original stream. This does not include
   // external weights.
-  std::unordered_map<ModelType, std::vector<char>> model_buffers_;
-  std::unordered_map<ModelType, std::unique_ptr<litert::Model>> models_;
+  absl::flat_hash_map<std::string, std::vector<char>> model_buffers_;
+  absl::flat_hash_map<std::string, std::unique_ptr<litert::Model>> models_;
 
   // In-memory host storage for model weights. Byte-aligned to
   // LITERT_HOST_MEMORY_BUFFER_ALIGNMENT.
-  absl::flat_hash_map<ModelType, std::vector<uint8_t>> weights_storage_;
+  absl::flat_hash_map<std::string, std::vector<uint8_t>> weights_storage_;
 
   // In-memory map of external weight section names to 64-byte aligned byte
   // spans in `weights_storage_`. We have spans into weights_storage_ rather
   // than storing the weights directly in this map to guarantee 64-byte
   // alignment.
   absl::flat_hash_map<
-      ModelType, absl::flat_hash_map<std::string, absl::Span<const std::byte>>>
+      std::string,
+      absl::flat_hash_map<std::string, absl::Span<const std::byte>>>
       weights_in_memory_per_model_;
 };
 

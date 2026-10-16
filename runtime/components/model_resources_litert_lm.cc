@@ -33,6 +33,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -42,6 +43,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -90,7 +92,7 @@ absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesLitertLm::Create(
 };
 
 absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
 }
 
@@ -140,18 +142,33 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
 }
 
 std::optional<std::string>
-ModelResourcesLitertLm::GetTFLiteModelBackendConstraint(ModelType model_type) {
-  return litert_lm_loader_->GetTFLiteModelBackendConstraint(model_type);
+ModelResourcesLitertLm::GetTFLiteModelBackendConstraint(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelBackendConstraint(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+ModelResourcesLitertLm::GetTFLiteModelBackendConstraint(
+    absl::string_view model_type_str) {
+  return litert_lm_loader_->GetTFLiteModelBackendConstraint(model_type_str);
 }
 
 std::optional<std::string>
 ModelResourcesLitertLm::GetTFLiteModelPreferActivationType(
-    ModelType model_type) {
-  return litert_lm_loader_->GetTFLiteModelPreferActivationType(model_type);
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelPreferActivationType(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+ModelResourcesLitertLm::GetTFLiteModelPreferActivationType(
+    absl::string_view model_type_str) {
+  return litert_lm_loader_->GetTFLiteModelPreferActivationType(model_type_str);
 }
 
 absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModelBuffer(TfLiteModelTypeToWireString(model_type));
 }
 
@@ -172,11 +189,16 @@ absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
 
 absl::StatusOr<std::unique_ptr<Tokenizer>>
 ModelResourcesLitertLm::GetTokenizer() {
-  return GetTokenizer(ModelType::kTfLitePrefillDecode);
+  return GetTokenizer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
 }
 
 absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTokenizer(TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
+    absl::string_view model_type_str) {
 #if !defined(ENABLE_SENTENCEPIECE_TOKENIZER) && \
     !defined(ENABLE_HUGGINGFACE_TOKENIZER)
   return absl::UnimplementedError(
@@ -184,14 +206,16 @@ absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
       "ENABLE_HUGGINGFACE_TOKENIZER are defined during build.");
 #endif  // !ENABLE_SENTENCEPIECE_TOKENIZER && !ENABLE_HUGGINGFACE_TOKENIZER
 
-  auto sp_tokenizer = litert_lm_loader_->GetSentencePieceTokenizer(model_type);
+  auto sp_tokenizer =
+      litert_lm_loader_->GetSentencePieceTokenizer(model_type_str);
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
   if (sp_tokenizer) {
     return SentencePieceTokenizer::CreateFromBuffer(sp_tokenizer->StrView());
   }
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 
-  auto hf_tokenizer = litert_lm_loader_->GetHuggingFaceTokenizer(model_type);
+  auto hf_tokenizer =
+      litert_lm_loader_->GetHuggingFaceTokenizer(model_type_str);
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
   if (hf_tokenizer) {
     std::string json_data(hf_tokenizer->StrData(), hf_tokenizer->Size());
@@ -208,19 +232,24 @@ absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
         "HuggingFace tokenizer found, but LiteRT LM was built with "
         "--define=DISABLE_HUGGINGFACE_TOKENIZER=1.");
   } else {
-    return absl::NotFoundError(
-        absl::StrCat("No tokenizer found in the model for model type: ",
-                     ModelTypeToString(model_type)));
+    return absl::NotFoundError(absl::StrCat(
+        "No tokenizer found in the model for model type: ", model_type_str));
   }
 }
 
 absl::StatusOr<const Tokenizer*> ModelResourcesLitertLm::GetOrCreateTokenizer(
-    ModelType model_type) {
-  if (auto it = tokenizer_map_.find(model_type); it != tokenizer_map_.end()) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetOrCreateTokenizer(TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<const Tokenizer*> ModelResourcesLitertLm::GetOrCreateTokenizer(
+    absl::string_view model_type_str) {
+  std::string key = absl::AsciiStrToLower(model_type_str);
+  if (auto it = tokenizer_map_.find(key); it != tokenizer_map_.end()) {
     return it->second.get();
   }
-  LITERT_ASSIGN_OR_RETURN(auto tokenizer, GetTokenizer(model_type));
-  return tokenizer_map_.emplace(model_type, std::move(tokenizer))
+  ABSL_ASSIGN_OR_RETURN(auto tokenizer, GetTokenizer(key));
+  return tokenizer_map_.emplace(std::move(key), std::move(tokenizer))
       .first->second.get();
 }
 
@@ -345,18 +374,32 @@ ModelResourcesLitertLm::GetScopedFile() {
 }
 
 absl::StatusOr<std::pair<size_t, size_t>>
-ModelResourcesLitertLm::GetWeightsSectionOffset(ModelType model_type) {
+ModelResourcesLitertLm::GetWeightsSectionOffset(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetWeightsSectionOffset(TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<std::pair<size_t, size_t>>
+ModelResourcesLitertLm::GetWeightsSectionOffset(
+    absl::string_view model_type_str) {
   return litert_lm_loader_->GetSectionLocation(
-      BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type));
+      BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type_str));
 }
 
 absl::StatusOr<FileRegion>
 ModelResourcesLitertLm::GetTFLiteModelSectionFileRegion(
-    ModelType model_type) {
-  LITERT_ASSIGN_OR_RETURN(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelSectionFileRegion(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<FileRegion>
+ModelResourcesLitertLm::GetTFLiteModelSectionFileRegion(
+    absl::string_view model_type_str) {
+  ABSL_ASSIGN_OR_RETURN(
       auto location,
       litert_lm_loader_->GetSectionLocation(
-          BufferKey(schema::AnySectionDataType_TFLiteModel, model_type)));
+          BufferKey(schema::AnySectionDataType_TFLiteModel, model_type_str)));
   return FileRegion{
       .offset = location.first,
       .size = location.second - location.first,

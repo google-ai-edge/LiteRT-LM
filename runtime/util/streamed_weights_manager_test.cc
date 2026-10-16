@@ -24,7 +24,8 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "runtime/components/model_resources.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
 
 namespace litert::lm {
@@ -61,27 +62,29 @@ class MemoryDataStream : public DataStream {
 };
 
 TEST(StreamedWeightsManagerTest, SetAndGetCurrentlyCompilingModel) {
-  SetCurrentlyCompilingModel(ModelType::kTfLiteVisionEncoder);
-  EXPECT_EQ(GetCurrentlyCompilingModel(), ModelType::kTfLiteVisionEncoder);
+  SetCurrentlyCompilingModel(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+  EXPECT_EQ(GetCurrentlyCompilingModel(), "tf_lite_vision_encoder");
 
-  SetCurrentlyCompilingModel(ModelType::kUnknown);
-  EXPECT_EQ(GetCurrentlyCompilingModel(), ModelType::kUnknown);
+  SetCurrentlyCompilingModel("");
+  EXPECT_EQ(GetCurrentlyCompilingModel(), "");
 }
 
 TEST(StreamedWeightsManagerTest, StoreReadAndClearWeightsStream) {
   auto stream = std::make_shared<MemoryDataStream>("hello_weights_data");
-  StoreWeightsStream(ModelType::kTfLiteTextEncoder, stream);
+  StoreWeightsStream(proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER, stream);
 
   char buffer[6] = {0};
-  EXPECT_TRUE(ReadStoredWeights(static_cast<int>(ModelType::kTfLiteTextEncoder),
+  EXPECT_TRUE(ReadStoredWeights("tf_lite_text_encoder",
                                 /*offset=*/6, /*size=*/5, buffer)
                   .ok());
   EXPECT_EQ(std::string(buffer, 5), "weigh");
 
-  EXPECT_TRUE(ClearStoredWeightsStream(ModelType::kTfLiteTextEncoder).ok());
+  EXPECT_TRUE(
+      ClearStoredWeightsStream(proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER)
+          .ok());
   EXPECT_TRUE(stream->discarded());
 
-  EXPECT_EQ(ReadStoredWeights(static_cast<int>(ModelType::kTfLiteTextEncoder),
+  EXPECT_EQ(ReadStoredWeights("tf_lite_text_encoder",
                               /*offset=*/0, /*size=*/5, buffer)
                 .code(),
             absl::StatusCode::kNotFound);
@@ -90,15 +93,15 @@ TEST(StreamedWeightsManagerTest, StoreReadAndClearWeightsStream) {
 TEST(StreamedWeightsManagerTest, ClearAllStoredWeightsStreams) {
   auto stream1 = std::make_shared<MemoryDataStream>("weights_1");
   auto stream2 = std::make_shared<MemoryDataStream>("weights_2");
-  StoreWeightsStream(ModelType::kTfLiteVisionEncoder, stream1);
-  StoreWeightsStream(ModelType::kTfLiteAudioEncoderHw, stream2);
+  StoreWeightsStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER, stream1);
+  StoreWeightsStream(proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW, stream2);
 
   EXPECT_TRUE(ClearStoredWeightsStreams().ok());
   EXPECT_TRUE(stream1->discarded());
   EXPECT_TRUE(stream2->discarded());
 
   char buffer[4] = {0};
-  EXPECT_EQ(ReadStoredWeights(static_cast<int>(ModelType::kTfLiteVisionEncoder),
+  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
                               /*offset=*/0, /*size=*/4, buffer)
                 .code(),
             absl::StatusCode::kNotFound);
@@ -108,19 +111,20 @@ TEST(StreamedWeightsManagerTest, StoreReadAndClearWeightsBuffer) {
   ASSERT_TRUE(ClearStoredWeightsStreams().ok());
   const std::string weights = "hello_weights_data";
   StoreWeightsBuffer(
-      ModelType::kTfLiteVisionEncoder,
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER,
       absl::MakeConstSpan(reinterpret_cast<const std::byte*>(weights.data()),
                           weights.size()));
 
   char buffer[6] = {0};
-  EXPECT_TRUE(
-      ReadStoredWeights(static_cast<int>(ModelType::kTfLiteVisionEncoder),
-                        /*offset=*/6, /*size=*/5, buffer)
-          .ok());
+  EXPECT_TRUE(ReadStoredWeights("tf_lite_vision_encoder",
+                                /*offset=*/6, /*size=*/5, buffer)
+                  .ok());
   EXPECT_EQ(std::string(buffer, 5), "weigh");
 
-  EXPECT_TRUE(ClearStoredWeightsStream(ModelType::kTfLiteVisionEncoder).ok());
-  EXPECT_EQ(ReadStoredWeights(static_cast<int>(ModelType::kTfLiteVisionEncoder),
+  EXPECT_TRUE(
+      ClearStoredWeightsStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER)
+          .ok());
+  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
                               /*offset=*/0, /*size=*/5, buffer)
                 .code(),
             absl::StatusCode::kNotFound);
@@ -130,16 +134,16 @@ TEST(StreamedWeightsManagerTest, ReadWeightsBufferRejectsOutOfRangeReads) {
   ASSERT_TRUE(ClearStoredWeightsStreams().ok());
   const std::string weights = "weights";
   StoreWeightsBuffer(
-      ModelType::kTfLiteVisionEncoder,
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER,
       absl::MakeConstSpan(reinterpret_cast<const std::byte*>(weights.data()),
                           weights.size()));
 
   char buffer[8] = {0};
-  EXPECT_EQ(ReadStoredWeights(static_cast<int>(ModelType::kTfLiteVisionEncoder),
+  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
                               /*offset=*/4, /*size=*/5, buffer)
                 .code(),
             absl::StatusCode::kOutOfRange);
-  EXPECT_EQ(ReadStoredWeights(static_cast<int>(ModelType::kTfLiteVisionEncoder),
+  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
                               /*offset=*/8, /*size=*/1, buffer)
                 .code(),
             absl::StatusCode::kOutOfRange);
@@ -151,17 +155,16 @@ TEST(StreamedWeightsManagerTest, StoredStreamTakesPrecedenceOverBuffer) {
   ASSERT_TRUE(ClearStoredWeightsStreams().ok());
   const std::string weights = "from_the_buffer";
   StoreWeightsBuffer(
-      ModelType::kTfLiteVisionEncoder,
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER,
       absl::MakeConstSpan(reinterpret_cast<const std::byte*>(weights.data()),
                           weights.size()));
   auto stream = std::make_shared<MemoryDataStream>("from_the_stream");
-  StoreWeightsStream(ModelType::kTfLiteVisionEncoder, stream);
+  StoreWeightsStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER, stream);
 
   char buffer[7] = {0};
-  EXPECT_TRUE(
-      ReadStoredWeights(static_cast<int>(ModelType::kTfLiteVisionEncoder),
-                        /*offset=*/9, /*size=*/6, buffer)
-          .ok());
+  EXPECT_TRUE(ReadStoredWeights("tf_lite_vision_encoder",
+                                /*offset=*/9, /*size=*/6, buffer)
+                  .ok());
   EXPECT_EQ(std::string(buffer, 6), "stream");
 
   EXPECT_TRUE(ClearStoredWeightsStreams().ok());

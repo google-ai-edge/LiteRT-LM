@@ -71,6 +71,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/litert_lm_loader.h"
@@ -94,16 +95,16 @@ class TfLiteModelResources : public lm::ModelResources {
   }
 
   absl::StatusOr<const Model*> GetTFLiteModel(
-      lm::ModelType model_type) override {
-    if (model_type == lm::ModelType::kTfLitePrefillDecode ||
-        model_type == lm::ModelType::kTfLiteMtpDrafter) {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+        model_type == lm::proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
       return &model_;
     }
     return absl::UnimplementedError("Unsupported model type");
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("GetTFLiteModelBuffer not implemented.");
   }
 
@@ -121,12 +122,12 @@ class TfLiteModelResources : public lm::ModelResources {
   }
 
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
 
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
 
@@ -136,12 +137,12 @@ class TfLiteModelResources : public lm::ModelResources {
   }
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("GetWeightsSectionOffset not implemented.");
   }
 
   absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError(
         "GetTFLiteModelSectionFileRegion not implemented.");
   }

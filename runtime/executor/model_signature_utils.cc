@@ -29,6 +29,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -148,27 +149,30 @@ absl::StatusOr<std::vector<SignatureInfo>> GetVisionModelSignatures(
 }  // namespace
 
 absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
-    const litert::Model& model, ModelType model_type) {
+    const litert::Model& model,
+    proto::EmbeddingMetadata::TfLiteModelType model_type) {
   switch (model_type) {
-    case ModelType::kTfLiteTextEncoder:
+    case proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER:
       return GetTextEncoderSignatures(model);
-    case ModelType::kTfLiteVisionEncoder:
-    case ModelType::kTfLiteVisionAdapter:
+    case proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER:
+    case proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER:
       return GetVisionModelSignatures(model);
     default:
-      return absl::InvalidArgumentError(
-          absl::StrCat("Unsupported model type for signature inspection: ",
-                       ModelTypeToString(model_type)));
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported model type for signature inspection: ",
+          proto::EmbeddingMetadata::TfLiteModelType_Name(model_type)));
   }
 }
 
 absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
-    ModelResources& resources, ModelType model_type) {
+    ModelResources& resources,
+    proto::EmbeddingMetadata::TfLiteModelType model_type) {
   LITERT_ASSIGN_OR_RETURN(const litert::Model* model,
                           resources.GetTFLiteModel(model_type));
   if (model == nullptr) {
-    return absl::NotFoundError(absl::StrCat("Model not found in resources: ",
-                                            ModelTypeToString(model_type)));
+    return absl::NotFoundError(absl::StrCat(
+        "Model not found in resources: ",
+        proto::EmbeddingMetadata::TfLiteModelType_Name(model_type)));
   }
   return GetAvailableSignatures(*model, model_type);
 }
@@ -258,7 +262,8 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
     std::optional<int> min_input_length) {
   LITERT_ASSIGN_OR_RETURN(
       auto signatures,
-      GetAvailableSignatures(resources, ModelType::kTfLiteTextEncoder));
+      GetAvailableSignatures(resources,
+                             proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
   return SelectTextEncoderSignatures(signatures, max_input_length,
                                      min_input_length);
 }
@@ -280,7 +285,8 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
     ModelResources& resources, int vision_tokens_per_image) {
   LITERT_ASSIGN_OR_RETURN(
       auto signatures,
-      GetAvailableSignatures(resources, ModelType::kTfLiteVisionEncoder));
+      GetAvailableSignatures(resources,
+                             proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER));
   return SelectVisionEncoderSignatures(signatures, vision_tokens_per_image);
 }
 
@@ -301,8 +307,8 @@ SelectVisionAdapterSignatures(const std::vector<SignatureInfo>& signatures,
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
 SelectVisionAdapterSignatures(ModelResources& resources,
                               int vision_tokens_per_image) {
-  auto adapter_signatures =
-      GetAvailableSignatures(resources, ModelType::kTfLiteVisionAdapter);
+  auto adapter_signatures = GetAvailableSignatures(
+      resources, proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER);
   if (!adapter_signatures.ok() || adapter_signatures->empty()) {
     return std::nullopt;
   }

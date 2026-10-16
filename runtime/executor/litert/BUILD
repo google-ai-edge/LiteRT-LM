@@ -73,6 +73,7 @@ cc_test(
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/proto:executor_metadata_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:scoped_file",

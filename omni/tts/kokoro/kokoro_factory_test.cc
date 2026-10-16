@@ -38,6 +38,7 @@
 #include "omni/tts/text_chunk_utils.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
@@ -58,11 +59,11 @@ class FakeSectionNames : public lm::ModelResources {
 
   // Unused parts of the interface.
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<std::reference_wrapper<lm::ScopedFile>> GetScopedFile()
@@ -70,19 +71,19 @@ class FakeSectionNames : public lm::ModelResources {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return absl::UnimplementedError("");
   }
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return std::nullopt;
   }
   absl::StatusOr<std::unique_ptr<lm::Tokenizer>> GetTokenizer() override {

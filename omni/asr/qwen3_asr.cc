@@ -41,6 +41,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/asr_model_type.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {
@@ -142,7 +143,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3AsrSessionFactory(
   ABSL_ASSIGN_OR_RETURN(
       auto compiled_model,
       CreateCompiledModel(settings, env, options, lm_resources.get(),
-                          lm::ModelType::kTfLiteAudioEncoderHw));
+                          lm::proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
   lm::proto::AsrMetadata resolved_metadata =
       Qwen3AsrSessionFactory::ResolveMetadata(metadata);
   return std::make_unique<Qwen3AsrSessionFactory>(

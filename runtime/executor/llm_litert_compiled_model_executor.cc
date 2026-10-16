@@ -76,6 +76,7 @@
 #include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/state_interface.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/log_tensor_buffer.h"
 #include "runtime/util/lora_util.h"
@@ -331,9 +332,9 @@ absl::Status InitializeAuxiliaryExecutorComponents(
         ple_manager_opt = std::ref(*per_layer_embedding_lookup);
       }
       if (compiled_mtp_drafter_model != nullptr) {
-        ABSL_ASSIGN_OR_RETURN(
-            const litert::Model* base_model_desc,
-            resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+        ABSL_ASSIGN_OR_RETURN(const litert::Model* base_model_desc,
+                              resources->GetTFLiteModel(
+                                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
         ABSL_ASSIGN_OR_RETURN(
             mtp_drafter,
             LlmLiteRtMtpDrafter::Create(
@@ -2022,7 +2023,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     ModelResources& resources) {
   ABSL_ASSIGN_OR_RETURN(
       auto litert_model,
-      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   if (!litert_model || !*litert_model) {
     return absl::InternalError("Failed to build LiteRt model");
   }
@@ -2044,7 +2045,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                                &signatures));
 
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources, ModelType::kTfLitePrefillDecode, compilation_options));
+      resources, proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      compilation_options));
 
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
@@ -2399,7 +2401,7 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
     ModelResources& resources) {
   ABSL_ASSIGN_OR_RETURN(
       auto litert_model,
-      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   if (!litert_model || !*litert_model) {
     return absl::InternalError("Failed to build LiteRt model");
   }

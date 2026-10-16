@@ -65,6 +65,7 @@
 #include "runtime/components/model_resources_litert_lm.h"  // IWYU pragma: keep
 #include "runtime/components/model_resources_task.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/file_util.h"
@@ -155,8 +156,9 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
   // models omit TF_LITE_AUX and must remain buffer-backed so their flatbuffer
   // can be mutated in place.
   if (!enable_file_backed_model_loading && enable_file_backed_for_aot_npu) {
-    auto aux_section = loader->GetSectionLocation(BufferKey(
-        schema::AnySectionDataType_TFLiteModel, ModelType::kTfLiteAux));
+    auto aux_section = loader->GetSectionLocation(
+        BufferKey(schema::AnySectionDataType_TFLiteModel,
+                  proto::LlmMetadata::TF_LITE_AUX));
     enable_file_backed_model_loading =
         aux_section.ok() && aux_section->second > aux_section->first;
   }
@@ -1198,9 +1200,9 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
 }
 
 absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
-    ModelResources& resources, ModelType model_type) {
+    ModelResources& resources, absl::string_view model_type_str) {
   ExternalWeightResources external_weights;
-  auto section_offset = resources.GetWeightsSectionOffset(model_type);
+  auto section_offset = resources.GetWeightsSectionOffset(model_type_str);
   if (!section_offset.ok()) {
     if (!absl::IsNotFound(section_offset.status()) &&
         !absl::IsUnimplemented(section_offset.status())) {
@@ -1219,19 +1221,19 @@ absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
 }
 
 absl::Status SetExternalWeightOptions(ModelResources& resources,
-                                      ModelType model_type,
+                                      absl::string_view model_type_str,
                                       litert::Options& compilation_options) {
-  if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
+  if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type_str);
       weight_map != nullptr) {
     compilation_options.SetWeightInMemoryMap(weight_map);
   }
   ABSL_ASSIGN_OR_RETURN(auto external_weights,
-                        GetExternalWeightResources(resources, model_type));
+                        GetExternalWeightResources(resources, model_type_str));
   if (!external_weights.scoped_file.has_value()) {
     return absl::OkStatus();
   }
-  ABSL_VLOG(1) << "External weights for model type "
-               << static_cast<int>(model_type) << ": offset "
+  ABSL_VLOG(1) << "External weights for model type " << model_type_str
+               << ": offset "
                << external_weights.sections["tflite_weights"].offset
                << ", length "
                << external_weights.sections["tflite_weights"].length;
@@ -1247,7 +1249,7 @@ absl::Status InitializeEmbeddingLookups(
   absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
   {
     auto end_of_audio_model =
-        resources.GetTFLiteModel(ModelType::kTfLiteEndOfAudio);
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO);
     if (end_of_audio_model.ok()) {
       end_of_multi_modal_embedding_models.insert(
           {ExecutorAudioData::kEndToken, end_of_audio_model.value()});
@@ -1255,7 +1257,7 @@ absl::Status InitializeEmbeddingLookups(
   }
   {
     auto end_of_vision_model =
-        resources.GetTFLiteModel(ModelType::kTfLiteEndOfVision);
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_VISION);
     if (end_of_vision_model.ok()) {
       end_of_multi_modal_embedding_models.insert(
           {ExecutorVisionData::kEndToken, end_of_vision_model.value()});
@@ -1263,19 +1265,20 @@ absl::Status InitializeEmbeddingLookups(
   }
 
 #ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(ModelType model_type)
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
       __attribute__((weak));
 #endif
 
   auto text_embedder_model =
-      resources.GetTFLiteModel(ModelType::kTfLiteEmbedder);
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER);
   if (text_embedder_model.ok()) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto external_weights,
-        GetExternalWeightResources(resources, ModelType::kTfLiteEmbedder));
+    ABSL_ASSIGN_OR_RETURN(auto external_weights,
+                          GetExternalWeightResources(
+                              resources, proto::LlmMetadata::TF_LITE_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {
-      SetCurrentlyCompilingModel(ModelType::kTfLiteEmbedder);
+      SetCurrentlyCompilingModel(
+          TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_EMBEDDER));
     }
 #endif
     auto status_or_embedding_lookup = EmbeddingLookupManager::Create(
@@ -1283,10 +1286,10 @@ absl::Status InitializeEmbeddingLookups(
         /*fully_supports_multi_modal=*/true,
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
-        resources.GetWeightInMemoryMap(ModelType::kTfLiteEmbedder));
+        resources.GetWeightInMemoryMap(proto::LlmMetadata::TF_LITE_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {
-      SetCurrentlyCompilingModel(ModelType::kUnknown);
+      SetCurrentlyCompilingModel("");
     }
 #endif
     ABSL_ASSIGN_OR_RETURN(embedding_lookup,
@@ -1295,14 +1298,16 @@ absl::Status InitializeEmbeddingLookups(
 
   // Create per layer embedding lookups from the resources.
   auto per_layer_embedder_model =
-      resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder);
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
   if (per_layer_embedder_model.ok()) {
-    ABSL_ASSIGN_OR_RETURN(auto external_weights,
-                          GetExternalWeightResources(
-                              resources, ModelType::kTfLitePerLayerEmbedder));
+    ABSL_ASSIGN_OR_RETURN(
+        auto external_weights,
+        GetExternalWeightResources(
+            resources, proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {
-      SetCurrentlyCompilingModel(ModelType::kTfLitePerLayerEmbedder);
+      SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
     }
 #endif
     auto status_or_per_layer_embedding_lookup = EmbeddingLookupManager::Create(
@@ -1310,10 +1315,11 @@ absl::Status InitializeEmbeddingLookups(
         /*fully_supports_multi_modal=*/false,
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
-        resources.GetWeightInMemoryMap(ModelType::kTfLitePerLayerEmbedder));
+        resources.GetWeightInMemoryMap(
+            proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {
-      SetCurrentlyCompilingModel(ModelType::kUnknown);
+      SetCurrentlyCompilingModel("");
     }
 #endif
     ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,

@@ -33,6 +33,7 @@
 #include "litert/cc/options/litert_magic_number_options.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/llm_metadata.pb.h"
 
 namespace litert::lm {
 namespace {
@@ -275,7 +276,8 @@ int64_t GetTargetNumber(int64_t magic_number, int64_t target_number_hint) {
 std::vector<EnvironmentOptions::Option>
 MagicNumberConfigsHelper::GetLiteRtEnvOptions(
     ModelResources& resources, const LlmExecutorSettings& executor_settings) {
-  auto litert_model = resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto litert_model =
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   if (!litert_model.ok() || !*litert_model) return {};
   auto magic_numbers = GetMagicNumbersFromModel(**litert_model);
   if (!magic_numbers || (magic_numbers->context_length == 0 &&

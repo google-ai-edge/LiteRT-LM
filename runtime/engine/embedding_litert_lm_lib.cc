@@ -63,6 +63,7 @@
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
@@ -85,7 +86,6 @@ using ::litert::lm::InputOverflowStrategy;
 using ::litert::lm::InputText;
 using ::litert::lm::MemoryMappedFile;
 using ::litert::lm::ModelAssets;
-using ::litert::lm::ModelType;
 using ::litert::lm::OwnedEnvironment;
 using ::litert::lm::ScopedFile;
 
@@ -368,7 +368,10 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       vision_backend_str.has_value() && !vision_backend_str->empty()) {
     LITERT_ASSIGN_OR_RETURN(vision_backend, ::litert::lm::GetBackendFromString(
                                                 *vision_backend_str));
-  } else if (resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
+  } else if (resources
+                 ->GetTFLiteModel(
+                     proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
+                 .ok()) {
     vision_backend = backend;
   }
 
@@ -377,8 +380,14 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       audio_backend_str.has_value() && !audio_backend_str->empty()) {
     LITERT_ASSIGN_OR_RETURN(
         audio_backend, ::litert::lm::GetBackendFromString(*audio_backend_str));
-  } else if (resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok() ||
-             resources->GetTFLiteModel(ModelType::kTfLiteAudioFrontend).ok()) {
+  } else if (resources
+                 ->GetTFLiteModel(
+                     proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)
+                 .ok() ||
+             resources
+                 ->GetTFLiteModel(
+                     proto::EmbeddingMetadata::TF_LITE_AUDIO_FRONTEND)
+                 .ok()) {
     audio_backend = backend;
   }
 

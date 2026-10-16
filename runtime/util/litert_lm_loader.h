@@ -34,6 +34,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -58,8 +59,9 @@ struct BufferKey {
   explicit BufferKey(schema::AnySectionDataType type,
                      absl::string_view model_type_str);
 
-  // Constructor for legacy ModelType enum
-  explicit BufferKey(schema::AnySectionDataType type, ModelType model_type);
+  // Constructor for the LLM capability-scoped Protobuf model type enum.
+  explicit BufferKey(schema::AnySectionDataType type,
+                     proto::LlmMetadata::TfLiteModelType model_type);
 
   // Equality operator (REQUIRED for std::unordered_map, good for std::map)
   bool operator==(const BufferKey& other) const;
@@ -109,42 +111,47 @@ class LitertLmLoader {
       std::shared_ptr<ScopedFile> scoped_file = nullptr);
 
   // Returns the tokenizer section buffer for the SentencePiece tokenizer
-  // for a given ModelType or wire string.
+  // for a given model type enum or wire string.
   std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer(
-      ModelType model_type = ModelType::kTfLitePrefillDecode);
+      proto::LlmMetadata::TfLiteModelType model_type =
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer(
       absl::string_view model_type_str);
 
   // Returns the tokenizer section buffer for the HuggingFace tokenizer
-  // for a given ModelType or wire string.
+  // for a given model type enum or wire string.
   std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer(
-      ModelType model_type = ModelType::kTfLitePrefillDecode);
+      proto::LlmMetadata::TfLiteModelType model_type =
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer(
       absl::string_view model_type_str);
 
   // Returns the TFLite model section buffer.
-  litert::BufferRef<uint8_t> GetTFLiteModel(ModelType model_type);
+  litert::BufferRef<uint8_t> GetTFLiteModel(
+      proto::LlmMetadata::TfLiteModelType model_type);
   litert::BufferRef<uint8_t> GetTFLiteModel(absl::string_view model_type_str);
-  template <typename TfLiteModelTypeT,
-            typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT>>>
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
   litert::BufferRef<uint8_t> GetTFLiteModel(TfLiteModelTypeT model_type) {
     return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
   }
 
-  litert::BufferRef<uint8_t> GetTFLiteWeights(ModelType model_type);
+  litert::BufferRef<uint8_t> GetTFLiteWeights(
+      proto::LlmMetadata::TfLiteModelType model_type);
   litert::BufferRef<uint8_t> GetTFLiteWeights(absl::string_view model_type_str);
 
   // Returns the TFLite model backend constraint.
   // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type);
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       absl::string_view model_type_str);
 
   // Returns the TFLite model section buffer's prefer activation type.
   // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type);
   std::optional<std::string> GetTFLiteModelPreferActivationType(
       absl::string_view model_type_str);
 
