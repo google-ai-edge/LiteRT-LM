@@ -1,0 +1,56 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Which matters more on a phone: prefill speed or decode speed? Answer briefly."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "\n\nDecode speed matters more, because it sets how quickly the user sees each word."
+        }
+      ],
+      "channels": {
+        "thought": "The user wants a short answer. Decode dominates the perceived latency.\n"
+      }
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "And for a 2B model?"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": ""
+        }
+      ],
+      "channels": {
+        "thought": "This turn ran out of tokens while thinking"
+      }
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Summarize our conversation in one sentence."
+        }
+      ]
+    }
+  ],
+  "add_generation_prompt": true
+}

@@ -1,0 +1,28 @@
+# proto-file: runtime/proto/llm_metadata.proto
+# proto-message: LlmMetadataProto
+
+stop_tokens {
+  token_str: "<|im_end|>"
+}
+# generation_config.json of the vendor checkpoint: temperature 1.0, top_p 0.95 (no top_k).
+sampler_params {
+  type: TOP_P
+  k: 40
+  p: 0.95
+  temperature: 1.0
+}
+max_num_tokens: 4096
+llm_model_type {
+  generic_model {
+  }
+}
+# Granite 4.2 is a thinking model: the generation prompt pre-opens the thought
+# channel (`<think>\n`) unless enable_thinking is false, in which case the template
+# emits the closed pair `<think></think>` and the model answers directly.
+supports_thinking: true
+jinja_prompt_template: "{%- macro format_content(content) -%}\n    {%- for item in content -%}\n        {%- if item[\'type\'] == \'text\' -%}\n            {{- item[\'text\'] -}}\n        {%- elif item[\'type\'] == \'tool_response\' -%}\n            {%- if item[\'response\'] is mapping or item[\'response\'] is sequence -%}\n                {{- item[\'response\'] | tojson -}}\n            {%- else -%}\n                {{- item[\'response\'] | string -}}\n            {%- endif -%}\n        {%- endif -%}\n    {%- endfor -%}\n{%- endmacro -%}\n\n{%- macro render_tool_calls(tool_calls) -%}\n    {%- for tool_call in tool_calls -%}\n        {%- set function = tool_call[\'function\'] if \'function\' in tool_call else tool_call -%}\n        {{- \'<tool_call>\\n<function=\' + function[\'name\'] + \'>\\n\' -}}\n        {%- if function[\'arguments\'] is mapping -%}\n            {%- for name, value in function[\'arguments\'] | items -%}\n                {%- if value is mapping or (value is sequence and value is not string) -%}\n                    {{- \'<parameter=\' + name + \'>\\n\' + (value | tojson) + \'\\n</parameter>\\n\' -}}\n                {%- else -%}\n                    {{- \'<parameter=\' + name + \'>\\n\' + (value | string) + \'\\n</parameter>\\n\' -}}\n                {%- endif -%}\n            {%- endfor -%}\n        {%- elif function[\'arguments\'] is string -%}\n            {{- function[\'arguments\'] + \'\\n\' -}}\n        {%- endif -%}\n        {{- \'</function>\\n</tool_call>\\n\' -}}\n    {%- endfor -%}\n{%- endmacro -%}\n\n{%- set is_first_system = messages[0][\'role\'] == \'system\' -%}\n{%- set loop_messages = messages[1:] if is_first_system else messages -%}\n{%- set system_content = format_content(messages[0][\'content\']) if is_first_system and messages[0][\'content\'] else \'\' -%}\n{#- The system turn is always rendered, empty when no system message is given (as in the vendor template). -#}\n{{- \'<|im_start|>system\\n\' + system_content -}}\n{%- if tools -%}\n    {%- if system_content -%}\n        {{- \'\\n\\n\' -}}\n    {%- endif -%}\n    {{- \'# Tools\\n\\nYou have access to the following functions:\\n\\n<tools>\' -}}\n    {%- for tool in tools -%}\n        {%- set function = tool[\'function\'] if \'function\' in tool else tool -%}\n        {{- \'\\n\' + (function | tojson) -}}\n    {%- endfor -%}\n    {{- \'\\n</tools>\' -}}\n    {{- \'\\n\\nIf you choose to call a function ONLY reply in the following format with NO suffix:\\n\\n<tool_call>\\n<function=example_function_name>\\n<parameter=example_parameter_1>\\nvalue_1\\n</parameter>\\n<parameter=example_parameter_2>\\nThis is the value for the second parameter\\nthat can span\\nmultiple lines\\n</parameter>\\n</function>\\n</tool_call>\\n\\n<IMPORTANT>\\nReminder:\\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\\n- Required parameters MUST be specified\\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\\n</IMPORTANT>\' -}}\n{%- endif -%}\n{{- \'<|im_end|>\\n\' -}}\n\n{%- for message in loop_messages -%}\n    {%- if message[\'role\'] == \'user\' or message[\'role\'] == \'system\' -%}\n        {{- \'<|im_start|>\' + message[\'role\'] + \'\\n\' + format_content(message[\'content\']) + \'<|im_end|>\\n\' -}}\n    {%- elif message[\'role\'] == \'assistant\' -%}\n        {#- Past assistant turns render as the vendor template renders history: the reasoning is replaced by an empty <think></think> pair. -#}\n        {%- set content = format_content(message[\'content\']) -%}\n        {%- if message[\'tool_calls\'] -%}\n            {{- \'<|im_start|>assistant\\n<think></think>\' + (content | trim) + \'\\n\' -}}\n            {{- render_tool_calls(message[\'tool_calls\']) -}}\n        {%- else -%}\n            {{- \'<|im_start|>assistant\\n\' + ((\'<think></think>\' + content) | trim) -}}\n        {%- endif -%}\n        {{- \'<|im_end|>\\n\' -}}\n    {%- elif message[\'role\'] == \'tool\' -%}\n        {%- if loop.first or loop_messages[loop.index0 - 1][\'role\'] != \'tool\' -%}\n            {{- \'<|im_start|>user\\n\' -}}\n        {%- endif -%}\n        {%- for item in message[\'content\'] -%}\n            {{- \'<tool_response>\\n\' + format_content([item]) + \'\\n</tool_response>\\n\' -}}\n        {%- endfor -%}\n        {%- if loop.last or loop_messages[loop.index0 + 1][\'role\'] != \'tool\' -%}\n            {{- \'<|im_end|>\\n\' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n\n{%- if add_generation_prompt -%}\n    {%- if enable_thinking | default(true) -%}\n        {{- \'<|im_start|>assistant\\n<think>\\n\' -}}\n    {%- else -%}\n        {{- \'<|im_start|>assistant\\n<think></think>\' -}}\n    {%- endif -%}\n{%- endif -%}\n"
+channels {
+  channel_name: "thought"
+  start: "<think>"
+  end: "</think>"
+}
