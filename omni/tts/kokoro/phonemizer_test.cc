@@ -379,6 +379,18 @@ TEST(PhonemizerTest, BritishEnglishPhonemization) {
   EXPECT_GT(tokens.size(), 2);
 }
 
+TEST(PhonemizerTest, DevanagariDandaPunctuation) {
+  // Regression test: Devanagari danda '।' (U+0964) should be recognized as
+  // sentence-ending punctuation and mapped to '.', rather than swallowed or
+  // glued to the preceding word.
+  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("hi"));
+  EXPECT_EQ(phonemizer->Language(), "hi");
+
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("नमस्ते।"));
+  EXPECT_FALSE(ipa.empty());
+  EXPECT_TRUE(absl::StrContains(ipa, "."));
+}
+
 TEST(PhonemizerTest, NonAsciiUtf8Tokenization) {
   absl::flat_hash_map<std::string, std::string> lexicon = {
       {"español", "esˈpaɲol"},
@@ -653,6 +665,24 @@ TEST(PhonemizerTest, SpanishPhonemization) {
   const auto& vocab = GetKokoroVocabMap();
   int jota_token = vocab.at("x");
   EXPECT_THAT(tokens, ::testing::Contains(jota_token));
+}
+
+TEST(PhonemizerTest, HindiPhonemization) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("hi"));
+  EXPECT_EQ(phonemizer->Language(), "hi");
+
+  std::string text = "नमस्ते भारत";
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
+  EXPECT_FALSE(ipa.empty()) << "Hindi IPA should not be empty.";
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds(text));
+  EXPECT_GE(tokens.size(), 2);
+  EXPECT_EQ(tokens.front(), 0);  // BOS
+  EXPECT_EQ(tokens.back(), 0);   // EOS
+  // Verify that phoneme tokens were produced between BOS and EOS.
+  EXPECT_GT(tokens.size(), 2)
+      << "Expected non-empty phoneme sequence for Hindi text.";
 }
 
 void AppendDouble(double value, std::string& out) {
@@ -1033,19 +1063,21 @@ TEST(PhonemizerTest, SpanishUsesSpanishG2pWithoutEspeak) {
               ::absl_testing::IsOkAndHolds("kokˈoɾo"));
 }
 
-#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
-TEST(PhonemizerTest, DevanagariDandaPunctuation) {
-  // Regression test: Devanagari danda '।' (U+0964) should be recognized as
-  // sentence-ending punctuation and mapped to '.', rather than swallowed or
-  // glued to the preceding word.
-  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("hi"));
+TEST(PhonemizerTest, HindiUsesHindiG2pWithoutEspeak) {
+  absl::flat_hash_map<std::string, std::string> custom_lexicon = {
+      {"कोकोरो", "koːkˈoːɾoː"},
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer,
+      KokoroPhonemizer::Create(/*espeak_data_dir=*/"", "hi", custom_lexicon));
   EXPECT_EQ(phonemizer->Language(), "hi");
-
-  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("नमस्ते।"));
-  EXPECT_FALSE(ipa.empty());
-  EXPECT_TRUE(absl::StrContains(ipa, "."));
+  EXPECT_THAT(phonemizer->TextToIpa("नमस्ते भारत।"),
+              ::absl_testing::IsOkAndHolds("nəmˈʌsteː bʰˈaːɾət."));
+  EXPECT_THAT(phonemizer->WordToIpa("कोकोरो"),
+              ::absl_testing::IsOkAndHolds("koːkˈoːɾoː"));
 }
 
+#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
 TEST(PhonemizerTest, FrenchPhonemization) {
   // Regression test: "fr-fr" is not a name `espeak_SetVoiceByName` resolves, so
   // French used to fail on every word and produce no phonemes at all.
@@ -1150,24 +1182,6 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
     }
     EXPECT_TRUE(tokens_matched);
   }
-}
-
-TEST(PhonemizerTest, HindiPhonemization) {
-  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("hi"));
-  EXPECT_EQ(phonemizer->Language(), "hi");
-
-  std::string text = "नमस्ते भारत";
-  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
-  EXPECT_FALSE(ipa.empty()) << "Hindi IPA should not be empty.";
-
-  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
-                       phonemizer->TextToPhonemeIds(text));
-  EXPECT_GE(tokens.size(), 2);
-  EXPECT_EQ(tokens.front(), 0);  // BOS
-  EXPECT_EQ(tokens.back(), 0);   // EOS
-  // Verify that phoneme tokens were produced between BOS and EOS.
-  EXPECT_GT(tokens.size(), 2)
-      << "Expected non-empty phoneme sequence for Hindi text.";
 }
 
 TEST(PhonemizerTest, ItalianPhonemization) {
