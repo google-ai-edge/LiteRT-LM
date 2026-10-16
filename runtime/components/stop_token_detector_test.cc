@@ -26,6 +26,8 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::status::IsOkAndHolds;
+
 TEST(StopTokenDetectorTest, AddStopSequence) {
   StopTokenDetector detector(1);
   EXPECT_TRUE(detector.AddStopTokenSequence({1, 2, 3}).ok());
@@ -132,6 +134,53 @@ TEST(StopTokenDetectorTest, ResetBatch) {
   // Batch is not done after reset.
   EXPECT_FALSE(detector.AllDone().value());
   EXPECT_EQ(0, detector.GetStepsBeforeStopTokens()[0]);
+}
+
+TEST(StopTokenDetectorTest, MarkForRollback) {
+  StopTokenDetector detector(1);
+  EXPECT_OK(detector.AddStopTokenSequence({5}));
+  EXPECT_OK(detector.AddStopTokenSequence({7}));
+  EXPECT_OK(detector.AddStopTokenSequence({8, 9}));
+  EXPECT_TRUE(detector.MarkForRollback(7));
+  // Only single token stop sequences that were added can be marked.
+  EXPECT_FALSE(detector.MarkForRollback(8));
+  EXPECT_FALSE(detector.MarkForRollback(3));
+
+  std::vector<int> marked_token = {7};
+  EXPECT_OK(detector.ProcessTokens(absl::MakeSpan(marked_token)));
+  EXPECT_THAT(detector.AllDone(), IsOkAndHolds(true));
+  EXPECT_TRUE(detector.EndsWithRollbackToken(0));
+
+  // A token after the stop, such as in benchmark mode, ends the match.
+  std::vector<int> next_token = {1};
+  EXPECT_OK(detector.ProcessTokens(absl::MakeSpan(next_token)));
+  EXPECT_THAT(detector.AllDone(), IsOkAndHolds(true));
+  EXPECT_FALSE(detector.EndsWithRollbackToken(0));
+
+  // ResetBatch() clears the stop state but keeps the mark.
+  detector.ResetBatch();
+  EXPECT_FALSE(detector.EndsWithRollbackToken(0));
+  std::vector<int> unmarked_token = {5};
+  EXPECT_OK(detector.ProcessTokens(absl::MakeSpan(unmarked_token)));
+  EXPECT_THAT(detector.AllDone(), IsOkAndHolds(true));
+  EXPECT_FALSE(detector.EndsWithRollbackToken(0));
+
+  detector.ResetBatch();
+  EXPECT_OK(detector.ProcessTokens(absl::MakeSpan(marked_token)));
+  EXPECT_TRUE(detector.EndsWithRollbackToken(0));
+}
+
+TEST(StopTokenDetectorTest, EndsWithRollbackTokenPerBatchItem) {
+  StopTokenDetector detector(2);  // Batch size 2
+  EXPECT_OK(detector.AddStopTokenSequence({5}));
+  EXPECT_OK(detector.AddStopTokenSequence({7}));
+  EXPECT_TRUE(detector.MarkForRollback(7));
+
+  std::vector<int> tokens = {7, 5};
+  EXPECT_OK(detector.ProcessTokens(absl::MakeSpan(tokens)));
+  EXPECT_THAT(detector.AllDone(), IsOkAndHolds(true));
+  EXPECT_TRUE(detector.EndsWithRollbackToken(0));
+  EXPECT_FALSE(detector.EndsWithRollbackToken(1));
 }
 
 }  // namespace

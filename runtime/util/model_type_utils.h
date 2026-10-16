@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MODEL_TYPE_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MODEL_TYPE_UTILS_H_
 
+#include <optional>
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -41,6 +42,17 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 
 // Get the model type name for the given model type.
 absl::string_view GetModelTypeName(const proto::LlmModelType& model_type);
+
+// Returns the ID of the stop token that the prompt template of `model_type`
+// writes again at the start of the next input, or std::nullopt if there is
+// none. Decoding rolls this token back when it stops on it, so the KV cache
+// does not hold it twice (see StopTokenDetector::MarkForRollback()). Only
+// Gemma 4 has one: the `function_response_start` of its model file (such as
+// `<|tool_response>`), which starts each tool response. FunctionGemma also has
+// a `function_response_start`, but its template ends a trailing tool call turn
+// with it, so it is not written twice.
+std::optional<int> GetRollbackStopTokenId(const proto::LlmModelType& model_type,
+                                          Tokenizer& tokenizer);
 
 }  // namespace litert::lm
 

@@ -15,6 +15,7 @@
 #include "runtime/util/model_type_utils.h"
 
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -417,6 +418,41 @@ absl::string_view GetModelTypeName(const proto::LlmModelType& model_type) {
       return "Not set";
   }
   return "Unknown";
+}
+
+std::optional<int> GetRollbackStopTokenId(const proto::LlmModelType& model_type,
+                                          Tokenizer& tokenizer) {
+  absl::string_view function_response_start;
+  // No default case, so that a new model type fails to compile until it is
+  // handled here.
+  switch (model_type.model_type_case()) {
+    case proto::LlmModelType::kGemma4:
+      function_response_start = model_type.gemma4().function_response_start();
+      break;
+    case proto::LlmModelType::kFunctionGemma:
+      // Its template ends a trailing tool call turn with
+      // `function_response_start`, so the stop token is not written twice.
+      break;
+    case proto::LlmModelType::kGenericModel:
+    case proto::LlmModelType::kGemma3N:
+    case proto::LlmModelType::kGemma3:
+    case proto::LlmModelType::kQwen3:
+    case proto::LlmModelType::kQwen2P5:
+    case proto::LlmModelType::kFastVlm:
+    case proto::LlmModelType::kLfm2:
+    case proto::LlmModelType::kMinicpm5:
+    case proto::LlmModelType::kMinicpmv4:
+    case proto::LlmModelType::MODEL_TYPE_NOT_SET:
+      break;
+  }
+  if (function_response_start.empty()) {
+    return std::nullopt;
+  }
+  absl::StatusOr<int> token_id = tokenizer.TokenToId(function_response_start);
+  if (!token_id.ok()) {
+    return std::nullopt;
+  }
+  return *token_id;
 }
 
 }  // namespace litert::lm

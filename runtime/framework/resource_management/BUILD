@@ -89,6 +89,7 @@ THREADED_EXECUTION_MANAGER_COMMON_DEPS = [
     "//runtime/util:convert_tensor_buffer",
     "//runtime/util:executor_data_util",
     "//runtime/util:litert_status_util",
+    "//runtime/util:model_type_utils",
     "//runtime/util:tensor_buffer_util",
 ]
 
@@ -169,6 +170,7 @@ SERIAL_EXECUTION_MANAGER_COMMON_DEPS = [
     "//runtime/util:convert_tensor_buffer",
     "//runtime/util:executor_data_util",
     "//runtime/util:litert_status_util",
+    "//runtime/util:model_type_utils",
     "//runtime/util:tensor_buffer_util",
 ]
 
@@ -231,6 +233,7 @@ cc_test(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:model_resources",
+        "//runtime/components:stop_token_detector",
         "//runtime/components/constrained_decoding:fake_constraint",
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",

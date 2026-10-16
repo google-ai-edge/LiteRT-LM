@@ -42,6 +42,7 @@
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
@@ -311,6 +312,40 @@ TEST_P(ExecutionManagerTest, GetMutableBenchmarkInfoFailsIfNoBenchmarkInfo) {
                        execution_manager_->RegisterNewSession(session_config));
   EXPECT_THAT(execution_manager_->GetMutableBenchmarkInfo(session_id),
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_P(ExecutionManagerTest, MarksGemma4ToolResponseStartForRollback) {
+  constexpr int kToolResponseStartId = 7;
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor());
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.GetMutableLlmModelType()
+      .mutable_gemma4()
+      ->set_function_response_start("<|tool_response>");
+  session_config.GetMutableStopTokenIds().push_back({kToolResponseStartId});
+  EXPECT_CALL(*tokenizer_, TokenToId("<|tool_response>"))
+      .WillRepeatedly(Return(kToolResponseStartId));
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  // Clone the session like SessionAdvanced::CloneAsync() does. The clone task
+  // replaces the stop token detector of the cloned session.
+  ASSERT_OK_AND_ASSIGN(const SessionId cloned_session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddCloneSessionTask(
+      session_id, task_id, {}, cloned_session_id,
+      std::make_shared<std::atomic<bool>>(false),
+      [](absl::StatusOr<Responses> responses) { ASSERT_OK(responses); }));
+  EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+
+  for (const SessionId id : {session_id, cloned_session_id}) {
+    ASSERT_OK_AND_ASSIGN(auto session_info,
+                         execution_manager_->GetSessionInfo(id));
+    StopTokenDetector& stop_token_detector = *session_info->stop_token_detector;
+    std::vector<int> token = {kToolResponseStartId};
+    ASSERT_OK(stop_token_detector.ProcessTokens(absl::MakeSpan(token)));
+    EXPECT_TRUE(stop_token_detector.EndsWithRollbackToken(0));
+  }
 }
 
 TEST_P(ExecutionManagerTest, AddPrefillTask) {

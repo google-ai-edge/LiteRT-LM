@@ -1434,15 +1434,17 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
   const ResolvedPrefillSignatures active_sigs = BuildResolvedPrefillSignatures(
       runner_size, ActiveContextGroup().context_size);
 
+  // Roll back before reading the pending input token, as Decode() does, so a
+  // token dropped by SetCurrentStep() is not prefilled.
+  if (processed_tokens_.TokenCount() != current_step_) {
+    LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(current_step_));
+  }
   auto [internal_start_step, pending_input_token] =
       processed_tokens_.GetNextUnprocessedToken();
   auto start_prepare_inputs = absl::Now();
   std::vector<int> tokens_to_embed;
   tokens_to_embed.reserve(ids.size());
 
-  if (processed_tokens_.TokenCount() != current_step_) {
-    LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(current_step_));
-  }
   // Check if we have a pending input token, e.g. because we are running a
   // multi-turn conversation or a multi-chunk prefill.
   std::vector<int32_t> prefill_positions;
