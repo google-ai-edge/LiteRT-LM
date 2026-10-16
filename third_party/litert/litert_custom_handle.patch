@@ -1,0 +1,272 @@
+diff --git litert/c/BUILD litert/c/BUILD
+--- litert/c/BUILD
++++ litert/c/BUILD
+@@ -460,6 +460,7 @@ cc_test(
+     deps = [
+         ":litert_any",
+         ":litert_common",
++        ":litert_custom_tensor_buffer",
+         ":litert_environment",
+         ":litert_environment_options",
+         ":litert_model_types",
+@@ -518,6 +519,7 @@ cc_test(
+ #     deps = [
+ #         ":litert_any",
+ #         ":litert_common",
++#         ":litert_custom_tensor_buffer",
+ #         ":litert_environment",
+ #         ":litert_environment_options",
+ #         ":litert_model_types",
+diff --git litert/c/internal/litert_runtime_api_export.cc litert/c/internal/litert_runtime_api_export.cc
+--- litert/c/internal/litert_runtime_api_export.cc
++++ litert/c/internal/litert_runtime_api_export.cc
+@@ -280,3 +280,5 @@ extern "C" LITERT_CAPI_EXPORT const LiteRtRuntimeCApiStruct
+             LiteRtGetAcceleratorDelegationMetricsDelegatedNodeCount,
+         .litert_get_accelerator_delegation_metrics_partition_count =
+             LiteRtGetAcceleratorDelegationMetricsPartitionCount,
++        .litert_create_tensor_buffer_from_custom_handle =
++            LiteRtCreateTensorBufferFromCustomHandle,
+diff --git litert/c/internal/litert_runtime_c_api.h litert/c/internal/litert_runtime_c_api.h
+--- litert/c/internal/litert_runtime_c_api.h
++++ litert/c/internal/litert_runtime_c_api.h
+@@ -46,7 +46,7 @@ extern "C" {
+ // LiteRT CompiledModels ABI version number, in semver 2 format
+ // (see https://semver.org).  This is the ABI version number for
+ // the methods in LiteRtRuntimeCApiStruct, which is defined below.
+-#define LITERT_RUNTIME_ABI_VERSION "1.2.0"
++#define LITERT_RUNTIME_ABI_VERSION "1.3.0"
+ // TODO(b/493650900): declare that as an extern const (and
+ // initialize it in a .cc file) rather than using a macro.
+ 
+@@ -799,4 +799,10 @@ typedef struct LiteRtRuntimeCApiStruct {
+   // This API was added in version 1.2.0.
+   LiteRtStatus (*litert_get_accelerator_delegation_metrics_partition_count)(
+       LiteRtAcceleratorDelegationMetricsConst metrics, int* partition_count);
++  // litert_tensor_buffer.h: LiteRtCreateTensorBufferFromCustomHandle
++  // This API was added in version 1.3.0.
++  LiteRtStatus (*litert_create_tensor_buffer_from_custom_handle)(
++      LiteRtEnvironment env, const LiteRtRankedTensorType* tensor_type,
++      LiteRtTensorBufferType buffer_type, HwMemoryHandle handle,
++      size_t buffer_size, LiteRtTensorBuffer* buffer);
+ } LiteRtRuntimeCApiStruct;
+diff --git litert/c/litert_runtime_c_api_so_symbols.txt litert/c/litert_runtime_c_api_so_symbols.txt
+--- litert/c/litert_runtime_c_api_so_symbols.txt
++++ litert/c/litert_runtime_c_api_so_symbols.txt
+@@ -85,6 +85,7 @@ LiteRtCreateOpaqueOptions
+ LiteRtCreateOptions
+ LiteRtCreateProfiler
+ LiteRtCreateTensorBufferFromAhwb
++LiteRtCreateTensorBufferFromCustomHandle
+ LiteRtCreateTensorBufferFromDmaBufBuffer
+ LiteRtCreateTensorBufferFromFastRpcBuffer
+ LiteRtCreateTensorBufferFromGlBuffer
+diff --git litert/c/litert_tensor_buffer.cc litert/c/litert_tensor_buffer.cc
+--- litert/c/litert_tensor_buffer.cc
++++ litert/c/litert_tensor_buffer.cc
+@@ -189,6 +189,22 @@ LiteRtStatus LiteRtCreateTensorBufferFromOpenClMemory(
+ #endif  // LITERT_HAS_OPENCL_SUPPORT
+ }
+ 
++LiteRtStatus LiteRtCreateTensorBufferFromCustomHandle(
++    LiteRtEnvironment env, const LiteRtRankedTensorType* tensor_type,
++    LiteRtTensorBufferType buffer_type, HwMemoryHandle handle,
++    size_t buffer_size, LiteRtTensorBuffer* buffer) {
++  LITERT_PERFETTO_TRACE_EVENT("LiteRT TensorBuffer Allocation");
++  if (!tensor_type || !buffer) {
++    return kLiteRtStatusErrorInvalidArgument;
++  }
++  LITERT_ASSIGN_OR_RETURN(
++      auto created_tensor_buffer,
++      LiteRtTensorBufferT::CreateFromCustomHandle(
++          env, *tensor_type, buffer_type, handle, buffer_size));
++  *buffer = created_tensor_buffer.release();
++  return kLiteRtStatusOk;
++}
++
+ LiteRtStatus LiteRtGetTensorBufferOpenClMemory(LiteRtTensorBuffer tensor_buffer,
+                                                LiteRtClMem* cl_mem_addr) {
+ #if LITERT_HAS_OPENCL_SUPPORT
+diff --git litert/c/litert_tensor_buffer.h litert/c/litert_tensor_buffer.h
+--- litert/c/litert_tensor_buffer.h
++++ litert/c/litert_tensor_buffer.h
+@@ -176,6 +176,19 @@ LiteRtStatus LiteRtCreateTensorBufferFromOpenClMemory(
+     size_t opencl_buffer_size, LiteRtOpenClDeallocator deallocator,
+     LiteRtTensorBuffer* buffer);
+ 
++// Create a tensor buffer of a custom `buffer_type` (e.g.
++// kLiteRtTensorBufferTypeOpenVINOTensorBuffer) from `handle`, using the
++// import_func registered for that buffer type. `handle` is the custom handle
++// of an existing buffer of that type, as returned by
++// LiteRtGetTensorBufferCustomTensorBufferHandle, so this can create a view of
++// `tensor_type` onto that buffer's memory (e.g. a smaller-context KV cache
++// onto the largest one). The returned buffer does not own the memory; the
++// caller must keep the source buffer alive for the returned buffer's lifetime.
++LiteRtStatus LiteRtCreateTensorBufferFromCustomHandle(
++    LiteRtEnvironment env, const LiteRtRankedTensorType* tensor_type,
++    LiteRtTensorBufferType buffer_type, HwMemoryHandle handle,
++    size_t buffer_size, LiteRtTensorBuffer* buffer);
++
+ // Return an error if the backing buffer is not a OpenCL memory.
+ //
+ // @warning kLiteRtStatusErrorUnsupported is returned if OPENCL is not
+diff --git litert/c/windows_exported_symbols.def litert/c/windows_exported_symbols.def
+--- litert/c/windows_exported_symbols.def
++++ litert/c/windows_exported_symbols.def
+@@ -103,6 +103,7 @@ EXPORTS
+   LiteRtCreateOptions
+   LiteRtCreateProfiler
+   LiteRtCreateTensorBufferFromAhwb
++  LiteRtCreateTensorBufferFromCustomHandle
+   LiteRtCreateTensorBufferFromDmaBufBuffer
+   LiteRtCreateTensorBufferFromFastRpcBuffer
+   LiteRtCreateTensorBufferFromGlBuffer
+diff --git litert/cc/internal/litert_runtime_proxy.h litert/cc/internal/litert_runtime_proxy.h
+--- litert/cc/internal/litert_runtime_proxy.h
++++ litert/cc/internal/litert_runtime_proxy.h
+@@ -877,6 +877,15 @@ class RuntimeProxy {
+                                opencl_buffer_size, deallocator, buffer);
+   }
+ 
++  LiteRtStatus CreateTensorBufferFromCustomHandle(
++      LiteRtEnvironment env, const LiteRtRankedTensorType* tensor_type,
++      LiteRtTensorBufferType buffer_type, HwMemoryHandle handle,
++      size_t buffer_size, LiteRtTensorBuffer* buffer) {
++    LITERT_PROXY_METHOD_STATUS(litert_create_tensor_buffer_from_custom_handle,
++                               env, tensor_type, buffer_type, handle,
++                               buffer_size, buffer);
++  }
++
+   LiteRtStatus GetTensorBufferOpenClMemory(LiteRtTensorBuffer tensor_buffer,
+                                            LiteRtClMem* cl_mem_addr) {
+     LITERT_PROXY_METHOD_STATUS(litert_get_tensor_buffer_opencl_memory,
+diff --git litert/cc/litert_tensor_buffer.h litert/cc/litert_tensor_buffer.h
+--- litert/cc/litert_tensor_buffer.h
++++ litert/cc/litert_tensor_buffer.h
+@@ -287,6 +287,27 @@ class TensorBuffer : public internal::BaseHandle<LiteRtTensorBuffer> {
+ #endif
+   }
+ 
++  /// @brief Wraps an existing handle as a tensor buffer of a custom
++  /// `buffer_type` (e.g. kLiteRtTensorBufferTypeOpenVINOTensorBuffer), via that
++  /// type's registered import handler. `handle` is the custom handle of an
++  /// existing buffer of that type, as returned by `GetCustomHandle()`, so this
++  /// can create a view of `tensor_type` onto that buffer's memory. The
++  /// returned buffer does not own the memory; the caller keeps the source
++  /// buffer alive.
++  static Expected<TensorBuffer> CreateFromCustomHandle(
++      const Environment& env, const RankedTensorType& tensor_type,
++      TensorBufferType buffer_type, HwMemoryHandle handle, size_t size_bytes) {
++    LiteRtTensorBuffer tensor_buffer;
++    auto litert_tensor_type = static_cast<LiteRtRankedTensorType>(tensor_type);
++    auto env_holder = env.GetHolder();
++    LITERT_RETURN_IF_ERROR(
++        env_holder.runtime->CreateTensorBufferFromCustomHandle(
++            env_holder.handle, &litert_tensor_type,
++            static_cast<LiteRtTensorBufferType>(buffer_type), handle,
++            size_bytes, &tensor_buffer));
++    return TensorBuffer(env_holder, tensor_buffer, OwnHandle::kYes);
++  }
++
+   static Expected<TensorBuffer> CreateFromClBuffer(
+       const Environment& env, const RankedTensorType& tensor_type,
+       TensorBufferType buffer_type, LiteRtClMem cl_memory, size_t size_bytes) {
+@@ -468,6 +489,18 @@ class TensorBuffer : public internal::BaseHandle<LiteRtTensorBuffer> {
+ #endif
+   }
+ 
++  /// @brief Returns the handle of a custom tensor buffer (buffer types in the
++  /// `kLiteRtTensorBufferTypeUserCustomBuffer` range). What the handle is
++  /// depends on the buffer type's provider; it can be passed to
++  /// `CreateFromCustomHandle()` with the same buffer type.
++  Expected<HwMemoryHandle> GetCustomHandle() const {
++    HwMemoryHandle hw_memory_handle;
++    LITERT_RETURN_IF_ERROR(
++        env_.runtime->GetTensorBufferCustomTensorBufferHandle(
++            Get(), &hw_memory_handle));
++    return hw_memory_handle;
++  }
++
+   Expected<HwMemoryHandle> GetWebGpuBuffer() const {
+ #if LITERT_HAS_WEBGPU_SUPPORT
+     HwMemoryHandle hw_memory_handle;
+diff --git litert/runtime/tensor_buffer.cc litert/runtime/tensor_buffer.cc
+--- litert/runtime/tensor_buffer.cc
++++ litert/runtime/tensor_buffer.cc
+@@ -20,7 +20,6 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <memory>
+-#include <optional>
+ #include <string>
+ #include <utility>
+ #include <variant>
+@@ -36,10 +35,8 @@
+ #include "absl/strings/str_cat.h"  // from @com_google_absl
+ #include "absl/types/span.h"  // from @com_google_absl
+ #include "litert/c/internal/litert_logging.h"
+-#include "litert/c/internal/litert_tensor_buffer_registry.h"
+-#include "litert/c/litert_any.h"
+ #include "litert/c/litert_common.h"
+-#include "litert/c/litert_environment_options.h"
++#include "litert/c/litert_custom_tensor_buffer.h"
+ #include "litert/c/litert_model_types.h"
+ #include "litert/c/litert_tensor_buffer_types.h"
+ #include "litert/c/litert_webgpu_types.h"
+@@ -50,7 +47,6 @@
+ #include "litert/core/util/tensor_type_util.h"
+ #include "litert/runtime/custom_buffer.h"
+ #include "litert/runtime/event.h"
+-#include "litert/runtime/tensor_buffer_registry.h"
+ 
+ #if LITERT_HAS_OPENCL_SUPPORT
+ #include "litert/runtime/open_cl_memory.h"
+@@ -456,6 +452,24 @@ LiteRtTensorBufferT::CreateManagedFastRpcBuffer(
+ }
+ #endif  // LITERT_HAS_FASTRPC_SUPPORT
+ 
++Expected<LiteRtTensorBufferT::Ptr> LiteRtTensorBufferT::CreateFromCustomHandle(
++    LiteRtEnvironment env, const LiteRtRankedTensorType& tensor_type,
++    LiteRtTensorBufferType buffer_type, HwMemoryHandle handle,
++    size_t buffer_size) {
++  LITERT_ASSIGN_OR_RETURN(size_t packed_size,
++                          GetNumPackedBytesAllowEmptyScalar(tensor_type));
++  LITERT_ASSIGN_OR_RETURN(
++      auto custom_buffer,
++      litert::internal::CustomBuffer::Wrap(env, tensor_type, buffer_type,
++                                           handle, buffer_size, packed_size));
++
++  Ptr tensor_buffer(
++      new LiteRtTensorBufferT(env, tensor_type, buffer_type, buffer_size));
++  tensor_buffer->buffer_.emplace<litert::internal::CustomBuffer>(
++      std::move(custom_buffer));
++  return tensor_buffer;
++}
++
+ #if LITERT_HAS_OPENCL_SUPPORT
+ Expected<LiteRtTensorBufferT::Ptr> LiteRtTensorBufferT::CreateFromOpenClMemory(
+     LiteRtEnvironment env, const LiteRtRankedTensorType& tensor_type,
+diff --git litert/runtime/tensor_buffer.h litert/runtime/tensor_buffer.h
+--- litert/runtime/tensor_buffer.h
++++ litert/runtime/tensor_buffer.h
+@@ -28,6 +28,7 @@
+ #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+ #include "absl/types/span.h"  // from @com_google_absl
+ #include "litert/c/litert_common.h"
++#include "litert/c/litert_custom_tensor_buffer.h"
+ #include "litert/c/litert_gl_types.h"
+ #include "litert/c/litert_layout.h"
+ #include "litert/c/litert_model_types.h"
+@@ -112,6 +113,13 @@ class LiteRtTensorBufferT {
+       const LiteRtRankedTensorType& tensor_type, size_t buffer_size,
+       size_t alignment);
+ 
++  // Wraps an existing handle as a custom tensor buffer of `buffer_type`, via
++  // that type's registered import_func. The buffer does not own the handle.
++  static litert::Expected<Ptr> CreateFromCustomHandle(
++      LiteRtEnvironment env, const LiteRtRankedTensorType& tensor_type,
++      LiteRtTensorBufferType buffer_type, HwMemoryHandle handle,
++      size_t buffer_size);
++
+ #if LITERT_HAS_OPENCL_SUPPORT
+   static litert::Expected<Ptr> CreateFromOpenClMemory(
+       LiteRtEnvironment env, const LiteRtRankedTensorType& tensor_type,
