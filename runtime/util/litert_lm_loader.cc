@@ -81,14 +81,14 @@ bool IsValidTfLiteModelTypeWireString(absl::string_view model_type_str) {
       emb_type != proto::EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
-  proto::TtsMetadata::TfLiteModelType tts_type;
-  if (proto::TtsMetadata::TfLiteModelType_Parse(upper, &tts_type) &&
-      tts_type != proto::TtsMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+  proto::Text2SpeechMetadata::TfLiteModelType tts_type;
+  if (proto::Text2SpeechMetadata::TfLiteModelType_Parse(upper, &tts_type) &&
+      tts_type != proto::Text2SpeechMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
-  proto::AsrMetadata::TfLiteModelType asr_type;
-  if (proto::AsrMetadata::TfLiteModelType_Parse(upper, &asr_type) &&
-      asr_type != proto::AsrMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+  proto::Speech2TextMetadata::TfLiteModelType asr_type;
+  if (proto::Speech2TextMetadata::TfLiteModelType_Parse(upper, &asr_type) &&
+      asr_type != proto::Speech2TextMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
   proto::Text2ImageMetadata::TfLiteModelType image_gen_type;
@@ -550,14 +550,16 @@ std::optional<std::string> LitertLmLoader::GetTFLiteModelPreferActivationType(
   return std::nullopt;
 }
 
-std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetTtsMetadata() {
+std::optional<litert::BufferRef<uint8_t>>
+LitertLmLoader::GetText2SpeechMetadata() {
   return GetSectionBuffer(
-      BufferKey(schema::AnySectionDataType_TtsMetadataProto));
+      BufferKey(schema::AnySectionDataType_Text2SpeechMetadataProto));
 }
 
-std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetAsrMetadata() {
+std::optional<litert::BufferRef<uint8_t>>
+LitertLmLoader::GetSpeech2TextMetadata() {
   return GetSectionBuffer(
-      BufferKey(schema::AnySectionDataType_AsrMetadataProto));
+      BufferKey(schema::AnySectionDataType_Speech2TextMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>>

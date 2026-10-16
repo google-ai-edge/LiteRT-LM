@@ -17,7 +17,7 @@ syntax = "proto3";
 package litert.lm.proto;
 
 option java_multiple_files = true;
-option java_outer_classname = "AsrModelTypeOuterClass";
+option java_outer_classname = "Speech2TextModelTypeOuterClass";
 
 // Whisper ASR model.
 message Whisper {}
@@ -31,7 +31,7 @@ message Moonshine {}
 // Qwen3 ASR model.
 message Qwen3Asr {}
 
-message AsrModelType {
+message Speech2TextModelType {
   oneof model_type {
     Whisper whisper = 1;
     Parakeet parakeet = 2;

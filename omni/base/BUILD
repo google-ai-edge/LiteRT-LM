@@ -162,7 +162,6 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
         "//omni:omni_engine_header",
-        "//runtime/components:model_resources",
         "//runtime/core:engine_advanced_impl",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:asr_metadata_cc_proto",

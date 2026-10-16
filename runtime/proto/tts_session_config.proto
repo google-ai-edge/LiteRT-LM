@@ -17,21 +17,21 @@ syntax = "proto3";
 package litert.lm.proto;
 
 option java_multiple_files = true;
-option java_outer_classname = "TtsSessionConfigOuterClass";
+option java_outer_classname = "Text2SpeechSessionConfigOuterClass";
 
 // Text chunking configuration for streaming TTS sessions.
-message TtsTextChunkConfig {
+message Text2SpeechTextChunkConfig {
   repeated string delimiters = 1;
   optional bool include_delimiter = 2;
   optional int32 max_buffer_size = 3;
 }
 
 // Per-session configuration for Text-to-Speech (TTS) sessions.
-message TtsSessionConfig {
+message Text2SpeechSessionConfig {
   // Language in BCP-47 format (e.g., "en-US").
   optional string language = 1;
   // Speaker or voice identifier (e.g., "af_heart").
   optional string voice = 2;
   // Optional streaming text chunking configuration.
-  optional TtsTextChunkConfig text_chunk_config = 3;
+  optional Text2SpeechTextChunkConfig text_chunk_config = 3;
 }

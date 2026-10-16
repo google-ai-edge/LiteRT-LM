@@ -93,9 +93,11 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<const proto::EmbeddingMetadata*> GetEmbeddingMetadata()
       override;
 
-  absl::StatusOr<const proto::TtsMetadata*> GetTtsMetadata() override;
+  absl::StatusOr<const proto::Text2SpeechMetadata*> GetText2SpeechMetadata()
+      override;
 
-  absl::StatusOr<const proto::AsrMetadata*> GetAsrMetadata() override;
+  absl::StatusOr<const proto::Speech2TextMetadata*> GetSpeech2TextMetadata()
+      override;
 
   absl::StatusOr<const proto::Text2ImageMetadata*> GetText2ImageMetadata()
       override;
@@ -140,8 +142,8 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::flat_hash_map<std::string, std::unique_ptr<Tokenizer>> tokenizer_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
   std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_;
-  std::unique_ptr<proto::TtsMetadata> tts_metadata_;
-  std::unique_ptr<proto::AsrMetadata> asr_metadata_;
+  std::unique_ptr<proto::Text2SpeechMetadata> text2speech_metadata_;
+  std::unique_ptr<proto::Speech2TextMetadata> speech2text_metadata_;
   std::unique_ptr<proto::Text2ImageMetadata> text2image_metadata_;
   std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 };

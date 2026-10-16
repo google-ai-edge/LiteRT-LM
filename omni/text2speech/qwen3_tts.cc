@@ -53,9 +53,9 @@ constexpr absl::string_view kModelNames[] = {
     "qwen3-tts",
 };
 
-lm::proto::TtsMetadata ResolveMetadata(
+lm::proto::Text2SpeechMetadata ResolveMetadata(
     const MessageLite* absl_nullable metadata) {
-  lm::proto::TtsMetadata resolved;
+  lm::proto::Text2SpeechMetadata resolved;
   if (metadata != nullptr) {
     resolved.CheckTypeAndMergeFrom(*metadata);
   }
@@ -85,7 +85,7 @@ class Qwen3TtsSessionFactory : public TtsSessionFactory {
   Qwen3TtsSessionFactory(
       const OmniEngine::Settings& settings,
       const MessageLite* absl_nullable session_config,
-      const lm::proto::TtsMetadata& metadata,
+      const lm::proto::Text2SpeechMetadata& metadata,
       std::vector<std::string> available_voices,
       std::shared_ptr<ModelResources> absl_nullable model_resources,
       Qwen3TtsModelConfig config)
@@ -103,12 +103,13 @@ class Qwen3TtsSessionFactory : public TtsSessionFactory {
 
  protected:
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithTextSource(
-      const lm::proto::TtsSessionConfig& session_config,
+      const lm::proto::Text2SpeechSessionConfig& session_config,
       std::unique_ptr<StreamTextSource> absl_nullable text_source) override {
-    lm::proto::TtsSessionConfig effective = MergeSessionConfig(session_config);
+    lm::proto::Text2SpeechSessionConfig effective =
+        MergeSessionConfig(session_config);
     if (effective.language().empty()) {
       return absl::InvalidArgumentError(
-          "TtsSessionConfig::language must not be empty.");
+          "Text2SpeechSessionConfig::language must not be empty.");
     }
 
     if (text_source == nullptr) {
@@ -160,7 +161,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3TtsSessionFactory(
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected model_name: ", model_name));
   }
-  lm::proto::TtsMetadata resolved_metadata = ResolveMetadata(metadata);
+  lm::proto::Text2SpeechMetadata resolved_metadata = ResolveMetadata(metadata);
   Qwen3TtsModelConfig config;
   PopulateQwen3TtsConfigFromProto(
       resolved_metadata.tts_model_type().qwen3_tts(), config);
@@ -200,7 +201,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3TtsSessionFactory(
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetQwen3TtsSessionFactory,
-      .session_config_type_id = "Tts",
+      .session_config_type_id = "Text2Speech",
   }));
   return true;
 }();

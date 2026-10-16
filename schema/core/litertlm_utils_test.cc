@@ -40,10 +40,12 @@ TEST(LitertLmUtilsTest, AnySectionDataTypeToString) {
   EXPECT_EQ(
       AnySectionDataTypeToString(AnySectionDataType_EmbeddingMetadataProto),
       "AnySectionDataType_EmbeddingMetadataProto");
-  EXPECT_EQ(AnySectionDataTypeToString(AnySectionDataType_TtsMetadataProto),
-            "AnySectionDataType_TtsMetadataProto");
-  EXPECT_EQ(AnySectionDataTypeToString(AnySectionDataType_AsrMetadataProto),
-            "AnySectionDataType_AsrMetadataProto");
+  EXPECT_EQ(
+      AnySectionDataTypeToString(AnySectionDataType_Text2SpeechMetadataProto),
+      "AnySectionDataType_Text2SpeechMetadataProto");
+  EXPECT_EQ(
+      AnySectionDataTypeToString(AnySectionDataType_Speech2TextMetadataProto),
+      "AnySectionDataType_Speech2TextMetadataProto");
   EXPECT_EQ(
       AnySectionDataTypeToString(AnySectionDataType_Text2ImageMetadataProto),
       "AnySectionDataType_Text2ImageMetadataProto");

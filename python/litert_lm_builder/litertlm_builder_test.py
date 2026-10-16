@@ -1745,9 +1745,13 @@ pooling_kernel_size = 2
       unpacked_builder.build(f, validate_metadata=True)
     self.assertGreater(os.path.getsize(rebuild_file), 0)
 
-  def test_from_toml_with_asr_metadata(self):
-    """Tests that TOML with AsrMetadata and capability model types builds properly."""
-    asr_meta = asr_metadata_pb2.AsrMetadata()
+  @parameterized.named_parameters(
+      ("speech2text_metadata", "Speech2TextMetadata"),
+      ("asr_metadata_alias", "AsrMetadata"),
+  )
+  def test_from_toml_with_speech2text_metadata(self, section_type: str):
+    """Tests that TOML with Speech2TextMetadata and capability model types builds properly."""
+    asr_meta = asr_metadata_pb2.Speech2TextMetadata()
     asr_meta_path = self._create_dummy_file(
         "asr_meta.pb", asr_meta.SerializeToString()
     )
@@ -1762,7 +1766,7 @@ entries = [
 ]
 
 [[section]]
-section_type = "AsrMetadata"
+section_type = "{section_type}"
 data_path = "{asr_meta_path}"
 
 [[section]]
@@ -1773,14 +1777,18 @@ data_path = "{enc_dec_path}"
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Sections (2)", ss)
-    self.assertIn("Data Type:    AsrMetadataProto", ss)
+    self.assertIn("Data Type:    Speech2TextMetadataProto", ss)
     self.assertIn(
         "Key: model_type, Value (String): tf_lite_encoder_decoder", ss
     )
 
-  def test_from_toml_with_tts_metadata(self):
-    """Tests that TOML with TtsMetadata and capability model types builds properly."""
-    tts_meta = tts_metadata_pb2.TtsMetadata(
+  @parameterized.named_parameters(
+      ("text2speech_metadata", "Text2SpeechMetadata"),
+      ("tts_metadata_alias", "TtsMetadata"),
+  )
+  def test_from_toml_with_text2speech_metadata(self, section_type: str):
+    """Tests that TOML with Text2SpeechMetadata and capability model types builds properly."""
+    tts_meta = tts_metadata_pb2.Text2SpeechMetadata(
         output_sample_rate=24000, supported_languages=["en-US"]
     )
     tts_meta_path = self._create_dummy_file(
@@ -1801,7 +1809,7 @@ entries = [
 ]
 
 [[section]]
-section_type = "TtsMetadata"
+section_type = "{section_type}"
 data_path = "{tts_meta_path}"
 
 [[section]]
@@ -1817,7 +1825,7 @@ data_path = "{vocoder_path}"
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Sections (3)", ss)
-    self.assertIn("Data Type:    TtsMetadataProto", ss)
+    self.assertIn("Data Type:    Text2SpeechMetadataProto", ss)
     self.assertIn("output_sample_rate: 24000", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_acoustic", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_vocoder", ss)
@@ -1882,23 +1890,23 @@ data_path = "{vae_path}"
     """Tests resolving capability proto enum ints for ASR, TTS, and Text2Image."""
     tflite_path = self._create_dummy_file("m.tflite", b"dummy")
     asr_path = self._create_dummy_file(
-        "asr.pb", asr_metadata_pb2.AsrMetadata().SerializeToString()
+        "asr.pb", asr_metadata_pb2.Speech2TextMetadata().SerializeToString()
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_asr_metadata(asr_path)
+    builder.add_speech2text_metadata(asr_path)
     builder.add_tflite_model(
-        tflite_path, asr_metadata_pb2.AsrMetadata.TF_LITE_AUDIO_ENCODER
+        tflite_path, asr_metadata_pb2.Speech2TextMetadata.TF_LITE_AUDIO_ENCODER
     )
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Key: model_type, Value (String): tf_lite_audio_encoder", ss)
 
     tts_path = self._create_dummy_file(
-        "tts.pb", tts_metadata_pb2.TtsMetadata().SerializeToString()
+        "tts.pb", tts_metadata_pb2.Text2SpeechMetadata().SerializeToString()
     )
     builder_tts = litertlm_builder.LitertLmFileBuilder()
-    builder_tts.add_tts_metadata(tts_path)
+    builder_tts.add_text2speech_metadata(tts_path)
     builder_tts.add_tflite_model(
-        tflite_path, tts_metadata_pb2.TtsMetadata.TF_LITE_ACOUSTIC
+        tflite_path, tts_metadata_pb2.Text2SpeechMetadata.TF_LITE_ACOUSTIC
     )
     ss_tts = self._build_and_read_litertlm(builder_tts)
     self.assertIn("Key: model_type, Value (String): tf_lite_acoustic", ss_tts)
@@ -1928,7 +1936,8 @@ data_path = "{vae_path}"
         ValueError, "Capability metadata must be added before resolving"
     ):
       builder_no_cap.add_tflite_model(
-          tflite_path, asr_metadata_pb2.AsrMetadata.TF_LITE_AUDIO_ENCODER
+          tflite_path,
+          asr_metadata_pb2.Speech2TextMetadata.TF_LITE_AUDIO_ENCODER,
       )
 
     with self.assertRaisesRegex(ValueError, "TF_LITE_MODEL_TYPE_UNSPECIFIED"):

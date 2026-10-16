@@ -53,9 +53,9 @@ namespace {
 
 constexpr float kDefaultOverlapRatio = 0.4f;
 
-lm::proto::AsrSessionConfig ResolveAsrSessionConfig(
+lm::proto::Speech2TextSessionConfig ResolveSpeech2TextSessionConfig(
     const MessageLite* absl_nullable session_config) {
-  lm::proto::AsrSessionConfig resolved;
+  lm::proto::Speech2TextSessionConfig resolved;
   if (session_config != nullptr) {
     resolved.CheckTypeAndMergeFrom(*session_config);
   }
@@ -64,16 +64,16 @@ lm::proto::AsrSessionConfig ResolveAsrSessionConfig(
   }
   if (!resolved.has_text_merger_type() ||
       resolved.text_merger_type() ==
-          lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_UNSPECIFIED) {
+          lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_UNSPECIFIED) {
     resolved.set_text_merger_type(
-        lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
+        lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
   }
   return resolved;
 }
 
-lm::proto::AsrMetadata ResolveAsrMetadata(
+lm::proto::Speech2TextMetadata ResolveSpeech2TextMetadata(
     const MessageLite* absl_nullable metadata, int default_vocab_size) {
-  lm::proto::AsrMetadata resolved;
+  lm::proto::Speech2TextMetadata resolved;
   if (metadata != nullptr) {
     resolved.CheckTypeAndMergeFrom(*metadata);
   }
@@ -336,12 +336,12 @@ std::unique_ptr<AudioSource> AsrSessionFactory::CreateAudioInputSource(
 AsrSessionFactory::AsrSessionFactory(
     const OmniEngine::Settings& settings,
     const MessageLite* absl_nullable session_config,
-    const MessageLite* absl_nullable metadata,
-    ::litert::Environment env,
+    const MessageLite* absl_nullable metadata, ::litert::Environment env,
     std::shared_ptr<lm::ModelResources> absl_nullable model_resources,
     std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer)
-    : session_config_(ResolveAsrSessionConfig(session_config)),
-      metadata_(ResolveAsrMetadata(metadata, tokenizer->GetVocabSize())),
+    : session_config_(ResolveSpeech2TextSessionConfig(session_config)),
+      metadata_(
+          ResolveSpeech2TextMetadata(metadata, tokenizer->GetVocabSize())),
       environment_(std::make_unique<::litert::Environment>(std::move(env))),
       model_resources_(std::move(model_resources)),
       tokenizer_(std::move(tokenizer)),
@@ -400,11 +400,11 @@ AsrSessionFactory::CreateMultiStagedSession(
   TokenizerDetokenizer* raw_detokenizer = detokenizer.get();
   std::unique_ptr<TextMerger> text_merger;
   switch (session_config_.text_merger_type()) {
-    case lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN:
+    case lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN:
       text_merger = std::make_unique<LevenshteinTextMerger>(raw_detokenizer);
       break;
-    case lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP:
-    case lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_UNSPECIFIED:
+    case lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP:
+    case lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_UNSPECIFIED:
     default:
       text_merger = std::make_unique<TimestampTextMerger>(
           raw_detokenizer, session_config_.overlap_ratio());

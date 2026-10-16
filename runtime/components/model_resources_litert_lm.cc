@@ -286,38 +286,38 @@ ModelResourcesLitertLm::GetEmbeddingMetadata() {
   return embedding_metadata_.get();
 };
 
-absl::StatusOr<const proto::TtsMetadata*>
-ModelResourcesLitertLm::GetTtsMetadata() {
-  if (tts_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetTtsMetadata();
+absl::StatusOr<const proto::Text2SpeechMetadata*>
+ModelResourcesLitertLm::GetText2SpeechMetadata() {
+  if (text2speech_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetText2SpeechMetadata();
     if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No TtsMetadata found in the model.");
+      return absl::NotFoundError("No Text2SpeechMetadata found in the model.");
     }
-    auto tts_metadata = std::make_unique<proto::TtsMetadata>();
-    if (!tts_metadata->ParseFromArray(buffer_ref->Data(),
-                                      buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse TtsMetadata");
+    auto text2speech_metadata = std::make_unique<proto::Text2SpeechMetadata>();
+    if (!text2speech_metadata->ParseFromArray(buffer_ref->Data(),
+                                              buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse Text2SpeechMetadata");
     }
-    tts_metadata_ = std::move(tts_metadata);
+    text2speech_metadata_ = std::move(text2speech_metadata);
   }
-  return tts_metadata_.get();
+  return text2speech_metadata_.get();
 }
 
-absl::StatusOr<const proto::AsrMetadata*>
-ModelResourcesLitertLm::GetAsrMetadata() {
-  if (asr_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetAsrMetadata();
+absl::StatusOr<const proto::Speech2TextMetadata*>
+ModelResourcesLitertLm::GetSpeech2TextMetadata() {
+  if (speech2text_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetSpeech2TextMetadata();
     if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No AsrMetadata found in the model.");
+      return absl::NotFoundError("No Speech2TextMetadata found in the model.");
     }
-    auto asr_metadata = std::make_unique<proto::AsrMetadata>();
-    if (!asr_metadata->ParseFromArray(buffer_ref->Data(),
-                                      buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse AsrMetadata");
+    auto speech2text_metadata = std::make_unique<proto::Speech2TextMetadata>();
+    if (!speech2text_metadata->ParseFromArray(buffer_ref->Data(),
+                                              buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse Speech2TextMetadata");
     }
-    asr_metadata_ = std::move(asr_metadata);
+    speech2text_metadata_ = std::move(speech2text_metadata);
   }
-  return asr_metadata_.get();
+  return speech2text_metadata_.get();
 }
 
 absl::StatusOr<const proto::Text2ImageMetadata*>

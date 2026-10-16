@@ -133,8 +133,9 @@ void Merge(MetadataT& dst, const MetadataT& src) {
 }
 
 template <>
-void Merge<lm::proto::AsrMetadata>(lm::proto::AsrMetadata& dst,
-                                   const lm::proto::AsrMetadata& src) {
+void Merge<lm::proto::Speech2TextMetadata>(
+    lm::proto::Speech2TextMetadata& dst,
+    const lm::proto::Speech2TextMetadata& src) {
   if (src.decode_start_token_ids_size() > 0) {
     dst.clear_decode_start_token_ids();
   }
@@ -165,13 +166,13 @@ const MessageLite* absl_nullable MergeMetadata(
   if (lm_resources == nullptr) {
     return caller_metadata;
   }
-  if (metadata_proto_type_id == "litert.lm.proto.AsrMetadata") {
-    return MergeMetadataProto(lm_resources->GetAsrMetadata(), caller_metadata,
-                              merged_metadata);
+  if (metadata_proto_type_id == "litert.lm.proto.Speech2TextMetadata") {
+    return MergeMetadataProto(lm_resources->GetSpeech2TextMetadata(),
+                              caller_metadata, merged_metadata);
   }
-  if (metadata_proto_type_id == "litert.lm.proto.TtsMetadata") {
-    return MergeMetadataProto(lm_resources->GetTtsMetadata(), caller_metadata,
-                              merged_metadata);
+  if (metadata_proto_type_id == "litert.lm.proto.Text2SpeechMetadata") {
+    return MergeMetadataProto(lm_resources->GetText2SpeechMetadata(),
+                              caller_metadata, merged_metadata);
   }
   if (metadata_proto_type_id == "litert.lm.proto.Text2ImageMetadata") {
     return MergeMetadataProto(lm_resources->GetText2ImageMetadata(),

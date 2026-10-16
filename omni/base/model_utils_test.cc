@@ -31,7 +31,6 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "omni/omni_engine.h"
-#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -254,10 +253,10 @@ TEST(ModelUtilsTest, CreateCompiledModelFromEngineSettingsNonExistent) {
   OmniEngine::Settings settings{
       .model_path = "/non/existent/model.tflite",
   };
-  EXPECT_THAT(
-      CreateCompiledModel(settings, *env, *options, /*lm_resources=*/nullptr,
-                          lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER),
-      StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(CreateCompiledModel(
+                  settings, *env, *options, /*lm_resources=*/nullptr,
+                  lm::proto::Speech2TextMetadata::TF_LITE_ENCODER_DECODER),
+              StatusIs(absl::StatusCode::kNotFound));
   EXPECT_THAT(
       CreateCompiledModel(settings, *env, *options,
                           /*lm_resources=*/nullptr,

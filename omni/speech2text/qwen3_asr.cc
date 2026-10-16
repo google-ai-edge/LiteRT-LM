@@ -57,9 +57,9 @@ constexpr absl::string_view kModelNames[] = {
 // Resolves configs and instantiates encoder, decoder, and sessions on demand.
 class Qwen3AsrSessionFactory : public AsrSessionFactory {
  public:
-  static lm::proto::AsrMetadata ResolveMetadata(
+  static lm::proto::Speech2TextMetadata ResolveMetadata(
       const MessageLite* absl_nullable metadata) {
-    lm::proto::AsrMetadata resolved;
+    lm::proto::Speech2TextMetadata resolved;
     if (metadata != nullptr) {
       resolved.CheckTypeAndMergeFrom(*metadata);
     }
@@ -144,7 +144,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3AsrSessionFactory(
       auto compiled_model,
       CreateCompiledModel(settings, env, options, lm_resources.get(),
                           lm::proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
-  lm::proto::AsrMetadata resolved_metadata =
+  lm::proto::Speech2TextMetadata resolved_metadata =
       Qwen3AsrSessionFactory::ResolveMetadata(metadata);
   return std::make_unique<Qwen3AsrSessionFactory>(
       settings, session_config, &resolved_metadata, std::move(env),
@@ -156,7 +156,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3AsrSessionFactory(
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetQwen3AsrSessionFactory,
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/"
           "main/qwen3_asr_0.6b_5s_i8.litertlm",

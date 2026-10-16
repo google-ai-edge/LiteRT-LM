@@ -103,7 +103,7 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
     LITERT_ASSIGN_OR_RETURN(
         absl::string_view acoustic_buffer,
         lm_resources->GetTFLiteModelBuffer(
-            lm::proto::TtsMetadata::TF_LITE_ACOUSTIC));
+            lm::proto::Text2SpeechMetadata::TF_LITE_ACOUSTIC));
     LITERT_ASSIGN_OR_RETURN(
         auto acoustic_compiled,
         CreateCompiledModelFromBuffer(env, acoustic_options, acoustic_buffer,
@@ -111,7 +111,7 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
     LITERT_ASSIGN_OR_RETURN(
         absl::string_view vocoder_buffer,
         lm_resources->GetTFLiteModelBuffer(
-            lm::proto::TtsMetadata::TF_LITE_VOCODER));
+            lm::proto::Text2SpeechMetadata::TF_LITE_VOCODER));
     LITERT_ASSIGN_OR_RETURN(
         auto vocoder_compiled,
         CreateCompiledModelFromBuffer(env, vocoder_options, vocoder_buffer,

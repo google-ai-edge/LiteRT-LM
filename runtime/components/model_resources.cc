@@ -50,15 +50,15 @@ std::string TfLiteModelTypeToWireString(
 }
 
 std::string TfLiteModelTypeToWireString(
-    proto::TtsMetadata::TfLiteModelType model_type) {
+    proto::Text2SpeechMetadata::TfLiteModelType model_type) {
   return absl::AsciiStrToLower(
-      proto::TtsMetadata::TfLiteModelType_Name(model_type));
+      proto::Text2SpeechMetadata::TfLiteModelType_Name(model_type));
 }
 
 std::string TfLiteModelTypeToWireString(
-    proto::AsrMetadata::TfLiteModelType model_type) {
+    proto::Speech2TextMetadata::TfLiteModelType model_type) {
   return absl::AsciiStrToLower(
-      proto::AsrMetadata::TfLiteModelType_Name(model_type));
+      proto::Speech2TextMetadata::TfLiteModelType_Name(model_type));
 }
 
 std::string TfLiteModelTypeToWireString(

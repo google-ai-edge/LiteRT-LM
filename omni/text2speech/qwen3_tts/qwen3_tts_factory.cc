@@ -70,7 +70,8 @@ class TalkerLmModelResources : public lm::ModelResources {
   absl::StatusOr<const Model*> GetTFLiteModel(
       lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     if (model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
-      return inner_->GetTFLiteModel(lm::proto::TtsMetadata::TF_LITE_TALKER);
+      return inner_->GetTFLiteModel(
+          lm::proto::Text2SpeechMetadata::TF_LITE_TALKER);
     }
     return inner_->GetTFLiteModel(model_type);
   }
@@ -84,7 +85,7 @@ class TalkerLmModelResources : public lm::ModelResources {
       lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     if (model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
       return inner_->GetTFLiteModelBuffer(
-          lm::proto::TtsMetadata::TF_LITE_TALKER);
+          lm::proto::Text2SpeechMetadata::TF_LITE_TALKER);
     }
     return inner_->GetTFLiteModelBuffer(model_type);
   }
@@ -202,7 +203,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
     LITERT_ASSIGN_OR_RETURN(
         absl::string_view text_emb_buf,
         lm_resources->GetTFLiteModelBuffer(
-            lm::proto::TtsMetadata::TF_LITE_TEXT_EMBEDDING));
+            lm::proto::Text2SpeechMetadata::TF_LITE_TEXT_EMBEDDING));
     LITERT_ASSIGN_OR_RETURN(
         auto text_emb, CreateCompiledModelFromBuffer(
                            env, model_options, text_emb_buf, "text_embedding"));
@@ -213,7 +214,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
     LITERT_ASSIGN_OR_RETURN(
         absl::string_view text_proj_buf,
         lm_resources->GetTFLiteModelBuffer(
-            lm::proto::TtsMetadata::TF_LITE_TEXT_PROJECTION));
+            lm::proto::Text2SpeechMetadata::TF_LITE_TEXT_PROJECTION));
     LITERT_ASSIGN_OR_RETURN(
         auto text_proj,
         CreateCompiledModelFromBuffer(env, model_options, text_proj_buf,
@@ -228,14 +229,16 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
     ABSL_RETURN_IF_ERROR(
         resources.AddLmRunner("talker", std::move(talker_runner)));
 
-    LITERT_ASSIGN_OR_RETURN(absl::string_view mtp_buf,
-                            lm_resources->GetTFLiteModelBuffer(
-                                lm::proto::TtsMetadata::TF_LITE_MTP_DRAFTER));
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view mtp_buf,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::Text2SpeechMetadata::TF_LITE_MTP_DRAFTER));
     ModelOptions mtp_options = model_options;
     if (mtp_options.backend == lm::Backend::GPU) {
-      LITERT_ASSIGN_OR_RETURN(const Model* mtp_model,
-                              lm_resources->GetTFLiteModel(
-                                  lm::proto::TtsMetadata::TF_LITE_MTP_DRAFTER));
+      LITERT_ASSIGN_OR_RETURN(
+          const Model* mtp_model,
+          lm_resources->GetTFLiteModel(
+              lm::proto::Text2SpeechMetadata::TF_LITE_MTP_DRAFTER));
       LITERT_ASSIGN_OR_RETURN(const auto& in_names,
                               mtp_model->GetSignatureInputNames(""));
       for (size_t i = 3; i < in_names.size(); ++i) {
@@ -257,7 +260,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
     LITERT_ASSIGN_OR_RETURN(
         absl::string_view codec_emb_buf,
         lm_resources->GetTFLiteModelBuffer(
-            lm::proto::TtsMetadata::TF_LITE_CODEC_EMBEDDING));
+            lm::proto::Text2SpeechMetadata::TF_LITE_CODEC_EMBEDDING));
     LITERT_ASSIGN_OR_RETURN(
         auto codec_emb,
         CreateCompiledModelFromBuffer(env, model_options, codec_emb_buf,
@@ -266,18 +269,20 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
         "codec_embedding",
         std::make_shared<CompiledModel>(std::move(codec_emb))));
 
-    LITERT_ASSIGN_OR_RETURN(absl::string_view mtp_emb_buf,
-                            lm_resources->GetTFLiteModelBuffer(
-                                lm::proto::TtsMetadata::TF_LITE_MTP_EMBEDDING));
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view mtp_emb_buf,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::Text2SpeechMetadata::TF_LITE_MTP_EMBEDDING));
     LITERT_ASSIGN_OR_RETURN(
         auto mtp_emb, CreateCompiledModelFromBuffer(
                           env, model_options, mtp_emb_buf, "mtp_embedding"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "mtp_embedding", std::make_shared<CompiledModel>(std::move(mtp_emb))));
 
-    LITERT_ASSIGN_OR_RETURN(absl::string_view codec_buf,
-                            lm_resources->GetTFLiteModelBuffer(
-                                lm::proto::TtsMetadata::TF_LITE_CODEC_DECODER));
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view codec_buf,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::Text2SpeechMetadata::TF_LITE_CODEC_DECODER));
     LITERT_ASSIGN_OR_RETURN(
         auto codec,
         CreateCompiledModelFromBuffer(env, model_options, codec_buf, "codec"));

@@ -41,9 +41,9 @@
 namespace litert::omni::tts {
 namespace {
 
-lm::proto::TtsSessionConfig ResolveTtsSessionConfig(
+lm::proto::Text2SpeechSessionConfig ResolveText2SpeechSessionConfig(
     const MessageLite* absl_nullable session_config) {
-  lm::proto::TtsSessionConfig resolved;
+  lm::proto::Text2SpeechSessionConfig resolved;
   if (session_config != nullptr) {
     resolved.CheckTypeAndMergeFrom(*session_config);
   }
@@ -135,7 +135,8 @@ class TextInputSource : public StreamTextSource {
 
 }  // namespace
 
-TextChunkConfig ToTextChunkConfig(const lm::proto::TtsTextChunkConfig& proto) {
+TextChunkConfig ToTextChunkConfig(
+    const lm::proto::Text2SpeechTextChunkConfig& proto) {
   TextChunkConfig config;
   if (!proto.delimiters().empty()) {
     config.delimiters.assign(proto.delimiters().begin(),
@@ -160,11 +161,11 @@ std::unique_ptr<StreamTextSource> TtsSessionFactory::CreateTextInputSource(
 TtsSessionFactory::TtsSessionFactory(
     const OmniEngine::Settings& settings,
     const MessageLite* absl_nullable session_config,
-    const lm::proto::TtsMetadata& metadata,
+    const lm::proto::Text2SpeechMetadata& metadata,
     std::vector<std::string> available_voices,
     std::shared_ptr<ModelResources> absl_nullable model_resources)
     : engine_settings_(settings),
-      session_config_(ResolveTtsSessionConfig(session_config)),
+      session_config_(ResolveText2SpeechSessionConfig(session_config)),
       metadata_(metadata),
       available_voices_(std::move(available_voices)),
       model_resources_(std::move(model_resources)),
@@ -225,14 +226,15 @@ std::string TtsSessionFactory::GetDefaultVoice(
 }
 
 TextChunkConfig TtsSessionFactory::ResolveTextChunkConfig(
-    const lm::proto::TtsSessionConfig& session_config) const {
-  lm::proto::TtsSessionConfig effective = MergeSessionConfig(session_config);
+    const lm::proto::Text2SpeechSessionConfig& session_config) const {
+  lm::proto::Text2SpeechSessionConfig effective =
+      MergeSessionConfig(session_config);
   return ToTextChunkConfig(effective.text_chunk_config());
 }
 
-lm::proto::TtsSessionConfig TtsSessionFactory::MergeSessionConfig(
-    const lm::proto::TtsSessionConfig& session_config) const {
-  lm::proto::TtsSessionConfig effective = session_config_;
+lm::proto::Text2SpeechSessionConfig TtsSessionFactory::MergeSessionConfig(
+    const lm::proto::Text2SpeechSessionConfig& session_config) const {
+  lm::proto::Text2SpeechSessionConfig effective = session_config_;
   effective.MergeFrom(session_config);
   if (session_config.has_text_chunk_config() &&
       !session_config.text_chunk_config().delimiters().empty()) {

@@ -17,7 +17,7 @@ syntax = "proto3";
 package litert.lm.proto;
 
 option java_multiple_files = true;
-option java_outer_classname = "TtsModelTypeOuterClass";
+option java_outer_classname = "Text2SpeechModelTypeOuterClass";
 
 // Kokoro-82M: phoneme-conditioned acoustic predictor + iSTFT neural vocoder.
 message Kokoro {
@@ -35,7 +35,7 @@ message Qwen3Tts {
 }
 
 // Architecture-specific parameters for TTS models.
-message TtsModelType {
+message Text2SpeechModelType {
   oneof model_type {
     Kokoro kokoro = 1;
     Qwen3Tts qwen3_tts = 2;

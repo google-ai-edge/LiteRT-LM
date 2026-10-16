@@ -118,7 +118,7 @@ TEST_F(AsrSessionTest, DynamicRegisterAndUnregisterModel) {
               -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
             return absl::UnimplementedError("Custom session factory invoked");
           },
-          .session_config_type_id = "Asr",
+          .session_config_type_id = "Speech2Text",
       }));
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("custom-test-asr-ctc"));
 

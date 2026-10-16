@@ -57,9 +57,9 @@ constexpr absl::string_view kModelNames[] = {
 // Resolves configs and instantiates encoder, decoder, and sessions on demand.
 class ParakeetTdtSessionFactory : public AsrSessionFactory {
  public:
-  static lm::proto::AsrMetadata ResolveMetadata(
+  static lm::proto::Speech2TextMetadata ResolveMetadata(
       const MessageLite* absl_nullable metadata) {
-    lm::proto::AsrMetadata resolved;
+    lm::proto::Speech2TextMetadata resolved;
     if (metadata != nullptr) {
       resolved.CheckTypeAndMergeFrom(*metadata);
     }
@@ -146,12 +146,13 @@ GetParakeetTdtSessionFactory(
   }
   ABSL_ASSIGN_OR_RETURN(
       auto compiled_model,
-      CreateCompiledModel(settings, env, options, lm_resources.get(),
-                          lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER));
+      CreateCompiledModel(
+          settings, env, options, lm_resources.get(),
+          lm::proto::Speech2TextMetadata::TF_LITE_ENCODER_DECODER));
   ABSL_ASSIGN_OR_RETURN(
       auto tokenizer,
       CreateTokenizer(lm_resources.get(), settings.tokenizer_path));
-  lm::proto::AsrMetadata resolved_metadata =
+  lm::proto::Speech2TextMetadata resolved_metadata =
       ParakeetTdtSessionFactory::ResolveMetadata(metadata);
   return std::make_unique<ParakeetTdtSessionFactory>(
       settings, session_config, &resolved_metadata, std::move(env),
@@ -162,7 +163,7 @@ GetParakeetTdtSessionFactory(
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetParakeetTdtSessionFactory,
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3/"
           "resolve/main/parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm",

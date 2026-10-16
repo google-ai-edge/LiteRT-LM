@@ -61,8 +61,9 @@ using ::testing::IsEmpty;
 using ::testing::NotNull;
 using ::testing::StartsWith;
 
-void WriteTestLitertLmWithAsrMetadata(
-    const std::string& path, const lm::proto::AsrMetadata& embedded_metadata) {
+void WriteTestLitertLmWithSpeech2TextMetadata(
+    const std::string& path,
+    const lm::proto::Speech2TextMetadata& embedded_metadata) {
   const std::string serialized = embedded_metadata.SerializeAsString();
   constexpr uint64_t kDataOffset = 512;
 
@@ -70,7 +71,7 @@ void WriteTestLitertLmWithAsrMetadata(
   auto asr_meta_section = lm::schema::CreateSectionObject(
       builder, /*items=*/0, /*begin_offset=*/kDataOffset,
       /*end_offset=*/kDataOffset + serialized.size(),
-      lm::schema::AnySectionDataType_AsrMetadataProto);
+      lm::schema::AnySectionDataType_Speech2TextMetadataProto);
   std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
       asr_meta_section};
   auto section_metadata = lm::schema::CreateSectionMetadata(
@@ -110,15 +111,16 @@ class FakeSessionFactory : public OmniSessionFactory {
 
 TEST(OmniRegistryTest, ResolvesSessionConfigAndMetadataProtoTypeIds) {
   auto& registry = OmniRegistry::Get();
-  EXPECT_THAT(registry.ResolveSessionConfigProtoTypeId("Asr"),
-              IsOkAndHolds("litert.lm.proto.AsrSessionConfig"));
-  EXPECT_THAT(registry.ResolveMetadataProtoTypeId("Asr", ""),
-              IsOkAndHolds("litert.lm.proto.AsrMetadata"));
+  EXPECT_THAT(registry.ResolveSessionConfigProtoTypeId("Speech2Text"),
+              IsOkAndHolds("litert.lm.proto.Speech2TextSessionConfig"));
+  EXPECT_THAT(registry.ResolveMetadataProtoTypeId("Speech2Text", ""),
+              IsOkAndHolds("litert.lm.proto.Speech2TextMetadata"));
 
-  EXPECT_THAT(registry.ResolveMetadataProtoTypeId("Asr", "Custom"),
+  EXPECT_THAT(registry.ResolveMetadataProtoTypeId("Speech2Text", "Custom"),
               IsOkAndHolds("litert.lm.proto.CustomMetadata"));
-  EXPECT_THAT(registry.ResolveMetadataProtoTypeId("Asr", "a.b.c.MyMetadata"),
-              IsOkAndHolds("a.b.c.MyMetadata"));
+  EXPECT_THAT(
+      registry.ResolveMetadataProtoTypeId("Speech2Text", "a.b.c.MyMetadata"),
+      IsOkAndHolds("a.b.c.MyMetadata"));
 
   EXPECT_THAT(registry.ResolveSessionConfigProtoTypeId("d.e.f.MySessionConfig"),
               IsOkAndHolds("d.e.f.MySessionConfig"));
@@ -152,17 +154,18 @@ TEST(OmniRegistryTest,
         captured_settings = settings;
         if (session_cfg != nullptr) {
           const auto* asr_cfg =
-              static_cast<const lm::proto::AsrSessionConfig*>(session_cfg);
+              static_cast<const lm::proto::Speech2TextSessionConfig*>(
+                  session_cfg);
           captured_overlap_ratio = asr_cfg->overlap_ratio();
         }
         if (metadata != nullptr) {
           const auto* asr_meta =
-              static_cast<const lm::proto::AsrMetadata*>(metadata);
+              static_cast<const lm::proto::Speech2TextMetadata*>(metadata);
           captured_input_milliseconds = asr_meta->input_milliseconds();
         }
         return std::make_unique<FakeSessionFactory>();
       },
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
       .model_remote_url = "https://example.com/custom_test_model.litertlm",
   }));
 
@@ -180,17 +183,18 @@ TEST(OmniRegistryTest,
   EXPECT_EQ(reg_model.model_remote_url,
             "https://example.com/custom_test_model.litertlm");
   EXPECT_EQ(reg_model.session_config_proto_type_id,
-            "litert.lm.proto.AsrSessionConfig");
-  EXPECT_EQ(reg_model.metadata_proto_type_id, "litert.lm.proto.AsrMetadata");
+            "litert.lm.proto.Speech2TextSessionConfig");
+  EXPECT_EQ(reg_model.metadata_proto_type_id,
+            "litert.lm.proto.Speech2TextMetadata");
 
   OmniEngine::Settings caller_settings{
       .backend = OmniEngine::Settings::Backend::kGpu,
       .cache_dir = "/custom/cache",
       .num_threads = 8,
   };
-  lm::proto::AsrSessionConfig caller_session_config;
+  lm::proto::Speech2TextSessionConfig caller_session_config;
   caller_session_config.set_overlap_ratio(0.5f);
-  lm::proto::AsrMetadata caller_metadata;
+  lm::proto::Speech2TextMetadata caller_metadata;
   caller_metadata.set_input_milliseconds(3000);
 
   ASSERT_OK_AND_ASSIGN(auto factory,
@@ -252,7 +256,7 @@ TEST(OmniRegistryTest, ConfiguresWeightCachesOnlyForWritableCacheDir) {
         }
         return std::make_unique<FakeSessionFactory>();
       },
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
   }));
   absl::Cleanup cleanup = [&] {
     registry.UnregisterModel("weight-cache-test-model");
@@ -355,7 +359,7 @@ TEST(OmniRegistryTest, DeletesOnlyStaleCachesOfTheSameModel) {
           -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
         return std::make_unique<FakeSessionFactory>();
       },
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
   }));
   absl::Cleanup cleanup = [&] {
     registry.UnregisterModel("stale-cache-test-model");
@@ -398,14 +402,14 @@ TEST(OmniRegistryTest, ResolvesModelByPathWhenModelNameNotExact) {
           [&](absl::string_view model_name,
               const OmniEngine::Settings& /*settings*/,
               const MessageLite* /*session_cfg*/,
-              const MessageLite* /*metadata*/,
-              ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+              const MessageLite* /*metadata*/, ::litert::Environment& /*env*/,
+              ::litert::Options& /*options*/,
               std::shared_ptr<lm::ModelResources> /*lm_resources*/)
           -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
         resolved_name = std::string(model_name);
         return std::make_unique<FakeSessionFactory>();
       },
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
   }));
   absl::Cleanup cleanup = [&] {
     registry.UnregisterModel("whisper-resolve-test");
@@ -426,29 +430,29 @@ TEST(OmniRegistryTest, RejectsMismatchedProtoTypesAtFactoryCreation) {
   ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
       .model_names = {"proto-type-check-model"},
       .get_session_factory = [](absl::string_view, const OmniEngine::Settings&,
-                                const MessageLite*,
-                                const MessageLite*,
+                                const MessageLite*, const MessageLite*,
                                 ::litert::Environment&, ::litert::Options&,
                                 std::shared_ptr<lm::ModelResources>)
           -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
         return std::make_unique<FakeSessionFactory>();
       },
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
   }));
   absl::Cleanup cleanup = [&] {
     registry.UnregisterModel("proto-type-check-model");
   };
 
-  lm::proto::TtsSessionConfig wrong_session_config;
+  lm::proto::Text2SpeechSessionConfig wrong_session_config;
   EXPECT_THAT(registry.CreateSessionFactory("proto-type-check-model", {},
                                             &wrong_session_config),
               StatusIs(absl::StatusCode::kInvalidArgument,
-                       HasSubstr("litert.lm.proto.AsrSessionConfig")));
+                       HasSubstr("litert.lm.proto.Speech2TextSessionConfig")));
 }
 
-TEST(OmniRegistryTest, MergesEmbeddedAsrMetadataAndReplacesDecodeStartTokens) {
+TEST(OmniRegistryTest,
+     MergesEmbeddedSpeech2TextMetadataAndReplacesDecodeStartTokens) {
   auto& registry = OmniRegistry::Get();
-  lm::proto::AsrMetadata captured_metadata;
+  lm::proto::Speech2TextMetadata captured_metadata;
 
   ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
       .model_names = {"asr-metadata-merge-test-model"},
@@ -465,7 +469,7 @@ TEST(OmniRegistryTest, MergesEmbeddedAsrMetadataAndReplacesDecodeStartTokens) {
         }
         return std::make_unique<FakeSessionFactory>();
       },
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
   }));
   absl::Cleanup cleanup = [&] {
     registry.UnregisterModel("asr-metadata-merge-test-model");
@@ -473,19 +477,19 @@ TEST(OmniRegistryTest, MergesEmbeddedAsrMetadataAndReplacesDecodeStartTokens) {
 
   const std::string test_model_path =
       absl::StrCat(::testing::TempDir(), "/asr_metadata_merge_test.litertlm");
-  lm::proto::AsrMetadata embedded_metadata;
+  lm::proto::Speech2TextMetadata embedded_metadata;
   embedded_metadata.set_input_milliseconds(30000);
   embedded_metadata.set_decode_stop_token_id(50257);
   embedded_metadata.add_decode_start_token_ids(50258);
   embedded_metadata.add_decode_start_token_ids(50259);
-  WriteTestLitertLmWithAsrMetadata(test_model_path, embedded_metadata);
+  WriteTestLitertLmWithSpeech2TextMetadata(test_model_path, embedded_metadata);
 
   OmniEngine::Settings settings{.model_path = test_model_path};
 
   // 1. Caller provides custom decode_start_token_ids: should replace embedded
   // decode_start_token_ids rather than appending, while preserving embedded
   // scalar fields not set by caller.
-  lm::proto::AsrMetadata caller_metadata;
+  lm::proto::Speech2TextMetadata caller_metadata;
   caller_metadata.add_decode_start_token_ids(999);
   ASSERT_OK_AND_ASSIGN(auto factory1,
                        registry.CreateSessionFactory(
@@ -499,7 +503,7 @@ TEST(OmniRegistryTest, MergesEmbeddedAsrMetadataAndReplacesDecodeStartTokens) {
   // 2. Caller omits decode_start_token_ids: embedded decode_start_token_ids
   // should be preserved.
   captured_metadata.Clear();
-  lm::proto::AsrMetadata caller_metadata_no_tokens;
+  lm::proto::Speech2TextMetadata caller_metadata_no_tokens;
   caller_metadata_no_tokens.set_input_milliseconds(15000);
   ASSERT_OK_AND_ASSIGN(
       auto factory2,

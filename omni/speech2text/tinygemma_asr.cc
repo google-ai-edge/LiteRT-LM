@@ -60,24 +60,24 @@ constexpr int kDefaultMaxOutputTokens = 128;
 // Resolves configs and instantiates encoder, decoder, and sessions on demand.
 class TinyGemmaAsrSessionFactory : public AsrSessionFactory {
  public:
-  static lm::proto::AsrSessionConfig ResolveSessionConfig(
+  static lm::proto::Speech2TextSessionConfig ResolveSessionConfig(
       const MessageLite* absl_nullable session_config) {
-    lm::proto::AsrSessionConfig resolved;
+    lm::proto::Speech2TextSessionConfig resolved;
     if (session_config != nullptr) {
       resolved.CheckTypeAndMergeFrom(*session_config);
     }
     if (!resolved.has_text_merger_type() ||
         resolved.text_merger_type() ==
-            lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_UNSPECIFIED) {
+            lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_UNSPECIFIED) {
       resolved.set_text_merger_type(
-          lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
+          lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
     }
     return resolved;
   }
 
-  static lm::proto::AsrMetadata ResolveMetadata(
+  static lm::proto::Speech2TextMetadata ResolveMetadata(
       const MessageLite* absl_nullable metadata) {
-    lm::proto::AsrMetadata resolved;
+    lm::proto::Speech2TextMetadata resolved;
     if (metadata != nullptr) {
       resolved.CheckTypeAndMergeFrom(*metadata);
     }
@@ -164,9 +164,9 @@ GetTinyGemmaAsrSessionFactory(
   ABSL_ASSIGN_OR_RETURN(
       auto tokenizer,
       CreateTokenizer(lm_resources.get(), settings.tokenizer_path));
-  lm::proto::AsrSessionConfig resolved_session_config =
+  lm::proto::Speech2TextSessionConfig resolved_session_config =
       TinyGemmaAsrSessionFactory::ResolveSessionConfig(session_config);
-  lm::proto::AsrMetadata resolved_metadata =
+  lm::proto::Speech2TextMetadata resolved_metadata =
       TinyGemmaAsrSessionFactory::ResolveMetadata(metadata);
   return std::make_unique<TinyGemmaAsrSessionFactory>(
       settings, &resolved_session_config, &resolved_metadata, std::move(env),
@@ -178,7 +178,7 @@ GetTinyGemmaAsrSessionFactory(
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetTinyGemmaAsrSessionFactory,
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/TinyGemma-ASR/resolve/main/"
           "tiny_gemma_asr_5s_i8.litertlm",

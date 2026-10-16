@@ -1049,8 +1049,8 @@ EngineAdvancedImpl::CreateStreamingWeights(
         break;
       }
       case schema::AnySectionDataType_EmbeddingMetadataProto:
-      case schema::AnySectionDataType_TtsMetadataProto:
-      case schema::AnySectionDataType_AsrMetadataProto:
+      case schema::AnySectionDataType_Text2SpeechMetadataProto:
+      case schema::AnySectionDataType_Speech2TextMetadataProto:
       case schema::AnySectionDataType_Text2ImageMetadataProto:
         ABSL_LOG(WARNING) << "Skipping section with data type: "
                           << section_metadata->data_type();

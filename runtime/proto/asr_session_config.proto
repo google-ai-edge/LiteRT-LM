@@ -17,10 +17,10 @@ syntax = "proto3";
 package litert.lm.proto;
 
 option java_multiple_files = true;
-option java_outer_classname = "AsrSessionConfigOuterClass";
+option java_outer_classname = "Speech2TextSessionConfigOuterClass";
 
 // Per-session configuration for Automatic Speech Recognition (ASR) sessions.
-message AsrSessionConfig {
+message Speech2TextSessionConfig {
   enum TextMergerType {
     TEXT_MERGER_TYPE_UNSPECIFIED = 0;
     TEXT_MERGER_TYPE_LEVENSHTEIN = 1;

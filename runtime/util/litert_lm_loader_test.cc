@@ -32,8 +32,9 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
-#include "runtime/components/model_resources.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
+#include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header.h"
@@ -387,16 +388,16 @@ TEST(LitertLmLoaderTest, MissingSectionLogsHumanReadableEnumName) {
   EXPECT_FALSE(loader_ptr->GetExecutorMetadata().has_value());
 }
 
-TEST(LitertLmLoaderTest, LoadCapabilityTtsMetadataAndNamedSections) {
+TEST(LitertLmLoaderTest, LoadCapabilityText2SpeechMetadataAndNamedSections) {
   auto test_file_path = std::filesystem::path(::testing::TempDir()) /
-                        "tts_capability_model.litertlm";
+                        "text2speech_capability_model.litertlm";
 
   flatbuffers::FlatBufferBuilder builder(1024);
 
-  // Section 0: TtsMetadataProto
-  auto tts_meta_section = schema::CreateSectionObject(
+  // Section 0: Text2SpeechMetadataProto
+  auto text2speech_meta_section = schema::CreateSectionObject(
       builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
-      schema::AnySectionDataType_TtsMetadataProto);
+      schema::AnySectionDataType_Text2SpeechMetadataProto);
 
   // Section 1: GenericBinaryData with items metadata (name = "af_heart")
   // NB: the value must be a std::string; a const char* selects the generic
@@ -429,7 +430,8 @@ TEST(LitertLmLoaderTest, LoadCapabilityTtsMetadataAndNamedSections) {
       schema::AnySectionDataType_TFLiteModel);
 
   std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
-      tts_meta_section, voice1_section, voice2_section, acoustic_section};
+      text2speech_meta_section, voice1_section, voice2_section,
+      acoustic_section};
   auto section_metadata =
       schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
   auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
@@ -448,8 +450,8 @@ TEST(LitertLmLoaderTest, LoadCapabilityTtsMetadataAndNamedSections) {
   ASSERT_OK_AND_ASSIGN(auto loader,
                        LitertLmLoader::Create(std::move(mapped_file)));
 
-  ASSERT_TRUE(loader->GetTtsMetadata().has_value());
-  EXPECT_EQ(loader->GetTtsMetadata()->Size(), 16);
+  ASSERT_TRUE(loader->GetText2SpeechMetadata().has_value());
+  EXPECT_EQ(loader->GetText2SpeechMetadata()->Size(), 16);
 
   ASSERT_TRUE(loader->GetGenericBinaryData("af_heart").has_value());
   EXPECT_EQ(loader->GetGenericBinaryData("af_heart")->Size(), 16);
@@ -460,8 +462,9 @@ TEST(LitertLmLoaderTest, LoadCapabilityTtsMetadataAndNamedSections) {
   EXPECT_THAT(loader->GetGenericBinaryDataNames(),
               ::testing::UnorderedElementsAre("af_heart", "am_adam"));
 
-  EXPECT_EQ(
-      loader->GetTFLiteModel(proto::TtsMetadata::TF_LITE_ACOUSTIC).Size(), 16);
+  EXPECT_EQ(loader->GetTFLiteModel(proto::Text2SpeechMetadata::TF_LITE_ACOUSTIC)
+                .Size(),
+            16);
 }
 
 TEST(LitertLmLoaderTest, LoadCapabilityText2ImageMetadataAndSections) {

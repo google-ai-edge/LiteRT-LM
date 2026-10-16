@@ -138,7 +138,7 @@ absl::Status Run() {
       engine_settings.backend,
       litert::omni::ParseOmniBackend(absl::GetFlag(FLAGS_backend)));
 
-  litert::lm::proto::TtsMetadata metadata;
+  litert::lm::proto::Text2SpeechMetadata metadata;
   std::string model_name;
   if (model_type_str == "kokoro" || model_type_str == "kokoro_tts" ||
       model_type_str == "kokoro-82m") {
@@ -165,7 +165,7 @@ absl::Status Run() {
         absl::StrCat("Unknown model_type: ", model_type_str));
   }
 
-  litert::lm::proto::TtsSessionConfig session_config;
+  litert::lm::proto::Text2SpeechSessionConfig session_config;
   const std::string requested_lang_str = absl::GetFlag(FLAGS_language);
   if (!requested_lang_str.empty()) {
     session_config.set_language(requested_lang_str);

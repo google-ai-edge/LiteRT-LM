@@ -44,10 +44,10 @@ std::string AnySectionDataTypeToString(AnySectionDataType value) {
       return "AnySectionDataType_EmbeddingMetadataProto";
     case AnySectionDataType_ExecutorMetadataProto:
       return "AnySectionDataType_ExecutorMetadataProto";
-    case AnySectionDataType_TtsMetadataProto:
-      return "AnySectionDataType_TtsMetadataProto";
-    case AnySectionDataType_AsrMetadataProto:
-      return "AnySectionDataType_AsrMetadataProto";
+    case AnySectionDataType_Text2SpeechMetadataProto:
+      return "AnySectionDataType_Text2SpeechMetadataProto";
+    case AnySectionDataType_Speech2TextMetadataProto:
+      return "AnySectionDataType_Speech2TextMetadataProto";
     case AnySectionDataType_Text2ImageMetadataProto:
       return "AnySectionDataType_Text2ImageMetadataProto";
     default:

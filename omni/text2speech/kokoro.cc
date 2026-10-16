@@ -61,9 +61,9 @@ constexpr absl::string_view kModelNames[] = {
     "kokoro-82m",
 };
 
-lm::proto::TtsMetadata ResolveMetadata(
+lm::proto::Text2SpeechMetadata ResolveMetadata(
     const MessageLite* absl_nullable metadata) {
-  lm::proto::TtsMetadata resolved;
+  lm::proto::Text2SpeechMetadata resolved;
   if (metadata != nullptr) {
     resolved.CheckTypeAndMergeFrom(*metadata);
   }
@@ -94,7 +94,7 @@ absl::Status PopulateKokoroConfigFromProto(const lm::proto::Kokoro& proto,
 KokoroSessionFactory::KokoroSessionFactory(
     const OmniEngine::Settings& settings,
     const MessageLite* absl_nullable session_config,
-    const lm::proto::TtsMetadata& metadata,
+    const lm::proto::Text2SpeechMetadata& metadata,
     std::vector<std::string> available_voices,
     std::shared_ptr<ModelResources> absl_nullable model_resources,
     KokoroModelConfig config)
@@ -166,8 +166,9 @@ std::string KokoroSessionFactory::GetDefaultVoice(
 }
 
 TextChunkConfig KokoroSessionFactory::ResolveTextChunkConfig(
-    const lm::proto::TtsSessionConfig& session_config) const {
-  lm::proto::TtsSessionConfig effective = MergeSessionConfig(session_config);
+    const lm::proto::Text2SpeechSessionConfig& session_config) const {
+  lm::proto::Text2SpeechSessionConfig effective =
+      MergeSessionConfig(session_config);
   KokoroModelConfig session_model_config = config_;
   const std::string kokoro_lang = ToKokoroLanguageCode(effective.language());
   if (!kokoro_lang.empty()) {
@@ -179,12 +180,13 @@ TextChunkConfig KokoroSessionFactory::ResolveTextChunkConfig(
 
 absl::StatusOr<std::unique_ptr<MultiStagedSession>>
 KokoroSessionFactory::CreateWithTextSource(
-    const lm::proto::TtsSessionConfig& session_config,
+    const lm::proto::Text2SpeechSessionConfig& session_config,
     std::unique_ptr<StreamTextSource> absl_nullable text_source) {
-  lm::proto::TtsSessionConfig effective = MergeSessionConfig(session_config);
+  lm::proto::Text2SpeechSessionConfig effective =
+      MergeSessionConfig(session_config);
   if (effective.language().empty()) {
     return absl::InvalidArgumentError(
-        "TtsSessionConfig::language must not be empty.");
+        "Text2SpeechSessionConfig::language must not be empty.");
   }
   const std::string kokoro_lang = ToKokoroLanguageCode(effective.language());
   if (kokoro_lang.empty()) {
@@ -255,7 +257,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetKokoroSessionFactory(
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected model_name: ", model_name));
   }
-  lm::proto::TtsMetadata resolved_metadata = ResolveMetadata(metadata);
+  lm::proto::Text2SpeechMetadata resolved_metadata = ResolveMetadata(metadata);
   KokoroModelConfig config;
   LITERT_RETURN_IF_ERROR(PopulateKokoroConfigFromProto(
       resolved_metadata.tts_model_type().kokoro(), config));
@@ -292,7 +294,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetKokoroSessionFactory(
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetKokoroSessionFactory,
-      .session_config_type_id = "Tts",
+      .session_config_type_id = "Text2Speech",
   }));
   return true;
 }();

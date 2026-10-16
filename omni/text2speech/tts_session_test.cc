@@ -287,8 +287,8 @@ TEST_F(TtsSessionTest, LitertLmModelPathIsNotTreatedAsModelDir) {
   }
 }
 
-TEST_F(TtsSessionTest, TtsSessionConfigProtoConversion) {
-  lm::proto::TtsSessionConfig config;
+TEST_F(TtsSessionTest, Text2SpeechSessionConfigProtoConversion) {
+  lm::proto::Text2SpeechSessionConfig config;
   config.set_language("es");
   config.set_voice("ef_dora");
   auto* tc = config.mutable_text_chunk_config();
@@ -413,10 +413,11 @@ TEST_F(TtsSessionTest, DefaultKokoroVoicesPerLanguage) {
 
 TEST_F(TtsSessionTest, KokoroSessionFactoryLanguagesAndVoices) {
   ScopedMockKokoroModelDir mock_dir;
-  KokoroSessionFactory factory(
-      OmniEngine::Settings{}, /*session_config=*/nullptr,
-      lm::proto::TtsMetadata{}, GetAvailableKokoroVoices(mock_dir.path()),
-      /*model_resources=*/nullptr);
+  KokoroSessionFactory factory(OmniEngine::Settings{},
+                               /*session_config=*/nullptr,
+                               lm::proto::Text2SpeechMetadata{},
+                               GetAvailableKokoroVoices(mock_dir.path()),
+                               /*model_resources=*/nullptr);
 
   EXPECT_THAT(factory.GetAvailableLanguages(),
               ElementsAre("en-GB", "en-US", "es", "fr", "hi", "it", "ja",
@@ -424,12 +425,12 @@ TEST_F(TtsSessionTest, KokoroSessionFactoryLanguagesAndVoices) {
 
   KokoroSessionFactory subset_factory(
       OmniEngine::Settings{}, /*session_config=*/nullptr,
-      lm::proto::TtsMetadata{}, {"af_heart", "ef_dora", "em_alex"},
+      lm::proto::Text2SpeechMetadata{}, {"af_heart", "ef_dora", "em_alex"},
       /*model_resources=*/nullptr);
   EXPECT_THAT(subset_factory.GetAvailableLanguages(),
               ElementsAre("en-US", "es"));
 
-  lm::proto::TtsMetadata meta;
+  lm::proto::Text2SpeechMetadata meta;
   meta.add_supported_languages("en-US");
   meta.add_supported_languages("zh-CN");
   meta.add_supported_languages("ja");
@@ -485,21 +486,21 @@ TEST_F(TtsSessionTest, KokoroSessionFactoryVoiceAndLanguageValidation) {
   const auto voices = GetAvailableKokoroVoices(mock_dir.path());
 
   // 1. Invalid voice returns InvalidArgumentError.
-  lm::proto::TtsSessionConfig invalid_voice_config;
+  lm::proto::Text2SpeechSessionConfig invalid_voice_config;
   invalid_voice_config.set_voice("unknown_speaker_xyz");
   KokoroSessionFactory factory1(OmniEngine::Settings{}, &invalid_voice_config,
-                                lm::proto::TtsMetadata{}, voices,
+                                lm::proto::Text2SpeechMetadata{}, voices,
                                 /*model_resources=*/nullptr);
   auto status1 = factory1.Create(std::make_unique<PushInputSource>());
   EXPECT_THAT(status1, StatusIs(absl::StatusCode::kInvalidArgument,
                                 testing::HasSubstr("is not available")));
 
   // 2. Conflicting voice and language returns InvalidArgumentError.
-  lm::proto::TtsSessionConfig mismatch_config;
+  lm::proto::Text2SpeechSessionConfig mismatch_config;
   mismatch_config.set_language("es");
   mismatch_config.set_voice("af_heart");  // American English voice
   KokoroSessionFactory factory2(OmniEngine::Settings{}, &mismatch_config,
-                                lm::proto::TtsMetadata{}, voices,
+                                lm::proto::Text2SpeechMetadata{}, voices,
                                 /*model_resources=*/nullptr);
   auto status2 = factory2.Create(std::make_unique<PushInputSource>());
   EXPECT_THAT(
@@ -508,21 +509,21 @@ TEST_F(TtsSessionTest, KokoroSessionFactoryVoiceAndLanguageValidation) {
                testing::HasSubstr("conflicts with requested language")));
 
   // 3. Unsupported BCP-47 language returns InvalidArgumentError.
-  lm::proto::TtsSessionConfig unsupported_lang_config;
+  lm::proto::Text2SpeechSessionConfig unsupported_lang_config;
   unsupported_lang_config.set_language("de");
   KokoroSessionFactory factory3(OmniEngine::Settings{},
                                 &unsupported_lang_config,
-                                lm::proto::TtsMetadata{}, voices,
+                                lm::proto::Text2SpeechMetadata{}, voices,
                                 /*model_resources=*/nullptr);
   auto status3 = factory3.Create(std::make_unique<PushInputSource>());
   EXPECT_THAT(status3, StatusIs(absl::StatusCode::kInvalidArgument,
                                 testing::HasSubstr("Unsupported language")));
 
   // 4. Empty language returns InvalidArgumentError.
-  lm::proto::TtsSessionConfig empty_lang_config;
+  lm::proto::Text2SpeechSessionConfig empty_lang_config;
   empty_lang_config.set_language("");
   KokoroSessionFactory factory4(OmniEngine::Settings{}, &empty_lang_config,
-                                lm::proto::TtsMetadata{}, voices,
+                                lm::proto::Text2SpeechMetadata{}, voices,
                                 /*model_resources=*/nullptr);
   auto status4 = factory4.Create(std::make_unique<PushInputSource>());
   EXPECT_THAT(status4,
@@ -530,10 +531,10 @@ TEST_F(TtsSessionTest, KokoroSessionFactoryVoiceAndLanguageValidation) {
                        testing::HasSubstr("language must not be empty")));
 
   // 5. No voice available for requested language returns InvalidArgumentError.
-  lm::proto::TtsSessionConfig es_config;
+  lm::proto::Text2SpeechSessionConfig es_config;
   es_config.set_language("es");
   KokoroSessionFactory factory5(OmniEngine::Settings{}, &es_config,
-                                lm::proto::TtsMetadata{},
+                                lm::proto::Text2SpeechMetadata{},
                                 {"af_heart", "am_adam"},
                                 /*model_resources=*/nullptr);
   EXPECT_EQ(factory5.GetDefaultVoice("es"), "ef_dora");

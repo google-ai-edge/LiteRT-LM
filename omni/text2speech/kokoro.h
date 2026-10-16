@@ -41,7 +41,7 @@ class KokoroSessionFactory : public TtsSessionFactory {
   KokoroSessionFactory(
       const OmniEngine::Settings& settings,
       const MessageLite* absl_nullable session_config,
-      const lm::proto::TtsMetadata& metadata,
+      const lm::proto::Text2SpeechMetadata& metadata,
       std::vector<std::string> available_voices,
       std::shared_ptr<ModelResources> absl_nullable model_resources,
       KokoroModelConfig config = {});
@@ -56,11 +56,11 @@ class KokoroSessionFactory : public TtsSessionFactory {
   std::string GetDefaultVoice(absl::string_view language) const override;
 
   TextChunkConfig ResolveTextChunkConfig(
-      const lm::proto::TtsSessionConfig& session_config) const override;
+      const lm::proto::Text2SpeechSessionConfig& session_config) const override;
 
  protected:
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithTextSource(
-      const lm::proto::TtsSessionConfig& session_config,
+      const lm::proto::Text2SpeechSessionConfig& session_config,
       std::unique_ptr<StreamTextSource> absl_nullable text_source) override;
 
  private:

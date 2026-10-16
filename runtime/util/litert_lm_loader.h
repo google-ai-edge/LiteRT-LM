@@ -175,13 +175,13 @@ class LitertLmLoader {
         BufferKey(schema::AnySectionDataType_EmbeddingMetadataProto));
   }
 
-  // Returns the TTS metadata section buffer. If not found, returns
+  // Returns the Text2Speech metadata section buffer. If not found, returns
   // std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetTtsMetadata();
+  std::optional<litert::BufferRef<uint8_t>> GetText2SpeechMetadata();
 
-  // Returns the ASR metadata section buffer. If not found, returns
+  // Returns the Speech2Text metadata section buffer. If not found, returns
   // std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetAsrMetadata();
+  std::optional<litert::BufferRef<uint8_t>> GetSpeech2TextMetadata();
 
   // Returns the Text2Image metadata section buffer. If not found, returns
   // std::nullopt.

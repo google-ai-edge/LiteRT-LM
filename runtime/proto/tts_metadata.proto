@@ -19,10 +19,10 @@ package litert.lm.proto;
 import "runtime/proto/tts_model_type.proto";
 
 option java_multiple_files = true;
-option java_outer_classname = "TtsMetadataOuterClass";
+option java_outer_classname = "Text2SpeechMetadataOuterClass";
 
 // Model-specific parameters for Text-to-Speech (TTS) models.
-message TtsMetadata {
+message Text2SpeechMetadata {
   enum TfLiteModelType {
     // Placeholder for unspecified model type.
     TF_LITE_MODEL_TYPE_UNSPECIFIED = 0;
@@ -47,7 +47,7 @@ message TtsMetadata {
   }
 
   // TTS model type.
-  TtsModelType tts_model_type = 1;
+  Text2SpeechModelType tts_model_type = 1;
   // Output audio sample rate in Hz.
   int32 output_sample_rate = 2;
   // Supported languages list in BCP-47 format (e.g., "en-US", "fr-FR", "hi-IN"

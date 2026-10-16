@@ -38,8 +38,10 @@ class OmniSessionTest;
 
 namespace litert::omni::tts {
 
-// Converts a `TtsTextChunkConfig` proto into a `TextChunkConfig` struct.
-TextChunkConfig ToTextChunkConfig(const lm::proto::TtsTextChunkConfig& proto);
+// Converts a `Text2SpeechTextChunkConfig` proto into a `TextChunkConfig`
+// struct.
+TextChunkConfig ToTextChunkConfig(
+    const lm::proto::Text2SpeechTextChunkConfig& proto);
 
 // Base `OmniSessionFactory` implementation for Text-to-Speech (TTS) models.
 class TtsSessionFactory : public OmniSessionFactory {
@@ -47,7 +49,7 @@ class TtsSessionFactory : public OmniSessionFactory {
   TtsSessionFactory(
       const OmniEngine::Settings& settings,
       const MessageLite* absl_nullable session_config,
-      const lm::proto::TtsMetadata& metadata,
+      const lm::proto::Text2SpeechMetadata& metadata,
       std::vector<std::string> available_voices,
       std::shared_ptr<ModelResources> absl_nullable model_resources);
 
@@ -57,8 +59,8 @@ class TtsSessionFactory : public OmniSessionFactory {
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
       override;
 
-  const lm::proto::TtsMetadata& metadata() const { return metadata_; }
-  const lm::proto::TtsSessionConfig& session_config() const {
+  const lm::proto::Text2SpeechMetadata& metadata() const { return metadata_; }
+  const lm::proto::Text2SpeechSessionConfig& session_config() const {
     return session_config_;
   }
   const OmniEngine::Settings& engine_settings() const {
@@ -92,16 +94,16 @@ class TtsSessionFactory : public OmniSessionFactory {
   // Resolves the `TextChunkConfig` for `session_config`, applying any
   // model-specific revisions.
   virtual TextChunkConfig ResolveTextChunkConfig(
-      const lm::proto::TtsSessionConfig& session_config) const;
+      const lm::proto::Text2SpeechSessionConfig& session_config) const;
 
  protected:
   virtual absl::StatusOr<std::unique_ptr<MultiStagedSession>>
   CreateWithTextSource(
-      const lm::proto::TtsSessionConfig& session_config,
+      const lm::proto::Text2SpeechSessionConfig& session_config,
       std::unique_ptr<StreamTextSource> absl_nullable text_source) = 0;
 
-  lm::proto::TtsSessionConfig MergeSessionConfig(
-      const lm::proto::TtsSessionConfig& session_config) const;
+  lm::proto::Text2SpeechSessionConfig MergeSessionConfig(
+      const lm::proto::Text2SpeechSessionConfig& session_config) const;
 
   lm::ThreadPool* thread_pool() const { return thread_pool_.get(); }
 
@@ -115,8 +117,8 @@ class TtsSessionFactory : public OmniSessionFactory {
       TextChunkConfig config = {});
 
   OmniEngine::Settings engine_settings_;
-  lm::proto::TtsSessionConfig session_config_;
-  lm::proto::TtsMetadata metadata_;
+  lm::proto::Text2SpeechSessionConfig session_config_;
+  lm::proto::Text2SpeechMetadata metadata_;
   std::vector<std::string> available_voices_;
   std::shared_ptr<ModelResources> absl_nullable model_resources_;
   std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool_;

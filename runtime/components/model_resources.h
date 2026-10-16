@@ -64,9 +64,9 @@ std::string TfLiteModelTypeToWireString(
 std::string TfLiteModelTypeToWireString(
     proto::EmbeddingMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
-    proto::TtsMetadata::TfLiteModelType model_type);
+    proto::Text2SpeechMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
-    proto::AsrMetadata::TfLiteModelType model_type);
+    proto::Speech2TextMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
     proto::Text2ImageMetadata::TfLiteModelType model_type);
 
@@ -91,7 +91,8 @@ constexpr bool kIsTfLiteModelType = std::is_enum_v<TfLiteModelTypeT>;
 
 // True for the capability-scoped Protobuf TfLiteModelType enums other than the
 // LLM one, e.g. proto::EmbeddingMetadata::TfLiteModelType,
-// proto::TtsMetadata::TfLiteModelType, proto::AsrMetadata::TfLiteModelType or
+// proto::Text2SpeechMetadata::TfLiteModelType,
+// proto::Speech2TextMetadata::TfLiteModelType or
 // proto::Text2ImageMetadata::TfLiteModelType. Used to route these enums to the
 // by-name (wire string) ModelResources overloads.
 template <typename TfLiteModelTypeT>
@@ -142,8 +143,8 @@ class ModelResources {
   // capability-scoped Engines. Here TfLiteModelTypeT is an enum type defined in
   // the capability-scoped metadata proto, e.g.
   // - proto::EmbeddingMetadata::TfLiteModelType,
-  // - proto::TtsMetadata::TfLiteModelType
-  // - proto::AsrMetadata::TfLiteModelType
+  // - proto::Text2SpeechMetadata::TfLiteModelType
+  // - proto::Speech2TextMetadata::TfLiteModelType
   // - proto::Text2ImageMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
@@ -320,14 +321,18 @@ class ModelResources {
     return absl::UnimplementedError("GetEmbeddingMetadata is not implemented.");
   }
 
-  // Returns the TTS metadata.
-  virtual absl::StatusOr<const proto::TtsMetadata*> GetTtsMetadata() {
-    return absl::UnimplementedError("GetTtsMetadata is not implemented.");
+  // Returns the Text2Speech metadata.
+  virtual absl::StatusOr<const proto::Text2SpeechMetadata*>
+  GetText2SpeechMetadata() {
+    return absl::UnimplementedError(
+        "GetText2SpeechMetadata is not implemented.");
   }
 
-  // Returns the ASR metadata.
-  virtual absl::StatusOr<const proto::AsrMetadata*> GetAsrMetadata() {
-    return absl::UnimplementedError("GetAsrMetadata is not implemented.");
+  // Returns the Speech2Text metadata.
+  virtual absl::StatusOr<const proto::Speech2TextMetadata*>
+  GetSpeech2TextMetadata() {
+    return absl::UnimplementedError(
+        "GetSpeech2TextMetadata is not implemented.");
   }
 
   // Returns the Text2Image metadata.

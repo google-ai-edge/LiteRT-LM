@@ -280,12 +280,12 @@ absl::Status RunOmniRunner() {
     }
   }
 
-  litert::lm::proto::AsrSessionConfig asr_config;
-  litert::lm::proto::TtsSessionConfig tts_config;
+  litert::lm::proto::Speech2TextSessionConfig asr_config;
+  litert::lm::proto::Text2SpeechSessionConfig tts_config;
   litert::lm::proto::Text2ImageSessionConfig t2i_config;
   const MessageLite* session_config = nullptr;
 
-  if (reg.metadata_proto_type_id == "litert.lm.proto.AsrMetadata") {
+  if (reg.metadata_proto_type_id == "litert.lm.proto.Speech2TextMetadata") {
     if (audio_path.empty()) {
       return absl::InvalidArgumentError(
           absl::StrCat("ASR model '", model_name, "' requires --audio_path."));
@@ -294,10 +294,12 @@ absl::Status RunOmniRunner() {
     if (absl::EqualsIgnoreCase(absl::GetFlag(FLAGS_text_merger_type),
                                "levenshtein")) {
       asr_config.set_text_merger_type(
-          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
+          litert::lm::proto::Speech2TextSessionConfig::
+              TEXT_MERGER_TYPE_LEVENSHTEIN);
     } else {
       asr_config.set_text_merger_type(
-          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
+          litert::lm::proto::Speech2TextSessionConfig::
+              TEXT_MERGER_TYPE_TIMESTAMP);
     }
     session_config = &asr_config;
   } else if (reg.metadata_proto_type_id ==
@@ -314,7 +316,8 @@ absl::Status RunOmniRunner() {
     t2i_config.set_num_inference_steps(absl::GetFlag(FLAGS_steps));
     t2i_config.set_seed(absl::GetFlag(FLAGS_seed));
     session_config = &t2i_config;
-  } else if (reg.metadata_proto_type_id == "litert.lm.proto.TtsMetadata") {
+  } else if (reg.metadata_proto_type_id ==
+             "litert.lm.proto.Text2SpeechMetadata") {
     if (text.empty()) {
       return absl::InvalidArgumentError(
           absl::StrCat("TTS model '", model_name, "' requires --text."));

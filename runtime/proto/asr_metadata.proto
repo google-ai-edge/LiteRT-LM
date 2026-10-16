@@ -19,7 +19,7 @@ package litert.lm.proto;
 import "runtime/proto/asr_model_type.proto";
 
 option java_multiple_files = true;
-option java_outer_classname = "AsrMetadataOuterClass";
+option java_outer_classname = "Speech2TextMetadataOuterClass";
 
 // Parameters for log-mel spectrogram audio preprocessing in ASR.
 message LogMelSpectrogramConfig {
@@ -47,7 +47,7 @@ message LogMelSpectrogramConfig {
 }
 
 // Model-specific parameters for Automatic Speech Recognition (ASR) models.
-message AsrMetadata {
+message Speech2TextMetadata {
   enum TfLiteModelType {
     // Placeholder for unspecified model type.
     TF_LITE_MODEL_TYPE_UNSPECIFIED = 0;
@@ -60,7 +60,7 @@ message AsrMetadata {
   }
 
   // ASR model type.
-  AsrModelType asr_model_type = 1;
+  Speech2TextModelType asr_model_type = 1;
 
   // Expected input audio sample rate in Hz (e.g., 16000).
   optional int32 sample_rate_hz = 2;

@@ -103,7 +103,8 @@ absl::Status RunAsrRunner(absl::string_view model_name,
   ABSL_ASSIGN_OR_RETURN(
       litert::omni::OmniRegistry::RegisteredModel reg_model,
       litert::omni::OmniRegistry::Get().GetRegisteredModel(model_name));
-  if (reg_model.metadata_proto_type_id != "litert.lm.proto.AsrMetadata") {
+  if (reg_model.metadata_proto_type_id !=
+      "litert.lm.proto.Speech2TextMetadata") {
     return absl::NotFoundError(
         absl::StrCat("Unsupported or unknown ASR model: ", model_name));
   }
@@ -136,15 +137,17 @@ absl::Status RunAsrRunner(absl::string_view model_name,
   ABSL_ASSIGN_OR_RETURN(engine_settings.backend,
                         litert::omni::ParseOmniBackend(backend_flag));
 
-  litert::lm::proto::AsrSessionConfig session_config;
+  litert::lm::proto::Speech2TextSessionConfig session_config;
   session_config.set_overlap_ratio(overlap_ratio);
   if (!text_merger_flag.empty()) {
     if (absl::EqualsIgnoreCase(text_merger_flag, "levenshtein")) {
       session_config.set_text_merger_type(
-          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
+          litert::lm::proto::Speech2TextSessionConfig::
+              TEXT_MERGER_TYPE_LEVENSHTEIN);
     } else {
       session_config.set_text_merger_type(
-          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
+          litert::lm::proto::Speech2TextSessionConfig::
+              TEXT_MERGER_TYPE_TIMESTAMP);
     }
   }
 

@@ -260,17 +260,17 @@ session configuration into three layers:
         `model_path`, and fallback model/session defaults provided by the
         model's `SessionFactory`.
 2.  **Layer 2 — `.litertlm` Package Metadata** (embedded in `.litertlm` files):
-    *   `AsrMetadata`, `TtsMetadata`, `Text2ImageMetadata`: Model-intrinsic
-        parameters packaged with the weights (e.g., sample rate, mel spectrogram
-        config, special token IDs).
+    *   `Speech2TextMetadata`, `Text2SpeechMetadata`, `Text2ImageMetadata`:
+        Model-intrinsic parameters packaged with the weights (e.g., sample rate,
+        mel spectrogram config, special token IDs).
 3.  **Layer 3 — Session Config** (passed to `OmniEngine::Create`):
-    *   `AsrSessionConfig` (overlap ratio, text merger type), `TtsSessionConfig`
-        (language, voice), `Text2ImageSessionConfig` (width, height, inference
-        steps, seed).
+    *   `Speech2TextSessionConfig` (overlap ratio, text merger type),
+        `Text2SpeechSessionConfig` (language, voice), `Text2ImageSessionConfig`
+        (width, height, inference steps, seed).
 
 ```cpp
 // Configure TTS voice and language when creating the engine:
-litert::lm::proto::TtsSessionConfig tts_config;
+litert::lm::proto::Text2SpeechSessionConfig tts_config;
 tts_config.set_language("en-US");
 tts_config.set_voice("af_heart");
 
@@ -290,8 +290,8 @@ register a `RegistrySpec` with `OmniRegistry::Get().RegisterSessionFactory`:
 *   **`model_names`**: Canonical model name followed by any aliases.
 *   **`get_session_factory`**: Callback that compiles shared model resources and
     returns an `OmniSessionFactory`.
-*   **`session_config_type_id`**: Short key (`"Asr"`, `"Tts"`, `"Text2Image"`,
-    which expands to `"litert.lm.proto.<Key>SessionConfig"` and
+*   **`session_config_type_id`**: Short key (`"Speech2Text"`, `"Text2Speech"`,
+    `"Text2Image"`, which expands to `"litert.lm.proto.<Key>SessionConfig"` and
     `"litert.lm.proto.<Key>Metadata"`) or full proto type name.
 *   **`model_remote_url`** *(optional)*: Default URL for automatic download when
     no local `model_path` is supplied.
@@ -319,7 +319,7 @@ GetParakeetTdtSessionFactory(
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetParakeetTdtSessionFactory,
-      .session_config_type_id = "Asr",
+      .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3/"
           "resolve/main/parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm",

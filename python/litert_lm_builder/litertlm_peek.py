@@ -276,35 +276,35 @@ def _dump_embedding_metadata_proto(
   )
 
 
-def _dump_asr_metadata_proto(
+def _dump_speech2text_metadata_proto(
     file_stream: IO[bytes],
     section_object: schema.SectionObject,
     dump_files_dir: str | None,
     output_stream: IO[str],
 ) -> Optional[str]:
-  """Dumps AsrMetadataProto section content."""
+  """Dumps Speech2TextMetadataProto section content."""
   return _dump_proto_section(
       file_stream,
       section_object,
       dump_files_dir,
       output_stream,
-      asr_metadata_pb2.AsrMetadata,
+      asr_metadata_pb2.Speech2TextMetadata,
   )
 
 
-def _dump_tts_metadata_proto(
+def _dump_text2speech_metadata_proto(
     file_stream: IO[bytes],
     section_object: schema.SectionObject,
     dump_files_dir: str | None,
     output_stream: IO[str],
 ) -> Optional[str]:
-  """Dumps TtsMetadataProto section content."""
+  """Dumps Text2SpeechMetadataProto section content."""
   return _dump_proto_section(
       file_stream,
       section_object,
       dump_files_dir,
       output_stream,
-      tts_metadata_pb2.TtsMetadata,
+      tts_metadata_pb2.Text2SpeechMetadata,
   )
 
 
@@ -687,14 +687,14 @@ def peek_litertlm_file(
           dumped_file_name = _dump_embedding_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
-        elif data_type == schema.AnySectionDataType.AsrMetadataProto:
-          section_info["section_type"] = "AsrMetadata"
-          dumped_file_name = _dump_asr_metadata_proto(
+        elif data_type == schema.AnySectionDataType.Speech2TextMetadataProto:
+          section_info["section_type"] = "Speech2TextMetadata"
+          dumped_file_name = _dump_speech2text_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
-        elif data_type == schema.AnySectionDataType.TtsMetadataProto:
-          section_info["section_type"] = "TtsMetadata"
-          dumped_file_name = _dump_tts_metadata_proto(
+        elif data_type == schema.AnySectionDataType.Text2SpeechMetadataProto:
+          section_info["section_type"] = "Text2SpeechMetadata"
+          dumped_file_name = _dump_text2speech_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.Text2ImageMetadataProto:

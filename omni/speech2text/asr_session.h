@@ -55,8 +55,8 @@ class AsrSessionFactory : public OmniSessionFactory {
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
       override;
 
-  const lm::proto::AsrMetadata& metadata() const { return metadata_; }
-  const lm::proto::AsrSessionConfig& session_config() const {
+  const lm::proto::Speech2TextMetadata& metadata() const { return metadata_; }
+  const lm::proto::Speech2TextSessionConfig& session_config() const {
     return session_config_;
   }
 
@@ -85,8 +85,8 @@ class AsrSessionFactory : public OmniSessionFactory {
       int sample_rate_hz, int num_channels, int samples_per_interval,
       int overlap_samples);
 
-  lm::proto::AsrSessionConfig session_config_;
-  lm::proto::AsrMetadata metadata_;
+  lm::proto::Speech2TextSessionConfig session_config_;
+  lm::proto::Speech2TextMetadata metadata_;
   std::unique_ptr<::litert::Environment> absl_nonnull environment_;
   std::shared_ptr<lm::ModelResources> absl_nullable model_resources_;
   std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer_;

@@ -299,8 +299,8 @@ def _get_model_type(section: _SectionObject) -> str | None:
 _ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
     set(llm_metadata_pb2.LlmMetadata.TfLiteModelType.keys())
     | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.keys())
-    | set(asr_metadata_pb2.AsrMetadata.TfLiteModelType.keys())
-    | set(tts_metadata_pb2.TtsMetadata.TfLiteModelType.keys())
+    | set(asr_metadata_pb2.Speech2TextMetadata.TfLiteModelType.keys())
+    | set(tts_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.keys())
     | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.keys())
 ) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
 
@@ -341,12 +341,12 @@ def _resolve_model_type_wire_string(
           "TF_LITE_MODEL_TYPE_UNSPECIFIED (0) is not a valid model_type."
       )
     capability_type = next(iter(capability_types))
-    if capability_type == "asr":
-      return asr_metadata_pb2.AsrMetadata.TfLiteModelType.Name(
+    if capability_type in ("speech2text", "asr"):
+      return asr_metadata_pb2.Speech2TextMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
-    if capability_type == "tts":
-      return tts_metadata_pb2.TtsMetadata.TfLiteModelType.Name(
+    if capability_type in ("text2speech", "tts"):
+      return tts_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
     if capability_type == "text2image":
@@ -468,8 +468,8 @@ class LitertLmFileBuilder:
     self._embedding_metadata: (
         embedding_metadata_pb2.EmbeddingMetadata | None
     ) = None
-    self._has_asr_metadata = False
-    self._has_tts_metadata = False
+    self._has_speech2text_metadata = False
+    self._has_text2speech_metadata = False
     self._has_text2image_metadata = False
     self._capability_types: set[str] = set()
     self._tokenizers_by_model_type: set[str | None] = set()
@@ -711,13 +711,13 @@ class LitertLmFileBuilder:
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section_type == "AsrMetadata":
-          builder.add_asr_metadata(
+        elif section_type in ("Speech2TextMetadata", "AsrMetadata"):
+          builder.add_speech2text_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section_type == "TtsMetadata":
-          builder.add_tts_metadata(
+        elif section_type in ("Text2SpeechMetadata", "TtsMetadata"):
+          builder.add_text2speech_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
@@ -1036,20 +1036,49 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
 
+  def add_speech2text_metadata(
+      self,
+      speech2text_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds speech-to-text metadata to the litertlm file."""
+    assert (
+        not self._has_speech2text_metadata
+    ), "Speech2Text metadata already added."
+    self._check_no_capability_metadata_added("speech2text")
+    self._has_speech2text_metadata = True
+    return self._add_proto_metadata_section(
+        speech2text_metadata_path,
+        asr_metadata_pb2.Speech2TextMetadata,
+        schema.AnySectionDataType.Speech2TextMetadataProto,
+        "Speech2Text",
+        additional_metadata,
+    )
+
   def add_asr_metadata(
       self,
       asr_metadata_path: str,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
-    """Adds ASR metadata to the litertlm file."""
-    assert not self._has_asr_metadata, "ASR metadata already added."
-    self._check_no_capability_metadata_added("asr")
-    self._has_asr_metadata = True
+    """Adds speech-to-text (ASR) metadata to the litertlm file."""
+    return self.add_speech2text_metadata(asr_metadata_path, additional_metadata)
+
+  def add_text2speech_metadata(
+      self,
+      text2speech_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds text-to-speech metadata to the litertlm file."""
+    assert (
+        not self._has_text2speech_metadata
+    ), "Text2Speech metadata already added."
+    self._check_no_capability_metadata_added("text2speech")
+    self._has_text2speech_metadata = True
     return self._add_proto_metadata_section(
-        asr_metadata_path,
-        asr_metadata_pb2.AsrMetadata,
-        schema.AnySectionDataType.AsrMetadataProto,
-        "ASR",
+        text2speech_metadata_path,
+        tts_metadata_pb2.Text2SpeechMetadata,
+        schema.AnySectionDataType.Text2SpeechMetadataProto,
+        "Text2Speech",
         additional_metadata,
     )
 
@@ -1058,17 +1087,8 @@ class LitertLmFileBuilder:
       tts_metadata_path: str,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
-    """Adds TTS metadata to the litertlm file."""
-    assert not self._has_tts_metadata, "TTS metadata already added."
-    self._check_no_capability_metadata_added("tts")
-    self._has_tts_metadata = True
-    return self._add_proto_metadata_section(
-        tts_metadata_path,
-        tts_metadata_pb2.TtsMetadata,
-        schema.AnySectionDataType.TtsMetadataProto,
-        "TTS",
-        additional_metadata,
-    )
+    """Adds text-to-speech (TTS) metadata to the litertlm file."""
+    return self.add_text2speech_metadata(tts_metadata_path, additional_metadata)
 
   def add_text2image_metadata(
       self,
