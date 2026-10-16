@@ -190,6 +190,20 @@ cc_test(
 )
 
 cc_library(
+    name = "antlr_parser_utils_hdrs",
+    hdrs = [
+        "fc_parser_utils.h",
+        "json_parser_utils.h",
+        "python_parser_utils.h",
+    ],
+    deps = [
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_library(
     name = "antlr_parser_utils_noop",
     srcs = ["antlr_parser_utils_noop.cc"],
     hdrs = [
@@ -217,10 +231,39 @@ cc_test(
 )
 
 cc_library(
+    name = "parser_utils_hdrs",
+    hdrs = ["parser_utils.h"],
+    deps = [
+        ":antlr_parser_utils_hdrs",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_library(
+    name = "parser_utils_lite",
+    srcs = ["parser_utils.cc"],
+    hdrs = ["parser_utils.h"],
+    deps = [
+        ":antlr_parser_utils_hdrs",
+        ":antlr_parser_utils_noop",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@nlohmann_json//:json",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_library(
     name = "parser_utils",
     srcs = ["parser_utils.cc"],
     hdrs = ["parser_utils.h"],
     deps = [
+        ":antlr_parser_utils_hdrs",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",

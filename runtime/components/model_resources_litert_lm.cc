@@ -48,14 +48,11 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "schema/core/litertlm_header_schema_generated.h"
-
-#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
-#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
-
-#ifdef ENABLE_HUGGINGFACE_TOKENIZER
-#endif  // ENABLE_HUGGINGFACE_TOKENIZER
+#include "support/tokenizer/huggingface_tokenizer.h"
 
 namespace litert::lm {
+
+using ::litert::support::HuggingFaceTokenizer;
 
 namespace {
 
@@ -199,13 +196,6 @@ absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
 
 absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
     absl::string_view model_type_str) {
-#if !defined(ENABLE_SENTENCEPIECE_TOKENIZER) && \
-    !defined(ENABLE_HUGGINGFACE_TOKENIZER)
-  return absl::UnimplementedError(
-      "Tokenizers cannot be used. Neither ENABLE_SENTENCEPIECE_TOKENIZER nor "
-      "ENABLE_HUGGINGFACE_TOKENIZER are defined during build.");
-#endif  // !ENABLE_SENTENCEPIECE_TOKENIZER && !ENABLE_HUGGINGFACE_TOKENIZER
-
   auto sp_tokenizer =
       litert_lm_loader_->GetSentencePieceTokenizer(model_type_str);
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
@@ -216,21 +206,15 @@ absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
 
   auto hf_tokenizer =
       litert_lm_loader_->GetHuggingFaceTokenizer(model_type_str);
-#ifdef ENABLE_HUGGINGFACE_TOKENIZER
   if (hf_tokenizer) {
     std::string json_data(hf_tokenizer->StrData(), hf_tokenizer->Size());
     return HuggingFaceTokenizer::CreateFromJson(json_data);
   }
-#endif  // ENABLE_HUGGINGFACE_TOKENIZER
 
   if (sp_tokenizer) {
     return absl::UnimplementedError(
         "SentencePiece tokenizer found, but LiteRT LM was built with "
         "--define=DISABLE_SENTENCEPIECE_TOKENIZER=1.");
-  } else if (hf_tokenizer) {
-    return absl::UnimplementedError(
-        "HuggingFace tokenizer found, but LiteRT LM was built with "
-        "--define=DISABLE_HUGGINGFACE_TOKENIZER=1.");
   } else {
     return absl::NotFoundError(absl::StrCat(
         "No tokenizer found in the model for model type: ", model_type_str));

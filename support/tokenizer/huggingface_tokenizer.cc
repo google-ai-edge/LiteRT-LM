@@ -33,6 +33,8 @@
 
 namespace litert::support {
 
+HuggingFaceTokenizer::~HuggingFaceTokenizer() { tokenizers_free(handle_); }
+
 absl::StatusOr<std::unique_ptr<HuggingFaceTokenizer>>
 HuggingFaceTokenizer::CreateFromFile(absl::string_view json_path) {
   ASSIGN_OR_RETURN(auto memory_mapped_file,  // NOLINT

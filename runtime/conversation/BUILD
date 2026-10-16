@@ -51,6 +51,22 @@ cc_library(
 )
 
 cc_library(
+    name = "prompt_utils_lite",
+    srcs = ["prompt_utils.cc"],
+    hdrs = ["prompt_utils.h"],
+    deps = [
+        ":io_types",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@nlohmann_json//:json",
+        "//runtime/components:prompt_template_noop",
+        "//runtime/conversation/model_data_processor",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_library(
     name = "channel_util",
     srcs = ["channel_util.cc"],
     hdrs = ["channel_util.h"],
@@ -151,6 +167,91 @@ cc_library(
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_type_utils",
+    ],
+)
+
+# Minimal Conversation target ("LiteRT-LM Lite" profile) for binary-size-constrained
+# clients.
+#
+# Included features:
+#   - Gemma3, Gemma4, FunctionGemma, and Generic model data processors.
+# Excluded heavy dependencies (linked against *_noop / *_lite targets instead):
+#   - Minijinja prompt templates (:prompt_template_noop)
+#   - Constrained decoding / llguidance / OpenFst (:constraint_provider_factory_noop)
+#   - Non-Gemma model data processors (:model_data_processor_factory_lite)
+#   - ANTLR4 and Rust tool-use expression parsers (:parser_utils_lite)
+#
+# Usage expectations:
+#   1. Pair `:conversation_lite` with `//runtime/core:engine_advanced_impl_lite`
+#      (or `:engine_advanced_impl_cpu_only_lite`) so heavy dependencies are excluded
+#      across both the Conversation and Engine layers.
+#   2. Do NOT link both `:conversation` and `:conversation_lite` (or both standard and
+#      `*_lite` variants of the same subsystem) in the same binary, as they provide
+#      competing link-time definitions for the same factory/component symbols.
+cc_library(
+    name = "conversation_lite",
+    srcs = ["conversation.cc"],
+    hdrs = ["conversation.h"],
+    deps = [
+        ":channel_util",
+        ":internal_callback_util",
+        ":io_types",
+        ":prompt_utils_lite",
+        ":thinking_config",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+        "@nlohmann_json//:json",
+        "//runtime/components:prompt_template_noop",
+        "//runtime/components/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:constraint_provider",
+        "//runtime/components/constrained_decoding:constraint_provider_config",
+        "//runtime/components/constrained_decoding:constraint_provider_factory_noop",
+        "//runtime/components/constrained_decoding:no_repeat_ngram_config",
+        "//runtime/components/constrained_decoding:repetition_penalty_config",
+        "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/conversation/model_data_processor",
+        "//runtime/conversation/model_data_processor:config_registry",
+        "//runtime/conversation/model_data_processor:model_data_processor_factory_lite",
+        "//runtime/core:session_utils",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:model_type_utils",
+    ],
+)
+
+cc_test(
+    name = "conversation_lite_test",
+    srcs = ["conversation_lite_test.cc"],
+    deps = [
+        ":conversation_lite",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//runtime/components:prompt_template_noop",
+        "//runtime/components/tool_use:parser_utils_lite",
+        "//runtime/conversation/model_data_processor:fastvlm_data_processor_config",
+        "//runtime/conversation/model_data_processor:gemma3_data_processor_config",
+        "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
+        "//runtime/conversation/model_data_processor:model_data_processor_factory_lite",
+        "//runtime/conversation/model_data_processor:qwen3_data_processor_config",
+        "//runtime/core:engine_advanced_impl_lite",  # buildcleaner: keep
+        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/util:test_utils",
+        "//support/tokenizer:huggingface_tokenizer_noop",
     ],
 )
 

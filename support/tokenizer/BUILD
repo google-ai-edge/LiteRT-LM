@@ -92,10 +92,27 @@ cc_test(
 )
 
 cc_library(
+    name = "huggingface_tokenizer_noop",
+    srcs = ["huggingface_tokenizer_noop.cc"],
+    hdrs = ["huggingface_tokenizer.h"],
+    linkstatic = 1,
+    deps = [
+        ":tokenizer",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
     name = "huggingface_tokenizer",
     srcs = ["huggingface_tokenizer.cc"],
     hdrs = ["huggingface_tokenizer.h"],
     defines = ["ENABLE_HUGGINGFACE_TOKENIZER"],
+    linkstatic = 1,
     deps = [
         ":tokenizer",
         "@com_google_absl//absl/base:nullability",
@@ -116,6 +133,7 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+    alwayslink = 1,
 )
 
 cc_test(

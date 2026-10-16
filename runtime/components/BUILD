@@ -307,6 +307,7 @@ cc_library(
         "@litert//litert/cc:litert_model",
         "//runtime/proto:asr_metadata_cc_proto",
         "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:text2image_metadata_cc_proto",
         "//runtime/proto:tts_metadata_cc_proto",
@@ -314,6 +315,8 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//schema/core:litertlm_header_schema",
+        "//support/tokenizer",
+        "//support/tokenizer:huggingface_tokenizer_noop",
     ],
 )
 
@@ -338,9 +341,6 @@ cc_library(
         "//runtime/util:scoped_file",
         "//support/tokenizer",
     ] + select({
-        ":disable_huggingface_tokenizer": [],
-        "//conditions:default": ["//support/tokenizer:huggingface_tokenizer"],
-    }) + select({
         ":disable_sentencepiece_tokenizer": [],
         "//conditions:default": ["//support/tokenizer:sentencepiece_tokenizer"],
     }),

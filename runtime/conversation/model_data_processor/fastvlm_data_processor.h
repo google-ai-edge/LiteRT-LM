@@ -15,7 +15,13 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_FASTVLM_DATA_PROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_FASTVLM_DATA_PROCESSOR_H_
 
-#include "runtime/components/prompt_template.h"
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"

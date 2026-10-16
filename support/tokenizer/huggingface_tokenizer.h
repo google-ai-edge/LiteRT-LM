@@ -25,9 +25,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"
-#include "include/tokenizers_c.h"  // from @tokenizers_cpp
 
 namespace litert::support {
+
+using TokenizerHandle = void*;
 
 // A Tokenizer implementation using HuggingFace.
 class HuggingFaceTokenizer : public Tokenizer {
@@ -40,7 +41,7 @@ class HuggingFaceTokenizer : public Tokenizer {
   static absl::StatusOr<std::unique_ptr<HuggingFaceTokenizer>> CreateFromJson(
       const std::string& json);
 
-  ~HuggingFaceTokenizer() override { tokenizers_free(handle_); }
+  ~HuggingFaceTokenizer() override;
 
   TokenizerType GetTokenizerType() const override {
     return TokenizerType::kHuggingFace;

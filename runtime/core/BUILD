@@ -47,7 +47,7 @@ package_group(
     ],
 )
 
-ENGINE_IMPL_COMMON_DEPS = [
+ENGINE_IMPL_BASE_DEPS = [
     ":audio_session_advanced",
     ":session_advanced",
     ":cached_session",
@@ -94,8 +94,6 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/executor:vision_litert_compiled_model_executor",
     "//runtime/framework:threadpool",
     "//runtime/framework/resource_management:execution_manager",
-    "//runtime/framework/resource_management:serial_execution_manager",
-    "//runtime/framework/resource_management:threaded_execution_manager",
     "//runtime/proto:executor_metadata_cc_proto",
     "//runtime/proto:llm_metadata_cc_proto",
     "//runtime/proto:sampler_params_cc_proto",
@@ -112,10 +110,27 @@ ENGINE_IMPL_COMMON_DEPS = [
     "@litert//litert/cc:litert_compiled_model",
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_model",
+]
+
+ENGINE_IMPL_COMMON_DEPS = ENGINE_IMPL_BASE_DEPS + [
+    "//runtime/components:model_resources_litert_lm",
+    "//runtime/framework/resource_management:serial_execution_manager",
+    "//runtime/framework/resource_management:threaded_execution_manager",
 ] + select({
-    "//runtime/components:disable_huggingface_tokenizer": [],
-    "//conditions:default": ["//support/tokenizer:huggingface_tokenizer"],
+    "//build_config:disable_huggingface_tokenizer": [
+        "//support/tokenizer:huggingface_tokenizer_noop",
+    ],
+    "//conditions:default": [
+        "//support/tokenizer:huggingface_tokenizer",
+    ],
 })
+
+ENGINE_IMPL_LITE_COMMON_DEPS = ENGINE_IMPL_BASE_DEPS + [
+    "//runtime/components:model_resources_litert_lm",
+    "//runtime/framework/resource_management:serial_execution_manager_lite",
+    "//runtime/framework/resource_management:threaded_execution_manager_lite",
+    "//support/tokenizer:huggingface_tokenizer_noop",
+]
 
 cc_library(
     name = "engine_advanced_impl",
@@ -152,6 +167,64 @@ cc_library(
         "//conditions:default": [],
     }),
     deps = ENGINE_IMPL_COMMON_DEPS + select({
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
+        "//conditions:default": [],
+    }),
+    alwayslink = 1,
+)
+
+# Lightweight Engine implementation ("LiteRT-LM Lite" profile) for
+# binary-size-constrained clients.
+#
+# Excluded heavy dependencies by default:
+#   - Legacy Artisan GPU/Audio executors (:resource_manager_lite)
+#   - HuggingFace Rust tokenizer (:huggingface_tokenizer_noop weak stubs are used
+#     unless //support/tokenizer:huggingface_tokenizer
+#     is explicitly linked).
+#
+# Usage expectations:
+#   1. Pair `:engine_advanced_impl_lite` (or `:engine_advanced_impl_cpu_only_lite`)
+#      with `//runtime/conversation:conversation_lite`.
+#   2. Do NOT link both `:engine_advanced_impl` and `:engine_advanced_impl_lite`
+#      (or both `:resource_manager` and `:resource_manager_lite`) in the same
+#      binary, as they provide competing link-time definitions for the same symbols.
+cc_library(
+    name = "engine_advanced_impl_lite",
+    srcs = ["engine_advanced_impl.cc"],
+    local_defines = select({
+        "//conditions:default": [],
+    }) + select({
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = ENGINE_IMPL_LITE_COMMON_DEPS + [
+        "//runtime/components:default_static_gpu_samplers",
+        "//runtime/executor:default_static_gpu_accelerator",
+    ] + select({
+        "//conditions:default": [],
+    }) + select({
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
+        "//conditions:default": [],
+    }),
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "engine_advanced_impl_cpu_only_lite",
+    srcs = ["engine_advanced_impl.cc"],
+    local_defines = select({
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = ENGINE_IMPL_LITE_COMMON_DEPS + select({
         "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
@@ -689,7 +762,13 @@ cc_library(
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//support/tokenizer",
         "//support/util:io_types",
-    ],
+    ] + select({
+        "//build_config:disable_huggingface_tokenizer": [],
+        "@platforms//os:chromiumos": [],
+        "//conditions:default": [
+            "//support/tokenizer:huggingface_tokenizer",
+        ],
+    }),
 )
 
 cc_test(
