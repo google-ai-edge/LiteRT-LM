@@ -75,6 +75,7 @@ cc_library(
         ":chinese_g2p",
         ":cjk_blob",
         ":common",
+        ":english_g2p",
         ":japanese_g2p",
         ":traditional_chinese_converter",
         "@com_google_absl//absl/base:core_headers",
@@ -479,6 +480,35 @@ cc_test(
         ":cjk_blob",
         ":cjk_test_blobs",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "english_g2p",
+    srcs = ["english_g2p.cc"],
+    hdrs = ["english_g2p.h"],
+    deps = [
+        ":cjk_blob",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "english_g2p_test",
+    srcs = ["english_g2p_test.cc"],
+    deps = [
+        ":cjk_blob",
+        ":cjk_test_blobs",
+        ":english_g2p",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "//support/util:test_utils",
     ],

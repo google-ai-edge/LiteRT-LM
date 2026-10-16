@@ -134,6 +134,11 @@ KokoroAcousticStage::Create(
   if (const auto lex_it = stage->config_.cjk_lexicons.find(normalized_lang);
       lex_it != stage->config_.cjk_lexicons.end()) {
     cjk_lexicon = lex_it->second;
+  } else if (normalized_lang == "en-gb") {
+    if (const auto us_it = stage->config_.cjk_lexicons.find("en-us");
+        us_it != stage->config_.cjk_lexicons.end()) {
+      cjk_lexicon = us_it->second;
+    }
   }
   ABSL_ASSIGN_OR_RETURN(
       stage->phonemizer_,

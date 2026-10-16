@@ -47,6 +47,7 @@
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/common.h"
+#include "omni/tts/kokoro/english_g2p.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
 #include "omni/tts/kokoro/traditional_chinese_converter.h"
 #include "omni/tts/text_normalizer.h"
@@ -62,6 +63,9 @@ constexpr absl::string_view kMissingJapaneseLexiconError =
     "model container; espeak-ng fallback is disabled for Japanese.";
 
 #if defined(LITERT_LM_ESPEAK_NG_ENABLED)
+// Whether this build links the espeak-ng C library.
+constexpr bool kEspeakNgEnabled = true;
+
 // Thread-safe one-time initialization of the process-global espeak-ng C
 // library.
 //
@@ -107,6 +111,9 @@ std::string RemoveTiesInsideParentheses(absl::string_view phonemes) {
   return out;
 }
 #else
+// Whether this build links the espeak-ng C library.
+constexpr bool kEspeakNgEnabled = false;
+
 // espeak-ng is not linked into this build; there is nothing to initialize.
 absl::Status EnsureEspeakInitialized(absl::string_view /*parent_dir*/) {
   return absl::OkStatus();
@@ -739,8 +746,13 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     ABSL_ASSIGN_OR_RETURN(kokoro::CjkBlob blob,
                           kokoro::CjkBlob::Create(cjk_lexicon));
     phonemizer->cjk_blob_ = std::make_unique<kokoro::CjkBlob>(std::move(blob));
-    if (phonemizer->language_ == "ja" ||
-        phonemizer->cjk_blob_->Contains("sys-da")) {
+    if (phonemizer->cjk_blob_->Contains("us-idx")) {
+      ABSL_ASSIGN_OR_RETURN(kokoro::EnglishG2p en_g2p,
+                            kokoro::EnglishG2p::Create(*phonemizer->cjk_blob_));
+      phonemizer->english_g2p_ =
+          std::make_unique<kokoro::EnglishG2p>(std::move(en_g2p));
+    } else if (phonemizer->language_ == "ja" ||
+               phonemizer->cjk_blob_->Contains("sys-da")) {
       ABSL_ASSIGN_OR_RETURN(
           kokoro::JapaneseG2p ja_g2p,
           kokoro::JapaneseG2p::Create(*phonemizer->cjk_blob_));
@@ -755,6 +767,14 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
           std::make_unique<kokoro::ChineseG2p>(std::move(zh_g2p));
     }
   }
+  const bool use_fallback_english_g2p =
+      !kEspeakNgEnabled || phonemizer->data_dir_.empty();
+  if (phonemizer->english_g2p_ == nullptr && use_fallback_english_g2p) {
+    ABSL_ASSIGN_OR_RETURN(kokoro::EnglishG2p en_g2p,
+                          kokoro::EnglishG2p::Create());
+    phonemizer->english_g2p_ =
+        std::make_unique<kokoro::EnglishG2p>(std::move(en_g2p));
+  }
 
   // Pre-seed default project-specific pronunciation overrides.
   phonemizer->merged_lexicon_ = {
@@ -764,7 +784,10 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
       {"github", "ɡˈɪthʌb"},
   };
   for (const auto& [w, ipa] : custom_lexicon) {
-    phonemizer->merged_lexicon_[absl::AsciiStrToLower(w)] = ipa;
+    const std::string low_w = absl::AsciiStrToLower(w);
+    phonemizer->custom_lexicon_[low_w] =
+        NormalizeMisakiPhonemes(ipa, FlavorForLanguage(phonemizer->language_));
+    phonemizer->merged_lexicon_[low_w] = ipa;
   }
 
   // Initialize the process-global espeak-ng G2P C library with the explicit
@@ -812,6 +835,10 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
     }
     return japanese_g2p_->TextToIpa(word);
   }
+  if ((language_ == "en-us" || language_ == "en-gb") &&
+      english_g2p_ != nullptr) {
+    return english_g2p_->WordToIpa(word, /*british=*/language_ == "en-gb");
+  }
 
   if (ContainsHanzi(word)) {
     if (chinese_g2p_ == nullptr) {
@@ -842,6 +869,9 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
       pieces.push_back(std::move(sub_ipa));
     }
     return absl::StrJoin(pieces, " ");
+  }
+  if (language_ == "cmn" && english_g2p_ != nullptr) {
+    return english_g2p_->WordToIpa(word, /*british=*/false);
   }
 
   return WordToIpaViaEspeak(word);
@@ -1081,6 +1111,12 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
   if (text_normalizer_ != nullptr && language_ == text_norm_language_) {
     normalized_text = text_normalizer_->Normalize(text);
     text = normalized_text;
+  }
+
+  if ((language_ == "en-us" || language_ == "en-gb") &&
+      english_g2p_ != nullptr) {
+    return english_g2p_->TextToIpa(text, /*british=*/language_ == "en-gb",
+                                   custom_lexicon_);
   }
 
   if (language_ == "ja") {

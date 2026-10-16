@@ -26,6 +26,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
+#include "omni/tts/kokoro/english_g2p.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
 #include "omni/tts/kokoro/traditional_chinese_converter.h"
 #include "omni/tts/text_normalizer.h"
@@ -389,6 +390,7 @@ class KokoroPhonemizer {
   // Voice name handed to `espeak_SetVoiceByName`; derived from `language_` via
   // EspeakVoiceForLanguage and usually identical to it.
   std::string espeak_voice_ = "en-us";
+  absl::flat_hash_map<std::string, std::string> custom_lexicon_;
   absl::flat_hash_map<std::string, std::string> merged_lexicon_;
   // Applied to text before phonemization. Null when no rule table was given.
   std::unique_ptr<TextNormalizer> text_normalizer_;
@@ -397,10 +399,11 @@ class KokoroPhonemizer {
   // rules would corrupt the text, so the two must agree for the normalizer to
   // run.
   std::string text_norm_language_;
-  // Section directory of the bundled CJK lexicon blob, plus the language
-  // front end built over it (`ja-lexicon` -> `japanese_g2p_`, `zh-lexicon` ->
-  // `chinese_g2p_`).
+  // Section directory of the bundled lexicon blob, plus the language
+  // front end built over it (`en-lexicon` -> `english_g2p_`, `ja-lexicon` ->
+  // `japanese_g2p_`, `zh-lexicon` -> `chinese_g2p_`).
   std::unique_ptr<kokoro::CjkBlob> cjk_blob_;
+  std::unique_ptr<kokoro::EnglishG2p> english_g2p_;
   std::unique_ptr<kokoro::JapaneseG2p> japanese_g2p_;
   std::unique_ptr<kokoro::ChineseG2p> chinese_g2p_;
   // Converts Traditional Chinese to Simplified before Mandarin text
