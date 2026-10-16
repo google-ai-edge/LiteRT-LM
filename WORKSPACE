@@ -455,11 +455,93 @@ http_archive(
         # third_party/py/numpy. Uses a shell loop rather than `find`, which may resolve
         # to find.exe on Windows.
         "for f in third_party/*/*; do if [ -f \"$f\" ]; then sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' \"$f\" || exit 1; fi; done",
+        "sed -i -e 's|build_file = \"//third_party/dawn:dawn.BUILD\"|build_file = \"@litert//third_party/dawn:dawn.BUILD\"|g' third_party/dawn/workspace.bzl",
+        # TODO: b/465678331 - Remove patch_cmds for visibility and legacy_create_init once
+        # cl/1000909231 is submitted and LITERT_REF is updated.
+        # Allow external @litert_lm workspace to depend on ml_drift_delegate and litert_runtime_builtin_none targets.
+        "sed -i -e '/default_visibility/,/\\]/d' ml_drift_delegate/delegate/BUILD",
+        "sed -i -e 's|package(|package(default_visibility = [\"//visibility:public\"],|g' ml_drift_delegate/delegate/BUILD",
+        "sed -i -e 's|visibility = litert_jni_friends() + \\[|visibility = litert_jni_friends() + [\"@//:__subpackages__\", |g' litert/c/internal/BUILD",
+        # Remove unsupported aspect_hints from ml_drift_delegate BUILD files.
+        "sed -i -e '/no_module/d' ml_drift_delegate/delegate/BUILD ml_drift_delegate/delegate/shared_memory_manager/BUILD",
+        # Fix unscrubbed path in gpu_backend_metal_litert.mm.
+        "sed -i -e 's|#import \".*ml_drift/|#import \"ml_drift_delegate/|g' ml_drift_delegate/delegate/gpu_backend_metal_litert.mm",
+        # Disable implicit __init__.py creation in dawn_json_generator and generate_build_identifier_py so @jinja2 is not shadowed.
+        "sed -i -e 's|name = \"dawn_json_generator\",|name = \"dawn_json_generator\", legacy_create_init = 0,|g' third_party/dawn/dawn.BUILD",
+        "sed -i -e 's|\"\\:dawn_native\",|\":dawn_native\", \"@//runtime/components:webgpu_dawn_shared_lib\",|g' third_party/dawn/dawn.BUILD",
+        "sed -i -e 's|name = \"generate_build_identifier_py\",|name = \"generate_build_identifier_py\", legacy_create_init = 0,|g' ml_drift_delegate/delegate/serialization_weight_cache/BUILD",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
     url = "https://github.com/google-ai-edge/LiteRT/archive/" + LITERT_REF + ".tar.gz",
 )
+
+http_archive(
+    name = "fp16",
+    build_file = "@litert//third_party/FP16:FP16.BUILD",
+    sha256 = "d973501a40c55126b31accc2d9f08d931ec3cc190c0430309a5e341d3c0ce32a",
+    strip_prefix = "FP16-4dfe081cf6bcd15db339cf2680b9281b8451eeb3",
+    url = "https://github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+)
+
+ML_DRIFT_COMMIT = "1b18771f44c0be3d972847b31a80f6dc3d6964b5"
+
+ML_DRIFT_SHA256 = "0a7384901754a4ee84220561bcf5447fde4363cbc8a42c94743f183d178feb30"
+
+http_archive(
+    name = "ml_drift",
+    patch_cmds = [
+        # TODO: b/465678331 - Remove patch_cmds once cl/1000935259 is submitted and ML_DRIFT_COMMIT is updated.
+        # Add external/ml_drift to flatc include paths for gl_inference_context_cc_fbs.
+        "sed -i -e 's|\"-I .\",|\"-I .\", \"-I external/ml_drift\",|g' ml_drift/gl/BUILD",
+        # Point ml_drift_delegate references to @litert//ml_drift_delegate.
+        "sed -i -e 's|@//ml_drift_delegate|@litert//ml_drift_delegate|g' ml_drift/common/default/BUILD ml_drift/common/task/BUILD ml_drift/common/kernels/BUILD",
+    ],
+    repo_mapping = {
+        "@com_github_google_re2": "@com_googlesource_code_re2",
+    },
+    sha256 = ML_DRIFT_SHA256,
+    strip_prefix = "ml-drift-" + ML_DRIFT_COMMIT,
+    urls = [
+        "https://github.com/google-ai-edge/ml-drift/archive/" + ML_DRIFT_COMMIT + ".tar.gz",
+    ],
+)
+
+EGL_HEADERS_COMMIT = "db3425b8246136faccb5e2782b5694960bd6edf1"
+
+http_archive(
+    name = "egl_headers",
+    build_file = "@ml_drift//third_party/egl_headers:egl_headers.BUILD",
+    sha256 = "3d6b42b23da8030f5b29ade07d7384c5f885e713f17f04650f6cd4b8329b88e8",
+    strip_prefix = "EGL-Registry-" + EGL_HEADERS_COMMIT + "/api",
+    urls = [
+        "https://github.com/KhronosGroup/EGL-Registry/archive/" + EGL_HEADERS_COMMIT + ".tar.gz",
+    ],
+)
+
+OPENGL_HEADERS_COMMIT = "1cdd228e34966dd6b95bd203e9f84faba0f371a1"
+
+http_archive(
+    name = "opengl_headers",
+    build_file = "@ml_drift//third_party/opengl_headers:opengl_headers.BUILD",
+    sha256 = "d8ac2e70b4a8173d4e30ceb726eb8b3137883d459e4666983eb1d2444483c62c",
+    strip_prefix = "OpenGL-Registry-" + OPENGL_HEADERS_COMMIT + "/api",
+    urls = [
+        "https://github.com/KhronosGroup/OpenGL-Registry/archive/" + OPENGL_HEADERS_COMMIT + ".tar.gz",
+    ],
+)
+
+load("@litert//third_party/markupsafe:workspace.bzl", markupsafe = "repo")
+
+markupsafe()
+
+load("@litert//third_party/jinja2:workspace.bzl", jinja2 = "repo")
+
+jinja2()
+
+load("@litert//third_party/dawn:workspace.bzl", dawn = "repo")
+
+dawn()
 
 http_archive(
     name = "tokenizers_cpp",
