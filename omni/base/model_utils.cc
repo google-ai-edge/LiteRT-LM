@@ -28,7 +28,6 @@
 #include <string_view>
 #include <system_error>  // NOLINT
 #include <utility>
-#include <variant>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -59,6 +58,7 @@
 #include "litert/experimental/custom_ops/bidirectional_lstm/bidirectional_lstm_custom_op.h"  // from @litert
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "omni/base/model_cache.h"
 #include "omni/omni_engine.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
@@ -227,8 +227,8 @@ ModelOptions ToLmModelOptions(const OmniEngine::Settings& settings) {
   ModelOptions lm_options;
   lm_options.backend = ToLmBackend(settings.backend);
   lm_options.num_threads = settings.num_threads > 0 ? settings.num_threads : 4;
-  lm_options.cache_dir =
-      settings.cache_dir.empty() ? ":nocache" : settings.cache_dir;
+  lm_options.cache_dir = settings.cache_dir.empty() ? std::string(kNoCacheDir)
+                                                    : settings.cache_dir;
   return lm_options;
 }
 
@@ -332,10 +332,16 @@ absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
 
 namespace {
 
+// `model_path` is the file the model weights are read from; it only feeds the
+// on-disk cache key so caches are invalidated when that file changes.
 absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
-                                                 absl::string_view model_name) {
+                                                 absl::string_view model_name,
+                                                 absl::string_view model_path) {
   LITERT_ASSIGN_OR_RETURN(auto comp_options, Options::Create());
   bool target_gpu = options.backend == lm::Backend::GPU;
+  ABSL_ASSIGN_OR_RETURN(
+      const ModelCacheConfig cache,
+      ResolveModelCache(model_name, model_path, options.cache_dir));
 
   if (target_gpu) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
@@ -354,23 +360,16 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
       gpu_compilation_options.AddExternalTensorPattern(pattern.c_str());
       gpu_compilation_options.AddBufferStorageTensorPattern(pattern.c_str());
     }
+    ABSL_RETURN_IF_ERROR(
+        ConfigureGpuModelCache(model_name, cache, gpu_compilation_options));
     comp_options.SetHardwareAccelerators(HwAccelerators::kGpu);
   } else {
     comp_options.SetHardwareAccelerators(HwAccelerators::kCpu);
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
                             comp_options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(lm::SetCpuOptions(cpu_options, options.num_threads));
-
-    // ":nocache" is the sentinel set by ToLmModelOptions() when no cache
-    // directory was provided; it must not be used as a real path.
-    if (!options.cache_dir.empty() && options.cache_dir != ":nocache") {
-      std::string cache_path = JoinPath(
-          options.cache_dir, absl::StrCat(model_name, ".xnnpack_cache"));
-      absl::StatusOr<std::variant<std::string, std::shared_ptr<lm::ScopedFile>>>
-          cache_variant(cache_path);
-      ABSL_RETURN_IF_ERROR(
-          lm::SetCpuCacheOptions(cache_variant, model_name, cpu_options));
-    }
+    ABSL_RETURN_IF_ERROR(
+        ConfigureCpuModelCache(model_name, cache, cpu_options));
   }
 
   // Register custom bidirectional LSTM op.
@@ -386,10 +385,11 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
 absl::StatusOr<CompiledModel> CreateCompiledModel(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename) {
-  ABSL_ASSIGN_OR_RETURN(auto comp_options,
-                        CreateCompilationOptions(options, model_filename));
-  bool target_gpu = options.backend == lm::Backend::GPU;
   std::string path = JoinPath(options.model_dir, model_filename);
+  ABSL_ASSIGN_OR_RETURN(
+      auto comp_options,
+      CreateCompilationOptions(options, model_filename, /*model_path=*/path));
+  bool target_gpu = options.backend == lm::Backend::GPU;
   ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
                           CompiledModel::Create(env, path, comp_options));
@@ -426,8 +426,11 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CreateCompiledModel(
 absl::StatusOr<CompiledModel> CreateCompiledModelFromBuffer(
     Environment& env, const ModelOptions& options,
     absl::string_view model_buffer, absl::string_view model_name) {
-  ABSL_ASSIGN_OR_RETURN(auto comp_options,
-                        CreateCompilationOptions(options, model_name));
+  // The buffer is a section of the `.litertlm` container at `model_dir`.
+  ABSL_ASSIGN_OR_RETURN(
+      auto comp_options,
+      CreateCompilationOptions(options, model_name,
+                               ResolveLitertLmPath(options.model_dir)));
   bool target_gpu = options.backend == lm::Backend::GPU;
   BufferRef<uint8_t> buffer_ref(
       reinterpret_cast<const uint8_t*>(model_buffer.data()),

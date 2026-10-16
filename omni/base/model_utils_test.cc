@@ -79,6 +79,47 @@ TEST(ModelUtilsTest, CreateCompiledModelNonExistent) {
   }
 }
 
+TEST(ModelUtilsTest, CreateCompiledModelConfiguresModelCaches) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  const std::filesystem::path root =
+      std::filesystem::path(::testing::TempDir()) / "model_utils_cache_test";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  std::ofstream((root / "model.tflite").string()) << "dummy";
+  std::ofstream((root / "bundle.litertlm").string()) << "dummy";
+
+  // Unwritable explicit cache_dir fails before model compilation.
+  ModelOptions bad_cache{.model_dir = root.string(),
+                         .cache_dir = "/non/existent/cache/dir"};
+  EXPECT_THAT(CreateCompiledModel(*env, bad_cache, "model.tflite"),
+              StatusIs(absl::StatusCode::kPermissionDenied));
+  EXPECT_THAT(
+      CreateCompiledModelFromBuffer(*env, bad_cache, "dummy", "kokoro_vocoder"),
+      StatusIs(absl::StatusCode::kPermissionDenied));
+
+  // Writable cache_dir cleans stale CPU and GPU caches of the same model.
+  std::ofstream((root / "model.tflite_1_2.xnnpack_cache").string()) << "x";
+  std::ofstream(
+      (root / "kokoro_vocoder_1_2_mldrift_program_cache.bin").string())
+      << "x";
+  ModelOptions cpu_opts{.model_dir = root.string(),
+                        .cache_dir = root.string(),
+                        .backend = lm::Backend::CPU};
+  (void)CreateCompiledModel(*env, cpu_opts, "model.tflite");
+  EXPECT_FALSE(
+      std::filesystem::exists(root / "model.tflite_1_2.xnnpack_cache"));
+
+  ModelOptions gpu_opts{.model_dir = root.string(),
+                        .cache_dir = root.string(),
+                        .backend = lm::Backend::GPU};
+  (void)CreateCompiledModelFromBuffer(*env, gpu_opts, "dummy",
+                                      "kokoro_vocoder");
+  EXPECT_FALSE(std::filesystem::exists(
+      root / "kokoro_vocoder_1_2_mldrift_program_cache.bin"));
+  std::filesystem::remove_all(root);
+}
+
 TEST(ModelUtilsTest, CreateExecutorInputsWithText) {
   auto env = Environment::Create({});
   ASSERT_TRUE(env.HasValue());

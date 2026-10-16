@@ -53,12 +53,50 @@ cc_test(
 )
 
 cc_library(
+    name = "model_cache",
+    srcs = ["model_cache.cc"],
+    hdrs = ["model_cache.h"],
+    deps = [
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc/options:litert_cpu_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "//runtime/util:file_util",
+    ],
+)
+
+cc_test(
+    name = "model_cache_test",
+    srcs = ["model_cache_test.cc"],
+    deps = [
+        ":model_cache",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/c/options:litert_gpu_options",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc/options:litert_cpu_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/test:matchers",
+        "//runtime/util:file_util",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "model_utils",
     srcs = ["model_utils.cc"],
     hdrs = ["model_utils.h"],
     deps = [
         ":litert_lm_engine_runner",
         ":litert_lm_runner",
+        ":model_cache",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",

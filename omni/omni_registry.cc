@@ -20,15 +20,12 @@
 #include <fstream>
 #include <memory>
 #include <string>
-#include <system_error>  // NOLINT
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -36,7 +33,6 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/strings/strip.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -45,6 +41,7 @@
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#include "omni/base/model_cache.h"
 #include "omni/base/model_utils.h"
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
@@ -53,7 +50,6 @@
 #include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/tts_metadata.pb.h"
-#include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 
@@ -66,110 +62,6 @@ bool FileExists(absl::string_view path) {
   }
   std::ifstream f(std::string(path).c_str());
   return f.good();
-}
-
-// Sentinel `cache_dir` value that disables compiled-model caches.
-constexpr absl::string_view kNoCacheDir = ":nocache";
-
-// Where compiled-model caches go and how they are named. Empty `dir` and `key`
-// mean caching is disabled.
-struct ModelCacheConfig {
-  std::string dir;
-  // `<model_name>_<model file id>`, where the id is `<mtime>_<size>` of the
-  // model file (see `lm::GetFileCacheIdentifier`).
-  std::string key;
-};
-
-// Resolves the compiled-model cache location for `model_name`:
-// - `cache_dir` is ":nocache": caching is disabled.
-// - `cache_dir` is empty: caches go next to the model file (LiteRT-LM
-//   convention); skipped silently if that directory is not writable.
-// - Otherwise caches go to `cache_dir`, which is created if missing. If it is
-//   not writable, caching is skipped when it is the model file's directory
-//   (read-only model directories are common); otherwise this is a
-//   `PermissionDeniedError`.
-// Caching is also skipped when the model file does not exist yet; the session
-// factory reports a missing model.
-absl::StatusOr<ModelCacheConfig> ResolveModelCache(
-    absl::string_view model_name, const OmniEngine::Settings& settings) {
-  if (settings.cache_dir == kNoCacheDir) {
-    return ModelCacheConfig{};
-  }
-  absl::StatusOr<std::string> model_id =
-      lm::GetFileCacheIdentifier(settings.model_path);
-  if (!model_id.ok()) {
-    return ModelCacheConfig{};
-  }
-  const bool explicit_dir = !settings.cache_dir.empty();
-  std::string dir =
-      explicit_dir
-          ? settings.cache_dir
-          : std::filesystem::path(settings.model_path).parent_path().string();
-  if (explicit_dir) {
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-  }
-  if (dir.empty() || !lm::IsDirectoryWritable(dir)) {
-    if (!explicit_dir) {
-      return ModelCacheConfig{};
-    }
-    // `cache_dir` also holds the model file, e.g. a read-only directory of
-    // pre-installed models (the Kotlin API has no separate model path), so
-    // load without caches instead of failing.
-    std::error_code ec;
-    if (std::filesystem::equivalent(
-            std::filesystem::path(settings.model_path).parent_path(), dir,
-            ec)) {
-      ABSL_LOG(WARNING) << "cache_dir " << dir
-                        << " is not writable; compiled-model caches disabled.";
-      return ModelCacheConfig{};
-    }
-    return absl::PermissionDeniedError(absl::StrCat(
-        "cache_dir is not a writable directory: ", dir,
-        ". Set cache_dir to \":nocache\" to disable compiled-model caches."));
-  }
-  return ModelCacheConfig{
-      .dir = std::move(dir),
-      .key = absl::StrCat(model_name, "_", *model_id),
-  };
-}
-
-// Returns true if `s` is `<digits>_<digits>`, the format of
-// `lm::GetFileCacheIdentifier`.
-bool IsFileCacheIdentifier(absl::string_view s) {
-  const size_t sep = s.find('_');
-  if (sep == absl::string_view::npos || sep == 0 || sep + 1 == s.size()) {
-    return false;
-  }
-  const auto all_digits = [](absl::string_view part) {
-    return absl::c_all_of(part, [](char c) { return absl::ascii_isdigit(c); });
-  };
-  return all_digits(s.substr(0, sep)) && all_digits(s.substr(sep + 1));
-}
-
-// Returns `<cache.dir>/<cache.key><suffix>`. Also deletes stale caches of the
-// same model: files named `<model_name>_<mtime>_<size><suffix>` whose
-// identifier differs from the current one were built from an older version of
-// the model file. Requiring a well-formed identifier keeps caches of other
-// models whose names merely start with `<model_name>_` untouched.
-std::string GetCachePathAndCleanStale(absl::string_view model_name,
-                                      const ModelCacheConfig& cache,
-                                      absl::string_view suffix) {
-  const std::string current = absl::StrCat(cache.key, suffix);
-  const std::string prefix = absl::StrCat(model_name, "_");
-  std::error_code ec;
-  for (const auto& entry :
-       std::filesystem::directory_iterator(cache.dir, ec)) {
-    const std::string name = entry.path().filename().string();
-    absl::string_view id = name;
-    if (name == current || !absl::ConsumePrefix(&id, prefix) ||
-        !absl::ConsumeSuffix(&id, suffix) || !IsFileCacheIdentifier(id)) {
-      continue;
-    }
-    std::error_code remove_ec;
-    std::filesystem::remove(entry.path(), remove_ec);
-  }
-  return (std::filesystem::path(cache.dir) / current).string();
 }
 
 std::string NormalizeForMatching(absl::string_view str) {
@@ -204,7 +96,7 @@ absl::StatusOr<std::shared_ptr<lm::ModelResources>> OpenLitertLmResources(
 OmniEngine::Settings ResolveEngineSettings(
     absl::string_view model_name, const OmniEngine::Settings& settings) {
   OmniEngine::Settings resolved = settings;
-  // ":nocache" only disables compiled-model caches; model files are still
+  // `kNoCacheDir` only disables compiled-model caches; model files are still
   // resolved and downloaded under the default directory.
   const std::string effective_cache_dir =
       (resolved.cache_dir.empty() || resolved.cache_dir == kNoCacheDir)
@@ -295,23 +187,17 @@ absl::Status ConfigureLiteRtOptions(absl::string_view model_name,
                                     const OmniEngine::Settings& settings,
                                     ::litert::Options& options) {
   uint32_t accelerators = static_cast<uint32_t>(::litert::HwAccelerators::kCpu);
-  ABSL_ASSIGN_OR_RETURN(const ModelCacheConfig cache,
-                        ResolveModelCache(model_name, settings));
+  ABSL_ASSIGN_OR_RETURN(
+      const ModelCacheConfig cache,
+      ResolveModelCache(model_name, settings.model_path, settings.cache_dir));
   if (settings.num_threads > 0 || !cache.key.empty()) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
                             options.GetOptions<::litert::CpuOptions>());
     if (settings.num_threads > 0) {
       cpu_options.SetNumThreads(settings.num_threads);
     }
-    if (!cache.key.empty()) {
-      // Persist XNNPack-packed weights in a file-backed cache: they are then
-      // mmap'ed (clean, reclaimable pages) instead of living in the native
-      // heap, and later loads skip re-packing.
-      const std::string weight_cache_path =
-          GetCachePathAndCleanStale(model_name, cache, ".xnnpack_cache");
-      LITERT_RETURN_IF_ERROR(
-          cpu_options.SetXNNPackWeightCachePath(weight_cache_path.c_str()));
-    }
+    ABSL_RETURN_IF_ERROR(
+        ConfigureCpuModelCache(model_name, cache, cpu_options));
   }
   if (settings.backend == OmniEngine::Settings::Backend::kGpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kGpu);
@@ -319,20 +205,8 @@ absl::Status ConfigureLiteRtOptions(absl::string_view model_name,
                             options.GetOptions<::litert::GpuOptions>());
     gpu_options.SetPrecision(::litert::GpuOptions::Precision::kFp32);
     gpu_options.EnableConstantTensorSharing(true);
-    if (!cache.key.empty()) {
-      // Serialize compiled GPU programs and GPU-layout weights so later loads
-      // skip shader compilation and weight conversion. The GPU delegate names
-      // the files `<cache.key>_mldrift_{program,weight}_cache.bin`.
-      for (absl::string_view suffix :
-           {"_mldrift_program_cache.bin", "_mldrift_weight_cache.bin"}) {
-        GetCachePathAndCleanStale(model_name, cache, suffix);
-      }
-      LITERT_RETURN_IF_ERROR(
-          gpu_options.SetSerializationDir(cache.dir.c_str()));
-      LITERT_RETURN_IF_ERROR(gpu_options.SetModelCacheKey(cache.key.c_str()));
-      LITERT_RETURN_IF_ERROR(gpu_options.SetSerializeProgramCache(true));
-      LITERT_RETURN_IF_ERROR(gpu_options.SetSerializeExternalTensors(true));
-    }
+    ABSL_RETURN_IF_ERROR(
+        ConfigureGpuModelCache(model_name, cache, gpu_options));
   } else if (settings.backend == OmniEngine::Settings::Backend::kNpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kNpu);
     LITERT_ASSIGN_OR_RETURN(
