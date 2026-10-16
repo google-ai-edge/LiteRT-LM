@@ -391,6 +391,21 @@ TEST(PhonemizerTest, DevanagariDandaPunctuation) {
   EXPECT_TRUE(absl::StrContains(ipa, "."));
 }
 
+TEST(PhonemizerTest, FrenchPhonemization) {
+  // Regression test: "fr-fr" is not a name `espeak_SetVoiceByName` resolves, so
+  // French used to fail on every word and produce no phonemes at all.
+  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("fr-fr"));
+  EXPECT_EQ(phonemizer->Language(), "fr-fr");
+
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("Bonjour !"));
+  EXPECT_FALSE(ipa.empty());
+  EXPECT_TRUE(absl::StrContains(ipa, "ʒ"));
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds("Bonjour le monde."));
+  EXPECT_GT(tokens.size(), 2);
+}
+
 TEST(PhonemizerTest, NonAsciiUtf8Tokenization) {
   absl::flat_hash_map<std::string, std::string> lexicon = {
       {"español", "esˈpaɲol"},
@@ -1139,22 +1154,23 @@ TEST(PhonemizerTest, ItalianUsesItalianG2pWithoutEspeak) {
               ::absl_testing::IsOkAndHolds("kokˈoro"));
 }
 
-#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
-TEST(PhonemizerTest, FrenchPhonemization) {
-  // Regression test: "fr-fr" is not a name `espeak_SetVoiceByName` resolves, so
-  // French used to fail on every word and produce no phonemes at all.
-  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("fr-fr"));
+TEST(PhonemizerTest, FrenchUsesFrenchG2pWithoutEspeak) {
+  absl::flat_hash_map<std::string, std::string> custom_lexicon = {
+      {"kokoro", "kokoʁˈo"},
+  };
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(/*espeak_data_dir=*/"", "fr-fr",
+                                                custom_lexicon));
   EXPECT_EQ(phonemizer->Language(), "fr-fr");
-
-  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("Bonjour !"));
-  EXPECT_FALSE(ipa.empty());
-  EXPECT_TRUE(absl::StrContains(ipa, "ʒ"));
-
-  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
-                       phonemizer->TextToPhonemeIds("Bonjour le monde."));
-  EXPECT_GT(tokens.size(), 2);
+  EXPECT_THAT(
+      phonemizer->TextToIpa(
+          "Les poules du couvent couvent tranquillement leurs œufs."),
+      ::absl_testing::IsOkAndHolds("le pˈul dy kuvˈɑ̃ kˈuv tʁɑ̃kilmˈɑ̃ lœʁz ˈø."));
+  EXPECT_THAT(phonemizer->WordToIpa("kokoro"),
+              ::absl_testing::IsOkAndHolds("kokoʁˈo"));
 }
 
+#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
 TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer,
                        KokoroPhonemizer::Create(GetTestEspeakDataDir()));

@@ -27,6 +27,7 @@
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/english_g2p.h"
+#include "omni/tts/kokoro/french_g2p.h"
 #include "omni/tts/kokoro/hindi_g2p.h"
 #include "omni/tts/kokoro/italian_g2p.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
@@ -412,6 +413,7 @@ class KokoroPhonemizer {
   std::unique_ptr<kokoro::HindiG2p> hindi_g2p_;
   std::unique_ptr<kokoro::PortugueseG2p> portuguese_g2p_;
   std::unique_ptr<kokoro::ItalianG2p> italian_g2p_;
+  std::unique_ptr<kokoro::FrenchG2p> french_g2p_;
   std::unique_ptr<kokoro::JapaneseG2p> japanese_g2p_;
   std::unique_ptr<kokoro::ChineseG2p> chinese_g2p_;
   // Converts Traditional Chinese to Simplified before Mandarin text
