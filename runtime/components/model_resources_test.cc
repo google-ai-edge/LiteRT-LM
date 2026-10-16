@@ -16,6 +16,7 @@
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -272,6 +273,46 @@ TEST(TfLiteModelTypeToWireStringTest, ReturnsLowercaseEnumName) {
   EXPECT_EQ(
       TfLiteModelTypeToWireString(EmbeddingMetadata::TF_LITE_TEXT_ENCODER),
       "tf_lite_text_encoder");
+}
+
+class MinimalModelResources : public ::litert::lm::ModelResources {
+ public:
+  absl::StatusOr<std::unique_ptr<::litert::lm::Tokenizer>> GetTokenizer()
+      override {
+    return absl::UnimplementedError("Minimal test tokenizer");
+  }
+  absl::StatusOr<const LlmMetadata*> GetLlmMetadata() override {
+    return &llm_metadata_;
+  }
+
+ private:
+  LlmMetadata llm_metadata_;
+};
+
+TEST(ModelResourcesTest, DefaultImplementationsForMinimalSubclass) {
+  MinimalModelResources resources;
+  EXPECT_THAT(resources.GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(
+      resources.GetTFLiteModelBuffer(LlmMetadata::TF_LITE_PREFILL_DECODE),
+      StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(resources.GetScopedFile(),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(
+      resources.GetWeightsSectionOffset(LlmMetadata::TF_LITE_PREFILL_DECODE),
+      StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(resources.GetTFLiteModelSectionFileRegion(
+                  LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_EQ(resources.GetTFLiteModelBackendConstraint(
+                LlmMetadata::TF_LITE_PREFILL_DECODE),
+            std::nullopt);
+  EXPECT_EQ(resources.GetTFLiteModelPreferActivationType(
+                LlmMetadata::TF_LITE_PREFILL_DECODE),
+            std::nullopt);
+  EXPECT_THAT(resources.GetExecutorMetadata(),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(resources.GetLlmMetadata(), ::absl_testing::IsOk());
 }
 
 }  // namespace

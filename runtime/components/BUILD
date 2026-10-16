@@ -363,12 +363,10 @@ cc_library(
         "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
-        "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:metadata_util",
         "//runtime/util:model_asset_bundle_resources",
-        "//runtime/util:scoped_file",
         "//support/tokenizer:sentencepiece_tokenizer",
     ],
 )

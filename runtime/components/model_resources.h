@@ -133,7 +133,9 @@ class ModelResources {
   // yet. And the model is created from memory mapped file, so physical memory
   // is only allocated when the model is actually used.
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      proto::LlmMetadata::TfLiteModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type) {
+    return absl::UnimplementedError("GetTFLiteModel is not implemented.");
+  }
 
   // Returns the litert model for the given model type wire string.
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
@@ -161,7 +163,9 @@ class ModelResources {
   // Prefer to use GetTFLiteModel() if possible, as this function will leave
   // the model lifecycle management to the caller.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      proto::LlmMetadata::TfLiteModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type) {
+    return absl::UnimplementedError("GetTFLiteModelBuffer is not implemented.");
+  }
 
   // Returns the TFLite model buffer for the given model type wire string.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
@@ -179,12 +183,16 @@ class ModelResources {
 
   // Returns the reference to the ScopedFile. This is used for the getting the
   // external weights that should not be mmapped into the memory.
-  virtual absl::StatusOr<std::reference_wrapper<ScopedFile>>
-  GetScopedFile() = 0;
+  virtual absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() {
+    return absl::UnimplementedError("GetScopedFile is not implemented.");
+  }
 
   // Returns the section start offset and end offset.
   virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      proto::LlmMetadata::TfLiteModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type) {
+    return absl::UnimplementedError(
+        "GetWeightsSectionOffset is not implemented.");
+  }
 
   // Returns the section start offset and end offset for the given model type
   // wire string.
@@ -203,7 +211,10 @@ class ModelResources {
 
   // Returns the region of the requested model type in the ModelResources.
   virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      proto::LlmMetadata::TfLiteModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type) {
+    return absl::UnimplementedError(
+        "GetTFLiteModelSectionFileRegion is not implemented.");
+  }
 
   // Returns the region of the requested model type wire string in the
   // ModelResources.
@@ -224,7 +235,9 @@ class ModelResources {
   // Returns the TFLite model backend constraint. When there is no constraint
   // for the given model type, it will return an nullopt.
   virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
-      proto::LlmMetadata::TfLiteModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type) {
+    return std::nullopt;
+  }
 
   // Returns the TFLite model backend constraint for the given model type wire
   // string, or nullopt if there is none.
@@ -246,7 +259,9 @@ class ModelResources {
   // prefer activation type for the given model type, it will return an
   // nullopt.
   virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
-      proto::LlmMetadata::TfLiteModelType model_type) = 0;
+      proto::LlmMetadata::TfLiteModelType model_type) {
+    return std::nullopt;
+  }
 
   // Returns the TFLite model prefer activation type for the given model type
   // wire string, or nullopt if there is none.
@@ -313,7 +328,9 @@ class ModelResources {
 
   // Returns the executor metadata.
   virtual absl::StatusOr<const proto::ExecutorMetadata*>
-  GetExecutorMetadata() = 0;
+  GetExecutorMetadata() {
+    return absl::UnimplementedError("GetExecutorMetadata is not implemented.");
+  }
 
   // Returns the embedding metadata.
   virtual absl::StatusOr<const proto::EmbeddingMetadata*>

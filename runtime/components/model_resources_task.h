@@ -15,23 +15,16 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_MODEL_RESOURCES_TASK_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_MODEL_RESOURCES_TASK_H_
 
-#include <cstddef>
-#include <functional>
 #include <memory>
-#include <optional>
-#include <string>
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/model_asset_bundle_resources.h"
-#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 
@@ -42,45 +35,15 @@ class ModelResourcesTask : public ModelResources {
       std::unique_ptr<ModelAssetBundleResources> model_asset_bundle_resources);
 
   using ModelResources::GetTFLiteModel;
-  using ModelResources::GetTFLiteModelBackendConstraint;
   using ModelResources::GetTFLiteModelBuffer;
-  using ModelResources::GetTFLiteModelPreferActivationType;
-  using ModelResources::GetTFLiteModelSectionFileRegion;
   using ModelResources::GetTokenizer;
-  using ModelResources::GetWeightsSectionOffset;
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       proto::LlmMetadata::TfLiteModelType model_type) override;
-  std::optional<std::string> GetTFLiteModelBackendConstraint(
-      proto::LlmMetadata::TfLiteModelType model_type) override {
-    // Task model does not support backend constraint.
-    return std::nullopt;
-  };
-  std::optional<std::string> GetTFLiteModelPreferActivationType(
-      proto::LlmMetadata::TfLiteModelType model_type) override {
-    // Task model does not support prefer activation type.
-    return std::nullopt;
-  };
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
-  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;
-  absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
-    return absl::UnimplementedError(
-        "GetScopedFile is not implemented for Task model.");
-  }
-  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      proto::LlmMetadata::TfLiteModelType model_type) override {
-    return absl::UnimplementedError(
-        "GetWeightsSectionOffset is not implemented for Task model.");
-  }
-  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      proto::LlmMetadata::TfLiteModelType model_type) override {
-    return absl::UnimplementedError(
-        "GetTFLiteModelSectionFileRegion is not implemented for Task "
-        "model.");
-  }
 
  private:
   explicit ModelResourcesTask(
@@ -92,7 +55,6 @@ class ModelResourcesTask : public ModelResources {
                       std::shared_ptr<litert::Model>>
       model_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
-  std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 
   // The model asset bundle resources produced by reading task bundle. Not null
   // only when the model is provided through .task format. If the model is
