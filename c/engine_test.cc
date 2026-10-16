@@ -2509,6 +2509,15 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EXPECT_EQ(text, "\xE6\xB2\xBF");
 }
 
+// LiteRtLmInputDataType values are part of the ABI and must never change.
+TEST(EngineCTest, InputDataTypeValuesAreStable) {
+  static_assert(kLiteRtLmInputDataTypeText == 0);
+  static_assert(kLiteRtLmInputDataTypeImage == 1);
+  static_assert(kLiteRtLmInputDataTypeImageEnd == 2);
+  static_assert(kLiteRtLmInputDataTypeAudio == 3);
+  static_assert(kLiteRtLmInputDataTypeAudioEnd == 4);
+}
+
 TEST(EngineCErrorTest, InputDataCreateUnknownTypeSetsError) {
   litert_lm_clear_last_error();
   LiteRtLmInputData* input_data = reinterpret_cast<LiteRtLmInputData*>(0x1);
