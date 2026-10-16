@@ -65,6 +65,12 @@ cc_library(
     name = "phonemizer",
     srcs = ["phonemizer.cc"],
     hdrs = ["phonemizer.h"],
+    defines = select({
+        "//build_config:enable_espeak_ng_setting": [
+            "LITERT_LM_ESPEAK_NG_ENABLED",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         ":chinese_g2p",
         ":cjk_blob",
@@ -82,27 +88,35 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
-        "@espeak_ng//:espeak_ng_base_headers",
-        "@espeak_ng//:espeak_ng_speak_lib_header",
-        "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
         "//omni/tts:text_normalizer",
-    ],
+    ] + select({
+        "//build_config:enable_espeak_ng_setting": [
+            "@espeak_ng//:espeak_ng_base_headers",
+            "@espeak_ng//:espeak_ng_speak_lib_header",
+            "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(
     name = "phonemizer_test",
     srcs = ["phonemizer_test.cc"],
     data = [
-        "@espeak_ng//:en_dictionary",
-        "@espeak_ng//:es_dictionary",
-        "@espeak_ng//:espeak_ng_data",
-        "@espeak_ng//:fr_dictionary",
-        "@espeak_ng//:hi_dictionary",
-        "@espeak_ng//:it_dictionary",
-        "@espeak_ng//:pt_dictionary",
-        "@espeak_ng//:zh_dictionary",
         "//omni/tts:text_normalizer_rule_tables",
-    ],
+    ] + select({
+        "//build_config:enable_espeak_ng_setting": [
+            "@espeak_ng//:en_dictionary",
+            "@espeak_ng//:es_dictionary",
+            "@espeak_ng//:espeak_ng_data",
+            "@espeak_ng//:fr_dictionary",
+            "@espeak_ng//:hi_dictionary",
+            "@espeak_ng//:it_dictionary",
+            "@espeak_ng//:pt_dictionary",
+            "@espeak_ng//:zh_dictionary",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         ":cjk_test_blobs",
         ":phonemizer",

@@ -488,6 +488,31 @@ selects.config_setting_group(
     visibility = ["//visibility:public"],
 )
 
+bool_flag(
+    name = "enable_espeak_ng",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "espeak_ng_enabled_by_flag",
+    flag_values = {":enable_espeak_ng": "true"},
+)
+
+config_setting(
+    name = "espeak_ng_enabled_by_define",
+    define_values = {"LITERT_LM_ESPEAK_NG_ENABLED": "1"},
+)
+
+selects.config_setting_group(
+    name = "enable_espeak_ng_setting",
+    match_any = [
+        ":espeak_ng_enabled_by_flag",
+        ":espeak_ng_enabled_by_define",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # ------------------------------------------------------------------------------
 # 5. Model Family Data Processors
 # ------------------------------------------------------------------------------

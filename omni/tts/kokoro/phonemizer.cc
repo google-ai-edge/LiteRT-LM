@@ -40,8 +40,10 @@
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
 #include "espeak-ng/espeak_ng.h"  // from @espeak_ng
 #include "espeak-ng/speak_lib.h"  // from @espeak_ng
+#endif  // defined(LITERT_LM_ESPEAK_NG_ENABLED)
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/common.h"
@@ -59,6 +61,7 @@ constexpr absl::string_view kMissingJapaneseLexiconError =
     "Japanese TTS requires a bundled 'ja-lexicon' section in the .litertlm "
     "model container; espeak-ng fallback is disabled for Japanese.";
 
+#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
 // Thread-safe one-time initialization of the process-global espeak-ng C
 // library.
 //
@@ -82,27 +85,6 @@ absl::Status EnsureEspeakInitialized(absl::string_view parent_dir) {
   return *init_status;
 }
 
-// Checks whether a character is an opening delimiter (e.g. '(', '[', '"').
-// Used during text phonemization to avoid inserting unnecessary leading spaces
-// immediately after an opening bracket or quotation mark.
-bool IsOpenPunctuation(char ch) {
-  return ch == '(' || ch == '[' || ch == '{' || ch == '"' || ch == '\'';
-}
-
-// Punctuation marks at which Host Kokoro splits text before handing it to
-// espeak-ng: `phonemizer.punctuation._DEFAULT_MARKS`.
-bool IsPhonemizerMark(absl::string_view symbol) {
-  static const absl::NoDestructor<absl::flat_hash_set<absl::string_view>>
-      kMarks({";", ":", ",", ".", "!", "?", "¡", "¿", "—", "…", "\"",
-              "«", "»", "“", "”", "(", ")", "{", "}", "[", "]"});
-  return kMarks->contains(symbol);
-}
-
-bool IsAsciiSpace(absl::string_view symbol) {
-  return symbol.size() == 1 &&
-         absl::ascii_isspace(static_cast<unsigned char>(symbol[0]));
-}
-
 // In tie mode espeak-ng also ties the letters of its language-switch flags
 // (`(e͡n)`). Drops tie characters inside parentheses so StripLanguageSwitches
 // still recognizes the flags.
@@ -123,6 +105,33 @@ std::string RemoveTiesInsideParentheses(absl::string_view phonemes) {
     ++i;
   }
   return out;
+}
+#else
+// espeak-ng is not linked into this build; there is nothing to initialize.
+absl::Status EnsureEspeakInitialized(absl::string_view /*parent_dir*/) {
+  return absl::OkStatus();
+}
+#endif  // defined(LITERT_LM_ESPEAK_NG_ENABLED)
+
+// Checks whether a character is an opening delimiter (e.g. '(', '[', '"').
+// Used during text phonemization to avoid inserting unnecessary leading spaces
+// immediately after an opening bracket or quotation mark.
+bool IsOpenPunctuation(char ch) {
+  return ch == '(' || ch == '[' || ch == '{' || ch == '"' || ch == '\'';
+}
+
+// Punctuation marks at which Host Kokoro splits text before handing it to
+// espeak-ng: `phonemizer.punctuation._DEFAULT_MARKS`.
+bool IsPhonemizerMark(absl::string_view symbol) {
+  static const absl::NoDestructor<absl::flat_hash_set<absl::string_view>>
+      kMarks({";", ":", ",", ".", "!", "?", "¡", "¿", "—", "…", "\"",
+              "«", "»", "“", "”", "(", ")", "{", "}", "[", "]"});
+  return kMarks->contains(symbol);
+}
+
+bool IsAsciiSpace(absl::string_view symbol) {
+  return symbol.size() == 1 &&
+         absl::ascii_isspace(static_cast<unsigned char>(symbol[0]));
 }
 
 }  // namespace
@@ -688,20 +697,20 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon,
     absl::string_view text_norm_rules, absl::string_view cjk_lexicon,
     absl::string_view zh_t2s_dictionary) {
-  if (espeak_data_dir.empty()) {
-    return absl::InvalidArgumentError("espeak_data_dir cannot be empty");
-  }
-
-  std::string data_dir = ResolveEspeakDataDir(espeak_data_dir);
-  if (data_dir.empty()) {
-    return absl::NotFoundError(absl::StrCat(
-        "Could not find espeak-ng-data directory with phontab. Given path: '",
-        espeak_data_dir, "'"));
+  const std::string normalized_language = NormalizeLanguageCode(language);
+  std::string data_dir;
+  if (!espeak_data_dir.empty()) {
+    data_dir = ResolveEspeakDataDir(espeak_data_dir);
+    if (data_dir.empty()) {
+      return absl::NotFoundError(absl::StrCat(
+          "Could not find espeak-ng-data directory with phontab. Given path: '",
+          espeak_data_dir, "'"));
+    }
   }
 
   auto phonemizer = std::unique_ptr<KokoroPhonemizer>(new KokoroPhonemizer());
   phonemizer->data_dir_ = data_dir;
-  phonemizer->language_ = NormalizeLanguageCode(language);
+  phonemizer->language_ = normalized_language;
 
   if (!text_norm_rules.empty()) {
     ABSL_ASSIGN_OR_RETURN(phonemizer->text_normalizer_,
@@ -759,12 +768,14 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
   }
 
   // Initialize the process-global espeak-ng G2P C library with the explicit
-  // parent path. The class-level static mutex protects one-time library
-  // initialization and voice table selection.
-  ABSL_RETURN_IF_ERROR(EnsureEspeakInitialized(parent_dir));
+  // parent path when espeak-ng-data was supplied. The class-level static mutex
+  // protects one-time library initialization and voice table selection.
+  if (!phonemizer->data_dir_.empty()) {
+    ABSL_RETURN_IF_ERROR(EnsureEspeakInitialized(parent_dir));
+  }
 
   phonemizer->SetLanguage(language);
-  ABSL_LOG(INFO) << "espeak-ng G2P initialized successfully for language '"
+  ABSL_LOG(INFO) << "KokoroPhonemizer initialized successfully for language '"
                  << phonemizer->language_
                  << "' from: " << phonemizer->data_dir_;
 
@@ -839,6 +850,11 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
 absl::StatusOr<std::string> KokoroPhonemizer::WordToIpaViaEspeak(
     absl::string_view word) const {
   absl::MutexLock lock(espeak_mutex_);
+#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
+  if (data_dir_.empty()) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("espeak-ng is not initialized for language: ", language_));
+  }
   if (espeak_SetVoiceByName(espeak_voice_.c_str()) != EE_OK) {
     return absl::InternalError(
         absl::StrCat("Failed to set espeak voice for language: ", language_));
@@ -886,6 +902,12 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpaViaEspeak(
                       << "\"; its language-switch fallback was discarded.";
   }
   return stripped;
+#else
+  (void)word;
+  return absl::FailedPreconditionError(
+      absl::StrCat("Failed to set espeak voice for language: ", language_,
+                   " (espeak-ng support is disabled in this build)"));
+#endif  // defined(LITERT_LM_ESPEAK_NG_ENABLED)
 }
 
 absl::Status KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
