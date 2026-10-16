@@ -16,6 +16,20 @@ Today it supports **Automatic Speech Recognition (ASR)**, **Text-to-Speech
 Pre-converted on-device models are available in the Hugging Face
 [`litert-community`](https://huggingface.co/litert-community).
 
+## Supported Models
+
+| Modality | Model Name (`--model_name`) | Hugging Face (`litert-community`) | Bazel Target | Input | Output |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Speech-to-Text** | `parakeet-tdt-0.6b-v3` | [parakeet-tdt-0.6b-v3](https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3) | `//omni/speech2text:parakeet_tdt` | `AudioInputMetadata` + `AudioInput` | `TextOutput` |
+| **Speech-to-Text** | `parakeet-ctc-0.6b` | [parakeet-ctc-0.6b](https://huggingface.co/litert-community/parakeet-ctc-0.6b) | `//omni/speech2text:parakeet_ctc` | `AudioInputMetadata` + `AudioInput` | `TextOutput` |
+| **Speech-to-Text** | `whisper-tiny` | [whisper-tiny](https://huggingface.co/litert-community/whisper-tiny) | `//omni/speech2text:whisper` | `AudioInputMetadata` + `AudioInput` | `TextOutput` |
+| **Speech-to-Text** | `qwen3-asr-0.6b` | [Qwen3-ASR-0.6B](https://huggingface.co/litert-community/Qwen3-ASR-0.6B) | `//omni/speech2text:qwen3_asr` | `AudioInputMetadata` + `AudioInput` | `TextOutput` |
+| **Speech-to-Text** | `moonshine-tiny` | [moonshine-tiny](https://huggingface.co/litert-community/moonshine-tiny) | `//omni/speech2text:moonshine` | `AudioInputMetadata` + `AudioInput` | `TextOutput` |
+| **Text-to-Speech** | `kokoro` (`kokoro-82m`) | [Kokoro-82M](https://huggingface.co/litert-community/Kokoro-82M) | `//omni/text2speech:kokoro` | `TextInput` | `AudioOutput` |
+| **Text-to-Speech** | `qwen3-tts` | [Qwen3-TTS-12Hz-0.6B-Base](https://huggingface.co/litert-community/Qwen3-TTS-12Hz-0.6B-Base) | `//omni/text2speech:qwen3_tts` | `TextInput` | `AudioOutput` |
+| **Text-to-Image** | `bonsai-flux2` | [Bonsai-Image-ternary-4B](https://huggingface.co/litert-community/Bonsai-Image-ternary-4B) | `//omni/text2image:bonsai_flux2` | `ImageGenInputMetadata` *(optional)* + `TextInput` | `ImageOutput` |
+| **Text-to-Image** | `flux2-klein` (`flux.2-klein-4b`) | [FLUX.2-klein-4B-LiteRT](https://huggingface.co/litert-community/FLUX.2-klein-4B-LiteRT) | `//omni/text2image:flux2_klein` | `ImageGenInputMetadata` *(optional)* + `TextInput` | `ImageOutput` |
+
 --------------------------------------------------------------------------------
 
 ## 1. Quick Start: Build and Run `omni_runner`
@@ -90,33 +104,17 @@ adb shell $DEVICE_DIR/omni_runner \
 
 ### Common `omni_runner` Flags
 
-| Flag                     | Default             | Description                 |
-| :----------------------- | :------------------ | :-------------------------- |
-| `--model_path`           | `""`                | Path to a `.litertlm`       |
-:                          :                     : package or model directory. :
-| `--model_name`           | *(inferred)*        | Model name (e.g.,           |
-:                          :                     : `parakeet-tdt-0.6b-v3`,     :
-:                          :                     : `kokoro`, `bonsai-flux2`).  :
-| `--backend`              | `"cpu"`             | Hardware accelerator:       |
-:                          :                     : `cpu`, `gpu`, or `npu`.     :
-| `--cache_dir`            | `"/tmp/omni_cache"` | Directory for downloaded    |
-:                          :                     : models and serialized       :
-:                          :                     : GPU/XNNPack caches.         :
-| `--audio_path`           | `""`                | Input WAV file for ASR      |
-:                          :                     : transcription.              :
-| `--text`                 | `""`                | Input text for TTS          |
-:                          :                     : synthesis or Text-to-Image  :
-:                          :                     : generation.                 :
-| `--output_path`          | `""`                | Output file path (`.wav`    |
-:                          :                     : for TTS, `.png` for         :
-:                          :                     : Text-to-Image, or optional  :
-:                          :                     : `.txt` for ASR).            :
-| `--language` / `--voice` | `"en-US"` / `""`    | TTS language code (BCP-47)  |
-:                          :                     : and optional voice ID       :
-:                          :                     : (e.g., `af_heart`).         :
-| `--img_size` / `--steps` | `0` / `4` / `42`    | Text-to-Image resolution,   |
-: / `--seed`               :                     : denoising steps, and random :
-:                          :                     : seed.                       :
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--model_path` | `""` | Path to a `.litertlm` package or model directory. |
+| `--model_name` | *(inferred)* | Model name (e.g., `parakeet-tdt-0.6b-v3`, `kokoro`, `bonsai-flux2`). |
+| `--backend` | `"cpu"` | Hardware accelerator: `cpu`, `gpu`, or `npu`. |
+| `--cache_dir` | `"/tmp/omni_cache"` | Directory for downloaded models and serialized GPU/XNNPack caches. |
+| `--audio_path` | `""` | Input WAV file for ASR transcription. |
+| `--text` | `""` | Input text for TTS synthesis or Text-to-Image generation. |
+| `--output_path` | `""` | Output file path (`.wav` for TTS, `.png` for Text-to-Image, or optional `.txt` for ASR). |
+| `--language` / `--voice` | `"en-US"` / `""` | TTS language code (BCP-47) and optional voice ID (e.g., `af_heart`). |
+| `--img_size` / `--steps` / `--seed` | `0` / `4` / `42` | Text-to-Image resolution, denoising steps, and random seed. |
 
 --------------------------------------------------------------------------------
 
@@ -173,42 +171,14 @@ while (true) {
 }
 ```
 
-### Supported Models
-
-More on-device models can be found in the Hugging Face
-[`litert-community`](https://huggingface.co/litert-community):
-
-| Modality          | Model Name             | Hugging Face (`litert-community`)                                                            | Bazel Target                      | Input                   | Output        |
-:                   : (`--model_name`)       :                                                                                              :                                   :                         :               :
-| :---------------- | :--------------------- | :------------------------------------------------------------------------------------------- | :-------------------------------- | :---------------------- | :------------ |
-| **ASR**           | `parakeet-tdt-0.6b-v3` | [parakeet-tdt-0.6b-v3](https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3)         | `//omni/speech2text:parakeet_tdt` | `AudioInputMetadata` +  | `TextOutput`  |
-:                   :                        :                                                                                              :                                   : `AudioInput`            :               :
-| **ASR**           | `parakeet-ctc-0.6b`    | [parakeet-ctc-0.6b](https://huggingface.co/litert-community/parakeet-ctc-0.6b)               | `//omni/speech2text:parakeet_ctc` | `AudioInputMetadata` +  | `TextOutput`  |
-:                   :                        :                                                                                              :                                   : `AudioInput`            :               :
-| **ASR**           | `moonshine-tiny`       | [moonshine-tiny](https://huggingface.co/litert-community/moonshine-tiny)                     | `//omni/speech2text:moonshine`    | `AudioInputMetadata` +  | `TextOutput`  |
-:                   :                        :                                                                                              :                                   : `AudioInput`            :               :
-| **ASR**           | `whisper-tiny`         | [whisper-tiny](https://huggingface.co/litert-community/whisper-tiny)                         | `//omni/speech2text:whisper`      | `AudioInputMetadata` +  | `TextOutput`  |
-:                   :                        :                                                                                              :                                   : `AudioInput`            :               :
-| **ASR**           | `qwen3-asr-0.6b`       | [Qwen3-ASR-0.6B](https://huggingface.co/litert-community/Qwen3-ASR-0.6B)                     | `//omni/speech2text:qwen3_asr`    | `AudioInputMetadata` +  | `TextOutput`  |
-:                   :                        :                                                                                              :                                   : `AudioInput`            :               :
-| **TTS**           | `kokoro`               | [Kokoro-82M](https://huggingface.co/litert-community/Kokoro-82M)                             | `//omni/text2speech:kokoro`       | `TextInput`             | `AudioOutput` |
-:                   : (`kokoro-82m`)         :                                                                                              :                                   :                         :               :
-| **TTS**           | `qwen3-tts`            | [Qwen3-TTS-12Hz-0.6B-Base](https://huggingface.co/litert-community/Qwen3-TTS-12Hz-0.6B-Base) | `//omni/text2speech:qwen3_tts`    | `TextInput`             | `AudioOutput` |
-| **Text-to-Image** | `bonsai-flux2`         | [Bonsai-Image-ternary-4B](https://huggingface.co/litert-community/Bonsai-Image-ternary-4B)   | `//omni/text2image:bonsai_flux2`  | `ImageGenInputMetadata` | `ImageOutput` |
-:                   :                        :                                                                                              :                                   : *(optional)* +          :               :
-:                   :                        :                                                                                              :                                   : `TextInput`             :               :
-| **Text-to-Image** | `flux2-klein`          | [FLUX.2-klein-4B-LiteRT](https://huggingface.co/litert-community/FLUX.2-klein-4B-LiteRT)     | `//omni/text2image:flux2_klein`   | `ImageGenInputMetadata` | `ImageOutput` |
-:                   : (`flux.2-klein-4b`)    :                                                                                              :                                   : *(optional)* +          :               :
-:                   :                        :                                                                                              :                                   : `TextInput`             :               :
-
 ### Selective Linking to Minimize Binary Size
 
 `//omni:omni_runner` links all supported ASR, TTS, and Text-to-Image model
 targets so a single binary can run any model. In your own application, you can
 depend on `//omni:omni_engine` and link **only** the specific model target(s)
-you need from the table above (e.g., only `//omni/speech2text:parakeet_tdt`),
-avoiding pulling unused model implementations or dependencies into your final
-binary or shared library:
+you need from the [Supported Models](#supported-models) table above (e.g., only
+`//omni/speech2text:parakeet_tdt`), avoiding pulling unused model
+implementations or dependencies into your final binary or shared library:
 
 ```python
 cc_binary(
