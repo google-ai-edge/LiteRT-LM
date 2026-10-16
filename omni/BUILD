@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
 
@@ -210,4 +211,44 @@ cc_test(
         "//runtime/proto:tts_session_config_cc_proto",
         "//support/util:test_utils",
     ],
+)
+
+cc_binary(
+    name = "omni_runner",
+    srcs = ["omni_runner.cc"],
+    deps = [
+        ":omni_engine",
+        ":omni_registry",
+        ":omni_session",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+        "//omni/asr:moonshine",  # build_cleaner: keep
+        "//omni/asr:parakeet_ctc",  # build_cleaner: keep
+        "//omni/asr:parakeet_tdt",  # build_cleaner: keep
+        "//omni/asr:qwen3_asr",  # build_cleaner: keep
+        "//omni/asr:whisper",  # build_cleaner: keep
+        "//omni/base:io_types",
+        "//omni/base:model_utils",
+        "//omni/text2image:bonsai_flux2",  # build_cleaner: keep
+        "//omni/text2image:flux2_klein",  # build_cleaner: keep
+        "//omni/tts:kokoro",  # build_cleaner: keep
+        "//omni/tts:qwen3_tts",  # build_cleaner: keep
+        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/proto:asr_session_config_cc_proto",
+        "//runtime/proto:text2image_session_config_cc_proto",
+        "//runtime/proto:tts_session_config_cc_proto",
+        "@stb//:stb_image_write",
+    ] + select({
+        "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
+        "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
+        "//conditions:default": ["@miniaudio"],
+    }),
 )

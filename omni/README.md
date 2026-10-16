@@ -1,155 +1,300 @@
-# LiteRT-Omni
+# LiteRT-LM Streaming Multimodality Model Examples
 
-**LiteRT-Omni** is the unified multimodal streaming runtime in LiteRT-LM for
-on-device generative and perception pipelines across audio, text, and vision
-modalities—including **Automatic Speech Recognition (ASR)**, **Text-to-Speech
-(TTS)**, and **Text-to-Image generation**.
+This folder contains an **experimental** effort (aka **"LiteRT Omni"**) inside
+LiteRT-LM to provide **rich model examples**, enabling LiteRT to run complex
+**streaming multimodality models** from a single `.litertlm` model file. It
+expands LiteRT-LM to run diverse models—such as **ASR**, **TTS**, **Diffusion**,
+and more.
 
-LiteRT-Omni provides a single, modality-agnostic C++ and Kotlin/JNI surface
-(`OmniEngine` and `OmniSession`) backed by an asynchronous, multi-staged
-streaming execution pipeline (`MultiStagedSession`).
+It exposes a single, modality-agnostic C++ interface (`OmniEngine` and
+`OmniSession`) and a single command-line runner (`//omni:omni_runner`) that runs
+every supported model across **CPU**, **GPU**, and **NPU** backends. It can
+accept **Any input** (audio, text, and vision) and produce **Any output**.
+
+Today it supports **Automatic Speech Recognition (ASR)**, **Text-to-Speech
+(TTS)**, and **Text-to-Image** generation, and more models are coming.
+Pre-converted on-device models are available in the Hugging Face
+[`litert-community`](https://huggingface.co/litert-community).
 
 --------------------------------------------------------------------------------
 
-## Core Concepts
+## 1. Quick Start: Build and Run `omni_runner`
 
-*   **`OmniEngine`** (`omni_engine.h`): The heavyweight, thread-safe engine that
+Run the commands below from the root of the LiteRT-LM GitHub repository (see
+[Build and Run](https://github.com/google-ai-edge/LiteRT-LM/blob/main/docs/getting-started/build-and-run.md)
+for prerequisites: Bazel from `.bazelversion`, and Android NDK r28b+ for Android
+builds).
+
+### Build once (Linux / macOS)
+
+```sh
+bazel build //omni:omni_runner
+```
+
+### Run ASR, TTS, or Text-to-Image with the same binary
+
+`omni_runner` selects the task automatically from your input flags
+(`--audio_path` for ASR, `--text` for TTS or Text-to-Image) and infers
+`--model_name` from `--model_path` when omitted:
+
+```sh
+# 1. Automatic Speech Recognition (ASR): WAV -> text transcript
+bazel-bin/omni/omni_runner \
+    --model_path=/path/to/parakeet-tdt-0.6b-v3.litertlm \
+    --audio_path=runtime/components/testdata/audio_sample.wav
+
+# 2. Text-to-Speech (TTS): text -> 24 kHz WAV file
+bazel-bin/omni/omni_runner \
+    --model_path=/path/to/kokoro.litertlm \
+    --language=en-US \
+    --text="Hello from LiteRT-Omni, running with a unified multimodal API." \
+    --output_path=/tmp/hello.wav
+
+# 3. Text-to-Image: text prompt -> PNG image
+bazel-bin/omni/omni_runner \
+    --model_path=/path/to/bonsai-flux2.litertlm \
+    --text="A red fox sitting in fresh snow at sunrise" \
+    --img_size=256 --steps=4 \
+    --output_path=/tmp/fox.png
+```
+
+### Run on Android (CPU & GPU)
+
+```sh
+export ANDROID_NDK_HOME=/path/to/android-ndk
+bazel build --config=android_arm64 //omni:omni_runner
+
+DEVICE_DIR=/data/local/tmp/omni
+adb shell mkdir -p $DEVICE_DIR
+adb push bazel-bin/omni/omni_runner \
+    prebuilt/android_arm64/*.so \
+    /path/to/parakeet-tdt-0.6b-v3.litertlm \
+    /path/to/kokoro.litertlm \
+    runtime/components/testdata/audio_sample.wav \
+    $DEVICE_DIR
+
+# ASR on Android GPU (compiled GPU programs & weights are cached in --cache_dir)
+adb shell LD_LIBRARY_PATH=$DEVICE_DIR $DEVICE_DIR/omni_runner \
+    --backend=gpu \
+    --cache_dir=$DEVICE_DIR/cache \
+    --model_path=$DEVICE_DIR/parakeet-tdt-0.6b-v3.litertlm \
+    --audio_path=$DEVICE_DIR/audio_sample.wav
+
+# TTS on Android CPU
+adb shell $DEVICE_DIR/omni_runner \
+    --model_path=$DEVICE_DIR/kokoro.litertlm \
+    --language=en-US \
+    --text="Hello from LiteRT-Omni on Android." \
+    --output_path=$DEVICE_DIR/hello.wav
+```
+
+### Common `omni_runner` Flags
+
+| Flag                     | Default             | Description                 |
+| :----------------------- | :------------------ | :-------------------------- |
+| `--model_path`           | `""`                | Path to a `.litertlm`       |
+:                          :                     : package or model directory. :
+| `--model_name`           | *(inferred)*        | Model name (e.g.,           |
+:                          :                     : `parakeet-tdt-0.6b-v3`,     :
+:                          :                     : `kokoro`, `bonsai-flux2`).  :
+| `--backend`              | `"cpu"`             | Hardware accelerator:       |
+:                          :                     : `cpu`, `gpu`, or `npu`.     :
+| `--cache_dir`            | `"/tmp/omni_cache"` | Directory for downloaded    |
+:                          :                     : models and serialized       :
+:                          :                     : GPU/XNNPack caches.         :
+| `--audio_path`           | `""`                | Input WAV file for ASR      |
+:                          :                     : transcription.              :
+| `--text`                 | `""`                | Input text for TTS          |
+:                          :                     : synthesis or Text-to-Image  :
+:                          :                     : generation.                 :
+| `--output_path`          | `""`                | Output file path (`.wav`    |
+:                          :                     : for TTS, `.png` for         :
+:                          :                     : Text-to-Image, or optional  :
+:                          :                     : `.txt` for ASR).            :
+| `--language` / `--voice` | `"en-US"` / `""`    | TTS language code (BCP-47)  |
+:                          :                     : and optional voice ID       :
+:                          :                     : (e.g., `af_heart`).         :
+| `--img_size` / `--steps` | `0` / `4` / `42`    | Text-to-Image resolution,   |
+: / `--seed`               :                     : denoising steps, and random :
+:                          :                     : seed.                       :
+
+--------------------------------------------------------------------------------
+
+## 2. C++ API Quick Start
+
+Every modality in LiteRT-Omni shares the exact same workflow:
+
+1.  Create an `OmniEngine` once with your model name/path and `Settings`.
+2.  Create a lightweight `OmniSession` connected to a `PushInputSource`.
+3.  Push `OmniSession::Input` items (`AudioInput` or `TextInput`) and pull
+    `OmniSession::Output` items (`TextOutput`, `AudioOutput`, or `ImageOutput`)
+    via `ProcessNext()` and `Flush()`.
+
+```cpp
+#include "omni/omni_engine.h"
+#include "omni/omni_session.h"
+
+using ::litert::omni::OmniEngine;
+using ::litert::omni::OmniSession;
+using ::litert::omni::PushInputSource;
+
+// 1. Load the engine once (model_name can be "parakeet-tdt-0.6b-v3",
+//    "kokoro", "bonsai-flux2", etc.).
+OmniEngine::Settings settings{
+    .backend = OmniEngine::Settings::Backend::kGpu,
+    .cache_dir = "/tmp/omni_cache",
+    .model_path = "/path/to/model.litertlm",
+};
+ABSL_ASSIGN_OR_RETURN(auto engine, OmniEngine::Create("kokoro", settings));
+
+// 2. Create a streaming session with a PushInputSource.
+auto input_source = std::make_unique<PushInputSource>();
+PushInputSource* raw_input = input_source.get();
+ABSL_ASSIGN_OR_RETURN(auto session,
+                      engine->CreateSession(std::move(input_source)));
+
+// 3. Push inputs (TextInput for TTS / Text2Image, or AudioInput for ASR).
+ABSL_RETURN_IF_ERROR(raw_input->PushInput(
+    OmniSession::TextInput{.text = "Hello from LiteRT-Omni."}));
+raw_input->Finish();
+
+// 4. Pull outputs until the stream ends, then flush any trailing output.
+while (true) {
+  auto next = session->ProcessNext();
+  if (!next.ok()) {
+    if (absl::IsOutOfRange(next.status()) || absl::IsNotFound(next.status())) {
+      ABSL_ASSIGN_OR_RETURN(auto tail, session->Flush());
+      // Handle `tail` (TextOutput, AudioOutput, or ImageOutput)...
+      break;
+    }
+    return next.status();
+  }
+  // Handle `*next` (TextOutput, AudioOutput, or ImageOutput)...
+}
+```
+
+### Supported Models
+
+More on-device models can be found in the Hugging Face
+[`litert-community`](https://huggingface.co/litert-community):
+
+| Modality          | Model Name             | Hugging Face (`litert-community`)                                                            | Bazel Target                     | Input                   | Output        |
+:                   : (`--model_name`)       :                                                                                              :                                  :                         :               :
+| :---------------- | :--------------------- | :------------------------------------------------------------------------------------------- | :------------------------------- | :---------------------- | :------------ |
+| **ASR**           | `parakeet-tdt-0.6b-v3` | [parakeet-tdt-0.6b-v3](https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3)         | `//omni/asr:parakeet_tdt`        | `AudioInputMetadata` +  | `TextOutput`  |
+:                   :                        :                                                                                              :                                  : `AudioInput`            :               :
+| **ASR**           | `parakeet-ctc-0.6b`    | [parakeet-ctc-0.6b](https://huggingface.co/litert-community/parakeet-ctc-0.6b)               | `//omni/asr:parakeet_ctc`        | `AudioInputMetadata` +  | `TextOutput`  |
+:                   :                        :                                                                                              :                                  : `AudioInput`            :               :
+| **ASR**           | `moonshine-tiny`       | [moonshine-tiny](https://huggingface.co/litert-community/moonshine-tiny)                     | `//omni/asr:moonshine`           | `AudioInputMetadata` +  | `TextOutput`  |
+:                   :                        :                                                                                              :                                  : `AudioInput`            :               :
+| **ASR**           | `whisper-tiny`         | [whisper-tiny](https://huggingface.co/litert-community/whisper-tiny)                         | `//omni/asr:whisper`             | `AudioInputMetadata` +  | `TextOutput`  |
+:                   :                        :                                                                                              :                                  : `AudioInput`            :               :
+| **ASR**           | `qwen3-asr-0.6b`       | [Qwen3-ASR-0.6B](https://huggingface.co/litert-community/Qwen3-ASR-0.6B)                     | `//omni/asr:qwen3_asr`           | `AudioInputMetadata` +  | `TextOutput`  |
+:                   :                        :                                                                                              :                                  : `AudioInput`            :               :
+| **TTS**           | `kokoro`               | [Kokoro-82M](https://huggingface.co/litert-community/Kokoro-82M)                             | `//omni/tts:kokoro`              | `TextInput`             | `AudioOutput` |
+:                   : (`kokoro-82m`)         :                                                                                              :                                  :                         :               :
+| **TTS**           | `qwen3-tts`            | [Qwen3-TTS-12Hz-0.6B-Base](https://huggingface.co/litert-community/Qwen3-TTS-12Hz-0.6B-Base) | `//omni/tts:qwen3_tts`           | `TextInput`             | `AudioOutput` |
+| **Text-to-Image** | `bonsai-flux2`         | [Bonsai-Image-ternary-4B](https://huggingface.co/litert-community/Bonsai-Image-ternary-4B)   | `//omni/text2image:bonsai_flux2` | `ImageGenInputMetadata` | `ImageOutput` |
+:                   :                        :                                                                                              :                                  : *(optional)* +          :               :
+:                   :                        :                                                                                              :                                  : `TextInput`             :               :
+| **Text-to-Image** | `flux2-klein`          | [FLUX.2-klein-4B-LiteRT](https://huggingface.co/litert-community/FLUX.2-klein-4B-LiteRT)     | `//omni/text2image:flux2_klein`  | `ImageGenInputMetadata` | `ImageOutput` |
+:                   : (`flux.2-klein-4b`)    :                                                                                              :                                  : *(optional)* +          :               :
+:                   :                        :                                                                                              :                                  : `TextInput`             :               :
+
+### Selective Linking to Minimize Binary Size
+
+`//omni:omni_runner` links all supported ASR, TTS, and Text-to-Image model
+targets so a single binary can run any model. In your own application, you can
+depend on `//omni:omni_engine` and link **only** the specific model target(s)
+you need from the table above (e.g., only `//omni/asr:parakeet_tdt`), avoiding
+pulling unused model implementations or dependencies into your final binary or
+shared library:
+
+```python
+cc_binary(
+    name = "my_asr_app",
+    srcs = ["my_asr_app.cc"],
+    deps = [
+        "//omni:omni_engine",
+        "//omni:omni_session",
+        "//omni/asr:parakeet_tdt",  # Link only Parakeet-TDT
+    ],
+)
+```
+
+--------------------------------------------------------------------------------
+
+## 3. Core Architecture
+
+*   **`OmniEngine`** (`omni_engine.h`): Heavyweight, thread-safe engine that
     owns compiled LiteRT models, tokenizers, hardware accelerator environments
-    (CPU, GPU, NPU), and worker thread pools for a loaded model. Creating an
-    `OmniEngine` performs one-time model resolution, optional downloading, and
-    accelerator compilation.
-*   **`OmniSession`** (`omni_session.h`): A lightweight, stateful streaming
-    session created by `OmniEngine::CreateSession`. Each session owns its own
-    per-stream pipeline stages and recurrent/decoder states while sharing the
-    underlying `OmniEngine` weights.
-    *   **Inputs (`OmniSession::Input`)**: Streamed into the session via an
-        `OmniSession::InputSource` (such as `PushInputSource`), supporting
-        `TextInput`, `AudioInput`, `AudioInputMetadata`,
-        `ImageGenInputMetadata`, and `EndOfInput`.
-    *   **Outputs (`OmniSession::Output`)**: Pulled synchronously via
-        `ProcessNext()` / `Flush()` or streamed asynchronously via
-        `ProcessAsync(callback)`, emitting `TextOutput`, `AudioOutput`,
-        `ImageOutput`, or `EndOfOutput`.
+    (CPU, GPU, NPU), and worker thread pools. Creating an `OmniEngine` performs
+    one-time model resolution and accelerator compilation.
+*   **`OmniSession`** (`omni_session.h`): Lightweight, stateful streaming
+    session created by `OmniEngine::CreateSession`. Multiple sessions can be
+    created from a single `OmniEngine` with per-session configuration overrides:
+    *   **Synchronous pulling**: Call `ProcessNext()` in a loop until
+        `absl::OutOfRangeError` / `absl::NotFoundError`, then call `Flush()`.
+    *   **Asynchronous streaming**: Call `ProcessAsync(callback)` to run stages
+        concurrently on the engine's thread pool and receive `Output` chunks via
+        callback.
 *   **`MultiStagedSession` & `Stage<T>`** (`multi_staged_session.h`,
-    `base/stage.h`): Composable pipeline execution engine that connects stages
-    (e.g., `AudioSource` → `AudioPreprocessor` → `SpeechRecognizer` →
-    `Detokenizer` → `TextMerger` for ASR; `StreamTextSource` → `TextFrontend` →
-    `AcousticModel` → `Vocoder` for TTS; `PromptSource` → `TextEncoderStage` →
-    `Denoiser` → `ImageDecoder` for Text-to-Image).
+    `base/stage.h`): Composable pipeline engine that connects typed stages:
+    *   **ASR**: `AudioSource` → `AudioPreprocessor` → `SpeechRecognizer` →
+        `Detokenizer` → `TextMerger`
+    *   **TTS**: `StreamTextSource` → `TextFrontend` → `AcousticModel` →
+        `Vocoder`
+    *   **Text-to-Image**: `PromptSource` → `TextEncoderStage` → `Denoiser` →
+        `ImageDecoder`
 
 --------------------------------------------------------------------------------
 
-## Three-Layer Configuration & Metadata Architecture
+## 4. Three-Layer Configuration & Metadata
 
-LiteRT-Omni separates model metadata, session configuration, and runtime
-environment settings into three distinct layers:
+LiteRT-Omni separates runtime settings, model-intrinsic metadata, and per-stream
+session configuration into three layers:
 
-1.  **Layer 1 — SessionFactory Defaults & Engine Settings** (per-model
-    `OmniSessionFactory` & per-`OmniEngine`):
-    *   **Types**: `OmniRegistry::RegistrySpec`, `OmniEngine::Settings`,
-        `OmniSessionFactory`
-    *   **Purpose**: Model registration (`model_names`, `get_session_factory`,
-        `session_config_type_id`, `metadata_type_id`, `model_remote_url`),
-        fallback model metadata and session config defaults filled by the
-        model's `SessionFactory` if not set, hardware backend (`kCpu`, `kGpu`,
-        `kNpu`), cache directory, thread count, and local file paths.
-2.  **Layer 2 — `.litertlm` Package Metadata** (embedded in the `.litertlm`
-    model file):
-    *   **Types**:
-        *   `litert.lm.proto.AsrMetadata` (`asr_metadata.proto`)
-        *   `litert.lm.proto.TtsMetadata` (`tts_metadata.proto`)
-        *   `litert.lm.proto.Text2ImageMetadata` (`text2image_metadata.proto`)
-    *   **Purpose**: Purely model-intrinsic architecture parameters packaged
-        with the model weights (e.g., audio sample rate, input window duration,
-        mel spectrogram parameters, special token IDs, supported languages).
-        Contains **no** session-specific or runtime-specific fields.
-3.  **Layer 3 — Session Config** (per-`OmniSession` via `CreateSession`):
-    *   **Types**:
-        *   `litert.lm.proto.AsrSessionConfig` (`asr_session_config.proto`)
-        *   `litert.lm.proto.TtsSessionConfig` (`tts_session_config.proto`)
-        *   `litert.lm.proto.Text2ImageSessionConfig`
-            (`text2image_session_config.proto`)
-    *   **Purpose**: Per-stream session parameters that vary across sessions
-        without reloading the engine (e.g., chunk overlap ratio, text merger
-        strategy, synthesis language/voice, text chunking, image
-        dimensions/steps/seed).
+1.  **Layer 1 — Engine Settings & Factory Defaults** (`OmniEngine::Settings`,
+    `OmniSessionFactory`):
+    *   Hardware backend (`kCpu`, `kGpu`, `kNpu`), thread count, `cache_dir`,
+        `model_path`, and fallback model/session defaults provided by the
+        model's `SessionFactory`.
+2.  **Layer 2 — `.litertlm` Package Metadata** (embedded in `.litertlm` files):
+    *   `AsrMetadata`, `TtsMetadata`, `Text2ImageMetadata`: Model-intrinsic
+        parameters packaged with the weights (e.g., sample rate, mel spectrogram
+        config, special token IDs).
+3.  **Layer 3 — Session Config** (passed to `OmniEngine::Create`):
+    *   `AsrSessionConfig` (overlap ratio, text merger type), `TtsSessionConfig`
+        (language, voice), `Text2ImageSessionConfig` (width, height, inference
+        steps, seed).
 
-### Override Precedence
+```cpp
+// Configure TTS voice and language when creating the engine:
+litert::lm::proto::TtsSessionConfig tts_config;
+tts_config.set_language("en-US");
+tts_config.set_voice("af_heart");
 
-1.  **Session Factory Creation (`OmniRegistry::CreateSessionFactory(model_name,
-    settings, session_config, metadata)`)**:
-    *   When loading a `.litertlm` package, embedded `.litertlm` metadata
-        (**Layer 2**) is merged with any caller-provided `metadata` override.
-    *   The model's `SessionFactory` fills in any unset model metadata or
-        session config fields with its built-in defaults (**Layer 1**).
-2.  **Session Creation (`engine->CreateSession(input_source,
-    session_config)`)**:
-    *   Starts from the resolved session config in the `SessionFactory` (**Layer
-        1**).
-    *   If a non-null `session_config` proto (**Layer 3**) is provided, its
-        populated fields override the default session config.
+ABSL_ASSIGN_OR_RETURN(
+    auto engine,
+    OmniEngine::Create("kokoro", settings, &tts_config));
+```
 
 --------------------------------------------------------------------------------
 
-## Session Factory Registration (`OmniRegistry::RegisterSessionFactory`)
+## 5. Extending LiteRT-Omni: Registering Custom Models
 
-`OmniRegistry` (`omni_registry.h`) decouples `OmniEngine` from concrete modality
-model implementations. Each model registers a `RegistrySpec` containing its
-`model_names` (first element is the canonical model name; remaining elements are
-aliases), `get_session_factory` callback, `session_config_type_id`, optional
-`metadata_type_id`, and optional `model_remote_url` with
-`OmniRegistry::Get().RegisterSessionFactory`.
+`OmniRegistry` (`omni_registry.h`) decouples `OmniEngine` from concrete model
+implementations. To add a new model, implement an `OmniSessionFactory` and
+register a `RegistrySpec` with `OmniRegistry::Get().RegisterSessionFactory`:
 
-### Protobuf Type ID Derivation Rules
-
-When calling `OmniRegistry::Get().RegisterSessionFactory(spec)`:
-
-1.  **`spec.session_config_type_id` (Primary Key)**:
-    *   **Short key `"Xxx"`** (no `.`): Resolves to
-        `"litert.lm.proto.XxxSessionConfig"`.
-        *   `"Asr"` → `"litert.lm.proto.AsrSessionConfig"`
-        *   `"Tts"` → `"litert.lm.proto.TtsSessionConfig"`
-        *   `"Text2Image"` → `"litert.lm.proto.Text2ImageSessionConfig"`
-    *   **Full proto type name `"d.e.f"`** (contains `.`): Used as-is
-        (`"d.e.f"`).
-2.  **`spec.metadata_type_id` (Optional for Short Keys)**:
-    *   **Omitted / empty `""` (when `session_config_type_id` is a short key
-        `"Xxx"`)**: Derives `"litert.lm.proto.XxxMetadata"`.
-        *   `("Asr", std::nullopt)` → `("litert.lm.proto.AsrSessionConfig",
-            "litert.lm.proto.AsrMetadata")`
-        *   `("Text2Image", std::nullopt)` →
-            `("litert.lm.proto.Text2ImageSessionConfig",
-            "litert.lm.proto.Text2ImageMetadata")`
-    *   **Short key `"Yyy"`** (no `.`): Resolves to
-        `"litert.lm.proto.YyyMetadata"`.
-    *   **Full proto type name `"a.b.c"`** (contains `.`): Used as-is
-        (`"a.b.c"`).
-    *   **Omitted / empty `""` when `session_config_type_id` is a full type name
-        `"d.e.f"`**: Rejected with `absl::InvalidArgumentError` because a
-        metadata type ID cannot be automatically derived from an arbitrary full
-        proto type name.
-
-### Type Validation
-
-*   At **session factory creation time**, if `session_config` or `metadata` is
-    passed to `OmniRegistry::CreateSessionFactory`, `OmniRegistry` verifies that
-    `session_config->GetTypeName()` and `metadata->GetTypeName()` match the
-    registered proto type IDs, returning `absl::InvalidArgumentError` on
-    mismatch.
-*   At **session creation time**, if `session_config` is passed to
-    `OmniEngine::CreateSession(input_source, session_config)`, `OmniEngine`
-    forwards it to the underlying `OmniSessionFactory`.
-
---------------------------------------------------------------------------------
-
-## Examples
-
-### 1. Registering a Model Session Factory
-
-To comply with the Google C++ Style Guide (which forbids non-POD static/global
-variables with dynamic destructors), register each model using an immediately
-invoked lambda that passes a `RegistrySpec` to
-`OmniRegistry::Get().RegisterSessionFactory`:
+*   **`model_names`**: Canonical model name followed by any aliases.
+*   **`get_session_factory`**: Callback that compiles shared model resources and
+    returns an `OmniSessionFactory`.
+*   **`session_config_type_id`**: Short key (`"Asr"`, `"Tts"`, `"Text2Image"`,
+    which expands to `"litert.lm.proto.<Key>SessionConfig"` and
+    `"litert.lm.proto.<Key>Metadata"`) or full proto type name.
+*   **`model_remote_url`** *(optional)*: Default URL for automatic download when
+    no local `model_path` is supplied.
 
 ```cpp
 namespace litert::omni::asr {
@@ -157,67 +302,9 @@ namespace {
 
 constexpr absl::string_view kModelNames[] = {
     "parakeet-tdt-0.6b-v3",
-    "parakeet-tdt-0.6b-v3-int8",
     "parakeet-tdt",
-    "parakeet-tdt-int8",
 };
 
-// Resolves configs and instantiates `OmniSession` on demand.
-class ParakeetTdtSessionFactory : public OmniSessionFactory {
- public:
-  ParakeetTdtSessionFactory(
-      const OmniEngine::Settings& settings,
-      const MessageLite* absl_nullable session_config,
-      const MessageLite* absl_nullable metadata,
-      ::litert::Environment env,
-      std::shared_ptr<lm::ModelResources> absl_nullable lm_resources,
-      std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer,
-      std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model)
-      : session_config_(ResolveSessionConfig(session_config)),
-        metadata_(ResolveMetadata(metadata)),
-        environment_(std::move(env)),
-        lm_resources_(std::move(lm_resources)),
-        tokenizer_(std::move(tokenizer)),
-        compiled_model_(std::move(compiled_model)) {}
-
- protected:
-  absl::StatusOr<std::unique_ptr<OmniSession>> Create(
-      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
-      override {
-    // Instantiate pipeline stages and return an OmniSession.
-  }
-
- private:
-  static lm::proto::AsrMetadata ResolveMetadata(
-      const MessageLite* absl_nullable metadata) {
-    lm::proto::AsrMetadata resolved;
-    if (metadata != nullptr) {
-      resolved.CheckTypeAndMergeFrom(*metadata);
-    }
-    // Set default values if not set by user.
-    return resolved;
-  }
-
-  static lm::proto::AsrSessionConfig ResolveSessionConfig(
-      const MessageLite* absl_nullable session_config) {
-    lm::proto::AsrSessionConfig resolved;
-    if (session_config != nullptr) {
-      resolved.CheckTypeAndMergeFrom(*session_config);
-    }
-    // Set default values if not set by user.
-    return resolved;
-  }
-
-  lm::proto::AsrSessionConfig session_config_;
-  lm::proto::AsrMetadata metadata_;
-  ::litert::Environment environment_;
-  std::shared_ptr<lm::ModelResources> absl_nullable lm_resources_;
-  std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer_;
-  std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model_;
-};
-
-// Instantiates common objects shared among sessions (returning on error), then
-// returns the session factory.
 absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
 GetParakeetTdtSessionFactory(
     absl::string_view model_name, const OmniEngine::Settings& settings,
@@ -225,25 +312,7 @@ GetParakeetTdtSessionFactory(
     const MessageLite* absl_nullable metadata,
     ::litert::Environment& env, ::litert::Options& options,
     std::shared_ptr<lm::ModelResources> absl_nullable lm_resources) {
-  if (!absl::c_linear_search(kModelNames, model_name)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unexpected model_name: ", model_name));
-  }
-  if (lm_resources == nullptr) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "lm_resources must not be null (model_path: ", settings.model_path,
-        ")."));
-  }
-  ABSL_ASSIGN_OR_RETURN(
-      auto compiled_model,
-      CreateCompiledModel(settings, env, options, lm_resources.get(),
-                          lm::proto::AsrMetadata::TF_LITE_ENCODER_DECODER));
-  ABSL_ASSIGN_OR_RETURN(
-      auto tokenizer,
-      CreateTokenizer(lm_resources.get(), settings.tokenizer_path));
-  return std::make_unique<ParakeetTdtSessionFactory>(
-      settings, session_config, metadata, std::move(env),
-      std::move(lm_resources), std::move(tokenizer), std::move(compiled_model));
+  // Compile shared models/tokenizers once and return an OmniSessionFactory.
 }
 
 [[maybe_unused]] const bool kParakeetTdtRegistered = [] {
@@ -262,61 +331,12 @@ GetParakeetTdtSessionFactory(
 }  // namespace litert::omni::asr
 ```
 
-> **Toolchain & Linker Portability (GCC, Clang, Xcode, MSVC)**:
->
-> *   **C++20 Designated Initializers**: Designated initializers require C++20
->     (`-std=c++20` on GCC/Clang/Xcode, `/std:c++20` on MSVC) and must appear in
->     exact struct declaration order (`model_names`, `get_session_factory`,
->     `session_config_type_id`, `metadata_type_id`, `model_remote_url`).
-> *   **Static Archive Dead-Stripping**: If a registration translation unit has
->     no symbols referenced by the main binary (or if `kParakeetRegistered` is
->     the only symbol in its `.cc` file inside a `.a` / `.lib` static archive),
->     linkers on all four toolchains (GNU `ld`/`lld` on GCC/Clang, Apple
->     `ld64`/`ld_prime` on Xcode, and `link.exe` on MSVC) will skip extracting
->     that object file from the archive. To ensure static self-registration runs
->     across all platforms:
->     *   In **Bazel**, set `alwayslink = 1` on the `cc_library` target
->         (translates to `-Wl,--whole-archive` on GCC/Clang, `-Wl,-force_load`
->         on Xcode, and `/WHOLEARCHIVE` on MSVC), **or** place the registration
->         in a `.cc` file whose symbols (such as `AsrSessionFactory`) are
->         already referenced by the binary.
->     *   In **CMake** (or when whole-archive linking is not used), link with
->         `$<LINK_LIBRARY:WHOLE_ARCHIVE,target>` or expose and call
->         `RegisterParakeetModels()` explicitly during initialization.
+> **Note on Static Registration**: Set `alwayslink = 1` on the `cc_library`
+> target in `BUILD` so the linker retains the self-registration translation unit
+> when linking binaries like `//omni:omni_runner`.
 
-### 2. Creating an `OmniEngine` and `OmniSession` with Per-Session Overrides
+### Running Unit Tests
 
-```cpp
-#include "omni/omni_engine.h"
-#include "omni/omni_session.h"
-#include "runtime/proto/asr_session_config.proto.h"
-
-// 1. Create the engine (overrides default backend and local model path, while
-//    inheriting any unset Settings fields from the registered ModelSpec).
-OmniEngine::Settings settings{
-    .backend = OmniEngine::Settings::Backend::kGpu,
-    .cache_dir = "/data/local/tmp/omni_cache",
-    .model_path = "/data/local/tmp/parakeet_tdt_0.6b_v3.litertlm",
-};
-ABSL_ASSIGN_OR_RETURN(
-    auto engine, OmniEngine::Create("parakeet-tdt-0.6b-v3", settings));
-
-// 2. Optionally customize per-session parameters via AsrSessionConfig.
-litert::lm::proto::AsrSessionConfig session_config;
-session_config.set_overlap_ratio(0.25f);
-session_config.set_text_merger_type(
-    litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
-
-auto input_source = std::make_unique<litert::omni::PushInputSource>();
-auto* raw_input_source = input_source.get();
-ABSL_ASSIGN_OR_RETURN(
-    auto session,
-    engine->CreateSession(std::move(input_source), &session_config));
-
-// 3. Push audio samples and stream transcription outputs.
-ABSL_RETURN_IF_ERROR(raw_input_source->PushInput(
-    litert::omni::OmniSession::AudioInput{.pcm_samples = pcm_chunk}));
-raw_input_source->Finish();
-
-ABSL_ASSIGN_OR_RETURN(auto output, session->Flush());
+```sh
+bazel test //omni/...
 ```

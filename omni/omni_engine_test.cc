@@ -276,6 +276,28 @@ TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {
                        HasSubstr("/custom/tts_cache/kokoro.litertlm")));
 }
 
+TEST(OmniEngineTest, ResolvesTtsModelPathAndRejectsMismatchedSessionConfig) {
+  OmniEngine::Settings settings{
+      .cache_dir = "/custom/tts_cache",
+      .model_path = "/custom/path/kokoro.litertlm",
+  };
+  EXPECT_THAT(OmniEngine::Create("kokoro", settings),
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("/custom/path/kokoro.litertlm")));
+
+  lm::proto::TtsSessionConfig tts_config;
+  tts_config.set_language("en-US");
+  tts_config.set_voice("af_heart");
+  EXPECT_THAT(OmniEngine::Create("kokoro", settings, &tts_config),
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("/custom/path/kokoro.litertlm")));
+
+  lm::proto::AsrSessionConfig mismatched_config;
+  mismatched_config.set_overlap_ratio(0.4f);
+  EXPECT_THAT(OmniEngine::Create("kokoro", settings, &mismatched_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
   OmniEngine::Settings settings{
       .backend = OmniEngine::Settings::Backend::kGpu,

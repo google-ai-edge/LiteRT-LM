@@ -16,6 +16,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <system_error>  // NOLINT: Required for std::error_code.
 #include <utility>
 #include <variant>
 #include <vector>
@@ -89,6 +90,14 @@ absl::Status RunAsrRunner(absl::string_view model_name,
                           absl::string_view model_path_flag) {
   if (audio_path.empty()) {
     return absl::InvalidArgumentError("--audio_path flag is required.");
+  }
+  if (!cache_dir.empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(std::string(cache_dir), ec);
+    if (ec) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Failed to create --cache_dir '", cache_dir, "': ", ec.message()));
+    }
   }
 
   ABSL_ASSIGN_OR_RETURN(

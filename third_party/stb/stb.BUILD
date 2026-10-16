@@ -29,6 +29,19 @@ genrule(
           "echo '#include \"stb_image_resize2.h\"'; } > $@",
 )
 
+genrule(
+    name = "stb_image_write_impl_src",
+    outs = ["stb_image_write_impl.cc"],
+    cmd = "{ echo '#define STB_IMAGE_WRITE_IMPLEMENTATION'; " +
+          "echo '#include \"stb_image_write.h\"'; } > $@",
+)
+
+cc_library(
+    name = "stb_image_write",
+    srcs = ["stb_image_write_impl.cc"],
+    hdrs = ["stb_image_write.h"],
+)
+
 cc_library(
     name = "stblib",
     srcs = ["stb_image_resize2_impl.cc"],
@@ -38,5 +51,8 @@ cc_library(
         "stb_image_resize2.h",
         "stb_image_write.h",
     ],
-    deps = [":stb_image"],
+    deps = [
+        ":stb_image",
+        ":stb_image_write",
+    ],
 )
