@@ -827,6 +827,7 @@ cc_library(
         "//omni/base:litert_runner",
         "//omni/base:model_utils",
         "//runtime/components:model_resources",
+        "//runtime/core:engine_advanced_impl",  # buildcleaner: keep
         "//runtime/proto:asr_metadata_cc_proto",
         "//runtime/proto:asr_model_type_cc_proto",
         "//runtime/proto:asr_session_config_cc_proto",

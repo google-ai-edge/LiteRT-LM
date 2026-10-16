@@ -126,7 +126,6 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",
-        "//runtime/core:engine_advanced_impl",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
@@ -163,6 +162,7 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer_types",
         "//omni:omni_engine_header",
         "//runtime/components:model_resources",
+        "//runtime/core:engine_advanced_impl",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:asr_metadata_cc_proto",
         "//support/util:test_utils",
