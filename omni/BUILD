@@ -135,7 +135,9 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers",  # build_cleaner: keep
         "@litert//litert/c:litert_common",
         "@litert//litert/c/options:litert_gpu_options",
         "@litert//litert/cc:litert_environment",
@@ -147,6 +149,7 @@ cc_test(
         "//runtime/proto:asr_session_config_cc_proto",
         "//runtime/proto:tts_session_config_cc_proto",
         "//runtime/util:file_util",
+        "//schema/core:litertlm_header_schema",
         "//support/util:test_utils",
     ],
 )

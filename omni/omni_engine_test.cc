@@ -220,8 +220,25 @@ TEST(PushInputSourceTest, PushScheduleAndReset) {
 }
 
 TEST(OmniEngineTest, CreateSessionDelegatesToFactory) {
-  auto engine = OmniEngine::Create("test-model",
-                                   std::make_unique<FakeOmniSessionFactory>());
+  ASSERT_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
+      .model_names = {"test-model"},
+      .get_session_factory =
+          [](absl::string_view /*model_name*/,
+             const OmniEngine::Settings& /*settings*/,
+             const MessageLite* /*session_cfg*/,
+             const MessageLite* /*metadata*/, ::litert::Environment& /*env*/,
+             ::litert::Options& /*options*/,
+             std::shared_ptr<lm::ModelResources> /*lm_resources*/)
+          -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+        return std::make_unique<FakeOmniSessionFactory>();
+      },
+      .session_config_type_id = "Tts",
+  }));
+  absl::Cleanup cleanup = [] {
+    OmniRegistry::Get().UnregisterModel("test-model");
+  };
+
+  auto engine = OmniEngine::Create("test-model");
   ASSERT_OK(engine);
   EXPECT_EQ((*engine)->model_name(), "test-model");
 
@@ -238,35 +255,35 @@ TEST(OmniEngineTest, CreateSessionDelegatesToFactory) {
 }
 
 TEST(OmniEngineTest, ResolvesAsrModelAndForwardsOptions) {
-  OmniEngine::Options options{
-      .backend = OmniEngine::Options::Backend::kGpu,
+  OmniEngine::Settings settings{
+      .backend = OmniEngine::Settings::Backend::kGpu,
       .cache_dir = "/custom/asr_cache",
       .num_threads = 8,
   };
-  EXPECT_THAT(OmniEngine::Create("moonshine-tiny", options),
+  EXPECT_THAT(OmniEngine::Create("moonshine-tiny", settings),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        HasSubstr("/custom/asr_cache/moonshine-tiny.litertlm")));
 }
 
 TEST(OmniEngineTest, ResolvesTtsModelAndForwardsOptions) {
-  OmniEngine::Options options{
-      .backend = OmniEngine::Options::Backend::kNpu,
+  OmniEngine::Settings settings{
+      .backend = OmniEngine::Settings::Backend::kNpu,
       .cache_dir = "/custom/tts_cache",
       .num_threads = 6,
   };
-  EXPECT_THAT(OmniEngine::Create("kokoro", options),
+  EXPECT_THAT(OmniEngine::Create("kokoro", settings),
               StatusIs(absl::StatusCode::kNotFound,
                        HasSubstr("/custom/tts_cache/kokoro.litertlm")));
 }
 
 TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
-  OmniEngine::Options options{
-      .backend = OmniEngine::Options::Backend::kGpu,
+  OmniEngine::Settings settings{
+      .backend = OmniEngine::Settings::Backend::kGpu,
       .cache_dir = "/custom/text2image_cache",
       .num_threads = 4,
   };
   EXPECT_THAT(
-      OmniEngine::Create("bonsai-flux2", options),
+      OmniEngine::Create("bonsai-flux2", settings),
       StatusIs(absl::StatusCode::kNotFound,
                HasSubstr("/custom/text2image_cache/bonsai-flux2.litertlm")));
 }

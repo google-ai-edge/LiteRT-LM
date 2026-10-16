@@ -76,7 +76,6 @@ class Text2ImageSessionFactory : public OmniSessionFactory {
 
  private:
   friend class ::litert::omni::OmniSessionTest;
-  friend class Text2ImageEngine;
   friend class Text2ImageSessionTest;
 
   static std::unique_ptr<PromptSource> CreatePromptInputSource(

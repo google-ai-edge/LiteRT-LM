@@ -18,7 +18,9 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -29,11 +31,10 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "omni/asr/asr_engine.h"
 #include "omni/asr/file_audio_source.h"
-#include "omni/asr/model_metadata.h"
 #include "omni/base/model_utils.h"
 #include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "runtime/proto/asr_session_config.pb.h"
 
@@ -56,70 +57,28 @@ ABSL_FLAG(std::string, model_path, "",
 
 namespace {
 
-absl::StatusOr<litert::omni::asr::AsrEngine::Settings> LoadSettingsFromPreset(
-    absl::string_view model_name, absl::string_view cache_dir,
-    absl::string_view backend_flag, int num_threads, float overlap_ratio,
-    absl::string_view text_merger_flag, absl::string_view model_path_flag) {
-  litert::omni::asr::AsrEngine::Settings settings;
-  settings.engine_settings.cache_dir = std::string(cache_dir);
-  settings.engine_settings.num_threads = num_threads;
-  if (!model_path_flag.empty()) {
-    settings.engine_settings.model_path = std::string(model_path_flag);
+class FileOmniInputSource : public litert::omni::OmniSession::InputSource {
+ public:
+  explicit FileOmniInputSource(
+      std::unique_ptr<litert::omni::asr::FileAudioSource> source)
+      : source_(std::move(source)) {}
+
+ protected:
+  void ResetInternal() override { source_->Reset(); }
+  bool NeedScheduleInternal() const override { return source_->NeedSchedule(); }
+  absl::Status ScheduleInternal() override {
+    SetState(State::kRunning);
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+    ABSL_RETURN_IF_ERROR(source_->Schedule());
+    ABSL_ASSIGN_OR_RETURN(std::vector<float> chunk, source_->GetOutput());
+    PushOutput(
+        litert::omni::OmniSession::AudioInput{.pcm_samples = std::move(chunk)});
+    return absl::OkStatus();
   }
 
-  litert::omni::asr::AsrEngineConfig metadata_config;
-  ABSL_RETURN_IF_ERROR(litert::omni::asr::PopulateConfigFromMetadataJson(
-      model_name, /*json_str=*/"", metadata_config));
-  settings.metadata = metadata_config.metadata;
-  settings.engine_settings.model_remote_url = metadata_config.model_url;
-  settings.engine_settings.tokenizer_remote_url = metadata_config.tokenizer_url;
-  settings.session_config.set_overlap_ratio(overlap_ratio);
-
-  if (!text_merger_flag.empty()) {
-    if (absl::EqualsIgnoreCase(text_merger_flag, "levenshtein")) {
-      settings.session_config.set_text_merger_type(
-          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
-    } else {
-      settings.session_config.set_text_merger_type(
-          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
-    }
-  }
-
-  if (backend_flag == "gpu") {
-    settings.engine_settings.backend =
-        litert::omni::OmniEngine::Settings::Backend::kGpu;
-  } else if (backend_flag == "npu") {
-    settings.engine_settings.backend =
-        litert::omni::OmniEngine::Settings::Backend::kNpu;
-  } else {
-    settings.engine_settings.backend =
-        litert::omni::OmniEngine::Settings::Backend::kCpu;
-  }
-
-  std::string model_ext =
-      std::filesystem::path(settings.engine_settings.model_remote_url)
-          .extension()
-          .string();
-  if (model_ext.empty()) {
-    model_ext = ".tflite";
-  }
-
-  std::filesystem::path cache_path(settings.engine_settings.cache_dir);
-  std::string model_filename = absl::StrCat(model_name, model_ext);
-  std::string tokenizer_filename = absl::StrCat(model_name, "_tokenizer.json");
-  if (settings.engine_settings.model_path.empty()) {
-    settings.engine_settings.model_path =
-        (cache_path / model_filename).string();
-  } else {
-    settings.engine_settings.model_remote_url.clear();
-  }
-  if (settings.engine_settings.tokenizer_path.empty()) {
-    settings.engine_settings.tokenizer_path =
-        (cache_path / tokenizer_filename).string();
-  }
-
-  return settings;
-}
+ private:
+  std::unique_ptr<litert::omni::asr::FileAudioSource> source_;
+};
 
 absl::Status RunAsrRunner(absl::string_view model_name,
                           absl::string_view audio_path,
@@ -133,32 +92,64 @@ absl::Status RunAsrRunner(absl::string_view model_name,
   }
 
   ABSL_ASSIGN_OR_RETURN(
-      auto settings,
-      LoadSettingsFromPreset(model_name, cache_dir, backend_flag, num_threads,
-                             overlap_ratio, text_merger_flag, model_path_flag));
-  if (!settings.engine_settings.model_remote_url.empty() &&
-      !std::filesystem::exists(settings.engine_settings.model_path)) {
-    ABSL_RETURN_IF_ERROR(litert::omni::DownloadFileWithCurl(
-        settings.engine_settings.model_remote_url,
-        settings.engine_settings.model_path));
+      litert::omni::OmniRegistry::RegisteredModel reg_model,
+      litert::omni::OmniRegistry::Get().GetRegisteredModel(model_name));
+  if (reg_model.metadata_proto_type_id != "litert.lm.proto.AsrMetadata") {
+    return absl::NotFoundError(
+        absl::StrCat("Unsupported or unknown ASR model: ", model_name));
   }
-  if (!settings.engine_settings.tokenizer_remote_url.empty() &&
-      !std::filesystem::exists(settings.engine_settings.tokenizer_path)) {
-    ABSL_RETURN_IF_ERROR(litert::omni::DownloadFileWithCurl(
-        settings.engine_settings.tokenizer_remote_url,
-        settings.engine_settings.tokenizer_path));
+
+  litert::omni::OmniEngine::Settings engine_settings;
+  engine_settings.cache_dir = std::string(cache_dir);
+  engine_settings.num_threads = num_threads;
+  if (!model_path_flag.empty()) {
+    engine_settings.model_path = std::string(model_path_flag);
+  } else {
+    engine_settings.model_remote_url = reg_model.model_remote_url;
+    std::string model_ext =
+        std::filesystem::path(engine_settings.model_remote_url)
+            .extension()
+            .string();
+    if (model_ext.empty()) {
+      model_ext = ".litertlm";
+    }
+    engine_settings.model_path =
+        (std::filesystem::path(engine_settings.cache_dir) /
+         absl::StrCat(model_name, model_ext))
+            .string();
+    if (!engine_settings.model_remote_url.empty() &&
+        !std::filesystem::exists(engine_settings.model_path)) {
+      ABSL_RETURN_IF_ERROR(litert::omni::DownloadFileWithCurl(
+          engine_settings.model_remote_url, engine_settings.model_path));
+    }
   }
-  absl::Duration interval =
-      absl::Milliseconds(settings.metadata.input_milliseconds());
-  absl::Duration overlap = interval * overlap_ratio;
-  ABSL_ASSIGN_OR_RETURN(auto engine, litert::omni::asr::AsrEngine::Create(
-                                         model_name, std::move(settings)));
-  ABSL_ASSIGN_OR_RETURN(auto audio_source,
-                        litert::omni::asr::FileAudioSource::Create(
-                            audio_path, interval, overlap,
-                            engine->settings().metadata.sample_rate_hz()));
-  ABSL_ASSIGN_OR_RETURN(auto session,
-                        engine->CreateSession(std::move(audio_source)));
+
+  ABSL_ASSIGN_OR_RETURN(engine_settings.backend,
+                        litert::omni::ParseOmniBackend(backend_flag));
+
+  litert::lm::proto::AsrSessionConfig session_config;
+  session_config.set_overlap_ratio(overlap_ratio);
+  if (!text_merger_flag.empty()) {
+    if (absl::EqualsIgnoreCase(text_merger_flag, "levenshtein")) {
+      session_config.set_text_merger_type(
+          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
+    } else {
+      session_config.set_text_merger_type(
+          litert::lm::proto::AsrSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
+    }
+  }
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto engine, litert::omni::OmniEngine::Create(model_name, engine_settings,
+                                                    &session_config));
+  ABSL_ASSIGN_OR_RETURN(
+      auto file_source,
+      litert::omni::asr::FileAudioSource::Create(
+          audio_path, /*interval=*/absl::Seconds(1),
+          /*overlap=*/absl::ZeroDuration(), /*sample_rate_hz=*/16000));
+  ABSL_ASSIGN_OR_RETURN(
+      auto session, engine->CreateSession(std::make_unique<FileOmniInputSource>(
+                        std::move(file_source))));
 
   ABSL_LOG(INFO) << "Starting speech recognition on " << audio_path << "...";
   while (true) {

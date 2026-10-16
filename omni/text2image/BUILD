@@ -204,38 +204,14 @@ cc_library(
     alwayslink = 1,
 )
 
-cc_library(
-    name = "text2image_engine",
-    srcs = ["text2image_engine.cc"],
-    hdrs = ["text2image_engine.h"],
+cc_test(
+    name = "text2image_session_test",
+    srcs = ["text2image_session_test.cc"],
     deps = [
         ":bonsai_flux2",  # build_cleaner: keep
         ":flux2_klein",  # build_cleaner: keep
-        ":prompt_source",
-        ":text2image_session",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "//omni:multi_staged_session",
-        "//omni:omni_engine",
-        "//omni:omni_registry",
-        "//omni:omni_session",
-        "//omni/base:io_types",
-        "//omni/base:model_resources",
-        "//runtime/proto:text2image_metadata_cc_proto",
-        "//runtime/proto:text2image_session_config_cc_proto",
-    ],
-)
-
-cc_test(
-    name = "text2image_engine_test",
-    srcs = ["text2image_engine_test.cc"],
-    deps = [
         ":image_decoder",
         ":prompt_source",
-        ":text2image_engine",
         ":text2image_session",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/base:nullability",
@@ -248,7 +224,7 @@ cc_test(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_options",
         "//omni:multi_staged_session",
-        "//omni:omni_engine_header",
+        "//omni:omni_engine",
         "//omni:omni_registry",
         "//omni:omni_session",
         "//omni/base:io_types",

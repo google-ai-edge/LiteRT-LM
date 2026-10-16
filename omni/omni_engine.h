@@ -91,9 +91,6 @@ class OmniEngine {
  public:
   using Settings = internal::OmniEngineSettings;
 
-  // TODO(b/524681030): Remove Options alias once callers migrate to Settings.
-  using Options = Settings;
-
   // Creates an OmniEngine for the specified `model_name` using registered
   // model and session configurations and optional runtime `settings`,
   // `session_config`, and `metadata`.
@@ -101,14 +98,6 @@ class OmniEngine {
       absl::string_view model_name, const Settings& settings = {},
       const MessageLite* absl_nullable session_config = nullptr,
       const MessageLite* absl_nullable metadata = nullptr);
-
-  // Creates an OmniEngine for the specified `model_name` with a custom
-  // `OmniSessionFactory`.
-  // TODO(b/524681030): Remove when TTS and Text2Image move to static
-  // registration.
-  static absl::StatusOr<std::unique_ptr<OmniEngine>> Create(
-      absl::string_view model_name,
-      std::unique_ptr<OmniSessionFactory> absl_nonnull factory);
 
   ~OmniEngine() = default;
 

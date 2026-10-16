@@ -26,7 +26,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
@@ -35,7 +38,10 @@
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
+#include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
@@ -56,6 +62,69 @@ class AsrSessionTest : public ::testing::Test {
 namespace {
 
 using ::absl_testing::StatusIs;
+using ::testing::IsSupersetOf;
+
+TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
+  EXPECT_THAT(OmniRegistry::Get().GetRegisteredModels(),
+              IsSupersetOf({"parakeet-tdt-0.6b-v3",
+                            "parakeet-tdt-0.6b-v3-int8",
+                            "parakeet-tdt",
+                            "parakeet-tdt-int8",
+                            "parakeet-ctc-0.6b",
+                            "parakeet-ctc-0.6b-int8",
+                            "parakeet-ctc",
+                            "parakeet-ctc-int8",
+                            "moonshine-tiny",
+                            "moonshine-tiny-int8",
+                            "moonshine",
+                            "moonshine-int8",
+                            "whisper-tiny",
+                            "whisper-tiny-int8",
+                            "whisper",
+                            "whisper-int8",
+                            "qwen3-asr-0.6b",
+                            "qwen3-asr-0.6b-int8",
+                            "qwen3-asr",
+                            "qwen3-asr-int8",
+                            "tinygemma-asr",
+                            "tinygemma-asr-int8"}));
+
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("parakeet-tdt-0.6b-v3"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("parakeet-ctc-0.6b"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("moonshine-tiny"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("whisper-tiny"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("qwen3-asr-0.6b"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("tinygemma-asr"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("unknown-model"));
+}
+
+TEST_F(AsrSessionTest, RejectsUnknownModelOnCreate) {
+  EXPECT_THAT(OmniEngine::Create("unknown-model"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(AsrSessionTest, DynamicRegisterAndUnregisterModel) {
+  ASSERT_OK(
+      OmniRegistry::Get().RegisterSessionFactory(OmniRegistry::RegistrySpec{
+          .model_names = {"custom-test-asr-ctc"},
+          .get_session_factory =
+              [](absl::string_view /*model_name*/,
+                 const OmniEngine::Settings& /*settings*/,
+                 const MessageLite* absl_nullable /*session_config*/,
+                 const MessageLite* absl_nullable /*metadata*/,
+                 ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+                 std::shared_ptr<::litert::lm::ModelResources> absl_nullable
+                 /*lm_resources*/)
+              -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+            return absl::UnimplementedError("Custom session factory invoked");
+          },
+          .session_config_type_id = "Asr",
+      }));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("custom-test-asr-ctc"));
+
+  EXPECT_TRUE(OmniRegistry::Get().UnregisterModel("custom-test-asr-ctc"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("custom-test-asr-ctc"));
+}
 
 class FakeAudioPreprocessor : public AudioPreprocessor {
  public:

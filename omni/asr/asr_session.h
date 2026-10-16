@@ -78,7 +78,6 @@ class AsrSessionFactory : public OmniSessionFactory {
 
  private:
   friend class ::litert::omni::OmniSessionTest;
-  friend class AsrEngine;
   friend class AsrSessionTest;
 
   static std::unique_ptr<AudioSource> CreateAudioInputSource(

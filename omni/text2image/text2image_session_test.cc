@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/text2image/text2image_engine.h"
+#include "omni/text2image/text2image_session.h"
 
 #include <cstdint>
 #include <memory>
@@ -40,7 +40,6 @@
 #include "omni/omni_session.h"
 #include "omni/text2image/image_decoder.h"
 #include "omni/text2image/prompt_source.h"
-#include "omni/text2image/text2image_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/proto/text2image_metadata.pb.h"
@@ -175,7 +174,7 @@ TEST(PushPromptSourceTest, PushScheduleAndFinish) {
               StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
-TEST(Text2ImageEngineRegistrationTest, AllDefaultModelsAreRegistered) {
+TEST_F(Text2ImageSessionTest, AllDefaultModelsAreRegistered) {
   EXPECT_THAT(OmniRegistry::Get().GetRegisteredModels(),
               IsSupersetOf({"bonsai-flux2", "bonsai_flux2", "flux2",
                             "flux2-klein", "flux2_klein", "flux.2-klein-4b"}));
@@ -185,24 +184,25 @@ TEST(Text2ImageEngineRegistrationTest, AllDefaultModelsAreRegistered) {
       OmniRegistry::Get().IsModelRegistered("unknown-text2image-model"));
 }
 
-TEST(Text2ImageEngineRegistrationTest, RejectsUnknownModelOnCreate) {
-  EXPECT_THAT(Text2ImageEngine::Create("unknown-text2image-model", {}),
+TEST_F(Text2ImageSessionTest, RejectsUnknownModelOnCreate) {
+  EXPECT_THAT(OmniEngine::Create("unknown-text2image-model"),
               StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST(Text2ImageEngineTest, CreateFailsWhenModelContainerIsMissingOrIncomplete) {
-  Text2ImageEngine::Settings settings;
-  settings.engine_settings.model_path = "/nonexistent/flux2_model_dir";
+TEST_F(Text2ImageSessionTest,
+       CreateFailsWhenModelContainerIsMissingOrIncomplete) {
+  OmniEngine::Settings settings;
+  settings.model_path = "/nonexistent/flux2_model_dir";
   for (const auto& model_name :
        {"bonsai-flux2", "bonsai_flux2", "flux2", "flux2-klein", "flux2_klein",
         "flux.2-klein-4b"}) {
-    EXPECT_THAT(Text2ImageEngine::Create(model_name, settings),
+    EXPECT_THAT(OmniEngine::Create(model_name, settings),
                 StatusIs(absl::StatusCode::kNotFound));
   }
 }
 
-TEST(Text2ImageEngineTest,
-     DynamicRegisterResolveDefaultPromptParamsAndCreateSession) {
+TEST_F(Text2ImageSessionTest,
+       DynamicRegisterResolveDefaultPromptParamsAndCreateSession) {
   ASSERT_OK(
       OmniRegistry::Get().RegisterSessionFactory(OmniRegistry::RegistrySpec{
           .model_names = {"fake-text2image-model"},
@@ -228,10 +228,11 @@ TEST(Text2ImageEngineTest,
     OmniRegistry::Get().UnregisterModel("fake-text2image-model");
   };
 
-  ASSERT_OK_AND_ASSIGN(auto engine,
-                       Text2ImageEngine::Create("fake-text2image-model", {}));
+  FakeText2ImageSessionFactory factory(OmniEngine::Settings{},
+                                       /*session_config=*/nullptr,
+                                       lm::proto::Text2ImageMetadata{});
   ImageGenInputMetadata resolved_defaults =
-      engine->ResolveDefaultPromptParams({});
+      factory.ResolveDefaultPromptParams({});
   EXPECT_EQ(resolved_defaults.width, 256);
   EXPECT_EQ(resolved_defaults.height, 256);
   EXPECT_EQ(resolved_defaults.num_inference_steps, 4);
@@ -243,7 +244,7 @@ TEST(Text2ImageEngineTest,
   custom_input.set_num_inference_steps(8);
   custom_input.set_seed(77);
   ImageGenInputMetadata resolved_custom =
-      engine->ResolveDefaultPromptParams(custom_input);
+      factory.ResolveDefaultPromptParams(custom_input);
   EXPECT_EQ(resolved_custom.width, 512);
   EXPECT_EQ(resolved_custom.height, 512);
   EXPECT_EQ(resolved_custom.num_inference_steps, 8);
@@ -252,7 +253,10 @@ TEST(Text2ImageEngineTest,
   lm::proto::Text2ImageSessionConfig non_square_config;
   non_square_config.set_width(512);
   non_square_config.set_height(256);
-  EXPECT_THAT(engine->CreateSession(non_square_config),
+  ASSERT_OK_AND_ASSIGN(auto engine, OmniEngine::Create("fake-text2image-model",
+                                                       OmniEngine::Settings{},
+                                                       &non_square_config));
+  EXPECT_THAT(engine->CreateSession(std::make_unique<PushInputSource>()),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 

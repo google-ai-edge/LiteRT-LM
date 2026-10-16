@@ -45,17 +45,8 @@ absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
   ABSL_ASSIGN_OR_RETURN(std::unique_ptr<OmniSessionFactory> session_factory,
                         OmniRegistry::Get().CreateSessionFactory(
                             model_name, settings, session_config, metadata));
-  return Create(model_name, std::move(session_factory));
-}
-
-absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
-    absl::string_view model_name,
-    std::unique_ptr<OmniSessionFactory> absl_nonnull factory) {
-  if (model_name.empty()) {
-    return absl::InvalidArgumentError("model_name must not be empty.");
-  }
   return std::unique_ptr<OmniEngine>(
-      new OmniEngine(std::string(model_name), std::move(factory)));
+      new OmniEngine(std::string(model_name), std::move(session_factory)));
 }
 
 absl::StatusOr<std::unique_ptr<OmniSession>> OmniEngine::CreateSession(

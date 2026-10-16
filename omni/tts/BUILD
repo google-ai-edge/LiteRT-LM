@@ -216,8 +216,11 @@ cc_library(
 cc_test(
     name = "tts_session_test",
     srcs = ["tts_session_test.cc"],
+    data = [
+        "@espeak_ng//:espeak_ng_data",
+    ],
     deps = [
-        ":kokoro",  # build_cleaner: keep
+        ":kokoro",
         ":qwen3_tts",  # build_cleaner: keep
         ":stream_text_source",
         ":text_chunk_utils",
@@ -229,14 +232,19 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
+        "@litert//litert/cc:litert_environment",
         "//omni:multi_staged_session",
         "//omni:omni_engine_header",
         "//omni:omni_registry",
         "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "//omni/tts/kokoro:kokoro_factory",
         "//runtime/framework:threadpool",
+        "//runtime/proto:tts_metadata_cc_proto",
+        "//runtime/proto:tts_session_config_cc_proto",
         "//support/util:test_utils",
     ],
 )
@@ -273,75 +281,5 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
-    ],
-)
-
-cc_library(
-    name = "tts_engine",
-    srcs = ["tts_engine.cc"],
-    hdrs = ["tts_engine.h"],
-    deps = [
-        ":kokoro",  # build_cleaner: keep
-        ":qwen3_tts",  # build_cleaner: keep
-        ":stream_text_source",
-        ":text_chunk_utils",
-        ":tts_session",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@litert//litert/cc:litert_macros",
-        "//omni:multi_staged_session",
-        "//omni:omni_engine",
-        "//omni:omni_registry",
-        "//omni:omni_session",
-        "//omni/base:io_types",
-        "//omni/base:model_resources",
-        "//omni/base:model_utils",
-        "//runtime/components:model_resources",
-        "//runtime/proto:tts_metadata_cc_proto",
-        "//runtime/proto:tts_model_type_cc_proto",
-        "//runtime/proto:tts_session_config_cc_proto",
-    ],
-)
-
-cc_test(
-    name = "tts_engine_test",
-    srcs = ["tts_engine_test.cc"],
-    data = [
-        "@espeak_ng//:espeak_ng_data",
-    ],
-    deps = [
-        ":kokoro",
-        ":stream_text_source",
-        ":text_chunk_utils",
-        ":tts_engine",
-        ":tts_session",
-        ":vocoder",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_matchers",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
-        "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc:litert_options",
-        "//omni:multi_staged_session",
-        "//omni:omni_engine_header",
-        "//omni:omni_registry",
-        "//omni:omni_session",
-        "//omni/base:io_types",
-        "//omni/base:stage",
-        "//omni/tts/kokoro:kokoro_factory",
-        "//runtime/components:model_resources",
-        "//runtime/framework:threadpool",
-        "//runtime/proto:tts_metadata_cc_proto",
-        "//runtime/proto:tts_session_config_cc_proto",
-        "//support/util:test_utils",
     ],
 )

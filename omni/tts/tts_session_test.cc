@@ -14,8 +14,11 @@
 
 #include "omni/tts/tts_session.h"
 
+#include <filesystem>  // NOLINT: Required for std::filesystem.
+#include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>  // NOLINT: Required for std::error_code.
 #include <utility>
 #include <variant>
 #include <vector>
@@ -26,6 +29,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
@@ -33,11 +37,15 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
+#include "omni/tts/kokoro.h"
+#include "omni/tts/kokoro/kokoro_factory.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/tts_session_config.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
@@ -249,6 +257,13 @@ TEST_F(TtsSessionTest, TextInputSourceProcessAsyncStreamsAndFlushesTail) {
 }
 
 TEST_F(TtsSessionTest, KokoroAndQwen3TtsRegisteredInOmniRegistry) {
+  EXPECT_THAT(OmniRegistry::Get().GetRegisteredModels(),
+              testing::IsSupersetOf({"kokoro", "kokoro-82m", "qwen3-tts"}));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("kokoro"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("qwen3-tts"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("qwen3"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("unknown-tts-model"));
+
   OmniEngine::Settings settings;
   settings.model_path = "/nonexistent/tts_model_dir";
   for (const auto& model_name :
@@ -270,6 +285,264 @@ TEST_F(TtsSessionTest, LitertLmModelPathIsNotTreatedAsModelDir) {
     EXPECT_THAT(status_or.status().message(),
                 testing::Not(testing::HasSubstr(".tflite")));
   }
+}
+
+TEST_F(TtsSessionTest, TtsSessionConfigProtoConversion) {
+  lm::proto::TtsSessionConfig config;
+  config.set_language("es");
+  config.set_voice("ef_dora");
+  auto* tc = config.mutable_text_chunk_config();
+  tc->set_max_buffer_size(120);
+  tc->add_delimiters(".");
+  tc->add_delimiters("!");
+  tc->add_delimiters("?");
+
+  EXPECT_EQ(config.language(), "es");
+  EXPECT_EQ(config.voice(), "ef_dora");
+  TextChunkConfig converted = ToTextChunkConfig(config.text_chunk_config());
+  EXPECT_EQ(converted.max_buffer_size, 120);
+  EXPECT_THAT(converted.delimiters, ElementsAre(".", "!", "?"));
+}
+
+TEST_F(TtsSessionTest, ToKokoroLanguageCodeMapping) {
+  EXPECT_EQ(ToKokoroLanguageCode(""), "");
+  EXPECT_EQ(ToKokoroLanguageCode("en"), "en-us");
+  EXPECT_EQ(ToKokoroLanguageCode("en-US"), "en-us");
+  EXPECT_EQ(ToKokoroLanguageCode("en_US"), "en-us");
+  EXPECT_EQ(ToKokoroLanguageCode("en-AU"), "en-us");
+  EXPECT_EQ(ToKokoroLanguageCode("en-GB"), "en-gb");
+  EXPECT_EQ(ToKokoroLanguageCode("en-UK"), "en-gb");
+  EXPECT_EQ(ToKokoroLanguageCode("es"), "es");
+  EXPECT_EQ(ToKokoroLanguageCode("es-MX"), "es");
+  EXPECT_EQ(ToKokoroLanguageCode("es-419"), "es");
+  EXPECT_EQ(ToKokoroLanguageCode("hi"), "hi");
+  EXPECT_EQ(ToKokoroLanguageCode("hi-IN"), "hi");
+  EXPECT_EQ(ToKokoroLanguageCode("zh"), "cmn");
+  EXPECT_EQ(ToKokoroLanguageCode("zh-CN"), "cmn");
+  EXPECT_EQ(ToKokoroLanguageCode("zh-Hant-TW"), "cmn");
+  EXPECT_EQ(ToKokoroLanguageCode("ja"), "ja");
+  EXPECT_EQ(ToKokoroLanguageCode("ja-JP"), "ja");
+  EXPECT_EQ(ToKokoroLanguageCode("fr"), "fr-fr");
+  EXPECT_EQ(ToKokoroLanguageCode("fr-CA"), "fr-fr");
+  EXPECT_EQ(ToKokoroLanguageCode("it"), "it");
+  EXPECT_EQ(ToKokoroLanguageCode("it-IT"), "it");
+  EXPECT_EQ(ToKokoroLanguageCode("pt"), "pt-br");
+  EXPECT_EQ(ToKokoroLanguageCode("pt-BR"), "pt-br");
+  EXPECT_EQ(ToKokoroLanguageCode("de"), "");
+  EXPECT_EQ(ToKokoroLanguageCode("unknown_lang"), "");
+}
+
+TEST_F(TtsSessionTest, KokoroCodeToBcp47Mapping) {
+  EXPECT_EQ(KokoroCodeToBcp47("en-us"), "en-US");
+  EXPECT_EQ(KokoroCodeToBcp47("en-gb"), "en-GB");
+  EXPECT_EQ(KokoroCodeToBcp47("es"), "es");
+  EXPECT_EQ(KokoroCodeToBcp47("fr-fr"), "fr");
+  EXPECT_EQ(KokoroCodeToBcp47("hi"), "hi");
+  EXPECT_EQ(KokoroCodeToBcp47("it"), "it");
+  EXPECT_EQ(KokoroCodeToBcp47("pt-br"), "pt-BR");
+  EXPECT_EQ(KokoroCodeToBcp47("ja"), "ja");
+  EXPECT_EQ(KokoroCodeToBcp47("cmn"), "zh-CN");
+  EXPECT_EQ(KokoroCodeToBcp47(""), "");
+  EXPECT_EQ(KokoroCodeToBcp47("de"), "");
+}
+
+class ScopedMockKokoroModelDir {
+ public:
+  ScopedMockKokoroModelDir() {
+    model_dir_ =
+        std::filesystem::path(testing::TempDir()) / "mock_kokoro_voices_dir";
+    std::filesystem::path voices_dir = model_dir_ / "voices";
+    std::error_code ec;
+    std::filesystem::create_directories(voices_dir, ec);
+    const std::vector<std::string> voice_names = {
+        "af_alloy", "af_heart", "bf_alice",   "ef_dora",     "em_alex",
+        "em_santa", "ff_siwis", "hf_alpha",   "hf_beta",     "hm_omega",
+        "hm_psi",   "if_sara",  "im_nicola",  "pf_dora",     "pm_alex",
+        "pm_santa", "jf_alpha", "zf_xiaobei", "zf_xiaoxiao",
+    };
+    for (const auto& name : voice_names) {
+      std::ofstream(voices_dir / (name + ".bin")).close();
+    }
+  }
+
+  ~ScopedMockKokoroModelDir() {
+    std::error_code ec;
+    std::filesystem::remove_all(model_dir_, ec);
+  }
+
+  std::string path() const { return model_dir_.string(); }
+
+ private:
+  std::filesystem::path model_dir_;
+};
+
+TEST_F(TtsSessionTest, EmptyModelFolderReturnsNoVoices) {
+  auto voices = GetAvailableKokoroVoices("");
+  EXPECT_TRUE(voices.empty());
+}
+
+TEST_F(TtsSessionTest, DiscoversKokoroVoicesFromDirectory) {
+  std::filesystem::path model_dir =
+      std::filesystem::path(testing::TempDir()) / "kokoro_test_dir";
+  std::filesystem::path voices_dir = model_dir / "voices";
+  std::error_code ec;
+  std::filesystem::create_directories(voices_dir, ec);
+
+  std::ofstream(voices_dir / "custom_voice1.bin").close();
+  std::ofstream(voices_dir / "custom_voice2.bin").close();
+  std::ofstream(voices_dir / "readme.txt").close();
+
+  auto discovered = GetAvailableKokoroVoices(model_dir.string());
+  EXPECT_THAT(discovered, ElementsAre("custom_voice1", "custom_voice2"));
+
+  std::filesystem::remove_all(model_dir, ec);
+}
+
+TEST_F(TtsSessionTest, DefaultKokoroVoicesPerLanguage) {
+  EXPECT_EQ(GetDefaultKokoroVoice(""), "af_heart");
+  EXPECT_EQ(GetDefaultKokoroVoice("en-us"), "af_heart");
+  EXPECT_EQ(GetDefaultKokoroVoice("es"), "ef_dora");
+  EXPECT_EQ(GetDefaultKokoroVoice("fr-fr"), "ff_siwis");
+  EXPECT_EQ(GetDefaultKokoroVoice("hi"), "hf_alpha");
+  EXPECT_EQ(GetDefaultKokoroVoice("it"), "if_sara");
+  EXPECT_EQ(GetDefaultKokoroVoice("pt-br"), "pf_dora");
+  EXPECT_EQ(GetDefaultKokoroVoice("en-gb"), "bf_alice");
+  EXPECT_EQ(GetDefaultKokoroVoice("ja"), "jf_alpha");
+  EXPECT_EQ(GetDefaultKokoroVoice("cmn"), "zf_xiaobei");
+}
+
+TEST_F(TtsSessionTest, KokoroSessionFactoryLanguagesAndVoices) {
+  ScopedMockKokoroModelDir mock_dir;
+  KokoroSessionFactory factory(
+      OmniEngine::Settings{}, /*session_config=*/nullptr,
+      lm::proto::TtsMetadata{}, GetAvailableKokoroVoices(mock_dir.path()),
+      /*model_resources=*/nullptr);
+
+  EXPECT_THAT(factory.GetAvailableLanguages(),
+              ElementsAre("en-GB", "en-US", "es", "fr", "hi", "it", "ja",
+                          "pt-BR", "zh-CN"));
+
+  KokoroSessionFactory subset_factory(
+      OmniEngine::Settings{}, /*session_config=*/nullptr,
+      lm::proto::TtsMetadata{}, {"af_heart", "ef_dora", "em_alex"},
+      /*model_resources=*/nullptr);
+  EXPECT_THAT(subset_factory.GetAvailableLanguages(),
+              ElementsAre("en-US", "es"));
+
+  lm::proto::TtsMetadata meta;
+  meta.add_supported_languages("en-US");
+  meta.add_supported_languages("zh-CN");
+  meta.add_supported_languages("ja");
+  KokoroSessionFactory meta_factory(OmniEngine::Settings{},
+                                    /*session_config=*/nullptr, meta, {},
+                                    /*model_resources=*/nullptr);
+  EXPECT_THAT(meta_factory.GetAvailableLanguages(),
+              ElementsAre("en-US", "zh-CN", "ja"));
+
+  auto voices = factory.GetAvailableVoices();
+  EXPECT_EQ(voices.size(), 19);
+  EXPECT_THAT(voices, testing::Contains("af_heart"));
+  EXPECT_THAT(voices, testing::Contains("ef_dora"));
+  EXPECT_THAT(voices, testing::Contains("zf_xiaoxiao"));
+
+  EXPECT_THAT(factory.GetAvailableVoices("es"),
+              ElementsAre("ef_dora", "em_alex", "em_santa"));
+  EXPECT_THAT(factory.GetAvailableVoices("it"),
+              ElementsAre("if_sara", "im_nicola"));
+  EXPECT_THAT(factory.GetAvailableVoices("fr"), ElementsAre("ff_siwis"));
+  EXPECT_THAT(factory.GetAvailableVoices("hi"),
+              ElementsAre("hf_alpha", "hf_beta", "hm_omega", "hm_psi"));
+  EXPECT_THAT(factory.GetAvailableVoices("pt-BR"),
+              ElementsAre("pf_dora", "pm_alex", "pm_santa"));
+  EXPECT_THAT(factory.GetAvailableVoices("en-GB"), ElementsAre("bf_alice"));
+  EXPECT_THAT(factory.GetAvailableVoices("en-US"),
+              ElementsAre("af_alloy", "af_heart"));
+  EXPECT_THAT(factory.GetAvailableVoices("zh-CN"),
+              ElementsAre("zf_xiaobei", "zf_xiaoxiao"));
+  EXPECT_THAT(factory.GetAvailableVoices("ja"), ElementsAre("jf_alpha"));
+  EXPECT_TRUE(factory.GetAvailableVoices("de").empty());
+
+  EXPECT_TRUE(factory.HasVoice("af_heart"));
+  EXPECT_TRUE(factory.HasVoice("af_heart.bin"));
+  EXPECT_TRUE(factory.HasVoice("voices/af_heart.bin"));
+  EXPECT_FALSE(factory.HasVoice("non_existent_voice"));
+  EXPECT_FALSE(factory.HasVoice(""));
+
+  EXPECT_EQ(factory.GetDefaultVoice("es"), "ef_dora");
+  EXPECT_EQ(factory.GetDefaultVoice("it"), "if_sara");
+  EXPECT_EQ(factory.GetDefaultVoice("fr"), "ff_siwis");
+  EXPECT_EQ(factory.GetDefaultVoice("hi"), "hf_alpha");
+  EXPECT_EQ(factory.GetDefaultVoice("pt-BR"), "pf_dora");
+  EXPECT_EQ(factory.GetDefaultVoice("en-GB"), "bf_alice");
+  EXPECT_EQ(factory.GetDefaultVoice("zh-CN"), "zf_xiaobei");
+  EXPECT_EQ(factory.GetDefaultVoice("ja"), "jf_alpha");
+  EXPECT_EQ(factory.GetDefaultVoice("en-US"), "af_heart");
+  EXPECT_EQ(factory.GetDefaultVoice(""), "af_heart");
+}
+
+TEST_F(TtsSessionTest, KokoroSessionFactoryVoiceAndLanguageValidation) {
+  ScopedMockKokoroModelDir mock_dir;
+  const auto voices = GetAvailableKokoroVoices(mock_dir.path());
+
+  // 1. Invalid voice returns InvalidArgumentError.
+  lm::proto::TtsSessionConfig invalid_voice_config;
+  invalid_voice_config.set_voice("unknown_speaker_xyz");
+  KokoroSessionFactory factory1(OmniEngine::Settings{}, &invalid_voice_config,
+                                lm::proto::TtsMetadata{}, voices,
+                                /*model_resources=*/nullptr);
+  auto status1 = factory1.Create(std::make_unique<PushInputSource>());
+  EXPECT_THAT(status1, StatusIs(absl::StatusCode::kInvalidArgument,
+                                testing::HasSubstr("is not available")));
+
+  // 2. Conflicting voice and language returns InvalidArgumentError.
+  lm::proto::TtsSessionConfig mismatch_config;
+  mismatch_config.set_language("es");
+  mismatch_config.set_voice("af_heart");  // American English voice
+  KokoroSessionFactory factory2(OmniEngine::Settings{}, &mismatch_config,
+                                lm::proto::TtsMetadata{}, voices,
+                                /*model_resources=*/nullptr);
+  auto status2 = factory2.Create(std::make_unique<PushInputSource>());
+  EXPECT_THAT(
+      status2,
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               testing::HasSubstr("conflicts with requested language")));
+
+  // 3. Unsupported BCP-47 language returns InvalidArgumentError.
+  lm::proto::TtsSessionConfig unsupported_lang_config;
+  unsupported_lang_config.set_language("de");
+  KokoroSessionFactory factory3(OmniEngine::Settings{},
+                                &unsupported_lang_config,
+                                lm::proto::TtsMetadata{}, voices,
+                                /*model_resources=*/nullptr);
+  auto status3 = factory3.Create(std::make_unique<PushInputSource>());
+  EXPECT_THAT(status3, StatusIs(absl::StatusCode::kInvalidArgument,
+                                testing::HasSubstr("Unsupported language")));
+
+  // 4. Empty language returns InvalidArgumentError.
+  lm::proto::TtsSessionConfig empty_lang_config;
+  empty_lang_config.set_language("");
+  KokoroSessionFactory factory4(OmniEngine::Settings{}, &empty_lang_config,
+                                lm::proto::TtsMetadata{}, voices,
+                                /*model_resources=*/nullptr);
+  auto status4 = factory4.Create(std::make_unique<PushInputSource>());
+  EXPECT_THAT(status4,
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       testing::HasSubstr("language must not be empty")));
+
+  // 5. No voice available for requested language returns InvalidArgumentError.
+  lm::proto::TtsSessionConfig es_config;
+  es_config.set_language("es");
+  KokoroSessionFactory factory5(OmniEngine::Settings{}, &es_config,
+                                lm::proto::TtsMetadata{},
+                                {"af_heart", "am_adam"},
+                                /*model_resources=*/nullptr);
+  EXPECT_EQ(factory5.GetDefaultVoice("es"), "ef_dora");
+  EXPECT_EQ(factory5.GetDefaultVoice(""), "af_heart");
+  auto status5 = factory5.Create(std::make_unique<PushInputSource>());
+  EXPECT_THAT(
+      status5,
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               testing::HasSubstr("No voice is available for language")));
 }
 
 }  // namespace

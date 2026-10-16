@@ -14,10 +14,13 @@
 
 #include "omni/omni_registry.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT
 #include <fstream>
+#include <ios>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -26,7 +29,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -40,6 +46,7 @@
 #include "runtime/proto/asr_session_config.pb.h"
 #include "runtime/proto/tts_session_config.pb.h"
 #include "runtime/util/file_util.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni {
@@ -47,11 +54,50 @@ namespace {
 
 using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
+using ::testing::ElementsAre;
 using ::testing::EndsWith;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::NotNull;
 using ::testing::StartsWith;
+
+void WriteTestLitertLmWithAsrMetadata(
+    const std::string& path, const lm::proto::AsrMetadata& embedded_metadata) {
+  const std::string serialized = embedded_metadata.SerializeAsString();
+  constexpr uint64_t kDataOffset = 512;
+
+  flatbuffers::FlatBufferBuilder builder(256);
+  auto asr_meta_section = lm::schema::CreateSectionObject(
+      builder, /*items=*/0, /*begin_offset=*/kDataOffset,
+      /*end_offset=*/kDataOffset + serialized.size(),
+      lm::schema::AnySectionDataType_AsrMetadataProto);
+  std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
+      asr_meta_section};
+  auto section_metadata = lm::schema::CreateSectionMetadata(
+      builder, builder.CreateVector(sections));
+  auto metadata =
+      lm::schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+
+  std::ofstream file(path, std::ios::binary);
+  file.write("LITERTLM", 8);
+  uint32_t major_version = 1;
+  uint32_t minor_version = 0;
+  uint32_t patch_version = 0;
+  uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&minor_version), sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&patch_version), sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&padding), sizeof(uint32_t));
+  uint64_t header_end_offset = 32 + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end_offset),
+             sizeof(uint64_t));
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  std::string pad(kDataOffset - header_end_offset, '\0');
+  file.write(pad.data(), pad.size());
+  file.write(serialized.data(), serialized.size());
+}
 
 class FakeSessionFactory : public OmniSessionFactory {
  public:
@@ -398,6 +444,73 @@ TEST(OmniRegistryTest, RejectsMismatchedProtoTypesAtFactoryCreation) {
                                             &wrong_session_config),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        HasSubstr("litert.lm.proto.AsrSessionConfig")));
+}
+
+TEST(OmniRegistryTest, MergesEmbeddedAsrMetadataAndReplacesDecodeStartTokens) {
+  auto& registry = OmniRegistry::Get();
+  lm::proto::AsrMetadata captured_metadata;
+
+  ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+      .model_names = {"asr-metadata-merge-test-model"},
+      .get_session_factory =
+          [&](absl::string_view /*model_name*/,
+              const OmniEngine::Settings& /*settings*/,
+              const MessageLite* /*session_cfg*/,
+              const MessageLite* absl_nullable metadata,
+              ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+              std::shared_ptr<lm::ModelResources> /*lm_resources*/)
+          -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+        if (metadata != nullptr) {
+          captured_metadata.CheckTypeAndMergeFrom(*metadata);
+        }
+        return std::make_unique<FakeSessionFactory>();
+      },
+      .session_config_type_id = "Asr",
+  }));
+  absl::Cleanup cleanup = [&] {
+    registry.UnregisterModel("asr-metadata-merge-test-model");
+  };
+
+  const std::string test_model_path =
+      absl::StrCat(::testing::TempDir(), "/asr_metadata_merge_test.litertlm");
+  lm::proto::AsrMetadata embedded_metadata;
+  embedded_metadata.set_input_milliseconds(30000);
+  embedded_metadata.set_decode_stop_token_id(50257);
+  embedded_metadata.add_decode_start_token_ids(50258);
+  embedded_metadata.add_decode_start_token_ids(50259);
+  WriteTestLitertLmWithAsrMetadata(test_model_path, embedded_metadata);
+
+  OmniEngine::Settings settings{.model_path = test_model_path};
+
+  // 1. Caller provides custom decode_start_token_ids: should replace embedded
+  // decode_start_token_ids rather than appending, while preserving embedded
+  // scalar fields not set by caller.
+  lm::proto::AsrMetadata caller_metadata;
+  caller_metadata.add_decode_start_token_ids(999);
+  ASSERT_OK_AND_ASSIGN(auto factory1,
+                       registry.CreateSessionFactory(
+                           "asr-metadata-merge-test-model", settings,
+                           /*session_config=*/nullptr, &caller_metadata));
+  EXPECT_THAT(factory1, NotNull());
+  EXPECT_EQ(captured_metadata.input_milliseconds(), 30000);
+  EXPECT_EQ(captured_metadata.decode_stop_token_id(), 50257);
+  EXPECT_THAT(captured_metadata.decode_start_token_ids(), ElementsAre(999));
+
+  // 2. Caller omits decode_start_token_ids: embedded decode_start_token_ids
+  // should be preserved.
+  captured_metadata.Clear();
+  lm::proto::AsrMetadata caller_metadata_no_tokens;
+  caller_metadata_no_tokens.set_input_milliseconds(15000);
+  ASSERT_OK_AND_ASSIGN(
+      auto factory2,
+      registry.CreateSessionFactory("asr-metadata-merge-test-model", settings,
+                                    /*session_config=*/nullptr,
+                                    &caller_metadata_no_tokens));
+  EXPECT_THAT(factory2, NotNull());
+  EXPECT_EQ(captured_metadata.input_milliseconds(), 15000);
+  EXPECT_EQ(captured_metadata.decode_stop_token_id(), 50257);
+  EXPECT_THAT(captured_metadata.decode_start_token_ids(),
+              ElementsAre(50258, 50259));
 }
 
 }  // namespace
