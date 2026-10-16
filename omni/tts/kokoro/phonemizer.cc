@@ -55,9 +55,13 @@
 #include "omni/tts/kokoro/portuguese_g2p.h"
 #include "omni/tts/kokoro/spanish_g2p.h"
 #include "omni/tts/kokoro/traditional_chinese_converter.h"
+#include "omni/tts/kokoro/unicode_utils.h"
 #include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
+
+using ::litert::omni::tts::kokoro::DecodeUtf8CodePoint;
+using ::litert::omni::tts::kokoro::Utf8CodePoint;
 
 ABSL_CONST_INIT absl::Mutex KokoroPhonemizer::espeak_mutex_(absl::kConstInit);
 
@@ -311,44 +315,6 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
                                         });
 }
 
-// Decodes the UTF-8 codepoint starting at `text[pos]`, advancing `char_len`.
-char32_t DecodeUtf8Char(absl::string_view text, size_t pos, size_t* char_len) {
-  if (pos >= text.size()) {
-    *char_len = 0;
-    return 0;
-  }
-  const unsigned char c0 = static_cast<unsigned char>(text[pos]);
-  if ((c0 & 0x80) == 0) {
-    *char_len = 1;
-    return c0;
-  }
-  if ((c0 & 0xE0) == 0xC0 && pos + 1 < text.size()) {
-    *char_len = 2;
-    const unsigned char c1 = static_cast<unsigned char>(text[pos + 1]);
-    return (static_cast<char32_t>(c0 & 0x1F) << 6) |
-           static_cast<char32_t>(c1 & 0x3F);
-  }
-  if ((c0 & 0xF0) == 0xE0 && pos + 2 < text.size()) {
-    *char_len = 3;
-    const unsigned char c1 = static_cast<unsigned char>(text[pos + 1]);
-    const unsigned char c2 = static_cast<unsigned char>(text[pos + 2]);
-    return (static_cast<char32_t>(c0 & 0x0F) << 12) |
-           (static_cast<char32_t>(c1 & 0x3F) << 6) |
-           static_cast<char32_t>(c2 & 0x3F);
-  }
-  if ((c0 & 0xF8) == 0xF0 && pos + 3 < text.size()) {
-    *char_len = 4;
-    const unsigned char c1 = static_cast<unsigned char>(text[pos + 1]);
-    const unsigned char c2 = static_cast<unsigned char>(text[pos + 2]);
-    const unsigned char c3 = static_cast<unsigned char>(text[pos + 3]);
-    return (static_cast<char32_t>(c0 & 0x07) << 18) |
-           (static_cast<char32_t>(c1 & 0x3F) << 12) |
-           (static_cast<char32_t>(c2 & 0x3F) << 6) |
-           static_cast<char32_t>(c3 & 0x3F);
-  }
-  *char_len = 1;
-  return c0;
-}
 // Checks whether `body` (the text between a '(' and its ')') is an espeak-ng
 // voice name, i.e. the payload of a language-switch escape such as "(en)",
 // "(cmn)" or "(pt-br)".
@@ -453,21 +419,18 @@ bool IsWordCodePoint(char32_t cp) {
 // Returns the byte length of the UTF-8 sequence starting at `text[pos]`,
 // clamped so it never runs past the end of `text`.
 size_t Utf8SequenceLength(absl::string_view text, size_t pos) {
-  size_t len = 0;
-  DecodeUtf8Char(text, pos, &len);
-  return len;
+  return DecodeUtf8CodePoint(text, pos).length;
 }
 
 // Checks if the given text contains any Chinese (Hanzi) characters.
 bool ContainsHanzi(absl::string_view text) {
   size_t i = 0;
   while (i < text.size()) {
-    size_t len = 0;
-    char32_t cp = DecodeUtf8Char(text, i, &len);
-    if (IsHanziCodePoint(cp)) {
+    const Utf8CodePoint decoded = DecodeUtf8CodePoint(text, i);
+    if (IsHanziCodePoint(decoded.code_point)) {
       return true;
     }
-    i += len;
+    i += decoded.length;
   }
   return false;
 }
@@ -1063,9 +1026,7 @@ absl::StatusOr<std::string> KokoroPhonemizer::ClauseLevelTextToIpa(
   prepared.reserve(text.size());
   const auto& unicode_punct_map = GetUnicodePunctuationMap();
   for (size_t pos = 0; pos < text.size();) {
-    size_t len = 0;
-    DecodeUtf8Char(text, pos, &len);
-    if (len == 0) len = 1;
+    const size_t len = DecodeUtf8CodePoint(text, pos).length;
     const absl::string_view symbol = text.substr(pos, len);
     pos += len;
     if (const auto it = unicode_punct_map.find(symbol);
@@ -1088,9 +1049,7 @@ absl::StatusOr<std::string> KokoroPhonemizer::ClauseLevelTextToIpa(
 
   size_t i = 0;
   while (i < prepared.size()) {
-    size_t char_len = 0;
-    DecodeUtf8Char(prepared, i, &char_len);
-    if (char_len == 0) char_len = 1;
+    const size_t char_len = DecodeUtf8CodePoint(prepared, i).length;
     const absl::string_view symbol =
         absl::string_view(prepared).substr(i, char_len);
     i += char_len;
@@ -1199,8 +1158,9 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
 
   size_t i = 0;
   while (i < text.size()) {
-    size_t char_len = 0;
-    const char32_t cp = DecodeUtf8Char(text, i, &char_len);
+    const Utf8CodePoint decoded = DecodeUtf8CodePoint(text, i);
+    const char32_t cp = decoded.code_point;
+    const size_t char_len = decoded.length;
     const unsigned char c = static_cast<unsigned char>(text[i]);
     absl::string_view symbol = text.substr(i, char_len);
     i += char_len;

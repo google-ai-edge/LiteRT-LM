@@ -31,81 +31,10 @@
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/strip.h"  // from @com_google_absl
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
-
-bool DecodeUtf8Char(absl::string_view text, size_t& pos, char32_t& cp_out) {
-  if (pos >= text.size()) return false;
-  const auto b0 = static_cast<unsigned char>(text[pos]);
-  if (b0 < 0x80) {
-    cp_out = b0;
-    pos += 1;
-    return true;
-  }
-  if ((b0 & 0xE0) == 0xC0 && pos + 1 < text.size()) {
-    cp_out =
-        ((b0 & 0x1F) << 6) | (static_cast<unsigned char>(text[pos + 1]) & 0x3F);
-    pos += 2;
-    return true;
-  }
-  if ((b0 & 0xF0) == 0xE0 && pos + 2 < text.size()) {
-    cp_out = ((b0 & 0x0F) << 12) |
-             ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 6) |
-             (static_cast<unsigned char>(text[pos + 2]) & 0x3F);
-    pos += 3;
-    return true;
-  }
-  if ((b0 & 0xF8) == 0xF0 && pos + 3 < text.size()) {
-    cp_out = ((b0 & 0x07) << 18) |
-             ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 12) |
-             ((static_cast<unsigned char>(text[pos + 2]) & 0x3F) << 6) |
-             (static_cast<unsigned char>(text[pos + 3]) & 0x3F);
-    pos += 4;
-    return true;
-  }
-  cp_out = b0;
-  pos += 1;
-  return true;
-}
-
-void AppendUtf8Char(char32_t cp, std::string& out) {
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-std::vector<char32_t> ToCodepoints(absl::string_view text) {
-  std::vector<char32_t> out;
-  out.reserve(text.size());
-  size_t pos = 0;
-  char32_t cp = 0;
-  while (DecodeUtf8Char(text, pos, cp)) {
-    out.push_back(cp);
-  }
-  return out;
-}
-
-std::string FromCodepoints(const std::vector<char32_t>& cps) {
-  std::string out;
-  out.reserve(cps.size() * 2);
-  for (char32_t cp : cps) {
-    AppendUtf8Char(cp, out);
-  }
-  return out;
-}
 
 std::string SliceCodepoints(const std::vector<char32_t>& cps, size_t start,
                             size_t end) {
@@ -114,27 +43,23 @@ std::string SliceCodepoints(const std::vector<char32_t>& cps, size_t start,
   std::string out;
   out.reserve((clamped_end - start) * 2);
   for (size_t k = start; k < clamped_end; ++k) {
-    AppendUtf8Char(cps[k], out);
+    AppendUtf8(cps[k], out);
   }
   return out;
 }
 
-char32_t ToLowerChar(char32_t cp) {
-  if (cp >= U'A' && cp <= U'Z') return cp + (U'a' - U'A');
-  if (cp >= 0xC0 && cp <= 0xD6) return cp + 0x20;
-  if (cp >= 0xD8 && cp <= 0xDE) return cp + 0x20;
-  if (cp == 0x152) return 0x153;  // Œ -> œ
-  if (cp == 0x178) return 0xFF;   // Ÿ -> ÿ
+// Lowercases `cp` and folds the typographic apostrophe onto '\''.
+char32_t ToLowerFrench(char32_t cp) {
   if (cp == 0x2019) return U'\'';
-  return cp;
+  return ToLowerLatin(cp);
 }
 
-std::string ToLowerUtf8(absl::string_view text) {
-  std::vector<char32_t> cps = ToCodepoints(text);
+std::string ToLowerFrenchUtf8(absl::string_view text) {
+  std::vector<char32_t> cps = Utf8ToCodePoints(text);
   for (char32_t& cp : cps) {
-    cp = ToLowerChar(cp);
+    cp = ToLowerFrench(cp);
   }
-  return FromCodepoints(cps);
+  return CodePointsToUtf8(cps);
 }
 
 bool IsCombiningMark(char32_t cp) { return (cp >= 0x0300 && cp <= 0x036F); }
@@ -143,12 +68,12 @@ std::vector<std::string> ToSymbols(absl::string_view ps) {
   std::vector<std::string> out;
   size_t pos = 0;
   char32_t cp = 0;
-  while (DecodeUtf8Char(ps, pos, cp)) {
+  while (ConsumeUtf8CodePoint(ps, pos, cp)) {
     if (!out.empty() && IsCombiningMark(cp)) {
-      AppendUtf8Char(cp, out.back());
+      AppendUtf8(cp, out.back());
     } else {
       std::string s;
-      AppendUtf8Char(cp, s);
+      AppendUtf8(cp, s);
       out.push_back(s);
     }
   }
@@ -786,22 +711,6 @@ const absl::flat_hash_map<std::string, std::string>& GetClitics() {
   return *kMap;
 }
 
-bool StartsWithAny(absl::string_view s,
-                   const std::vector<absl::string_view>& prefixes) {
-  for (absl::string_view p : prefixes) {
-    if (absl::StartsWith(s, p)) return true;
-  }
-  return false;
-}
-
-bool EndsWithAny(absl::string_view s,
-                 const std::vector<absl::string_view>& suffixes) {
-  for (absl::string_view p : suffixes) {
-    if (absl::EndsWith(s, p)) return true;
-  }
-  return false;
-}
-
 bool EqualsAny(absl::string_view s,
                const std::vector<absl::string_view>& items) {
   for (absl::string_view p : items) {
@@ -820,7 +729,7 @@ bool IsSilent3plEnt(absl::string_view w, const std::vector<char32_t>& cps) {
   if (GetNasalEntWords().contains(w)) return false;
   if (absl::EndsWith(w, "scent")) return false;
   for (const std::string& nw : GetNasalEntWords()) {
-    if (ToCodepoints(nw).size() >= 5 && absl::EndsWith(w, nw)) {
+    if (Utf8ToCodePoints(nw).size() >= 5 && absl::EndsWith(w, nw)) {
       return false;
     }
   }
@@ -2096,7 +2005,7 @@ void EmitLtsSingleChar(absl::string_view w, const std::vector<char32_t>& cps,
 }
 
 std::vector<std::string> LtsWord(absl::string_view word) {
-  std::string w = ToLowerUtf8(word);
+  std::string w = ToLowerFrenchUtf8(word);
   if (const auto it = GetEnLoans().find(w); it != GetEnLoans().end()) {
     return ToSymbols(it->second);
   }
@@ -2133,7 +2042,7 @@ std::vector<std::string> LtsWord(absl::string_view word) {
   std::vector<std::string> special;
   if (TryLtsWholeWordSpecial(w, special)) return special;
 
-  std::vector<char32_t> cps = ToCodepoints(w);
+  std::vector<char32_t> cps = Utf8ToCodePoints(w);
   if (cps.size() >= 2) {
     bool all_cons = true;
     for (char32_t cp : cps) {
@@ -2148,7 +2057,7 @@ std::vector<std::string> LtsWord(absl::string_view word) {
   if (IsSilent3plEnt(w, cps)) {
     cps.resize(cps.size() - 3);
     cps.push_back(U'e');
-    w = FromCodepoints(cps);
+    w = CodePointsToUtf8(cps);
   }
 
   const size_t end = cps.size();
@@ -2191,7 +2100,7 @@ std::vector<std::string> LtsWord(absl::string_view word) {
 
 std::string StressIsolated(const std::vector<std::string>& pron,
                            absl::string_view word) {
-  const std::string w = ToLowerUtf8(word);
+  const std::string w = ToLowerFrenchUtf8(word);
   for (const std::string& s : pron) {
     if (s == "ˈ" || s == "ˌ") return JoinSymbols(pron);
   }
@@ -2401,7 +2310,7 @@ std::vector<std::string> BasePron(absl::string_view word,
                                   absl::string_view prev_word = "",
                                   absl::string_view next_word = "") {
   (void)next_word;
-  const std::string w = ToLowerUtf8(word);
+  const std::string w = ToLowerFrenchUtf8(word);
   if (w == "y") return {"i"};
   if (w == "couvent") {
     if (EqualsAny(prev_word, {"du", "le", "au", "un", "ce"})) {
@@ -2517,7 +2426,7 @@ std::vector<std::string> BasePron(absl::string_view word,
 std::string LatentConsonant(absl::string_view word,
                             const std::vector<std::string>& pron,
                             absl::string_view next_word = "") {
-  std::string w = ToLowerUtf8(word);
+  std::string w = ToLowerFrenchUtf8(word);
   if (const size_t apos = w.rfind('\''); apos != std::string::npos) {
     w = w.substr(apos + 1);
   }
@@ -2564,7 +2473,7 @@ std::string LatentConsonant(absl::string_view word,
 
 bool IsVowelInitial(absl::string_view word,
                     const std::vector<std::string>& pron) {
-  std::string w = ToLowerUtf8(word);
+  std::string w = ToLowerFrenchUtf8(word);
   if (const size_t apos = w.rfind('\''); apos != std::string::npos) {
     w = w.substr(apos + 1);
   }
@@ -2575,7 +2484,7 @@ bool IsVowelInitial(absl::string_view word,
   }
   if (pron.empty()) return false;
   if (IsVowelPhoneme(pron[0])) return true;
-  const std::vector<char32_t> cps = ToCodepoints(w);
+  const std::vector<char32_t> cps = Utf8ToCodePoints(w);
   return (pron[0] == "j" || pron[0] == "w") && !cps.empty() &&
          (cps[0] == U'y' || cps[0] == U'o' || cps[0] == U'i' ||
           cps[0] == U'u') &&
@@ -2585,7 +2494,7 @@ bool IsVowelInitial(absl::string_view word,
 
 int StressClass(absl::string_view word, absl::string_view prev_word = "",
                 absl::string_view next_word = "") {
-  const std::string w = ToLowerUtf8(word);
+  const std::string w = ToLowerFrenchUtf8(word);
   if (w == "ont" &&
       !EqualsAny(prev_word, {"ils", "elles", "qui", "qu'ils", "qu'elles"})) {
     return 2;
@@ -2627,7 +2536,7 @@ std::vector<std::string> ApplyStress(const std::vector<std::string>& pron,
   for (const std::string& s : pron) {
     if (s == "ˈ" || s == "ˌ") return pron;
   }
-  const std::string w = ToLowerUtf8(word);
+  const std::string w = ToLowerFrenchUtf8(word);
   int cls =
       (isolated || clause_final) ? 2 : StressClass(w, prev_word, next_word);
   if (GetAlwaysUnstressed().contains(w) && (isolated || !clause_final)) {
@@ -2652,7 +2561,7 @@ std::vector<std::string> ApplyStress(const std::vector<std::string>& pron,
 }
 
 std::vector<std::string> CompoundPron(absl::string_view w, bool clause_final) {
-  const std::string lw = ToLowerUtf8(w);
+  const std::string lw = ToLowerFrenchUtf8(w);
   if (const auto it = GetEnLoans().find(lw); it != GetEnLoans().end()) {
     return ToSymbols(it->second);
   }
@@ -2704,7 +2613,7 @@ bool IsAllAsciiDigits(absl::string_view s) {
 }
 
 std::vector<std::string> TokenizeClause(absl::string_view clause) {
-  const std::vector<char32_t> cps = ToCodepoints(clause);
+  const std::vector<char32_t> cps = Utf8ToCodePoints(clause);
   std::vector<std::string> tokens;
   const size_t n = cps.size();
   size_t i = 0;
@@ -2886,7 +2795,7 @@ std::string ClauseG2p(
       i += 1;
       continue;
     }
-    const std::string lw = ToLowerUtf8(tok);
+    const std::string lw = ToLowerFrenchUtf8(tok);
     if (const auto it = custom_lexicon.find(lw); it != custom_lexicon.end()) {
       expanded.push_back({tok, ToSymbols(it->second), true});
       i += 1;
@@ -2900,9 +2809,9 @@ std::string ClauseG2p(
   for (size_t idx = 0; idx < m; ++idx) {
     if (!expanded[idx].pre_built) {
       const std::string pw =
-          (idx > 0) ? ToLowerUtf8(expanded[idx - 1].word) : "";
+          (idx > 0) ? ToLowerFrenchUtf8(expanded[idx - 1].word) : "";
       const std::string nw =
-          (idx + 1 < m) ? ToLowerUtf8(expanded[idx + 1].word) : "";
+          (idx + 1 < m) ? ToLowerFrenchUtf8(expanded[idx + 1].word) : "";
       expanded[idx].pron = BasePron(expanded[idx].word, pw, nw);
     }
   }
@@ -2916,10 +2825,10 @@ std::string ClauseG2p(
       continue;
     }
     const std::string& w = item.word;
-    const std::string lw = ToLowerUtf8(w);
-    const std::string pw = (idx > 0) ? ToLowerUtf8(expanded[idx - 1].word) : "";
+    const std::string lw = ToLowerFrenchUtf8(w);
+    const std::string pw = (idx > 0) ? ToLowerFrenchUtf8(expanded[idx - 1].word) : "";
     const std::string nw =
-        (idx + 1 < m) ? ToLowerUtf8(expanded[idx + 1].word) : "";
+        (idx + 1 < m) ? ToLowerFrenchUtf8(expanded[idx + 1].word) : "";
     const bool nxt_vowel =
         (idx + 1 < m) && !expanded[idx + 1].pre_built &&
         IsVowelInitial(expanded[idx + 1].word, expanded[idx + 1].pron);
@@ -3070,7 +2979,7 @@ absl::StatusOr<FrenchG2p> FrenchG2p::Create() { return FrenchG2p(0); }
 absl::StatusOr<std::string> FrenchG2p::WordToIpa(
     absl::string_view word,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
-  const std::string lw = ToLowerUtf8(word);
+  const std::string lw = ToLowerFrenchUtf8(word);
   if (lw.empty()) return std::string();
   if (const auto it = custom_lexicon.find(lw); it != custom_lexicon.end()) {
     return it->second;
@@ -3082,7 +2991,7 @@ absl::StatusOr<std::string> FrenchG2p::TextToIpa(
     absl::string_view text,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::string prep = PreprocessText(text);
-  const std::vector<char32_t> cps = ToCodepoints(prep);
+  const std::vector<char32_t> cps = Utf8ToCodePoints(prep);
   const size_t n = cps.size();
 
   std::string joined;

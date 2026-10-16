@@ -29,181 +29,92 @@
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
 
-struct DecodedCodePoint {
-  char32_t cp;
-  size_t len;
-};
-
-DecodedCodePoint DecodeUtf8(absl::string_view s, size_t pos) {
-  if (pos >= s.size()) {
-    return {0, 0};
-  }
-  const uint8_t b0 = static_cast<uint8_t>(s[pos]);
-  if (b0 < 0x80) {
-    return {static_cast<char32_t>(b0), 1};
-  }
-  if ((b0 & 0xE0) == 0xC0 && pos + 1 < s.size()) {
-    const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
-    if ((b1 & 0xC0) == 0x80) {
-      return {static_cast<char32_t>(((b0 & 0x1F) << 6) | (b1 & 0x3F)), 2};
-    }
-  }
-  if ((b0 & 0xF0) == 0xE0 && pos + 2 < s.size()) {
-    const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
-    const uint8_t b2 = static_cast<uint8_t>(s[pos + 2]);
-    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-      return {static_cast<char32_t>(((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) |
-                                    (b2 & 0x3F)),
-              3};
-    }
-  }
-  if ((b0 & 0xF8) == 0xF0 && pos + 3 < s.size()) {
-    const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
-    const uint8_t b2 = static_cast<uint8_t>(s[pos + 2]);
-    const uint8_t b3 = static_cast<uint8_t>(s[pos + 3]);
-    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
-      return {static_cast<char32_t>(((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) |
-                                    ((b2 & 0x3F) << 6) | (b3 & 0x3F)),
-              4};
-    }
-  }
-  return {static_cast<char32_t>(b0), 1};
-}
-
-void AppendCodePointUtf8(char32_t cp, std::string& out) {
-  if (cp <= 0x7F) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp <= 0x7FF) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp <= 0xFFFF) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp <= 0x10FFFF) {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-std::u32string Utf8ToU32(absl::string_view s) {
+// Decodes UTF-8 `s`, composing a vowel, u or n followed by a combining
+// acute accent, diaeresis or tilde into the precomposed Spanish letter.
+std::u32string Utf8ToComposedU32(absl::string_view s) {
   std::u32string out;
   out.reserve(s.size());
   size_t pos = 0;
   while (pos < s.size()) {
-    const DecodedCodePoint dec = DecodeUtf8(s, pos);
-    if (dec.cp == 0x0301 && !out.empty()) {
+    const Utf8CodePoint dec = DecodeUtf8CodePoint(s, pos);
+    if (dec.code_point == 0x0301 && !out.empty()) {
       // Combining acute accent -> precomposed Spanish vowel.
       switch (out.back()) {
         case U'a':
           out.back() = U'á';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'e':
           out.back() = U'é';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'i':
           out.back() = U'í';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'o':
           out.back() = U'ó';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'u':
           out.back() = U'ú';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'A':
           out.back() = U'Á';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'E':
           out.back() = U'É';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'I':
           out.back() = U'Í';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'O':
           out.back() = U'Ó';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         case U'U':
           out.back() = U'Ú';
-          pos += dec.len;
+          pos += dec.length;
           continue;
         default:
           break;
       }
-    } else if (dec.cp == 0x0308 && !out.empty()) {
+    } else if (dec.code_point == 0x0308 && !out.empty()) {
       if (out.back() == U'u') {
         out.back() = U'ü';
-        pos += dec.len;
+        pos += dec.length;
         continue;
       }
       if (out.back() == U'U') {
         out.back() = U'Ü';
-        pos += dec.len;
+        pos += dec.length;
         continue;
       }
-    } else if (dec.cp == 0x0303 && !out.empty()) {
+    } else if (dec.code_point == 0x0303 && !out.empty()) {
       if (out.back() == U'n') {
         out.back() = U'ñ';
-        pos += dec.len;
+        pos += dec.length;
         continue;
       }
       if (out.back() == U'N') {
         out.back() = U'Ñ';
-        pos += dec.len;
+        pos += dec.length;
         continue;
       }
     }
-    out.push_back(dec.cp);
-    pos += dec.len;
+    out.push_back(dec.code_point);
+    pos += dec.length;
   }
   return out;
-}
-
-std::string U32ToUtf8(const std::u32string& u32) {
-  std::string out;
-  out.reserve(u32.size() * 2);
-  for (char32_t cp : u32) {
-    AppendCodePointUtf8(cp, out);
-  }
-  return out;
-}
-
-char32_t ToLowerSpanish(char32_t cp) {
-  if (cp >= U'A' && cp <= U'Z') {
-    return cp - U'A' + U'a';
-  }
-  switch (cp) {
-    case U'Á':
-      return U'á';
-    case U'É':
-      return U'é';
-    case U'Í':
-      return U'í';
-    case U'Ó':
-      return U'ó';
-    case U'Ú':
-      return U'ú';
-    case U'Ü':
-      return U'ü';
-    case U'Ñ':
-      return U'ñ';
-    default:
-      return cp;
-  }
 }
 
 bool IsUpperSpanish(char32_t cp) {
@@ -212,7 +123,7 @@ bool IsUpperSpanish(char32_t cp) {
 }
 
 bool IsSpanishLetter(char32_t cp) {
-  const char32_t lc = ToLowerSpanish(cp);
+  const char32_t lc = ToLowerLatin(cp);
   return (lc >= U'a' && lc <= U'z') || lc == U'á' || lc == U'é' || lc == U'í' ||
          lc == U'ó' || lc == U'ú' || lc == U'ü' || lc == U'ñ' || lc == U'ª' ||
          lc == U'º';
@@ -229,13 +140,13 @@ std::u32string LowercaseU32(const std::u32string& s) {
   std::u32string out;
   out.reserve(s.size());
   for (char32_t cp : s) {
-    out.push_back(ToLowerSpanish(cp));
+    out.push_back(ToLowerLatin(cp));
   }
   return out;
 }
 
 std::string LowercaseUtf8(absl::string_view s) {
-  return U32ToUtf8(LowercaseU32(Utf8ToU32(s)));
+  return CodePointsToUtf8(LowercaseU32(Utf8ToComposedU32(s)));
 }
 
 bool IsAllUppercaseWord(const std::u32string& w) {
@@ -646,7 +557,7 @@ std::vector<GraphemeUnit> ParseUnits(const std::u32string& w) {
       continue;
     }
     std::string single_cons;
-    AppendCodePointUtf8(c, single_cons);
+    AppendUtf8(c, single_cons);
     out.push_back({UnitKind::kConsonant, 0, std::move(single_cons)});
     ++i;
   }
@@ -761,11 +672,11 @@ NucleusIpa RenderNucleusIpa(const std::vector<NucleusChar>& nuc) {
     if (nc.role == VowelRole::kGlide) {
       pre.push_back((base == U'i') ? 'j' : 'w');
     } else if (nc.role == VowelRole::kHiatusPre) {
-      AppendCodePointUtf8(base, pre);
+      AppendUtf8(base, pre);
     } else if (nc.role == VowelRole::kNucleus) {
-      AppendCodePointUtf8(base, body);
+      AppendUtf8(base, body);
     } else {
-      AppendCodePointUtf8((base == U'Y') ? U'i' : base, body);
+      AppendUtf8((base == U'Y') ? U'i' : base, body);
     }
   }
   if (body == "ui") {
@@ -855,13 +766,13 @@ absl::string_view LetterName(char32_t ch) {
 
 std::vector<PhoneToken> SpellWord(const std::u32string& word) {
   if (word.size() == 1 && word[0] == U'w') {
-    std::vector<PhoneToken> out = WordPhones(Utf8ToU32("uve"));
+    std::vector<PhoneToken> out = WordPhones(Utf8ToComposedU32("uve"));
     for (PhoneToken& t : out) {
       if (t.kind == PhoneKind::kVowel && t.stress == "ˈ") {
         t.stress = "ˌ";
       }
     }
-    const std::vector<PhoneToken> doble = WordPhones(Utf8ToU32("doble"));
+    const std::vector<PhoneToken> doble = WordPhones(Utf8ToComposedU32("doble"));
     out.insert(out.end(), doble.begin(), doble.end());
     return out;
   }
@@ -872,7 +783,7 @@ std::vector<PhoneToken> SpellWord(const std::u32string& word) {
     if (name.empty()) {
       continue;
     }
-    parts.push_back(WordPhones(Utf8ToU32(name)));
+    parts.push_back(WordPhones(Utf8ToComposedU32(name)));
   }
   std::vector<PhoneToken> out;
   for (size_t k = 0; k < parts.size(); ++k) {
@@ -896,7 +807,7 @@ std::vector<PhoneToken> SpellWord(const std::u32string& word) {
 
 std::vector<PhoneToken> WordPhones(const std::u32string& raw_word) {
   const std::u32string word = LowercaseU32(raw_word);
-  const std::string word_utf8 = U32ToUtf8(word);
+  const std::string word_utf8 = CodePointsToUtf8(word);
   const auto& lexicon = GetSpanishLexicon();
   if (const auto it = lexicon.find(word_utf8); it != lexicon.end()) {
     return it->second;
@@ -926,7 +837,7 @@ std::vector<PhoneToken> WordPhones(const std::u32string& raw_word) {
     }
     if (stem_has_vowel) {
       std::vector<PhoneToken> base = WordPhones(stem);
-      std::vector<PhoneToken> suffix = WordPhones(Utf8ToU32("mente"));
+      std::vector<PhoneToken> suffix = WordPhones(Utf8ToComposedU32("mente"));
       for (PhoneToken& t : suffix) {
         if (t.kind == PhoneKind::kVowel) {
           t.no_open_e = true;
@@ -1301,10 +1212,10 @@ std::vector<std::vector<PhoneToken>> NumberWordsTokens(absl::string_view s) {
   std::vector<std::vector<PhoneToken>> out;
   if (ml == 1) {
     out.push_back({MakeVowel("", "u", "ˈ"), MakeCons("n")});
-    out.push_back(WordPhones(Utf8ToU32("millón")));
+    out.push_back(WordPhones(Utf8ToComposedU32("millón")));
   } else {
     out = NumberWordsTokens(absl::StrCat(ml));
-    out.push_back(WordPhones(Utf8ToU32("millones")));
+    out.push_back(WordPhones(Utf8ToComposedU32("millones")));
   }
   if (rem > 0) {
     std::vector<std::vector<PhoneToken>> rem_toks =
@@ -1458,7 +1369,7 @@ struct RawToken {
 };
 
 std::vector<RawToken> TokenizeSpanish(absl::string_view text) {
-  const std::u32string u32 = Utf8ToU32(text);
+  const std::u32string u32 = Utf8ToComposedU32(text);
   std::vector<RawToken> out;
   size_t i = 0;
   while (i < u32.size()) {
@@ -1469,7 +1380,7 @@ std::vector<RawToken> TokenizeSpanish(absl::string_view text) {
         span.push_back(u32[i]);
         ++i;
       }
-      out.push_back({RawTokenKind::kSpace, span, U32ToUtf8(span)});
+      out.push_back({RawTokenKind::kSpace, span, CodePointsToUtf8(span)});
       continue;
     }
     if (IsAsciiDigitCp(cp)) {
@@ -1478,7 +1389,7 @@ std::vector<RawToken> TokenizeSpanish(absl::string_view text) {
         span.push_back(u32[i]);
         ++i;
       }
-      out.push_back({RawTokenKind::kDigits, span, U32ToUtf8(span)});
+      out.push_back({RawTokenKind::kDigits, span, CodePointsToUtf8(span)});
       continue;
     }
     if (IsSpanishLetter(cp)) {
@@ -1487,11 +1398,11 @@ std::vector<RawToken> TokenizeSpanish(absl::string_view text) {
         span.push_back(u32[i]);
         ++i;
       }
-      out.push_back({RawTokenKind::kWord, span, U32ToUtf8(span)});
+      out.push_back({RawTokenKind::kWord, span, CodePointsToUtf8(span)});
       continue;
     }
     const std::u32string single(1, cp);
-    out.push_back({RawTokenKind::kPunct, single, U32ToUtf8(single)});
+    out.push_back({RawTokenKind::kPunct, single, CodePointsToUtf8(single)});
     ++i;
   }
   return out;
@@ -1608,7 +1519,7 @@ std::string PhonemizeSpanish(
 
     // Word token.
     const std::u32string lw_u32 = LowercaseU32(tok.u32);
-    const std::string lw = U32ToUtf8(lw_u32);
+    const std::string lw = CodePointsToUtf8(lw_u32);
 
     if (!custom_lexicon.empty()) {
       if (const auto it = custom_lexicon.find(lw); it != custom_lexicon.end()) {

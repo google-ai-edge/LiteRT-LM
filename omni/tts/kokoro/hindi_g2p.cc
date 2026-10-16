@@ -29,6 +29,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
@@ -38,84 +39,6 @@ constexpr char32_t kNukta = 0x093C;
 constexpr char32_t kAnusvara = 0x0902;
 constexpr char32_t kChandrabindu = 0x0901;
 constexpr char32_t kVisarga = 0x0903;
-
-struct DecodedCodePoint {
-  char32_t cp = 0;
-  size_t byte_len = 0;
-};
-
-DecodedCodePoint DecodeUtf8At(absl::string_view text, size_t pos) {
-  if (pos >= text.size()) {
-    return {0, 0};
-  }
-  const unsigned char b0 = static_cast<unsigned char>(text[pos]);
-  if ((b0 & 0x80) == 0) {
-    return {static_cast<char32_t>(b0), 1};
-  }
-  if ((b0 & 0xE0) == 0xC0 && pos + 1 < text.size()) {
-    const unsigned char b1 = static_cast<unsigned char>(text[pos + 1]);
-    return {static_cast<char32_t>(((b0 & 0x1F) << 6) | (b1 & 0x3F)), 2};
-  }
-  if ((b0 & 0xF0) == 0xE0 && pos + 2 < text.size()) {
-    const unsigned char b1 = static_cast<unsigned char>(text[pos + 1]);
-    const unsigned char b2 = static_cast<unsigned char>(text[pos + 2]);
-    return {static_cast<char32_t>(((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) |
-                                  (b2 & 0x3F)),
-            3};
-  }
-  if ((b0 & 0xF8) == 0xF0 && pos + 3 < text.size()) {
-    const unsigned char b1 = static_cast<unsigned char>(text[pos + 1]);
-    const unsigned char b2 = static_cast<unsigned char>(text[pos + 2]);
-    const unsigned char b3 = static_cast<unsigned char>(text[pos + 3]);
-    return {static_cast<char32_t>(((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) |
-                                  ((b2 & 0x3F) << 6) | (b3 & 0x3F)),
-            4};
-  }
-  return {static_cast<char32_t>(b0), 1};
-}
-
-void AppendCodePointUtf8(char32_t cp, std::string& out) {
-  out.reserve(out.size() + 4);
-  if (cp <= 0x7F) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp <= 0x7FF) {
-    out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp <= 0xFFFF) {
-    out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-std::u32string Utf8ToU32(absl::string_view text) {
-  std::u32string out;
-  out.reserve(text.size());
-  size_t pos = 0;
-  while (pos < text.size()) {
-    const DecodedCodePoint dec = DecodeUtf8At(text, pos);
-    if (dec.byte_len == 0) {
-      break;
-    }
-    out.push_back(dec.cp);
-    pos += dec.byte_len;
-  }
-  return out;
-}
-
-std::string U32ToUtf8(const std::u32string& u32) {
-  std::string out;
-  out.reserve(u32.size() * 3);
-  for (char32_t cp : u32) {
-    AppendCodePointUtf8(cp, out);
-  }
-  return out;
-}
 
 // Normalizes precomposed Devanagari nukta codepoints (U+0958..U+095F) to their
 // canonical base consonant + combining nukta (U+093C) sequence so that lookup
@@ -1159,7 +1082,7 @@ std::string PhonemizeHindiWord(const std::u32string& raw_word, bool isolated) {
     return HindiNumberToIpa(digits);
   }
   const std::u32string norm_u32 = NormalizeDevanagariU32(raw_word);
-  const std::string norm_utf8 = U32ToUtf8(norm_u32);
+  const std::string norm_utf8 = CodePointsToUtf8(norm_u32);
   const auto& exceptions = GetHindiWordExceptions();
   if (const auto it = exceptions.find(norm_utf8); it != exceptions.end()) {
     return it->second;
@@ -1243,7 +1166,7 @@ std::vector<RawToken> TokenizeHindi(absl::string_view text) {
         span.push_back(u32[i]);
         ++i;
       }
-      out.push_back({RawTokenKind::kSpace, span, U32ToUtf8(span)});
+      out.push_back({RawTokenKind::kSpace, span, CodePointsToUtf8(span)});
       continue;
     }
     if (IsDigitCp(cp)) {
@@ -1252,7 +1175,7 @@ std::vector<RawToken> TokenizeHindi(absl::string_view text) {
         span.push_back(u32[i]);
         ++i;
       }
-      out.push_back({RawTokenKind::kDigits, span, U32ToUtf8(span)});
+      out.push_back({RawTokenKind::kDigits, span, CodePointsToUtf8(span)});
       continue;
     }
     if (IsDevanagariWordCp(cp) ||
@@ -1265,11 +1188,11 @@ std::vector<RawToken> TokenizeHindi(absl::string_view text) {
         span.push_back(u32[i]);
         ++i;
       }
-      out.push_back({RawTokenKind::kWord, span, U32ToUtf8(span)});
+      out.push_back({RawTokenKind::kWord, span, CodePointsToUtf8(span)});
       continue;
     }
     std::u32string single(1, cp);
-    out.push_back({RawTokenKind::kPunct, single, U32ToUtf8(single)});
+    out.push_back({RawTokenKind::kPunct, single, CodePointsToUtf8(single)});
     ++i;
   }
   return out;

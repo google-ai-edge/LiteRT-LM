@@ -26,115 +26,10 @@
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
-
-bool DecodeUtf8Char(absl::string_view text, size_t& pos, char32_t& cp_out) {
-  if (pos >= text.size()) return false;
-  const auto b0 = static_cast<unsigned char>(text[pos]);
-  if (b0 < 0x80) {
-    cp_out = b0;
-    pos += 1;
-    return true;
-  }
-  if ((b0 & 0xE0) == 0xC0 && pos + 1 < text.size()) {
-    cp_out =
-        ((b0 & 0x1F) << 6) | (static_cast<unsigned char>(text[pos + 1]) & 0x3F);
-    pos += 2;
-    return true;
-  }
-  if ((b0 & 0xF0) == 0xE0 && pos + 2 < text.size()) {
-    cp_out = ((b0 & 0x0F) << 12) |
-             ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 6) |
-             (static_cast<unsigned char>(text[pos + 2]) & 0x3F);
-    pos += 3;
-    return true;
-  }
-  if ((b0 & 0xF8) == 0xF0 && pos + 3 < text.size()) {
-    cp_out = ((b0 & 0x07) << 18) |
-             ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 12) |
-             ((static_cast<unsigned char>(text[pos + 2]) & 0x3F) << 6) |
-             (static_cast<unsigned char>(text[pos + 3]) & 0x3F);
-    pos += 4;
-    return true;
-  }
-  cp_out = b0;
-  pos += 1;
-  return true;
-}
-
-void AppendUtf8Char(char32_t cp, std::string& out) {
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-std::vector<char32_t> ToCodepoints(absl::string_view text) {
-  std::vector<char32_t> out;
-  out.reserve(text.size());
-  size_t pos = 0;
-  char32_t cp = 0;
-  while (DecodeUtf8Char(text, pos, cp)) {
-    out.push_back(cp);
-  }
-  return out;
-}
-
-std::string FromCodepoints(const std::vector<char32_t>& cps) {
-  std::string out;
-  out.reserve(cps.size() * 2);
-  for (char32_t cp : cps) {
-    AppendUtf8Char(cp, out);
-  }
-  return out;
-}
-
-char32_t ToLowerChar(char32_t cp) {
-  if (cp >= U'A' && cp <= U'Z') return cp + (U'a' - U'A');
-  switch (cp) {
-    case U'À':
-      return U'à';
-    case U'È':
-      return U'è';
-    case U'É':
-      return U'é';
-    case U'Ì':
-      return U'ì';
-    case U'Í':
-      return U'í';
-    case U'Ò':
-      return U'ò';
-    case U'Ó':
-      return U'ó';
-    case U'Ù':
-      return U'ù';
-    case U'Ú':
-      return U'ú';
-    default:
-      return cp;
-  }
-}
-
-std::string ToLowerUtf8(absl::string_view text) {
-  std::vector<char32_t> cps = ToCodepoints(text);
-  for (char32_t& cp : cps) {
-    cp = ToLowerChar(cp);
-  }
-  return FromCodepoints(cps);
-}
 
 bool IsVowel(char32_t cp) {
   switch (cp) {
@@ -222,14 +117,14 @@ bool IsWordChar(char32_t cp) {
       (cp >= U'0' && cp <= U'9') || cp == U'_') {
     return true;
   }
-  return IsVowel(ToLowerChar(cp));
+  return IsVowel(ToLowerLatin(cp));
 }
 
 bool IsAlphaWord(absl::string_view tok) {
   if (tok.empty()) return false;
   size_t pos = 0;
   char32_t cp = 0;
-  if (!DecodeUtf8Char(tok, pos, cp)) return false;
+  if (!ConsumeUtf8CodePoint(tok, pos, cp)) return false;
   if (cp >= U'0' && cp <= U'9') return false;
   return IsWordChar(cp);
 }
@@ -1614,22 +1509,6 @@ const absl::flat_hash_set<std::string>& GetClosedOWords() {
   return *kSet;
 }
 
-bool EndsWithAny(absl::string_view w,
-                 const std::vector<absl::string_view>& suffixes) {
-  for (absl::string_view suf : suffixes) {
-    if (absl::EndsWith(w, suf)) return true;
-  }
-  return false;
-}
-
-bool StartsWithAny(absl::string_view w,
-                   const std::vector<absl::string_view>& prefixes) {
-  for (absl::string_view pre : prefixes) {
-    if (absl::StartsWith(w, pre)) return true;
-  }
-  return false;
-}
-
 bool HasStressedIaSuffix(absl::string_view w) {
   static const absl::NoDestructor<std::vector<absl::string_view>> kSuffixes({
       "logia",      "grafia",    "sofia",      "metria",     "fobia",
@@ -2081,7 +1960,7 @@ std::vector<Unit> ParseUnits(const std::vector<char32_t>& w,
       continue;
     }
     std::string ph;
-    AppendUtf8Char(c, ph);
+    AppendUtf8(c, ph);
     if (dbl) {
       out.push_back({UnitKind::kConsonant, 0, ph, 2});
       i += 2;
@@ -2164,8 +2043,8 @@ std::vector<PhonToken> WordTokens(absl::string_view word,
   const std::string w_str = ToLowerUtf8(word);
   const std::string lookup_w =
       root_hint.empty() ? w_str : ToLowerUtf8(root_hint);
-  const std::vector<char32_t> w_cps = ToCodepoints(w_str);
-  const std::vector<char32_t> lookup_cps = ToCodepoints(lookup_w);
+  const std::vector<char32_t> w_cps = Utf8ToCodePoints(w_str);
+  const std::vector<char32_t> lookup_cps = Utf8ToCodePoints(lookup_w);
   if (w_cps.empty()) return {};
 
   const std::vector<Unit> u_list = ParseUnits(w_cps, w_str);
@@ -2708,12 +2587,12 @@ std::vector<RawToken> TokenizeText(absl::string_view text) {
       continue;
     }
     char32_t cp = 0;
-    DecodeUtf8Char(text, pos, cp);
+    ConsumeUtf8CodePoint(text, pos, cp);
     if (cp == U'’') cp = U'\'';
-    AppendUtf8Char(cp, norm);
+    AppendUtf8(cp, norm);
   }
 
-  const std::vector<char32_t> cps = ToCodepoints(norm);
+  const std::vector<char32_t> cps = Utf8ToCodePoints(norm);
   std::vector<RawToken> tokens;
   const size_t n = cps.size();
   size_t i = 0;
@@ -2735,7 +2614,7 @@ std::vector<RawToken> TokenizeText(absl::string_view text) {
         while (j < n && cps[j] >= U'0' && cps[j] <= U'9') j += 1;
       }
       std::vector<char32_t> slice(cps.begin() + i, cps.begin() + j);
-      tokens.push_back({FromCodepoints(slice)});
+      tokens.push_back({CodePointsToUtf8(slice)});
       i = j;
       continue;
     }
@@ -2744,12 +2623,12 @@ std::vector<RawToken> TokenizeText(absl::string_view text) {
       while (j < n && IsWordChar(cps[j])) j += 1;
       if (j < n && cps[j] == U'\'') j += 1;
       std::vector<char32_t> slice(cps.begin() + i, cps.begin() + j);
-      tokens.push_back({FromCodepoints(slice)});
+      tokens.push_back({CodePointsToUtf8(slice)});
       i = j;
       continue;
     }
     std::string single;
-    AppendUtf8Char(c, single);
+    AppendUtf8(c, single);
     tokens.push_back({single});
     i += 1;
   }
@@ -2760,7 +2639,7 @@ bool IsClosingPunct(absl::string_view s) {
   if (s.empty()) return false;
   size_t pos = 0;
   char32_t cp = 0;
-  if (!DecodeUtf8Char(s, pos, cp)) return false;
+  if (!ConsumeUtf8CodePoint(s, pos, cp)) return false;
   switch (cp) {
     case U'.':
     case U',':

@@ -28,6 +28,7 @@
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/cjk_lattice.h"
 #include "omni/tts/kokoro/mecab_lattice.h"
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
@@ -41,68 +42,6 @@ constexpr uint32_t kSokuon = 0x3063;       // っ
 constexpr uint32_t kMoraicNasal = 0x3093;  // ん
 constexpr uint32_t kChoonpu = 0x30FC;      // ー
 constexpr uint32_t kGlottalStop = 0x0294;  // ʔ
-
-// A code point and the number of bytes it was decoded from.
-struct DecodedUtf8 {
-  uint32_t code_point = 0;
-  int length = 1;
-};
-
-// Returns the low six payload bits of the UTF-8 continuation byte at `offset`.
-uint32_t Utf8Trail(absl::string_view text, int offset) {
-  return static_cast<uint8_t>(text[offset]) & 0x3Fu;
-}
-
-DecodedUtf8 DecodeUtf8(absl::string_view text, int offset) {
-  const auto lead = static_cast<uint8_t>(text[offset]);
-  const int remaining = static_cast<int>(text.size()) - offset;
-  if (lead < 0x80) return {lead, 1};
-  if ((lead & 0xE0) == 0xC0 && remaining >= 2) {
-    return {((lead & 0x1Fu) << 6) | Utf8Trail(text, offset + 1), 2};
-  }
-  if ((lead & 0xF0) == 0xE0 && remaining >= 3) {
-    return {((lead & 0x0Fu) << 12) | (Utf8Trail(text, offset + 1) << 6) |
-                Utf8Trail(text, offset + 2),
-            3};
-  }
-  if ((lead & 0xF8) == 0xF0 && remaining >= 4) {
-    return {((lead & 0x07u) << 18) | (Utf8Trail(text, offset + 1) << 12) |
-                (Utf8Trail(text, offset + 2) << 6) |
-                Utf8Trail(text, offset + 3),
-            4};
-  }
-  return {0xFFFD, 1};
-}
-
-void AppendUtf8(uint32_t cp, std::string& out) {
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-std::vector<uint32_t> ToCodepoints(absl::string_view text) {
-  std::vector<uint32_t> out;
-  out.reserve(text.size());
-  int offset = 0;
-  while (offset < static_cast<int>(text.size())) {
-    const DecodedUtf8 decoded = DecodeUtf8(text, offset);
-    out.push_back(decoded.code_point);
-    offset += decoded.length;
-  }
-  return out;
-}
 
 // Drops the last UTF-8 character of `text`, which must be valid UTF-8.
 absl::string_view DropLastUtf8Char(absl::string_view text) {
@@ -120,7 +59,7 @@ bool IsAllAscii(absl::string_view text) {
 }
 
 bool IsWhitespaceOnly(absl::string_view text) {
-  for (uint32_t cp : ToCodepoints(text)) {
+  for (uint32_t cp : Utf8ToCodePoints(text)) {
     if (cp != ' ' && cp != '\t' && cp != '\n' && cp != '\r' && cp != 0x3000) {
       return false;
     }
@@ -133,7 +72,7 @@ bool IsWhitespaceOnly(absl::string_view text) {
 std::string KataToHira(absl::string_view text) {
   std::string out;
   out.reserve(text.size());
-  for (uint32_t cp : ToCodepoints(text)) {
+  for (uint32_t cp : Utf8ToCodePoints(text)) {
     AppendUtf8((cp >= 0x30A1 && cp <= 0x30F6) ? cp - 0x60 : cp, out);
   }
   return out;
@@ -344,7 +283,7 @@ bool IsDigitOrFullwidthDigit(uint32_t cp) {
 
 // Port of `JAG2P._normalize_text`.
 std::string NormalizeJapaneseText(absl::string_view text) {
-  const std::vector<uint32_t> cps = ToCodepoints(text);
+  const std::vector<char32_t> cps = Utf8ToCodePoints(text);
   std::vector<uint32_t> stage1;
   stage1.reserve(cps.size());
 
@@ -617,7 +556,7 @@ bool IsOdori(uint32_t cp) {
 // articulation of `next_ipa`, the IPA of the kana that follows it.
 absl::string_view AssimilateMoraicNasal(absl::string_view next_ipa) {
   if (next_ipa.empty()) return "ɴ";
-  const uint32_t first_cp = DecodeUtf8(next_ipa, 0).code_point;
+  const uint32_t first_cp = DecodeUtf8CodePoint(next_ipa, 0).code_point;
   // Bilabial: m, p, b.
   if (first_cp == 'm' || first_cp == 'p' || first_cp == 'b') return "m";
   // Velar: k, ɡ (U+0261).
@@ -684,7 +623,7 @@ std::string RomajiWord(const WordItem& word) {
   if (IsAllAscii(word.surface)) return word.surface;
   std::string out;
   if (word.char_type == kSymbolCharType) {
-    for (uint32_t cp : ToCodepoints(word.surface)) {
+    for (uint32_t cp : Utf8ToCodePoints(word.surface)) {
       if (cp == 0x3099 || cp == 0x309A) continue;
       const absl::string_view mapped = LookupHepburn(cp);
       if (mapped.empty()) {
@@ -696,7 +635,7 @@ std::string RomajiWord(const WordItem& word) {
     return out;
   }
   if (word.char_type != kHiraganaCharType) return "";
-  const std::vector<uint32_t> hira = ToCodepoints(word.hira);
+  const std::vector<char32_t> hira = Utf8ToCodePoints(word.hira);
   for (size_t i = 0; i < hira.size(); ++i) {
     const uint32_t pk = (i > 0) ? hira[i - 1] : 0;
     const uint32_t nk = (i + 1 < hira.size()) ? hira[i + 1] : 0;
@@ -721,7 +660,7 @@ bool IsClosingPunctRoma(absl::string_view roma) {
 std::string StripSokuon(absl::string_view text) {
   std::string out;
   out.reserve(text.size());
-  for (uint32_t cp : ToCodepoints(text)) {
+  for (uint32_t cp : Utf8ToCodePoints(text)) {
     if (cp != kSokuon) AppendUtf8(cp, out);
   }
   return out;
@@ -743,7 +682,7 @@ std::string PostProcessIpa(absl::string_view raw) {
   std::vector<uint32_t> collapsed;
   collapsed.reserve(raw.size());
   bool in_space = true;
-  for (uint32_t cp : ToCodepoints(raw)) {
+  for (uint32_t cp : Utf8ToCodePoints(raw)) {
     if (cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r') {
       if (!in_space) collapsed.push_back(' ');
       in_space = true;

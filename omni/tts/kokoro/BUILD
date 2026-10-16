@@ -83,6 +83,7 @@ cc_library(
         ":portuguese_g2p",
         ":spanish_g2p",
         ":traditional_chinese_converter",
+        ":unicode_utils",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -416,6 +417,7 @@ cc_library(
         ":cjk_blob",
         ":cjk_lattice",
         ":mecab_lattice",
+        ":unicode_utils",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -441,6 +443,7 @@ cc_library(
     hdrs = ["chinese_g2p.h"],
     deps = [
         ":cjk_blob",
+        ":unicode_utils",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -491,11 +494,32 @@ cc_test(
 )
 
 cc_library(
+    name = "unicode_utils",
+    srcs = ["unicode_utils.cc"],
+    hdrs = ["unicode_utils.h"],
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_test(
+    name = "unicode_utils_test",
+    srcs = ["unicode_utils_test.cc"],
+    deps = [
+        ":unicode_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "english_g2p",
     srcs = ["english_g2p.cc"],
     hdrs = ["english_g2p.h"],
     deps = [
         ":cjk_blob",
+        ":unicode_utils",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
@@ -524,6 +548,7 @@ cc_library(
     srcs = ["spanish_g2p.cc"],
     hdrs = ["spanish_g2p.h"],
     deps = [
+        ":unicode_utils",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status:statusor",
@@ -547,6 +572,7 @@ cc_library(
     srcs = ["hindi_g2p.cc"],
     hdrs = ["hindi_g2p.h"],
     deps = [
+        ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -571,6 +597,7 @@ cc_library(
     srcs = ["portuguese_g2p.cc"],
     hdrs = ["portuguese_g2p.h"],
     deps = [
+        ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -595,6 +622,7 @@ cc_library(
     srcs = ["italian_g2p.cc"],
     hdrs = ["italian_g2p.h"],
     deps = [
+        ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -619,6 +647,7 @@ cc_library(
     srcs = ["french_g2p.cc"],
     hdrs = ["french_g2p.h"],
     deps = [
+        ":unicode_utils",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",

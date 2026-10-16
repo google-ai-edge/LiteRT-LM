@@ -35,6 +35,7 @@
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/tts/kokoro/cjk_blob.h"
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
@@ -44,83 +45,6 @@ constexpr char32_t kSecondaryStress = U'ˌ';
 constexpr absl::string_view kPrimaryStressUtf8 = "ˈ";
 constexpr absl::string_view kSecondaryStressUtf8 = "ˌ";
 constexpr absl::string_view kUnkUtf8 = "❓";
-
-struct DecodedChar {
-  char32_t code_point = 0;
-  size_t byte_length = 0;
-};
-
-DecodedChar DecodeUtf8At(absl::string_view text, size_t offset) {
-  const auto b0 = static_cast<uint8_t>(text[offset]);
-  if (b0 < 0x80) {
-    return {b0, 1};
-  }
-  if ((b0 & 0xE0) == 0xC0 && offset + 1 < text.size()) {
-    const auto b1 = static_cast<uint8_t>(text[offset + 1]);
-    if ((b1 & 0xC0) == 0x80) {
-      return {static_cast<char32_t>(((b0 & 0x1F) << 6) | (b1 & 0x3F)), 2};
-    }
-  }
-  if ((b0 & 0xF0) == 0xE0 && offset + 2 < text.size()) {
-    const auto b1 = static_cast<uint8_t>(text[offset + 1]);
-    const auto b2 = static_cast<uint8_t>(text[offset + 2]);
-    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-      return {static_cast<char32_t>(((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) |
-                                    (b2 & 0x3F)),
-              3};
-    }
-  }
-  if ((b0 & 0xF8) == 0xF0 && offset + 3 < text.size()) {
-    const auto b1 = static_cast<uint8_t>(text[offset + 1]);
-    const auto b2 = static_cast<uint8_t>(text[offset + 2]);
-    const auto b3 = static_cast<uint8_t>(text[offset + 3]);
-    if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
-      return {static_cast<char32_t>(((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) |
-                                    ((b2 & 0x3F) << 6) | (b3 & 0x3F)),
-              4};
-    }
-  }
-  return {b0, 1};
-}
-
-void AppendCodePointUtf8(char32_t cp, std::string& out) {
-  if (cp <= 0x7F) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp <= 0x7FF) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp <= 0xFFFF) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-std::u32string Utf8ToU32(absl::string_view text) {
-  std::u32string out;
-  out.reserve(text.size());
-  size_t i = 0;
-  while (i < text.size()) {
-    const DecodedChar dc = DecodeUtf8At(text, i);
-    out.push_back(dc.code_point);
-    i += dc.byte_length;
-  }
-  return out;
-}
-
-std::string U32ToUtf8(const std::u32string& text) {
-  std::string out;
-  out.reserve(text.size() * 2);
-  for (char32_t cp : text) {
-    AppendCodePointUtf8(cp, out);
-  }
-  return out;
-}
 
 bool IsDiphthong(char32_t cp) {
   switch (cp) {
@@ -268,11 +192,11 @@ bool IsLexiconOrd(char32_t cp) {
 
 bool AllLexiconOrds(absl::string_view word) {
   for (size_t i = 0; i < word.size();) {
-    const DecodedChar dc = DecodeUtf8At(word, i);
+    const Utf8CodePoint dc = DecodeUtf8CodePoint(word, i);
     if (!IsLexiconOrd(dc.code_point)) {
       return false;
     }
-    i += dc.byte_length;
+    i += dc.length;
   }
   return true;
 }
@@ -296,16 +220,6 @@ bool IsUnicodeLetter(char32_t cp) {
          (cp >= 0x100 && cp <= 0x024F);
 }
 
-char32_t ToUnicodeLower(char32_t cp) {
-  if (cp >= U'A' && cp <= U'Z') {
-    return cp + (U'a' - U'A');
-  }
-  if (cp >= 0xC0 && cp <= 0xDE && cp != 0xD7) {
-    return cp + 0x20;
-  }
-  return cp;
-}
-
 char32_t ToUnicodeUpper(char32_t cp) {
   if (cp >= U'a' && cp <= U'z') {
     return cp - (U'a' - U'A');
@@ -320,24 +234,13 @@ std::string NormalizeWordUtf8(absl::string_view word) {
   std::string out;
   out.reserve(word.size());
   for (size_t i = 0; i < word.size();) {
-    const DecodedChar dc = DecodeUtf8At(word, i);
+    const Utf8CodePoint dc = DecodeUtf8CodePoint(word, i);
     if (dc.code_point == U'‘' || dc.code_point == U'’') {
       out.push_back('\'');
     } else {
-      AppendCodePointUtf8(dc.code_point, out);
+      AppendUtf8(dc.code_point, out);
     }
-    i += dc.byte_length;
-  }
-  return out;
-}
-
-std::string LowercaseUtf8(absl::string_view word) {
-  std::string out;
-  out.reserve(word.size());
-  for (size_t i = 0; i < word.size();) {
-    const DecodedChar dc = DecodeUtf8At(word, i);
-    AppendCodePointUtf8(ToUnicodeLower(dc.code_point), out);
-    i += dc.byte_length;
+    i += dc.length;
   }
   return out;
 }
@@ -347,12 +250,12 @@ std::string CapitalizeUtf8(absl::string_view word) {
   out.reserve(word.size());
   bool first = true;
   for (size_t i = 0; i < word.size();) {
-    const DecodedChar dc = DecodeUtf8At(word, i);
-    AppendCodePointUtf8(
-        first ? ToUnicodeUpper(dc.code_point) : ToUnicodeLower(dc.code_point),
+    const Utf8CodePoint dc = DecodeUtf8CodePoint(word, i);
+    AppendUtf8(
+        first ? ToUnicodeUpper(dc.code_point) : ToLowerLatin(dc.code_point),
         out);
     first = false;
-    i += dc.byte_length;
+    i += dc.length;
   }
   return out;
 }
@@ -384,12 +287,12 @@ bool IsAllUpperAlphaAscii(absl::string_view word) {
 bool IsRestLowerUtf8(absl::string_view word) {
   bool first = true;
   for (size_t i = 0; i < word.size();) {
-    const DecodedChar dc = DecodeUtf8At(word, i);
+    const Utf8CodePoint dc = DecodeUtf8CodePoint(word, i);
     if (!first && IsUnicodeUpper(dc.code_point)) {
       return false;
     }
     first = false;
-    i += dc.byte_length;
+    i += dc.length;
   }
   return true;
 }
@@ -413,7 +316,7 @@ std::optional<std::string> AltCaseKey(absl::string_view key) {
   if (u32.size() < 2) {
     return std::nullopt;
   }
-  const std::string low = LowercaseUtf8(key);
+  const std::string low = ToLowerUtf8(key);
   const std::string cap = CapitalizeUtf8(low);
   if (key == low) {
     if (key != cap) {
@@ -455,7 +358,7 @@ std::string RestressPhonemes(const std::u32string& ps) {
   for (const PosChar& item : items) {
     out.push_back(item.cp);
   }
-  return U32ToUtf8(out);
+  return CodePointsToUtf8(out);
 }
 
 std::optional<std::string> ApplyStress(std::optional<std::string> ps_opt,
@@ -485,7 +388,7 @@ std::optional<std::string> ApplyStress(std::optional<std::string> ps_opt,
         out.push_back(cp);
       }
     }
-    return U32ToUtf8(out);
+    return CodePointsToUtf8(out);
   }
   if (s == -1.0 || ((s == 0.0 || s == -0.5) && has_primary)) {
     std::u32string out;
@@ -496,7 +399,7 @@ std::optional<std::string> ApplyStress(std::optional<std::string> ps_opt,
       }
       out.push_back(cp == kPrimaryStress ? kSecondaryStress : cp);
     }
-    return U32ToUtf8(out);
+    return CodePointsToUtf8(out);
   }
   if ((s == 0.0 || s == 0.5 || s == 1.0) && !has_primary && !has_secondary) {
     if (!has_vowel) {
@@ -514,7 +417,7 @@ std::optional<std::string> ApplyStress(std::optional<std::string> ps_opt,
     for (char32_t cp : ps) {
       out.push_back(cp == kSecondaryStress ? kPrimaryStress : cp);
     }
-    return U32ToUtf8(out);
+    return CodePointsToUtf8(out);
   }
   if (s > 1.0 && !has_primary && !has_secondary) {
     if (!has_vowel) {
@@ -725,9 +628,9 @@ struct MToken {
 int TokenCaseScore(absl::string_view text) {
   int score = 0;
   for (size_t i = 0; i < text.size();) {
-    const DecodedChar dc = DecodeUtf8At(text, i);
+    const Utf8CodePoint dc = DecodeUtf8CodePoint(text, i);
     score += IsUnicodeUpper(dc.code_point) ? 2 : 1;
-    i += dc.byte_length;
+    i += dc.length;
   }
   return score;
 }
@@ -1155,7 +1058,7 @@ class EnglishLexicon {
 
   bool IsKnown(absl::string_view word, absl::string_view /*tag*/) const {
     if (!custom_lexicon_.empty() &&
-        custom_lexicon_.contains(LowercaseUtf8(word))) {
+        custom_lexicon_.contains(ToLowerUtf8(word))) {
       return true;
     }
     if (table_.InGold(word) || FindInPairs(word, kSymbols, 4).has_value() ||
@@ -1179,7 +1082,7 @@ class EnglishLexicon {
                        std::optional<double> stress,
                        const TokenContext* ctx) const {
     if (!custom_lexicon_.empty()) {
-      const std::string low = LowercaseUtf8(word);
+      const std::string low = ToLowerUtf8(word);
       if (const auto it = custom_lexicon_.find(low);
           it != custom_lexicon_.end()) {
         return {ApplyStress(it->second, stress), 4};
@@ -1286,7 +1189,7 @@ class EnglishLexicon {
     }
     if (IsUsTau(u32[u32.size() - 2])) {
       std::u32string prefix(u32.begin(), u32.end() - 1);
-      return absl::StrCat(U32ToUtf8(prefix), "ɾᵻd");
+      return absl::StrCat(CodePointsToUtf8(prefix), "ɾᵻd");
     }
     return absl::StrCat(*stem, "ᵻd");
   }
@@ -1324,7 +1227,7 @@ class EnglishLexicon {
       }
     } else if (u32.size() > 1 && last == U't' && IsUsTau(u32[u32.size() - 2])) {
       std::u32string prefix(u32.begin(), u32.end() - 1);
-      return absl::StrCat(U32ToUtf8(prefix), "ɾɪŋ");
+      return absl::StrCat(CodePointsToUtf8(prefix), "ɾɪŋ");
     }
     return absl::StrCat(*stem, "ɪŋ");
   }
@@ -1694,7 +1597,7 @@ class EnglishLexicon {
   PhonemeResult LookupToken(const MToken& t, const TokenContext& ctx) const {
     const std::string word =
         NormalizeWordUtf8(t.alias.has_value() ? *t.alias : t.text);
-    const std::string low = LowercaseUtf8(word);
+    const std::string low = ToLowerUtf8(word);
     std::optional<double> stress;
     if (word != low) {
       stress = (word == absl::AsciiStrToUpper(word)) ? 2.0 : 0.5;
@@ -1745,13 +1648,13 @@ std::vector<std::string> Subtokenize(absl::string_view word) {
       while (j < n && IsApostropheCp(u32[j])) {
         ++j;
       }
-      out.push_back(U32ToUtf8(u32.substr(i, j - i)));
+      out.push_back(CodePointsToUtf8(u32.substr(i, j - i)));
       i = j;
       continue;
     }
     if (IsUnicodeUpper(u32[i]) && i + 2 < n && IsUnicodeUpper(u32[i + 1]) &&
         IsUnicodeLower(u32[i + 2])) {
-      out.push_back(U32ToUtf8(u32.substr(i, 1)));
+      out.push_back(CodePointsToUtf8(u32.substr(i, 1)));
       ++i;
       continue;
     }
@@ -1773,7 +1676,7 @@ std::vector<std::string> Subtokenize(absl::string_view word) {
       }
     }
     if (matched_num) {
-      out.push_back(U32ToUtf8(u32.substr(i, j - i)));
+      out.push_back(CodePointsToUtf8(u32.substr(i, j - i)));
       i = j;
       continue;
     }
@@ -1782,7 +1685,7 @@ std::vector<std::string> Subtokenize(absl::string_view word) {
       while (j < n && (u32[j] == U'-' || u32[j] == U'_')) {
         ++j;
       }
-      out.push_back(U32ToUtf8(u32.substr(i, j - i)));
+      out.push_back(CodePointsToUtf8(u32.substr(i, j - i)));
       i = j;
       continue;
     }
@@ -1792,7 +1695,7 @@ std::vector<std::string> Subtokenize(absl::string_view word) {
         ++j;
       }
       if (j - i >= 2 || j == n) {
-        out.push_back(U32ToUtf8(u32.substr(i, j - i)));
+        out.push_back(CodePointsToUtf8(u32.substr(i, j - i)));
       }
       i = j;
       continue;
@@ -1819,11 +1722,11 @@ std::vector<std::string> Subtokenize(absl::string_view word) {
           break;
         }
       }
-      out.push_back(U32ToUtf8(u32.substr(i, j - i)));
+      out.push_back(CodePointsToUtf8(u32.substr(i, j - i)));
       i = j;
       continue;
     }
-    out.push_back(U32ToUtf8(u32.substr(i, 1)));
+    out.push_back(CodePointsToUtf8(u32.substr(i, 1)));
     ++i;
   }
   return out;
@@ -1928,7 +1831,7 @@ bool MatchApostropheClitic(absl::string_view sc_norm, std::string& stem_out,
                            std::string& suf_out) {
   constexpr absl::string_view kClitics[] = {"'s",  "'ll", "'ve",
                                             "'re", "'d",  "'m"};
-  const std::string low = LowercaseUtf8(sc_norm);
+  const std::string low = ToLowerUtf8(sc_norm);
   for (absl::string_view clitic : kClitics) {
     if (low.size() > clitic.size() && absl::EndsWith(low, clitic)) {
       const size_t cut = sc_norm.size() - clitic.size();
@@ -2037,7 +1940,7 @@ std::vector<MToken> RuleTokenizeRaw(absl::string_view text) {
         trail_toks.push_back({std::string(1, chunk.back()), "."});
         chunk.remove_suffix(1);
       } else if (chunk.back() == '.' && chunk.size() > 1) {
-        const std::string low_c = LowercaseUtf8(chunk);
+        const std::string low_c = ToLowerUtf8(chunk);
         if (InWordSet(low_c, kDottedAbbrs,
                       sizeof(kDottedAbbrs) / sizeof(kDottedAbbrs[0])) ||
             IsMultiDotAcronym(low_c)) {
@@ -2055,8 +1958,8 @@ std::vector<MToken> RuleTokenizeRaw(absl::string_view text) {
         }
       } else if ((chunk.back() == '\'' || absl::EndsWith(chunk, "’")) &&
                  chunk.size() > 1 &&
-                 !absl::EndsWith(LowercaseUtf8(chunk), "s'") &&
-                 !absl::EndsWith(LowercaseUtf8(chunk), "s’")) {
+                 !absl::EndsWith(ToLowerUtf8(chunk), "s'") &&
+                 !absl::EndsWith(ToLowerUtf8(chunk), "s’")) {
         const size_t s_len = chunk.back() == '\'' ? 1 : 3;
         if (chunk.size() > s_len) {
           trail_toks.push_back({"'", "''"});
@@ -2099,7 +2002,7 @@ std::vector<MToken> RuleTokenizeRaw(absl::string_view text) {
             mid_parts.push_back({"%", "NN"});
           } else {
             const std::string sc_norm = NormalizeWordUtf8(sc);
-            const std::string sc_low = LowercaseUtf8(sc_norm);
+            const std::string sc_low = ToLowerUtf8(sc_norm);
             bool handled_contraction = false;
             for (const ContractionSplit& cs : kContractions) {
               if (sc_low == cs.full) {
@@ -2312,12 +2215,12 @@ void AssignPosTags(std::vector<MToken>& toks) {
       continue;
     }
     const std::string& w = t.text;
-    const std::string lw = LowercaseUtf8(w);
+    const std::string lw = ToLowerUtf8(w);
     std::string next_lw;
     bool has_next_lw = false;
     if (idx + 1 < n && !InWordSet(toks[idx + 1].tag, kKeepTags,
                                   sizeof(kKeepTags) / sizeof(kKeepTags[0]))) {
-      next_lw = LowercaseUtf8(toks[idx + 1].text);
+      next_lw = ToLowerUtf8(toks[idx + 1].text);
       has_next_lw = true;
     }
 
@@ -2415,7 +2318,7 @@ std::string PunctTagPhonemes(absl::string_view tag, absl::string_view text) {
       out.push_back(cp);
     }
   }
-  return U32ToUtf8(out);
+  return CodePointsToUtf8(out);
 }
 
 bool IsAsciiVowel(char c) {
@@ -2457,7 +2360,7 @@ void EmitLtsVowel(absl::string_view v, bool can_stress, bool& stressed,
 }
 
 std::string EnglishLts(absl::string_view raw_word, bool british) {
-  std::string w = LowercaseUtf8(raw_word);
+  std::string w = ToLowerUtf8(raw_word);
   while (!w.empty() &&
          (w.front() == '\'' || w.front() == '-' || w.front() == '.')) {
     w.erase(w.begin());
@@ -3377,7 +3280,7 @@ class EnglishG2pEngine {
       return {absl::StrCat(num_ipa, " ", deg_ipa, " ", unit_ipa), 2};
     }
 
-    const std::string low = LowercaseUtf8(t);
+    const std::string low = ToLowerUtf8(t);
     if (const auto direct = FindDirectOov(low); direct.has_value()) {
       return {std::string(*direct), 2};
     }
@@ -3428,7 +3331,7 @@ class EnglishG2pEngine {
     while (!core.empty() && core.back() == '.') {
       core.remove_suffix(1);
     }
-    const std::string core_low = LowercaseUtf8(core);
+    const std::string core_low = ToLowerUtf8(core);
     if (const auto direct = FindDirectOov(core_low); direct.has_value()) {
       std::string out(*direct);
       if (absl::EndsWith(t, ".") && !absl::EndsWith(out, ".")) {

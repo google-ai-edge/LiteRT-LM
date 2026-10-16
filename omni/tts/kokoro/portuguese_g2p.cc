@@ -27,98 +27,13 @@
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
 
-bool DecodeUtf8Char(absl::string_view text, size_t& pos, char32_t& cp_out) {
-  if (pos >= text.size()) return false;
-  const auto b0 = static_cast<unsigned char>(text[pos]);
-  if (b0 < 0x80) {
-    cp_out = b0;
-    pos += 1;
-    return true;
-  }
-  if ((b0 & 0xE0) == 0xC0 && pos + 1 < text.size()) {
-    cp_out =
-        ((b0 & 0x1F) << 6) | (static_cast<unsigned char>(text[pos + 1]) & 0x3F);
-    pos += 2;
-    return true;
-  }
-  if ((b0 & 0xF0) == 0xE0 && pos + 2 < text.size()) {
-    cp_out = ((b0 & 0x0F) << 12) |
-             ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 6) |
-             (static_cast<unsigned char>(text[pos + 2]) & 0x3F);
-    pos += 3;
-    return true;
-  }
-  if ((b0 & 0xF8) == 0xF0 && pos + 3 < text.size()) {
-    cp_out = ((b0 & 0x07) << 18) |
-             ((static_cast<unsigned char>(text[pos + 1]) & 0x3F) << 12) |
-             ((static_cast<unsigned char>(text[pos + 2]) & 0x3F) << 6) |
-             (static_cast<unsigned char>(text[pos + 3]) & 0x3F);
-    pos += 4;
-    return true;
-  }
-  cp_out = b0;
-  pos += 1;
-  return true;
-}
-
-void AppendUtf8Char(char32_t cp, std::string& out) {
-  if (cp < 0x80) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp < 0x800) {
-    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp < 0x10000) {
-    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
-}
-
-char32_t LowercasePortugueseChar(char32_t cp) {
-  if (cp >= U'A' && cp <= U'Z') return cp - U'A' + U'a';
-  switch (cp) {
-    case U'Á':
-      return U'á';
-    case U'À':
-      return U'à';
-    case U'Â':
-      return U'â';
-    case U'Ã':
-      return U'ã';
-    case U'É':
-      return U'é';
-    case U'Ê':
-      return U'ê';
-    case U'Í':
-      return U'í';
-    case U'Ó':
-      return U'ó';
-    case U'Ô':
-      return U'ô';
-    case U'Õ':
-      return U'õ';
-    case U'Ú':
-      return U'ú';
-    case U'Ü':
-      return U'ü';
-    case U'Ç':
-      return U'ç';
-    default:
-      return cp;
-  }
-}
-
 bool IsPortugueseLetter(char32_t cp) {
-  const char32_t lc = LowercasePortugueseChar(cp);
+  const char32_t lc = ToLowerLatin(cp);
   if (lc >= U'a' && lc <= U'z') return true;
   switch (lc) {
     case U'á':
@@ -142,7 +57,7 @@ bool IsPortugueseLetter(char32_t cp) {
 
 bool IsPortugueseUpper(char32_t cp) {
   if (cp >= U'A' && cp <= U'Z') return true;
-  return LowercasePortugueseChar(cp) != cp;
+  return ToLowerLatin(cp) != cp;
 }
 
 bool IsPortugueseVowel(char32_t cp) {
@@ -225,7 +140,7 @@ std::vector<char32_t> ToCodepointsLower(absl::string_view text) {
   std::vector<char32_t> cps;
   size_t pos = 0;
   char32_t cp = 0;
-  while (DecodeUtf8Char(text, pos, cp)) {
+  while (ConsumeUtf8CodePoint(text, pos, cp)) {
     if (cp == 0x0301 && !cps.empty()) {
       switch (cps.back()) {
         case U'a':
@@ -272,18 +187,9 @@ std::vector<char32_t> ToCodepointsLower(absl::string_view text) {
       cps.back() = U'à';
       continue;
     }
-    cps.push_back(LowercasePortugueseChar(cp));
+    cps.push_back(ToLowerLatin(cp));
   }
   return cps;
-}
-
-std::string CodepointsToUtf8(const std::vector<char32_t>& cps) {
-  std::string out;
-  out.reserve(cps.size() * 2);
-  for (char32_t cp : cps) {
-    AppendUtf8Char(cp, out);
-  }
-  return out;
 }
 
 const absl::flat_hash_map<std::string, std::string>& GetAtoneMap() {
@@ -919,7 +825,7 @@ std::vector<Unit> BuildUnits(const std::vector<char32_t>& w) {
       i += 1;
     }
     std::string s;
-    AppendUtf8Char(c, s);
+    AppendUtf8(c, s);
     out.push_back({UnitKind::kConsonant, 0, s, 0});
     i += 1;
   }
@@ -1057,8 +963,8 @@ std::string DiphthongBody(char32_t a, char32_t b) {
   if (a == U'õ' && b == U'e') return "õj";
   if (a == U'ɛ' && b == U'i') return "ɛɪ";
   std::string out;
-  AppendUtf8Char(a, out);
-  AppendUtf8Char(b, out);
+  AppendUtf8(a, out);
+  AppendUtf8(b, out);
   return out;
 }
 
@@ -1111,7 +1017,7 @@ std::string PhonemizePortugueseWordByRules(const std::vector<char32_t>& w_cps,
     } else if (vb == U'õ') {
       body = "õ";
     } else {
-      AppendUtf8Char(vb, body);
+      AppendUtf8(vb, body);
     }
 
     const bool nasal_coda = (nxt != nullptr && !nxt->is_nucleus &&
@@ -1395,7 +1301,7 @@ std::vector<RawToken> TokenizePortugueseText(absl::string_view text) {
   while (pos < text.size()) {
     const size_t start = pos;
     char32_t cp = 0;
-    DecodeUtf8Char(text, pos, cp);
+    ConsumeUtf8CodePoint(text, pos, cp);
     if (cp == U' ' || cp == U'\t' || cp == U'\n' || cp == U'\r') {
       continue;
     }
@@ -1418,16 +1324,16 @@ std::vector<RawToken> TokenizePortugueseText(absl::string_view text) {
     // Check digits (and optional º / ª ordinal suffix)
     if (cp >= U'0' && cp <= U'9') {
       std::string digits;
-      AppendUtf8Char(cp, digits);
+      AppendUtf8(cp, digits);
       bool is_ord = false;
       while (pos < text.size()) {
         const size_t next_pos = pos;
         char32_t next_cp = 0;
-        DecodeUtf8Char(text, pos, next_cp);
+        ConsumeUtf8CodePoint(text, pos, next_cp);
         if (next_cp >= U'0' && next_cp <= U'9') {
-          AppendUtf8Char(next_cp, digits);
+          AppendUtf8(next_cp, digits);
         } else if (next_cp == U'º' || next_cp == U'ª') {
-          AppendUtf8Char(next_cp, digits);
+          AppendUtf8(next_cp, digits);
           is_ord = true;
           break;
         } else {
@@ -1441,15 +1347,15 @@ std::vector<RawToken> TokenizePortugueseText(absl::string_view text) {
     // Check word letters
     if (IsPortugueseLetter(cp)) {
       std::string word;
-      AppendUtf8Char(cp, word);
+      AppendUtf8(cp, word);
       size_t char_count = 1;
       const bool first_upper = IsPortugueseUpper(cp);
       while (pos < text.size()) {
         const size_t next_pos = pos;
         char32_t next_cp = 0;
-        DecodeUtf8Char(text, pos, next_cp);
+        ConsumeUtf8CodePoint(text, pos, next_cp);
         if (IsPortugueseLetter(next_cp)) {
-          AppendUtf8Char(next_cp, word);
+          AppendUtf8(next_cp, word);
           char_count += 1;
         } else {
           pos = next_pos;
@@ -1477,10 +1383,10 @@ char32_t FirstPhonemeCodepointAfterStress(absl::string_view ph,
   size_t pos = 0;
   char32_t cp = 0;
   second_cp = 0;
-  while (DecodeUtf8Char(ph, pos, cp)) {
+  while (ConsumeUtf8CodePoint(ph, pos, cp)) {
     if (cp == U'ˈ' || cp == U'ˌ') continue;
     size_t next_pos = pos;
-    DecodeUtf8Char(ph, next_pos, second_cp);
+    ConsumeUtf8CodePoint(ph, next_pos, second_cp);
     return cp;
   }
   return 0;
@@ -1529,7 +1435,6 @@ bool IsVowelPhonemeCp(char32_t cp) {
       return false;
   }
 }
-
 
 // Ordinal stems without their gender vowel, as Host Kokoro's espeak-ng reads
 // them: units 1..9 and tens 10..90, indexed by digit.
@@ -1618,7 +1523,7 @@ absl::StatusOr<std::string> PortugueseG2p::WordToIpa(
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) const {
   const std::vector<char32_t> cps = ToCodepointsLower(word);
   if (cps.empty()) return std::string("");
-  const std::string lw = CodepointsToUtf8(cps);
+  const std::string lw = CodePointsToUtf8(cps);
   if (const auto it = custom_lexicon.find(lw); it != custom_lexicon.end()) {
     return it->second;
   }
@@ -1719,7 +1624,7 @@ absl::StatusOr<std::string> PortugueseG2p::TextToIpa(
     }
     if (tok.is_word) {
       const std::vector<char32_t> cps = ToCodepointsLower(tok.text);
-      const std::string lw = CodepointsToUtf8(cps);
+      const std::string lw = CodePointsToUtf8(cps);
       if (const auto it = custom_lexicon.find(lw); it != custom_lexicon.end()) {
         words.push_back({true, it->second, lw});
         continue;

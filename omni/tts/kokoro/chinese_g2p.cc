@@ -41,6 +41,7 @@
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/tts/kokoro/cjk_blob.h"
+#include "omni/tts/kokoro/unicode_utils.h"
 
 namespace litert::omni::tts::kokoro {
 namespace {
@@ -65,36 +66,6 @@ double ReadLeDouble(const char* ptr) {
   return val;
 }
 
-int Utf8CharLength(absl::string_view text, int offset) {
-  const auto lead = static_cast<uint8_t>(text[offset]);
-  const int remaining = static_cast<int>(text.size()) - offset;
-  if (lead < 0x80) return 1;
-  if ((lead & 0xE0) == 0xC0 && remaining >= 2) return 2;
-  if ((lead & 0xF0) == 0xE0 && remaining >= 3) return 3;
-  if ((lead & 0xF8) == 0xF0 && remaining >= 4) return 4;
-  return 1;
-}
-
-uint32_t DecodeUtf8CodePoint(absl::string_view text, int offset, int& length) {
-  const int len = Utf8CharLength(text, offset);
-  length = len;
-  const auto* u = reinterpret_cast<const uint8_t*>(text.data() + offset);
-  if (len == 1) return u[0];
-  if (len == 2) {
-    return ((static_cast<uint32_t>(u[0]) & 0x1F) << 6) |
-           (static_cast<uint32_t>(u[1]) & 0x3F);
-  }
-  if (len == 3) {
-    return ((static_cast<uint32_t>(u[0]) & 0x0F) << 12) |
-           ((static_cast<uint32_t>(u[1]) & 0x3F) << 6) |
-           (static_cast<uint32_t>(u[2]) & 0x3F);
-  }
-  return ((static_cast<uint32_t>(u[0]) & 0x07) << 18) |
-         ((static_cast<uint32_t>(u[1]) & 0x3F) << 12) |
-         ((static_cast<uint32_t>(u[2]) & 0x3F) << 6) |
-         (static_cast<uint32_t>(u[3]) & 0x3F);
-}
-
 // Matches `jieba.re_han_default`:
 // `re.compile("([\u4E00-\u9FD5a-zA-Z0-9+#&._%-]+)")`.
 bool IsJiebaHanCodePoint(uint32_t cp) {
@@ -110,7 +81,7 @@ std::vector<int> Utf8CharEnds(absl::string_view text) {
   std::vector<int> ends;
   int offset = 0;
   while (offset < static_cast<int>(text.size())) {
-    offset += Utf8CharLength(text, offset);
+    offset += static_cast<int>(DecodeUtf8CodePoint(text, offset).length);
     ends.push_back(offset);
   }
   return ends;
@@ -158,24 +129,6 @@ absl::StatusOr<std::unique_ptr<cppjieba::DictTrie>> CreateDictTrie(
   precomputed.max_weight = max_weight;
   precomputed.median_weight = 0.5 * (precomputed.min_weight + max_weight);
   return std::make_unique<cppjieba::DictTrie>(precomputed);
-}
-
-void EncodeUtf8Rune(uint32_t cp, std::string& out) {
-  if (cp <= 0x7F) {
-    out.push_back(static_cast<char>(cp));
-  } else if (cp <= 0x7FF) {
-    out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else if (cp <= 0xFFFF) {
-    out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  } else {
-    out.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-  }
 }
 
 // Unpacks the HMM parameters from the `zh-lexicon` blob into `cache_dir` in the
@@ -250,7 +203,7 @@ absl::StatusOr<std::string> UnpackHmmModelToCacheDir(
           ReadLe32(hmm_ec.data() + (base + i) * sizeof(uint32_t));
       const double prob =
           ReadLeDouble(hmm_ep.data() + (base + i) * sizeof(double));
-      EncodeUtf8Rune(rune, content);
+      AppendUtf8(rune, content);
       absl::StrAppend(&content, ":", prob);
     }
     content.push_back('\n');
@@ -381,15 +334,15 @@ absl::StatusOr<std::vector<absl::string_view>> ChineseG2p::Segment(
   const int n = static_cast<int>(text.size());
   int offset = 0;
   while (offset < n) {
-    int char_len = 0;
-    const uint32_t cp = DecodeUtf8CodePoint(text, offset, char_len);
+    const Utf8CodePoint decoded = DecodeUtf8CodePoint(text, offset);
+    const uint32_t cp = decoded.code_point;
+    const int char_len = static_cast<int>(decoded.length);
     const bool is_han = IsJiebaHanCodePoint(cp);
     int run_end = offset + char_len;
     while (run_end < n) {
-      int next_len = 0;
-      const uint32_t next_cp = DecodeUtf8CodePoint(text, run_end, next_len);
-      if (IsJiebaHanCodePoint(next_cp) != is_han) break;
-      run_end += next_len;
+      const Utf8CodePoint next = DecodeUtf8CodePoint(text, run_end);
+      if (IsJiebaHanCodePoint(next.code_point) != is_han) break;
+      run_end += static_cast<int>(next.length);
     }
     const absl::string_view block = text.substr(offset, run_end - offset);
     if (is_han) {
@@ -455,7 +408,8 @@ bool ChineseG2p::WordToIpa(absl::string_view word, std::string& out) const {
     }
     int offset = 0;
     while (offset < static_cast<int>(piece.size())) {
-      const int char_len = Utf8CharLength(piece, offset);
+      const int char_len =
+          static_cast<int>(DecodeUtf8CodePoint(piece, offset).length);
       const absl::string_view ch = piece.substr(offset, char_len);
       const int char_pos = characters_.Find(ch);
       if (char_pos < 0) return false;
