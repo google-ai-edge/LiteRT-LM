@@ -90,6 +90,35 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_get_api_version(int* out_major, int* out_minor,
                                              int* out_patch);
 
+// Threading model
+// ---------------
+// NOTE: This section describes the current behavior of the implementation so
+// that callers can use the API safely. It is not a commitment to keep these
+// constraints; they may be changed in a future version.
+//
+// * Handles are not thread-safe: calls that use the same handle MUST NOT
+//   overlap. When single-threaded execution is enabled (see
+//   `litert_lm_engine_settings_set_single_threaded_execution`), this extends to
+//   an engine and every session and conversation created from it.
+// * Stream callbacks can run on library-owned threads that are shared by all
+//   streams of an engine, so a callback should return quickly. When
+//   single-threaded execution is enabled, queued work, and with it the
+//   callbacks, runs only while a caller drives it, for example inside
+//   `litert_lm_conversation_wait_until_done`.
+// * A callback MUST NOT call LiteRT LM functions on the engine that runs the
+//   stream, or on any session or conversation created from it, with one
+//   exception: while handling a chunk that is not final, it may stop the stream
+//   with `litert_lm_session_cancel_process` or
+//   `litert_lm_conversation_cancel_process`. Hand any other such work off to
+//   another thread.
+// * After `litert_lm_session_cancel_process` or
+//   `litert_lm_conversation_cancel_process`, the session or conversation MUST
+//   NOT be reused; only delete it.
+// * The last error is thread-local (see error_reporter.h): read it on the
+//   thread that received the failing status code. Errors that occur after a
+//   stream has started are reported through its chunks instead (see
+//   `litert_lm_stream_chunk_get_error`).
+
 // Opaque pointer for the LiteRT LM Engine.
 //
 // Added in version 0.1.0.
@@ -1118,6 +1147,8 @@ LiteRtLmStatusCode litert_lm_engine_create(
 // engine before destroying the engine itself. Destroying an engine with
 // live children, or using a child after its engine has been destroyed, is
 // undefined behavior.
+//
+// Handles are not thread-safe; see "Threading model" at the top of this file.
 
 // Destroys a LiteRT LM Engine.
 //
@@ -1159,6 +1190,11 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_session_delete(LiteRtLmSession* session);
 
 // Cancels the current processing in the session.
+//
+// This function only requests cancellation and does not wait for it: the
+// stream callback can still run after this function returns. The session MUST
+// NOT be reused afterwards; only delete it. See "Threading model" at the top of
+// this file.
 //
 // @param session The session to cancel processing on.
 // @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
@@ -1712,6 +1748,9 @@ LiteRtLmStatusCode litert_lm_stream_chunk_get_error(
 // function. `chunk` is a pointer to the stream chunk object. It's only valid
 // for the duration of the call.
 //
+// See "Threading model" at the top of this file for where the callback runs
+// and which functions it must not call.
+//
 // Added in version 0.1.0.
 typedef void (*LiteRtLmStreamCallback)(void* callback_data,
                                        const LiteRtLmStreamChunk* chunk);
@@ -1740,7 +1779,8 @@ LiteRtLmStatusCode litert_lm_session_run_decode_async(
 
 // Generates content from the input prompt and streams the response via a
 // callback. This is a non-blocking call that will invoke the callback from a
-// background thread for each chunk.
+// background thread for each chunk (see "Threading model" at the top of this
+// file).
 //
 // @param session The session to use for generation.
 // @param inputs An array of LiteRtLmInputData structs representing the

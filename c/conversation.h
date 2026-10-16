@@ -27,6 +27,9 @@
 #include "c/error_reporter.h"
 #endif
 
+// Conversations follow the "Threading model" and "Ownership and lifetime" rules
+// documented in engine.h.
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -546,7 +549,7 @@ LiteRtLmStatusCode litert_lm_json_response_get_string(
 
 // Sends a message to the conversation and streams the response via a
 // callback. This is a non-blocking call that will invoke the callback from a
-// background thread for each chunk.
+// background thread for each chunk (see "Threading model" in engine.h).
 //
 // @param conversation The conversation to use.
 // @param message_json A JSON string representing the message to send.
@@ -579,6 +582,10 @@ LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
 // `litert_lm_conversation_send_message_stream` functions will handle rendering
 // internally.
 //
+// This function is not safe to call concurrently on the same conversation:
+// each call replaces the string returned by the previous one. See "Threading
+// model" in engine.h.
+//
 // @param conversation The conversation instance.
 // @param message_json A JSON string representing the message to render.
 // @param out_text On success, receives the rendered string. The string is
@@ -600,6 +607,10 @@ LiteRtLmStatusCode litert_lm_conversation_render_message_to_string(
 
 // Renders the preface into a string according to the template.
 //
+// This function is not safe to call concurrently on the same conversation:
+// each call replaces the string returned by the previous one. See "Threading
+// model" in engine.h.
+//
 // @param conversation The conversation instance.
 // @param out_text On success, receives the rendered string. The string is
 //   owned by the `conversation` object and is valid until the next call to
@@ -618,6 +629,11 @@ LiteRtLmStatusCode litert_lm_conversation_render_preface_to_string(
     LiteRtLmConversation* conversation, const char** out_text);
 
 // Cancels the ongoing inference process, for asynchronous inference.
+//
+// This function only requests cancellation and does not wait for it: the
+// stream callback can still run after this function returns. The conversation
+// MUST NOT be reused afterwards; only delete it. See "Threading model" in
+// engine.h.
 //
 // @param conversation The conversation to cancel the inference for.
 // @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
