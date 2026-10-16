@@ -46,6 +46,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/audio/audio_executor_utils.h"
+#include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
@@ -437,10 +438,17 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
   }
   const auto& model_assets =
       engine_settings.GetMutableMainExecutorSettings().GetModelAssets();
-  ABSL_ASSIGN_OR_RETURN(auto model_resources,
-                        BuildLiteRtCompiledModelResources(
-                            model_assets, enable_file_backed_model_loading,
-                            /*enable_file_backed_for_aot_npu=*/is_npu));
+  std::unique_ptr<ModelResources> model_resources;
+  if (ModelResourcesRegistry::Instance().CanLoad(model_assets)) {
+    ABSL_ASSIGN_OR_RETURN(
+        model_resources,
+        ModelResourcesRegistry::Instance().Create(model_assets));
+  } else {
+    ABSL_ASSIGN_OR_RETURN(model_resources,
+                          BuildLiteRtCompiledModelResources(
+                              model_assets, enable_file_backed_model_loading,
+                              /*enable_file_backed_for_aot_npu=*/is_npu));
+  }
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
         BenchmarkInfo::InitPhase::kModelAssets));
@@ -594,6 +602,13 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
 
   switch (main_executor_settings.GetBackend()) {
     default: {
+      const Backend backend = main_executor_settings.GetBackend();
+      if (ExecutorBackendRegistry::Instance().IsRegistered(backend)) {
+        ABSL_ASSIGN_OR_RETURN(
+            executor, ExecutorBackendRegistry::Instance().Create(
+                          backend, main_executor_settings, *model_resources));
+        break;
+      }
       ABSL_ASSIGN_OR_RETURN(executor, CreateLlmLiteRtCompiledModelExecutor(
                                           main_executor_settings,
                                           owned_env->env, *model_resources));

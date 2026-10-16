@@ -40,6 +40,8 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #ifdef ENGINE_ADVANCED
+#include "runtime/executor/executor_backend_registry.h"
+#include "runtime/executor/llm_executor.h"
 #include "runtime/util/file_data_stream.h"
 #endif
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -61,6 +63,36 @@ absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
   RET_CHECK_EQ(engine_types.size(), 1);
   return EngineFactory::CreateDefault(std::move(engine_settings));
 }
+
+#if defined(ENGINE_ADVANCED)
+// Registered (custom) backends are only supported by EngineAdvancedImpl.
+TEST(EngineTest, CreateEngine_RegisteredBackendReturningNullExecutorFails) {
+  ASSERT_OK_AND_ASSIGN(
+      const Backend backend,
+      ExecutorBackendRegistry::Instance().TryRegister(
+          "engine_test_null_executor_backend",
+          [](const LlmExecutorSettings&,
+             ModelResources&) -> absl::StatusOr<std::unique_ptr<LlmExecutor>> {
+            return nullptr;
+          }));
+  absl::Cleanup unregister = [backend] {
+    ExecutorBackendRegistry::Instance().Unregister(backend).IgnoreError();
+  };
+
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(task_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings,
+                       EngineSettings::CreateDefault(model_assets, backend));
+
+  EXPECT_THAT(
+      CreateEngine(std::move(engine_settings)),
+      testing::status::StatusIs(absl::StatusCode::kInternal,
+                                ::testing::HasSubstr("null llm_executor")));
+}
+#endif  // ENGINE_ADVANCED
 
 TEST(EngineTest, CreateEngine_WithoutCache) {
   auto task_path =
