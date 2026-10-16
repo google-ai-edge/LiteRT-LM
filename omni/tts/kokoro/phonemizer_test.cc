@@ -685,6 +685,22 @@ TEST(PhonemizerTest, HindiPhonemization) {
       << "Expected non-empty phoneme sequence for Hindi text.";
 }
 
+TEST(PhonemizerTest, ItalianPhonemization) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("it"));
+  EXPECT_EQ(phonemizer->Language(), "it");
+
+  std::string text = "Ciao, questo è un test in italiano.";
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
+  EXPECT_FALSE(ipa.empty()) << "Italian IPA should not be empty.";
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds(text));
+  EXPECT_GE(tokens.size(), 2);
+  EXPECT_EQ(tokens.front(), 0);  // BOS
+  EXPECT_EQ(tokens.back(), 0);   // EOS
+  EXPECT_GT(tokens.size(), 2);
+}
+
 TEST(PhonemizerTest, PortuguesePhonemization) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("pt-br"));
   EXPECT_EQ(phonemizer->Language(), "pt-br");
@@ -1108,6 +1124,21 @@ TEST(PhonemizerTest, PortugueseUsesPortugueseG2pWithoutEspeak) {
               ::absl_testing::IsOkAndHolds("kokˈoɾʊ"));
 }
 
+TEST(PhonemizerTest, ItalianUsesItalianG2pWithoutEspeak) {
+  absl::flat_hash_map<std::string, std::string> custom_lexicon = {
+      {"kokoro", "kokˈoro"},
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer,
+      KokoroPhonemizer::Create(/*espeak_data_dir=*/"", "it", custom_lexicon));
+  EXPECT_EQ(phonemizer->Language(), "it");
+  EXPECT_THAT(phonemizer->TextToIpa("Il treno per Milano parte dal binario 4."),
+              ::absl_testing::IsOkAndHolds(
+                  "il trˈɛno per milˈano pˈarte dal binˈario kwˈatːro."));
+  EXPECT_THAT(phonemizer->WordToIpa("kokoro"),
+              ::absl_testing::IsOkAndHolds("kokˈoro"));
+}
+
 #if defined(LITERT_LM_ESPEAK_NG_ENABLED)
 TEST(PhonemizerTest, FrenchPhonemization) {
   // Regression test: "fr-fr" is not a name `espeak_SetVoiceByName` resolves, so
@@ -1213,22 +1244,6 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
     }
     EXPECT_TRUE(tokens_matched);
   }
-}
-
-TEST(PhonemizerTest, ItalianPhonemization) {
-  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("it"));
-  EXPECT_EQ(phonemizer->Language(), "it");
-
-  std::string text = "Ciao, questo è un test in italiano.";
-  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
-  EXPECT_FALSE(ipa.empty()) << "Italian IPA should not be empty.";
-
-  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
-                       phonemizer->TextToPhonemeIds(text));
-  EXPECT_GE(tokens.size(), 2);
-  EXPECT_EQ(tokens.front(), 0);  // BOS
-  EXPECT_EQ(tokens.back(), 0);   // EOS
-  EXPECT_GT(tokens.size(), 2);
 }
 
 TEST(PhonemizerTest, EspeakVoiceIsReselectedWhenLanguageChangesBack) {

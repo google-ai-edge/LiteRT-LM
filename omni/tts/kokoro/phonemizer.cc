@@ -49,6 +49,7 @@
 #include "omni/tts/kokoro/common.h"
 #include "omni/tts/kokoro/english_g2p.h"
 #include "omni/tts/kokoro/hindi_g2p.h"
+#include "omni/tts/kokoro/italian_g2p.h"
 #include "omni/tts/kokoro/japanese_g2p.h"
 #include "omni/tts/kokoro/portuguese_g2p.h"
 #include "omni/tts/kokoro/spanish_g2p.h"
@@ -732,6 +733,10 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
                         kokoro::PortugueseG2p::Create());
   phonemizer->portuguese_g2p_ =
       std::make_unique<kokoro::PortugueseG2p>(std::move(pt_g2p));
+  ABSL_ASSIGN_OR_RETURN(kokoro::ItalianG2p it_g2p,
+                        kokoro::ItalianG2p::Create());
+  phonemizer->italian_g2p_ =
+      std::make_unique<kokoro::ItalianG2p>(std::move(it_g2p));
 
   if (!text_norm_rules.empty()) {
     ABSL_ASSIGN_OR_RETURN(phonemizer->text_normalizer_,
@@ -861,6 +866,9 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
   }
   if (language_ == "pt-br" && portuguese_g2p_ != nullptr) {
     return portuguese_g2p_->WordToIpa(word, custom_lexicon_);
+  }
+  if (language_ == "it" && italian_g2p_ != nullptr) {
+    return italian_g2p_->WordToIpa(word, custom_lexicon_);
   }
 
   if (ContainsHanzi(word)) {
@@ -1150,6 +1158,9 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
   }
   if (language_ == "pt-br" && portuguese_g2p_ != nullptr) {
     return portuguese_g2p_->TextToIpa(text, custom_lexicon_);
+  }
+  if (language_ == "it" && italian_g2p_ != nullptr) {
+    return italian_g2p_->TextToIpa(text, custom_lexicon_);
   }
 
   if (language_ == "ja") {
