@@ -1278,7 +1278,30 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::EnsureMtpDrafterLoaded() {
                                           env_, *resources_, executor_settings_,
                                           *compiled_model_, *embedding_lookup_,
                                           ple_manager_opt, executor_metadata_));
-  return absl::OkStatus();
+  return MaybeUpdateVerifierSamplerConfig();
+}
+
+absl::Status
+LlmLiteRtCompiledModelExecutorBase::MaybeUpdateVerifierSamplerConfig() {
+  if (mtp_drafter_ == nullptr || sampler_ == nullptr) {
+    return absl::OkStatus();
+  }
+  proto::SamplerParameters sampler_params = GreedySamplerParams();
+  if (llm_context_->runtime_config().sampler_params.has_value() &&
+      llm_context_->runtime_config().sampler_params->type() !=
+          proto::SamplerParameters::TYPE_UNSPECIFIED) {
+    sampler_params = llm_context_->runtime_config().sampler_params.value();
+  }
+  std::shared_ptr<std::default_random_engine> rand_gen;
+  if (rand_gen == nullptr) {
+    // The session sampler owns a generator seeded with the session seed. Give
+    // the verifier an independent stream rather than a second generator with
+    // the same seed (which would correlate its draws with the session's).
+    constexpr int32_t kVerifierSeedSalt = 0x56455249;  // "VERI"
+    sampler_params.set_seed(sampler_params.seed() ^ kVerifierSeedSalt);
+  }
+  return mtp_drafter_->UpdateVerifierSamplerConfig(sampler_params,
+                                                   std::move(rand_gen));
 }
 
 absl::StatusOr<std::vector<std::vector<int>>>
@@ -1738,7 +1761,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
     ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
   }
 
-  return absl::OkStatus();
+  return MaybeUpdateVerifierSamplerConfig();
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::SwapSamplerInputTensors() {

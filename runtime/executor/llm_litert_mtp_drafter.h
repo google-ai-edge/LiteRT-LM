@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,9 +41,11 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/state_interface.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
 
@@ -61,6 +64,24 @@ inline int CountAcceptedPrefix(absl::Span<const int> verifier_ids,
   }
   return accepted;
 }
+
+// Owns a random number generator seeded with the last requested seed. The
+// generator is only recreated when the seed changes, so that repeated requests
+// with the same seed continue its stream instead of restarting it.
+class SeededRandomEngine {
+ public:
+  std::shared_ptr<std::default_random_engine> Get(int32_t seed) {
+    if (engine_ == nullptr || seed != seed_) {
+      engine_ = std::make_shared<std::default_random_engine>(seed);
+      seed_ = seed;
+    }
+    return engine_;
+  }
+
+ private:
+  std::shared_ptr<std::default_random_engine> engine_;
+  int32_t seed_ = 0;
+};
 
 // Statistics of the last successful `LlmLiteRtMtpDrafter::Draft()` call.
 struct MtpRoundStats {
@@ -120,6 +141,17 @@ class LlmLiteRtMtpDrafter {
       int position, int token_id, std::optional<TensorBuffer> activations,
       StateInterface& state, const Constraint* constraint = nullptr);
 
+  // Reconfigures the verifier sampler to sample from `sampler_params` with the
+  // shared random number generator `rand_gen` (typically the session sampler's
+  // configuration and generator), recreating it if its top-k capacity is too
+  // small. If `rand_gen` is null, the verifier uses its own generator seeded
+  // with `sampler_params.seed()`, which is only reseeded when the seed changes.
+  // The drafter sampler stays greedy, which keeps the exact-match acceptance
+  // lossless with respect to the verifier's distribution.
+  absl::Status UpdateVerifierSamplerConfig(
+      const proto::SamplerParameters& sampler_params,
+      std::shared_ptr<std::default_random_engine> rand_gen);
+
   const MtpRoundStats& last_round_stats() const { return last_round_stats_; }
 
  private:
@@ -129,7 +161,8 @@ class LlmLiteRtMtpDrafter {
       const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
       std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
       std::unique_ptr<Sampler> drafter_sampler,
-      std::unique_ptr<Sampler> verifier_sampler,
+      std::unique_ptr<Sampler> verifier_sampler, const Environment& env,
+      Backend sampler_backend, ActivationDataType verifier_logits_data_type,
       std::vector<std::string> kv_cache_input_names,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           drafter_input_buffers,
@@ -154,6 +187,9 @@ class LlmLiteRtMtpDrafter {
         ple_manager_(ple_manager),
         drafter_sampler_(std::move(drafter_sampler)),
         verifier_sampler_(std::move(verifier_sampler)),
+        env_(env),
+        sampler_backend_(sampler_backend),
+        verifier_logits_data_type_(verifier_logits_data_type),
         kv_cache_input_names_(std::move(kv_cache_input_names)),
         drafter_input_buffers_(std::move(drafter_input_buffers)),
         drafter_output_buffers_(std::move(drafter_output_buffers)),
@@ -230,8 +266,18 @@ class LlmLiteRtMtpDrafter {
 
   // Greedy sampler with batch size 1.
   std::unique_ptr<Sampler> drafter_sampler_;
-  // Greedy sampler with batch size G + 1, where G is the number of draft steps.
+  // Sampler with batch size 1 and sequence size G + 1, where G is the number
+  // of draft steps. Greedy unless reconfigured by
+  // `UpdateVerifierSamplerConfig()`.
   std::unique_ptr<Sampler> verifier_sampler_;
+  // Arguments needed to recreate `verifier_sampler_`.
+  const Environment& env_;
+  const Backend sampler_backend_;
+  const ActivationDataType verifier_logits_data_type_;
+  // The top-k capacity of `verifier_sampler_`.
+  int verifier_sampler_max_top_k_ = 1;
+  // The verifier's generator when no shared generator is supplied.
+  SeededRandomEngine verifier_own_rand_gen_;
 
   // The names of the key/value cache input tensors for the MTP drafter model.
   std::vector<std::string> kv_cache_input_names_;

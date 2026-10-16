@@ -257,13 +257,17 @@ cc_test(
     name = "sampler_factory_test",
     srcs = ["sampler_factory_test.cc"],
     deps = [
+        ":sampler",
         ":sampler_factory",
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
     ],
 )

@@ -18,7 +18,9 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/sampler.h"
@@ -48,6 +50,34 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
     std::optional<int> sequence_size = std::nullopt,
     std::optional<int> vocab_size = std::nullopt,
     std::optional<ActivationDataType> activation_data_type = std::nullopt);
+
+// Reconfigures `sampler` with `sampler_params` and `rand_gen`.
+//
+// GPU samplers fix their top-k capacity at creation. If `sampler_params.k()`
+// exceeds `max_top_k` (the capacity of `sampler`), or `sampler` is null, the
+// sampler is first recreated with `CreateSampler()` (with the remaining
+// arguments) and `max_top_k` is updated. If recreation fails, `sampler` and
+// `max_top_k` are left unchanged.
+// Then `sampler->UpdateConfig()` is called with `batch_size` and `rand_gen`.
+//
+// `UpdateConfig()` ignores `sampler_params.seed()`: a non-null `rand_gen`
+// replaces the sampler's generator, so that the sampler shares the caller's
+// random stream, and a null `rand_gen` keeps the existing generator. The seed
+// therefore only takes effect when the sampler is recreated; pass a generator
+// to apply a new seed.
+absl::Status UpdateOrRecreateSampler(
+    std::unique_ptr<Sampler>& sampler, int& max_top_k, Backend backend,
+    int batch_size, const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine> rand_gen,
+    std::optional<std::reference_wrapper<const litert::Environment>> env =
+        std::nullopt,
+    std::optional<int> sequence_size = std::nullopt,
+    std::optional<int> vocab_size = std::nullopt,
+    std::optional<ActivationDataType> activation_data_type = std::nullopt);
+
+// Returns TOP_P parameters with k = 1 (i.e. greedy sampling), temperature 1 and
+// seed 0.
+proto::SamplerParameters GreedySamplerParams();
 
 }  // namespace litert::lm
 

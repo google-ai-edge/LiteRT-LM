@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -80,13 +81,7 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(
     const Environment& env, Backend backend, int output_heads,
     int sequence_size, int vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
-  proto::SamplerParameters sampler_params;
-  sampler_params.set_type(proto::SamplerParameters::TOP_P);
-  sampler_params.set_k(1);
-  sampler_params.set_p(0.0f);
-  sampler_params.set_temperature(1.0f);
-  sampler_params.set_seed(0);
-  return CreateSampler(backend, output_heads, std::move(sampler_params), env,
+  return CreateSampler(backend, output_heads, GreedySamplerParams(), env,
                        sequence_size, vocab_size, activation_data_type);
 }
 
@@ -438,14 +433,30 @@ LlmLiteRtMtpDrafter::Create(
   return absl::WrapUnique(new LlmLiteRtMtpDrafter(
       std::move(mtp_drafter_model), std::move(drafter_signature), base_model,
       std::move(verify_signature), base_model_desc, embedding_manager,
-      ple_manager, std::move(drafter_sampler), std::move(verifier_sampler),
-      std::move(kv_cache_input_names), std::move(mtp_drafter_input_buffers),
+      ple_manager, std::move(drafter_sampler), std::move(verifier_sampler), env,
+      backend, verifier_logits_data_type, std::move(kv_cache_input_names),
+      std::move(mtp_drafter_input_buffers),
       std::move(mtp_drafter_output_buffers), std::move(verifier_input_buffers),
       std::move(verifier_output_buffers), std::move(drafter_id_tensor),
       std::move(verifier_id_tensor), num_draft_steps,
       std::move(drafter_model_signatures), std::move(verifier_model_signatures),
       vocab_size, GetAttentionMaskParams(executor_metadata),
       std::move(drafter_mask_runner), std::move(verifier_mask_runner)));
+}
+
+absl::Status LlmLiteRtMtpDrafter::UpdateVerifierSamplerConfig(
+    const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine> rand_gen) {
+  if (rand_gen == nullptr) {
+    // The sampler ignores `sampler_params.seed()` unless it is recreated, so
+    // hand it a generator for the seed explicitly.
+    rand_gen = verifier_own_rand_gen_.Get(sampler_params.seed());
+  }
+  return UpdateOrRecreateSampler(
+      verifier_sampler_, verifier_sampler_max_top_k_, sampler_backend_,
+      /*batch_size=*/1, sampler_params, std::move(rand_gen), std::cref(env_),
+      /*sequence_size=*/num_draft_steps_ + 1, vocab_size_,
+      verifier_logits_data_type_);
 }
 
 absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(

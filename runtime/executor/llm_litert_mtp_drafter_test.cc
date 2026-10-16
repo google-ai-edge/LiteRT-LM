@@ -14,11 +14,16 @@
 
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -257,6 +262,178 @@ TEST(LlmLiteRtMtpDrafterTest,
   const std::vector<int> drafted = {10, 20, 30};
   const std::vector<int> short_verifier = {10, 20};
   EXPECT_EQ(CountAcceptedPrefix(short_verifier, drafted), 2);
+}
+
+// A toy first-order "language model" over a small vocabulary, used to check
+// that exact-match verification with a *sampling* verifier and a *greedy*
+// drafter emits tokens from the verifier's distribution (speculative sampling).
+constexpr int kVocab = 5;
+using Distribution = std::array<double, kVocab>;
+
+// Target (verifier) next-token distributions, indexed by the previous token.
+constexpr std::array<Distribution, kVocab> kTarget = {{
+    {0.10, 0.40, 0.20, 0.20, 0.10},
+    {0.30, 0.05, 0.25, 0.10, 0.30},
+    {0.15, 0.15, 0.15, 0.40, 0.15},
+    {0.50, 0.10, 0.10, 0.10, 0.20},
+    {0.05, 0.20, 0.45, 0.10, 0.20},
+}};
+
+// Greedy drafter proposals, indexed by the previous token. They differ from
+// the argmax of `kTarget` for most rows, so rejections are frequent.
+constexpr std::array<int, kVocab> kDraft = {2, 0, 3, 4, 1};
+
+enum class Verifier { kSampled, kGreedy };
+
+// The target distributions of `kTarget` as samplers, built once.
+std::array<std::discrete_distribution<int>, kVocab> TargetSamplers() {
+  std::array<std::discrete_distribution<int>, kVocab> samplers;
+  for (int i = 0; i < kVocab; ++i) {
+    samplers[i] =
+        std::discrete_distribution<int>(kTarget[i].begin(), kTarget[i].end());
+  }
+  return samplers;
+}
+
+int Argmax(const Distribution& p) {
+  return static_cast<int>(
+      std::distance(p.begin(), std::max_element(p.begin(), p.end())));
+}
+
+// Generates the first `num_tokens` tokens after `start` with option-B MTP
+// rounds of `num_draft_steps` drafted tokens each. A `kSampled` verifier
+// samples every position independently from the target distribution
+// conditioned on the drafted prefix; a `kGreedy` verifier picks its argmax.
+std::vector<int> GenerateWithMtpRounds(
+    int start, int num_tokens, int num_draft_steps, Verifier verifier,
+    std::array<std::discrete_distribution<int>, kVocab>& target_samplers,
+    std::mt19937_64& rng) {
+  std::vector<int> emitted;
+  int last = start;
+  while (static_cast<int>(emitted.size()) < num_tokens) {
+    std::vector<int> drafted(num_draft_steps);
+    for (int i = 0; i < num_draft_steps; ++i) {
+      drafted[i] = kDraft[i == 0 ? last : drafted[i - 1]];
+    }
+    std::vector<int> verifier_ids(num_draft_steps + 1);
+    for (int i = 0; i <= num_draft_steps; ++i) {
+      const int previous = i == 0 ? last : drafted[i - 1];
+      verifier_ids[i] = verifier == Verifier::kSampled
+                            ? target_samplers[previous](rng)
+                            : Argmax(kTarget[previous]);
+    }
+    const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
+    emitted.insert(emitted.end(), drafted.begin(), drafted.begin() + accepted);
+    emitted.push_back(verifier_ids[accepted]);
+    last = emitted.back();
+  }
+  emitted.resize(num_tokens);
+  return emitted;
+}
+
+// Returns the counts of the first token emitted after `start` over `trials`
+// generations.
+std::vector<int64_t> CountFirstTokens(int start, Verifier verifier,
+                                      int64_t trials, std::mt19937_64& rng) {
+  auto target_samplers = TargetSamplers();
+  std::vector<int64_t> counts(kVocab, 0);
+  for (int64_t t = 0; t < trials; ++t) {
+    ++counts[GenerateWithMtpRounds(start, /*num_tokens=*/1,
+                                   /*num_draft_steps=*/3, verifier,
+                                   target_samplers, rng)[0]];
+  }
+  return counts;
+}
+
+double ChiSquared(const std::vector<int64_t>& observed,
+                  const std::vector<double>& expected_probs, int64_t trials) {
+  double chi2 = 0.0;
+  for (int i = 0; i < static_cast<int>(observed.size()); ++i) {
+    const double expected = expected_probs[i] * trials;
+    const double diff = observed[i] - expected;
+    chi2 += diff * diff / expected;
+  }
+  return chi2;
+}
+
+TEST(LlmLiteRtMtpDrafterTest, SampledVerificationFirstTokenFollowsTarget) {
+  constexpr int64_t kTrials = 200000;
+  constexpr int kStart = 0;
+  std::mt19937_64 rng(1234);
+  const std::vector<int64_t> counts =
+      CountFirstTokens(kStart, Verifier::kSampled, kTrials, rng);
+  const std::vector<double> expected(kTarget[kStart].begin(),
+                                     kTarget[kStart].end());
+  // Critical value of the chi-squared distribution with 4 degrees of freedom
+  // at p = 0.001.
+  EXPECT_LT(ChiSquared(counts, expected, kTrials), 18.47);
+}
+
+TEST(LlmLiteRtMtpDrafterTest,
+     SampledVerificationJointOfTwoTokensFollowsTarget) {
+  // The second token is emitted either in the same round (after an accepted
+  // draft) or in the next round (after a rejection); both paths must combine
+  // into the target joint distribution p(x1 | start) * p(x2 | x1).
+  constexpr int64_t kTrials = 200000;
+  constexpr int kStart = 3;
+  std::mt19937_64 rng(5678);
+  auto target_samplers = TargetSamplers();
+  std::vector<int64_t> counts(kVocab * kVocab, 0);
+  for (int64_t t = 0; t < kTrials; ++t) {
+    const std::vector<int> tokens =
+        GenerateWithMtpRounds(kStart, /*num_tokens=*/2, /*num_draft_steps=*/3,
+                              Verifier::kSampled, target_samplers, rng);
+    ++counts[tokens[0] * kVocab + tokens[1]];
+  }
+  std::vector<double> expected(kVocab * kVocab);
+  for (int a = 0; a < kVocab; ++a) {
+    for (int b = 0; b < kVocab; ++b) {
+      expected[a * kVocab + b] = kTarget[kStart][a] * kTarget[a][b];
+    }
+  }
+  // Critical value of the chi-squared distribution with 24 degrees of freedom
+  // at p = 0.001.
+  EXPECT_LT(ChiSquared(counts, expected, kTrials), 51.18);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, GreedyVerificationDoesNotFollowTarget) {
+  // Control: with an argmax verifier the emitted token is deterministic, so the
+  // chi-squared check of `SampledVerificationFirstTokenFollowsTarget` must
+  // reject it.
+  constexpr int64_t kTrials = 200000;
+  constexpr int kStart = 0;
+  std::mt19937_64 rng(1234);
+  const std::vector<int64_t> counts =
+      CountFirstTokens(kStart, Verifier::kGreedy, kTrials, rng);
+  EXPECT_EQ(counts[Argmax(kTarget[kStart])], kTrials);
+  const std::vector<double> expected(kTarget[kStart].begin(),
+                                     kTarget[kStart].end());
+  EXPECT_GT(ChiSquared(counts, expected, kTrials), 18.47);
+}
+
+TEST(SeededRandomEngineTest, KeepsStreamWhileSeedIsUnchanged) {
+  SeededRandomEngine engine;
+  std::default_random_engine reference(7);
+  const auto first = engine.Get(7);
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ((*first)(), reference());
+  const auto again = engine.Get(7);
+  EXPECT_EQ(again, first);
+  EXPECT_EQ((*again)(), reference());
+}
+
+TEST(SeededRandomEngineTest, ReseedsWhenSeedChanges) {
+  SeededRandomEngine engine;
+  const auto seven = engine.Get(7);
+  seven->discard(1);
+  const auto eight = engine.Get(8);
+  EXPECT_NE(eight, seven);
+  std::default_random_engine reference_eight(8);
+  EXPECT_EQ((*eight)(), reference_eight());
+  // Going back to a previous seed restarts its stream.
+  const auto seven_again = engine.Get(7);
+  std::default_random_engine reference_seven(7);
+  EXPECT_EQ((*seven_again)(), reference_seven());
 }
 
 }  // namespace

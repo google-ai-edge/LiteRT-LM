@@ -1418,6 +1418,41 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   EXPECT_EQ(stats->mtp_rounds(), 0);
 }
 
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     Decode_WithoutDrafterSkipsVerifierSamplerConfig) {
+  // Without an MTP drafter, keeping the verifier sampler in sync with the
+  // session sampler must not affect plain decoding (the verifier is only
+  // configured once a drafter exists).
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources, TfLiteModelResources::Create(
+                                                 model_assets,
+                                                 /*with_mtp_drafter=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
+  ASSERT_TRUE(executor);
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  auto input_tokens_buffer =
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
+  ASSERT_TRUE(input_tokens_buffer);
+  inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+  ASSERT_OK(executor->Decode());
+  ExecutorDecodeParams disabled;
+  disabled.SetEnableSpeculativeDecoding(false);
+  ASSERT_OK(executor->Decode(disabled));
+}
+
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
   const std::filesystem::path model_path =
       std::filesystem::path(::testing::SrcDir()) /

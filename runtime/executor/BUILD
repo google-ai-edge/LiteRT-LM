@@ -1330,6 +1330,7 @@ cc_library(
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/executor/litert:state",
         "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
     ],

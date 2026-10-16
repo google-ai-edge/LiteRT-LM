@@ -287,6 +287,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // loaded.
   absl::Status EnsureMtpDrafterLoaded();
 
+  // Configures the MTP drafter's verifier sampler to match the session sampler
+  // (parameters and random generator), or greedy if the session has no sampler
+  // parameters. No-op until both the drafter and the session sampler exist.
+  absl::Status MaybeUpdateVerifierSamplerConfig();
+
   // Attempts to create a compiled model for the MTP drafter.
   // Returns a unique_ptr to the compiled model if the resource is found, or
   // nullptr if the drafter model is optional and missing.

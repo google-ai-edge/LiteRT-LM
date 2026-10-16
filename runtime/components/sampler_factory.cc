@@ -787,4 +787,34 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
   }
 }
 
+absl::Status UpdateOrRecreateSampler(
+    std::unique_ptr<Sampler>& sampler, int& max_top_k, Backend backend,
+    int batch_size, const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine> rand_gen,
+    std::optional<std::reference_wrapper<const litert::Environment>> env,
+    std::optional<int> sequence_size, std::optional<int> vocab_size,
+    std::optional<ActivationDataType> activation_data_type) {
+  if (sampler == nullptr || sampler_params.k() > max_top_k) {
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<Sampler> new_sampler,
+        CreateSampler(backend, batch_size, sampler_params, env, sequence_size,
+                      vocab_size, activation_data_type));
+    RET_CHECK(new_sampler != nullptr)
+        << "No sampler for sampler type " << sampler_params.type();
+    sampler = std::move(new_sampler);
+    max_top_k = sampler_params.k();
+  }
+  return sampler->UpdateConfig(sampler_params, batch_size, std::move(rand_gen));
+}
+
+proto::SamplerParameters GreedySamplerParams() {
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_type(proto::SamplerParameters::TOP_P);
+  sampler_params.set_k(1);
+  sampler_params.set_p(0.0f);
+  sampler_params.set_temperature(1.0f);
+  sampler_params.set_seed(0);
+  return sampler_params;
+}
+
 }  // namespace litert::lm
