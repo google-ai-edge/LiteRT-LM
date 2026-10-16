@@ -73,7 +73,7 @@ struct OmniEngineSettings {
 // `model_name` (or a path containing a registered model name) with registered
 // model and session configurations.
 //
-// Supported ASR model names (registered in `omni/asr/`):
+// Supported ASR model names (registered in `omni/speech2text/`):
 //   - "parakeet-tdt-0.6b-v3"
 //   - "parakeet-ctc-0.6b"
 //   - "moonshine-tiny"
@@ -81,7 +81,7 @@ struct OmniEngineSettings {
 //   - "qwen3-asr-0.6b"
 //   - "tinygemma-asr"
 //
-// Supported TTS model names (registered in `omni/tts/`):
+// Supported TTS model names (registered in `omni/text2speech/`):
 //   - "kokoro" / "kokoro-82m"
 //   - "qwen3-tts" / "qwen3"
 //

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
 
@@ -234,5 +235,31 @@ cc_test(
         "//runtime/proto:text2image_metadata_cc_proto",
         "//runtime/proto:text2image_session_config_cc_proto",
         "//support/util:test_utils",
+    ],
+)
+
+cc_binary(
+    name = "text2image_runner",
+    srcs = ["text2image_runner.cc"],
+    deps = [
+        ":bonsai_flux2",  # build_cleaner: keep
+        ":flux2_klein",  # build_cleaner: keep
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:initialize",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+        "//omni:omni_engine",
+        "//omni:omni_session",
+        "//omni/base:io_types",
+        "//omni/base:model_utils",
+        "//runtime/proto:image_gen_model_type_cc_proto",
+        "//runtime/proto:text2image_metadata_cc_proto",
+        "//runtime/proto:text2image_session_config_cc_proto",
+        "@stb//:stb_image_write",
     ],
 )

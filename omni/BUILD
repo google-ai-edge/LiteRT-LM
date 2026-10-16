@@ -186,22 +186,22 @@ cc_test(
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_options",
-        "//omni/asr:asr_session",
-        "//omni/asr:audio_preprocessor",
-        "//omni/asr:audio_source",
-        "//omni/asr:detokenizer",
-        "//omni/asr:levenshtein_text_merger",
-        "//omni/asr:moonshine",  # build_cleaner: keep
-        "//omni/asr:speech_recognizer",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "//omni/speech2text:asr_session",
+        "//omni/speech2text:audio_preprocessor",
+        "//omni/speech2text:audio_source",
+        "//omni/speech2text:detokenizer",
+        "//omni/speech2text:levenshtein_text_merger",
+        "//omni/speech2text:moonshine",  # build_cleaner: keep
+        "//omni/speech2text:speech_recognizer",
         "//omni/text2image:bonsai_flux2",  # build_cleaner: keep
-        "//omni/tts:kokoro",  # build_cleaner: keep
-        "//omni/tts:stream_text_source",
-        "//omni/tts:text_chunk_utils",
-        "//omni/tts:text_source",
-        "//omni/tts:tts_session",
-        "//omni/tts:vocoder",
+        "//omni/text2speech:kokoro",  # build_cleaner: keep
+        "//omni/text2speech:stream_text_source",
+        "//omni/text2speech:text_chunk_utils",
+        "//omni/text2speech:text_source",
+        "//omni/text2speech:tts_session",
+        "//omni/text2speech:vocoder",
         "//runtime/components:model_resources",
         "//runtime/framework:threadpool",
         "//runtime/proto:asr_metadata_cc_proto",
@@ -228,17 +228,17 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
-        "//omni/asr:moonshine",  # build_cleaner: keep
-        "//omni/asr:parakeet_ctc",  # build_cleaner: keep
-        "//omni/asr:parakeet_tdt",  # build_cleaner: keep
-        "//omni/asr:qwen3_asr",  # build_cleaner: keep
-        "//omni/asr:whisper",  # build_cleaner: keep
         "//omni/base:io_types",
         "//omni/base:model_utils",
+        "//omni/speech2text:moonshine",  # build_cleaner: keep
+        "//omni/speech2text:parakeet_ctc",  # build_cleaner: keep
+        "//omni/speech2text:parakeet_tdt",  # build_cleaner: keep
+        "//omni/speech2text:qwen3_asr",  # build_cleaner: keep
+        "//omni/speech2text:whisper",  # build_cleaner: keep
         "//omni/text2image:bonsai_flux2",  # build_cleaner: keep
         "//omni/text2image:flux2_klein",  # build_cleaner: keep
-        "//omni/tts:kokoro",  # build_cleaner: keep
-        "//omni/tts:qwen3_tts",  # build_cleaner: keep
+        "//omni/text2speech:kokoro",  # build_cleaner: keep
+        "//omni/text2speech:qwen3_tts",  # build_cleaner: keep
         "//runtime/executor:default_static_gpu_accelerator",
         "//runtime/proto:asr_session_config_cc_proto",
         "//runtime/proto:text2image_session_config_cc_proto",
