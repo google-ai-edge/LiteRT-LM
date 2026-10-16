@@ -29,8 +29,6 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/ascii.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
@@ -59,162 +57,6 @@ using ::litert::support::SentencePieceTokenizer;
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 using ::litert::support::Tokenizer;
 
-// Deprecated: Use the capability-scoped Protobuf enums instead, e.g.
-// proto::LlmMetadata::TfLiteModelType or proto::EmbeddingMetadata::
-// TfLiteModelType. While migrating, use ModelTypeToLlmTfLiteModelType() /
-// ModelTypeToEmbeddingTfLiteModelType() and their inverse functions below to
-// bridge between the legacy and the Protobuf enums.
-enum class ModelType {
-  kUnknown = 0,              // Placeholder for uninitialized model type.
-  kTfLitePrefillDecode = 1,  // The base model is used for prefill and decode.
-  kTfLiteEmbedder = 2,
-  kTfLitePerLayerEmbedder = 3,
-  kTfLiteAux = 4,
-  kTfLiteAudioFrontend = 9,  // Audio frontend model is weight-less Short-Time
-                             // Fourier Transform (STFT) to convert audio to
-                             // spectrogram.
-  kTfLiteAudioEncoderHw = 5,
-  kTfLiteAudioAdapter = 10,
-  kTfLiteEndOfAudio = 6,
-  kTfLiteVisionAdapter = 7,
-  kTfLiteEndOfVision = 12,  // The end of vision token model.
-  kTfLiteVisionEncoder = 8,
-  kArtisanTextDecoder = 11,  // The text decoder model for the artisan gpu.
-  kTfLiteMtpDrafter = 13,    // The MTP drafter model.
-  kTfLiteMtpAux = 14,        // The MTP auxiliary model.
-  kTfLiteTextEncoder = 15,   // The text encoder for an embedding model.
-};
-
-// Utility function to convert a string to ModelType. It's case insensitive.
-inline absl::StatusOr<ModelType> StringToModelType(
-    absl::string_view model_type_str) {
-  const std::string lower_case_model_type_str =
-      absl::AsciiStrToLower(model_type_str);
-  if (lower_case_model_type_str == "tf_lite_prefill_decode") {
-    return ModelType::kTfLitePrefillDecode;
-  } else if (lower_case_model_type_str == "tf_lite_embedder") {
-    return ModelType::kTfLiteEmbedder;
-  } else if (lower_case_model_type_str == "tf_lite_per_layer_embedder") {
-    return ModelType::kTfLitePerLayerEmbedder;
-  } else if (lower_case_model_type_str == "tf_lite_aux") {
-    return ModelType::kTfLiteAux;
-  } else if (lower_case_model_type_str == "tf_lite_audio_frontend") {
-    return ModelType::kTfLiteAudioFrontend;
-  } else if (lower_case_model_type_str == "tf_lite_audio_encoder_hw") {
-    return ModelType::kTfLiteAudioEncoderHw;
-  } else if (lower_case_model_type_str == "tf_lite_audio_adapter") {
-    return ModelType::kTfLiteAudioAdapter;
-  } else if (lower_case_model_type_str == "tf_lite_end_of_audio") {
-    return ModelType::kTfLiteEndOfAudio;
-  } else if (lower_case_model_type_str == "tf_lite_vision_adapter") {
-    return ModelType::kTfLiteVisionAdapter;
-  } else if (lower_case_model_type_str == "tf_lite_end_of_vision") {
-    return ModelType::kTfLiteEndOfVision;
-  } else if (lower_case_model_type_str == "tf_lite_vision_encoder") {
-    return ModelType::kTfLiteVisionEncoder;
-  } else if (lower_case_model_type_str == "tf_lite_artisan_text_decoder") {
-    return ModelType::kArtisanTextDecoder;
-  } else if (lower_case_model_type_str == "tf_lite_mtp_drafter") {
-    return ModelType::kTfLiteMtpDrafter;
-  } else if (lower_case_model_type_str == "tf_lite_mtp_aux") {
-    return ModelType::kTfLiteMtpAux;
-  } else if (lower_case_model_type_str == "tf_lite_text_encoder") {
-    return ModelType::kTfLiteTextEncoder;
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unknown model type: ", model_type_str));
-  }
-}
-
-// Utility function to convert a ModelType to string.
-inline std::string ModelTypeToString(ModelType model_type) {
-  switch (model_type) {
-    case ModelType::kTfLitePrefillDecode:
-      return "TF_LITE_PREFILL_DECODE";
-    case ModelType::kTfLiteEmbedder:
-      return "TF_LITE_EMBEDDER";
-    case ModelType::kTfLitePerLayerEmbedder:
-      return "TF_LITE_PER_LAYER_EMBEDDER";
-    case ModelType::kTfLiteAux:
-      return "TF_LITE_AUX";
-    case ModelType::kTfLiteAudioFrontend:
-      return "TF_LITE_AUDIO_FRONTEND";
-    case ModelType::kTfLiteAudioEncoderHw:
-      return "TF_LITE_AUDIO_ENCODER_HW";
-    case ModelType::kTfLiteAudioAdapter:
-      return "TF_LITE_AUDIO_ADAPTER";
-    case ModelType::kTfLiteEndOfAudio:
-      return "TF_LITE_END_OF_AUDIO";
-    case ModelType::kTfLiteVisionAdapter:
-      return "TF_LITE_VISION_ADAPTER";
-    case ModelType::kTfLiteEndOfVision:
-      return "TF_LITE_END_OF_VISION";
-    case ModelType::kTfLiteVisionEncoder:
-      return "TF_LITE_VISION_ENCODER";
-    case ModelType::kArtisanTextDecoder:
-      return "TF_LITE_ARTISAN_TEXT_DECODER";
-    case ModelType::kTfLiteMtpDrafter:
-      return "TF_LITE_MTP_DRAFTER";
-    case ModelType::kTfLiteMtpAux:
-      return "TF_LITE_MTP_AUX";
-    case ModelType::kTfLiteTextEncoder:
-      return "TF_LITE_TEXT_ENCODER";
-    case ModelType::kUnknown:
-      return "UNKNOWN";
-    default:
-      return "INVALID";
-  }
-}
-
-// Converts a legacy C++ ModelType to the LLM capability-scoped Protobuf enum.
-// Used to bridge the legacy ModelType to proto::LlmMetadata::TfLiteModelType
-// while callers are migrated.
-//
-// args:
-//   model_type: The legacy ModelType to convert.
-// returns:
-//   The matching proto::LlmMetadata::TfLiteModelType. kUnknown maps to
-//   TF_LITE_MODEL_TYPE_UNSPECIFIED. Returns InvalidArgumentError for values
-//   without an LLM counterpart (e.g. kTfLiteTextEncoder, which belongs to the
-//   embedding capability; use ModelTypeToEmbeddingTfLiteModelType() instead).
-absl::StatusOr<proto::LlmMetadata::TfLiteModelType>
-ModelTypeToLlmTfLiteModelType(ModelType model_type);
-
-// Converts the LLM capability-scoped Protobuf enum to the legacy C++ ModelType.
-//
-// args:
-//   model_type: The proto::LlmMetadata::TfLiteModelType to convert.
-// returns:
-//   The matching legacy ModelType. TF_LITE_MODEL_TYPE_UNSPECIFIED maps to
-//   kUnknown. Returns InvalidArgumentError for unrecognized enum values.
-absl::StatusOr<ModelType> LlmTfLiteModelTypeToModelType(
-    proto::LlmMetadata::TfLiteModelType model_type);
-
-// Converts a legacy C++ ModelType to the embedding capability-scoped Protobuf
-// enum. Used to bridge the legacy ModelType to
-// proto::EmbeddingMetadata::TfLiteModelType while callers are migrated, e.g.
-// for embedding models that contain a text encoder.
-//
-// args:
-//   model_type: The legacy ModelType to convert.
-// returns:
-//   The matching proto::EmbeddingMetadata::TfLiteModelType. kUnknown maps to
-//   TF_LITE_MODEL_TYPE_UNSPECIFIED. Returns InvalidArgumentError for values
-//   without an embedding counterpart (e.g. kTfLitePrefillDecode).
-absl::StatusOr<proto::EmbeddingMetadata::TfLiteModelType>
-ModelTypeToEmbeddingTfLiteModelType(ModelType model_type);
-
-// Converts the embedding capability-scoped Protobuf enum to the legacy C++
-// ModelType.
-//
-// args:
-//   model_type: The proto::EmbeddingMetadata::TfLiteModelType to convert.
-// returns:
-//   The matching legacy ModelType. TF_LITE_MODEL_TYPE_UNSPECIFIED maps to
-//   kUnknown. Returns InvalidArgumentError for unrecognized enum values.
-absl::StatusOr<ModelType> EmbeddingTfLiteModelTypeToModelType(
-    proto::EmbeddingMetadata::TfLiteModelType model_type);
-
 // LITE_RUNTIME compatible helper functions converting capability-scoped
 // Protobuf TfLiteModelType enums to canonical lowercase wire strings.
 std::string TfLiteModelTypeToWireString(
@@ -227,7 +69,6 @@ std::string TfLiteModelTypeToWireString(
     proto::AsrMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
     proto::Text2ImageMetadata::TfLiteModelType model_type);
-std::string TfLiteModelTypeToWireString(ModelType model_type);
 
 // Parses a wire string (e.g. "tf_lite_prefill_decode") or enum name (e.g.
 // "TF_LITE_PREFILL_DECODE") into the LLM capability-scoped Protobuf enum. The
@@ -246,9 +87,7 @@ absl::StatusOr<proto::LlmMetadata::TfLiteModelType> ParseLlmTfLiteModelType(
 // proto::EmbeddingMetadata::TfLiteModelType. Used to constrain the generic
 // per-capability template wrappers that forward to by-name (wire string) APIs.
 template <typename TfLiteModelTypeT>
-constexpr bool kIsTfLiteModelType =
-    std::is_enum_v<TfLiteModelTypeT> &&
-    !std::is_same_v<TfLiteModelTypeT, ModelType>;
+constexpr bool kIsTfLiteModelType = std::is_enum_v<TfLiteModelTypeT>;
 
 // True for the capability-scoped Protobuf TfLiteModelType enums other than the
 // LLM one, e.g. proto::EmbeddingMetadata::TfLiteModelType,
@@ -293,11 +132,7 @@ class ModelResources {
   // yet. And the model is created from memory mapped file, so physical memory
   // is only allocated when the model is actually used.
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      proto::LlmMetadata::TfLiteModelType model_type);
-
-  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
-  virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type) = 0;
 
   // Returns the litert model for the given model type wire string.
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
@@ -325,11 +160,7 @@ class ModelResources {
   // Prefer to use GetTFLiteModel() if possible, as this function will leave
   // the model lifecycle management to the caller.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      proto::LlmMetadata::TfLiteModelType model_type);
-
-  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
-  virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type) = 0;
 
   // Returns the TFLite model buffer for the given model type wire string.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
@@ -352,11 +183,7 @@ class ModelResources {
 
   // Returns the section start offset and end offset.
   virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      proto::LlmMetadata::TfLiteModelType model_type);
-
-  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
-  virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type) = 0;
 
   // Returns the section start offset and end offset for the given model type
   // wire string.
@@ -375,11 +202,7 @@ class ModelResources {
 
   // Returns the region of the requested model type in the ModelResources.
   virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      proto::LlmMetadata::TfLiteModelType model_type);
-
-  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
-  virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type) = 0;
 
   // Returns the region of the requested model type wire string in the
   // ModelResources.
@@ -400,11 +223,7 @@ class ModelResources {
   // Returns the TFLite model backend constraint. When there is no constraint
   // for the given model type, it will return an nullopt.
   virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
-      proto::LlmMetadata::TfLiteModelType model_type);
-
-  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
-  virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type) = 0;
 
   // Returns the TFLite model backend constraint for the given model type wire
   // string, or nullopt if there is none.
@@ -426,11 +245,7 @@ class ModelResources {
   // prefer activation type for the given model type, it will return an
   // nullopt.
   virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
-      proto::LlmMetadata::TfLiteModelType model_type);
-
-  // Deprecated: Use the capability-scoped Protobuf enum overload instead.
-  virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type);
+      proto::LlmMetadata::TfLiteModelType model_type) = 0;
 
   // Returns the TFLite model prefer activation type for the given model type
   // wire string, or nullopt if there is none.

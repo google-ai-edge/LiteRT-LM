@@ -36,18 +36,12 @@ namespace {
 
 using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
-using ::litert::lm::EmbeddingTfLiteModelTypeToModelType;
 using ::litert::lm::LitertLmLoader;
-using ::litert::lm::LlmTfLiteModelTypeToModelType;
 using ::litert::lm::ModelAssetBundleResources;
 using ::litert::lm::ModelResourcesLitertLm;
 using ::litert::lm::ModelResourcesTask;
-using ::litert::lm::ModelType;
-using ::litert::lm::ModelTypeToEmbeddingTfLiteModelType;
-using ::litert::lm::ModelTypeToLlmTfLiteModelType;
-using ::litert::lm::ModelTypeToString;
+using ::litert::lm::ParseLlmTfLiteModelType;
 using ::litert::lm::ScopedFile;
-using ::litert::lm::StringToModelType;
 using ::litert::lm::TfLiteModelTypeToWireString;
 using ::litert::lm::proto::EmbeddingMetadata;
 using ::litert::lm::proto::LlmMetadata;
@@ -251,158 +245,33 @@ TEST(ModelResourcesTest, GetTFLiteModelSectionFileRegion) {
               testing::status::StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST(ModelTypeConversionTest, StringToModelType) {
-  auto result = StringToModelType("tf_lite_prefill_decode");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePrefillDecode);
-
-  result = StringToModelType("TF_LITE_PREFILL_DECODE");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePrefillDecode);
-
-  result = StringToModelType("tf_lite_embedder");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteEmbedder);
-
-  result = StringToModelType("TF_LITE_EMBEDDER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteEmbedder);
-
-  result = StringToModelType("tf_lite_per_layer_embedder");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePerLayerEmbedder);
-
-  result = StringToModelType("TF_LITE_PER_LAYER_EMBEDDER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePerLayerEmbedder);
-
-  result = StringToModelType("TF_LITE_ARTISAN_TEXT_DECODER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kArtisanTextDecoder);
-
-  result = StringToModelType("tf_lite_mtp_drafter");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteMtpDrafter);
-
-  result = StringToModelType("TF_LITE_MTP_DRAFTER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteMtpDrafter);
-
-  result = StringToModelType("tf_lite_text_encoder");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteTextEncoder);
-
-  result = StringToModelType("TF_LITE_TEXT_ENCODER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteTextEncoder);
-
-  result = StringToModelType("unknown");
-  EXPECT_FALSE(result.ok());
+TEST(ParseLlmTfLiteModelTypeTest, ParsesWireStringsCaseInsensitively) {
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_prefill_decode"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_THAT(ParseLlmTfLiteModelType("TF_LITE_PREFILL_DECODE"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_THAT(ParseLlmTfLiteModelType("Tf_Lite_Embedder"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_EMBEDDER));
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_artisan_text_decoder"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER));
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_mtp_drafter"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_MTP_DRAFTER));
 }
 
-TEST(ModelTypeConversionTest, ModelTypeToString) {
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLitePrefillDecode),
-            "TF_LITE_PREFILL_DECODE");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteEmbedder), "TF_LITE_EMBEDDER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLitePerLayerEmbedder),
-            "TF_LITE_PER_LAYER_EMBEDDER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kArtisanTextDecoder),
-            "TF_LITE_ARTISAN_TEXT_DECODER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteMtpDrafter),
-            "TF_LITE_MTP_DRAFTER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteTextEncoder),
-            "TF_LITE_TEXT_ENCODER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kUnknown), "UNKNOWN");
-}
-
-TEST(ModelTypeBridgeTest, LlmRoundTripAndWireStringParity) {
-  for (const ModelType model_type : {
-           ModelType::kTfLitePrefillDecode,
-           ModelType::kTfLiteEmbedder,
-           ModelType::kTfLitePerLayerEmbedder,
-           ModelType::kTfLiteAux,
-           ModelType::kTfLiteAudioFrontend,
-           ModelType::kTfLiteAudioEncoderHw,
-           ModelType::kTfLiteAudioAdapter,
-           ModelType::kTfLiteEndOfAudio,
-           ModelType::kTfLiteVisionAdapter,
-           ModelType::kTfLiteEndOfVision,
-           ModelType::kTfLiteVisionEncoder,
-           ModelType::kArtisanTextDecoder,
-           ModelType::kTfLiteMtpDrafter,
-           ModelType::kTfLiteMtpAux,
-       }) {
-    SCOPED_TRACE(ModelTypeToString(model_type));
-    ASSERT_OK_AND_ASSIGN(const LlmMetadata::TfLiteModelType proto_model_type,
-                         ModelTypeToLlmTfLiteModelType(model_type));
-    EXPECT_EQ(TfLiteModelTypeToWireString(proto_model_type),
-              TfLiteModelTypeToWireString(model_type));
-    EXPECT_THAT(LlmTfLiteModelTypeToModelType(proto_model_type),
-                IsOkAndHolds(model_type));
-  }
-}
-
-TEST(ModelTypeBridgeTest, LlmUnknownMapsToUnspecified) {
-  EXPECT_THAT(ModelTypeToLlmTfLiteModelType(ModelType::kUnknown),
-              IsOkAndHolds(LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED));
-  EXPECT_THAT(LlmTfLiteModelTypeToModelType(
-                  LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
-              IsOkAndHolds(ModelType::kUnknown));
-}
-
-TEST(ModelTypeBridgeTest, LlmRejectsTextEncoderAndInvalidValues) {
-  EXPECT_THAT(ModelTypeToLlmTfLiteModelType(ModelType::kTfLiteTextEncoder),
+TEST(ParseLlmTfLiteModelTypeTest, RejectsUnknownAndNonLlmTypes) {
+  EXPECT_THAT(ParseLlmTfLiteModelType("unknown"),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(LlmTfLiteModelTypeToModelType(
-                  static_cast<LlmMetadata::TfLiteModelType>(999)),
+  // The text encoder belongs to the embedding capability only.
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_text_encoder"),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST(ModelTypeBridgeTest, EmbeddingRoundTripAndWireStringParity) {
-  for (const ModelType model_type : {
-           ModelType::kTfLiteTextEncoder,
-           ModelType::kTfLiteEmbedder,
-           ModelType::kTfLitePerLayerEmbedder,
-           ModelType::kTfLiteVisionEncoder,
-           ModelType::kTfLiteVisionAdapter,
-           ModelType::kTfLiteEndOfVision,
-           ModelType::kTfLiteAudioEncoderHw,
-           ModelType::kTfLiteAudioAdapter,
-           ModelType::kTfLiteAudioFrontend,
-           ModelType::kTfLiteEndOfAudio,
-       }) {
-    SCOPED_TRACE(ModelTypeToString(model_type));
-    ASSERT_OK_AND_ASSIGN(
-        const EmbeddingMetadata::TfLiteModelType proto_model_type,
-        ModelTypeToEmbeddingTfLiteModelType(model_type));
-    EXPECT_EQ(TfLiteModelTypeToWireString(proto_model_type),
-              TfLiteModelTypeToWireString(model_type));
-    EXPECT_THAT(EmbeddingTfLiteModelTypeToModelType(proto_model_type),
-                IsOkAndHolds(model_type));
-  }
-}
-
-TEST(ModelTypeBridgeTest, EmbeddingTextEncoderMapsToEmbedding) {
-  EXPECT_THAT(
-      ModelTypeToEmbeddingTfLiteModelType(ModelType::kTfLiteTextEncoder),
-      IsOkAndHolds(EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
-}
-
-TEST(ModelTypeBridgeTest, EmbeddingUnknownMapsToUnspecified) {
-  EXPECT_THAT(ModelTypeToEmbeddingTfLiteModelType(ModelType::kUnknown),
-              IsOkAndHolds(EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED));
-  EXPECT_THAT(EmbeddingTfLiteModelTypeToModelType(
-                  EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
-              IsOkAndHolds(ModelType::kUnknown));
-}
-
-TEST(ModelTypeBridgeTest, EmbeddingRejectsLlmOnlyAndInvalidValues) {
-  EXPECT_THAT(
-      ModelTypeToEmbeddingTfLiteModelType(ModelType::kTfLitePrefillDecode),
-      StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(EmbeddingTfLiteModelTypeToModelType(
-                  static_cast<EmbeddingMetadata::TfLiteModelType>(999)),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+TEST(TfLiteModelTypeToWireStringTest, ReturnsLowercaseEnumName) {
+  EXPECT_EQ(TfLiteModelTypeToWireString(LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "tf_lite_prefill_decode");
+  EXPECT_EQ(
+      TfLiteModelTypeToWireString(EmbeddingMetadata::TF_LITE_TEXT_ENCODER),
+      "tf_lite_text_encoder");
 }
 
 }  // namespace

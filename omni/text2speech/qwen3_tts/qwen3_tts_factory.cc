@@ -47,6 +47,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -58,9 +59,17 @@ class TalkerLmModelResources : public lm::ModelResources {
   explicit TalkerLmModelResources(std::shared_ptr<lm::ModelResources> inner)
       : inner_(std::move(inner)) {}
 
+  using lm::ModelResources::GetTFLiteModel;
+  using lm::ModelResources::GetTFLiteModelBackendConstraint;
+  using lm::ModelResources::GetTFLiteModelBuffer;
+  using lm::ModelResources::GetTFLiteModelPreferActivationType;
+  using lm::ModelResources::GetTFLiteModelSectionFileRegion;
+  using lm::ModelResources::GetTokenizer;
+  using lm::ModelResources::GetWeightsSectionOffset;
+
   absl::StatusOr<const Model*> GetTFLiteModel(
-      lm::ModelType model_type) override {
-    if (model_type == lm::ModelType::kTfLitePrefillDecode) {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
       return inner_->GetTFLiteModel(lm::proto::TtsMetadata::TF_LITE_TALKER);
     }
     return inner_->GetTFLiteModel(model_type);
@@ -72,8 +81,8 @@ class TalkerLmModelResources : public lm::ModelResources {
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      lm::ModelType model_type) override {
-    if (model_type == lm::ModelType::kTfLitePrefillDecode) {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
       return inner_->GetTFLiteModelBuffer(
           lm::proto::TtsMetadata::TF_LITE_TALKER);
     }
@@ -99,12 +108,12 @@ class TalkerLmModelResources : public lm::ModelResources {
   }
 
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return inner_->GetTFLiteModelBackendConstraint(model_type);
   }
 
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return inner_->GetTFLiteModelPreferActivationType(model_type);
   }
 
@@ -114,12 +123,12 @@ class TalkerLmModelResources : public lm::ModelResources {
   }
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return inner_->GetWeightsSectionOffset(model_type);
   }
 
   absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
-      lm::ModelType model_type) override {
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
     return inner_->GetTFLiteModelSectionFileRegion(model_type);
   }
 

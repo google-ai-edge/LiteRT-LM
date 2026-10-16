@@ -237,6 +237,9 @@ class TfLiteModelType(enum.Enum):
   MTP_DRAFTER = "tf_lite_mtp_drafter"
   MTP_AUX = "tf_lite_mtp_aux"
   TEXT_ENCODER = "tf_lite_text_encoder"
+  #     //runtime/proto/llm_metadata.proto,
+  #     //runtime/proto/embedding_metadata.proto,
+  # )
 
   @classmethod
   def get_enum_from_tf_free_value(cls, tf_free_value: str) -> "TfLiteModelType":
