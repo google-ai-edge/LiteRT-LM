@@ -77,6 +77,7 @@ cc_library(
         ":common",
         ":english_g2p",
         ":japanese_g2p",
+        ":spanish_g2p",
         ":traditional_chinese_converter",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
@@ -511,5 +512,28 @@ cc_test(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "spanish_g2p",
+    srcs = ["spanish_g2p.cc"],
+    hdrs = ["spanish_g2p.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "spanish_g2p_test",
+    srcs = ["spanish_g2p_test.cc"],
+    deps = [
+        ":spanish_g2p",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status:status_matchers",
     ],
 )

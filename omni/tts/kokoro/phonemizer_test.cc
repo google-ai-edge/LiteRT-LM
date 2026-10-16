@@ -633,6 +633,28 @@ TEST(PhonemizerTest, NormalizeMisakiPhonemesFlavors) {
             "kaʊzˈata");
 }
 
+TEST(PhonemizerTest, SpanishPhonemization) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("es"));
+  EXPECT_EQ(phonemizer->Language(), "es");
+
+  std::string text = "El zorro y el gato en el ojo.";
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
+  EXPECT_FALSE(ipa.empty());
+  // Spanish jota 'x' should be preserved for "ojo" / "zorro".
+  EXPECT_TRUE(absl::StrContains(ipa, "x"))
+      << "Expected Spanish jota 'x' in IPA: " << ipa;
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds(text));
+  EXPECT_GE(tokens.size(), 2);
+  EXPECT_EQ(tokens.front(), 0);  // BOS
+  EXPECT_EQ(tokens.back(), 0);   // EOS
+
+  const auto& vocab = GetKokoroVocabMap();
+  int jota_token = vocab.at("x");
+  EXPECT_THAT(tokens, ::testing::Contains(jota_token));
+}
+
 void AppendDouble(double value, std::string& out) {
   char buf[sizeof(double)];
   std::memcpy(buf, &value, sizeof(double));
@@ -997,27 +1019,21 @@ TEST(PhonemizerTest, EnglishWithBundledLexiconUsesEnglishG2pWithoutEspeak) {
               ::absl_testing::IsOkAndHolds("wˈɔːtə"));
 }
 
-#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
-TEST(PhonemizerTest, EspeakVoiceIsReselectedWhenLanguageChangesBack) {
-  // The active espeak voice is cached process-wide so that WordToIpa does not
-  // reselect it for every word (each selection reloads the dictionary and leaks
-  // a voice_t inside libespeak-ng). A stale cache would silently phonemize in
-  // whichever language was used last, so exercise an A -> B -> A cycle and
-  // require that the two A results agree and that B differs from both.
-  ASSERT_OK_AND_ASSIGN(auto phonemizer_en, CreateTestPhonemizer("en-us"));
-  ASSERT_OK_AND_ASSIGN(auto phonemizer_de, CreateTestPhonemizer("de"));
-
-  ASSERT_OK_AND_ASSIGN(std::string en_first,
-                       phonemizer_en->WordToIpa("animal"));
-  ASSERT_OK_AND_ASSIGN(std::string de_ipa, phonemizer_de->WordToIpa("animal"));
-  ASSERT_OK_AND_ASSIGN(std::string en_again,
-                       phonemizer_en->WordToIpa("animal"));
-
-  EXPECT_FALSE(en_first.empty());
-  EXPECT_EQ(en_first, en_again);
-  EXPECT_NE(en_first, de_ipa);
+TEST(PhonemizerTest, SpanishUsesSpanishG2pWithoutEspeak) {
+  absl::flat_hash_map<std::string, std::string> custom_lexicon = {
+      {"kokoro", "kokˈoɾo"},
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer,
+      KokoroPhonemizer::Create(/*espeak_data_dir=*/"", "es", custom_lexicon));
+  EXPECT_EQ(phonemizer->Language(), "es");
+  EXPECT_THAT(phonemizer->TextToIpa("¡Buenos días! ¿Cómo estás?"),
+              ::absl_testing::IsOkAndHolds("bwˈenos ðˈias! kˈomo estˈas?"));
+  EXPECT_THAT(phonemizer->WordToIpa("kokoro"),
+              ::absl_testing::IsOkAndHolds("kokˈoɾo"));
 }
 
+#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
 TEST(PhonemizerTest, DevanagariDandaPunctuation) {
   // Regression test: Devanagari danda '।' (U+0964) should be recognized as
   // sentence-ending punctuation and mapped to '.', rather than swallowed or
@@ -1136,28 +1152,6 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
   }
 }
 
-TEST(PhonemizerTest, SpanishPhonemization) {
-  ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("es"));
-  EXPECT_EQ(phonemizer->Language(), "es");
-
-  std::string text = "El zorro y el gato en el ojo.";
-  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
-  EXPECT_FALSE(ipa.empty());
-  // Spanish jota 'x' should be preserved for "ojo" / "zorro".
-  EXPECT_TRUE(absl::StrContains(ipa, "x"))
-      << "Expected Spanish jota 'x' in IPA: " << ipa;
-
-  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
-                       phonemizer->TextToPhonemeIds(text));
-  EXPECT_GE(tokens.size(), 2);
-  EXPECT_EQ(tokens.front(), 0);  // BOS
-  EXPECT_EQ(tokens.back(), 0);   // EOS
-
-  const auto& vocab = GetKokoroVocabMap();
-  int jota_token = vocab.at("x");
-  EXPECT_THAT(tokens, ::testing::Contains(jota_token));
-}
-
 TEST(PhonemizerTest, HindiPhonemization) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer, CreateTestPhonemizer("hi"));
   EXPECT_EQ(phonemizer->Language(), "hi");
@@ -1206,6 +1200,26 @@ TEST(PhonemizerTest, PortuguesePhonemization) {
   EXPECT_EQ(tokens.front(), 0);  // BOS
   EXPECT_EQ(tokens.back(), 0);   // EOS
   EXPECT_GT(tokens.size(), 2);
+}
+
+TEST(PhonemizerTest, EspeakVoiceIsReselectedWhenLanguageChangesBack) {
+  // The active espeak voice is cached process-wide so that WordToIpa does not
+  // reselect it for every word (each selection reloads the dictionary and leaks
+  // a voice_t inside libespeak-ng). A stale cache would silently phonemize in
+  // whichever language was used last, so exercise an A -> B -> A cycle and
+  // require that the two A results agree and that B differs from both.
+  ASSERT_OK_AND_ASSIGN(auto phonemizer_en, CreateTestPhonemizer("en-us"));
+  ASSERT_OK_AND_ASSIGN(auto phonemizer_de, CreateTestPhonemizer("de"));
+
+  ASSERT_OK_AND_ASSIGN(std::string en_first,
+                       phonemizer_en->WordToIpa("animal"));
+  ASSERT_OK_AND_ASSIGN(std::string de_ipa, phonemizer_de->WordToIpa("animal"));
+  ASSERT_OK_AND_ASSIGN(std::string en_again,
+                       phonemizer_en->WordToIpa("animal"));
+
+  EXPECT_FALSE(en_first.empty());
+  EXPECT_EQ(en_first, en_again);
+  EXPECT_NE(en_first, de_ipa);
 }
 #else
 TEST(PhonemizerTest, EspeakDisabledReturnsPreconditionError) {
