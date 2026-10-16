@@ -680,7 +680,6 @@ absl::StatusOr<Responses> Decode(
   };
 
   std::unique_ptr<Constraint> thinking_budget_constraint;
-  int vocab_size = tokenizer.GetTokens().size();
 
   // Apply the thinking budget constraint whenever thinking is enabled (budget
   // != 0). Even if the budget is -1 (unlimited), the constraint is required to
@@ -693,7 +692,7 @@ absl::StatusOr<Responses> Decode(
     } else {
       thinking_budget_constraint = std::make_unique<ThinkingBudgetConstraint>(
           constraint, *thinking_token_budget, thinking_start_token_ids,
-          thinking_end_token_ids, vocab_size);
+          thinking_end_token_ids, tokenizer.GetTokens().size());
       constraint = thinking_budget_constraint.get();
     }
   }
