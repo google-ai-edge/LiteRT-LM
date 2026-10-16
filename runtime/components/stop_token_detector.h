@@ -99,12 +99,16 @@ class StopTokenDetector {
   // Stores all added stop sequences.
   std::vector<std::vector<int>> stop_sequences_storage_;
 
-  // batch_item_match_progress_[i][k]: current match length for batch item 'i'
-  // against stop_sequences_storage_[k].
-  std::vector<std::vector<int>> batch_item_match_progress_;
+  // Maximum length of any registered stop sequence.
+  size_t max_stop_sequence_length_ = 0;
 
-  // max_batch_item_match_progress_[i]: maximum match length for batch item 'i'
-  // against all stop_sequences_storage_[k].
+  // The token history buffer for each batch item.
+  // batch_item_token_history_[i] stores the last max_stop_sequence_length_
+  // tokens for batch item 'i'.
+  std::vector<std::vector<int>> batch_item_token_history_;
+
+  // max_batch_item_match_progress_[i]: maximum partial match length for batch
+  // item 'i' against all stop_sequences_storage_[k].
   std::vector<int> max_batch_item_match_progress_;
 
   // stop_token_found_[i]: true if batch item 'i' has matched a stop sequence.
