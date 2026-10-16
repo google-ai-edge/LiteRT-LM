@@ -58,8 +58,6 @@ absl::StatusOr<proto::LitertLmMetrics> ToProto(const LitertLmMetrics& metrics) {
 
   proto_metrics.set_peak_mem_mb(metrics.peak_mem_mb);
   proto_metrics.set_peak_private_mb(metrics.peak_private_mb);
-  proto_metrics.set_peak_dmabuf_mb(metrics.peak_dmabuf_mb);
-  proto_metrics.set_dmabuf_buffer_count(metrics.dmabuf_buffer_count);
   if (metrics.peak_accelerator_mb.has_value()) {
     proto_metrics.set_peak_accelerator_mb(*metrics.peak_accelerator_mb);
   }

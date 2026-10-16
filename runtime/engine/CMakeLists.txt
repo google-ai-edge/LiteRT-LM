@@ -52,25 +52,6 @@ target_link_libraries(runtime_engine_cpu_affinity_utils
 )
 
 # ==============================================================================
-# DMA-BUF Utils
-# ==============================================================================
-add_litertlm_library(runtime_engine_dmabuf_util STATIC
-  dmabuf_util.cc
-)
-add_library(LiteRTLM::Runtime::Engine::DmaBufUtil ALIAS runtime_engine_dmabuf_util)
-
-target_include_directories(runtime_engine_dmabuf_util
-  PUBLIC
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_engine_dmabuf_util
-  PUBLIC
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
 # Accelerator Memory Monitor
 # ==============================================================================
 add_litertlm_library(runtime_engine_accelerator_memory_monitor STATIC
@@ -233,7 +214,6 @@ target_link_libraries(runtime_engine_libs INTERFACE
   LiteRTLM::Runtime::Engine::Interface
   LiteRTLM::Runtime::Engine::EmbeddingEngineInterface
   LiteRTLM::Runtime::Engine::CpuAffinityUtils
-  LiteRTLM::Runtime::Engine::DmaBufUtil
   LiteRTLM::Runtime::Engine::AcceleratorMemoryMonitor
   LiteRTLM::Runtime::Engine::Settings
   LiteRTLM::Runtime::Engine::EmbeddingEngineSettings

@@ -42,12 +42,42 @@ struct AcceleratorMemoryUsage {
   // (category name, bytes) pairs. Where a breakdown is available, the entries
   // sum to `total_bytes`. Empty when the platform offers no breakdown.
   std::vector<std::pair<std::string, uint64_t>> breakdown;
+  // Optional per-allocation detail, as (label, bytes) pairs ordered largest
+  // first, for diagnostic logging. Empty when the platform does not expose
+  // individual allocations.
+  std::vector<std::pair<std::string, uint64_t>> allocations;
 };
 
 // Returns the accelerator memory currently used by this process, or
 // std::nullopt when accelerator memory tracking is not supported on this
 // platform.
+//
+// Android: the process's DMA-BUF usage read from /proc/self/fdinfo, broken
+// down by exporter (the dma-buf heap name, e.g. "system-uncached"). This only
+// covers dma-buf heap backed buffers such as AHardwareBuffers, not memory the
+// GPU driver allocates from its own pool, so it is a lower bound.
 std::optional<AcceleratorMemoryUsage> GetProcessAcceleratorMemoryUsage();
+
+// Summary of the DMA-BUF buffers held by the current process, as read from
+// /proc/self/fdinfo on Android.
+struct DmaBufSummary {
+  uint64_t total_bytes = 0;
+  struct Entry {
+    uint64_t inode = 0;
+    uint64_t size_bytes = 0;
+    std::string name;
+    std::string exp_name;
+  };
+  // Ordered largest first.
+  std::vector<Entry> entries;
+};
+
+// Converts a DMA-BUF summary into an AcceleratorMemoryUsage: the breakdown is
+// the total per exporter (largest first) and the allocations are the
+// individual buffers in the order of `dmabuf.entries`. Used by the Android
+// implementation of GetProcessAcceleratorMemoryUsage(); exposed for testing.
+AcceleratorMemoryUsage AcceleratorMemoryUsageFromDmaBuf(
+    const DmaBufSummary& dmabuf);
 
 // Converts bytes to mebibytes.
 float AcceleratorMemoryBytesToMb(uint64_t bytes);
@@ -55,6 +85,11 @@ float AcceleratorMemoryBytesToMb(uint64_t bytes);
 // Formats `usage.breakdown` as "name=1.00 MB, other=2.00 MB". Returns an empty
 // string when there is no breakdown.
 std::string FormatAcceleratorMemoryBreakdown(
+    const AcceleratorMemoryUsage& usage);
+
+// Formats `usage.allocations` for diagnostic logging, one line per allocation
+// of at least 1 MiB, in the order they appear in `usage.allocations`.
+std::vector<std::string> FormatAcceleratorMemoryAllocations(
     const AcceleratorMemoryUsage& usage);
 
 // Tracks the peak accelerator memory usage of the process by sampling

@@ -209,9 +209,9 @@ TEST(LiteRtLmLibTest, RunLiteRtLmWithEmptyModelPathReturnsError) {
 
 // Returns a LitertLmMetrics with one prefill and one decode turn, an "Init
 // Executor" phase of `init_phase` and the given peak memory usage.
-LitertLmMetrics CreateMetrics(absl::Duration init_phase, float peak_mem_mb,
-                              float peak_private_mb,
-                              float peak_dmabuf_mb = 0.0f) {
+LitertLmMetrics CreateMetrics(
+    absl::Duration init_phase, float peak_mem_mb, float peak_private_mb,
+    std::optional<float> peak_accelerator_mb = std::nullopt) {
   BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
   ABSL_CHECK_OK(benchmark_info.InitPhaseRecord(
       BenchmarkInfo::InitPhase::kExecutor, init_phase));
@@ -224,7 +224,7 @@ LitertLmMetrics CreateMetrics(absl::Duration init_phase, float peak_mem_mb,
   metrics.benchmark_info = benchmark_info;
   metrics.peak_mem_mb = peak_mem_mb;
   metrics.peak_private_mb = peak_private_mb;
-  metrics.peak_dmabuf_mb = peak_dmabuf_mb;
+  metrics.peak_accelerator_mb = peak_accelerator_mb;
   return metrics;
 }
 
@@ -247,7 +247,6 @@ TEST(ComputeMedianMetricsTest, NoMetrics) {
   EXPECT_FALSE(aggregated.time_to_first_token_sec.has_value());
   EXPECT_FALSE(aggregated.peak_mem_mb.has_value());
   EXPECT_FALSE(aggregated.peak_private_mb.has_value());
-  EXPECT_FALSE(aggregated.peak_dmabuf_mb.has_value());
   EXPECT_FALSE(aggregated.peak_accelerator_mb.has_value());
   EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb, testing::IsEmpty());
 }
@@ -255,11 +254,11 @@ TEST(ComputeMedianMetricsTest, NoMetrics) {
 TEST(ComputeMedianMetricsTest, OddNumberOfIterations) {
   const std::vector<LitertLmMetrics> metrics = {
       CreateMetrics(absl::Milliseconds(300), /*peak_mem_mb=*/300.0f,
-                    /*peak_private_mb=*/30.0f, /*peak_dmabuf_mb=*/30.0f),
+                    /*peak_private_mb=*/30.0f, /*peak_accelerator_mb=*/30.0f),
       CreateMetrics(absl::Milliseconds(100), /*peak_mem_mb=*/100.0f,
-                    /*peak_private_mb=*/10.0f, /*peak_dmabuf_mb=*/10.0f),
+                    /*peak_private_mb=*/10.0f, /*peak_accelerator_mb=*/10.0f),
       CreateMetrics(absl::Milliseconds(200), /*peak_mem_mb=*/200.0f,
-                    /*peak_private_mb=*/20.0f, /*peak_dmabuf_mb=*/20.0f),
+                    /*peak_private_mb=*/20.0f, /*peak_accelerator_mb=*/20.0f),
   };
 
   const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
@@ -272,7 +271,7 @@ TEST(ComputeMedianMetricsTest, OddNumberOfIterations) {
           absl::Milliseconds(200))));
   EXPECT_EQ(aggregated.peak_mem_mb, 200.0f);
   EXPECT_EQ(aggregated.peak_private_mb, 20.0f);
-  EXPECT_EQ(aggregated.peak_dmabuf_mb, 20.0f);
+  EXPECT_EQ(aggregated.peak_accelerator_mb, 20.0f);
 
   std::vector<double> prefill_speeds;
   std::vector<double> decode_speeds;
@@ -295,13 +294,13 @@ TEST(ComputeMedianMetricsTest, OddNumberOfIterations) {
 TEST(ComputeMedianMetricsTest, EvenNumberOfIterationsAveragesMiddleValues) {
   const std::vector<LitertLmMetrics> metrics = {
       CreateMetrics(absl::Milliseconds(100), /*peak_mem_mb=*/100.0f,
-                    /*peak_private_mb=*/10.0f, /*peak_dmabuf_mb=*/10.0f),
+                    /*peak_private_mb=*/10.0f, /*peak_accelerator_mb=*/10.0f),
       CreateMetrics(absl::Milliseconds(400), /*peak_mem_mb=*/400.0f,
-                    /*peak_private_mb=*/40.0f, /*peak_dmabuf_mb=*/40.0f),
+                    /*peak_private_mb=*/40.0f, /*peak_accelerator_mb=*/40.0f),
       CreateMetrics(absl::Milliseconds(200), /*peak_mem_mb=*/200.0f,
-                    /*peak_private_mb=*/20.0f, /*peak_dmabuf_mb=*/20.0f),
+                    /*peak_private_mb=*/20.0f, /*peak_accelerator_mb=*/20.0f),
       CreateMetrics(absl::Milliseconds(300), /*peak_mem_mb=*/300.0f,
-                    /*peak_private_mb=*/30.0f, /*peak_dmabuf_mb=*/30.0f),
+                    /*peak_private_mb=*/30.0f, /*peak_accelerator_mb=*/30.0f),
   };
 
   const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
@@ -314,7 +313,7 @@ TEST(ComputeMedianMetricsTest, EvenNumberOfIterationsAveragesMiddleValues) {
           absl::Milliseconds(250))));
   EXPECT_EQ(aggregated.peak_mem_mb, 250.0f);
   EXPECT_EQ(aggregated.peak_private_mb, 25.0f);
-  EXPECT_EQ(aggregated.peak_dmabuf_mb, 25.0f);
+  EXPECT_EQ(aggregated.peak_accelerator_mb, 25.0f);
 }
 
 TEST(ComputeMedianMetricsTest, MetricsWithoutBenchmarkInfoAreSkipped) {
@@ -337,7 +336,6 @@ TEST(ComputeMedianMetricsTest, MetricsWithoutBenchmarkInfoAreSkipped) {
   // Peak memory is not reported unless --report_peak_memory_footprint is set.
   EXPECT_FALSE(aggregated.peak_mem_mb.has_value());
   EXPECT_FALSE(aggregated.peak_private_mb.has_value());
-  EXPECT_FALSE(aggregated.peak_dmabuf_mb.has_value());
   EXPECT_FALSE(aggregated.peak_accelerator_mb.has_value());
   EXPECT_THAT(aggregated.peak_accelerator_breakdown_mb, testing::IsEmpty());
 }

@@ -157,8 +157,6 @@ struct LitertLmMetrics {
   std::optional<BenchmarkInfo> benchmark_info;
   float peak_mem_mb = 0.0f;
   float peak_private_mb = 0.0f;
-  float peak_dmabuf_mb = 0.0f;
-  int64_t dmabuf_buffer_count = 0;
   // Peak accelerator (GPU / NPU) memory used by the process, in MB. Unset when
   // accelerator memory tracking is not supported on the platform or peak memory
   // reporting is disabled.
@@ -187,7 +185,6 @@ struct AggregatedLitertLmMetrics {
   // Median peak memory usage, in MB.
   std::optional<float> peak_mem_mb;
   std::optional<float> peak_private_mb;
-  std::optional<float> peak_dmabuf_mb;
   std::optional<float> peak_accelerator_mb;
   // Median of each peak accelerator memory breakdown category, in MB, keyed by
   // the category name. Like `init_phases`, each category is aggregated

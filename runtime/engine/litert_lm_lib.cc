@@ -24,7 +24,6 @@
 #include "runtime/engine/litert_lm_lib.h"
 
 #include "runtime/engine/accelerator_memory_monitor.h"
-#include "runtime/engine/dmabuf_util.h"
 
 #if defined(_WIN32)
 #include <io.h>
@@ -478,25 +477,40 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
   }
 }
 
+// Logs the peak accelerator memory usage: the headline total, the per-category
+// breakdown and the largest individual allocations.
+void LogAcceleratorMemoryUsage(const LiteRtLmSettings& settings,
+                               const AcceleratorMemoryUsage& peak_accelerator) {
+  const float peak_accelerator_mb =
+      AcceleratorMemoryBytesToMb(peak_accelerator.total_bytes);
+  if (!settings.log_sink_file.has_value()) {
+    ABSL_LOG(INFO) << "Peak accelerator memory usage: " << peak_accelerator_mb
+                   << "MB.";
+  } else {
+    ABSL_LOG(INFO) << absl::StrFormat("Peak accelerator memory usage: %.2f MB",
+                                      peak_accelerator_mb);
+  }
+  // The lines below are diagnostic only. They deliberately avoid the
+  // "<name>: <value> <unit>" shape so that they are not picked up as metrics
+  // by the log parsers.
+  if (!peak_accelerator.breakdown.empty()) {
+    ABSL_LOG(INFO) << "Peak accelerator memory usage breakdown: "
+                   << FormatAcceleratorMemoryBreakdown(peak_accelerator);
+  }
+  for (const std::string& line :
+       FormatAcceleratorMemoryAllocations(peak_accelerator)) {
+    ABSL_LOG(INFO) << line;
+  }
+}
+
 void LogMemoryUsage(const LiteRtLmSettings& settings, float peak_mem_mb,
                     float peak_private_mb,
-                    const DmaBufSummary* dmabuf = nullptr,
                     const AcceleratorMemoryUsage* peak_accelerator = nullptr) {
   if (!settings.log_sink_file.has_value()) {
     ABSL_LOG(INFO) << "Peak system ram usage: " << peak_mem_mb << "MB.";
     ABSL_LOG(INFO) << "Memory usage: "
                    << tflite::profiling::memory::GetMemoryUsage();
     ABSL_LOG(INFO) << "Peak private footprint: " << peak_private_mb << "MB.";
-    if (peak_accelerator != nullptr) {
-      ABSL_LOG(INFO) << "Peak accelerator memory usage: "
-                     << AcceleratorMemoryBytesToMb(
-                            peak_accelerator->total_bytes)
-                     << "MB.";
-      if (!peak_accelerator->breakdown.empty()) {
-        ABSL_LOG(INFO) << "Peak accelerator memory usage breakdown: "
-                       << FormatAcceleratorMemoryBreakdown(*peak_accelerator);
-      }
-    }
   } else {
     ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
                                       peak_mem_mb);
@@ -516,26 +530,10 @@ void LogMemoryUsage(const LiteRtLmSettings& settings, float peak_mem_mb,
           "Private footprint: %.2f MB",
           memory_usage.private_footprint_bytes / 1000.0 / 1000.0);
     }
-    if (peak_accelerator != nullptr) {
-      ABSL_LOG(INFO) << absl::StrFormat(
-          "Peak accelerator memory usage: %.2f MB",
-          AcceleratorMemoryBytesToMb(peak_accelerator->total_bytes));
-      // The breakdown is diagnostic only. It deliberately uses "name=value"
-      // pairs so that it is not picked up as a metric by the log parsers.
-      if (!peak_accelerator->breakdown.empty()) {
-        ABSL_LOG(INFO) << "Peak accelerator memory usage breakdown: "
-                       << FormatAcceleratorMemoryBreakdown(*peak_accelerator);
-      }
-    }
   }
-
-#if defined(__ANDROID__)
-  if (dmabuf != nullptr) {
-    LogDmaBufUsage(*dmabuf);
-  } else {
-    LogDmaBufUsage(GetProcessDmaBufUsage());
+  if (peak_accelerator != nullptr) {
+    LogAcceleratorMemoryUsage(settings, *peak_accelerator);
   }
-#endif
 }
 
 // Returns the median of `values`, or zero if there is nothing to aggregate. For
@@ -630,10 +628,6 @@ void LogAggregatedMetrics(const AggregatedLitertLmMetrics& aggregated,
       ss << "  Peak private footprint: " << *aggregated.peak_private_mb << "MB."
          << std::endl;
     }
-    if (aggregated.peak_dmabuf_mb.has_value()) {
-      ss << "  Peak DMA-BUF hardware usage: " << *aggregated.peak_dmabuf_mb
-         << " MB." << std::endl;
-    }
     if (aggregated.peak_accelerator_mb.has_value()) {
       ss << "  Peak accelerator memory usage: "
          << *aggregated.peak_accelerator_mb << " MB." << std::endl;
@@ -684,10 +678,6 @@ void LogAggregatedMetrics(const AggregatedLitertLmMetrics& aggregated,
     if (aggregated.peak_private_mb.has_value()) {
       ABSL_LOG(INFO) << absl::StrFormat("Peak private footprint: %.2f MB",
                                         *aggregated.peak_private_mb);
-    }
-    if (aggregated.peak_dmabuf_mb.has_value()) {
-      ABSL_LOG(INFO) << absl::StrFormat("Peak DMA-BUF hardware usage: %.2f MB",
-                                        *aggregated.peak_dmabuf_mb);
     }
     if (aggregated.peak_accelerator_mb.has_value()) {
       ABSL_LOG(INFO) << absl::StrFormat(
@@ -964,7 +954,6 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
   std::vector<std::vector<double>> decode_tokens_per_sec;
   std::vector<double> peak_mem_mb;
   std::vector<double> peak_private_mb;
-  std::vector<double> peak_dmabuf_mb;
   std::vector<double> peak_accelerator_mb;
   absl::flat_hash_map<std::string, std::vector<double>>
       peak_accelerator_breakdown_mb;
@@ -976,9 +965,6 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
     }
     if (metric.peak_private_mb > 0.0f) {
       peak_private_mb.push_back(metric.peak_private_mb);
-    }
-    if (metric.peak_dmabuf_mb > 0.0f) {
-      peak_dmabuf_mb.push_back(metric.peak_dmabuf_mb);
     }
     // Unset when accelerator memory tracking is unsupported. A supported
     // platform reporting zero is a real measurement and is aggregated.
@@ -1042,9 +1028,6 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
   }
   if (!peak_private_mb.empty()) {
     aggregated.peak_private_mb = static_cast<float>(Median(peak_private_mb));
-  }
-  if (!peak_dmabuf_mb.empty()) {
-    aggregated.peak_dmabuf_mb = static_cast<float>(Median(peak_dmabuf_mb));
   }
   if (!peak_accelerator_mb.empty()) {
     aggregated.peak_accelerator_mb =
@@ -1235,13 +1218,6 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
       }
     }
 
-    std::optional<DmaBufSummary> dmabuf_summary;
-#if defined(__ANDROID__)
-    if (settings.report_peak_memory_footprint) {
-      dmabuf_summary = GetProcessDmaBufUsage();
-    }
-#endif
-
     // Manually resetting the session to ensure that memory usage from
     // `GetMemoryUsage()` is reporting idle engine state without active
     // sessions.
@@ -1273,18 +1249,8 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
               category, AcceleratorMemoryBytesToMb(bytes));
         }
       }
-#if defined(__ANDROID__)
-      if (dmabuf_summary.has_value() && dmabuf_summary->total_bytes > 0) {
-        metric.peak_dmabuf_mb = static_cast<float>(
-            static_cast<double>(dmabuf_summary->total_bytes) /
-            (1024.0 * 1024.0));
-        metric.dmabuf_buffer_count =
-            static_cast<int64_t>(dmabuf_summary->entries.size());
-      }
-#endif
       LogMemoryUsage(
           settings, peak_mem_mb, peak_private_mb,
-          dmabuf_summary.has_value() ? &*dmabuf_summary : nullptr,
           peak_accelerator.has_value() ? &*peak_accelerator : nullptr);
     }
     iteration_metrics.push_back(std::move(metric));

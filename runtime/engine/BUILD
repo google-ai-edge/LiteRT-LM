@@ -120,32 +120,12 @@ cc_library(
 )
 
 cc_library(
-    name = "dmabuf_util",
-    srcs = ["dmabuf_util.cc"],
-    hdrs = ["dmabuf_util.h"],
-    deps = [
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-    ],
-)
-
-cc_test(
-    name = "dmabuf_util_test",
-    srcs = ["dmabuf_util_test.cc"],
-    deps = [
-        ":dmabuf_util",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_library(
     name = "accelerator_memory_monitor",
     srcs = ["accelerator_memory_monitor.cc"],
     hdrs = ["accelerator_memory_monitor.h"],
     deps = [
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -216,7 +196,6 @@ cc_library(
     hdrs = ["litert_lm_lib.h"],
     deps = [
         ":accelerator_memory_monitor",
-        ":dmabuf_util",
         ":engine_factory",
         ":engine_impl_selected",
         ":engine_interface",
@@ -355,7 +334,6 @@ cc_binary(
         "//conditions:default": [],
     }),
     deps = [
-        ":dmabuf_util",
         ":io_types",
         ":litert_lm_lib",
         ":shared_flags",
@@ -393,7 +371,7 @@ cc_library(
     srcs = ["embedding_litert_lm_lib.cc"],
     hdrs = ["embedding_litert_lm_lib.h"],
     deps = [
-        ":dmabuf_util",
+        ":accelerator_memory_monitor",
         ":embedding_engine",
         ":embedding_engine_settings",
         ":io_types",

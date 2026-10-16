@@ -22,10 +22,6 @@
 
 #include "runtime/engine/embedding_litert_lm_lib.h"
 
-#if defined(__ANDROID__)
-#include "runtime/engine/dmabuf_util.h"
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -57,6 +53,7 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
+#include "runtime/engine/accelerator_memory_monitor.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -211,6 +208,7 @@ bool ParseBool(absl::string_view value) {
 
 void StopAndReportPeakMemoryUsage(
     tflite::profiling::memory::MemoryUsageMonitor* mem_monitor,
+    AcceleratorMemoryMonitor* accelerator_mem_monitor,
     bool report_peak_memory_footprint, std::string* report_out) {
   if (!report_peak_memory_footprint) {
     return;
@@ -227,9 +225,32 @@ void StopAndReportPeakMemoryUsage(
     }
   }
 
-#if defined(__ANDROID__)
-  LogDmaBufUsage(GetProcessDmaBufUsage(), report_out, /*print_to_stdout=*/true);
-#endif  // defined(__ANDROID__)
+  if (accelerator_mem_monitor == nullptr) {
+    return;
+  }
+  accelerator_mem_monitor->Stop();
+  const std::optional<AcceleratorMemoryUsage> peak_accelerator =
+      accelerator_mem_monitor->GetPeakUsage();
+  if (!peak_accelerator.has_value()) {
+    return;
+  }
+  std::vector<std::string> lines;
+  lines.push_back(absl::StrFormat(
+      "Peak accelerator memory usage: %.2f MB",
+      AcceleratorMemoryBytesToMb(peak_accelerator->total_bytes)));
+  if (!peak_accelerator->breakdown.empty()) {
+    lines.push_back(
+        absl::StrCat("Peak accelerator memory usage breakdown: ",
+                     FormatAcceleratorMemoryBreakdown(*peak_accelerator)));
+  }
+  for (std::string& line :
+       FormatAcceleratorMemoryAllocations(*peak_accelerator)) {
+    lines.push_back(std::move(line));
+  }
+  for (const std::string& line : lines) {
+    ABSL_LOG(INFO) << line;
+    Emit(report_out, line);
+  }
 }
 
 }  // namespace
@@ -344,11 +365,16 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   }
 
   std::unique_ptr<tflite::profiling::memory::MemoryUsageMonitor> mem_monitor;
+  std::unique_ptr<AcceleratorMemoryMonitor> accelerator_mem_monitor;
   if (run_settings.report_peak_memory_footprint) {
     mem_monitor =
         std::make_unique<tflite::profiling::memory::MemoryUsageMonitor>(
             kMemoryCheckIntervalMs);
     mem_monitor->Start();
+    // No-op on platforms where accelerator memory tracking is unsupported.
+    accelerator_mem_monitor = std::make_unique<AcceleratorMemoryMonitor>(
+        absl::Milliseconds(kMemoryCheckIntervalMs));
+    accelerator_mem_monitor->Start();
   }
 
   LITERT_ASSIGN_OR_RETURN(auto model_assets,
@@ -613,9 +639,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
         absl::StrFormat("Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)",
                         avg_ms, min_ms, max_ms));
 
-    StopAndReportPeakMemoryUsage(mem_monitor.get(),
-                                 run_settings.report_peak_memory_footprint,
-                                 report_out);
+    StopAndReportPeakMemoryUsage(
+        mem_monitor.get(), accelerator_mem_monitor.get(),
+        run_settings.report_peak_memory_footprint, report_out);
     Emit(report_out, absl::StrCat("Embedding vector dimension: ",
                                   last_response.embedding.size()));
     if (const std::string compare_path = run_settings.compare_embedding_path;
@@ -641,8 +667,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   EmbeddingResponse response = *std::move(response_result);
 
   Emit(report_out, "\n================ RESULT ================");
-  StopAndReportPeakMemoryUsage(
-      mem_monitor.get(), run_settings.report_peak_memory_footprint, report_out);
+  StopAndReportPeakMemoryUsage(mem_monitor.get(), accelerator_mem_monitor.get(),
+                               run_settings.report_peak_memory_footprint,
+                               report_out);
   ABSL_LOG(INFO) << absl::StrFormat("Init Time: %.2f ms", init_time_ms);
   Emit(report_out, absl::StrFormat("Init Time: %.2f ms", init_time_ms));
   Emit(report_out, absl::StrCat("Input length: ", response.input_length));

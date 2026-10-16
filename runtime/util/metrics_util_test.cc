@@ -37,8 +37,6 @@ TEST(MetricsUtilTest, EmptyMetrics) {
   LitertLmMetrics metrics;
   metrics.peak_mem_mb = 12.5f;
   metrics.peak_private_mb = 10.0f;
-  metrics.peak_dmabuf_mb = 348.7f;
-  metrics.dmabuf_buffer_count = 14;
   metrics.peak_accelerator_mb = 512.25f;
   metrics.peak_accelerator_breakdown_mb = {{"local", 500.0f},
                                            {"non-local", 12.25f}};
@@ -47,8 +45,6 @@ TEST(MetricsUtilTest, EmptyMetrics) {
 
   EXPECT_THAT(proto.peak_mem_mb(), FloatEq(12.5f));
   EXPECT_THAT(proto.peak_private_mb(), FloatEq(10.0f));
-  EXPECT_THAT(proto.peak_dmabuf_mb(), FloatEq(348.7f));
-  EXPECT_EQ(proto.dmabuf_buffer_count(), 14);
   EXPECT_THAT(proto.peak_accelerator_mb(), FloatEq(512.25f));
   EXPECT_THAT(proto.peak_accelerator_breakdown_mb(),
               UnorderedElementsAre(Pair("local", FloatEq(500.0f)),
