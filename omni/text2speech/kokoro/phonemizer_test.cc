@@ -1110,6 +1110,26 @@ TEST(PhonemizerTest, SpanishUsesSpanishG2pWithoutEspeak) {
               ::absl_testing::IsOkAndHolds("kokˈoɾo"));
 }
 
+TEST(PhonemizerTest, LongTextIsNotTruncated) {
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer,
+      KokoroPhonemizer::Create(/*espeak_data_dir=*/"", "es"));
+  const std::string sentence = "buenos días a todos los amigos de la casa ";
+  ASSERT_OK_AND_ASSIGN(const std::vector<int> one,
+                       phonemizer->TextToPhonemeIds(sentence));
+  std::string text;
+  for (int i = 0; i < 20; ++i) text += sentence;
+  ASSERT_OK_AND_ASSIGN(const std::vector<int> many,
+                       phonemizer->TextToPhonemeIds(text));
+
+  // Long chunks are sliced to the model capacity downstream; the phonemizer
+  // must keep every token instead of dropping the tail.
+  EXPECT_GT(many.size(), 256);
+  EXPECT_GT(many.size(), 15 * (one.size() - 2));
+  EXPECT_EQ(many.front(), 0);  // BOS
+  EXPECT_EQ(many.back(), 0);   // EOS
+}
+
 TEST(PhonemizerTest, HindiUsesHindiG2pWithoutEspeak) {
   absl::flat_hash_map<std::string, std::string> custom_lexicon = {
       {"कोकोरो", "koːkˈoːɾoː"},

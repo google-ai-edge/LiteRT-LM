@@ -1209,18 +1209,21 @@ absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     return std::vector<int>();
   }
 
-  // Initialize output token buffer with BOS token (ID 0) at index 0.
-  std::vector<int> ids(kokoro::kMaxTokens, kokoro::kBosTokenId);
+  // Start with the BOS token (ID 0). The sequence is not capped here:
+  // `KokoroAcousticStage` slices it to the model capacity, so a cap would only
+  // drop the tail of long chunks silently.
+  std::vector<int> ids;
+  ids.reserve(ipa_str.size() + 2);
+  ids.push_back(kokoro::kBosTokenId);
   const auto& vocab = GetKokoroVocabMap();
 
-  int idx = 1;
   size_t pos = 0;
   bool has_phonetic_token = false;
   int dropped_symbols = 0;
 
   // Iterate over the UTF-8 encoded IPA string character by character (Unicode
   // codepoints).
-  while (pos < ipa_str.size() && idx < kokoro::kMaxTokens - 1) {
+  while (pos < ipa_str.size()) {
     const size_t char_len = Utf8SequenceLength(ipa_str, pos);
     absl::string_view symbol = absl::string_view(ipa_str).substr(pos, char_len);
     pos += char_len;
@@ -1229,12 +1232,12 @@ absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     // vocabulary.
     auto it = vocab.find(symbol);
     if (it != vocab.end()) {
-      ids[idx++] = it->second;
+      ids.push_back(it->second);
       if (it->second != kokoro::kSpaceTokenId) {
         has_phonetic_token = true;
       }
     } else if (symbol == " ") {
-      ids[idx++] = kokoro::kSpaceTokenId;
+      ids.push_back(kokoro::kSpaceTokenId);
     } else {
       // Silently dropping symbols degrades pronunciation invisibly (e.g. the
       // lowered/centralized diacritics espeak emits for Japanese), so surface
@@ -1255,8 +1258,8 @@ absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     return std::vector<int>();
   }
 
-  // Resize token array to include the trailing EOS token (ID 0).
-  ids.resize(idx + 1);
+  // Append the trailing EOS token.
+  ids.push_back(kokoro::kEosTokenId);
   return ids;
 }
 

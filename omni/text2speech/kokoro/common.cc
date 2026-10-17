@@ -57,6 +57,11 @@ bool IsSpaceToken(int token_id) {
   return token_id == kSpaceTokenId;
 }
 
+// Punctuation, quotes, brackets and the space all sit at or below
+// `kSpaceTokenId` in the Kokoro vocabulary; everything above is a phoneme or a
+// prosody mark that the model actually voices.
+bool IsPhoneticToken(int token_id) { return token_id > kSpaceTokenId; }
+
 }  // namespace
 
 std::vector<TokenSlice> SliceTokenIds(absl::Span<const int> token_ids,
@@ -66,13 +71,35 @@ std::vector<TokenSlice> SliceTokenIds(absl::Span<const int> token_ids,
                        SliceJoin::kChunkBoundary, SliceJoin::kChunkBoundary}};
   }
 
+  // Every slice is framed with its own trailing EOS below; exclude the input's
+  // trailing EOS (and any trailing spaces before it) from the slice range so a
+  // cut that lands on the last content token does not leave a phonemeless
+  // trailing slice behind.
+  size_t content_end = token_ids.size();
+  while (content_end > 1 && (token_ids[content_end - 1] == kEosTokenId ||
+                             IsSpaceToken(token_ids[content_end - 1]))) {
+    --content_end;
+  }
+  // One past the last voiced token. A cut at or after it would leave only
+  // punctuation behind (e.g. the closing quote of `.”`), which the model would
+  // synthesize as a stray, phonemeless utterance.
+  size_t phonetic_end = content_end;
+  while (phonetic_end > 0 && !IsPhoneticToken(token_ids[phonetic_end - 1])) {
+    --phonetic_end;
+  }
+
   std::vector<TokenSlice> slices;
   size_t start = 0;
   SliceJoin join_before = SliceJoin::kChunkBoundary;
-  while (start < token_ids.size()) {
-    size_t end = std::min(start + max_capacity, token_ids.size());
+  while (start < content_end) {
+    size_t end = std::min(start + max_capacity, content_end);
     SliceJoin join_after = SliceJoin::kChunkBoundary;
-    if (end < token_ids.size()) {
+    if (end < content_end) {
+      // Keep the last voiced token in the remainder, so the trailing
+      // punctuation stays attached to the last word.
+      if (phonetic_end > start + 1) {
+        end = std::min(end, phonetic_end - 1);
+      }
       // Search backwards for a break, but no further than half the capacity so
       // a slice never becomes uselessly short.
       const size_t earliest = start + (max_capacity / kSplitCapacityDivisor);
@@ -100,9 +127,9 @@ std::vector<TokenSlice> SliceTokenIds(absl::Span<const int> token_ids,
     }
 
     std::vector<int> slice;
-    slice.reserve(std::max<size_t>(2, end - start));
+    slice.reserve(std::max<size_t>(2, end - start + 2));
     slice.push_back(kBosTokenId);
-    if (token_ids[start] == kBosTokenId) {
+    if (start == 0 && token_ids[start] == kBosTokenId) {
       ++start;
     }
     slice.insert(slice.end(), token_ids.begin() + start,

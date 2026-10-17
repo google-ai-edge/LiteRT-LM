@@ -31,9 +31,6 @@ namespace litert::omni::tts::kokoro {
 // Model & Pipeline Architecture Constants
 // =============================================================================
 
-// Maximum phoneme sequence length supported across bucketing configurations.
-constexpr int kMaxTokens = 256;
-
 // Default target sequence length for bucketing.
 constexpr int kDefaultBucketSize = 128;
 

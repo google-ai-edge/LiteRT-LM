@@ -14,7 +14,9 @@
 
 #include "omni/text2speech/kokoro/common.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -113,7 +115,6 @@ std::string MakeVoicePackBytes(float value) {
 }
 
 TEST(CommonTest, ConstantsSanity) {
-  EXPECT_EQ(kokoro::kMaxTokens, 256);
   EXPECT_EQ(kokoro::kSampleRate, 24000);
   EXPECT_EQ(kokoro::kAudioHop, 600);
   EXPECT_EQ(kokoro::kVoicePackSize, 510 * 256);
@@ -170,6 +171,179 @@ TEST(CommonTest, SliceTokenIdsMidWordCutWhenNoBoundary) {
   for (size_t i = 0; i < slices.size() - 1; ++i) {
     EXPECT_EQ(slices[i].join_after, SliceJoin::kWordBoundary);
     EXPECT_EQ(slices[i + 1].join_before, SliceJoin::kWordBoundary);
+  }
+}
+
+TEST(CommonTest, SliceTokenIdsDoesNotEmitTrailingEosOnlySlice) {
+  // 19 content tokens framed by BOS/EOS (21 total) with max_capacity=10: the
+  // second slice ends right at the last content token (index 19), leaving only
+  // the trailing EOS at index 20. Must not emit a 3rd phonemeless slice `{0}`.
+  std::vector<int> mid_word(21, 20);
+  mid_word.front() = kokoro::kBosTokenId;
+  mid_word.back() = kokoro::kEosTokenId;
+  auto mid_word_slices = kokoro::SliceTokenIds(mid_word, /*max_capacity=*/10);
+  ASSERT_EQ(mid_word_slices.size(), 2);
+  EXPECT_EQ(mid_word_slices[0].join_after, SliceJoin::kWordBoundary);
+  EXPECT_EQ(mid_word_slices[1].join_before, SliceJoin::kWordBoundary);
+  EXPECT_EQ(mid_word_slices[1].join_after, SliceJoin::kChunkBoundary);
+  for (const auto& s : mid_word_slices) {
+    EXPECT_GT(s.token_ids.size(), 2);
+  }
+
+  // Same boundary when the final content token before EOS (and a trailing
+  // space) is sentence-final punctuation: the second slice must end with
+  // kChunkBoundary rather than splitting on the final period into an empty
+  // trailing slice.
+  std::vector<int> punct_end = {kokoro::kBosTokenId,
+                                20,
+                                21,
+                                22,
+                                23,
+                                24,
+                                kokoro::kSpaceTokenId,
+                                25,
+                                26,
+                                27,
+                                28,
+                                29,
+                                30,
+                                31,
+                                32,
+                                33,
+                                /*.=*/4,
+                                kokoro::kSpaceTokenId,
+                                kokoro::kEosTokenId};
+  auto punct_slices = kokoro::SliceTokenIds(punct_end, /*max_capacity=*/10);
+  ASSERT_EQ(punct_slices.size(), 2);
+  EXPECT_EQ(punct_slices[0].join_after, SliceJoin::kWordBoundary);
+  EXPECT_EQ(punct_slices[1].join_before, SliceJoin::kWordBoundary);
+  EXPECT_EQ(punct_slices[1].join_after, SliceJoin::kChunkBoundary);
+  EXPECT_EQ(punct_slices[1].token_ids[punct_slices[1].token_ids.size() - 2], 4);
+}
+
+TEST(CommonTest, SliceTokenIdsKeepsClosingPunctuationWithLastWord) {
+  // Text ending in `.”`: the second window ends between '.' and '”', so a split
+  // on '.' would leave a phonemeless `{0, ”, 0}` slice. The trailing
+  // punctuation must stay attached to the last word instead.
+  constexpr int kPeriod = 4;
+  constexpr int kCloseQuote = 15;
+  const std::vector<int> tokens = {kokoro::kBosTokenId,
+                                   20,
+                                   21,
+                                   22,
+                                   23,
+                                   24,
+                                   kokoro::kSpaceTokenId,
+                                   25,
+                                   26,
+                                   27,
+                                   28,
+                                   29,
+                                   30,
+                                   kokoro::kSpaceTokenId,
+                                   31,
+                                   32,
+                                   kPeriod,
+                                   kCloseQuote,
+                                   kokoro::kEosTokenId};
+  auto slices = kokoro::SliceTokenIds(tokens, /*max_capacity=*/10);
+  ASSERT_EQ(slices.size(), 3);
+  EXPECT_EQ(slices[2].token_ids,
+            (std::vector<int>{kokoro::kBosTokenId, 31, 32, kPeriod, kCloseQuote,
+                              kokoro::kEosTokenId}));
+  EXPECT_EQ(slices[1].join_after, SliceJoin::kWordBoundary);
+  EXPECT_EQ(slices[2].join_after, SliceJoin::kChunkBoundary);
+}
+
+// Builds a framed token sequence that looks like phonemizer output: words of
+// voiced tokens separated by spaces, with clause/sentence punctuation, closing
+// quotes and an optional trailing space before EOS.
+std::vector<int> MakeSentenceLikeTokens(int num_words, uint32_t seed) {
+  constexpr int kComma = 3;
+  constexpr int kPeriod = 4;
+  constexpr int kCloseQuote = 15;
+  uint32_t state = seed;
+  auto next = [&state](uint32_t bound) {
+    state = state * 1664525u + 1013904223u;
+    return (state >> 8) % bound;
+  };
+  std::vector<int> tokens = {kokoro::kBosTokenId};
+  for (int w = 0; w < num_words; ++w) {
+    if (w > 0) tokens.push_back(kokoro::kSpaceTokenId);
+    const int word_len = 1 + static_cast<int>(next(8));
+    for (int i = 0; i < word_len; ++i) {
+      tokens.push_back(43 + static_cast<int>(next(100)));
+    }
+    switch (next(10)) {
+      case 0:
+        tokens.push_back(kComma);
+        break;
+      case 1:
+        tokens.push_back(kPeriod);
+        break;
+      case 2:
+        tokens.push_back(kPeriod);
+        tokens.push_back(kCloseQuote);
+        break;
+      default:
+        break;
+    }
+  }
+  tokens.push_back(kPeriod);
+  if (next(2) == 0) tokens.push_back(kCloseQuote);
+  if (next(2) == 0) tokens.push_back(kokoro::kSpaceTokenId);
+  tokens.push_back(kokoro::kEosTokenId);
+  return tokens;
+}
+
+TEST(CommonTest, SliceTokenIdsPreservesEveryVoicedToken) {
+  for (int max_capacity : {8, 10, 16, 31, 61}) {
+    for (int num_words = 1; num_words <= 80; ++num_words) {
+      for (uint32_t seed = 1; seed <= 5; ++seed) {
+        const std::vector<int> tokens =
+            MakeSentenceLikeTokens(num_words, seed * 7919u + num_words);
+        SCOPED_TRACE(absl::StrCat("max_capacity=", max_capacity,
+                                  " num_words=", num_words, " seed=", seed));
+        const auto slices = kokoro::SliceTokenIds(tokens, max_capacity);
+        ASSERT_FALSE(slices.empty());
+        EXPECT_EQ(slices.front().join_before, SliceJoin::kChunkBoundary);
+        EXPECT_EQ(slices.back().join_after, SliceJoin::kChunkBoundary);
+        if (tokens.size() <= static_cast<size_t>(max_capacity)) {
+          ASSERT_EQ(slices.size(), 1);
+          EXPECT_EQ(slices[0].token_ids, tokens);
+          continue;
+        }
+
+        // Expected content: the input without its BOS, trailing EOS and the
+        // trailing spaces before it.
+        size_t content_end = tokens.size();
+        while (tokens[content_end - 1] == kokoro::kEosTokenId ||
+               tokens[content_end - 1] == kokoro::kSpaceTokenId) {
+          --content_end;
+        }
+        const std::vector<int> expected(tokens.begin() + 1,
+                                        tokens.begin() + content_end);
+
+        std::vector<int> concatenated;
+        for (size_t i = 0; i < slices.size(); ++i) {
+          const std::vector<int>& ids = slices[i].token_ids;
+          ASSERT_GE(ids.size(), 3);
+          EXPECT_LE(ids.size(), static_cast<size_t>(max_capacity) + 2);
+          EXPECT_EQ(ids.front(), kokoro::kBosTokenId);
+          EXPECT_EQ(ids.back(), kokoro::kEosTokenId);
+          EXPECT_TRUE(
+              std::any_of(ids.begin(), ids.end(),
+                          [](int id) { return id > kokoro::kSpaceTokenId; }))
+              << "slice " << i << " has no voiced token";
+          if (i + 1 < slices.size()) {
+            EXPECT_EQ(slices[i].join_after, slices[i + 1].join_before);
+          }
+          concatenated.insert(concatenated.end(), ids.begin() + 1,
+                              ids.end() - 1);
+        }
+        EXPECT_EQ(concatenated, expected);
+      }
+    }
   }
 }
 
