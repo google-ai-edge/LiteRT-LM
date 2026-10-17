@@ -31,6 +31,7 @@
 #include "runtime/engine/cpu_affinity_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::lm {
@@ -96,6 +97,12 @@ class EngineFactory {
         if (instance.registry_.contains(engine_type)) {
           return Create(engine_type, std::move(settings), input_prompt_as_hint);
         }
+      }
+    } else if (ExecutorBackendRegistry::Instance().IsRegistered(backend)) {
+      if (instance.registry_.contains(
+              EngineType::kAdvancedLiteRTCompiledModel)) {
+        return Create(EngineType::kAdvancedLiteRTCompiledModel,
+                      std::move(settings), input_prompt_as_hint);
       }
     }
 

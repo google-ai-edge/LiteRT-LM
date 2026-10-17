@@ -173,11 +173,11 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     ModelAssets model_assets, Backend backend,
     std::optional<Backend> sampler_backend) {
   LlmExecutorSettings settings(std::move(model_assets));
-  if (backend == Backend::CPU) {
+  if (backend == Backend::CPU || IsCustomBackend(backend)) {
     CpuConfig config;
     config.kv_increment_size = 16;
     config.prefill_chunk_size = -1;
-    config.number_of_threads = 4;
+    config.number_of_threads = (backend == Backend::CPU) ? 4 : 0;
     settings.SetBackendConfig(config);
   } else if (backend == Backend::GPU) {
     GpuConfig config;
