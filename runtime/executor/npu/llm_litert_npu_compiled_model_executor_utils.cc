@@ -36,6 +36,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -1309,6 +1310,29 @@ absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
                         env, target_type, host_mem_addr, target_bytes));
       return std::move(buf);
     }
+  }
+
+  // Intel OpenVINO: the largest-context KV buffer is an ov::Tensor in host
+  // memory. Wrap its data pointer as a non-owning OpenVINO buffer of the
+  // smaller shape, so the dispatch keeps getting its own buffer type (a
+  // host-memory alias would not match the dispatch's buffer requirements and
+  // would be copied instead of shared). The pointer stays valid after
+  // unlocking: OpenVINO's lock just returns the tensor's data pointer.
+  if (static_cast<LiteRtTensorBufferType>(buffer_type) ==
+      kLiteRtTensorBufferTypeOpenVINOTensorBuffer) {
+    void* source_data = nullptr;
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock, ::litert::TensorBufferScopedLock::Create(
+                         const_cast<::litert::TensorBuffer&>(source_buffer),
+                         ::litert::TensorBuffer::LockMode::kRead));
+      source_data = lock.second;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto buf,
+        ::litert::TensorBuffer::CreateFromCustomHandle(
+            env, target_type, buffer_type, source_data, target_bytes));
+    return std::move(buf);
   }
 
 #if LITERT_HAS_AHWB_SUPPORT
