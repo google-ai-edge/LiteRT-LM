@@ -240,9 +240,80 @@ cc_test(
         "//runtime/testdata",
     ],
     defines = ["ENGINE_ADVANCED"],
-    tags = ["requires-mac-inputs:hard"],
+    tags = [
+        "nowindows",
+        "requires-mac-inputs:hard",
+    ],
     deps = [
         ":engine_advanced_impl",  # buildcleaner: keep
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "//runtime/components:model_resources",
+        "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/util:file_data_stream",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "engine_advanced_impl_lite_test",
+    srcs = ["engine_advanced_impl_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    defines = ["ENGINE_ADVANCED"],
+    tags = [
+        "nowindows",
+        "requires-mac-inputs:hard",
+    ],
+    deps = [
+        ":engine_advanced_impl_lite",  # buildcleaner: keep
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "//runtime/components:model_resources",
+        "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/util:file_data_stream",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "engine_advanced_impl_cpu_only_lite_test",
+    srcs = ["engine_advanced_impl_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    defines = ["ENGINE_ADVANCED"],
+    tags = [
+        "nowindows",
+        "requires-mac-inputs:hard",
+    ],
+    deps = [
+        ":engine_advanced_impl_cpu_only_lite",  # buildcleaner: keep
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_check",

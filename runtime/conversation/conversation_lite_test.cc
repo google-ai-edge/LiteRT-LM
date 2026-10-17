@@ -1,4 +1,4 @@
-// Copyright 2025 The ODML Authors.
+// Copyright 2026 The ODML Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,24 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/model_resources.h"
+#include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/components/tool_use/parser_utils.h"
+#include "runtime/conversation/conversation.h"
+#include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
+#include "runtime/engine/engine.h"
+#include "runtime/engine/engine_factory.h"
+#include "runtime/engine/engine_settings.h"
+#include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/llm_model_type.pb.h"
+#include "runtime/util/litert_lm_loader.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "support/tokenizer/huggingface_tokenizer.h"
 
 namespace litert::lm {
 namespace {
 
+using ::testing::HasSubstr;
 using ::testing::status::StatusIs;
+
+constexpr absl::string_view kTestLlmPath =
+    "litert_lm/runtime/testdata/test_lm.litertlm";
+
+constexpr absl::string_view kTestHfTokenizerLlmPath =
+    "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
+
+std::string GetTestdataPath(absl::string_view file_path) {
+  return absl::StrCat(::testing::SrcDir(), "/", file_path);
+}
 
 TEST(ConversationLiteTest, PromptTemplateIsNoopInLiteTarget) {
   PromptTemplate tmpl("{{ message }}");
@@ -39,7 +69,21 @@ TEST(ConversationLiteTest, PromptTemplateIsNoopInLiteTarget) {
 
 TEST(ConversationLiteTest, HuggingFaceTokenizerIsNoopInLiteTarget) {
   EXPECT_THAT(litert::support::HuggingFaceTokenizer::CreateFromJson("{}"),
-              StatusIs(absl::StatusCode::kUnimplemented));
+              StatusIs(absl::StatusCode::kUnimplemented,
+                       HasSubstr("HuggingFace tokenizer is disabled")));
+}
+
+TEST(ConversationLiteTest,
+     ModelWithHuggingFaceTokenizerReportsDisabledErrorInLiteTarget) {
+  auto model_file = ScopedFile::Open(GetTestdataPath(kTestHfTokenizerLlmPath));
+  ASSERT_OK(model_file);
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(*model_file)));
+  ASSERT_OK_AND_ASSIGN(auto resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+  EXPECT_THAT(resources->GetTokenizer(),
+              StatusIs(absl::StatusCode::kUnimplemented,
+                       HasSubstr("HuggingFace tokenizer is disabled")));
 }
 
 TEST(ConversationLiteTest, ToolUseParserLiteReturnsErrorWithoutParsers) {
@@ -95,6 +139,42 @@ TEST(ConversationLiteTest,
   function_gemma_type.mutable_function_gemma();
   EXPECT_THAT(CreateDataProcessorConfigFromLlmModelType(function_gemma_type),
               StatusIs(absl::StatusCode::kUnimplemented));
+}
+
+TEST(ConversationLiteTest,
+     PositiveGemmaDataProcessorAndEngineSessionRoundTripSucceeds) {
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       CreateModelDataProcessor(Gemma3DataProcessorConfig()));
+  const Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<InputData> input_data,
+      processor->ToInputDataVector(
+          "<start_of_turn>user\nHello world!<end_of_turn>\n",
+          nlohmann::ordered_json::array({user_message}), std::monostate()));
+  ASSERT_FALSE(input_data.empty());
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(10);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::CreateDefault(*engine));
+  EXPECT_OK(Conversation::Create(*engine, config));
+
+  ASSERT_OK_AND_ASSIGN(auto session,
+                       engine->CreateSession(config.GetSessionConfig()));
+  ASSERT_OK(session->RunPrefill(input_data));
+  ASSERT_OK_AND_ASSIGN(Responses responses, session->RunDecode());
+  ASSERT_FALSE(responses.GetTexts().empty());
+
+  ASSERT_OK_AND_ASSIGN(Message assistant_message,
+                       processor->ToMessage(responses, std::monostate()));
+  EXPECT_EQ(assistant_message["role"], "assistant");
+  ASSERT_TRUE(assistant_message["content"].is_array());
+  ASSERT_FALSE(assistant_message["content"].empty());
 }
 
 }  // namespace

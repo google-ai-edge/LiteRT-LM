@@ -14,6 +14,10 @@
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+load(
+    "//runtime/conversation/model_data_processor:gemma_data_processor.bzl",
+    "gemma_data_processor_libraries",
+)
 
 package(
     default_hdrs_check = "strict",
@@ -212,6 +216,34 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "model_data_processor_factory_common",
+    srcs = ["model_data_processor_factory_common.cc"],
+    hdrs = [
+        "model_data_processor_factory.h",
+        "model_data_processor_factory_common.h",
+    ],
+    deps = [
+        ":config_registry",
+        ":gemma3_data_processor_config",
+        ":gemma4_data_processor_config",
+        ":generic_data_processor_config",
+        ":model_data_processor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_layout",
+        "//runtime/conversation:io_types",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/proto:token_cc_proto",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:image_preprocessor",
+        "//support/tokenizer",
+    ],
+)
+
 MODEL_DATA_PROCESSOR_FACTORY_COMMON_DEPS = [
     ":config_registry",
     ":fastvlm_data_processor_config",
@@ -224,18 +256,15 @@ MODEL_DATA_PROCESSOR_FACTORY_COMMON_DEPS = [
     ":minicpm5_data_processor_config",
     ":minicpmv_data_processor_config",
     ":model_data_processor",
+    ":model_data_processor_factory_common",
     ":qwen3_data_processor_config",
     "@com_google_absl//absl/base",
     "@com_google_absl//absl/status",
     "@com_google_absl//absl/status:status_macros",
     "@com_google_absl//absl/status:statusor",
-    "@com_google_absl//absl/strings",
-    "@litert//litert/cc:litert_layout",
     "//runtime/conversation:io_types",
     "//runtime/proto:llm_metadata_cc_proto",
     "//runtime/proto:llm_model_type_cc_proto",
-    "//runtime/proto:token_cc_proto",
-    "//runtime/util:litert_status_util",
     "//support/tokenizer",
 ]
 
@@ -291,17 +320,13 @@ cc_library(
         ":generic_data_processor",
         ":generic_data_processor_config",
         ":model_data_processor",
+        ":model_data_processor_factory_common",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@litert//litert/cc:litert_layout",
         "//runtime/conversation:io_types",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
-        "//runtime/proto:token_cc_proto",
-        "//runtime/util:litert_status_util",
         "//support/tokenizer",
     ],
 )
@@ -607,32 +632,12 @@ GEMMA3_DATA_PROCESSOR_COMMON_DEPS = [
     "@sentencepiece//:sentencepiece_model_cc_proto",
 ]
 
-cc_library(
+gemma_data_processor_libraries(
     name = "gemma3_data_processor",
     srcs = ["gemma3_data_processor.cc"],
     hdrs = ["gemma3_data_processor.h"],
-    defines = ["ENABLE_GEMMA3_DATA_PROCESSOR"] + select({
-        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-        "//conditions:default": [],
-    }),
-    deps = GEMMA3_DATA_PROCESSOR_COMMON_DEPS + [
-        "//runtime/components/tool_use:parser_utils",
-    ] + select({
-        ":litert_lm_fst_constraints_disabled": [],
-        "//conditions:default": [
-            "//runtime/components/constrained_decoding:gemma_model_constraint_provider_lib",
-        ],
-    }),
-)
-
-cc_library(
-    name = "gemma3_data_processor_lite",
-    srcs = ["gemma3_data_processor.cc"],
-    hdrs = ["gemma3_data_processor.h"],
-    defines = ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-    deps = GEMMA3_DATA_PROCESSOR_COMMON_DEPS + [
-        "//runtime/components/tool_use:parser_utils_lite",
-    ],
+    common_deps = GEMMA3_DATA_PROCESSOR_COMMON_DEPS,
+    enable_define = "ENABLE_GEMMA3_DATA_PROCESSOR",
 )
 
 cc_test(
@@ -758,32 +763,12 @@ GEMMA4_DATA_PROCESSOR_COMMON_DEPS = [
     "@sentencepiece//:sentencepiece_model_cc_proto",
 ]
 
-cc_library(
+gemma_data_processor_libraries(
     name = "gemma4_data_processor",
     srcs = ["gemma4_data_processor.cc"],
     hdrs = ["gemma4_data_processor.h"],
-    defines = ["ENABLE_GEMMA4_DATA_PROCESSOR"] + select({
-        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-        "//conditions:default": [],
-    }),
-    deps = GEMMA4_DATA_PROCESSOR_COMMON_DEPS + [
-        "//runtime/components/tool_use:parser_utils",
-    ] + select({
-        ":litert_lm_fst_constraints_disabled": [],
-        "//conditions:default": [
-            "//runtime/components/constrained_decoding:gemma_model_constraint_provider_lib",
-        ],
-    }),
-)
-
-cc_library(
-    name = "gemma4_data_processor_lite",
-    srcs = ["gemma4_data_processor.cc"],
-    hdrs = ["gemma4_data_processor.h"],
-    defines = ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-    deps = GEMMA4_DATA_PROCESSOR_COMMON_DEPS + [
-        "//runtime/components/tool_use:parser_utils_lite",
-    ],
+    common_deps = GEMMA4_DATA_PROCESSOR_COMMON_DEPS,
+    enable_define = "ENABLE_GEMMA4_DATA_PROCESSOR",
 )
 
 # Convenience bundle of lightweight Gemma data processors (Gemma3, Gemma4, and
