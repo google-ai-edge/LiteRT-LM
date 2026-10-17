@@ -281,7 +281,11 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
-    ],
+    ] + select({
+        "//build_config:disable_legacy_artisan_executors": [],
+        "//conditions:default": [
+        ],
+    }),
     alwayslink = True,
 )
 
@@ -301,7 +305,11 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
-    ],
+    ] + select({
+        "//build_config:disable_legacy_artisan_executors": [],
+        "//conditions:default": [
+        ],
+    }),
     alwayslink = True,
 )
 
@@ -355,7 +363,11 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
-    ],
+    ] + select({
+        "//build_config:disable_legacy_artisan_executors": [],
+        "//conditions:default": [
+        ],
+    }),
     alwayslink = True,
 )
 
@@ -383,7 +395,11 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
-    ],
+    ] + select({
+        "//build_config:disable_legacy_artisan_executors": [],
+        "//conditions:default": [
+        ],
+    }),
     alwayslink = True,
 )
 
@@ -545,6 +561,10 @@ cc_binary(
         ":model_info_headers",
         "//runtime/core:engine_impl",
     ] + select({
+        "//build_config:disable_legacy_artisan_executors": [],
+        "//conditions:default": [
+        ],
+    }) + select({
         "//conditions:default": [],
     }),
 )
