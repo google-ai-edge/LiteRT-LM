@@ -1311,6 +1311,29 @@ absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
     }
   }
 
+  // Intel OpenVINO: the master KV buffer is an ov::Tensor in host memory. Wrap
+  // its data pointer as a non-owning OpenVINO buffer of the smaller shape, so
+  // the dispatch keeps getting its own buffer type (a host-memory alias would
+  // not match the dispatch's buffer requirements and would be copied instead
+  // of shared). The pointer stays valid after unlocking: OpenVINO's lock just
+  // returns the tensor's data pointer.
+  if (static_cast<LiteRtTensorBufferType>(buffer_type) ==
+      kLiteRtTensorBufferTypeOpenVINOTensorBuffer) {
+    void* master_data = nullptr;
+    {
+      LITERT_ASSIGN_OR_RETURN(auto lock,
+                              ::litert::TensorBufferScopedLock::Create(
+                                  const_cast<::litert::TensorBuffer&>(
+                                      source_buffer),
+                                  ::litert::TensorBuffer::LockMode::kRead));
+      master_data = lock.second;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto buf, ::litert::TensorBuffer::CreateFromCustomHandle(
+                      env, target_type, buffer_type, master_data, target_bytes));
+    return std::move(buf);
+  }
+
 #if LITERT_HAS_AHWB_SUPPORT
   if (buffer_type == ::litert::TensorBufferType::kAhwb) {
     auto ahwb_res = source_buffer.GetAhwb();
