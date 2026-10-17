@@ -2,3 +2,4 @@
 /bazel-*
 /js/packages/core/wasm/
 node_modules/
+.build/
