@@ -703,6 +703,7 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",

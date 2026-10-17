@@ -698,8 +698,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
   ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets, CreateModelAssets(settings));
   auto backend_str = settings.backend;
   ABSL_LOG(INFO) << "Choose backend: " << backend_str;
-  ABSL_ASSIGN_OR_RETURN(Backend backend,
-                        litert::lm::GetBackendFromString(backend_str));
+  ABSL_ASSIGN_OR_RETURN(auto resolved_backend,
+                        litert::lm::ResolveBackendString(backend_str));
+  Backend backend = resolved_backend.first;
+  GpuBackend resolved_gpu_backend = resolved_backend.second;
   std::optional<Backend> vision_backend = std::nullopt;
   if (settings.vision_backend.has_value()) {
     ABSL_LOG(INFO) << "Provided vision backend: " << *settings.vision_backend;
@@ -860,6 +862,9 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
   } else if (settings.conv_type == ConvType::kInt8) {
     advanced_settings.allow_src_quantized_fc_conv_ops = true;
   }
+  // The GPU delegate is resolved from the single backend string above (e.g.
+  // backend=webgpu). kDefault uses the build-preferred delegate.
+  advanced_settings.gpu_backend = resolved_gpu_backend;
   if (advanced_settings != AdvancedSettings()) {
     engine_settings.GetMutableMainExecutorSettings().SetAdvancedSettings(
         advanced_settings);

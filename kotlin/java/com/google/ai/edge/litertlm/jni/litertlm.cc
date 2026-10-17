@@ -545,11 +545,16 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
   std::string backend_str(backend_chars);
   env->ReleaseStringUTFChars(backend, backend_chars);
 
-  auto backend_enum = litert::lm::GetBackendFromString(backend_str);
-  if (!backend_enum.ok()) {
-    ThrowLiteRtLmJniException(env, backend_enum.status().ToString());
+  // Resolve the single backend string into the hardware backend plus, for the
+  // GPU path, the specific delegate (opencl/opengl/webgpu); "gpu"/"auto" keep
+  // the default (build-preferred) delegate.
+  auto resolved_backend = litert::lm::ResolveBackendString(backend_str);
+  if (!resolved_backend.ok()) {
+    ThrowLiteRtLmJniException(env, resolved_backend.status().ToString());
     return 0;
   }
+  absl::StatusOr<Backend> backend_enum = resolved_backend->first;
+  const litert::lm::GpuBackend gpu_backend = resolved_backend->second;
 
   const char* vision_backend_chars =
       env->GetStringUTFChars(vision_backend, nullptr);
@@ -592,6 +597,19 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     ThrowLiteRtLmJniException(env, "Failed to create engine settings: " +
                                        settings.status().ToString());
     return 0;
+  }
+
+  // Apply an explicitly requested GPU delegate (opencl/opengl/webgpu). kDefault
+  // needs no advanced settings: CreateCompilationOptions uses the
+  // build-preferred delegate.
+  if (*backend_enum == Backend::GPU &&
+      gpu_backend != litert::lm::GpuBackend::kDefault) {
+    auto advanced_settings =
+        settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
+            litert::lm::AdvancedSettings());
+    advanced_settings.gpu_backend = gpu_backend;
+    settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings);
   }
 
   const char* cache_dir_chars = env->GetStringUTFChars(cache_dir, nullptr);
@@ -753,11 +771,16 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   std::string backend_str(backend_chars);
   env->ReleaseStringUTFChars(backend, backend_chars);
 
-  auto backend_enum = litert::lm::GetBackendFromString(backend_str);
-  if (!backend_enum.ok()) {
-    ThrowLiteRtLmJniException(env, backend_enum.status().ToString());
+  // Resolve the single backend string into the hardware backend plus, for the
+  // GPU path, the specific delegate (opencl/opengl/webgpu); "gpu"/"auto" keep
+  // the default (build-preferred) delegate.
+  auto resolved_backend = litert::lm::ResolveBackendString(backend_str);
+  if (!resolved_backend.ok()) {
+    ThrowLiteRtLmJniException(env, resolved_backend.status().ToString());
     return 0;
   }
+  absl::StatusOr<Backend> backend_enum = resolved_backend->first;
+  const litert::lm::GpuBackend gpu_backend = resolved_backend->second;
 
   const char* vision_backend_chars =
       env->GetStringUTFChars(vision_backend, nullptr);
@@ -800,6 +823,19 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     ThrowLiteRtLmJniException(env, "Failed to create engine settings: " +
                                        settings.status().ToString());
     return 0;
+  }
+
+  // Apply an explicitly requested GPU delegate (opencl/opengl/webgpu). kDefault
+  // needs no advanced settings: CreateCompilationOptions uses the
+  // build-preferred delegate.
+  if (*backend_enum == Backend::GPU &&
+      gpu_backend != litert::lm::GpuBackend::kDefault) {
+    auto advanced_settings =
+        settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
+            litert::lm::AdvancedSettings());
+    advanced_settings.gpu_backend = gpu_backend;
+    settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings);
   }
 
   const char* cache_dir_chars = env->GetStringUTFChars(cache_dir, nullptr);

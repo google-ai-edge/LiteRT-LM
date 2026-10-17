@@ -31,6 +31,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
 
@@ -163,6 +164,41 @@ struct NpuConfig {
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
 
+// Selects the GPU delegate backend at runtime for the GPU path.
+// kDefault uses the build-preferred default: WebGPU when the binary is compiled
+// with LITERT_USE_WEBGPU_ACCELERATOR, otherwise LiteRT's baseline
+// (OpenCL/OpenGL) default. This is not a runtime "best available" probe and
+// does not fall back between delegates. The other values force a specific
+// delegate; WebGPU can only be selected in a build that links it (otherwise
+// CreateCompilationOptions returns an error). OpenCL/OpenGL are the
+// always-linked baseline.
+//
+// Scope: this option applies only to the main text LLM executor. Vision, audio,
+// and embedding submodels keep their own build-time/default GPU behavior.
+enum class GpuBackend {
+  kDefault,
+  kOpenCl,
+  kOpenGl,
+  kWebGpu,
+};
+std::ostream& operator<<(std::ostream& os, GpuBackend backend);
+
+// Parses a GPU backend name (case-insensitive) into a GpuBackend value.
+// Accepts: "default"/""/"auto"/"automatic" -> kDefault, "opencl"/"cl" ->
+// kOpenCl, "opengl"/"gl" -> kOpenGl, "webgpu" -> kWebGpu. Returns
+// InvalidArgumentError for anything else.
+absl::StatusOr<GpuBackend> GpuBackendFromString(absl::string_view name);
+
+// Resolves a single user-facing backend string into the hardware Backend and,
+// for the GPU path, the specific delegate. Hardware names (cpu/gpu/npu/...)
+// resolve with the GPU delegate left at kDefault (automatic selection). The GPU
+// delegate names (opencl/opengl/webgpu) resolve to Backend::GPU with that
+// delegate, so the backend string stays the only user-facing knob and there is
+// no second flag to reconcile. Returns InvalidArgumentError for an unrecognized
+// name.
+absl::StatusOr<std::pair<Backend, GpuBackend>> ResolveBackendString(
+    absl::string_view name);
+
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
   // Ordered set of the maximum number of prefill tokens processed at once when
@@ -285,6 +321,12 @@ struct AdvancedSettings {
   // (most OSS models), we would set this flag to true to ensure smooth UI.
   std::optional<bool> gpu_context_low_priority;
 
+  // Selects the GPU delegate for the main text executor. Only meaningful for
+  // the GPU backend; ignored for CPU/NPU, and not propagated to vision/audio/
+  // embedding submodels. Defaults to kDefault (the build-preferred delegate;
+  // see GpuBackend).
+  GpuBackend gpu_backend = GpuBackend::kDefault;
+
   // If true, the executor enables speculative decoding.
   bool enable_speculative_decoding = false;
 
@@ -337,6 +379,7 @@ struct AdvancedSettings {
            sampler_handles_input == other.sampler_handles_input &&
            allow_src_quantized_fc_conv_ops ==
                other.allow_src_quantized_fc_conv_ops &&
+           gpu_backend == other.gpu_backend &&
            hint_waiting_for_completion == other.hint_waiting_for_completion &&
            gpu_context_low_priority == other.gpu_context_low_priority &&
            enable_speculative_decoding == other.enable_speculative_decoding &&
