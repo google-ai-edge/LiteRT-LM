@@ -75,6 +75,80 @@ class Session(private val handle: Long) : AutoCloseable {
   }
 
   /**
+   * Scores candidate continuations of the input added by [runPrefill]; no text is generated.
+   *
+   * The runtime scores one target text per call today and reports an error for more. Each score is
+   * the target's log probability after the prefilled input (negative; higher is more likely).
+   * Scoring consumes the target's tokens: to score another candidate from the same position, call
+   * [saveCheckpoint] before the first scoring and [rewindToCheckpoint] between scorings.
+   *
+   * This is a blocking call.
+   *
+   * @param targetTexts The candidate text(s) to score; must not be empty.
+   * @param storeTokenLengths Whether to also return the token length of each target.
+   * @return One score per target, and the token lengths when requested.
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the runtime rejects the request or fails.
+   */
+  fun runTextScoring(
+    targetTexts: List<String>,
+    storeTokenLengths: Boolean = false,
+  ): TextScoringResponse {
+    checkIsAlive()
+    require(targetTexts.isNotEmpty()) { "targetTexts must not be empty." }
+    val response =
+      LiteRtLmJni.nativeRunTextScoring(handle, targetTexts.toTypedArray(), storeTokenLengths)
+    check(response.scores.size == targetTexts.size) {
+      "Expected ${targetTexts.size} score(s), got ${response.scores.size}."
+    }
+    return response
+  }
+
+  /**
+   * Saves the session's current position under [label], to return to with [rewindToCheckpoint].
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  fun saveCheckpoint(label: String) {
+    checkIsAlive()
+    LiteRtLmJni.nativeSaveCheckpoint(handle, label)
+  }
+
+  /**
+   * Returns the session to the position saved under [label]; later checkpoints are dropped.
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the label does not exist or the native method fails.
+   */
+  fun rewindToCheckpoint(label: String) {
+    checkIsAlive()
+    LiteRtLmJni.nativeRewindToCheckpoint(handle, label)
+  }
+
+  /**
+   * Returns the session to a step number (see [getCurrentStep]).
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  fun rewindToStep(step: Int) {
+    checkIsAlive()
+    LiteRtLmJni.nativeRewindToStep(handle, step)
+  }
+
+  /**
+   * Returns the session's current step: the number of tokens processed so far.
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  fun getCurrentStep(): Int {
+    checkIsAlive()
+    return LiteRtLmJni.nativeGetCurrentStep(handle)
+  }
+
+  /**
    * Generates content from the provided [InputData] and any previous input data added by
    * [runPrefill].
    *
@@ -175,6 +249,26 @@ sealed class InputData {
    */
   // TODO(b/439003966): add Android-friendly methods to create image input data.
   data class Image(val bytes: ByteArray) : InputData()
+}
+
+/**
+ * The result of [Session.runTextScoring].
+ *
+ * @param scores One score per target text: the target's log probability after the prefilled input
+ *   (negative; higher is more likely).
+ * @param tokenLengths The token length of each target when it was requested, else null.
+ */
+data class TextScoringResponse(val scores: FloatArray, val tokenLengths: IntArray?) {
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is TextScoringResponse) return false
+    return scores.contentEquals(other.scores) &&
+      (tokenLengths?.contentEquals(other.tokenLengths) ?: (other.tokenLengths == null))
+  }
+
+  override fun hashCode(): Int {
+    return 31 * scores.contentHashCode() + (tokenLengths?.contentHashCode() ?: 0)
+  }
 }
 
 /** An callback for receiving streaming responses. */
