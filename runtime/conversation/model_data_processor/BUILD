@@ -53,6 +53,7 @@ cc_library(
     srcs = ["data_utils.cc"],
     hdrs = ["data_utils.h"],
     deps = [
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -73,6 +74,7 @@ cc_test(
         ":data_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "//runtime/components/tool_use:parser_utils",

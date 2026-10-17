@@ -24,6 +24,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/tool_use/parser_utils.h"
@@ -223,6 +224,153 @@ TEST(DataUtilsTest, ResponseTextToMessage_WithTools) {
   ASSERT_TRUE(message.contains("tool_calls"));
   ASSERT_EQ(message["tool_calls"].size(), 1);
   EXPECT_EQ(message["tool_calls"][0]["function"]["name"], "get_weather");
+}
+
+TEST(DataUtilsTest, FormatToolCalls_NonArrayReturnsError) {
+  auto status = FormatToolCalls(ordered_json::object({{"not", "an array"}}),
+                                [](const ordered_json& v) { return v.dump(); })
+                    .status();
+  EXPECT_THAT(status,
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Tool calls must be an array."));
+}
+
+TEST(DataUtilsTest, FormatToolCalls_EmptyArray) {
+  ASSERT_OK_AND_ASSIGN(
+      const ordered_json formatted,
+      FormatToolCalls(ordered_json::array(),
+                      [](const ordered_json& v) { return v.dump(); }));
+  EXPECT_EQ(formatted, ordered_json::array());
+}
+
+TEST(DataUtilsTest, FormatToolCalls_ValidWithObjectArguments) {
+  const ordered_json tool_calls = ordered_json::array({
+      {
+          {"type", "function"},
+          {"function",
+           {{"name", "get_weather"},
+            {"arguments", {{"city", "MTV"}, {"units", "celsius"}}}}},
+      },
+  });
+  ASSERT_OK_AND_ASSIGN(const ordered_json formatted,
+                       FormatToolCalls(tool_calls, [](const ordered_json& v) {
+                         return absl::StrCat("formatted_",
+                                             v.get<std::string>());
+                       }));
+  const ordered_json expected = ordered_json::array({
+      {
+          {"type", "function"},
+          {"function",
+           {{"name", "get_weather"},
+            {"arguments",
+             {{"city", "formatted_MTV"}, {"units", "formatted_celsius"}}}}},
+      },
+  });
+  EXPECT_EQ(formatted, expected);
+}
+
+TEST(DataUtilsTest, FormatToolCalls_NonObjectArgumentsPassedThrough) {
+  const ordered_json tool_calls = ordered_json::array({
+      {
+          {"function",
+           {{"name", "custom_fn"}, {"arguments", "raw_arg_string"}}},
+      },
+  });
+  ASSERT_OK_AND_ASSIGN(const ordered_json formatted,
+                       FormatToolCalls(tool_calls, [](const ordered_json& v) {
+                         return absl::StrCat("formatted_",
+                                             v.get<std::string>());
+                       }));
+  const ordered_json expected = ordered_json::array({
+      {
+          {"type", "function"},
+          {"function",
+           {{"name", "custom_fn"}, {"arguments", "raw_arg_string"}}},
+      },
+  });
+  EXPECT_EQ(formatted, expected);
+}
+
+TEST(DataUtilsTest, FormatToolCalls_SkipsInvalidEntries) {
+  const ordered_json tool_calls = ordered_json::array({
+      "not an object",
+      ordered_json::object(),
+      {{"no_function", true}},
+      {{"function", "not an object"}},
+      {{"function", ordered_json::object()}},  // missing name
+      {{"function", {{"name", "valid_fn"}}}},  // valid, no arguments
+  });
+  ASSERT_OK_AND_ASSIGN(const ordered_json formatted,
+                       FormatToolCalls(tool_calls, [](const ordered_json& v) {
+                         return v.dump();
+                       }));
+  const ordered_json expected = ordered_json::array({
+      {
+          {"type", "function"},
+          {"function", {{"name", "valid_fn"}}},
+      },
+  });
+  EXPECT_EQ(formatted, expected);
+}
+
+TEST(DataUtilsTest, FormatToolCalls_CallbackErrorPropagated) {
+  const ordered_json tool_calls = ordered_json::array({
+      {
+          {"function",
+           {{"name", "fail_fn"}, {"arguments", {{"arg1", "val1"}}}}},
+      },
+  });
+  auto status = FormatToolCalls(tool_calls, [](const ordered_json& v) {
+                  return absl::InternalError("Formatting failed");
+                }).status();
+  EXPECT_THAT(status, testing::status::StatusIs(absl::StatusCode::kInternal));
+  EXPECT_THAT(status.message(), testing::HasSubstr("Formatting failed"));
+}
+
+TEST(DataUtilsTest, FormatToolsArray_NonArrayReturnsError) {
+  auto status = FormatToolsArray("not an array", [](const ordered_json& t) {
+                  return t.dump();
+                }).status();
+  EXPECT_THAT(status,
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(status.message(), testing::HasSubstr("Tools must be an array."));
+}
+
+TEST(DataUtilsTest, FormatToolsArray_EmptyArray) {
+  ASSERT_OK_AND_ASSIGN(
+      const ordered_json formatted,
+      FormatToolsArray(ordered_json::array(),
+                       [](const ordered_json& t) { return t.dump(); }));
+  EXPECT_EQ(formatted, ordered_json::array());
+}
+
+TEST(DataUtilsTest, FormatToolsArray_ValidArray) {
+  const ordered_json tools = ordered_json::array({
+      {{"name", "tool_a"}},
+      {{"name", "tool_b"}},
+  });
+  ASSERT_OK_AND_ASSIGN(const ordered_json formatted,
+                       FormatToolsArray(tools, [](const ordered_json& t) {
+                         return absl::StrCat("decl:",
+                                             t["name"].get<std::string>());
+                       }));
+  const ordered_json expected = ordered_json::array({
+      "decl:tool_a",
+      "decl:tool_b",
+  });
+  EXPECT_EQ(formatted, expected);
+}
+
+TEST(DataUtilsTest, FormatToolsArray_CallbackErrorPropagated) {
+  const ordered_json tools = ordered_json::array({
+      {{"name", "tool_a"}},
+  });
+  auto status = FormatToolsArray(tools, [](const ordered_json& t) {
+                  return absl::InternalError("Tool format error");
+                }).status();
+  EXPECT_THAT(status, testing::status::StatusIs(absl::StatusCode::kInternal));
+  EXPECT_THAT(status.message(), testing::HasSubstr("Tool format error"));
 }
 
 }  // namespace
