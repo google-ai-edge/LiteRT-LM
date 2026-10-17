@@ -141,19 +141,27 @@ absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateTalkerLmRunner(
     Environment& env, const ModelOptions& options,
     std::shared_ptr<lm::ModelResources> lm_resources) {
   std::optional<lm::ModelAssets> model_assets;
-  auto scoped_file_or = lm_resources->GetScopedFile();
-  if (scoped_file_or.ok()) {
-    LITERT_ASSIGN_OR_RETURN(auto dup_file, scoped_file_or->get().Duplicate());
+  const std::string litertlm_path =
+      absl::EndsWithIgnoreCase(options.model_dir, ".litertlm")
+          ? std::string(options.model_dir)
+          : ResolveLitertLmPath(options.model_dir);
+  auto scoped_file = lm_resources->GetScopedFile();
+  if (scoped_file.ok()) {
+    LITERT_ASSIGN_OR_RETURN(auto dup_file, scoped_file->get().Duplicate());
     auto shared_scoped_file =
         std::make_shared<lm::ScopedFile>(std::move(dup_file));
-    ABSL_ASSIGN_OR_RETURN(model_assets,
-                          lm::ModelAssets::Create(shared_scoped_file));
+    ABSL_ASSIGN_OR_RETURN(model_assets, lm::ModelAssets::Create(
+                                            shared_scoped_file, litertlm_path));
   } else {
-    ABSL_ASSIGN_OR_RETURN(model_assets, lm::ModelAssets::Create(""));
+    ABSL_ASSIGN_OR_RETURN(model_assets, lm::ModelAssets::Create(litertlm_path));
   }
+  // Use `sampler_backend = lm::Backend::CPU` for Qwen3-TTS's Talker LM so
+  // `Decode()` keeps its output tensor (`[cb0_logits (3072), hidden (1024)]`)
+  // in FP32 for CPU-side `cb0` sampling and CPU MTP conditioning.
   ABSL_ASSIGN_OR_RETURN(auto executor_settings,
                         lm::LlmExecutorSettings::CreateDefault(
-                            std::move(*model_assets), options.backend));
+                            std::move(*model_assets), options.backend,
+                            /*sampler_backend=*/lm::Backend::CPU));
   if (options.backend == lm::Backend::CPU && options.num_threads > 0) {
     lm::CpuConfig cpu_config;
     cpu_config.number_of_threads = options.num_threads;
@@ -185,6 +193,15 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
   model_options.backend = backend;
   model_options.num_threads = num_threads;
 
+  // Only the 28-layer Talker LM runs on GPU when backend == GPU.
+  // Embedding lookup tables, the single-shot text projection MLP, the 16-step
+  // inner MTP drafter loop (which otherwise incurs 16 synchronous CPU<->GPU
+  // round-trips per 80 ms frame), and the 1D conv/transpose-conv codec vocoder
+  // (whose sequence lengths up to 122,886 exceed mobile OpenCL 2D texture
+  // dimension limits of 16,384) execute on CPU.
+  ModelOptions cpu_model_options = model_options;
+  cpu_model_options.backend = lm::Backend::CPU;
+
   if (!resources.HasLmModelResources() && !model_folder.empty()) {
     const std::string litertlm_path =
         absl::EndsWithIgnoreCase(model_folder, ".litertlm")
@@ -204,9 +221,9 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
         absl::string_view text_emb_buf,
         lm_resources->GetTFLiteModelBuffer(
             lm::proto::Text2SpeechMetadata::TF_LITE_TEXT_EMBEDDING));
-    LITERT_ASSIGN_OR_RETURN(
-        auto text_emb, CreateCompiledModelFromBuffer(
-                           env, model_options, text_emb_buf, "text_embedding"));
+    LITERT_ASSIGN_OR_RETURN(auto text_emb, CreateCompiledModelFromBuffer(
+                                               env, cpu_model_options,
+                                               text_emb_buf, "text_embedding"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "text_embedding",
         std::make_shared<CompiledModel>(std::move(text_emb))));
@@ -217,7 +234,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
             lm::proto::Text2SpeechMetadata::TF_LITE_TEXT_PROJECTION));
     LITERT_ASSIGN_OR_RETURN(
         auto text_proj,
-        CreateCompiledModelFromBuffer(env, model_options, text_proj_buf,
+        CreateCompiledModelFromBuffer(env, cpu_model_options, text_proj_buf,
                                       "text_projection"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "text_projection",
@@ -233,27 +250,9 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
         absl::string_view mtp_buf,
         lm_resources->GetTFLiteModelBuffer(
             lm::proto::Text2SpeechMetadata::TF_LITE_MTP_DRAFTER));
-    ModelOptions mtp_options = model_options;
-    if (mtp_options.backend == lm::Backend::GPU) {
-      LITERT_ASSIGN_OR_RETURN(
-          const Model* mtp_model,
-          lm_resources->GetTFLiteModel(
-              lm::proto::Text2SpeechMetadata::TF_LITE_MTP_DRAFTER));
-      LITERT_ASSIGN_OR_RETURN(const auto& in_names,
-                              mtp_model->GetSignatureInputNames(""));
-      for (size_t i = 3; i < in_names.size(); ++i) {
-        mtp_options.external_tensor_patterns.push_back(
-            std::string(in_names[i]));
-      }
-      LITERT_ASSIGN_OR_RETURN(const auto& out_names,
-                              mtp_model->GetSignatureOutputNames(""));
-      for (size_t i = 1; i < out_names.size(); ++i) {
-        mtp_options.external_tensor_patterns.push_back(
-            std::string(out_names[i]));
-      }
-    }
-    LITERT_ASSIGN_OR_RETURN(auto mtp, CreateCompiledModelFromBuffer(
-                                          env, mtp_options, mtp_buf, "mtp"));
+    LITERT_ASSIGN_OR_RETURN(
+        auto mtp,
+        CreateCompiledModelFromBuffer(env, cpu_model_options, mtp_buf, "mtp"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "mtp", std::make_shared<CompiledModel>(std::move(mtp))));
 
@@ -263,7 +262,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
             lm::proto::Text2SpeechMetadata::TF_LITE_CODEC_EMBEDDING));
     LITERT_ASSIGN_OR_RETURN(
         auto codec_emb,
-        CreateCompiledModelFromBuffer(env, model_options, codec_emb_buf,
+        CreateCompiledModelFromBuffer(env, cpu_model_options, codec_emb_buf,
                                       "codec_embedding"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "codec_embedding",
@@ -273,9 +272,9 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
         absl::string_view mtp_emb_buf,
         lm_resources->GetTFLiteModelBuffer(
             lm::proto::Text2SpeechMetadata::TF_LITE_MTP_EMBEDDING));
-    LITERT_ASSIGN_OR_RETURN(
-        auto mtp_emb, CreateCompiledModelFromBuffer(
-                          env, model_options, mtp_emb_buf, "mtp_embedding"));
+    LITERT_ASSIGN_OR_RETURN(auto mtp_emb, CreateCompiledModelFromBuffer(
+                                              env, cpu_model_options,
+                                              mtp_emb_buf, "mtp_embedding"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "mtp_embedding", std::make_shared<CompiledModel>(std::move(mtp_emb))));
 
@@ -284,8 +283,8 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
         lm_resources->GetTFLiteModelBuffer(
             lm::proto::Text2SpeechMetadata::TF_LITE_CODEC_DECODER));
     LITERT_ASSIGN_OR_RETURN(
-        auto codec,
-        CreateCompiledModelFromBuffer(env, model_options, codec_buf, "codec"));
+        auto codec, CreateCompiledModelFromBuffer(env, cpu_model_options,
+                                                  codec_buf, "codec"));
     ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
         "codec", std::make_shared<CompiledModel>(std::move(codec))));
 
@@ -294,13 +293,13 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
 
   LITERT_ASSIGN_OR_RETURN(
       auto text_emb,
-      CreateCompiledModel(env, model_options, config.text_embedding_file));
+      CreateCompiledModel(env, cpu_model_options, config.text_embedding_file));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "text_embedding", std::make_shared<CompiledModel>(std::move(text_emb))));
 
   LITERT_ASSIGN_OR_RETURN(
       auto text_proj,
-      CreateCompiledModel(env, model_options, config.text_projection_file));
+      CreateCompiledModel(env, cpu_model_options, config.text_projection_file));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "text_projection",
       std::make_shared<CompiledModel>(std::move(text_proj))));
@@ -311,29 +310,30 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
   ABSL_RETURN_IF_ERROR(
       resources.AddLmRunner("talker", std::move(talker_runner)));
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto mtp, CreateCompiledModelForStatefulRunner(
-                    env, model_options, config.mtp_file,
-                    /*signature_name=*/"", /*num_non_state_inputs=*/3,
-                    /*num_non_state_outputs=*/1));
+  LITERT_ASSIGN_OR_RETURN(auto mtp,
+                          CreateCompiledModelForStatefulRunner(
+                              env, cpu_model_options, config.mtp_file,
+                              /*signature_name=*/"", /*num_non_state_inputs=*/3,
+                              /*num_non_state_outputs=*/1));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "mtp", std::make_shared<CompiledModel>(std::move(mtp))));
 
   LITERT_ASSIGN_OR_RETURN(
       auto codec_emb,
-      CreateCompiledModel(env, model_options, config.codec_embedding_file));
+      CreateCompiledModel(env, cpu_model_options, config.codec_embedding_file));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "codec_embedding",
       std::make_shared<CompiledModel>(std::move(codec_emb))));
 
   LITERT_ASSIGN_OR_RETURN(
       auto mtp_emb,
-      CreateCompiledModel(env, model_options, config.mtp_embedding_file));
+      CreateCompiledModel(env, cpu_model_options, config.mtp_embedding_file));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "mtp_embedding", std::make_shared<CompiledModel>(std::move(mtp_emb))));
 
   LITERT_ASSIGN_OR_RETURN(
-      auto codec, CreateCompiledModel(env, model_options, config.codec_file));
+      auto codec,
+      CreateCompiledModel(env, cpu_model_options, config.codec_file));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "codec", std::make_shared<CompiledModel>(std::move(codec))));
 

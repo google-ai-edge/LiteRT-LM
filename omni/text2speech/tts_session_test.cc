@@ -39,6 +39,7 @@
 #include "omni/omni_session.h"
 #include "omni/text2speech/kokoro.h"
 #include "omni/text2speech/kokoro/kokoro_factory.h"
+#include "omni/text2speech/qwen3_tts/common.h"
 #include "omni/text2speech/stream_text_source.h"
 #include "omni/text2speech/text_chunk_utils.h"
 #include "omni/text2speech/text_source.h"
@@ -544,6 +545,34 @@ TEST_F(TtsSessionTest, KokoroSessionFactoryVoiceAndLanguageValidation) {
       status5,
       StatusIs(absl::StatusCode::kInvalidArgument,
                testing::HasSubstr("No voice is available for language")));
+}
+
+TEST_F(TtsSessionTest, Qwen3TtsLanguageResolutionAndIds) {
+  EXPECT_THAT(ResolveQwen3TtsLanguage("en-US"),
+              absl_testing::IsOkAndHolds("english"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("zh-CN"),
+              absl_testing::IsOkAndHolds("chinese"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("cmn"),
+              absl_testing::IsOkAndHolds("chinese"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("ja-JP"),
+              absl_testing::IsOkAndHolds("japanese"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("ko"),
+              absl_testing::IsOkAndHolds("korean"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("pt-BR"),
+              absl_testing::IsOkAndHolds("portuguese"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("auto"),
+              absl_testing::IsOkAndHolds("auto"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("english"),
+              absl_testing::IsOkAndHolds("english"));
+  EXPECT_THAT(ResolveQwen3TtsLanguage("hi"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_THAT(GetLanguageId("english"), absl_testing::IsOkAndHolds(2050));
+  EXPECT_THAT(GetLanguageId("chinese"), absl_testing::IsOkAndHolds(2055));
+  EXPECT_THAT(GetLanguageId("japanese"), absl_testing::IsOkAndHolds(2058));
+  EXPECT_THAT(GetLanguageId("korean"), absl_testing::IsOkAndHolds(2064));
+  EXPECT_THAT(GetLanguageId("unknown"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

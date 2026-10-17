@@ -550,6 +550,12 @@ std::optional<std::string> LitertLmLoader::GetTFLiteModelPreferActivationType(
   return std::nullopt;
 }
 
+bool LitertLmLoader::HasLlmMetadata() {
+  return GetSectionBuffer(
+             BufferKey(schema::AnySectionDataType_LlmMetadataProto))
+      .has_value();
+}
+
 std::optional<litert::BufferRef<uint8_t>>
 LitertLmLoader::GetText2SpeechMetadata() {
   return GetSectionBuffer(

@@ -155,7 +155,14 @@ class LitertLmLoader {
   std::optional<std::string> GetTFLiteModelPreferActivationType(
       absl::string_view model_type_str);
 
-  // Returns the tokenizer section buffer.
+  // Checks whether the model container includes an LlmMetadata section.
+  // Non-LLM containers (e.g. TTS, ASR, embedding) do not have this section.
+  //
+  // returns
+  // - True if an LlmMetadataProto section exists in the file, false otherwise.
+  bool HasLlmMetadata();
+
+  // Returns the LlmMetadata section buffer. Requires HasLlmMetadata().
   litert::BufferRef<uint8_t> GetLlmMetadata() {
     return GetSectionBuffer(
                BufferKey(schema::AnySectionDataType_LlmMetadataProto))

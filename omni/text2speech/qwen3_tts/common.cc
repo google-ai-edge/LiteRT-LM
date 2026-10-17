@@ -22,27 +22,74 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
 namespace litert::omni::tts {
 
+absl::StatusOr<std::string> ResolveQwen3TtsLanguage(
+    absl::string_view language) {
+  if (absl::EqualsIgnoreCase(language, "auto")) {
+    return std::string("auto");
+  }
+  std::string primary(language.substr(0, language.find_first_of("-_")));
+  absl::AsciiStrToLower(&primary);
+  static const absl::NoDestructor<absl::flat_hash_map<std::string, std::string>>
+      kPrimaryToName({
+          {"en", "english"},
+          {"english", "english"},
+          {"zh", "chinese"},
+          {"cmn", "chinese"},
+          {"chinese", "chinese"},
+          {"de", "german"},
+          {"german", "german"},
+          {"it", "italian"},
+          {"italian", "italian"},
+          {"pt", "portuguese"},
+          {"portuguese", "portuguese"},
+          {"es", "spanish"},
+          {"spanish", "spanish"},
+          {"ja", "japanese"},
+          {"japanese", "japanese"},
+          {"ko", "korean"},
+          {"korean", "korean"},
+          {"fr", "french"},
+          {"french", "french"},
+          {"ru", "russian"},
+          {"russian", "russian"},
+      });
+  if (const auto it = kPrimaryToName->find(primary);
+      it != kPrimaryToName->end()) {
+    return it->second;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unsupported language: '", language, "'"));
+}
+
 absl::StatusOr<int> GetLanguageId(absl::string_view language) {
   static const absl::NoDestructor<absl::flat_hash_map<std::string, int>>
       kLanguageMap({
-          {"chinese", 2055},  {"english", 2050},    {"german", 2053},
-          {"italian", 2070},  {"portuguese", 2071}, {"spanish", 2054},
-          {"japanese", 2064}, {"korean", 2064},     {"french", 2061},
+          {"chinese", 2055},
+          {"english", 2050},
+          {"german", 2053},
+          {"italian", 2070},
+          {"portuguese", 2071},
+          {"spanish", 2054},
+          {"japanese", 2058},
+          {"korean", 2064},
+          {"french", 2061},
           {"russian", 2069},
       });
   std::string lang_lower = std::string(language);
   absl::c_transform(lang_lower, lang_lower.begin(), ::tolower);
-  auto it = kLanguageMap->find(lang_lower);
-  if (it == kLanguageMap->end()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported language: ", language));
+  if (const auto it = kLanguageMap->find(lang_lower);
+      it != kLanguageMap->end()) {
+    return it->second;
   }
-  return it->second;
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unsupported language: ", language));
 }
 
 }  // namespace litert::omni::tts

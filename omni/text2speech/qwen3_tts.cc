@@ -22,6 +22,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -37,6 +38,7 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
+#include "omni/text2speech/qwen3_tts/common.h"
 #include "omni/text2speech/qwen3_tts/qwen3_tts_factory.h"
 #include "omni/text2speech/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/text2speech/stream_text_source.h"
@@ -118,19 +120,8 @@ class Qwen3TtsSessionFactory : public TtsSessionFactory {
     }
 
     Qwen3TtsModelConfig session_model_config = config_;
-    const absl::string_view lang = effective.language();
-    if (absl::StartsWithIgnoreCase(lang, "zh") ||
-        absl::EqualsIgnoreCase(lang, "cmn")) {
-      // TODO(b/538727793): Support non-English languages for Qwen3-TTS.
-      // Qwen3 TTS language code:
-      // https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base/blob/main/config.json#L115-L126
-      session_model_config.language = "zh-CN";
-    } else if (absl::StartsWithIgnoreCase(lang, "en")) {
-      session_model_config.language = "en-US";
-    } else {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Unsupported language: '", lang, "'"));
-    }
+    ABSL_ASSIGN_OR_RETURN(session_model_config.language,
+                          ResolveQwen3TtsLanguage(effective.language()));
     if (!effective.voice().empty()) {
       session_model_config.speaker_file = effective.voice();
     }

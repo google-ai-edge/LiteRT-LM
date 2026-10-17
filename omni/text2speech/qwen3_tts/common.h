@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_COMMON_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_COMMON_H_
 
+#include <string>
+
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
@@ -43,6 +45,18 @@ constexpr float kNegInf = -1e9f;
 constexpr absl::string_view kPromptTemplate =
     "<|im_start|>assistant\n%s<|im_end|>\n<|im_start|>assistant\n";
 }  // namespace qwen3_tts
+
+// Resolves a BCP-47 language tag (e.g. "en-US", "zh-CN", "cmn", "pt-BR") or
+// language name (e.g. "english", "chinese") to the canonical language name
+// understood by `GetLanguageId()`, or "auto".
+//
+// args
+// - language: Language tag or name string view.
+//
+// returns
+// - Canonical language name on success, or absl::InvalidArgumentError if
+// unsupported.
+absl::StatusOr<std::string> ResolveQwen3TtsLanguage(absl::string_view language);
 
 // Resolves a language name to its corresponding codec language ID.
 //

@@ -55,6 +55,51 @@
 #include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni::tts {
+namespace {
+
+float Float16BitsToFloat32(uint16_t h) {
+  const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+  const uint32_t exp = (h >> 10) & 0x1Fu;
+  const uint32_t mant = h & 0x03FFu;
+  if (exp == 0) {
+    if (mant == 0) {
+      float out = 0.0f;
+      std::memcpy(&out, &sign, sizeof(float));
+      return out;
+    }
+    const float v = std::ldexp(static_cast<float>(mant), -24);
+    return (sign != 0) ? -v : v;
+  }
+  const uint32_t bits = (exp == 31)
+                            ? (sign | 0x7F800000u | (mant << 13))
+                            : (sign | ((exp + 112u) << 23) | (mant << 13));
+  float out = 0.0f;
+  std::memcpy(&out, &bits, sizeof(float));
+  return out;
+}
+
+absl::Status ReadTalkerDecodeOutputAsFloat(TensorBuffer& buffer,
+                                           absl::Span<float> out) {
+  LITERT_ASSIGN_OR_RETURN(size_t packed_size, buffer.PackedSize());
+  if (packed_size == out.size() * sizeof(float)) {
+    LITERT_RETURN_IF_ERROR(buffer.Read<float>(out));
+    return absl::OkStatus();
+  }
+  if (packed_size == out.size() * sizeof(uint16_t)) {
+    std::vector<uint16_t> fp16_data(out.size());
+    LITERT_RETURN_IF_ERROR(buffer.Read<uint16_t>(absl::MakeSpan(fp16_data)));
+    for (size_t i = 0; i < out.size(); ++i) {
+      out[i] = Float16BitsToFloat32(fp16_data[i]);
+    }
+    return absl::OkStatus();
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unexpected Talker decode output byte size: ", packed_size,
+                   " (expected ", out.size() * sizeof(float), " for FP32 or ",
+                   out.size() * sizeof(uint16_t), " for FP16)."));
+}
+
+}  // namespace
 
 absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>>
 Qwen3TtsAcousticPredictorStage::Create(
@@ -340,8 +385,8 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
 
     std::vector<float> raw_output(qwen3_tts::kCodecVocab +
                                   qwen3_tts::kHiddenDim);
-    LITERT_RETURN_IF_ERROR(decode_logits_buf.Read<float>(
-        absl::MakeSpan(raw_output.data(), raw_output.size())));
+    ABSL_RETURN_IF_ERROR(ReadTalkerDecodeOutputAsFloat(
+        decode_logits_buf, absl::MakeSpan(raw_output)));
     std::copy(raw_output.begin(), raw_output.begin() + qwen3_tts::kCodecVocab,
               cb0_logits.begin());
     std::copy(raw_output.begin() + qwen3_tts::kCodecVocab, raw_output.end(),

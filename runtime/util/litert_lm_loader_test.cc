@@ -167,6 +167,20 @@ TEST(LitertLmLoaderTest, GetEmbeddingMetadataSuccess) {
                        LitertLmLoader::Create(std::move(model_file)));
   EXPECT_TRUE(loader->GetEmbeddingMetadata().has_value());
   EXPECT_EQ(loader->GetEmbeddingMetadata()->Size(), 32);
+  // A container whose only capability section is EmbeddingMetadata has no
+  // LlmMetadata.
+  EXPECT_FALSE(loader->HasLlmMetadata());
+}
+
+TEST(LitertLmLoaderTest, HasLlmMetadataForLlmFile) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  EXPECT_TRUE(loader->HasLlmMetadata());
+  EXPECT_GT(loader->GetLlmMetadata().Size(), 0);
 }
 
 TEST(LitertLmLoaderTest, InitializeWithSentencePieceFile) {

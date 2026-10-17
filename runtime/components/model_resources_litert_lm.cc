@@ -240,6 +240,11 @@ absl::StatusOr<const Tokenizer*> ModelResourcesLitertLm::GetOrCreateTokenizer(
 absl::StatusOr<const proto::LlmMetadata*>
 ModelResourcesLitertLm::GetLlmMetadata() {
   if (llm_metadata_ == nullptr) {
+    // Non-LLM containers (e.g. TTS, ASR) carry no LlmMetadata section; report
+    // NotFound instead of dereferencing an empty optional.
+    if (!litert_lm_loader_->HasLlmMetadata()) {
+      return absl::NotFoundError("LlmMetadata not found in the model file.");
+    }
     auto buffer_ref = litert_lm_loader_->GetLlmMetadata();
     auto llm_metadata = std::make_unique<proto::LlmMetadata>();
     if (!llm_metadata->ParseFromString(

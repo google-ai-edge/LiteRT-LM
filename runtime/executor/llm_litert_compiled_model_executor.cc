@@ -82,7 +82,6 @@
 #include "runtime/util/lora_util.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/tensor_buffer_util.h"
-#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 
@@ -178,6 +177,9 @@ absl::Status CopyOrAssignTensorBuffer(const TensorBuffer& src,
                               dst, TensorBuffer::LockMode::kWrite));
   size_t bytes_to_copy = std::min(in_size, out_size);
   std::memcpy(out_lock.second, in_lock.second, bytes_to_copy);
+  if (out_size > bytes_to_copy) {
+    std::memset(out_lock.second + bytes_to_copy, 0, out_size - bytes_to_copy);
+  }
   return absl::OkStatus();
 }
 
