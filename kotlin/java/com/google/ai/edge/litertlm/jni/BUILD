@@ -80,7 +80,11 @@ cc_binary(
         "//runtime/engine:embedding_engine_settings",
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
-    ],
+    ] + select({
+        "//build_config:disable_legacy_artisan_executors": [],
+        "//conditions:default": [
+        ],
+    }),
 )
 
 cc_library(
