@@ -352,6 +352,35 @@ std::vector<std::string> OmniRegistry::GetRegisteredModels() const {
   return names;
 }
 
+std::string OmniRegistry::FindLongestContainedModelName(
+    absl::string_view normalized_target) const {
+  std::string best;
+  size_t best_len = 0;
+  for (const auto& [name, _] : models_) {
+    const std::string normalized_name = NormalizeForMatching(name);
+    if (normalized_name.size() > best_len &&
+        absl::StrContains(normalized_target, normalized_name)) {
+      best = name;
+      best_len = normalized_name.size();
+    }
+  }
+  return best;
+}
+
+absl::StatusOr<std::string> OmniRegistry::FindModelNameForPath(
+    absl::string_view model_path) const {
+  const std::filesystem::path path{std::string(model_path)};
+  const std::string normalized_stem = NormalizeForMatching(
+      path.has_stem() ? path.stem().string() : path.string());
+  absl::MutexLock lock(mutex_);
+  std::string best = FindLongestContainedModelName(normalized_stem);
+  if (best.empty()) {
+    return absl::NotFoundError(
+        absl::StrCat("No registered Omni model matches path: ", model_path));
+  }
+  return best;
+}
+
 absl::StatusOr<OmniRegistry::RegisteredModel> OmniRegistry::GetRegisteredModel(
     absl::string_view model_name) const {
   absl::MutexLock lock(mutex_);
@@ -395,18 +424,13 @@ OmniRegistry::CreateSessionFactory(
 
     if (model_it == models_.end() &&
         (!settings.model_path.empty() || absl::StrContains(model_name, '/'))) {
-      const std::string norm_target = NormalizeForMatching(
-          resolved_model_name.empty() ? settings.model_path
-                                      : resolved_model_name);
-      size_t best_match_len = 0;
-      for (auto it = models_.begin(); it != models_.end(); ++it) {
-        const std::string norm_candidate = NormalizeForMatching(it->first);
-        if (norm_candidate.size() > best_match_len &&
-            absl::StrContains(norm_target, norm_candidate)) {
-          model_it = it;
-          resolved_model_name = it->first;
-          best_match_len = norm_candidate.size();
-        }
+      const std::string matched_name =
+          FindLongestContainedModelName(NormalizeForMatching(
+              resolved_model_name.empty() ? settings.model_path
+                                          : resolved_model_name));
+      if (!matched_name.empty()) {
+        model_it = models_.find(matched_name);
+        resolved_model_name = matched_name;
       }
     }
 

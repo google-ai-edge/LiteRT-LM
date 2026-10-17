@@ -123,6 +123,14 @@ class OmniRegistry {
   // Returns the list of currently registered `model_name`s.
   std::vector<std::string> GetRegisteredModels() const;
 
+  // Returns the longest registered model name contained in the file name of
+  // `model_path`, ignoring case, '-' and '_' (e.g. "kokoro" for
+  // "/x/kokoro_int8_gpu.litertlm"), or `NotFoundError` if none matches.
+  // Published model files carry variant suffixes, so their stem is usually not
+  // a registered name itself.
+  absl::StatusOr<std::string> FindModelNameForPath(
+      absl::string_view model_path) const;
+
   // Returns a `RegisteredModel` view of the registration for `model_name`, or
   // `NotFoundError` if `model_name` is not registered.
   absl::StatusOr<RegisteredModel> GetRegisteredModel(
@@ -164,6 +172,12 @@ class OmniRegistry {
 
   friend class absl::NoDestructor<OmniRegistry>;
   OmniRegistry() = default;
+
+  // Returns the longest registered model name whose normalized form (lowercase,
+  // without '-' and '_') is contained in `normalized_target`, or an empty
+  // string if none matches.
+  std::string FindLongestContainedModelName(absl::string_view normalized_target)
+      const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   mutable absl::Mutex mutex_;
   absl::flat_hash_map<FactoryKey, std::shared_ptr<SessionFactoryCreator>>

@@ -258,6 +258,14 @@ absl::Status RunOmniRunner() {
     if (model_name.empty()) {
       model_name = p.parent_path().filename().string();
     }
+    // Published files carry variant suffixes (e.g. `kokoro_int8_gpu`), so fall
+    // back to the registered name contained in the file name.
+    if (!OmniRegistry::Get().IsModelRegistered(model_name)) {
+      if (auto inferred = OmniRegistry::Get().FindModelNameForPath(model_path);
+          inferred.ok()) {
+        model_name = *std::move(inferred);
+      }
+    }
   }
 
   ABSL_ASSIGN_OR_RETURN(const auto reg,

@@ -392,6 +392,35 @@ TEST(OmniRegistryTest, DeletesOnlyStaleCachesOfTheSameModel) {
   EXPECT_TRUE(std::filesystem::exists(dir / "other-model_1_2.xnnpack_cache"));
 }
 
+TEST(OmniRegistryTest, FindModelNameForPathMatchesLongestRegisteredName) {
+  auto& registry = OmniRegistry::Get();
+  const auto factory =
+      [](absl::string_view, const OmniEngine::Settings&,
+         const MessageLite* absl_nullable, const MessageLite* absl_nullable,
+         ::litert::Environment&, ::litert::Options&,
+         std::shared_ptr<lm::ModelResources> absl_nullable)
+      -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+    return std::make_unique<FakeSessionFactory>();
+  };
+  ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+      .model_names = {"find-test-model", "find-test-model-v2"},
+      .get_session_factory = factory,
+      .session_config_type_id = "Speech2Text",
+  }));
+  absl::Cleanup cleanup = [&] {
+    registry.UnregisterModel("find-test-model");
+    registry.UnregisterModel("find-test-model-v2");
+  };
+
+  EXPECT_THAT(registry.FindModelNameForPath("/x/Find_Test_Model_int8.litertlm"),
+              IsOkAndHolds("find-test-model"));
+  EXPECT_THAT(
+      registry.FindModelNameForPath("/x/find_test_model_v2_int8_gpu.litertlm"),
+      IsOkAndHolds("find-test-model-v2"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/unrelated.litertlm"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
 TEST(OmniRegistryTest, ResolvesModelByPathWhenModelNameNotExact) {
   auto& registry = OmniRegistry::Get();
   std::string resolved_name;
