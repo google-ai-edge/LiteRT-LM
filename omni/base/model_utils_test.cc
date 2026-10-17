@@ -32,8 +32,8 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "omni/omni_engine.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni {

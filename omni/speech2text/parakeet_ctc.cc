@@ -37,8 +37,8 @@
 #include "omni/speech2text/audio_source.h"
 #include "omni/speech2text/ctc_decoder.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/proto/asr_metadata.pb.h"
-#include "runtime/proto/asr_model_type.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
+#include "runtime/proto/speech2text_model_type.pb.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {

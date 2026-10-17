@@ -42,9 +42,9 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/proto/asr_metadata.pb.h"
-#include "runtime/proto/asr_session_config.pb.h"
-#include "runtime/proto/tts_session_config.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
+#include "runtime/proto/text2speech_session_config.pb.h"
 #include "runtime/util/file_util.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK

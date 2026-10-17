@@ -46,9 +46,9 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "omni/text2speech/qwen3_tts/common.h"
-#include "runtime/proto/tts_metadata.pb.h"
-#include "runtime/proto/tts_model_type.pb.h"
-#include "runtime/proto/tts_session_config.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
+#include "runtime/proto/text2speech_model_type.pb.h"
+#include "runtime/proto/text2speech_session_config.pb.h"
 #include "miniaudio.h"  // from @miniaudio
 
 ABSL_FLAG(std::string, model_path, "",

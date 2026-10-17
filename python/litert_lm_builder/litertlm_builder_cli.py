@@ -90,9 +90,7 @@ _SUBCOMMANDS = (
     "executor_metadata",
     "embedding_metadata",
     "speech2text_metadata",
-    "asr_metadata",
     "text2speech_metadata",
-    "tts_metadata",
     "text2image_metadata",
     "tflite_model",
     "tflite_weights",
@@ -241,25 +239,6 @@ def _add_speech2text_metadata_parser(subparsers) -> None:
   _add_metadata_arguments(speech2text_metadata_parser)
 
 
-def _add_asr_metadata_parser(subparsers) -> None:
-  """Adds a parser for asr metadata to the subparsers."""
-  asr_metadata_parser = subparsers.add_parser(
-      "asr_metadata",
-      description=(
-          "Add asr metadata to the LiteRT-LM file. Can be a text or binary"
-          " proto file."
-      ),
-      help="Add asr metadata.",
-  )
-  asr_metadata_parser.add_argument(
-      "--path",
-      type=str,
-      required=True,
-      help="The path to the asr metadata file.",
-  )
-  _add_metadata_arguments(asr_metadata_parser)
-
-
 def _add_text2speech_metadata_parser(subparsers) -> None:
   """Adds a parser for text2speech metadata to the subparsers."""
   text2speech_metadata_parser = subparsers.add_parser(
@@ -277,25 +256,6 @@ def _add_text2speech_metadata_parser(subparsers) -> None:
       help="The path to the text2speech metadata file.",
   )
   _add_metadata_arguments(text2speech_metadata_parser)
-
-
-def _add_tts_metadata_parser(subparsers) -> None:
-  """Adds a parser for tts metadata to the subparsers."""
-  tts_metadata_parser = subparsers.add_parser(
-      "tts_metadata",
-      description=(
-          "Add tts metadata to the LiteRT-LM file. Can be a text or binary"
-          " proto file."
-      ),
-      help="Add tts metadata.",
-  )
-  tts_metadata_parser.add_argument(
-      "--path",
-      type=str,
-      required=True,
-      help="The path to the tts metadata file.",
-  )
-  _add_metadata_arguments(tts_metadata_parser)
 
 
 def _add_text2image_metadata_parser(subparsers) -> None:
@@ -486,9 +446,7 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_executor_metadata_parser(subparsers)
   _add_embedding_metadata_parser(subparsers)
   _add_speech2text_metadata_parser(subparsers)
-  _add_asr_metadata_parser(subparsers)
   _add_text2speech_metadata_parser(subparsers)
-  _add_tts_metadata_parser(subparsers)
   _add_text2image_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
@@ -628,14 +586,6 @@ def _build_speech2text_metadata(
   builder.add_speech2text_metadata(args.path, additional_metadata=metadata)
 
 
-def _build_asr_metadata(
-    args: argparse.Namespace,
-    builder: litertlm_builder.LitertLmFileBuilder,
-) -> None:
-  """Builds asr metadata from the parsed arguments."""
-  _build_speech2text_metadata(args, builder)
-
-
 def _build_text2speech_metadata(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
@@ -643,14 +593,6 @@ def _build_text2speech_metadata(
   """Builds text2speech metadata from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
   builder.add_text2speech_metadata(args.path, additional_metadata=metadata)
-
-
-def _build_tts_metadata(
-    args: argparse.Namespace,
-    builder: litertlm_builder.LitertLmFileBuilder,
-) -> None:
-  """Builds tts metadata from the parsed arguments."""
-  _build_text2speech_metadata(args, builder)
 
 
 def _build_text2image_metadata(
@@ -790,9 +732,9 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_executor_metadata(parsed_arg, builder)
         case "embedding_metadata":
           _build_embedding_metadata(parsed_arg, builder)
-        case "speech2text_metadata" | "asr_metadata":
+        case "speech2text_metadata":
           _build_speech2text_metadata(parsed_arg, builder)
-        case "text2speech_metadata" | "tts_metadata":
+        case "text2speech_metadata":
           _build_text2speech_metadata(parsed_arg, builder)
         case "text2image_metadata":
           _build_text2image_metadata(parsed_arg, builder)

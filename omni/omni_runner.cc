@@ -43,9 +43,9 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
-#include "runtime/proto/asr_session_config.pb.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
 #include "runtime/proto/text2image_session_config.pb.h"
-#include "runtime/proto/tts_session_config.pb.h"
+#include "runtime/proto/text2speech_session_config.pb.h"
 #include "miniaudio.h"  // from @miniaudio
 #include "stb_image_write.h"  // from @stb
 

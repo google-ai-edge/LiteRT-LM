@@ -34,7 +34,7 @@
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
-#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header.h"

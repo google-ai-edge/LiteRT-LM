@@ -45,8 +45,8 @@
 #include "omni/text2speech/text_source.h"
 #include "omni/text2speech/vocoder.h"
 #include "runtime/framework/threadpool.h"
-#include "runtime/proto/tts_metadata.pb.h"
-#include "runtime/proto/tts_session_config.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
+#include "runtime/proto/text2speech_session_config.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {

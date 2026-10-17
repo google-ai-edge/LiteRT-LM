@@ -44,8 +44,8 @@
 #include "omni/speech2text/tokenizer_detokenizer.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
-#include "runtime/proto/asr_metadata.pb.h"
-#include "runtime/proto/asr_session_config.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {

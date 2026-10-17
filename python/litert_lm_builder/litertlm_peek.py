@@ -21,12 +21,12 @@ from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
-from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import speech2text_metadata_pb2
 from runtime.proto import text2image_metadata_pb2
-from runtime.proto import tts_metadata_pb2
+from runtime.proto import text2speech_metadata_pb2
 
 # --- ANSI Escape Code Definitions ---
 ANSI_BOLD = "\033[1m"
@@ -288,7 +288,7 @@ def _dump_speech2text_metadata_proto(
       section_object,
       dump_files_dir,
       output_stream,
-      asr_metadata_pb2.Speech2TextMetadata,
+      speech2text_metadata_pb2.Speech2TextMetadata,
   )
 
 
@@ -304,7 +304,7 @@ def _dump_text2speech_metadata_proto(
       section_object,
       dump_files_dir,
       output_stream,
-      tts_metadata_pb2.Text2SpeechMetadata,
+      text2speech_metadata_pb2.Text2SpeechMetadata,
   )
 
 

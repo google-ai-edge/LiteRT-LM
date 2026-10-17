@@ -44,9 +44,9 @@
 #include "omni/text2speech/stream_text_source.h"
 #include "omni/text2speech/tts_session.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/proto/tts_metadata.pb.h"
-#include "runtime/proto/tts_model_type.pb.h"
-#include "runtime/proto/tts_session_config.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
+#include "runtime/proto/text2speech_model_type.pb.h"
+#include "runtime/proto/text2speech_session_config.pb.h"
 
 namespace litert::omni::tts {
 namespace {

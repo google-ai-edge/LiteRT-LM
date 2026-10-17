@@ -38,12 +38,12 @@
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/sentencepiece_tokenizer.h"
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
-#include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
-#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "support/tokenizer/tokenizer.h"
 

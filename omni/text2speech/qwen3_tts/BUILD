@@ -185,7 +185,7 @@ cc_library(
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:llm_litert_compiled_model_executor_factory",
         "//runtime/proto:llm_metadata_cc_proto",
-        "//runtime/proto:tts_metadata_cc_proto",
+        "//runtime/proto:text2speech_metadata_cc_proto",
         "//runtime/util:scoped_file",
     ],
 )

@@ -28,11 +28,11 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
-#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 

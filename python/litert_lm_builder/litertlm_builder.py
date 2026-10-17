@@ -62,12 +62,12 @@ import tomli as tomllib
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
-from runtime.proto import asr_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import speech2text_metadata_pb2
 from runtime.proto import text2image_metadata_pb2
-from runtime.proto import tts_metadata_pb2
+from runtime.proto import text2speech_metadata_pb2
 
 
 @enum.unique
@@ -299,8 +299,8 @@ def _get_model_type(section: _SectionObject) -> str | None:
 _ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
     set(llm_metadata_pb2.LlmMetadata.TfLiteModelType.keys())
     | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.keys())
-    | set(asr_metadata_pb2.Speech2TextMetadata.TfLiteModelType.keys())
-    | set(tts_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.keys())
+    | set(speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.keys())
+    | set(text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.keys())
     | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.keys())
 ) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
 
@@ -341,12 +341,12 @@ def _resolve_model_type_wire_string(
           "TF_LITE_MODEL_TYPE_UNSPECIFIED (0) is not a valid model_type."
       )
     capability_type = next(iter(capability_types))
-    if capability_type in ("speech2text", "asr"):
-      return asr_metadata_pb2.Speech2TextMetadata.TfLiteModelType.Name(
+    if capability_type == "speech2text":
+      return speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
-    if capability_type in ("text2speech", "tts"):
-      return tts_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.Name(
+    if capability_type == "text2speech":
+      return text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
     if capability_type == "text2image":
@@ -711,12 +711,12 @@ class LitertLmFileBuilder:
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section_type in ("Speech2TextMetadata", "AsrMetadata"):
+        elif section_type == "Speech2TextMetadata":
           builder.add_speech2text_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
-        elif section_type in ("Text2SpeechMetadata", "TtsMetadata"):
+        elif section_type == "Text2SpeechMetadata":
           builder.add_text2speech_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
@@ -1049,19 +1049,11 @@ class LitertLmFileBuilder:
     self._has_speech2text_metadata = True
     return self._add_proto_metadata_section(
         speech2text_metadata_path,
-        asr_metadata_pb2.Speech2TextMetadata,
+        speech2text_metadata_pb2.Speech2TextMetadata,
         schema.AnySectionDataType.Speech2TextMetadataProto,
         "Speech2Text",
         additional_metadata,
     )
-
-  def add_asr_metadata(
-      self,
-      asr_metadata_path: str,
-      additional_metadata: Optional[list[Metadata]] = None,
-  ) -> LitertLmFileBuilderT:
-    """Adds speech-to-text (ASR) metadata to the litertlm file."""
-    return self.add_speech2text_metadata(asr_metadata_path, additional_metadata)
 
   def add_text2speech_metadata(
       self,
@@ -1076,19 +1068,11 @@ class LitertLmFileBuilder:
     self._has_text2speech_metadata = True
     return self._add_proto_metadata_section(
         text2speech_metadata_path,
-        tts_metadata_pb2.Text2SpeechMetadata,
+        text2speech_metadata_pb2.Text2SpeechMetadata,
         schema.AnySectionDataType.Text2SpeechMetadataProto,
         "Text2Speech",
         additional_metadata,
     )
-
-  def add_tts_metadata(
-      self,
-      tts_metadata_path: str,
-      additional_metadata: Optional[list[Metadata]] = None,
-  ) -> LitertLmFileBuilderT:
-    """Adds text-to-speech (TTS) metadata to the litertlm file."""
-    return self.add_text2speech_metadata(tts_metadata_path, additional_metadata)
 
   def add_text2image_metadata(
       self,

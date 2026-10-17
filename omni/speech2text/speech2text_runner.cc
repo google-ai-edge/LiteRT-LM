@@ -37,7 +37,7 @@
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "omni/speech2text/file_audio_source.h"
-#include "runtime/proto/asr_session_config.pb.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
 
 ABSL_FLAG(std::string, model_name, "parakeet-tdt-0.6b-v3",
           "ASR model name as defined in model metadata presets.");

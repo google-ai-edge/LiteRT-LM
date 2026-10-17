@@ -48,7 +48,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
 #include "runtime/proto/llm_metadata.pb.h"
-#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 
 namespace litert::omni::tts {

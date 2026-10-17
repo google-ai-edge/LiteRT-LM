@@ -49,9 +49,9 @@
 #include "omni/text2speech/vocoder.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
-#include "runtime/proto/asr_metadata.pb.h"
-#include "runtime/proto/asr_session_config.pb.h"
-#include "runtime/proto/tts_session_config.pb.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
+#include "runtime/proto/text2speech_session_config.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni {

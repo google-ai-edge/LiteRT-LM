@@ -141,9 +141,6 @@ if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_CORROSION_LINKER_V
 endif()
 
 set(LITERTLM_PROTO_FILES
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/asr_metadata.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/asr_model_type.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/asr_session_config.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_model_type.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/engine.proto"
@@ -152,12 +149,15 @@ set(LITERTLM_PROTO_FILES
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_model_type.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/sampler_params.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/speech2text_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/speech2text_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/speech2text_session_config.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2image_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2image_session_config.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2speech_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2speech_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2speech_session_config.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/token.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/tts_metadata.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/tts_model_type.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/tts_session_config.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/executor/proto/constrained_decoding_options.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/executor_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/util/external_file.proto"

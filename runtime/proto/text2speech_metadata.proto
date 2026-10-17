@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
-import "runtime/proto/tts_model_type.proto";
+import "runtime/proto/text2speech_model_type.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "Text2SpeechMetadataOuterClass";

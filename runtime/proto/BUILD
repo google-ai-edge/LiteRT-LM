@@ -214,125 +214,125 @@ alias(
 )
 
 tf_proto_library(
-    name = "tts_model_type",
-    srcs = ["tts_model_type.proto"],
+    name = "text2speech_model_type",
+    srcs = ["text2speech_model_type.proto"],
 )
 
 alias(
-    name = "tts_model_type_proto",
-    actual = ":tts_model_type",
+    name = "text2speech_model_type_proto",
+    actual = ":text2speech_model_type",
 )
 
 alias(
-    name = "tts_model_type_cc_proto",
-    actual = ":tts_model_type_cc",
+    name = "text2speech_model_type_cc_proto",
+    actual = ":text2speech_model_type_cc",
 )
 
 alias(
-    name = "tts_model_type_py_pb2",
-    actual = ":tts_model_type_py_proto",
+    name = "text2speech_model_type_py_pb2",
+    actual = ":text2speech_model_type_py_proto",
 )
 
 tf_proto_library(
-    name = "tts_metadata",
-    srcs = ["tts_metadata.proto"],
-    deps = [":tts_model_type"],
+    name = "text2speech_metadata",
+    srcs = ["text2speech_metadata.proto"],
+    deps = [":text2speech_model_type"],
 )
 
 alias(
-    name = "tts_metadata_proto",
-    actual = ":tts_metadata",
+    name = "text2speech_metadata_proto",
+    actual = ":text2speech_metadata",
 )
 
 alias(
-    name = "tts_metadata_cc_proto",
-    actual = ":tts_metadata_cc",
+    name = "text2speech_metadata_cc_proto",
+    actual = ":text2speech_metadata_cc",
 )
 
 alias(
-    name = "tts_metadata_py_pb2",
-    actual = ":tts_metadata_py_proto",
+    name = "text2speech_metadata_py_pb2",
+    actual = ":text2speech_metadata_py_proto",
 )
 
 tf_proto_library(
-    name = "tts_session_config",
-    srcs = ["tts_session_config.proto"],
+    name = "text2speech_session_config",
+    srcs = ["text2speech_session_config.proto"],
 )
 
 alias(
-    name = "tts_session_config_proto",
-    actual = ":tts_session_config",
+    name = "text2speech_session_config_proto",
+    actual = ":text2speech_session_config",
 )
 
 alias(
-    name = "tts_session_config_cc_proto",
-    actual = ":tts_session_config_cc",
+    name = "text2speech_session_config_cc_proto",
+    actual = ":text2speech_session_config_cc",
 )
 
 alias(
-    name = "tts_session_config_py_pb2",
-    actual = ":tts_session_config_py_proto",
+    name = "text2speech_session_config_py_pb2",
+    actual = ":text2speech_session_config_py_proto",
 )
 
 tf_proto_library(
-    name = "asr_model_type",
-    srcs = ["asr_model_type.proto"],
+    name = "speech2text_model_type",
+    srcs = ["speech2text_model_type.proto"],
 )
 
 alias(
-    name = "asr_model_type_proto",
-    actual = ":asr_model_type",
+    name = "speech2text_model_type_proto",
+    actual = ":speech2text_model_type",
 )
 
 alias(
-    name = "asr_model_type_cc_proto",
-    actual = ":asr_model_type_cc",
+    name = "speech2text_model_type_cc_proto",
+    actual = ":speech2text_model_type_cc",
 )
 
 alias(
-    name = "asr_model_type_py_pb2",
-    actual = ":asr_model_type_py_proto",
+    name = "speech2text_model_type_py_pb2",
+    actual = ":speech2text_model_type_py_proto",
 )
 
 tf_proto_library(
-    name = "asr_metadata",
-    srcs = ["asr_metadata.proto"],
-    deps = [":asr_model_type"],
+    name = "speech2text_metadata",
+    srcs = ["speech2text_metadata.proto"],
+    deps = [":speech2text_model_type"],
 )
 
 alias(
-    name = "asr_metadata_proto",
-    actual = ":asr_metadata",
+    name = "speech2text_metadata_proto",
+    actual = ":speech2text_metadata",
 )
 
 alias(
-    name = "asr_metadata_cc_proto",
-    actual = ":asr_metadata_cc",
+    name = "speech2text_metadata_cc_proto",
+    actual = ":speech2text_metadata_cc",
 )
 
 alias(
-    name = "asr_metadata_py_pb2",
-    actual = ":asr_metadata_py_proto",
+    name = "speech2text_metadata_py_pb2",
+    actual = ":speech2text_metadata_py_proto",
 )
 
 tf_proto_library(
-    name = "asr_session_config",
-    srcs = ["asr_session_config.proto"],
+    name = "speech2text_session_config",
+    srcs = ["speech2text_session_config.proto"],
 )
 
 alias(
-    name = "asr_session_config_proto",
-    actual = ":asr_session_config",
+    name = "speech2text_session_config_proto",
+    actual = ":speech2text_session_config",
 )
 
 alias(
-    name = "asr_session_config_cc_proto",
-    actual = ":asr_session_config_cc",
+    name = "speech2text_session_config_cc_proto",
+    actual = ":speech2text_session_config_cc",
 )
 
 alias(
-    name = "asr_session_config_py_pb2",
-    actual = ":asr_session_config_py_proto",
+    name = "speech2text_session_config_py_pb2",
+    actual = ":speech2text_session_config_py_proto",
 )
 
 tf_proto_library(
