@@ -1278,5 +1278,172 @@ TEST(TdtDecoderTest,
   EXPECT_EQ(tokens[5].timestamp_ms, kNumFrames);
 }
 
+TEST(TdtDecoderTest,
+     ForcedSosBurstRollsBackStatelessDumpAndMultiFrameHallucination) {
+  constexpr size_t kNumFrames = 55;
+  constexpr size_t kNumTokenSlots = 12;
+  constexpr size_t kLogitsPerSlot = 10;
+  constexpr size_t kLogitsPerFrame = kNumTokenSlots * kLogitsPerSlot;
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(
+            CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+        buffers.push_back(
+            CreateTestTensorBuffer(kNumTokenSlots, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(kLogitsPerFrame * kNumFrames,
+                                                 sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(10, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+
+  auto set_slot = [&](std::vector<float>& logits, size_t frame, size_t slot,
+                      float blank_logit, int non_blank_id,
+                      float non_blank_logit, int duration) {
+    const size_t base = frame * kLogitsPerFrame + slot * kLogitsPerSlot;
+    std::fill_n(logits.begin() + base, kLogitsPerSlot, 0.0f);
+    logits[base + 0] = blank_logit;
+    if (non_blank_id > 0) {
+      logits[base + non_blank_id] = non_blank_logit;
+    }
+    logits[base + 5 + duration] = 10.0f;
+  };
+
+  std::vector<float> active_logits(kLogitsPerFrame * kNumFrames, 0.0f);
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillRepeatedly([&](absl::string_view, absl::Span<const TensorBuffer>,
+                          absl::Span<const TensorBuffer> outputs) {
+        auto& logits_buf = const_cast<TensorBuffer&>(outputs[0]);
+        EXPECT_TRUE(logits_buf.Write<float>(absl::MakeConstSpan(active_logits))
+                        .HasValue());
+        return absl::OkStatus();
+      });
+
+  auto init_all_blank = [&]() {
+    for (size_t f = 0; f < kNumFrames; ++f) {
+      for (size_t s = 0; s < kNumTokenSlots; ++s) {
+        set_slot(active_logits, f, s, /*blank_logit=*/10.0f,
+                 /*non_blank_id=*/0, /*non_blank_logit=*/0.0f, /*duration=*/1);
+      }
+    }
+  };
+
+  ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      TdtDecoder::Create(&mock_runner, /*decode_start_token_ids=*/{0},
+                         /*decode_statefully_after=*/4,
+                         /*max_symbols_per_step=*/3));
+  std::vector<TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer(1024 * kNumFrames, sizeof(float)));
+
+  // Case 1: Forced near-threshold <sos> at t=10 (gap=2.0 <= 3.0) with d=1,
+  // followed at t=11 by 3 tokens in slots 1..3 on the same frame (d=0, 0, 1).
+  // Because sos_was_forced && tokens_since_sos == 1, the 3rd symbol on t=11
+  // triggers RollbackFrameBurstAndAdvance and resets to <sos>, allowing the
+  // natural speech token at t=25 to be decoded from slot 0.
+  init_all_blank();
+  set_slot(active_logits, /*frame=*/10, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/11, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/0);
+  set_slot(active_logits, /*frame=*/11, /*slot=*/2, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/3, /*non_blank_logit=*/10.0f, /*duration=*/0);
+  set_slot(active_logits, /*frame=*/11, /*slot=*/3, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/4, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/25, /*slot=*/0, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/4);
+
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 2);
+  EXPECT_EQ(tokens[0].token_id, 2);
+  EXPECT_EQ(tokens[0].timestamp_ms, 25);
+  EXPECT_TRUE(tokens[1].IsEndOfChunk());
+
+  // Case 2: Forced near-threshold <sos> at t=12 (> kDeadZoneClearPrefixMaxFrame
+  // = 8) emitting 2 tokens across t=12, 13 followed by a >= 16-frame dead zone,
+  // and a late forced <sos> at t=48 that bursts at end-of-chunk (t=53). Both
+  // forced false starts are cleared.
+  init_all_blank();
+  set_slot(active_logits, /*frame=*/12, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/13, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/48, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/2);
+  set_slot(active_logits, /*frame=*/50, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/3);
+  for (size_t s = 2; s < kNumTokenSlots; ++s) {
+    set_slot(active_logits, /*frame=*/53, /*slot=*/s, /*blank_logit=*/0.0f,
+             /*non_blank_id=*/3, /*non_blank_logit=*/10.0f, /*duration=*/0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 1);
+  EXPECT_TRUE(tokens[0].IsEndOfChunk());
+
+  // Case 3: A forced <sos> at t=10 is followed by 6 more emission frames
+  // (t=11..16), i.e. 7 > kMaxPrematureForcedSosFrames emission frames, before
+  // a burst at t=17. The segment is no longer a premature false start, so only
+  // the burst frame is removed and the 7 earlier tokens are kept.
+  init_all_blank();
+  set_slot(active_logits, /*frame=*/10, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  for (size_t f = 11; f <= 16; ++f) {
+    set_slot(active_logits, f, /*slot=*/f - 10, /*blank_logit=*/0.0f,
+             /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  }
+  for (size_t s = 7; s < 11; ++s) {
+    set_slot(active_logits, /*frame=*/17, s, /*blank_logit=*/0.0f,
+             /*non_blank_id=*/4, /*non_blank_logit=*/10.0f, /*duration=*/0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 8);
+  EXPECT_EQ(tokens[0].token_id, 1);
+  EXPECT_EQ(tokens[0].timestamp_ms, 10);
+  for (size_t i = 1; i <= 6; ++i) {
+    EXPECT_EQ(tokens[i].token_id, 2);
+    EXPECT_EQ(tokens[i].timestamp_ms, 10 + i);
+  }
+  EXPECT_TRUE(tokens[7].IsEndOfChunk());
+
+  // Case 4: 7 unforced emission frames at t=1..7 are cleared by a mid-chunk
+  // dead-zone reset, which also resets the emission-frame count. A later
+  // forced <sos> at t=40 with 3 emission frames (t=40..42) is then a premature
+  // false start, so the burst at t=43 removes all 3 tokens instead of only the
+  // burst frame.
+  init_all_blank();
+  for (size_t f = 1; f <= 7; ++f) {
+    set_slot(active_logits, f, /*slot=*/f - 1, /*blank_logit=*/0.0f,
+             /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  }
+  set_slot(active_logits, /*frame=*/40, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/41, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/42, /*slot=*/2, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/3, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  for (size_t s = 3; s < 7; ++s) {
+    set_slot(active_logits, /*frame=*/43, s, /*blank_logit=*/0.0f,
+             /*non_blank_id=*/4, /*non_blank_logit=*/10.0f, /*duration=*/0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 1);
+  EXPECT_TRUE(tokens[0].IsEndOfChunk());
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

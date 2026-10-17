@@ -72,6 +72,10 @@ constexpr size_t kBurstEndOfChunkMarginFrames = 2;
 // Maximum tokens fed since `<sos>` (`<= 2` tokens) treated as a premature
 // false start and rolled back to `<sos>` when a zero-duration burst occurs.
 constexpr size_t kMaxPrematureSosTokens = 2;
+// Maximum emission frames since a forced near-threshold `<sos>` (`<= 6`
+// frames) treated as a premature forced-`<sos>` false start and rolled back to
+// `<sos>` when a zero-duration burst occurs.
+constexpr size_t kMaxPrematureForcedSosFrames = 6;
 // Minimum consecutive blank frames (16 frames = 1.28 s at 80 ms/frame) after
 // an early emission before triggering a mid-chunk `<sos>` reset.
 constexpr size_t kDeadZoneMinBlankFrames = 16;
@@ -156,6 +160,12 @@ struct DecodeState {
   // Number of non-blank tokens fed to the prediction network at earlier frames
   // since the last `<sos>` reset.
   size_t tokens_since_sos = 0;
+  // Number of encoder frames that emitted at least one non-blank token since
+  // the last `<sos>` reset.
+  size_t sos_emission_frames = 0;
+  // Whether the current `<sos>` segment was initiated by
+  // `SelectNearThresholdSosToken` rather than a natural non-blank argmax.
+  bool sos_was_forced = false;
   // Most recent encoder frame index at which a non-blank token was emitted.
   size_t last_emitted_time_index = 0;
   // Value of `last_emitted_time_index` when a mid-chunk `<sos>` reset fired.
@@ -284,7 +294,7 @@ int SelectNearThresholdSosToken(const float* logits, const DecodeState& state,
 // near-threshold `<sos>` fallback when `<sos>` predicts `blank_token_id` in a
 // full 5-second window.
 std::pair<int, int> SelectGreedyTokenAndDuration(const float* logits,
-                                                 const DecodeState& state,
+                                                 DecodeState& state,
                                                  size_t num_logits_per_token,
                                                  int blank_token_id) {
   const size_t start_index_in_current_time_index =
@@ -306,6 +316,9 @@ std::pair<int, int> SelectGreedyTokenAndDuration(const float* logits,
     token_id = SelectNearThresholdSosToken(
         logits, state, num_logits_per_token, start_index_of_token_id,
         end_index_of_token_id, blank_token_id);
+    if (token_id != blank_token_id) {
+      state.sos_was_forced = true;
+    }
   }
   auto max_duration_it = std::max_element(logits + end_index_of_token_id,
                                           logits + end_index_of_duration);
@@ -334,6 +347,8 @@ absl::Status ResetToSos(std::vector<TensorBuffer>& decode_input_buffers,
   state.token_index = 0;
   state.sos_tokens_start = state.decoded_tokens.size();
   state.tokens_since_sos = 0;
+  state.sos_emission_frames = 0;
+  state.sos_was_forced = false;
   state.prev_frame_had_burst = false;
   if (stateful_runner != nullptr) {
     LITERT_RETURN_IF_ERROR(stateful_runner->Reset());
@@ -401,15 +416,22 @@ absl::StatusOr<bool> RollbackFrameBurstAndAdvance(
     std::vector<TensorBuffer>& decode_input_buffers,
     StatefulLiteRtRunner* stateful_runner, size_t num_token_ids,
     int blank_token_id, DecodeState& state) {
-  state.decoded_tokens.resize(state.frame_tokens_start);
-  // Intentional early exit before the premature-`<sos>` check: at the end of
-  // the chunk there are no remaining frames to re-decode after a reset, so keep
-  // any earlier tokens from the current `<sos>` segment and stop decoding.
+  const bool is_premature_forced_sos_burst =
+      state.sos_was_forced &&
+      state.sos_emission_frames <= kMaxPrematureForcedSosFrames;
+  state.decoded_tokens.resize(is_premature_forced_sos_burst
+                                  ? state.sos_tokens_start
+                                  : state.frame_tokens_start);
+  // Intentional early exit before the unforced premature-`<sos>` check: at the
+  // end of the chunk there are no remaining frames to re-decode after a reset,
+  // so keep any earlier unforced tokens from the current `<sos>` segment and
+  // stop decoding.
   if (state.time_index + kBurstEndOfChunkMarginFrames >=
       state.effective_max_time_index) {
     return false;
   }
-  if (state.tokens_since_sos <= kMaxPrematureSosTokens) {
+  if (is_premature_forced_sos_burst ||
+      state.tokens_since_sos <= kMaxPrematureSosTokens) {
     state.decoded_tokens.resize(state.sos_tokens_start);
     state.has_emitted_in_chunk = !state.decoded_tokens.empty();
     LITERT_RETURN_IF_ERROR(ResetToSos(decode_input_buffers, stateful_runner,
@@ -498,11 +520,16 @@ absl::Status MaybeResetAfterMidChunkDeadZone(
   }
   state.did_mid_chunk_sos_reset = true;
   state.reset_origin_time_index = state.last_emitted_time_index;
-  // Discard isolated onset false starts (`<= 8` frames in, followed by `>= 16`
-  // blank frames); in streaming mode any real speech in that prefix is covered
-  // by the overlapping previous chunk. `has_emitted_in_chunk` and
+  // Discard isolated onset false starts (`<= 8` frames in, or `<= 2` forced
+  // `<sos>` tokens, followed by `>= 16` blank frames); in streaming mode any
+  // real speech in that prefix is covered by the overlapping previous chunk.
+  // `tokens_since_sos` (rather than `decoded_tokens.size()`) also counts tokens
+  // that were not reported, e.g. before `first_reported_time_index` on a
+  // shifted-back final chunk. `has_emitted_in_chunk` and
   // `last_emitted_time_index` are intentionally preserved to anchor the rewind.
-  if (state.last_emitted_time_index <= kDeadZoneClearPrefixMaxFrame) {
+  if (state.last_emitted_time_index <= kDeadZoneClearPrefixMaxFrame ||
+      (state.sos_was_forced &&
+       state.tokens_since_sos <= kMaxPrematureSosTokens)) {
     state.decoded_tokens.clear();
     state.frame_tokens_start = 0;
   }
@@ -657,7 +684,16 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
         lock.second, state, num_logits_per_token_, blank_token_id_);
 
     if (token_id != blank_token_id_) {
-      if (++state.symbols_at_time_index > max_symbols_per_step_) {
+      // When a single forced near-threshold `<sos>` token is immediately
+      // followed by a single frame that dumps `max_symbols_per_step_` tokens
+      // across the remaining stateless slots, treat that single-frame dump as a
+      // zero-duration burst before transitioning to stateful decoding.
+      const int effective_max_symbols_per_step =
+          (state.sos_was_forced && state.tokens_since_sos == 1 &&
+           state.num_inference_token_ids > 1 && max_symbols_per_step_ > 1)
+              ? max_symbols_per_step_ - 1
+              : max_symbols_per_step_;
+      if (++state.symbols_at_time_index > effective_max_symbols_per_step) {
         LITERT_ASSIGN_OR_RETURN(
             bool keep_decoding,
             RollbackFrameBurstAndAdvance(decode_input_buffers_,
@@ -680,7 +716,10 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     }
 
     if (duration > 0) {
-      state.tokens_since_sos += state.symbols_at_time_index;
+      if (state.symbols_at_time_index > 0) {
+        state.tokens_since_sos += state.symbols_at_time_index;
+        ++state.sos_emission_frames;
+      }
       state.symbols_at_time_index = 0;
       state.frame_tokens_start = state.decoded_tokens.size();
     }
