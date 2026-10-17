@@ -366,32 +366,6 @@ proto::EmbeddingMetadata::TfLiteModelType ParseEmbeddingModelType(
   return model_type;
 }
 
-// Stores a model's weight section into host memory instead of leaving it to be
-// streamed on demand, and publishes it so the GPU weight upload callback can be
-// served from that buffer.
-//
-// Used for Image and Audio Embedding models.
-absl::Status StoreWeightsInHostMemory(
-    ModelResourcesStreaming& resources,
-    proto::EmbeddingMetadata::TfLiteModelType model_type, DataStream& stream,
-    size_t size) {
-  ABSL_LOG(INFO) << "Reading weights (" << size << " bytes) for model type "
-                 << proto::EmbeddingMetadata::TfLiteModelType_Name(model_type)
-                 << " into host memory...";
-  ABSL_RETURN_IF_ERROR(
-      resources.SetWeightsFromStream(model_type, stream, size));
-  ABSL_LOG(INFO) << "Weights read.";
-
-  // The bytes stay owned by `resources`.
-  if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
-      weight_map != nullptr) {
-    if (auto it = weight_map->find("tflite_weights"); it != weight_map->end()) {
-      StoreWeightsBuffer(model_type, it->second);
-    }
-  }
-  return absl::OkStatus();
-}
-
 }  // namespace
 
 // static
@@ -673,9 +647,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
 
   auto streaming_resources = std::make_unique<ModelResourcesStreaming>();
 
-  // The registrations made below point into `streaming_resources`. Declared
-  // after it so that it destructs first, dropping them before the storage they
-  // point into goes away on any path out of this function.
   absl::Cleanup clear_stored_weights = [] {
     ClearStoredWeightsStreams().IgnoreError();
   };
@@ -876,6 +847,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                     settings.GetMainExecutorSettings(), owned_env->env,
                     *streaming_resources));
             ABSL_LOG(INFO) << "text_encoder compiled.";
+            ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
+                proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
           }
         } else if (model_type ==
                        proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER ||
@@ -888,10 +861,16 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           // Vision and audio weights are always stored in host memory before
           // being loaded, even when their encoder runs on GPU, due to an issue
           // with streaming float32 weights.
-          ABSL_RETURN_IF_ERROR(StoreWeightsInHostMemory(
-              *streaming_resources, model_type, *section->data_stream,
-              section_metadata->end_offset() -
-                  section_metadata->begin_offset()));
+          const size_t size =
+              section_metadata->end_offset() - section_metadata->begin_offset();
+          ABSL_LOG(INFO) << "Reading weights (" << size
+                         << " bytes) for model type "
+                         << proto::EmbeddingMetadata::TfLiteModelType_Name(
+                                model_type)
+                         << " into host memory...";
+          ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
+              model_type, *section->data_stream, size));
+          ABSL_LOG(INFO) << "Weights read.";
         } else {
           ABSL_LOG(INFO)
               << "Storing TFLiteWeights section stream for model type: "
@@ -1063,9 +1042,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                                 owned_env->env, *streaming_resources));
     // We only need to keep the weights in CPU memory when running on CPU.
     if (settings.GetVisionExecutorSettings()->GetBackend() != Backend::CPU) {
-      // Drop the registration that points into the storage before freeing it.
-      ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
-          proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER));
       streaming_resources->ReleaseWeights(
           proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER);
       // Don't clear the vision adapter. It always runs on CPU.
@@ -1092,8 +1068,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     // Same as vision encoder above, we only need to keep the weights in CPU
     // memory when running on CPU.
     if (settings.GetAudioExecutorSettings()->GetBackend() != Backend::CPU) {
-      ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
-          proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW));
       streaming_resources->ReleaseWeights(
           proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW);
       // Don't clear the audio adapter. It always runs on CPU.

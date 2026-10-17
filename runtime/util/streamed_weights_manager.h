@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_STREAMED_WEIGHTS_MANAGER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_STREAMED_WEIGHTS_MANAGER_H_
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -24,7 +23,6 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/util/data_stream.h"
 
@@ -87,33 +85,8 @@ void StoreWeightsStream(TfLiteModelTypeT model_type,
                      std::move(stream));
 }
 
-// Registers an in-memory external weights section for `model_type_str`
-// so that it can be read on demand during WebGPU model compilation, as an
-// alternative to `StoreWeightsStream()`. This is necessary for certain models
-// that can not yet be streamed.
-//
-// The caller retains ownership and must keep the underlying bytes alive until
-// the submodel has been compiled.
-//
-// args:
-//   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
-//   weights: The in-memory external weights section.
-void StoreWeightsBuffer(absl::string_view model_type_str,
-                        absl::Span<const std::byte> weights);
-
-// Registers an in-memory external weights section for a capability-scoped
-// Protobuf model type. See StoreWeightsBuffer(absl::string_view, ...).
-template <typename TfLiteModelTypeT,
-          typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
-void StoreWeightsBuffer(TfLiteModelTypeT model_type,
-                        absl::Span<const std::byte> weights) {
-  StoreWeightsBuffer(TfLiteModelTypeToWireString(model_type), weights);
-}
-
-// Reads `size` bytes at `offset` from the stored weights for `model_type_str`
-// into `buffer`. Reads are served from the stored DataStream if there is one,
-// discarding the read bytes from it, and otherwise from the stored in-memory
-// buffer.
+// Reads `size` bytes at `offset` from the stored weights stream for
+// `model_type_str` into `buffer`, discarding the read bytes from the stream.
 //
 // args:
 //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
@@ -122,12 +95,12 @@ void StoreWeightsBuffer(TfLiteModelTypeT model_type,
 //   buffer: The destination buffer, at least `size` bytes large.
 // returns:
 //   OkStatus on success, NotFoundError if nothing is stored for the model
-//   type, or OutOfRangeError if the read exceeds the stored buffer.
+//   type, or OutOfRangeError if the read exceeds the stored stream.
 absl::Status ReadStoredWeights(absl::string_view model_type_str,
                                uint64_t offset, uint64_t size, void* buffer);
 
 // Discards any remaining unread bytes and removes the stored weights stream
-// or buffer for `model_type_str`.
+// for `model_type_str`.
 //
 // args:
 //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
@@ -136,7 +109,7 @@ absl::Status ReadStoredWeights(absl::string_view model_type_str,
 absl::Status ClearStoredWeightsStream(absl::string_view model_type_str);
 
 // Discards any remaining unread bytes and removes the stored weights stream
-// or buffer for a capability-scoped Protobuf model type. See
+// for a capability-scoped Protobuf model type. See
 // ClearStoredWeightsStream(absl::string_view).
 template <typename TfLiteModelTypeT,
           typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
@@ -144,8 +117,7 @@ absl::Status ClearStoredWeightsStream(TfLiteModelTypeT model_type) {
   return ClearStoredWeightsStream(TfLiteModelTypeToWireString(model_type));
 }
 
-// Discards any remaining unread bytes and clears all stored weight streams and
-// buffers.
+// Discards any remaining unread bytes and clears all stored weight streams.
 absl::Status ClearStoredWeightsStreams();
 
 }  // namespace litert::lm

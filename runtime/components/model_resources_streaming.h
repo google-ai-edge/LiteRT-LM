@@ -311,9 +311,6 @@ class ModelResourcesStreaming : public ModelResources {
   //
   // Only call this once you know the weights will not be read again.
   //
-  // Callers that also published the section via `StoreWeightsBuffer` must
-  // clear that registration first, since it holds a span into this storage.
-  //
   // args:
   //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
   void ReleaseWeights(absl::string_view model_type_str);

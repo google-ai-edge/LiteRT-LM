@@ -14,7 +14,6 @@
 
 #include "runtime/util/streamed_weights_manager.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -23,7 +22,6 @@
 
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
@@ -105,69 +103,6 @@ TEST(StreamedWeightsManagerTest, ClearAllStoredWeightsStreams) {
                               /*offset=*/0, /*size=*/4, buffer)
                 .code(),
             absl::StatusCode::kNotFound);
-}
-
-TEST(StreamedWeightsManagerTest, StoreReadAndClearWeightsBuffer) {
-  ASSERT_TRUE(ClearStoredWeightsStreams().ok());
-  const std::string weights = "hello_weights_data";
-  StoreWeightsBuffer(
-      proto::LlmMetadata::TF_LITE_VISION_ENCODER,
-      absl::MakeConstSpan(reinterpret_cast<const std::byte*>(weights.data()),
-                          weights.size()));
-
-  char buffer[6] = {0};
-  EXPECT_TRUE(ReadStoredWeights("tf_lite_vision_encoder",
-                                /*offset=*/6, /*size=*/5, buffer)
-                  .ok());
-  EXPECT_EQ(std::string(buffer, 5), "weigh");
-
-  EXPECT_TRUE(
-      ClearStoredWeightsStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER)
-          .ok());
-  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
-                              /*offset=*/0, /*size=*/5, buffer)
-                .code(),
-            absl::StatusCode::kNotFound);
-}
-
-TEST(StreamedWeightsManagerTest, ReadWeightsBufferRejectsOutOfRangeReads) {
-  ASSERT_TRUE(ClearStoredWeightsStreams().ok());
-  const std::string weights = "weights";
-  StoreWeightsBuffer(
-      proto::LlmMetadata::TF_LITE_VISION_ENCODER,
-      absl::MakeConstSpan(reinterpret_cast<const std::byte*>(weights.data()),
-                          weights.size()));
-
-  char buffer[8] = {0};
-  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
-                              /*offset=*/4, /*size=*/5, buffer)
-                .code(),
-            absl::StatusCode::kOutOfRange);
-  EXPECT_EQ(ReadStoredWeights("tf_lite_vision_encoder",
-                              /*offset=*/8, /*size=*/1, buffer)
-                .code(),
-            absl::StatusCode::kOutOfRange);
-
-  EXPECT_TRUE(ClearStoredWeightsStreams().ok());
-}
-
-TEST(StreamedWeightsManagerTest, StoredStreamTakesPrecedenceOverBuffer) {
-  ASSERT_TRUE(ClearStoredWeightsStreams().ok());
-  const std::string weights = "from_the_buffer";
-  StoreWeightsBuffer(
-      proto::LlmMetadata::TF_LITE_VISION_ENCODER,
-      absl::MakeConstSpan(reinterpret_cast<const std::byte*>(weights.data()),
-                          weights.size()));
-  auto stream = std::make_shared<MemoryDataStream>("from_the_stream");
-  StoreWeightsStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER, stream);
-
-  char buffer[7] = {0};
-  EXPECT_TRUE(ReadStoredWeights("tf_lite_vision_encoder",
-                                /*offset=*/9, /*size=*/6, buffer)
-                  .ok());
-  EXPECT_EQ(std::string(buffer, 6), "stream");
-
-  EXPECT_TRUE(ClearStoredWeightsStreams().ok());
 }
 
 }  // namespace
