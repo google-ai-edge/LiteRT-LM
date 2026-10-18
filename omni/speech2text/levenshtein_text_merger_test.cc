@@ -199,5 +199,32 @@ TEST(LevenshteinTextMergerTest, IgnoresInteriorSingleWordStopwordMatch) {
   EXPECT_EQ(res2->unconfirmed_text, "delta echo the foxtrot");
 }
 
+TEST(LevenshteinTextMergerTest, ChineseWindowsWithoutSpacesAreNotDuplicated) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 = ProcessWords(word_stage, merger, {"你好吗？北京有什么好玩的？"});
+  ASSERT_TRUE(res1.ok());
+  auto res2 =
+      ProcessWords(word_stage, merger, {"北京有什么好玩的？这个秋天还可以。"});
+  ASSERT_TRUE(res2.ok());
+
+  EXPECT_EQ(res2->confirmed_text, "你好吗？");
+  EXPECT_EQ(res2->unconfirmed_text, "北京有什么好玩的？这个秋天还可以。");
+}
+
+TEST(LevenshteinTextMergerTest, EmptyChunkKeepsUnconfirmedWords) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 = ProcessWords(word_stage, merger, {"你好吗？"});
+  ASSERT_TRUE(res1.ok());
+  auto res2 = ProcessWords(word_stage, merger, {});
+  ASSERT_TRUE(res2.ok());
+
+  EXPECT_EQ(res2->confirmed_text, "");
+  EXPECT_EQ(res2->unconfirmed_text, "你好吗？");
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

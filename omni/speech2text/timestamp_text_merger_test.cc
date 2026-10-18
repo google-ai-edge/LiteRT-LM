@@ -779,11 +779,9 @@ TEST(TimestampTextMergerTest,
   TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
 
   // Chunk 1 (0-5000) decodes "twenty-five" at 3400 ms and "it's" at 3900 ms.
-  word_stage.PushWordsWithEndOfChunkTimestamp({{"count", 1000},
-                                               {"twenty-five", 3400},
-                                               {"it's", 3900},
-                                               {"ready", 4400}},
-                                              /*end_ts_ms=*/5000);
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"count", 1000}, {"twenty-five", 3400}, {"it's", 3900}, {"ready", 4400}},
+      /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
   ASSERT_OK(GetMergeResult(merger));
 
@@ -863,9 +861,8 @@ TEST(TimestampTextMergerTest,
   TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
 
   // Chunk 1 (0-5000): ends with "100" at 2900 ms.
-  word_stage.PushWordsWithEndOfChunkTimestamp(
-      {{"cost", 1000}, {"100", 2900}},
-      /*end_ts_ms=*/5000);
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"cost", 1000}, {"100", 2900}},
+                                              /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
   ASSERT_OK(GetMergeResult(merger));
 
@@ -883,9 +880,8 @@ TEST(TimestampTextMergerTest,
 
   // Also verify "page 25 begins":
   merger.Reset();
-  word_stage.PushWordsWithEndOfChunkTimestamp(
-      {{"page", 1000}, {"25", 2900}},
-      /*end_ts_ms=*/5000);
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"page", 1000}, {"25", 2900}},
+                                              /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
   ASSERT_OK(GetMergeResult(merger));
 
@@ -952,8 +948,7 @@ TEST(TimestampTextMergerTest,
   EXPECT_EQ(res->unconfirmed_text, "well-planned ed ate lunch");
 }
 
-TEST(TimestampTextMergerTest,
-     HyphenatedSuffixEchoRespectsProximityGap) {
+TEST(TimestampTextMergerTest, HyphenatedSuffixEchoRespectsProximityGap) {
   DummyWordStage word_stage;
   TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
 
@@ -969,12 +964,11 @@ TEST(TimestampTextMergerTest,
   // past tol.match_late from 3400 ms (|5500 - 3400| = 2100 > 1000).
   // It represents a genuine new sentence ("Five people arrived") and must NOT
   // be dropped.
-  word_stage.PushWordsWithEndOfChunkTimestamp(
-      {{"twenty-five", 400},
-       {"five", 2500},
-       {"people", 3100},
-       {"arrived", 3700}},
-      /*end_ts_ms=*/5000);
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"twenty-five", 400},
+                                               {"five", 2500},
+                                               {"people", 3100},
+                                               {"arrived", 3700}},
+                                              /*end_ts_ms=*/5000);
   ASSERT_OK(merger.Schedule());
   auto res = GetMergeResult(merger);
   ASSERT_OK(res);
@@ -1007,6 +1001,127 @@ TEST(TimestampTextMergerTest,
   ASSERT_OK(res2);
   EXPECT_EQ(res2->confirmed_text, "start");
   EXPECT_EQ(res2->unconfirmed_text, "reading now complete");
+}
+
+// Runs `windows` (one space-free CJK hypothesis per window, as emitted by
+// Qwen3-ASR) through `merger` and returns all confirmed text plus the flush.
+std::string MergeWindows(DummyWordStage& word_stage,
+                         TimestampTextMerger& merger,
+                         const std::vector<std::string>& windows) {
+  std::string text;
+  for (const std::string& window : windows) {
+    auto result = ProcessWords(word_stage, merger, {window});
+    EXPECT_OK(result);
+    if (result.ok()) text += result->confirmed_text;
+  }
+  EXPECT_OK(merger.Flush());
+  auto flushed = GetMergeResult(merger);
+  EXPECT_OK(flushed);
+  if (flushed.ok()) text += flushed->confirmed_text;
+  return text;
+}
+
+TEST(TimestampTextMergerTest, ChineseWindowsWithoutSpacesAreNotDuplicated) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Live Qwen3-ASR output for 5 s windows with a 2 s overlap: each window
+  // repeats the tail of the previous one, and Chinese has no spaces between
+  // words.
+  const std::string text = MergeWindows(
+      word_stage, merger,
+      {"你好吗？今天是晚上吃什么？北京有什么好玩的？",
+       "北京有什么好玩的？这个秋天，是不是还可以？", "是不是还可以找个地方玩？",
+       "这个中文的重复，为什么会中文会有重复呢？", "中文会有重复的。"});
+
+  // The last window re-hears the previous window's tail ("中文会有重复呢？")
+  // as "中文会有重复的。"; after the pivot the current window wins.
+  EXPECT_EQ(text,
+            "你好吗？今天是晚上吃什么？北京有什么好玩的？这个秋天，"
+            "是不是还可以找个地方玩？这个中文的重复，为什么会中文会有重复的。");
+}
+
+TEST(TimestampTextMergerTest, ChineseWindowEndingMidSentenceIsMerged) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // The first window ends mid-sentence, so the model closes it with a period
+  // that the next window does not have.
+  const std::string text = MergeWindows(
+      word_stage, merger,
+      {"你可以说中文吗？好像中文的。", "好像中文的质量还不错，可以做到实时吗？",
+       "可以做到实时吗？可以的。"});
+
+  EXPECT_EQ(text,
+            "你可以说中文吗？好像中文的质量还不错，可以做到实时吗？可以的。");
+}
+
+TEST(TimestampTextMergerTest, MixedChineseAndLatinKeepsWordSpacing) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  auto result =
+      ProcessWords(word_stage, merger,
+                   {"欢迎体验", "Light", "RT", "Omni", "语音合成演示。"});
+  ASSERT_OK(result);
+
+  EXPECT_EQ(result->unconfirmed_text, "欢迎体验 Light RT Omni 语音合成演示。");
+}
+
+TEST(TimestampTextMergerTest, TimestampedChineseSentenceWordIsNotDuplicated) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // A detokenizer that does not split CJK text emits each window as one word
+  // carrying only its onset timestamp, plus the end of the chunk.
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"你好吗？北京有什么好玩的？", 200}}, /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto res1, GetMergeResult(merger));
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"北京有什么好玩的？这个秋天还可以。", 100}}, /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto res2, GetMergeResult(merger));
+  ASSERT_OK(merger.Flush());
+  ASSERT_OK_AND_ASSIGN(auto flushed, GetMergeResult(merger));
+
+  EXPECT_EQ(res1.confirmed_text + res2.confirmed_text + flushed.confirmed_text,
+            "你好吗？北京有什么好玩的？这个秋天还可以。");
+}
+
+TEST(TimestampTextMergerTest, ChineseCharactersWithTimestampsMergeByTime) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // One word per character, as emitted by `TokenizerDetokenizer` for a
+  // timestamped decoder. The second window starts at 3000 (= 5000 * 0.6), so
+  // "北京好玩" (3200..3800) is heard by both windows.
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"你", 200},
+                                               {"好", 1000},
+                                               {"吗？", 2000},
+                                               {"北", 3200},
+                                               {"京", 3400},
+                                               {"好", 3600},
+                                               {"玩", 3800}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto res1, GetMergeResult(merger));
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"北", 200},
+                                               {"京", 400},
+                                               {"好", 600},
+                                               {"玩", 800},
+                                               {"的。", 1000},
+                                               {"秋", 2500},
+                                               {"天", 2700}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto res2, GetMergeResult(merger));
+  ASSERT_OK(merger.Flush());
+  ASSERT_OK_AND_ASSIGN(auto flushed, GetMergeResult(merger));
+
+  EXPECT_EQ(res2.confirmed_text, "你好吗？");
+  EXPECT_EQ(res1.confirmed_text + res2.confirmed_text + flushed.confirmed_text,
+            "你好吗？北京好玩的。秋天");
 }
 
 }  // namespace

@@ -37,6 +37,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/base/stage.h"
+#include "omni/base/text_utils.h"
 #include "omni/speech2text/detokenizer.h"
 #include "omni/speech2text/speech_recognizer.h"
 #include "support/tokenizer/tokenizer.h"
@@ -90,10 +91,10 @@ absl::StatusOr<absl::string_view> TokenizerDetokenizer::GetDecodedTokenPiece(
   // byte-safe and independent of the surrounding token stream.
   const int two[2] = {token_id, token_id};
   const int three[3] = {token_id, token_id, token_id};
-  ABSL_ASSIGN_OR_RETURN(
-      std::string d2, tokenizer_.TokenIdsToText(two, skip_special_tokens));
-  ABSL_ASSIGN_OR_RETURN(
-      std::string d3, tokenizer_.TokenIdsToText(three, skip_special_tokens));
+  ABSL_ASSIGN_OR_RETURN(std::string d2,
+                        tokenizer_.TokenIdsToText(two, skip_special_tokens));
+  ABSL_ASSIGN_OR_RETURN(std::string d3,
+                        tokenizer_.TokenIdsToText(three, skip_special_tokens));
   if (!absl::StartsWith(d3, d2)) {
     return absl::InternalError(
         "Decoded token triple does not start with decoded token pair.");
@@ -137,18 +138,27 @@ TokenizerDetokenizer::MapWordsToOnsetTokenIndices(
   // "is" into the pre-overlap prefix of chunk 1 and duplicates it from chunk 2.
   //
   // By scanning the cached non-initial pieces from `token_piece_cache_`
-  // (" un", "for", "tu", "nate", "ly", " it", " is", " open") and incrementing
-  // `curr_word_count` whenever a non-space character follows a space (`!in_word`),
-  // we record the exact starting token index for each word:
-  //   - k=0 (" un"):   ' ' -> 'u' increments curr_word_count to 1 -> idx[0] = 0
-  //   - k=1..4:        no spaces (`in_word` stays true) -> curr_word_count = 1
-  //   - k=5 (" it"):   ' ' resets `in_word`, 'i' increments to 2 -> idx[1] = 5
-  //   - k=6 (" is"):   ' ' resets `in_word`, 'i' increments to 3 -> idx[2] = 6
-  //   - k=7 (" open"): ' ' resets `in_word`, 'o' increments to 4 -> idx[3] = 7
+  // (" un", "for", "tu", "nate", "ly", " it", " is", " open") and starting a
+  // new word whenever a non-space character follows a space (`!in_word`), we
+  // record the exact starting token index for each word:
+  //   - k=0 (" un"):   ' ' -> 'u' starts word 0 -> idx[0] = 0
+  //   - k=1..4:        no spaces (`in_word` stays true)
+  //   - k=5 (" it"):   ' ' resets `in_word`, 'i' starts word 1 -> idx[1] = 5
+  //   - k=6 (" is"):   ' ' resets `in_word`, 'i' starts word 2 -> idx[2] = 6
+  //   - k=7 (" open"): ' ' resets `in_word`, 'o' starts word 3 -> idx[3] = 7
+  //
+  // Words are counted the way `Detokenize` splits them: on spaces, and with
+  // every CJK character as its own word (see `SplitCjkCharacters`), so each
+  // CJK character gets the timestamp of the token that emits it. Pieces are
+  // concatenated before decoding because a byte-level BPE token may hold only
+  // part of a multi-byte character.
+  std::string text;
+  std::vector<size_t> byte_token;  // Token index of each byte of `text`.
   std::vector<size_t> word_token_idx(num_words, 0);
   size_t prev_word_count = 0;
-  size_t curr_word_count = 0;
-  bool in_word = false;
+  bool in_word = false;             // Inside a run of non-CJK characters.
+  bool attach_punctuation = false;  // Punctuation joins the CJK char before.
+  size_t pos = 0;
   for (size_t k = 0; k < num_tokens && prev_word_count < num_words; ++k) {
     auto piece_or = GetDecodedTokenPiece(token_ids[k], skip_special_tokens);
     if (!piece_or.ok()) {
@@ -157,20 +167,35 @@ TokenizerDetokenizer::MapWordsToOnsetTokenIndices(
           << token_ids[k] << ": " << piece_or.status();
       continue;
     }
-    for (char c : *piece_or) {
-      if (c != ' ') {
-        if (!in_word) {
-          ++curr_word_count;
-          in_word = true;
-        }
-      } else {
+    text.append(*piece_or);
+    byte_token.resize(text.size(), k);
+    const bool last_token = k + 1 == num_tokens;
+    while (pos < text.size() && prev_word_count < num_words) {
+      // Wait for the next token if it may complete a multi-byte character.
+      const unsigned char lead = static_cast<unsigned char>(text[pos]);
+      const size_t length = lead >= 0xF0 && lead < 0xF8   ? 4
+                            : lead >= 0xE0 && lead < 0xF0 ? 3
+                            : lead >= 0xC0 && lead < 0xE0 ? 2
+                                                          : 1;
+      if (!last_token && pos + length > text.size()) break;
+      const size_t start = pos;
+      const char32_t cp = DecodeUtf8CodePoint(text, pos);
+      bool starts_word = false;
+      if (cp == ' ') {
         in_word = false;
+        attach_punctuation = false;
+      } else if (IsCjkCharacter(cp)) {
+        starts_word = true;
+        in_word = false;
+        attach_punctuation = true;
+      } else if (!(attach_punctuation && IsPunctuation(cp))) {
+        starts_word = !in_word;
+        in_word = true;
+        attach_punctuation = false;
       }
-    }
-    curr_word_count = std::min(curr_word_count, num_words);
-    while (prev_word_count < curr_word_count) {
-      word_token_idx[prev_word_count] = k;
-      ++prev_word_count;
+      if (starts_word) {
+        word_token_idx[prev_word_count++] = byte_token[start];
+      }
     }
   }
 
@@ -228,8 +253,12 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
     }
     ABSL_ASSIGN_OR_RETURN(auto text, std::move(text_status));
     ABSL_VLOG(1) << "Detokenized text: " << text;
-    std::vector<absl::string_view> raw_words =
+    // Every CJK character is a word of its own (see `SplitCjkCharacters`):
+    // Chinese and Japanese have no spaces, and the text mergers align
+    // overlapping windows word by word.
+    const std::vector<std::string> space_words =
         absl::StrSplit(text, ' ', absl::SkipEmpty());
+    const std::vector<std::string> raw_words = SplitCjkCharacters(space_words);
 
     words.reserve(raw_words.size() +
                   (end_of_chunk_timestamp_ms.has_value() ? 1 : 0));

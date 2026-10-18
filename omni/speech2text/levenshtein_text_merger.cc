@@ -21,8 +21,8 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
-#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "omni/base/text_utils.h"
 #include "omni/speech2text/detokenizer.h"
 #include "omni/speech2text/levenshtein_align.h"
 #include "omni/speech2text/text_merger.h"
@@ -45,9 +45,7 @@ std::vector<std::string> ExtractChunkWords(
 
 }  // namespace
 
-void LevenshteinTextMerger::ResetInternal() {
-  unconfirmed_words_.clear();
-}
+void LevenshteinTextMerger::ResetInternal() { unconfirmed_words_.clear(); }
 
 absl::Status LevenshteinTextMerger::ScheduleInternal() {
   SetState(State::kRunning);
@@ -59,16 +57,17 @@ absl::Status LevenshteinTextMerger::ScheduleInternal() {
 absl::Status LevenshteinTextMerger::Execute() {
   ABSL_ASSIGN_OR_RETURN(auto curr_chunk_words, detokenizer_.GetOutput());
 
-  std::vector<std::string> curr_strings = ExtractChunkWords(curr_chunk_words);
+  std::vector<std::string> curr_strings =
+      SplitCjkCharacters(ExtractChunkWords(curr_chunk_words));
   if (curr_strings.empty()) {
-    PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
+    PushOutput(MergeResult{"", JoinWithCjkAwareSpacing(unconfirmed_words_)});
     return absl::OkStatus();
   }
 
   if (unconfirmed_words_.empty()) {
     // Initial chunk: cache words as unconfirmed state.
     unconfirmed_words_ = std::move(curr_strings);
-    PushOutput(MergeResult{"", absl::StrJoin(unconfirmed_words_, " ")});
+    PushOutput(MergeResult{"", JoinWithCjkAwareSpacing(unconfirmed_words_)});
     return absl::OkStatus();
   }
 
@@ -100,14 +99,14 @@ absl::Status LevenshteinTextMerger::Execute() {
   }
 
   unconfirmed_words_ = std::move(new_unconfirmed);
-  PushOutput(MergeResult{absl::StrJoin(confirmed, " "),
-                         absl::StrJoin(unconfirmed_words_, " ")});
+  PushOutput(MergeResult{JoinWithCjkAwareSpacing(confirmed),
+                         JoinWithCjkAwareSpacing(unconfirmed_words_)});
   return absl::OkStatus();
 }
 
 absl::Status LevenshteinTextMerger::FlushInternal() {
   if (!unconfirmed_words_.empty()) {
-    MergeResult result = {absl::StrJoin(unconfirmed_words_, " "), ""};
+    MergeResult result = {JoinWithCjkAwareSpacing(unconfirmed_words_), ""};
     unconfirmed_words_.clear();
     PushOutput(std::move(result));
   }

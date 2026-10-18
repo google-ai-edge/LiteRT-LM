@@ -24,6 +24,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -36,6 +37,9 @@
 
 namespace litert::omni::asr {
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::Pair;
 
 class FakeTokenizer : public ::litert::support::Tokenizer {
  public:
@@ -401,8 +405,8 @@ TEST(TokenizerDetokenizerTest,
     if (ids.size() == 1 && ids[0] == 0) {
       return "<bos>";
     }
-    const std::vector<std::string> pieces = {"",     " Th", "ere",
-                                             "'s",   " a",  " way"};
+    const std::vector<std::string> pieces = {"",   " Th", "ere",
+                                             "'s", " a",  " way"};
     std::string out;
     for (int id : ids) {
       if (id > 0 && id < static_cast<int>(pieces.size())) {
@@ -429,7 +433,8 @@ TEST(TokenizerDetokenizerTest,
   ASSERT_OK_AND_ASSIGN(auto words1, detokenizer.GetOutput());
   ASSERT_EQ(words1.size(), 3);
   EXPECT_EQ(words1[0].text, "There's");
-  EXPECT_EQ(words1[0].timestamp_ms, 10);  // Token index 1 (" Th"), skipping <bos>
+  EXPECT_EQ(words1[0].timestamp_ms,
+            10);  // Token index 1 (" Th"), skipping <bos>
   EXPECT_EQ(words1[1].text, "a");
   EXPECT_EQ(words1[1].timestamp_ms, 40);  // Token index 4 (" a")
   EXPECT_EQ(words1[2].text, "way");
@@ -580,6 +585,44 @@ TEST(TokenizerDetokenizerTest,
   EXPECT_EQ(words[2].text, "");
   EXPECT_EQ(words[2].timestamp_ms, 5000);
   EXPECT_TRUE(words[2].IsEndOfChunk());
+}
+
+TEST(TokenizerDetokenizerTest, CjkCharactersAreWordsWithTheirTokenTimestamps) {
+  DummySpeechRecognizer dummy_decoder;
+  FakeTokenizer fake_tokenizer;
+  // Token 5 and 6 split "中" (E4 B8 AD) across two tokens, as byte-level BPE
+  // tokenizers do.
+  const absl::flat_hash_map<int, std::string> pieces = {
+      {1, "你好"}, {2, "吗？"},     {3, " OK"},
+      {4, "世界"}, {5, "\xE4\xB8"}, {6, "\xAD文"}};
+  fake_tokenizer.token_ids_to_text_fn_ =
+      [&pieces](absl::Span<const int> ids) -> absl::StatusOr<std::string> {
+    std::string text;
+    for (int id : ids) text += pieces.at(id);
+    return text;
+  };
+
+  TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
+  dummy_decoder.PushTokens({
+      {.token_id = 1, .timestamp_ms = 100},
+      {.token_id = 2, .timestamp_ms = 200},
+      {.token_id = 3, .timestamp_ms = 300},
+      {.token_id = 4, .timestamp_ms = 400},
+      {.token_id = 5, .timestamp_ms = 500},
+      {.token_id = 6, .timestamp_ms = 600},
+  });
+
+  ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto words, detokenizer.GetOutput());
+
+  std::vector<std::pair<std::string, int>> actual;
+  for (const auto& word : words) {
+    actual.emplace_back(word.text, word.timestamp_ms.value_or(-1));
+  }
+  EXPECT_THAT(actual,
+              ElementsAre(Pair("你", 100), Pair("好", 100), Pair("吗？", 200),
+                          Pair("OK", 300), Pair("世", 400), Pair("界", 400),
+                          Pair("中", 500), Pair("文", 600)));
 }
 
 }  // namespace

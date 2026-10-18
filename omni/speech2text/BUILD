@@ -445,6 +445,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "//omni/base:stage",
+        "//omni/base:text_utils",
         "//support/tokenizer",
     ],
 )
@@ -456,6 +457,7 @@ cc_test(
         ":speech_recognizer",
         ":tokenizer_detokenizer",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
@@ -485,6 +487,7 @@ cc_library(
     deps = [
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "//omni/base:text_utils",
     ],
 )
 
@@ -511,6 +514,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "//omni/base:stage",
+        "//omni/base:text_utils",
     ],
 )
 
@@ -548,6 +552,7 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "//omni/base:stage",
+        "//omni/base:text_utils",
     ],
 )
 

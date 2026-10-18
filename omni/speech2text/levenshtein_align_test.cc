@@ -137,5 +137,11 @@ TEST(LevenshteinAlignTest, FindBestSeamMatchRunValidatesSingleWordMatches) {
               IsEmpty());
 }
 
+TEST(LevenshteinAlignTest, CanonicalizeStripsCjkAndUnicodePunctuation) {
+  EXPECT_EQ(CanonicalizeStr("吗？"), "吗");
+  EXPECT_EQ(CanonicalizeStr("「中文」。"), "中文");
+  EXPECT_EQ(CanonicalizeStr("“Hello,”—World!"), "helloworld");
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

@@ -15,7 +15,6 @@
 #include "omni/speech2text/levenshtein_align.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -24,8 +23,10 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "omni/base/text_utils.h"
 
 namespace litert::omni::asr {
+
 namespace {
 
 // Extracts the longest contiguous `kCorrect` run (preferring later runs of
@@ -243,10 +244,11 @@ std::string CanonicalizeStr(absl::string_view word) {
   std::string lower = absl::AsciiStrToLower(word);
   std::string result;
   result.reserve(lower.size());
-  for (char c : lower) {
-    if (!std::ispunct(static_cast<unsigned char>(c))) {
-      result.push_back(c);
-    }
+  size_t pos = 0;
+  while (pos < lower.size()) {
+    const size_t start = pos;
+    if (IsPunctuation(DecodeUtf8CodePoint(lower, pos))) continue;
+    result.append(lower, start, pos - start);
   }
   return result;
 }

@@ -33,11 +33,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/base/stage.h"
+#include "omni/base/text_utils.h"
 #include "omni/speech2text/detokenizer.h"
 #include "omni/speech2text/levenshtein_align.h"
 #include "omni/speech2text/text_merger.h"
@@ -262,9 +262,9 @@ bool MatchesSpokenNumberSuffix(absl::string_view canon_prev,
   static const absl::NoDestructor<
       absl::flat_hash_map<std::string, std::vector<std::string>>>
       kSpokenNumberMap([] {
-        constexpr absl::string_view kOnes[] = {
-            "zero", "one", "two",   "three", "four",
-            "five", "six", "seven", "eight", "nine"};
+        constexpr absl::string_view kOnes[] = {"zero",  "one",  "two", "three",
+                                               "four",  "five", "six", "seven",
+                                               "eight", "nine"};
         constexpr absl::string_view kTeens[] = {
             "ten",     "eleven",  "twelve",    "thirteen", "fourteen",
             "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"};
@@ -510,7 +510,7 @@ absl::Status TimestampTextMerger::Execute() {
   if (curr_chunk_words.empty()) {
     UpdateStreamTimestampOffset(last_chunk_end_ms_);
     LogAndPushOutput(
-        {"", prev_words_.empty() ? "" : absl::StrJoin(prev_words_, " ")});
+        {"", prev_words_.empty() ? "" : JoinWithCjkAwareSpacing(prev_words_)});
     return absl::OkStatus();
   }
 
@@ -519,6 +519,8 @@ absl::Status TimestampTextMerger::Execute() {
   std::vector<std::string> curr_words;
   std::vector<int> curr_timestamps;
   std::optional<int> max_chunk_timestamp_ms;
+  // Whether a word had to be split into several units below.
+  bool split_word = false;
   curr_words.reserve(curr_chunk_words.size());
   for (const auto& word : curr_chunk_words) {
     if (word.IsEndOfChunk()) {
@@ -527,9 +529,16 @@ absl::Status TimestampTextMerger::Execute() {
       }
       continue;
     }
-    curr_words.push_back(word.text);
-    if (word.timestamp_ms.has_value()) {
-      curr_timestamps.push_back(word.timestamp_ms.value() + chunk_start_ms);
+    // Align CJK text character by character (see `SplitCjkCharacters`).
+    // `TokenizerDetokenizer` already emits one word per CJK character; this
+    // only splits words from detokenizers that do not.
+    std::vector<std::string> units = SplitCjkCharacters({word.text});
+    split_word |= units.size() > 1;
+    for (std::string& unit : units) {
+      curr_words.push_back(std::move(unit));
+      if (word.timestamp_ms.has_value()) {
+        curr_timestamps.push_back(word.timestamp_ms.value() + chunk_start_ms);
+      }
     }
   }
   // End of the chunk relative to its start; falls back to the last word's
@@ -541,16 +550,20 @@ absl::Status TimestampTextMerger::Execute() {
   if (chunk_end_ms > 0) {
     last_chunk_end_ms_ = chunk_end_ms;
   }
+  // A split word's timestamp is the onset of its first unit only; using it for
+  // every unit would confirm the whole word as soon as its onset falls before
+  // the next chunk, so such chunks are merged by word count instead.
+  if (split_word) curr_timestamps.clear();
 
   if (curr_words.empty()) {
     UpdateStreamTimestampOffset(chunk_end_ms);
     LogAndPushOutput(
-        {"", prev_words_.empty() ? "" : absl::StrJoin(prev_words_, " ")});
+        {"", prev_words_.empty() ? "" : JoinWithCjkAwareSpacing(prev_words_)});
     return absl::OkStatus();
   }
 
   if (overlap_ratio_ == 0.0f) {
-    LogAndPushOutput({absl::StrJoin(curr_words, " "), ""});
+    LogAndPushOutput({JoinWithCjkAwareSpacing(curr_words), ""});
     return absl::OkStatus();
   }
 
@@ -559,7 +572,7 @@ absl::Status TimestampTextMerger::Execute() {
     prev_timestamps_ = curr_timestamps;
     prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
     UpdateStreamTimestampOffset(chunk_end_ms);
-    LogAndPushOutput({"", absl::StrJoin(prev_words_, " ")});
+    LogAndPushOutput({"", JoinWithCjkAwareSpacing(prev_words_)});
     return absl::OkStatus();
   }
 
@@ -587,8 +600,8 @@ absl::Status TimestampTextMerger::Execute() {
   prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
   UpdateStreamTimestampOffset(chunk_end_ms);
 
-  LogAndPushOutput({absl::StrJoin(last_confirmed_words_, " "),
-                    absl::StrJoin(prev_words_, " ")});
+  LogAndPushOutput({JoinWithCjkAwareSpacing(last_confirmed_words_),
+                    JoinWithCjkAwareSpacing(prev_words_)});
   return absl::OkStatus();
 }
 
@@ -748,7 +761,7 @@ void TimestampTextMerger::MergeByWordCount(
 
 absl::Status TimestampTextMerger::FlushInternal() {
   if (!prev_words_.empty()) {
-    MergeResult result = {absl::StrJoin(prev_words_, " "), ""};
+    MergeResult result = {JoinWithCjkAwareSpacing(prev_words_), ""};
     prev_words_.clear();
     prev_timestamps_.clear();
     last_confirmed_words_.clear();

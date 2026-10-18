@@ -47,7 +47,8 @@ int ComputeLevenshteinDistanceStr(absl::string_view s1, absl::string_view s2);
 int ComputeLevenshteinDistanceWords(absl::Span<const std::string> words1,
                                     absl::Span<const std::string> words2);
 
-// Lowercases a word and strips punctuation.
+// Lowercases a word and strips punctuation (ASCII and common Unicode
+// punctuation such as CJK and fullwidth marks).
 std::string CanonicalizeStr(absl::string_view word);
 
 // Lowercases each word in the span and strips punctuation.
