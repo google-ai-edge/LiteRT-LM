@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>  // NOLINT: Required for path manipulation.
 #include <iostream>
 #include <memory>
 #include <string>
@@ -44,6 +45,7 @@
 #include "omni/base/io_types.h"
 #include "omni/base/model_utils.h"
 #include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "omni/text2speech/qwen3_tts/common.h"
 #include "runtime/proto/text2speech_metadata.pb.h"
@@ -53,8 +55,6 @@
 
 ABSL_FLAG(std::string, model_path, "",
           "Path to the TTS model (.litertlm file or directory).");
-ABSL_FLAG(std::string, model_dir, "",
-          "Path to the TTS model directory (deprecated; prefer --model_path).");
 ABSL_FLAG(std::string, model_type, "kokoro",
           "TTS model architecture type: 'kokoro' or 'qwen3'.");
 ABSL_FLAG(std::string, text, "Hello from LiteRT TTS Engine.",
@@ -114,14 +114,7 @@ absl::Status WriteWavFile(absl::string_view filename,
 }
 
 absl::Status Run() {
-  std::string model_path = absl::GetFlag(FLAGS_model_path);
-  if (model_path.empty()) {
-    model_path = absl::GetFlag(FLAGS_model_dir);
-  }
-  if (model_path.empty()) {
-    return absl::InvalidArgumentError(
-        "--model_path (or --model_dir) flag must be specified.");
-  }
+  const std::string model_path = absl::GetFlag(FLAGS_model_path);
 
   std::string input_text = absl::GetFlag(FLAGS_text);
   if (input_text.empty()) {
@@ -132,7 +125,6 @@ absl::Status Run() {
   litert::omni::OmniEngine::Settings engine_settings;
   engine_settings.cache_dir = absl::GetFlag(FLAGS_cache_dir);
   engine_settings.num_threads = absl::GetFlag(FLAGS_num_threads);
-  engine_settings.model_path = model_path;
 
   ABSL_ASSIGN_OR_RETURN(
       engine_settings.backend,
@@ -163,6 +155,33 @@ absl::Status Run() {
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unknown model_type: ", model_type_str));
+  }
+
+  const std::string effective_cache_dir = engine_settings.cache_dir.empty()
+                                              ? "/tmp/tts_models"
+                                              : engine_settings.cache_dir;
+  if (!model_path.empty()) {
+    engine_settings.model_path = model_path;
+  } else {
+    ABSL_ASSIGN_OR_RETURN(
+        litert::omni::OmniRegistry::RegisteredModel reg_model,
+        litert::omni::OmniRegistry::Get().GetRegisteredModel(model_name));
+    engine_settings.model_remote_url = reg_model.model_remote_url;
+    std::string model_ext =
+        std::filesystem::path(engine_settings.model_remote_url)
+            .extension()
+            .string();
+    if (model_ext.empty()) {
+      model_ext = ".litertlm";
+    }
+    engine_settings.model_path = (std::filesystem::path(effective_cache_dir) /
+                                  absl::StrCat(model_name, model_ext))
+                                     .string();
+    if (!engine_settings.model_remote_url.empty() &&
+        !std::filesystem::exists(engine_settings.model_path)) {
+      ABSL_RETURN_IF_ERROR(litert::omni::DownloadFileWithCurl(
+          engine_settings.model_remote_url, engine_settings.model_path));
+    }
   }
 
   litert::lm::proto::Text2SpeechSessionConfig session_config;

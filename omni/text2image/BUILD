@@ -254,6 +254,7 @@ cc_binary(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
         "//omni:omni_engine",
+        "//omni:omni_registry",
         "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:model_utils",

@@ -265,6 +265,17 @@ TEST_F(TtsSessionTest, KokoroAndQwen3TtsRegisteredInOmniRegistry) {
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("qwen3"));
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("unknown-tts-model"));
 
+  ASSERT_OK_AND_ASSIGN(const auto kokoro_reg,
+                       OmniRegistry::Get().GetRegisteredModel("kokoro"));
+  EXPECT_EQ(kokoro_reg.model_remote_url,
+            "https://huggingface.co/litert-community/Kokoro-82M/resolve/main/"
+            "kokoro_int8.litertlm");
+  ASSERT_OK_AND_ASSIGN(const auto qwen3_reg,
+                       OmniRegistry::Get().GetRegisteredModel("qwen3-tts"));
+  EXPECT_EQ(qwen3_reg.model_remote_url,
+            "https://huggingface.co/litert-community/"
+            "Qwen3-TTS-12Hz-0.6B-Base/resolve/main/qwen3_tts_int8.litertlm");
+
   OmniEngine::Settings settings;
   settings.model_path = "/nonexistent/tts_model_dir";
   for (const auto& model_name :

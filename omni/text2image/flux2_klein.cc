@@ -195,6 +195,9 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetFlux2KleinSessionFactory(
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetFlux2KleinSessionFactory,
       .session_config_type_id = "Text2Image",
+      .model_remote_url =
+          "https://huggingface.co/litert-community/FLUX.2-klein-4B-LiteRT/"
+          "resolve/main/flux2-klein-4b.litertlm",
   }));
   return true;
 }();

@@ -295,6 +295,9 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetKokoroSessionFactory(
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetKokoroSessionFactory,
       .session_config_type_id = "Text2Speech",
+      .model_remote_url =
+          "https://huggingface.co/litert-community/Kokoro-82M/resolve/main/"
+          "kokoro_int8.litertlm",
   }));
   return true;
 }();

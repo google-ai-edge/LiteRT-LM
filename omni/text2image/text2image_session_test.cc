@@ -182,6 +182,17 @@ TEST_F(Text2ImageSessionTest, AllDefaultModelsAreRegistered) {
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("flux2-klein"));
   EXPECT_FALSE(
       OmniRegistry::Get().IsModelRegistered("unknown-text2image-model"));
+
+  ASSERT_OK_AND_ASSIGN(const auto bonsai_reg,
+                       OmniRegistry::Get().GetRegisteredModel("bonsai-flux2"));
+  EXPECT_EQ(bonsai_reg.model_remote_url,
+            "https://huggingface.co/litert-community/"
+            "Bonsai-Image-ternary-4B/resolve/main/bonsai-flux2-4b.litertlm");
+  ASSERT_OK_AND_ASSIGN(const auto klein_reg,
+                       OmniRegistry::Get().GetRegisteredModel("flux2-klein"));
+  EXPECT_EQ(klein_reg.model_remote_url,
+            "https://huggingface.co/litert-community/"
+            "FLUX.2-klein-4B-LiteRT/resolve/main/flux2-klein-4b.litertlm");
 }
 
 TEST_F(Text2ImageSessionTest, RejectsUnknownModelOnCreate) {

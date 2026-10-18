@@ -15,7 +15,7 @@
 // Example usage:
 // bazel run -c opt \
 //   //omni/text2image:text2image_runner -- \
-//   --model_dir="$HOME/models/flux2/bonsai" \
+//   --model_path="$HOME/models/flux2/bonsai" \
 //   --model_type="bonsai_flux2" \
 //   --prompt="a red fox sitting in fresh snow at sunrise" \
 //   --img_size=256 \
@@ -25,6 +25,7 @@
 //   --num_threads=8 --v=2 --alsologtostderr
 
 #include <cstdint>
+#include <filesystem>  // NOLINT: Required for path manipulation.
 #include <iostream>
 #include <memory>
 #include <string>
@@ -44,14 +45,15 @@
 #include "omni/base/io_types.h"
 #include "omni/base/model_utils.h"
 #include "omni/omni_engine.h"
+#include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "runtime/proto/image_gen_model_type.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/text2image_session_config.pb.h"
 #include "stb_image_write.h"  // from @stb
 
-ABSL_FLAG(std::string, model_dir, "",
-          "Path to the text-to-image model directory (required).");
+ABSL_FLAG(std::string, model_path, "",
+          "Path to the text-to-image model (.litertlm file or directory).");
 ABSL_FLAG(std::string, model_type, "bonsai_flux2",
           "Text-to-image model architecture type: 'bonsai_flux2', "
           "'flux2_klein' (or empty to auto-detect).");
@@ -100,10 +102,7 @@ absl::Status WritePngFile(absl::string_view filename,
 }
 
 absl::Status Run() {
-  const std::string model_dir = absl::GetFlag(FLAGS_model_dir);
-  if (model_dir.empty()) {
-    return absl::InvalidArgumentError("--model_dir flag must be specified.");
-  }
+  const std::string model_path = absl::GetFlag(FLAGS_model_path);
 
   const std::string prompt_text = absl::GetFlag(FLAGS_prompt);
   if (prompt_text.empty()) {
@@ -115,7 +114,6 @@ absl::Status Run() {
   const uint64_t seed = absl::GetFlag(FLAGS_seed);
 
   litert::omni::OmniEngine::Settings engine_settings;
-  engine_settings.model_path = model_dir;
   engine_settings.cache_dir = absl::GetFlag(FLAGS_cache_dir);
   engine_settings.num_threads = absl::GetFlag(FLAGS_num_threads);
   ABSL_ASSIGN_OR_RETURN(
@@ -136,13 +134,16 @@ absl::Status Run() {
   }
   litert::lm::proto::Text2ImageMetadata metadata;
   litert::lm::proto::Flux2Params* flux2_params = nullptr;
+  std::string model_name;
   if (model_type_str == "flux2_klein" || model_type_str == "flux2-klein" ||
       model_type_str == "flux.2-klein-4b") {
+    model_name = "flux2-klein";
     flux2_params = metadata.mutable_image_gen_model_type()
                        ->mutable_flux2_klein()
                        ->mutable_flux2_params();
   } else if (model_type_str == "bonsai_flux2" ||
              model_type_str == "bonsai-flux2" || model_type_str == "flux2") {
+    model_name = "bonsai-flux2";
     flux2_params = metadata.mutable_image_gen_model_type()
                        ->mutable_bonsai_flux2()
                        ->mutable_flux2_params();
@@ -151,15 +152,43 @@ absl::Status Run() {
         absl::StrCat("Unknown model_type: ", model_type_str));
   }
 
+  const std::string effective_cache_dir = engine_settings.cache_dir.empty()
+                                              ? "/tmp/omni_models"
+                                              : engine_settings.cache_dir;
+  if (!model_path.empty()) {
+    engine_settings.model_path = model_path;
+  } else {
+    ABSL_ASSIGN_OR_RETURN(
+        litert::omni::OmniRegistry::RegisteredModel reg_model,
+        litert::omni::OmniRegistry::Get().GetRegisteredModel(model_name));
+    engine_settings.model_remote_url = reg_model.model_remote_url;
+    std::string model_ext =
+        std::filesystem::path(engine_settings.model_remote_url)
+            .extension()
+            .string();
+    if (model_ext.empty()) {
+      model_ext = ".litertlm";
+    }
+    engine_settings.model_path = (std::filesystem::path(effective_cache_dir) /
+                                  absl::StrCat(model_name, model_ext))
+                                     .string();
+    if (!engine_settings.model_remote_url.empty() &&
+        !std::filesystem::exists(engine_settings.model_path)) {
+      ABSL_RETURN_IF_ERROR(litert::omni::DownloadFileWithCurl(
+          engine_settings.model_remote_url, engine_settings.model_path));
+    }
+  }
+
   if (img_size > 0) {
     flux2_params->set_img_size(img_size);
   }
   flux2_params->set_default_steps(steps);
 
-  std::cout << "Loading OmniEngine from: " << model_dir << "\n";
+  std::cout << "Loading OmniEngine from: " << engine_settings.model_path
+            << "\n";
   absl::Time load_start = absl::Now();
   ABSL_ASSIGN_OR_RETURN(auto engine, litert::omni::OmniEngine::Create(
-                                         model_type_str, engine_settings,
+                                         model_name, engine_settings,
                                          &session_config, &metadata));
   double load_time_sec = absl::ToDoubleSeconds(absl::Now() - load_start);
 

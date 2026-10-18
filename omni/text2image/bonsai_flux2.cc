@@ -195,6 +195,9 @@ GetBonsaiFlux2SessionFactory(
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetBonsaiFlux2SessionFactory,
       .session_config_type_id = "Text2Image",
+      .model_remote_url =
+          "https://huggingface.co/litert-community/Bonsai-Image-ternary-4B/"
+          "resolve/main/bonsai-flux2-4b.litertlm",
   }));
   return true;
 }();

@@ -193,6 +193,9 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3TtsSessionFactory(
       .model_names = {std::begin(kModelNames), std::end(kModelNames)},
       .get_session_factory = &GetQwen3TtsSessionFactory,
       .session_config_type_id = "Text2Speech",
+      .model_remote_url =
+          "https://huggingface.co/litert-community/Qwen3-TTS-12Hz-0.6B-Base/"
+          "resolve/main/qwen3_tts_int8.litertlm",
   }));
   return true;
 }();
