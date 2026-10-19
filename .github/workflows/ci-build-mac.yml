@@ -122,6 +122,31 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
 
+      - name: Run bazel build on MacOS for release (static linking).
+        run: |
+          bazel build --disk_cache=~/.cache/bazel \
+            --repository_cache=~/.cache/bazel/repo \
+            --config=macos_arm64 \
+            -c opt \
+            //runtime/engine:litert_lm_main
+
+      - name: Check if litert_lm_main does not link libLiteRt.dylib
+        run: |
+          ! otool -L bazel-bin/runtime/engine/litert_lm_main | grep libLiteRt.dylib
+
+      - name: Update litert_lm_main prebuilt for MacOS if new version tag is pushed.
+        if: github.ref_type == 'tag'
+        run: |
+          mkdir -p litert_lm_macos_arm64
+          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_macos_arm64/litert_lm_main
+          cp prebuilt/macos_arm64/libGemmaModelConstraintProvider.dylib litert_lm_macos_arm64/
+          tar -czvf litert_lm_macos_arm64.tar.gz -C litert_lm_macos_arm64 .
+
+          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.macos_arm64
+          gh release upload ${GITHUB_REF_NAME} litert_lm_main.macos_arm64 --clobber
+          gh release upload ${GITHUB_REF_NAME} prebuilt/macos_arm64/libGemmaModelConstraintProvider.dylib --clobber
+          gh release upload ${GITHUB_REF_NAME} litert_lm_macos_arm64.tar.gz --clobber
+
       - name: Run bazel build on MacOS with dynamic linking.
         run: |
           bazel build --disk_cache=~/.cache/bazel \
@@ -142,12 +167,6 @@ jobs:
             //runtime/... \
             //schema/... \
             //c/...
-
-      - name: Update litert_lm_main prebuilt for MacOS if new version tag is pushed.
-        if: github.ref_type == 'tag'
-        run: |
-          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.macos_arm64
-          gh release upload ${GITHUB_REF_NAME} litert_lm_main.macos_arm64 --clobber
 
       - name: Run pytest
         run: |
