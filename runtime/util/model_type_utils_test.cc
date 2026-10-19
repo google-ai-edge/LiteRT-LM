@@ -14,13 +14,11 @@
 
 #include "runtime/util/model_type_utils.h"
 
-#include <optional>
 #include <string>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -232,45 +230,6 @@ TEST(ModelTypeUtilsTest, GetModelTypeName) {
 
   model_type.mutable_minicpmv4();
   EXPECT_EQ(GetModelTypeName(model_type), "minicpmv4");
-}
-
-TEST(ModelTypeUtilsTest, GetRollbackStopTokenIdGemma4) {
-  NiceMock<MockTokenizer> tokenizer;
-  EXPECT_CALL(tokenizer, TokenToId("<|tool_response>")).WillOnce(Return(7));
-  proto::LlmModelType model_type;
-  model_type.mutable_gemma4()->set_function_response_start("<|tool_response>");
-  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), 7);
-}
-
-TEST(ModelTypeUtilsTest, GetRollbackStopTokenIdGemma4WithoutResponseStart) {
-  NiceMock<MockTokenizer> tokenizer;
-  EXPECT_CALL(tokenizer, TokenToId).Times(0);
-  proto::LlmModelType model_type;
-  model_type.mutable_gemma4();
-  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
-}
-
-TEST(ModelTypeUtilsTest, GetRollbackStopTokenIdGemma4NotSingleToken) {
-  NiceMock<MockTokenizer> tokenizer;
-  EXPECT_CALL(tokenizer, TokenToId("<|tool_response>"))
-      .WillOnce(Return(absl::StatusOr<int>(absl::NotFoundError("Not found"))));
-  proto::LlmModelType model_type;
-  model_type.mutable_gemma4()->set_function_response_start("<|tool_response>");
-  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
-}
-
-TEST(ModelTypeUtilsTest, GetRollbackStopTokenIdOtherModels) {
-  NiceMock<MockTokenizer> tokenizer;
-  EXPECT_CALL(tokenizer, TokenToId).Times(0);
-  proto::LlmModelType model_type;
-  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
-
-  model_type.mutable_gemma3n();
-  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
-
-  model_type.mutable_function_gemma()->set_function_response_start(
-      "<start_function_response>");
-  EXPECT_EQ(GetRollbackStopTokenId(model_type, tokenizer), std::nullopt);
 }
 
 }  // namespace

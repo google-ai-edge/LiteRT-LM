@@ -69,24 +69,12 @@ absl::Status StopTokenDetector::AddStopTokenSequence(
   }
 
   stop_sequences_storage_.push_back(stop_sequence);
-  rollback_marks_.push_back(false);
 
   // Add a progress tracker for the new stop sequence for each batch item.
   for (auto& progress_vector_for_item : batch_item_match_progress_) {
     progress_vector_for_item.push_back(0);
   }
   return absl::OkStatus();
-}
-
-bool StopTokenDetector::MarkForRollback(int stop_token_id) {
-  auto it =
-      std::find(stop_sequences_storage_.begin(), stop_sequences_storage_.end(),
-                std::vector<int>{stop_token_id});
-  if (it == stop_sequences_storage_.end()) {
-    return false;
-  }
-  rollback_marks_[it - stop_sequences_storage_.begin()] = true;
-  return true;
 }
 
 void StopTokenDetector::ResetBatch(size_t batch_size) {
@@ -98,7 +86,6 @@ void StopTokenDetector::ResetBatch(size_t batch_size) {
   batch_item_match_progress_.assign(
       new_batch_size, std::vector<int>(stop_sequences_storage_.size(), 0));
   matched_stop_sequence_length_.assign(new_batch_size, 0);
-  ends_with_rollback_token_.assign(new_batch_size, false);
 }
 
 // Processes the latest incoming token for each sequence in the batch.
@@ -119,7 +106,6 @@ absl::Status StopTokenDetector::ProcessTokens(
     if (stop_token_found_[i]) {
       // Already stopped, but increase the length of the matched stop sequence.
       matched_stop_sequence_length_[i]++;
-      ends_with_rollback_token_[i] = false;
       continue;
     }
     max_batch_item_match_progress_[i] = 0;
@@ -146,7 +132,6 @@ absl::Status StopTokenDetector::ProcessTokens(
           current_match_len_for_k == stop_seq_k.size()) {
         stop_token_found_[i] = true;
         matched_stop_sequence_length_[i] = stop_seq_k.size();
-        ends_with_rollback_token_[i] = rollback_marks_[k];
       }
       max_batch_item_match_progress_[i] =
           std::max(max_batch_item_match_progress_[i], current_match_len_for_k);
@@ -175,10 +160,6 @@ absl::Status StopTokenDetector::ProcessTokens(
 
 int StopTokenDetector::MaxPartialStopTokenLength(int index) const {
   return max_batch_item_match_progress_[index];
-}
-
-bool StopTokenDetector::EndsWithRollbackToken(int index) const {
-  return ends_with_rollback_token_[index];
 }
 
 const std::vector<int>& StopTokenDetector::GetStepsBeforeStopTokens() const {

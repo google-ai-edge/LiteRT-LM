@@ -355,22 +355,11 @@ class DecodeOneStep {
           ABSL_ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
           ABSL_RETURN_IF_ERROR(executor_.SetCurrentStep(current_step - diff));
         }
-        // Decode() rolls back a stop token marked for rollback if it is the
-        // last token of this step, since a stop token before the last one is
-        // already rolled back above. Only for a single candidate, since all
-        // candidates share the current step.
-        stopped_on_rollback_token_ =
-            num_output_candidates_ == 1 && step == sequence_length - 1 &&
-            stop_token_detector_.EndsWithRollbackToken(0);
         return true;
       }
     }
     return false;
   }
-
-  // Returns whether decoding stopped on a stop token marked with
-  // StopTokenDetector::MarkForRollback() as its last decoded token.
-  bool StoppedOnRollbackToken() const { return stopped_on_rollback_token_; }
 
   // Flushes any remaining withheld text and token IDs from the detokenizer.
   // Overwrites `result_text_` and `result_token_ids_` with only the newly
@@ -561,7 +550,6 @@ class DecodeOneStep {
   bool is_first_step_ = true;
   const std::atomic<bool>* cancelled_ = nullptr;
   std::optional<bool> enable_speculative_decoding_ = std::nullopt;
-  bool stopped_on_rollback_token_ = false;
 };
 
 }  // namespace
@@ -846,14 +834,7 @@ absl::StatusOr<Responses> Decode(
     record_executor_benchmark_info();
   }
 
-  if (run_one_step->StoppedOnRollbackToken()) {
-    // The prompt template writes this stop token again at the start of the
-    // next turn. The executor has counted it in the current step but not
-    // written it to the KV cache, so roll back one step instead of keeping it
-    // as the pending token.
-    ABSL_ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
-    ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
-  } else if (is_custom_sampling) {
+  if (is_custom_sampling) {
     // For external sampling, the sampled tokens are provided by the sampler. We
     // must run one prefill to add the stop token as pending token in the LLM
     // Executor when stop condition is met.

@@ -63,7 +63,6 @@
 #include "runtime/framework/resource_management/resource_manager.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/executor_data_util.h"
-#include "runtime/util/model_type_utils.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
 
@@ -212,11 +211,6 @@ absl::StatusOr<SessionId> SerialExecutionManager::RegisterNewSession(
     if (!status.ok()) {
       ABSL_LOG(ERROR) << "Failed to add stop token sequence: " << status;
     }
-  }
-  if (std::optional<int> rollback_stop_token_id =
-          GetRollbackStopTokenId(session_config.GetLlmModelType(), *tokenizer_);
-      rollback_stop_token_id.has_value()) {
-    stop_token_detector->MarkForRollback(*rollback_stop_token_id);
   }
   SessionId session_id = next_session_id_++;
   auto session_info = std::make_shared<SessionInfo>(SessionInfo{
@@ -1041,14 +1035,6 @@ absl::Status SerialExecutionManager::AddCloneSessionTask(
               result = status;
               break;
             }
-          }
-          if (std::optional<int> rollback_stop_token_id =
-                  GetRollbackStopTokenId(
-                      original_session_info->session_config.GetLlmModelType(),
-                      *tokenizer_);
-              rollback_stop_token_id.has_value()) {
-            cloned_stop_token_detector->MarkForRollback(
-                *rollback_stop_token_id);
           }
 
           if (result.ok()) {
