@@ -217,12 +217,15 @@ endif()
 
 # --- STB (Header Only - Populated) ---
 set(LITERTLM_STB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/stb_lib CACHE PATH "Path to libstb headers")
-set(LITERTLM_STB_TAG "master" CACHE STRING "STB git tag")
+# Pinned to the same commit as the Bazel build (see WORKSPACE). Upstream master
+# moved stb_image_resize2.h into deprecated/, so tracking master breaks the build.
+# GIT_SHALLOW is omitted because a shallow clone cannot check out a commit that
+# is not a branch tip.
+set(LITERTLM_STB_TAG "f58f558c120e9b32c217290b80bad1a0729fbb2c" CACHE STRING "STB git tag")
 FetchContent_Declare(
   stb_lib
   GIT_REPOSITORY https://github.com/nothings/stb.git
   GIT_TAG ${LITERTLM_STB_TAG}
-  GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_STB_SRC_DIR}
 )
 FetchContent_Populate(stb_lib)
