@@ -171,15 +171,19 @@ cc_library(
 )
 
 # Minimal Conversation target ("LiteRT-LM Lite" profile) for binary-size-constrained
-# clients.
+# clients. Together with `:engine_advanced_impl_lite`, this saves ~6 MB of
+# uncompressed binary size on iOS arm64.
 #
 # Included features:
-#   - Gemma3, Gemma4, FunctionGemma, and Generic model data processors.
+#   - Gemma3, Gemma4, TinyGemma, and Generic model data processors.
 # Excluded heavy dependencies (linked against *_noop / *_lite targets instead):
-#   - Minijinja prompt templates (:prompt_template_noop)
-#   - Constrained decoding / llguidance / OpenFst (:constraint_provider_factory_noop)
+#   - Rust crates (`minijinja` prompt templates, `llguidance` constrained
+#     decoding, `tokenizers_cpp` HuggingFace tokenizer, and Rust tool-use
+#     parsers) + ANTLR4 (~5 MB combined on Linux/Android; ~3.0 MB net on iOS
+#     arm64 after linker `-dead_strip`)
+#   - Constrained decoding / OpenFst (:constraint_provider_factory_noop, ~0.5 MB)
 #   - Non-Gemma model data processors (:model_data_processor_factory_lite)
-#   - ANTLR4 and Rust tool-use expression parsers (:parser_utils_lite)
+#   - Legacy Artisan GPU/Audio executors (via :engine_advanced_impl_lite, ~2.5 MB)
 #
 # Usage expectations:
 #   1. Pair `:conversation_lite` with `//runtime/core:engine_advanced_impl_lite`
@@ -237,10 +241,20 @@ cc_library(
 cc_test(
     name = "conversation_lite_test",
     srcs = ["conversation_lite_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    tags = ["requires-mac-inputs:hard"],
     deps = [
         ":conversation_lite",
+        ":io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/components:model_resources",
+        "//runtime/components:model_resources_litert_lm",
         "//runtime/components:prompt_template_noop",
         "//runtime/components/tool_use:parser_utils_lite",
         "//runtime/conversation/model_data_processor:fastvlm_data_processor_config",
@@ -249,7 +263,14 @@ cc_test(
         "//runtime/conversation/model_data_processor:model_data_processor_factory_lite",
         "//runtime/conversation/model_data_processor:qwen3_data_processor_config",
         "//runtime/core:engine_advanced_impl_lite",  # buildcleaner: keep
+        "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:executor_settings_base",
         "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
         "//support/tokenizer:huggingface_tokenizer_noop",
     ],

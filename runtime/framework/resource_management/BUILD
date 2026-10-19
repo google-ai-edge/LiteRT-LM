@@ -113,6 +113,8 @@ cc_library(
     }),
 )
 
+# Lite variant of :threaded_execution_manager that links :resource_manager_lite
+# instead of :resource_manager to exclude legacy Artisan GPU/Audio executors.
 cc_library(
     name = "threaded_execution_manager_lite",
     srcs = ["threaded_execution_manager.cc"],
@@ -194,6 +196,8 @@ cc_library(
     }),
 )
 
+# Lite variant of :serial_execution_manager that links :resource_manager_lite
+# instead of :resource_manager to exclude legacy Artisan GPU/Audio executors.
 cc_library(
     name = "serial_execution_manager_lite",
     srcs = ["serial_execution_manager.cc"],
@@ -303,6 +307,8 @@ cc_library(
     ],
 )
 
+# Lite variant of :resource_manager that excludes legacy Artisan GPU/Audio
+# executors and links :huggingface_tokenizer_noop by default.
 cc_library(
     name = "resource_manager_lite",
     srcs = ["resource_manager.cc"],
