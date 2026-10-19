@@ -24,7 +24,7 @@
 #include "absl/base/log_severity.h"  // from @com_google_absl
 #include "absl/log/scoped_mock_log.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory.h"
 #include "runtime/util/memory_profiling/host_memory.h"
 
 namespace litert::lm {

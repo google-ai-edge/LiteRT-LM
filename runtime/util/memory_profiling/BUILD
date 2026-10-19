@@ -15,27 +15,25 @@
 # Measurement of the memory a LiteRT-LM process uses, split into host (CPU)
 # and accelerator (GPU / NPU) memory, for the CLI's benchmark metrics.
 #
-#   host_memory                 the host side: HostMemoryUsage and the per-OS
-#                               contract that reads it
-#   accelerator_memory_monitor  the accelerator side: types, the per-OS
-#                               platform contract, formatting, and the
-#                               accelerator-only AcceleratorMemoryMonitor
-#   memory_snapshot             MemorySnapshot / TakeMemorySnapshot(): host and
-#                               accelerator memory at one instant
-#   memory_monitor              MemoryMonitor: peaks of both over time, sampled
-#                               from a background thread
+#   host_memory             the host side: HostMemoryUsage and the per-OS
+#                           contract that reads it
+#   accelerator_memory      the accelerator side: types, the per-OS platform
+#                           contract, formatting
+#   memory_snapshot         MemorySnapshot / TakeMemorySnapshot(): host and
+#                           accelerator memory at one instant
+#   memory_monitor          MemoryMonitor: peaks over time, sampled from a
+#                           background thread
 #
 # The host and accelerator sides follow the same layout: a platform-neutral
 # header declares a platform contract, and each operating system contributes
 # one <side>_<os>.cc implementing it (plus an internal <side>_<os>.h when its
 # test needs the building blocks) and one <side>_<os>_test.cc that only runs
-# on that OS. Building blocks that can be tested without the OS go in their own
-# files (accelerator_memory_dmabuf.* is Android's, built on Linux too so that
-# its test runs in CI). <side>_unsupported.cc covers every other OS. To add an
-# OS, add its files and one entry to each select() below.
+# on that OS. <side>_unsupported.cc covers every other OS. To add an OS, add
+# its files and one entry to each select() below.
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+# [Google-internal load of `objc_library`]
 
 package(
     default_hdrs_check = "strict",
@@ -116,62 +114,15 @@ cc_test(
     ],
 )
 
+# Reader for /proc/self/fdinfo, shared by the Linux and Android accelerator
+# implementations (Android reads dma-buf buffers from it, Linux DRM clients).
 cc_library(
-    name = "accelerator_memory_monitor",
-    srcs = ["accelerator_memory_monitor.cc"] + select({
-        "@platforms//os:android": [
-            "accelerator_memory_android.cc",
-            "accelerator_memory_dmabuf.cc",
-        ],
-        # The dma-buf reader is Android's implementation; it is built on Linux
-        # too so that accelerator_memory_dmabuf_test can run in CI.
-        "@platforms//os:linux": [
-            "accelerator_memory_dmabuf.cc",
-            "accelerator_memory_unsupported.cc",
-        ],
-        "//conditions:default": ["accelerator_memory_unsupported.cc"],
-    }),
-    hdrs = ["accelerator_memory_monitor.h"] + select({
-        "@platforms//os:android": ["accelerator_memory_dmabuf.h"],
-        "@platforms//os:linux": ["accelerator_memory_dmabuf.h"],
-        "//conditions:default": [],
-    }),
-    deps = [
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
-    ] + select({
-        "@platforms//os:android": [
-            "@com_google_absl//absl/container:flat_hash_map",
-        ],
-        "@platforms//os:linux": [
-            "@com_google_absl//absl/container:flat_hash_map",
-        ],
-        "//conditions:default": [],
-    }),
-)
-
-cc_test(
-    name = "accelerator_memory_monitor_test",
-    srcs = ["accelerator_memory_monitor_test.cc"],
-    deps = [
-        ":accelerator_memory_monitor",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
-    ],
-)
-
-cc_test(
-    name = "accelerator_memory_dmabuf_test",
-    srcs = ["accelerator_memory_dmabuf_test.cc"],
-    # The Android reader, tested on canned fdinfo; runs on Linux in TAP. The
-    # tags keep the other TAP projects from requesting it explicitly, which
-    # target_compatible_with alone turns into a build error (b/202306027).
+    name = "fdinfo",
+    srcs = ["fdinfo.cc"],
+    hdrs = ["fdinfo.h"],
+    # Linux and Android only (/proc). The tags keep the other TAP projects from
+    # requesting it explicitly, which target_compatible_with alone turns into a
+    # build error (b/202306027).
     tags = [
         "noios",
         "nomacos",
@@ -183,7 +134,239 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":accelerator_memory_monitor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "fake_proc_self",
+    testonly = True,
+    hdrs = ["fake_proc_self.h"],
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_googletest//:gtest_for_library",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "fdinfo_test",
+    srcs = ["fdinfo_test.cc"],
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":fake_proc_self",
+        ":fdinfo",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "proc_mappings",
+    srcs = ["proc_mappings.cc"],
+    hdrs = ["proc_mappings.h"],
+    # Linux and Android only (/proc); see :fdinfo for the tags.
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = ["@com_google_absl//absl/strings"],
+)
+
+cc_test(
+    name = "proc_mappings_test",
+    srcs = ["proc_mappings_test.cc"],
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":fake_proc_self",
+        ":proc_mappings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_android_sources_test",
+    srcs = ["accelerator_memory_android_sources_test.cc"],
+    # The Android combination rule on canned inputs; runs on Linux in TAP.
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        ":proc_mappings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "accelerator_memory",
+    srcs = ["accelerator_memory.cc"] + select({
+        # The dma-buf reader and the Android combination rule are Android's
+        # implementation; both are built on Linux too so that
+        # accelerator_memory_dmabuf_test and
+        # accelerator_memory_android_sources_test can run in CI.
+        "@platforms//os:android": [
+            "accelerator_memory_android.cc",
+            "accelerator_memory_android_sources.cc",
+            "accelerator_memory_dmabuf.cc",
+        ],
+        "@platforms//os:linux": [
+            "accelerator_memory_android_sources.cc",
+            "accelerator_memory_dmabuf.cc",
+            "accelerator_memory_linux.cc",
+            "accelerator_memory_nvml.cc",
+        ],
+        "@platforms//os:windows": ["accelerator_memory_windows.cc"],
+        # macOS and iOS: accelerator_memory_apple.mm, Objective-C++, lives in
+        # the objc_library below and comes in through deps.
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["accelerator_memory_unsupported.cc"],
+    }),
+    hdrs = ["accelerator_memory.h"] + select({
+        "@platforms//os:android": [
+            "accelerator_memory_android.h",
+            "accelerator_memory_dmabuf.h",
+        ],
+        "@platforms//os:linux": [
+            "accelerator_memory_android.h",
+            "accelerator_memory_dmabuf.h",
+            "accelerator_memory_linux.h",
+            "accelerator_memory_nvml.h",
+        ],
+        "@platforms//os:windows": ["accelerator_memory_windows.h"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        # dxgi: IDXGIAdapter3::QueryVideoMemoryInfo; gdi32: D3DKMTQueryStatistics.
+        "@platforms//os:windows": [
+            "dxgi.lib",
+            "gdi32.lib",
+        ],
+        # dlopen() of libnvidia-ml.so at run time.
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ] + select({
+        "@platforms//os:android": [
+            ":fdinfo",
+            ":proc_mappings",
+            "@com_google_absl//absl/base:core_headers",
+            "@com_google_absl//absl/container:flat_hash_map",
+            "@com_google_absl//absl/synchronization",
+            "@com_google_absl//absl/time",
+        ],
+        "@platforms//os:linux": [
+            ":fdinfo",
+            ":proc_mappings",
+            "@com_google_absl//absl/container:flat_hash_map",
+            "@com_google_absl//absl/container:flat_hash_set",
+            "@com_google_absl//absl/log:absl_log",
+        ],
+        "@platforms//os:windows": [
+            "@com_google_absl//absl/log:absl_log",
+        ],
+        "@platforms//os:macos": [":accelerator_memory_apple"],
+        "@platforms//os:ios": [":accelerator_memory_apple"],
+        "//conditions:default": [],
+    }),
+)
+
+# The macOS / iOS implementation of the contract, Objective-C++ because it
+# reads MTLDevice. Part of :accelerator_memory (which selects it in on Apple
+# platforms), not a library in its own right; its header is public only for
+# its test. It takes accelerator_memory.h as a source, since the contract it
+# implements is declared there and the dependency runs the other way.
+objc_library(
+    name = "accelerator_memory_apple",
+    srcs = [
+        "accelerator_memory.h",
+        "accelerator_memory_apple.mm",
+    ],
+    hdrs = ["accelerator_memory_apple.h"],
+    copts = ["-ObjC++"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_absl//absl/strings",
+
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_test",
+    srcs = ["accelerator_memory_test.cc"],
+    deps = [
+        ":accelerator_memory",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_dmabuf_test",
+    srcs = ["accelerator_memory_dmabuf_test.cc"],
+    # The Android reader, tested on canned fdinfo; runs on Linux in TAP.
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        ":fake_proc_self",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/strings",
     ],
@@ -194,11 +377,11 @@ cc_test(
     srcs = ["accelerator_memory_android_test.cc"],
     # Runs on an Android device only:
     #   bazel test --config=android_arm64 :accelerator_memory_android_test
-    # No TAP project can run it: TAP's Android project builds cc_test targets
-    # for the Linux host (--android_platforms only applies to android_* rules),
-    # and Tricorder's builder uses the default platform. The tags make them
-    # skip it; target_compatible_with alone is not enough, as an explicitly
-    # requested incompatible target is a build error (b/202306027).
+    # No TAP project can run it (TAP's Android project builds cc_test targets
+    # for the Linux host), and Tricorder's builder uses the default platform.
+    # The tags make them skip it; target_compatible_with alone is not enough,
+    # as an explicitly requested incompatible target is a build error
+    # (b/202306027).
     tags = [
         "noandroid",
         "nobuilder",
@@ -212,7 +395,204 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":accelerator_memory_monitor",
+        ":accelerator_memory",
+        ":proc_mappings",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_linux_test",
+    srcs = ["accelerator_memory_linux_test.cc"],
+    # Canned DRM fdinfo, plus a live check that needs no GPU; runs on Linux in
+    # TAP. The tags keep the other TAP projects from requesting it explicitly
+    # (b/202306027).
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        ":fake_proc_self",
+        ":fdinfo",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_nvml_test",
+    srcs = ["accelerator_memory_nvml_test.cc"],
+    # The GPU-free part of the NVML reader (merging the per-process lists);
+    # runs on Linux in TAP. Tags as for accelerator_memory_linux_test.
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_nvidia_test",
+    srcs = ["accelerator_memory_nvidia_test.cc"],
+    # Needs an NVIDIA GPU: allocates framebuffer memory through the CUDA
+    # driver (dlopen()ed, no build dependency) and checks that NVML attributes
+    # it to this process. requires-gpu-sm90-full picks a whole H100, i.e. no
+    # MIG partitioning, which NVML accounts for differently. The no<os> tags
+    # keep the other TAP projects from requesting it explicitly (b/202306027).
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+        "requires-gpu-sm90-full",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_windows_test",
+    srcs = ["accelerator_memory_windows_test.cc"],
+    # The test allocates GPU memory through Direct3D 11.
+    linkopts = ["d3d11.lib"],
+    # Runs in TAP's Windows project. The tags make the other TAP projects and
+    # Tricorder's builder skip it; target_compatible_with alone is not enough,
+    # as an explicitly requested incompatible target is a build error
+    # (b/202306027).
+    tags = [
+        "noandroid",
+        "nobuilder",
+        "noios",
+        "nolinux",
+        "nomacos",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        ":host_memory",
+        ":memory_snapshot",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+# The Apple test: the merge rule on fixed inputs, and live checks with a Metal
+# buffer and with weights mapped from a file. Objective-C++, so an
+# objc_library wrapped in a cc_test. Runs in TAP's macOS project
+# (Forge-on-Mac has a Metal device); the tags keep the other TAP projects and
+# Tricorder's builder from requesting it explicitly (b/202306027).
+objc_library(
+    name = "accelerator_memory_apple_test_lib",
+    testonly = True,
+    srcs = ["accelerator_memory_apple_test.mm"],
+    copts = ["-ObjC++"],
+    tags = [
+        "noandroid",
+        "nobuilder",
+        "nolinux",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory",
+        ":accelerator_memory_apple",
+        ":host_memory",
+        ":memory_snapshot",
+        "@com_google_googletest//:gtest",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "accelerator_memory_apple_test",
+    tags = [
+        "noandroid",
+        "nobuilder",
+        "nolinux",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_apple_test_lib",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Measurement of how Metal allocations show up in the host figures on macOS;
+# the data the Apple implementation of the accelerator contract is based on.
+# Objective-C++, so it is an objc_library wrapped in a cc_test, like the other
+# Metal tests in the tree. Both are manual: the test is meant to be run by
+# hand (see the file comment) and read, not to gate anything yet.
+objc_library(
+    name = "accelerator_memory_apple_metal_test_lib",
+    testonly = True,
+    srcs = ["accelerator_memory_apple_metal_test.mm"],
+    copts = ["-ObjC++"],
+    tags = [
+        "manual",
+        "nobuilder",
+        "notap",
+    ],
+    deps = [
+        ":host_memory",
+        "@com_google_googletest//:gtest",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "accelerator_memory_apple_metal_test",
+    tags = [
+        "manual",
+        "nobuilder",
+        "notap",
+    ],
+    deps = [
+        ":accelerator_memory_apple_metal_test_lib",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -222,7 +602,7 @@ cc_library(
     srcs = ["memory_snapshot.cc"],
     hdrs = ["memory_snapshot.h"],
     deps = [
-        ":accelerator_memory_monitor",
+        ":accelerator_memory",
         ":host_memory",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
@@ -234,7 +614,7 @@ cc_test(
     name = "memory_snapshot_test",
     srcs = ["memory_snapshot_test.cc"],
     deps = [
-        ":accelerator_memory_monitor",
+        ":accelerator_memory",
         ":host_memory",
         ":memory_snapshot",
         "@com_google_googletest//:gtest_main",
@@ -249,7 +629,7 @@ cc_library(
     srcs = ["memory_monitor.cc"],
     hdrs = ["memory_monitor.h"],
     deps = [
-        ":accelerator_memory_monitor",
+        ":accelerator_memory",
         ":memory_snapshot",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/log:absl_log",
@@ -264,7 +644,7 @@ cc_test(
     name = "memory_monitor_test",
     srcs = ["memory_monitor_test.cc"],
     deps = [
-        ":accelerator_memory_monitor",
+        ":accelerator_memory",
         ":memory_monitor",
         ":memory_snapshot",
         "@com_google_googletest//:gtest_main",

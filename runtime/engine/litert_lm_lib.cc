@@ -23,7 +23,8 @@
 
 #include "runtime/engine/litert_lm_lib.h"
 
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory.h"
+#include "runtime/util/memory_profiling/memory_monitor.h"
 
 #if defined(_WIN32)
 #include <io.h>
@@ -60,6 +61,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
@@ -83,7 +85,6 @@
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "re2/re2.h"  // from @com_googlesource_code_re2
 #include "tflite/profiling/memory_info.h"  // from @litert
-#include "tflite/profiling/memory_usage_monitor.h"  // from @litert
 
 namespace litert {
 namespace lm {
@@ -509,8 +510,7 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
 // breakdown and the largest individual allocations.
 void LogAcceleratorMemoryUsage(const LiteRtLmSettings& settings,
                                const AcceleratorMemoryUsage& peak_accelerator) {
-  const float peak_accelerator_mb =
-      AcceleratorMemoryBytesToMb(peak_accelerator.total_bytes);
+  const float peak_accelerator_mb = BytesToMb(peak_accelerator.total_bytes);
   if (!settings.log_sink_file.has_value()) {
     ABSL_LOG(INFO) << "Peak accelerator memory usage: " << peak_accelerator_mb
                    << "MB.";
@@ -531,36 +531,80 @@ void LogAcceleratorMemoryUsage(const LiteRtLmSettings& settings,
   }
 }
 
-void LogMemoryUsage(const LiteRtLmSettings& settings, float peak_mem_mb,
-                    float peak_private_mb,
-                    const AcceleratorMemoryUsage* peak_accelerator = nullptr) {
+// Logs the peak memory usage of a run.
+//
+// With a log sink file the output is a fixed set of "<name>: <value> MB" lines
+// that the google3 log parsers turn into metrics, so their names must not
+// change and no other line of that shape may be added casually. Without one,
+// the detailed human-readable form is logged instead.
+void LogMemoryUsage(const LiteRtLmSettings& settings,
+                    const MemoryPeaks& peaks) {
   if (!settings.log_sink_file.has_value()) {
-    ABSL_LOG(INFO) << "Peak system ram usage: " << peak_mem_mb << "MB.";
+    for (absl::string_view line :
+         absl::StrSplit(FormatMemoryPeaks(peaks), '\n')) {
+      ABSL_LOG(INFO) << line;
+    }
     ABSL_LOG(INFO) << "Memory usage: "
                    << tflite::profiling::memory::GetMemoryUsage();
-    ABSL_LOG(INFO) << "Peak private footprint: " << peak_private_mb << "MB.";
-  } else {
-    ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
-                                      peak_mem_mb);
-    ABSL_LOG(INFO) << absl::StrFormat("Peak private footprint: %.2f MB",
-                                      peak_private_mb);
-    auto memory_usage = tflite::profiling::memory::GetMemoryUsage();
-    if (memory_usage.IsSupported()) {
-      ABSL_LOG(INFO) << absl::StrFormat("Physical footprint: %.2f MB",
-                                        memory_usage.mem_footprint_kb / 1000.0);
-      ABSL_LOG(INFO) << absl::StrFormat(
-          "Total non-mmapped heap size: %.2f MB",
-          memory_usage.total_allocated_bytes / 1000.0 / 1000.0);
-      ABSL_LOG(INFO) << absl::StrFormat(
-          "In-use heap size: %.2f MB",
-          memory_usage.in_use_allocated_bytes / 1000.0 / 1000.0);
-      ABSL_LOG(INFO) << absl::StrFormat(
-          "Private footprint: %.2f MB",
-          memory_usage.private_footprint_bytes / 1000.0 / 1000.0);
-    }
+    return;
   }
-  if (peak_accelerator != nullptr) {
-    LogAcceleratorMemoryUsage(settings, *peak_accelerator);
+  // "Peak system ram usage" is the memory resident in RAM, CPU and accelerator,
+  // and "Peak private footprint" the memory the OS attributes to the process
+  // (Activity Monitor's / Task Manager's figure), as of the move to
+  // MemoryMonitor; before it both were CPU-only.
+  if (peaks.resident_in_ram.has_value()) {
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Peak system ram usage: %.2f MB",
+        BytesToMb(peaks.resident_in_ram->total_bytes));
+  }
+  if (peaks.attributed_by_os.has_value()) {
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Peak private footprint: %.2f MB",
+        BytesToMb(peaks.attributed_by_os->total_bytes));
+  }
+  auto memory_usage = tflite::profiling::memory::GetMemoryUsage();
+  if (memory_usage.IsSupported()) {
+    ABSL_LOG(INFO) << absl::StrFormat("Physical footprint: %.2f MB",
+                                      memory_usage.mem_footprint_kb / 1000.0);
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Total non-mmapped heap size: %.2f MB",
+        memory_usage.total_allocated_bytes / 1000.0 / 1000.0);
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "In-use heap size: %.2f MB",
+        memory_usage.in_use_allocated_bytes / 1000.0 / 1000.0);
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Private footprint: %.2f MB",
+        memory_usage.private_footprint_bytes / 1000.0 / 1000.0);
+  }
+  if (peaks.accelerator.has_value()) {
+    LogAcceleratorMemoryUsage(settings, *peaks.accelerator);
+  }
+  // Kept for the parsers: the same figure as "Peak private footprint" now
+  // that the attributed figure already covers CPU and accelerator.
+  if (peaks.attributed_by_os.has_value()) {
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Peak total private footprint: %.2f MB",
+        BytesToMb(peaks.attributed_by_os->total_bytes));
+  }
+}
+
+// Copies the peaks into the per-iteration metrics.
+void SetPeakMetrics(const MemoryPeaks& peaks, LitertLmMetrics& metric) {
+  if (peaks.resident_in_ram.has_value()) {
+    metric.peak_mem_mb = BytesToMb(peaks.resident_in_ram->total_bytes);
+  }
+  if (peaks.attributed_by_os.has_value()) {
+    metric.peak_private_mb = BytesToMb(peaks.attributed_by_os->total_bytes);
+    metric.peak_total_private_mb = metric.peak_private_mb;
+  }
+  if (peaks.accelerator.has_value()) {
+    metric.peak_accelerator_mb = BytesToMb(peaks.accelerator->total_bytes);
+    metric.peak_accelerator_breakdown_mb.reserve(
+        peaks.accelerator->breakdown.size());
+    for (const auto& [category, bytes] : peaks.accelerator->breakdown) {
+      metric.peak_accelerator_breakdown_mb.emplace_back(category,
+                                                        BytesToMb(bytes));
+    }
   }
 }
 
@@ -666,6 +710,10 @@ void LogAggregatedMetrics(const AggregatedLitertLmMetrics& aggregated,
            << std::endl;
       }
     }
+    if (aggregated.peak_total_private_mb.has_value()) {
+      ss << "  Peak total private footprint: "
+         << *aggregated.peak_total_private_mb << " MB." << std::endl;
+    }
     std::string line;
     bool is_first_line = true;
     while (std::getline(ss, line)) {
@@ -716,6 +764,10 @@ void LogAggregatedMetrics(const AggregatedLitertLmMetrics& aggregated,
                        << FormatAggregatedAcceleratorMemoryBreakdown(
                               aggregated.peak_accelerator_breakdown_mb);
       }
+    }
+    if (aggregated.peak_total_private_mb.has_value()) {
+      ABSL_LOG(INFO) << absl::StrFormat("Peak total private footprint: %.2f MB",
+                                        *aggregated.peak_total_private_mb);
     }
   }
 }
@@ -1087,6 +1139,7 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
   std::vector<double> peak_accelerator_mb;
   absl::flat_hash_map<std::string, std::vector<double>>
       peak_accelerator_breakdown_mb;
+  std::vector<double> peak_total_private_mb;
 
   for (const LitertLmMetrics& metric : metrics) {
     // Memory usage is only reported when --report_peak_memory_footprint is set.
@@ -1103,6 +1156,9 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
       for (const auto& [category, mb] : metric.peak_accelerator_breakdown_mb) {
         peak_accelerator_breakdown_mb[category].push_back(mb);
       }
+    }
+    if (metric.peak_total_private_mb.has_value()) {
+      peak_total_private_mb.push_back(*metric.peak_total_private_mb);
     }
     if (!metric.benchmark_info.has_value()) {
       continue;
@@ -1166,6 +1222,10 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
       aggregated.peak_accelerator_breakdown_mb[category] =
           static_cast<float>(Median(values));
     }
+  }
+  if (!peak_total_private_mb.empty()) {
+    aggregated.peak_total_private_mb =
+        static_cast<float>(Median(peak_total_private_mb));
   }
   return aggregated;
 }
@@ -1270,17 +1330,11 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
   iteration_metrics.reserve(settings.num_iterations);
 
   for (int i = 0; i < settings.num_iterations; ++i) {
-    std::unique_ptr<tflite::profiling::memory::MemoryUsageMonitor> mem_monitor;
-    std::unique_ptr<AcceleratorMemoryMonitor> accelerator_mem_monitor;
+    std::unique_ptr<MemoryMonitor> memory_monitor;
     if (settings.report_peak_memory_footprint) {
-      mem_monitor =
-          std::make_unique<tflite::profiling::memory::MemoryUsageMonitor>(
-              kMemoryCheckIntervalMs);
-      mem_monitor->Start();
-      // No-op on platforms where accelerator memory tracking is unsupported.
-      accelerator_mem_monitor = std::make_unique<AcceleratorMemoryMonitor>(
+      memory_monitor = std::make_unique<MemoryMonitor>(
           absl::Milliseconds(kMemoryCheckIntervalMs));
-      accelerator_mem_monitor->Start();
+      memory_monitor->Start();
     }
 
     // Session and Conversation are mutually exclusive. Only when
@@ -1354,34 +1408,11 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
     conversation.reset();
     session.reset();
 
-    if (settings.report_peak_memory_footprint) {
-      float peak_mem_mb = 0.0f;
-      float peak_private_mb = 0.0f;
-      if (mem_monitor != nullptr) {
-        mem_monitor->Stop();
-        peak_mem_mb = mem_monitor->GetPeakMemUsageInMB();
-        peak_private_mb = mem_monitor->GetPeakPrivateFootprintInMB();
-        metric.peak_mem_mb = peak_mem_mb;
-        metric.peak_private_mb = peak_private_mb;
-      }
-      std::optional<AcceleratorMemoryUsage> peak_accelerator;
-      if (accelerator_mem_monitor != nullptr) {
-        accelerator_mem_monitor->Stop();
-        peak_accelerator = accelerator_mem_monitor->GetPeakUsage();
-      }
-      if (peak_accelerator.has_value()) {
-        metric.peak_accelerator_mb =
-            AcceleratorMemoryBytesToMb(peak_accelerator->total_bytes);
-        metric.peak_accelerator_breakdown_mb.reserve(
-            peak_accelerator->breakdown.size());
-        for (const auto& [category, bytes] : peak_accelerator->breakdown) {
-          metric.peak_accelerator_breakdown_mb.emplace_back(
-              category, AcceleratorMemoryBytesToMb(bytes));
-        }
-      }
-      LogMemoryUsage(
-          settings, peak_mem_mb, peak_private_mb,
-          peak_accelerator.has_value() ? &*peak_accelerator : nullptr);
+    if (memory_monitor != nullptr) {
+      memory_monitor->Stop();
+      const MemoryPeaks peaks = memory_monitor->GetPeaks();
+      SetPeakMetrics(peaks, metric);
+      LogMemoryUsage(settings, peaks);
     }
     iteration_metrics.push_back(std::move(metric));
   }

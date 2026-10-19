@@ -54,10 +54,12 @@ message LitertLmMetrics {
   // Time to first token in seconds.
   double time_to_first_token_seconds = 7;
 
-  // Peak memory usage in megabytes.
+  // Peak memory resident in RAM, CPU and accelerator together, in megabytes.
   float peak_mem_mb = 8;
 
-  // Peak private memory usage in megabytes.
+  // Peak memory attributed to the process by the OS (what Activity Monitor or
+  // Task Manager shows, plus GPU memory the OS keeps no charge for), in
+  // megabytes.
   float peak_private_mb = 9;
 
   // Fields 10 and 11 were the DMA-BUF specific `peak_dmabuf_mb` and
@@ -66,14 +68,19 @@ message LitertLmMetrics {
   reserved 10, 11;
   reserved "peak_dmabuf_mb", "dmabuf_buffer_count";
 
-  // Peak accelerator (GPU / NPU) memory used by the process in megabytes. Unset
-  // when accelerator memory tracking is not supported on the platform or peak
+  // Peak accelerator (GPU / NPU) memory present, in megabytes. Unset when
+  // accelerator memory tracking is not supported on the platform or peak
   // memory reporting is disabled.
   optional float peak_accelerator_mb = 12;
 
   // Breakdown of peak_accelerator_mb into platform-specific categories, in
   // megabytes, keyed by the category name.
   map<string, float> peak_accelerator_breakdown_mb = 13;
+
+  // The same figure as peak_private_mb, kept for readers of the metric; it
+  // predates peak_private_mb covering CPU and accelerator. Unset when peak
+  // memory reporting is disabled.
+  optional float peak_total_private_mb = 14;
 }
 
 message LitertLmMetricsList {

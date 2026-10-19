@@ -184,15 +184,24 @@ struct LiteRtLmSettings {
 
 struct LitertLmMetrics {
   std::optional<BenchmarkInfo> benchmark_info;
+  // Peak memory resident in RAM, CPU and accelerator together, in MB
+  // (MemorySnapshot::resident_in_ram, memory_snapshot.h).
   float peak_mem_mb = 0.0f;
+  // Peak memory attributed to the process by the OS, in MB: what Activity
+  // Monitor or Task Manager shows, plus GPU memory the OS keeps no charge for
+  // (MemorySnapshot::attributed_by_os).
   float peak_private_mb = 0.0f;
-  // Peak accelerator (GPU / NPU) memory used by the process, in MB. Unset when
+  // Peak accelerator (GPU / NPU) memory present, in MB. Unset when
   // accelerator memory tracking is not supported on the platform or peak memory
   // reporting is disabled.
   std::optional<float> peak_accelerator_mb;
   // Breakdown of `peak_accelerator_mb` into platform-specific categories, in
   // MB.
   std::vector<std::pair<std::string, float>> peak_accelerator_breakdown_mb;
+  // The same figure as `peak_private_mb`, kept for readers of the metric; it
+  // predates `peak_private_mb` covering CPU and accelerator. Unset when peak
+  // memory reporting is disabled.
+  std::optional<float> peak_total_private_mb;
 };
 
 // Aggregated (median) statistics of the metrics collected over multiple
@@ -220,6 +229,8 @@ struct AggregatedLitertLmMetrics {
   // independently, so unlike a single iteration's breakdown the medians do not
   // necessarily sum to `peak_accelerator_mb`.
   absl::btree_map<std::string, float> peak_accelerator_breakdown_mb;
+  // Median peak total private footprint, in MB.
+  std::optional<float> peak_total_private_mb;
 };
 
 // Computes the median of each benchmark metric across the per-iteration

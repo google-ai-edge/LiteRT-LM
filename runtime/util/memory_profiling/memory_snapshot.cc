@@ -28,7 +28,7 @@
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory.h"
 #include "runtime/util/memory_profiling/host_memory.h"
 
 namespace litert::lm {
@@ -36,7 +36,7 @@ namespace litert::lm {
 namespace {
 
 std::string Mb(uint64_t bytes) {
-  return absl::StrFormat("%.2f MB", AcceleratorMemoryBytesToMb(bytes));
+  return absl::StrFormat("%.2f MB", BytesToMb(bytes));
 }
 
 // "<total> (<breakdown>)", or just "<total>" without a breakdown.

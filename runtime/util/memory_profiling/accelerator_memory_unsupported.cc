@@ -13,13 +13,13 @@
 // limitations under the License.
 
 // Fallback implementation of the platform contract in
-// accelerator_memory_monitor.h for operating systems that do not have their
+// accelerator_memory.h for operating systems that do not have their
 // own accelerator_memory_<os>.cc yet. Accelerator memory tracking is reported
 // as unsupported, which makes AcceleratorMemoryMonitor a no-op.
 
 #include <optional>
 
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory.h"
 
 namespace litert::lm {
 
