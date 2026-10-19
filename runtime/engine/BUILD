@@ -244,6 +244,8 @@ cc_library(
         "@platforms//os:linux": [
         ],
         "//conditions:default": [],
+    }) + select({
+        "//conditions:default": [],
     }),
 )
 
@@ -307,7 +309,9 @@ cc_binary(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
-    ],
+    ] + select({
+        "//conditions:default": [],
+    }),
 )
 
 cc_binary(
