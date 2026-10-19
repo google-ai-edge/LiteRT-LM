@@ -38,6 +38,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
@@ -225,6 +226,7 @@ class LlmLiteRtMtpDrafter {
   struct DraftingResult {
     std::vector<int> drafted_tokens;
     std::vector<std::unique_ptr<Constraint::State>> draft_constraint_states;
+    std::vector<std::unique_ptr<LogitMask>> draft_masks;
   };
 
   absl::Status PrepareDrafterInputBuffers(
@@ -248,8 +250,7 @@ class LlmLiteRtMtpDrafter {
           output_kv_cache_buffers);
 
   absl::StatusOr<std::vector<int>> RunVerification(
-      const std::vector<std::unique_ptr<Constraint::State>>&
-          draft_constraint_states);
+      DraftingResult& drafting_result);
 
   // The MTP drafter model.
   CompiledModel mtp_drafter_model_;

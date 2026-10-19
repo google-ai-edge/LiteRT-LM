@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/bitmap.h"
 #include "runtime/components/constrained_decoding/constraint.h"
@@ -38,17 +39,37 @@ class LlgBitmap : public Bitmap {
 };
 
 // A wrapper class to own the ::LlgConstraint* pointer from llguidance.h.
+// Copies deep-clone the underlying constraint, so copies can be advanced
+// independently of each other.
 class LlgConstraintOwner {
  public:
   explicit LlgConstraintOwner(::LlgConstraint* llg_constraint)
       : llg_constraint_(llg_constraint) {}
 
-  ~LlgConstraintOwner() { llg_free_constraint(llg_constraint_); }
+  LlgConstraintOwner(const LlgConstraintOwner& other)
+      : llg_constraint_(other.llg_constraint_ != nullptr
+                            ? llg_clone_constraint(other.llg_constraint_.get())
+                            : nullptr) {}
 
-  ::LlgConstraint* llg_constraint() const { return llg_constraint_; }
+  LlgConstraintOwner& operator=(const LlgConstraintOwner& other) {
+    LlgConstraintOwner copy(other);
+    std::swap(llg_constraint_, copy.llg_constraint_);
+    return *this;
+  }
+
+  LlgConstraintOwner(LlgConstraintOwner&&) noexcept = default;
+  LlgConstraintOwner& operator=(LlgConstraintOwner&&) noexcept = default;
+
+  ::LlgConstraint* llg_constraint() const { return llg_constraint_.get(); }
 
  private:
-  ::LlgConstraint* llg_constraint_;  // Owned.
+  struct Deleter {
+    void operator()(::LlgConstraint* llg_constraint) const {
+      llg_free_constraint(llg_constraint);
+    }
+  };
+
+  std::unique_ptr<::LlgConstraint, Deleter> llg_constraint_;
 };
 
 // Represents a decoding constraint based on the LLGuidance library.
@@ -57,18 +78,27 @@ class LlgConstraint : public Constraint {
   class LlgState : public State {
    public:
     // LlgState takes ownership of llg_constraint.
-    explicit LlgState(::LlgConstraint* llg_constraint) {
-      llg_constraint_owner_ =
-          std::make_shared<LlgConstraintOwner>(llg_constraint);
-    }
+    explicit LlgState(::LlgConstraint* llg_constraint)
+        : llg_constraint_owner_(llg_constraint) {}
 
     ::LlgConstraint* llg_constraint() const {
-      return llg_constraint_owner_->llg_constraint();
+      return llg_constraint_owner_.llg_constraint();
+    }
+
+    bool mask_computed() const { return mask_computed_; }
+
+    void set_mask_computed(bool mask_computed) const {
+      mask_computed_ = mask_computed;
     }
 
    private:
-    // The shared_ptr is needed because Constraint::State must be copyable.
-    std::shared_ptr<LlgConstraintOwner> llg_constraint_owner_;
+    LlgConstraintOwner llg_constraint_owner_;
+
+    // Whether llg_compute_mask() has run since the last commit. llguidance
+    // requires compute_mask() before commit_token(), and the C API does not
+    // expose this, so it is mirrored here. Mutable because ComputeMask() takes
+    // a const State& (the llg constraint is already mutated through it).
+    mutable bool mask_computed_ = false;
   };
 
   // LlgConstraint takes ownership of llg_constraint.
@@ -101,6 +131,9 @@ class LlgConstraint : public Constraint {
       const State& state) const override;
 
  private:
+  // Commits `token` to `state`, computing the mask first if needed.
+  absl::Status CommitToken(const LlgState& state, int token) const;
+
   LlgConstraintOwner llg_constraint_owner_;
   int vocab_size_;
   int eos_token_id_;

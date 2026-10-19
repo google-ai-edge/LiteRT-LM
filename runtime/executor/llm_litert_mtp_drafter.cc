@@ -518,6 +518,10 @@ LlmLiteRtMtpDrafter::RunDraftingLoop(
   DraftingResult result;
   result.drafted_tokens.reserve(num_draft_steps_);
   result.draft_constraint_states.reserve(num_draft_steps_);
+  if (constraint != nullptr) {
+    // One extra slot for the final position's mask, added in RunVerification.
+    result.draft_masks.reserve(num_draft_steps_ + 1);
+  }
   int last_drafted_token_id = token_id;
   std::vector<float> embedding_vector;
   TensorBuffer* activations_ptr =
@@ -548,11 +552,16 @@ LlmLiteRtMtpDrafter::RunDraftingLoop(
         drafter_signature_.Key(), active_drafter_input_buffers_,
         active_drafter_output_buffers_, async));
 
-    if (constraint != nullptr && current_draft_state != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(auto mask,
-                            constraint->ComputeMask(*current_draft_state));
-      ABSL_RETURN_IF_ERROR(drafter_mask_runner_->Apply(
-          active_drafter_output_buffers_["logits"], mask.get()));
+    if (constraint != nullptr) {
+      if (current_draft_state != nullptr) {
+        ABSL_ASSIGN_OR_RETURN(auto mask,
+                              constraint->ComputeMask(*current_draft_state));
+        ABSL_RETURN_IF_ERROR(drafter_mask_runner_->Apply(
+            active_drafter_output_buffers_["logits"], mask.get()));
+        result.draft_masks.push_back(std::move(mask));
+      } else {
+        result.draft_masks.push_back(nullptr);
+      }
     }
 
     ABSL_RETURN_IF_ERROR(drafter_sampler_->SampleToIdAndScoreBuffer(
@@ -669,33 +678,29 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierOutputBuffers(
 }
 
 absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification(
-    const std::vector<std::unique_ptr<Constraint::State>>&
-        draft_constraint_states) {
+    DraftingResult& drafting_result) {
   bool async = true;
   LITERT_RETURN_IF_ERROR(base_model_.RunAsync(
       verify_signature_.Key(), active_verifier_input_buffers_,
       active_verifier_output_buffers_, async));
 
   // Apply constraint masks to verifier logits for all positions in a single
-  // pass.
+  // pass. Masks for positions [0, num_draft_steps_ - 1] were already computed
+  // during RunDraftingLoop; only the final position's mask needs to be
+  // computed here.
   if (constraint_ != nullptr) {
-    std::vector<std::unique_ptr<LogitMask>> masks;
-    masks.reserve(draft_constraint_states.size() + 1);
-    if (constraint_state_ != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(auto mask,
-                            constraint_->ComputeMask(*constraint_state_));
+    const auto& draft_constraint_states =
+        drafting_result.draft_constraint_states;
+    std::vector<std::unique_ptr<LogitMask>> masks =
+        std::move(drafting_result.draft_masks);
+    const Constraint::State* final_state =
+        draft_constraint_states.empty() ? constraint_state_.get()
+                                        : draft_constraint_states.back().get();
+    if (final_state != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(auto mask, constraint_->ComputeMask(*final_state));
       masks.push_back(std::move(mask));
     } else {
       masks.push_back(nullptr);
-    }
-    for (const auto& draft_state : draft_constraint_states) {
-      if (draft_state != nullptr) {
-        ABSL_ASSIGN_OR_RETURN(auto mask,
-                              constraint_->ComputeMask(*draft_state));
-        masks.push_back(std::move(mask));
-      } else {
-        masks.push_back(nullptr);
-      }
     }
     ABSL_RETURN_IF_ERROR(verifier_mask_runner_->ApplySequence(
         active_verifier_output_buffers_.at("logits"), masks));
@@ -732,10 +737,6 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
              constraint_state_ == nullptr) {
     constraint_ = constraint;
     constraint_state_ = constraint_->Start();
-    // Compute mask on the initial state so the underlying grammar engine (e.g.
-    // llguidance) initializes parser rows and lexer state before committing the
-    // first token.
-    ABSL_RETURN_IF_ERROR(constraint_->ComputeMask(*constraint_state_).status());
     ABSL_ASSIGN_OR_RETURN(constraint_state_, constraint_->ComputeNext(
                                                  *constraint_state_, token_id));
     if (constraint_->IsEnded(*constraint_state_)) {
@@ -756,9 +757,8 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   ABSL_RETURN_IF_ERROR(
       PrepareVerifierOutputBuffers(state_buffers.output_buffers));
 
-  ABSL_ASSIGN_OR_RETURN(
-      std::vector<int> verifier_id_vector,
-      RunVerification(drafting_result.draft_constraint_states));
+  ABSL_ASSIGN_OR_RETURN(std::vector<int> verifier_id_vector,
+                        RunVerification(drafting_result));
   const absl::Duration verify_time = absl::Now() - verify_start;
 
   RET_CHECK_EQ(verifier_id_vector.size(),

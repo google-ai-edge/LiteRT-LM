@@ -24,6 +24,7 @@
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -61,6 +62,24 @@ std::vector<bool> SampleMaskToVector(const uint32_t* sample_mask,
   return mask_vector;
 }
 
+// Returns the mask for a stopped constraint, which only allows EOS.
+std::unique_ptr<LogitMask> StoppedMask(int vocab_size, int eos_token_id) {
+  if (eos_token_id >= 0 && eos_token_id < vocab_size) {
+    return BitmapLogitMask::CreateSingleAllowedToken(vocab_size, eos_token_id);
+  }
+  return BitmapLogitMask::CreateAllDisallowed(vocab_size);
+}
+
+// llguidance reports a constraint in an error state as stopped, so this must be
+// checked before llg_is_stopped() to avoid treating errors as a normal end.
+absl::Status CheckNoError(const ::LlgConstraint* llg_constraint) {
+  if (const char* error = llg_get_error(llg_constraint); error != nullptr) {
+    return absl::InternalError(
+        absl::StrCat("Constraint is in an error state: ", error));
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 std::unique_ptr<Constraint::State> LlgConstraint::Start() const {
@@ -76,23 +95,45 @@ bool LlgConstraint::IsEnded(const LlgConstraint::State& state) const {
 
 int LlgConstraint::GetVocabularySize() const { return vocab_size_; }
 
-absl::StatusOr<std::unique_ptr<Constraint::State>> LlgConstraint::ComputeNext(
-    const Constraint::State& state, int token) const {
-  const auto& llg_state = static_cast<const LlgConstraint::LlgState&>(state);
+absl::Status LlgConstraint::CommitToken(const LlgState& state,
+                                        int token) const {
+  ::LlgConstraint* llg_constraint = state.llg_constraint();
+  if (!state.mask_computed() && !llg_is_stopped(llg_constraint)) {
+    LlgMaskResult mask_res;
+    if (llg_compute_mask(llg_constraint, &mask_res) != 0) {
+      std::string error_message = llg_get_error(llg_constraint);
+      return absl::InternalError(
+          absl::StrCat("Failed to compute mask: ", error_message));
+    }
+  }
 
   LlgCommitResult commit_res;
-  if (llg_commit_token(llg_state.llg_constraint(), token, &commit_res) != 0) {
-    std::string error_message = llg_get_error(llg_state.llg_constraint());
+  if (llg_commit_token(llg_constraint, token, &commit_res) != 0) {
+    std::string error_message = llg_get_error(llg_constraint);
     return absl::InternalError(
         absl::StrCat("Failed to commit token: ", error_message));
   }
+  state.set_mask_computed(false);
+  return absl::OkStatus();
+}
 
-  return std::make_unique<LlgConstraint::LlgState>(llg_state);
+absl::StatusOr<std::unique_ptr<Constraint::State>> LlgConstraint::ComputeNext(
+    const Constraint::State& state, int token) const {
+  const auto& llg_state = static_cast<const LlgConstraint::LlgState&>(state);
+  auto next_state = std::make_unique<LlgConstraint::LlgState>(llg_state);
+  ABSL_RETURN_IF_ERROR(CommitToken(*next_state, token));
+  return next_state;
 }
 
 absl::StatusOr<std::unique_ptr<LogitMask>> LlgConstraint::ComputeMask(
     const Constraint::State& state) const {
   const auto& llg_state = static_cast<const LlgConstraint::LlgState&>(state);
+
+  ABSL_RETURN_IF_ERROR(CheckNoError(llg_state.llg_constraint()));
+  if (llg_is_stopped(llg_state.llg_constraint())) {
+    llg_state.set_mask_computed(true);
+    return StoppedMask(vocab_size_, eos_token_id_);
+  }
 
   LlgMaskResult mask_res;
   if (llg_compute_mask(llg_state.llg_constraint(), &mask_res) != 0) {
@@ -100,14 +141,11 @@ absl::StatusOr<std::unique_ptr<LogitMask>> LlgConstraint::ComputeMask(
     return absl::InternalError(
         absl::StrCat("Failed to compute mask: ", error_message));
   }
+  llg_state.set_mask_computed(true);
 
   if (mask_res.sample_mask == nullptr) {
     if (mask_res.is_stop) {
-      if (eos_token_id_ >= 0 && eos_token_id_ < vocab_size_) {
-        return BitmapLogitMask::CreateSingleAllowedToken(vocab_size_,
-                                                         eos_token_id_);
-      }
-      return BitmapLogitMask::CreateAllDisallowed(vocab_size_);
+      return StoppedMask(vocab_size_, eos_token_id_);
     } else {
       return BitmapLogitMask::CreateAllAllowed(vocab_size_);
     }
@@ -122,12 +160,21 @@ absl::StatusOr<std::unique_ptr<Bitmap>> LlgConstraint::ComputeBitmap(
     const Constraint::State& state) const {
   const auto& llg_state = static_cast<const LlgConstraint::LlgState&>(state);
 
+  ABSL_RETURN_IF_ERROR(CheckNoError(llg_state.llg_constraint()));
+  if (llg_is_stopped(llg_state.llg_constraint())) {
+    llg_state.set_mask_computed(true);
+    std::vector<bool> mask_vector = SampleMaskToVector(
+        /*sample_mask=*/nullptr, vocab_size_, /*is_stop=*/true, eos_token_id_);
+    return std::make_unique<LlgBitmap>(std::move(mask_vector));
+  }
+
   LlgMaskResult mask_res;
   if (llg_compute_mask(llg_state.llg_constraint(), &mask_res) != 0) {
     std::string error_message = llg_get_error(llg_state.llg_constraint());
     return absl::InternalError(
         absl::StrCat("Failed to compute mask: ", error_message));
   }
+  llg_state.set_mask_computed(true);
 
   std::vector<bool> mask_vector = SampleMaskToVector(
       mask_res.sample_mask, vocab_size_, mask_res.is_stop, eos_token_id_);

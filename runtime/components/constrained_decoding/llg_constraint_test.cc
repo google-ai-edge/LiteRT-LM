@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <cmath>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
@@ -310,6 +311,218 @@ TEST_F(LlgConstraintTest, JsonSequenceTest) {
   // 7. Check end.
   EXPECT_OK(constraint->ComputeBitmap(*state));
   EXPECT_TRUE(constraint->IsEnded(*state));
+}
+
+TEST_F(LlgConstraintTest, ComputeNextDoesNotMutateInputState) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       CreateProvider());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "ab"}));
+
+  std::unique_ptr<Constraint::State> state_0 = constraint->Start();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_0,
+                       constraint->ComputeMask(*state_0));
+  auto* bitmap_mask_0 = static_cast<BitmapLogitMask*>(mask_0.get());
+  EXPECT_TRUE(bitmap_mask_0->IsAllowed(2));   // 'a'
+  EXPECT_FALSE(bitmap_mask_0->IsAllowed(3));  // 'b'
+
+  // Speculatively advance from state_0 -> state_1 ('a') -> state_2 ('b').
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint::State> state_1,
+                       constraint->ComputeNext(*state_0, 2));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_1,
+                       constraint->ComputeMask(*state_1));
+  auto* bitmap_mask_1 = static_cast<BitmapLogitMask*>(mask_1.get());
+  EXPECT_FALSE(bitmap_mask_1->IsAllowed(2));  // 'a'
+  EXPECT_TRUE(bitmap_mask_1->IsAllowed(3));   // 'b'
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint::State> state_2,
+                       constraint->ComputeNext(*state_1, 3));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_2,
+                       constraint->ComputeMask(*state_2));
+  auto* bitmap_mask_2 = static_cast<BitmapLogitMask*>(mask_2.get());
+  EXPECT_TRUE(bitmap_mask_2->IsAllowed(1));   // '<eos>'
+  EXPECT_FALSE(bitmap_mask_2->IsAllowed(2));  // 'a'
+  EXPECT_FALSE(bitmap_mask_2->IsAllowed(3));  // 'b'
+  EXPECT_TRUE(constraint->IsEnded(*state_2));
+
+  // Verify that state_0 and state_1 were NOT mutated in place by ComputeNext.
+  EXPECT_FALSE(constraint->IsEnded(*state_0));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_0_recomputed,
+                       constraint->ComputeMask(*state_0));
+  auto* bitmap_mask_0_recomputed =
+      static_cast<BitmapLogitMask*>(mask_0_recomputed.get());
+  EXPECT_TRUE(bitmap_mask_0_recomputed->IsAllowed(2));   // 'a'
+  EXPECT_FALSE(bitmap_mask_0_recomputed->IsAllowed(3));  // 'b'
+
+  EXPECT_FALSE(constraint->IsEnded(*state_1));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_1_recomputed,
+                       constraint->ComputeMask(*state_1));
+  auto* bitmap_mask_1_recomputed =
+      static_cast<BitmapLogitMask*>(mask_1_recomputed.get());
+  EXPECT_FALSE(bitmap_mask_1_recomputed->IsAllowed(2));  // 'a'
+  EXPECT_TRUE(bitmap_mask_1_recomputed->IsAllowed(3));   // 'b'
+
+  // Branching from state_0 again after rejecting speculative draft tokens must
+  // succeed and produce a valid state_1_retry.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint::State> state_1_retry,
+                       constraint->ComputeNext(*state_0, 2));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> bitmap_1_retry,
+                       constraint->ComputeBitmap(*state_1_retry));
+  EXPECT_FALSE(bitmap_1_retry->Get(2));  // 'a'
+  EXPECT_TRUE(bitmap_1_retry->Get(3));   // 'b'
+}
+
+TEST_F(LlgConstraintTest, ComputeMaskAndBitmapAreIdempotentAfterStop) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       CreateProvider());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "a"}));
+
+  std::unique_ptr<Constraint::State> state = constraint->Start();
+  ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, 2));  // 'a'
+
+  // First ComputeMask call transitions llguidance to its stopped state and
+  // returns the EOS-only mask.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_1,
+                       constraint->ComputeMask(*state));
+  EXPECT_TRUE(constraint->IsEnded(*state));
+  auto* bitmap_mask_1 = static_cast<BitmapLogitMask*>(mask_1.get());
+  EXPECT_TRUE(bitmap_mask_1->IsAllowed(1));   // '<eos>'
+  EXPECT_FALSE(bitmap_mask_1->IsAllowed(2));  // 'a'
+
+  // Subsequent ComputeMask and ComputeBitmap calls on the stopped state must
+  // succeed idempotently (instead of failing with "compute_mask() called after
+  // stop") and continue returning the EOS-only mask.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask_2,
+                       constraint->ComputeMask(*state));
+  auto* bitmap_mask_2 = static_cast<BitmapLogitMask*>(mask_2.get());
+  EXPECT_TRUE(bitmap_mask_2->IsAllowed(1));   // '<eos>'
+  EXPECT_FALSE(bitmap_mask_2->IsAllowed(2));  // 'a'
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> bitmap,
+                       constraint->ComputeBitmap(*state));
+  EXPECT_TRUE(bitmap->Get(1));   // '<eos>'
+  EXPECT_FALSE(bitmap->Get(2));  // 'a'
+}
+
+TEST_F(LlgConstraintTest,
+       SpeculativeDecodingDraftRejectionOnJsonSchemaPreservesGrammar) {
+  LlGuidanceConfig config;
+  config.eos_id = 1;
+
+  // Token IDs:
+  // 0: <pad>, 1: <eos>, 2: {, 3: }, 4: ", 5: :, 6: ,,
+  // 7: "intent", 8: "slots", 9: UN, 10: SUPPORTED, 11: KNOWN
+  const std::vector<std::string> vocab = {
+      "<pad>", "<eos>",      "{",         "}",  "\"",        ":",
+      ",",     "\"intent\"", "\"slots\"", "UN", "SUPPORTED", "KNOWN"};
+
+  MockTokenizer json_tokenizer;
+  EXPECT_CALL(json_tokenizer, GetTokens()).WillOnce(Return(vocab));
+  EXPECT_CALL(json_tokenizer, TextToTokenIds(::testing::_))
+      .WillRepeatedly([&vocab](absl::string_view text) {
+        TokenIds ids;
+        while (!text.empty()) {
+          int best_id = -1;
+          size_t best_len = 0;
+          for (int id = 2; id < static_cast<int>(vocab.size()); ++id) {
+            const std::string& tok = vocab[id];
+            if (tok.size() > best_len && text.substr(0, tok.size()) == tok) {
+              best_id = id;
+              best_len = tok.size();
+            }
+          }
+          if (best_id < 0) {
+            return TokenIds{};
+          }
+          ids.push_back(best_id);
+          text.remove_prefix(best_len);
+        }
+        return ids;
+      });
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       LlgConstraintProvider::Create(json_tokenizer, config));
+  constexpr absl::string_view kSchema = R"json({
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["intent", "slots"],
+    "properties": {
+      "intent": {"type": "string", "enum": ["UNSUPPORTED", "UNKNOWN"]},
+      "slots": {"type": "object", "additionalProperties": {"type": "string"}}
+    }
+  })json";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kJsonSchema,
+                           .constraint_string = std::string(kSchema)}));
+
+  // Advance verified state through `{"intent":"` (tokens 2, 7, 5, 4).
+  std::unique_ptr<Constraint::State> verified_state = constraint->Start();
+  for (int token : {2, 7, 5, 4}) {
+    ASSERT_OK_AND_ASSIGN(verified_state,
+                         constraint->ComputeNext(*verified_state, token));
+  }
+
+  // Simulate an MTP round (gamma = 3) starting at `{"intent":"`:
+  // Drafter proposes d_0 = 9 ("UN"), d_1 = 11 ("KNOWN"), d_2 = 4 ("\"").
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> draft_mask_0,
+                       constraint->ComputeMask(*verified_state));
+  EXPECT_TRUE(static_cast<BitmapLogitMask*>(draft_mask_0.get())->IsAllowed(9));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint::State> draft_state_0,
+                       constraint->ComputeNext(*verified_state, 9));  // "UN"
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> draft_mask_1,
+                       constraint->ComputeMask(*draft_state_0));
+  auto* bitmap_draft_1 = static_cast<BitmapLogitMask*>(draft_mask_1.get());
+  EXPECT_TRUE(bitmap_draft_1->IsAllowed(10));  // "SUPPORTED"
+  EXPECT_TRUE(bitmap_draft_1->IsAllowed(11));  // "KNOWN"
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint::State> draft_state_1,
+                       constraint->ComputeNext(*draft_state_0, 11));  // "KNOWN"
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> draft_mask_2,
+                       constraint->ComputeMask(*draft_state_1));
+  EXPECT_TRUE(static_cast<BitmapLogitMask*>(draft_mask_2.get())->IsAllowed(4));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint::State> draft_state_2,
+                       constraint->ComputeNext(*draft_state_1, 4));  // "\""
+
+  // Verifier accepts d_0 = 9 ("UN"), rejects d_1 = 11 ("KNOWN"), and samples
+  // bonus_token = 10 ("SUPPORTED") at position 1. Recomputing draft_state_0's
+  // mask must still reflect `{"intent":"UN`. Before the fix, draft_state_0 was
+  // mutated in place to draft_state_2, which disallowed token 10 ("SUPPORTED")
+  // and allowed token 6 (",") prematurely.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> draft_mask_1_recomputed,
+                       constraint->ComputeMask(*draft_state_0));
+  auto* bitmap_draft_1_recomputed =
+      static_cast<BitmapLogitMask*>(draft_mask_1_recomputed.get());
+  EXPECT_TRUE(bitmap_draft_1_recomputed->IsAllowed(10));  // "SUPPORTED"
+  EXPECT_FALSE(
+      bitmap_draft_1_recomputed->IsAllowed(6));  // "," before closing "
+
+  verified_state = std::move(draft_state_0);
+  ASSERT_OK_AND_ASSIGN(
+      verified_state,
+      constraint->ComputeNext(*verified_state, 10));  // bonus: "SUPPORTED"
+
+  // Remaining sequence `","slots":{}}` (tokens 4, 6, 8, 5, 2, 3, 3) must all
+  // be allowed and lead to a stopped state that allows only <eos> (token 1).
+  for (int token : {4, 6, 8, 5, 2, 3, 3}) {
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask,
+                         constraint->ComputeMask(*verified_state));
+    EXPECT_TRUE(static_cast<BitmapLogitMask*>(mask.get())->IsAllowed(token));
+    ASSERT_OK_AND_ASSIGN(verified_state,
+                         constraint->ComputeNext(*verified_state, token));
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> final_mask,
+                       constraint->ComputeMask(*verified_state));
+  EXPECT_TRUE(constraint->IsEnded(*verified_state));
+  EXPECT_TRUE(static_cast<BitmapLogitMask*>(final_mask.get())->IsAllowed(1));
+  EXPECT_FALSE(static_cast<BitmapLogitMask*>(final_mask.get())->IsAllowed(3));
 }
 
 }  // namespace
