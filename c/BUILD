@@ -88,6 +88,18 @@ CONVERSATION_DEPS = [
     "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
 ]
 
+CONVERSATION_LITE_DEPS = [
+    ":conversation_internal_lite",
+    "@nlohmann_json//:json",
+    "//runtime/components:prompt_template_noop",
+    "//runtime/components/constrained_decoding:llg_constraint_config",
+    "//runtime/conversation:conversation_lite",
+    "//runtime/conversation:io_types",
+    "//runtime/conversation:thinking_config",
+    "//runtime/conversation/model_data_processor:config_registry",
+    "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
+]
+
 EMBEDDING_ENGINE_DEPS = [
     ":embedding_engine_internal",
     "//runtime/components:model_resources",
@@ -111,6 +123,13 @@ ENGINE_COMMON_DEPS = (
     ENGINE_LITE_COMMON_DEPS +
     CONVERSATION_DEPS +
     EMBEDDING_ENGINE_DEPS +
+    MODEL_INFO_DEPS +
+    EXPERIMENTAL_DEPS
+)
+
+ENGINE_CONVERSATION_LITE_COMMON_DEPS = (
+    ENGINE_LITE_COMMON_DEPS +
+    CONVERSATION_LITE_DEPS +
     MODEL_INFO_DEPS +
     EXPERIMENTAL_DEPS
 )
@@ -274,6 +293,21 @@ cc_library(
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/conversation",
+        "//runtime/conversation:thinking_config",
+        "//runtime/engine:engine_settings",
+    ],
+)
+
+cc_library(
+    name = "conversation_internal_lite",
+    hdrs = ["conversation_internal.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":conversation_headers",
+        "//runtime/components/constrained_decoding:no_repeat_ngram_config",
+        "//runtime/components/constrained_decoding:repetition_penalty_config",
+        "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/conversation:conversation_lite",
         "//runtime/conversation:thinking_config",
         "//runtime/engine:engine_settings",
     ],
@@ -583,6 +617,56 @@ cc_binary(
         ":experimental_headers",
         ":model_info_headers",
         "//runtime/core:engine_impl",
+    ] + select({
+        "//conditions:default": [],
+    }),
+)
+
+cc_binary(
+    name = "litert-lm-lite",
+    srcs = [
+        "conversation.cc",
+        "engine.cc",
+        "error_reporter.cc",
+        "experimental.cc",
+        "model_info.cc",
+    ],
+    copts = ["-fvisibility=hidden"],
+    features = ["-legacy_whole_archive"],
+    linkopts = select({
+        "@platforms//os:macos": [
+            # Export only the public C API symbols to hide internal C++ symbols.
+            "-Wl,-exported_symbol,_litert_lm_*",
+            # Remove unreachable code and data to reduce library size.
+            "-Wl,-dead_strip",
+        ],
+        "@platforms//os:ios": [
+            # Export only the public C API symbols to hide internal C++ symbols.
+            "-Wl,-exported_symbol,_litert_lm_*",
+            # Remove unreachable code and data to reduce library size.
+            "-Wl,-dead_strip",
+        ],
+        "@platforms//os:windows": [],
+        "//conditions:default": [
+            # Report unresolved symbol references as errors during linking.
+            "-Wl,--no-undefined",
+            # Strip all symbols to reduce library size (debug info is removed).
+            "-Wl,--strip-all",
+            # Remove unused sections/functions to further reduce library size.
+            "-Wl,--gc-sections",
+            # Ensure symbols are resolved internally first.
+            "-Wl,-Bsymbolic",
+            # Update the rpath
+            "-Wl,-rpath,$$ORIGIN",
+        ],
+    }),
+    linkshared = 1,
+    deps = ENGINE_CONVERSATION_LITE_COMMON_DEPS + [
+        ":conversation_headers",
+        ":engine_headers",
+        ":experimental_headers",
+        ":model_info_headers",
+        "//runtime/core:engine_advanced_impl_lite",
     ] + select({
         "//conditions:default": [],
     }),
