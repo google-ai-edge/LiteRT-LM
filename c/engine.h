@@ -1213,6 +1213,7 @@ LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session);
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
 //   or `label` is NULL.
 //
+// Added in version 0.1.0.
 // Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
 // instead of -1.
 LITERT_LM_C_API_EXPORT
@@ -1228,6 +1229,7 @@ LiteRtLmStatusCode litert_lm_session_save_checkpoint(LiteRtLmSession* session,
 //   or `label` is NULL; otherwise the runtime error (e.g. if no checkpoint with
 //   `label` exists).
 //
+// Added in version 0.1.0.
 // Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
 // instead of -1.
 LITERT_LM_C_API_EXPORT
@@ -1242,6 +1244,7 @@ LiteRtLmStatusCode litert_lm_session_rewind_to_checkpoint(
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
 //   is NULL; otherwise the runtime error (e.g. if `step` is invalid).
 //
+// Added in version 0.1.0.
 // Changed in version 1.0.0: failures return a canonical LiteRtLmStatusCode
 // instead of -1.
 LITERT_LM_C_API_EXPORT
