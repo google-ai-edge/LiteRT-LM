@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Copyright (c) Qualcomm Innovation Center, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 #include "runtime/executor/audio_litert_compiled_model_executor.h"
 
 #include <algorithm>
@@ -36,6 +39,8 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -66,6 +71,7 @@
 
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif  // !defined(LITERT_DISABLE_NPU)
 
 namespace litert::lm {
@@ -275,12 +281,18 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
+    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
+                            options.GetOptions<qualcomm::QualcommOptions>());
+    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
+    qualcomm_options.SetHtpPerformanceMode(
+        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
     LITERT_ASSIGN_OR_RETURN(
         auto& google_tensor_options,
         options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(
@@ -428,12 +440,18 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
+    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
+                            options.GetOptions<qualcomm::QualcommOptions>());
+    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
+    qualcomm_options.SetHtpPerformanceMode(
+        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
     LITERT_ASSIGN_OR_RETURN(
         auto& google_tensor_options,
         options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(
@@ -656,12 +674,18 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (backend == Backend::NPU) {
+    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
+                            options.GetOptions<qualcomm::QualcommOptions>());
+    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
+    qualcomm_options.SetHtpPerformanceMode(
+        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
     LITERT_ASSIGN_OR_RETURN(
         auto& google_tensor_options,
         options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(

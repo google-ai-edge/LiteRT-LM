@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Copyright (c) Qualcomm Innovation Center, Inc. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # [Google-internal load of `cc_library`]
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
@@ -1058,6 +1061,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
@@ -1073,6 +1077,7 @@ cc_library(
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_google_tensor_options",
         "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_qualcomm_options",
         "//runtime/components:lora_manager",
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",
