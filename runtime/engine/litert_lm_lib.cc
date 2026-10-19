@@ -1095,7 +1095,7 @@ absl::StatusOr<nlohmann::json> BuildContentList(
           return absl::InvalidArgumentError(
               "Audio backend is not specified. Please specify the audio "
               "backend "
-              "with --audio_backend=<cpu|gpu>");
+              "with --audio_backend=<cpu|gpu|npu>");
         }
         // Add media part
         content_list.push_back({{"type", media_type}, {"path", media_path}});

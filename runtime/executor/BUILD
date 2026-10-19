@@ -1131,6 +1131,7 @@ cc_library(
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_google_tensor_options",
         "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_qualcomm_options",
         "//runtime/components:lora_manager",
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",

@@ -170,6 +170,21 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, CreateExecutorTest) {
                                 /*max_sequence_length=*/0, Backend::CPU));
 }
 
+#if !defined(LITERT_DISABLE_NPU)
+TEST_F(AudioLiteRtCompiledModelExecutorTest, CreateNpuExecutorTest) {
+  EXPECT_OK(CreateAudioExecutor(*env_,
+                                (std::filesystem::path(::testing::SrcDir()) /
+                                 std::string(kTestAudioModelPath))
+                                    .string(),
+                                /*max_sequence_length=*/0, Backend::NPU));
+  EXPECT_OK(CreateAudioExecutor(*env_,
+                                (std::filesystem::path(::testing::SrcDir()) /
+                                 std::string(kTestAudioStreamingModelPath))
+                                    .string(),
+                                /*max_sequence_length=*/0, Backend::NPU));
+}
+#endif  // !defined(LITERT_DISABLE_NPU)
+
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
        EncodeTest_WithoutMaskFitSequenceLength) {
   ASSERT_OK_AND_ASSIGN(
