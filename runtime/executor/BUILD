@@ -1334,6 +1334,28 @@ cc_test(
 )
 
 cc_library(
+    name = "mtp_gating_policy",
+    srcs = ["mtp_gating_policy.cc"],
+    hdrs = ["mtp_gating_policy.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_test(
+    name = "mtp_gating_policy_test",
+    srcs = ["mtp_gating_policy_test.cc"],
+    deps = [
+        ":mtp_gating_policy",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_library(
     name = "llm_litert_mtp_drafter",
     srcs = ["llm_litert_mtp_drafter.cc"],
     hdrs = ["llm_litert_mtp_drafter.h"],

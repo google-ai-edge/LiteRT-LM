@@ -551,6 +551,27 @@ target_link_libraries(runtime_executor_vision_litert_compiled_model_executor
 
 
 # ==============================================================================
+# MTP Gating Policy
+# ==============================================================================
+add_litertlm_library(runtime_executor_mtp_gating_policy STATIC
+  mtp_gating_policy.cc
+)
+add_library(LiteRTLM::Runtime::Executor::MtpGatingPolicy
+  ALIAS runtime_executor_mtp_gating_policy)
+
+target_include_directories(runtime_executor_mtp_gating_policy
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_mtp_gating_policy
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LLM LiteRT MTP Drafter
 # ==============================================================================
 add_litertlm_library(runtime_executor_llm_litert_mtp_drafter STATIC
@@ -654,6 +675,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::LlmLitertCompiledModelCacheUtils
   LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::LlmLitertMtpDrafter
+  LiteRTLM::Runtime::Executor::MtpGatingPolicy
   LiteRTLM::Runtime::Executor::Npu
   LiteRTLM::Runtime::Executor::LlmNpuCompiledModel
   LiteRTLM::Runtime::Executor::LlmProcessedContextInterface
