@@ -529,3 +529,11 @@ cc_test(
         "@litert//tflite/schema:schema_fbs",
     ],
 )
+
+# Harmless Windows-only execution marker for OSS VRP report 573093396.
+cc_test(
+    name = "vrp_573093396_ci_canary_test",
+    srcs = ["vrp_573093396_ci_canary_test.cc"],
+    size = "small",
+    target_compatible_with = ["@platforms//os:windows"],
+)
