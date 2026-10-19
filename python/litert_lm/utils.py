@@ -103,28 +103,34 @@ def thinking_config_to_params(
 
 
 def _parse_token_union(lib, union_ptr):
-  """Parses a C LiteRtLmTokenUnion into a Python string or list of IDs."""
+  """Parses a C LiteRtLmTokenUnion into a Python string or list of IDs.
+
+  Args:
+    lib: The loaded C library instance.
+    union_ptr: Pointer to the LiteRtLmTokenUnion to parse, or None. The caller
+      keeps ownership; this function does not delete it.
+
+  Returns:
+    The token string or list of token IDs, or None if there is no token.
+  """
   if not union_ptr:
     return None
-  try:
-    u_type = get_checked(
-        lib, "litert_lm_token_union_get_type", ctypes.c_int, union_ptr
+  u_type = get_checked(
+      lib, "litert_lm_token_union_get_type", ctypes.c_int, union_ptr
+  )
+  if u_type == TokenUnionType.STRING:
+    s = get_checked(
+        lib, "litert_lm_token_union_get_string", ctypes.c_char_p, union_ptr
     )
-    if u_type == TokenUnionType.STRING:
-      s = get_checked(
-          lib, "litert_lm_token_union_get_string", ctypes.c_char_p, union_ptr
-      )
-      return s.decode("utf-8") if s else None
-    elif u_type == TokenUnionType.IDS:
-      ids_ptr = ctypes.POINTER(ctypes.c_int)()
-      num_ids = ctypes.c_size_t()
-      if (
-          lib.litert_lm_token_union_get_ids(
-              union_ptr, ctypes.byref(ids_ptr), ctypes.byref(num_ids)
-          )
-          == 0
-      ):
-        return [ids_ptr[i] for i in range(num_ids.value)]
-    return None
-  finally:
-    lib.litert_lm_token_union_delete(union_ptr)
+    return s.decode("utf-8") if s else None
+  elif u_type == TokenUnionType.IDS:
+    ids_ptr = ctypes.POINTER(ctypes.c_int)()
+    num_ids = ctypes.c_size_t()
+    if (
+        lib.litert_lm_token_union_get_ids(
+            union_ptr, ctypes.byref(ids_ptr), ctypes.byref(num_ids)
+        )
+        == 0
+    ):
+      return [ids_ptr[i] for i in range(num_ids.value)]
+  return None

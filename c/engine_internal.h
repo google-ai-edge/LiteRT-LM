@@ -100,7 +100,9 @@ struct LiteRtLmTokenUnion {
 };
 
 struct LiteRtLmTokenUnions {
-  std::vector<litert::lm::proto::TokenUnion> tokens;
+  // Holds the C type so that each element has a stable address that
+  // `litert_lm_token_unions_get_token_at` can lend out.
+  std::vector<LiteRtLmTokenUnion> tokens;
 };
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_C_ENGINE_INTERNAL_H_

@@ -578,7 +578,12 @@ class Engine(interfaces.AbstractEngine):
     u_ptr = create_optional_checked(
         self._lib, "litert_lm_engine_get_start_token", self._engine_ptr
     )
-    val = _parse_token_union(self._lib, u_ptr)
+    if not u_ptr:
+      return None
+    try:
+      val = _parse_token_union(self._lib, u_ptr)
+    finally:
+      self._lib.litert_lm_token_union_delete(u_ptr)
     if isinstance(val, int):
       return val
     if isinstance(val, list) and val:
@@ -601,11 +606,14 @@ class Engine(interfaces.AbstractEngine):
       )
       all_ids = []
       for i in range(num):
-        u_ptr = create_checked(
-            self._lib, "litert_lm_token_unions_get_token_at", unions_ptr, i
+        # Borrowed from `unions_ptr`, which is deleted below.
+        u_ptr = get_checked(
+            self._lib,
+            "litert_lm_token_unions_get_token_at",
+            ctypes.c_void_p,
+            unions_ptr,
+            i,
         )
-        # _parse_token_union handles deleting the owned LiteRtLmTokenUnion
-        # pointer.
         val = _parse_token_union(self._lib, u_ptr)
         if isinstance(val, int):
           all_ids.append([val])

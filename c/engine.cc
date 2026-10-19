@@ -1645,7 +1645,7 @@ LiteRtLmStatusCode litert_lm_token_unions_get_num_tokens(
 
 LiteRtLmStatusCode litert_lm_token_unions_get_token_at(
     const LiteRtLmTokenUnions* tokens, size_t index,
-    LiteRtLmTokenUnion** out_token) {
+    const LiteRtLmTokenUnion** out_token) {
   LITERT_LM_C_RETURN_IF_NULL(out_token);
   *out_token = nullptr;
   LITERT_LM_C_RETURN_IF_NULL(tokens);
@@ -1653,9 +1653,7 @@ LiteRtLmStatusCode litert_lm_token_unions_get_token_at(
     return litert::lm::c::ReturnError(absl::StatusCode::kOutOfRange,
                                       "Token index out of range.");
   }
-  auto result = std::make_unique<LiteRtLmTokenUnion>();
-  result->token_union = tokens->tokens[index];
-  *out_token = result.release();
+  *out_token = &tokens->tokens[index];
   return kLiteRtLmStatusOk;
 }
 
@@ -1690,8 +1688,10 @@ LiteRtLmStatusCode litert_lm_engine_get_stop_tokens(
     return kLiteRtLmStatusOk;
   }
   auto c_tokens = std::make_unique<LiteRtLmTokenUnions>();
-  c_tokens->tokens.assign(metadata->stop_tokens().begin(),
-                          metadata->stop_tokens().end());
+  c_tokens->tokens.reserve(metadata->stop_tokens_size());
+  for (const auto& stop_token : metadata->stop_tokens()) {
+    c_tokens->tokens.push_back(LiteRtLmTokenUnion{stop_token});
+  }
   *out_tokens = c_tokens.release();
   return kLiteRtLmStatusOk;
 }

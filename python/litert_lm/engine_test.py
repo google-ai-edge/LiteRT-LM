@@ -695,6 +695,7 @@ class EngineTest(LiteRtLmTestBase):
 
       eos_token_ids = engine.eos_token_ids
       self.assertIsInstance(eos_token_ids, list)
+      self.assertNotEmpty(eos_token_ids)
       for stop_token_ids in eos_token_ids:
         self.assertIsInstance(stop_token_ids, list)
         self.assertTrue(

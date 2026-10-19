@@ -244,9 +244,10 @@ LiteRtLmDetokenizeResult* Detokenize(LiteRtLmEngine* engine, const int* tokens,
   return HandleOrNull(status, result);
 }
 
-LiteRtLmTokenUnion* GetTokenAt(const LiteRtLmTokenUnions* tokens,
-                               size_t index) {
-  LiteRtLmTokenUnion* token = nullptr;
+// Returns the token union at `index`, borrowed from `tokens`.
+const LiteRtLmTokenUnion* GetTokenAt(const LiteRtLmTokenUnions* tokens,
+                                     size_t index) {
+  const LiteRtLmTokenUnion* token = nullptr;
   const int status = litert_lm_token_unions_get_token_at(tokens, index, &token);
   return HandleOrNull(status, token);
 }
@@ -1301,22 +1302,20 @@ TEST(EngineCTest, TokenizerTest) {
     size_t num_tokens =
         GetOk<size_t>(litert_lm_token_unions_get_num_tokens, stop_tokens.get());
     for (size_t i = 0; i < num_tokens; ++i) {
-      TokenUnionPtr stop_token(GetTokenAt(stop_tokens.get(), i),
-                               &litert_lm_token_union_delete);
+      const LiteRtLmTokenUnion* stop_token = GetTokenAt(stop_tokens.get(), i);
       ASSERT_NE(stop_token, nullptr);
       if (GetOk<LiteRtLmTokenUnionType>(litert_lm_token_union_get_type,
-                                        stop_token.get()) ==
+                                        stop_token) ==
           kLiteRtLmTokenUnionTypeIds) {
         const int* ids;
         size_t num_ids;
-        EXPECT_EQ(
-            litert_lm_token_union_get_ids(stop_token.get(), &ids, &num_ids),
-            kLiteRtLmStatusOk);
+        EXPECT_EQ(litert_lm_token_union_get_ids(stop_token, &ids, &num_ids),
+                  kLiteRtLmStatusOk);
         EXPECT_GT(num_ids, 0);
       } else {
-        EXPECT_NE(GetOk<const char*>(litert_lm_token_union_get_string,
-                                     stop_token.get()),
-                  nullptr);
+        EXPECT_NE(
+            GetOk<const char*>(litert_lm_token_union_get_string, stop_token),
+            nullptr);
       }
     }
   }
@@ -2726,30 +2725,31 @@ TEST(EngineCErrorTest, ResultProducersWithNullHandleResetOutParam) {
       "engine_get_stop_tokens", [](LiteRtLmTokenUnions** out) {
         return litert_lm_engine_get_stop_tokens(nullptr, out);
       });
-  ExpectInvalidArgumentResetsOut<LiteRtLmTokenUnion>(
-      "token_unions_get_token_at", [](LiteRtLmTokenUnion** out) {
+  ExpectInvalidArgumentResetsOut<const LiteRtLmTokenUnion>(
+      "token_unions_get_token_at", [](const LiteRtLmTokenUnion** out) {
         return litert_lm_token_unions_get_token_at(nullptr, 0, out);
       });
 }
 
 TEST(EngineCErrorTest, TokenUnionsGetTokenAt) {
   LiteRtLmTokenUnions token_unions;
-  token_unions.tokens.emplace_back().mutable_token_ids()->add_ids(7);
+  token_unions.tokens.emplace_back().token_union.mutable_token_ids()->add_ids(
+      7);
 
-  LiteRtLmTokenUnion* token = nullptr;
+  const LiteRtLmTokenUnion* token = nullptr;
   ASSERT_EQ(litert_lm_token_unions_get_token_at(&token_unions, 0, &token),
             kLiteRtLmStatusOk);
-  TokenUnionPtr token_ptr(token, &litert_lm_token_union_delete);
-  ASSERT_NE(token_ptr, nullptr);
+  // The token is borrowed from the collection, not a copy.
+  EXPECT_EQ(token, &token_unions.tokens[0]);
   const int* ids = nullptr;
   size_t num_ids = 0;
-  ASSERT_EQ(litert_lm_token_union_get_ids(token_ptr.get(), &ids, &num_ids),
+  ASSERT_EQ(litert_lm_token_union_get_ids(token, &ids, &num_ids),
             kLiteRtLmStatusOk);
   ASSERT_EQ(num_ids, 1);
   EXPECT_EQ(ids[0], 7);
 
   litert_lm_clear_last_error();
-  token = reinterpret_cast<LiteRtLmTokenUnion*>(0x1);
+  token = reinterpret_cast<const LiteRtLmTokenUnion*>(0x1);
   const int status =
       litert_lm_token_unions_get_token_at(&token_unions, 1, &token);
   EXPECT_EQ(status, kLiteRtLmStatusOutOfRange);
@@ -3182,7 +3182,8 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
               testing::HasSubstr("benchmark_info must not be NULL"));
 
   litert_lm_clear_last_error();
-  LiteRtLmTokenUnion* token = reinterpret_cast<LiteRtLmTokenUnion*>(0x1);
+  const LiteRtLmTokenUnion* token =
+      reinterpret_cast<const LiteRtLmTokenUnion*>(0x1);
   EXPECT_EQ(litert_lm_token_unions_get_token_at(nullptr, 0, &token),
             kLiteRtLmStatusInvalidArgument);
   EXPECT_EQ(token, nullptr);
@@ -3702,8 +3703,9 @@ TEST(EngineCErrorTest, TokenResultAccessors) {
                "text");
 
   LiteRtLmTokenUnions token_unions;
-  token_unions.tokens.emplace_back().set_token_str("<eos>");
-  token_unions.tokens.emplace_back().mutable_token_ids()->add_ids(1);
+  token_unions.tokens.emplace_back().token_union.set_token_str("<eos>");
+  token_unions.tokens.emplace_back().token_union.mutable_token_ids()->add_ids(
+      1);
   EXPECT_EQ(GetOk<size_t>(litert_lm_token_unions_get_num_tokens, &token_unions),
             2);
 }

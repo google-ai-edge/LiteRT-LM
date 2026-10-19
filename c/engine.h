@@ -1916,7 +1916,9 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_detokenize_result_get_string(
     const LiteRtLmDetokenizeResult* result, const char** out_text);
 
-// Destroys a LiteRT LM Token Union.
+// Destroys a LiteRT LM Token Union that the caller owns, such as one returned
+// by `litert_lm_engine_get_start_token`. Do not pass a token union borrowed
+// from a collection by `litert_lm_token_unions_get_token_at`.
 //
 // @param token_union The token union to destroy.
 //
@@ -2003,13 +2005,14 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_token_unions_get_num_tokens(
     const LiteRtLmTokenUnions* tokens, size_t* out_num_tokens);
 
-// Returns a copy of the token union at a given index from a collection.
+// Returns the token union at a given index in a collection.
 //
 // @param tokens The token unions collection.
 // @param index The index of the token union.
-// @param out_token On success, receives a new copy of the token union at
-//   `index`, owned by the caller; release with `litert_lm_token_union_delete`.
-//   Set to NULL on failure.
+// @param out_token On success, receives the token union at `index`. The
+//   returned pointer is owned by `tokens` and is invalidated when it is
+//   deleted; do not pass it to `litert_lm_token_union_delete`. Set to NULL on
+//   failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `tokens`
 //   or `out_token` is NULL; kLiteRtLmStatusOutOfRange if `index` is out of
@@ -2017,11 +2020,12 @@ LiteRtLmStatusCode litert_lm_token_unions_get_num_tokens(
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the result is returned
-// through out_token.
+// through out_token and is borrowed from `tokens` instead of being a copy
+// that the caller deletes.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_token_unions_get_token_at(
     const LiteRtLmTokenUnions* tokens, size_t index,
-    LiteRtLmTokenUnion** out_token);
+    const LiteRtLmTokenUnion** out_token);
 
 // Returns the configured start token (BOS), if any.
 //
