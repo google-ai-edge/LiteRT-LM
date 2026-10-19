@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -165,6 +166,10 @@ class LitertState : public StateInterface {
   bool bank_1_is_input_ = true;
 
   AllocationPolicy allocation_policy_;
+
+  // Signatures for which skipped kGpuOptimizedInplace input buffer requirements
+  // have already been verified.
+  absl::flat_hash_set<std::string> verified_gpu_inplace_signatures_;
 };
 
 }  // namespace litert::lm
