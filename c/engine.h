@@ -653,11 +653,11 @@ LiteRtLmStatusCode litert_lm_set_min_log_level(LiteRtLmLogSeverity level);
 //
 // Added in version 0.1.0.
 typedef enum {
-  kLiteRtLmInputDataTypeText,
-  kLiteRtLmInputDataTypeImage,
-  kLiteRtLmInputDataTypeImageEnd,
-  kLiteRtLmInputDataTypeAudio,
-  kLiteRtLmInputDataTypeAudioEnd,
+  kLiteRtLmInputDataTypeText = 0,
+  kLiteRtLmInputDataTypeImage = 1,
+  kLiteRtLmInputDataTypeImageEnd = 2,
+  kLiteRtLmInputDataTypeAudio = 3,
+  kLiteRtLmInputDataTypeAudioEnd = 4,
 } LiteRtLmInputDataType;
 
 // Creates a LiteRT LM Input Data.
