@@ -349,15 +349,13 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.disable_input_prompt_as_hint =
       absl::GetFlag(FLAGS_disable_input_prompt_as_hint);
 
-  // Adjust max_num_tokens and prefill_batch_size if not set on benchmark mode.
-  if (settings.benchmark && settings.benchmark_prefill_tokens > 0) {
-    if (settings.max_num_tokens == 0 && settings.benchmark_decode_tokens > 0) {
-      settings.max_num_tokens =
-          settings.benchmark_prefill_tokens + settings.benchmark_decode_tokens;
-    }
-    if (settings.prefill_batch_sizes.empty()) {
-      settings.prefill_batch_sizes.insert(settings.benchmark_prefill_tokens);
-    }
+  // Match the prefill signature to the benchmarked prefill length if not set on
+  // benchmark mode. max_num_tokens (the KV cache size) is not derived from the
+  // benchmark tokens: pass --max_num_tokens explicitly to benchmark with a
+  // specific KV cache size, otherwise the model or engine default is used.
+  if (settings.benchmark && settings.benchmark_prefill_tokens > 0 &&
+      settings.prefill_batch_sizes.empty()) {
+    settings.prefill_batch_sizes.insert(settings.benchmark_prefill_tokens);
   }
 
   std::vector<litert::lm::LitertLmMetrics> metrics;

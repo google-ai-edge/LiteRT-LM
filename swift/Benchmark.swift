@@ -53,6 +53,9 @@ public struct BenchmarkInfo {
 ///   - prompt: The custom prompt string to tokenize and run. If the tokenized prompt is shorter
 ///       than `prefillTokens`, the remaining tokens are padded with zero. If it is longer, the
 ///       prompt is truncated to `prefillTokens`.
+///   - maxNumTokens: The maximum number of the sum of input and output tokens, i.e. the size of the
+///       KV cache, like `EngineConfig.maxNumTokens`. When `nil`, use the default value from the
+///       model or the engine. Note that the KV cache size affects the prefill and decode speed.
 /// - Returns: The benchmark info.
 /// - Throws: A `LiteRTLMError` if the engine fails to initialize or generate benchmark info.
 public func benchmark(
@@ -63,7 +66,8 @@ public func benchmark(
   prefillTokens: Int = 256,
   decodeTokens: Int = 256,
   cacheDir: String? = nil,
-  prompt: String = "How are you"
+  prompt: String = "How are you",
+  maxNumTokens: Int? = nil
 ) async throws -> BenchmarkInfo {
   ExperimentalFlags.optIntoExperimentalAPIs()
 
@@ -79,7 +83,7 @@ public func benchmark(
     backend: backend,
     visionBackend: visionBackend,
     audioBackend: audioBackend,
-    maxNumTokens: prefillTokens + decodeTokens + 32,
+    maxNumTokens: maxNumTokens,
     cacheDir: cacheDir
   )
   let engine = Engine(engineConfig: engineConfig)
