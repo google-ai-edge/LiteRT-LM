@@ -51,6 +51,7 @@
 #endif  // !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
@@ -206,7 +207,41 @@ absl::StatusOr<int> GetVitSignatureIndex(
                    max_available_length, "."));
 }
 
+// WebGPU and Metal buffers cannot be reused across calls (see b/457483190).
+bool AreBuffersReusable(const std::vector<TensorBuffer>& buffers) {
+  return absl::c_none_of(buffers, [](const TensorBuffer& buffer) {
+    return buffer.IsWebGpuMemory() || buffer.IsMetalMemory();
+  });
+}
+
 }  // namespace
+
+Expected<std::vector<TensorBuffer>&> VisionLiteRtCompiledModelExecutor::
+    SignatureBufferCache::GetOrCreateInputBuffers(CompiledModel& compiled_model,
+                                                  int signature_index) {
+  auto it = input_buffers_.find(signature_index);
+  if (it != input_buffers_.end() && AreBuffersReusable(it->second)) {
+    return it->second;
+  }
+  LITERT_ASSIGN_OR_RETURN(auto buffers,
+                          compiled_model.CreateInputBuffers(signature_index));
+  for (auto& buffer : buffers) {
+    LITERT_RETURN_IF_ERROR(buffer.Clear());
+  }
+  return input_buffers_[signature_index] = std::move(buffers);
+}
+
+Expected<std::vector<TensorBuffer>&> VisionLiteRtCompiledModelExecutor::
+    SignatureBufferCache::GetOrCreateOutputBuffers(
+        CompiledModel& compiled_model, int signature_index) {
+  auto it = output_buffers_.find(signature_index);
+  if (it != output_buffers_.end() && AreBuffersReusable(it->second)) {
+    return it->second;
+  }
+  LITERT_ASSIGN_OR_RETURN(auto buffers,
+                          compiled_model.CreateOutputBuffers(signature_index));
+  return output_buffers_[signature_index] = std::move(buffers);
+}
 
 absl::StatusOr<
     std::unique_ptr<VisionLiteRtCompiledModelExecutor::VisionEncoder>>
@@ -325,10 +360,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
     // but multi-signature(ViT) encoders create buffers for each signature
     // in map-based encode at that time, so signature 0 buffers should not
     // be created in advance.
-    LITERT_ASSIGN_OR_RETURN(input_buffers_,
-                            compiled_model_.CreateInputBuffers(0));
-    LITERT_ASSIGN_OR_RETURN(output_buffers_,
-                            compiled_model_.CreateOutputBuffers(0));
+    LITERT_RETURN_IF_ERROR(GetOrCreateInputBuffers(0));
+    LITERT_RETURN_IF_ERROR(GetOrCreateOutputBuffers(0));
   }
   return absl::OkStatus();
 }
@@ -444,8 +477,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
   if (model_.GetNumSignatures() == 1) {
     auto signature = model_.GetSignature(0);
     if (signature.HasValue() && !signature->InputNames().empty()) {
-      LITERT_ASSIGN_OR_RETURN(input_buffers_,
-                              compiled_model_.CreateInputBuffers(0));
+      LITERT_RETURN_IF_ERROR(GetOrCreateInputBuffers(0));
     }
   }
 
@@ -536,11 +568,13 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const litert::TensorBuffer& input_image_tensor) {
   ScopedLatency scoped_total_latency(latency_stats_);
+  LITERT_ASSIGN_OR_RETURN(auto& encoder_input_buffers,
+                          vision_encoder_->GetOrCreateInputBuffers(0));
+
   LITERT_ASSIGN_OR_RETURN(auto input_image_data,
                           ReferTensorBufferAsSpan<float>(input_image_tensor));
   LITERT_RETURN_IF_ERROR(
-      vision_encoder_->GetMutableInputBuffers()[0].Write<float>(
-          input_image_data));
+      encoder_input_buffers[0].Write<float>(input_image_data));
 
   if (vision_adapter_ == nullptr) {
     LITERT_ASSIGN_OR_RETURN(
@@ -549,7 +583,7 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     {
       ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
       LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-          /*input_buffers=*/vision_encoder_->GetInputBuffers(),
+          /*input_buffers=*/encoder_input_buffers,
           /*output_buffers=*/encoder_outputs));
     }
     AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
@@ -567,21 +601,13 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
                      output_tensor_buffers.size()));
   }
 
-  auto& encoder_outputs = vision_encoder_->GetMutableOutputBuffers();
-  if (encoder_outputs[0].IsWebGpuMemory() ||
-      encoder_outputs[0].IsMetalMemory()) {
-    // For WebGPU and Metal memory, we need to create a new output buffer to
-    // hold the data, otherwise we will get failed to lock TensorBuffer error on
-    // the second call to `Encode`. See b/457483190
-    LITERT_ASSIGN_OR_RETURN(
-        encoder_outputs,
-        vision_encoder_->GetCompiledModel().CreateOutputBuffers(0));
-  }
+  LITERT_ASSIGN_OR_RETURN(auto& encoder_outputs,
+                          vision_encoder_->GetOrCreateOutputBuffers(0));
 
   {
     ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
     LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-        /*input_buffers=*/vision_encoder_->GetInputBuffers(),
+        /*input_buffers=*/encoder_input_buffers,
         /*output_buffers=*/encoder_outputs));
   }
 
@@ -639,9 +665,8 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
   }
 
   LITERT_ASSIGN_OR_RETURN(
-      auto encoder_input_buffers,
-      vision_encoder_->GetCompiledModel().CreateInputBuffers(
-          encoder_signature_index));
+      auto& encoder_input_buffers,
+      vision_encoder_->GetOrCreateInputBuffers(encoder_signature_index));
 
   LITERT_ASSIGN_OR_RETURN(
       auto encoder_signature,
@@ -654,20 +679,6 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
         vision_adapter_->GetModel().GetSignature(*adapter_signature_index));
     ABSL_VLOG(1) << "adapter_signature_index: " << *adapter_signature_index
                  << " name: " << adapter_signature.Key();
-  }
-
-  std::vector<TensorBuffer> adapter_output_tensor_buffers;
-  if (vision_adapter_ != nullptr) {
-    LITERT_ASSIGN_OR_RETURN(
-        adapter_output_tensor_buffers,
-        vision_adapter_->GetCompiledModel().CreateOutputBuffers(
-            *adapter_signature_index));
-    if (adapter_output_tensor_buffers.size() != 1) {
-      return absl::InternalError(
-          absl::StrCat("The Vision Adapter model must have exactly one output "
-                       "buffer but got ",
-                       adapter_output_tensor_buffers.size()));
-    }
   }
 
   for (const auto& [key, value] : input_maps) {
@@ -721,9 +732,8 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
   }
 
   LITERT_ASSIGN_OR_RETURN(
-      auto encoder_output_buffers,
-      vision_encoder_->GetCompiledModel().CreateOutputBuffers(
-          encoder_signature_index));
+      auto& encoder_output_buffers,
+      vision_encoder_->GetOrCreateOutputBuffers(encoder_signature_index));
 
   {
     ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
@@ -800,9 +810,17 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
 
   if (vision_adapter_ != nullptr) {
     LITERT_ASSIGN_OR_RETURN(
-        auto adapter_input_buffers,
-        vision_adapter_->GetCompiledModel().CreateInputBuffers(
-            *adapter_signature_index));
+        auto& adapter_input_buffers,
+        vision_adapter_->GetOrCreateInputBuffers(*adapter_signature_index));
+    LITERT_ASSIGN_OR_RETURN(
+        auto& adapter_output_tensor_buffers,
+        vision_adapter_->GetOrCreateOutputBuffers(*adapter_signature_index));
+    if (adapter_output_tensor_buffers.size() != 1) {
+      return absl::InternalError(
+          absl::StrCat("The Vision Adapter model must have exactly one output "
+                       "buffer but got ",
+                       adapter_output_tensor_buffers.size()));
+    }
     // Feed the adapter's `features` input from the encoder output. Any extra
     // adapter inputs are matched by name against the other encoder outputs.
     LITERT_ASSIGN_OR_RETURN(
