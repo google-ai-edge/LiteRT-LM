@@ -310,6 +310,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_model",
         "//omni/base:io_types",
@@ -321,6 +322,8 @@ cc_test(
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:scoped_file",
+        "//schema/core:litertlm_header",
+        "//schema/core:litertlm_header_schema",
         "//support/util:test_utils",
     ],
 )

@@ -110,7 +110,9 @@ absl::Status CreateKokoroComponents(
 // `model_folder`.
 //
 // args
-// - model_folder: Optional path to the directory containing voice `.bin` files.
+// - model_folder: Optional path to a `.litertlm` bundle, a directory holding
+//   one, or a directory containing voice `.bin` files. A bundle is opened to
+//   read its voice sections when `lm_resources` is null.
 // - lm_resources: Optional pointer to a loaded `.litertlm` `ModelResources`
 //   container to inspect for embedded voice sections.
 //

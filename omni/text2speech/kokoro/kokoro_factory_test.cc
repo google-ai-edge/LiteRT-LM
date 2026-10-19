@@ -15,7 +15,11 @@
 #include "omni/text2speech/kokoro/kokoro_factory.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>  // NOLINT
+#include <fstream>
 #include <functional>
+#include <ios>
 #include <memory>
 #include <optional>
 #include <string>
@@ -27,6 +31,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "omni/base/io_types.h"
@@ -40,10 +46,14 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
 namespace {
+
+namespace schema = ::litert::lm::schema;
 
 using ::testing::ElementsAre;
 
@@ -146,6 +156,56 @@ TEST(KokoroFactoryTest, GetAvailableKokoroVoicesSkipsNonVoiceSections) {
 
   EXPECT_THAT(GetAvailableKokoroVoices(/*model_folder=*/"", &lm_resources),
               ElementsAre("af_heart", "ef_dora"));
+}
+
+// Writes a minimal `.litertlm` file whose only payload is one
+// GenericBinaryData section per name in `section_names`.
+std::string WriteLitertLmWithSections(
+    const std::string& path, const std::vector<std::string>& section_names) {
+  flatbuffers::FlatBufferBuilder builder(1024);
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections;
+  uint64_t offset = 0;
+  for (const std::string& name : section_names) {
+    auto kv = schema::CreateKeyValuePair(builder, "name", name);
+    auto items = builder.CreateVector(
+        std::vector<flatbuffers::Offset<schema::KeyValuePair>>{kv});
+    sections.push_back(schema::CreateSectionObject(
+        builder, items, offset, offset + 16,
+        schema::AnySectionDataType_GenericBinaryData));
+    offset += 16;
+  }
+  auto metadata = schema::CreateLiteRTLMMetaData(
+      builder, 0,
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections)));
+  builder.Finish(metadata);
+
+  std::ofstream file(path, std::ios::binary);
+  file.write("LITERTLM", 8);
+  const uint32_t versions[4] = {1, 0, 0, 0};  // major, minor, patch, padding
+  file.write(reinterpret_cast<const char*>(versions), sizeof(versions));
+  const uint64_t header_end = 32 + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end), sizeof(header_end));
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  const std::string payload(offset + 16, 'a');
+  file.write(payload.data(), payload.size());
+  return path;
+}
+
+TEST(KokoroFactoryTest, GetAvailableKokoroVoicesReadsLitertLmBundle) {
+  const std::string bundle = WriteLitertLmWithSections(
+      (std::filesystem::path(::testing::TempDir()) / "kokoro_voices.litertlm")
+          .string(),
+      {"zf_xiaobei", std::string(kokoro::kEspeakNgSectionName), "af_heart",
+       "zh-lexicon"});
+
+  // Only the bundle path is given, as `TextToSpeech::ListVoices()` does.
+  EXPECT_THAT(GetAvailableKokoroVoices(bundle),
+              ElementsAre("af_heart", "zf_xiaobei"));
+  // A directory containing the bundle works too.
+  EXPECT_THAT(GetAvailableKokoroVoices(
+                  std::filesystem::path(bundle).parent_path().string()),
+              ElementsAre("af_heart", "zf_xiaobei"));
 }
 
 }  // namespace

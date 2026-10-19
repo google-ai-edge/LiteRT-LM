@@ -237,6 +237,21 @@ absl::Status CreateKokoroComponents(
 std::vector<std::string> GetAvailableKokoroVoices(
     absl::string_view model_folder, const lm::ModelResources* lm_resources) {
   std::vector<std::string> voices;
+  // A `.litertlm` bundle (or a folder holding one) carries its voices as
+  // sections, so open it when the caller did not pass its resources.
+  std::shared_ptr<lm::ModelResources> opened_resources;
+  if (lm_resources == nullptr && !model_folder.empty()) {
+    const std::string litertlm_path = ResolveLitertLmPath(model_folder);
+    if (!litertlm_path.empty()) {
+      absl::StatusOr<std::shared_ptr<lm::ModelResources>> resources =
+          CreateLmModelResources(litertlm_path);
+      if (resources.ok()) {
+        opened_resources = *std::move(resources);
+        lm_resources = opened_resources.get();
+      }
+    }
+  }
+
   if (lm_resources != nullptr) {
     for (const auto& name : lm_resources->GetGenericBinaryDataNames()) {
       // Not every GenericBinaryData section is a voice pack.
