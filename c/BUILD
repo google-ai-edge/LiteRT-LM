@@ -204,8 +204,47 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":api_export_headers",
+        ":conversation_headers",
         ":engine_headers",
         ":error_reporter_headers",
+    ],
+)
+
+# Checks that all public C API headers compile together as C. Outside Windows,
+# it uses strict C99 so that C11-only constructs (such as a repeated typedef)
+# and declarations without prototypes fail the build.
+cc_test(
+    name = "litert_lm_c_api_common_test",
+    srcs = ["litert_lm_c_api_common_test.c"],
+    copts = select({
+        # clang-cl has no C99 mode, so Windows uses the toolchain defaults.
+        "@platforms//os:windows": [],
+        "//conditions:default": [
+            "-std=c99",
+            "-pedantic-errors",
+            "-Wstrict-prototypes",
+            "-Werror",
+            # The toolchain may treat headers under third_party/ as system
+            # headers, which hides the diagnostics above. Check these headers
+            # like user code.
+            "--no-system-header-prefix=c/",
+        ],
+    }),
+    target_compatible_with = select({
+        "@platforms//os:ios": [],
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":api_export_headers",
+        ":conversation_headers",
+        ":embedding_engine_headers",
+        ":engine_headers",
+        ":error_reporter_headers",
+        ":experimental_headers",
+        ":model_info_headers",
     ],
 )
 

@@ -19,10 +19,12 @@
 
 #if defined(__APPLE__)
 #include "api_export.h"      // NOLINT
+#include "conversation.h"    // NOLINT
 #include "engine.h"          // NOLINT
 #include "error_reporter.h"  // NOLINT
 #else
 #include "c/api_export.h"
+#include "c/conversation.h"
 #include "c/engine.h"
 #include "c/error_reporter.h"
 #endif
@@ -30,8 +32,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef struct LiteRtLmConversation LiteRtLmConversation;
 
 // =============================================================================
 // WARNING: The APIs declared in this header are EXPERIMENTAL and subject to
