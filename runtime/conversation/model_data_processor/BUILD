@@ -298,7 +298,7 @@ cc_library(
 
 # Lightweight factory that links only Gemma3DataProcessor (lite),
 # Gemma4DataProcessor (lite), TinyGemmaDataProcessor, and GenericDataProcessor,
-# excluding non-Gemma model processors, OpenFst constrained decoding, and ANTLR
+# excluding non-Gemma model processors, FST constrained decoding, and ANTLR
 # Rust tool-use parsers.
 cc_library(
     name = "model_data_processor_factory_lite",
@@ -765,7 +765,7 @@ gemma_data_processor_libraries(
 )
 
 # Convenience bundle of lightweight Gemma data processors (Gemma3, Gemma4, and
-# TinyGemma) with OpenFst constrained decoding and ANTLR Rust tool-use parsers
+# TinyGemma) with FST constrained decoding and ANTLR Rust tool-use parsers
 # excluded.
 cc_library(
     name = "gemma_data_processors_lite",

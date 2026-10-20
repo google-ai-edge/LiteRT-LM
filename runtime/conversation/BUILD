@@ -181,7 +181,7 @@ cc_library(
 #     decoding, `tokenizers_cpp` HuggingFace tokenizer, and Rust tool-use
 #     parsers) + ANTLR4 (~5 MB combined on Linux/Android; ~3.0 MB net on iOS
 #     arm64 after linker `-dead_strip`)
-#   - Constrained decoding / OpenFst (:constraint_provider_factory_noop, ~0.5 MB)
+#   - Constrained decoding / FST (:constraint_provider_factory_noop, ~0.5 MB)
 #   - Non-Gemma model data processors (:model_data_processor_factory_lite)
 #   - Legacy Artisan GPU/Audio executors (via :engine_advanced_impl_lite, ~2.5 MB)
 #
