@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <ios>
 #include <optional>
 #include <sstream>
@@ -1545,6 +1546,38 @@ TEST(ModelInfoFileTest,
   std::istringstream stream(litertlm_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
   EXPECT_THAT(result_or, StatusIs(absl::StatusCode::kInternal));
+}
+
+// Tests that reading from a file path, which memory-maps aligned sections and
+// copies the others, gives the same result as reading from a stream.
+TEST(ModelInfoFileTest, GetModelInfo_FromPath_MatchesStream) {
+  // The vision encoder begins on a 16 KB boundary and is memory-mapped. The
+  // odd-sized audio adapter leaves the vision adapter unaligned, so it is
+  // copied.
+  std::string file_data = CreateTestLiteRTLMWithConfigs(
+      "IT", "google/gemma-4-e2b-it",
+      {{.model_type = "tf_lite_vision_encoder",
+        .payload = CreateMinimalTFLiteModel({256, 280})},
+       {.model_type = "tf_lite_audio_adapter", .payload = std::string(101, 0)},
+       {.model_type = "tf_lite_vision_adapter",
+        .payload = CreateMinimalTFLiteModel({140})}});
+  const std::string path = ::testing::TempDir() + "/model_info_test.litertlm";
+  std::ofstream(path, std::ios::binary)
+      .write(file_data.data(), file_data.size());
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto from_stream = GetModelInfo(stream);
+  ASSERT_OK(from_stream);
+  auto from_path = GetModelInfo(path);
+  ASSERT_OK(from_path);
+
+  ASSERT_TRUE(from_path->llm_capability.has_value());
+  EXPECT_THAT(from_path->llm_capability->vision_signature_selection,
+              ::testing::Optional(::testing::ElementsAre(140, 256, 280)));
+  std::ostringstream expected, actual;
+  expected << *from_stream;
+  actual << *from_path;
+  EXPECT_EQ(actual.str(), expected.str());
 }
 
 }  // namespace

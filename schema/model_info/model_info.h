@@ -220,10 +220,12 @@ struct ModelInfo {
 };
 
 // Extracts model metadata and capabilities from the given LiteRT-LM file
-// stream.
+// stream. Inspected sub-model sections are copied into memory, which can take
+// hundreds of MB for large models; prefer the file path overload for files.
 absl::StatusOr<ModelInfo> GetModelInfo(std::istream& litertlm_stream);
 
 // Extracts model metadata and capabilities from the given LiteRT-LM file path.
+// Sub-model sections are memory-mapped where possible instead of being copied.
 absl::StatusOr<ModelInfo> GetModelInfo(absl::string_view litertlm_path);
 
 std::ostream& operator<<(std::ostream& os,

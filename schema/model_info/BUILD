@@ -44,6 +44,8 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//schema/core:litertlm_header_schema",
         "//schema/core:litertlm_read",
+        "//support/util:memory_mapped_file",
+        "//support/util:scoped_file",
         "@litert//tflite/schema:schema_fbs",
     ],
 )

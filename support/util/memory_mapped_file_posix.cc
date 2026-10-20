@@ -139,7 +139,9 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
     ABSL_LOG(WARNING) << "madvise failed: " << strerror(errno);
   }
 #else
-  if (madvise(data, length, MADV_WILLNEED) != 0) {
+  // Skip MADV_WILLNEED for read-only mappings so callers inspecting only
+  // metadata pages do not trigger kernel readahead for the entire region.
+  if (access != Access::kRead && madvise(data, length, MADV_WILLNEED) != 0) {
     ABSL_LOG(WARNING) << "madvise failed: " << strerror(errno);
   }
 #endif

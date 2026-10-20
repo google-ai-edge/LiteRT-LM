@@ -30,5 +30,7 @@ target_link_libraries(schema_model_info
   PUBLIC
     LiteRTLM::Schema::Core::HeaderSchema
     LiteRTLM::Schema::Core::Read
+    LiteRTLM::Support::Util::MemoryMappedFile
+    LiteRTLM::Support::Util::ScopedFile
     LITERTLM_DEPS
 )

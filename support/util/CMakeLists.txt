@@ -27,6 +27,7 @@ add_litertlm_library(support_util_memory_mapped_file STATIC
   ${LITERT_MEMORY_MAPPED_FILE_SRC}
 )
 add_library(LiteRTLM::Support::Util::MemoryMappedFile ALIAS support_util_memory_mapped_file)
+add_library(LiteRTLM::Support::Util::ScopedFile ALIAS runtime_util_scoped_file)
 
 target_include_directories(support_util_memory_mapped_file
   PUBLIC
