@@ -25,6 +25,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl  // IWYU pragma: keep
+#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
@@ -36,6 +37,7 @@
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -80,6 +82,85 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGenericModelDataProcessor) {
 
   EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
                                            Gemma3DataProcessorArguments()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(ModelDataProcessorFactoryTest,
+       CreateGenericModelDataProcessorWithToolCallConfig) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_generic_model();
+  proto::ToolCallConfig tool_call_config;
+  tool_call_config.set_fence_start("<tool_call>");
+  tool_call_config.set_fence_end("</tool_call>");
+  tool_call_config.mutable_regex_syntax()->set_tool_call_regex(
+      R"((?s)<function=([^>]+)>(.*?)</function>)");
+  tool_call_config.mutable_regex_syntax()->set_argument_regex(
+      R"((?s)<parameter=([^>]+)>\s*(.*?)\s*</parameter>)");
+
+  ASSERT_OK_AND_ASSIGN(auto config, CreateDataProcessorConfigFromLlmModelType(
+                                        llm_model_type, tool_call_config));
+  ASSERT_TRUE(std::holds_alternative<GenericDataProcessorConfig>(config));
+  const auto& generic_config = std::get<GenericDataProcessorConfig>(config);
+  ASSERT_TRUE(generic_config.tool_call_config.has_value());
+  EXPECT_EQ(generic_config.tool_call_config->fence_start(), "<tool_call>");
+  EXPECT_EQ(generic_config.tool_call_config->fence_end(), "</tool_call>");
+  EXPECT_TRUE(generic_config.tool_call_config->has_regex_syntax());
+  EXPECT_EQ(generic_config.tool_call_config->regex_syntax().tool_call_regex(),
+            R"((?s)<function=([^>]+)>(.*?)</function>)");
+  EXPECT_EQ(generic_config.tool_call_config->regex_syntax().argument_regex(),
+            R"((?s)<parameter=([^>]+)>\s*(.*?)\s*</parameter>)");
+
+  Preface preface = JsonPreface{
+      .tools = nlohmann::ordered_json::parse(
+          R"json([{"type": "function", "function": {"name": "get_weather"}}])json")};
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       CreateModelDataProcessor(config, preface));
+  ASSERT_OK_AND_ASSIGN(
+      const Message message,
+      processor->ToMessage(
+          Responses(
+              TaskState::kProcessing,
+              {"<tool_call>\n<function=get_weather>\n<parameter=location>\n"
+               "Paris\n</parameter>\n</function>\n</tool_call>"}),
+          GenericDataProcessorArguments()));
+  EXPECT_EQ(message, nlohmann::ordered_json::parse(R"json({
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": {
+                      "location": "Paris"
+                    }
+                  }
+                }
+              ]
+            })json"));
+}
+
+TEST_F(ModelDataProcessorFactoryTest, ToolCallConfigValidation) {
+  proto::ToolCallConfig valid_tool_call_config;
+  valid_tool_call_config.set_fence_start("<tool_call>");
+  valid_tool_call_config.set_fence_end("</tool_call>");
+  valid_tool_call_config.mutable_regex_syntax()->set_tool_call_regex(
+      R"((?s)<function=([^>]+)>(.*?)</function>)");
+
+  // Rejects tool_call_config on non-generic_model.
+  proto::LlmModelType gemma3_model_type;
+  gemma3_model_type.mutable_gemma3();
+  EXPECT_THAT(CreateDataProcessorConfigFromLlmModelType(gemma3_model_type,
+                                                        valid_tool_call_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Rejects invalid tool_call_config on generic_model.
+  proto::LlmModelType generic_model_type;
+  generic_model_type.mutable_generic_model();
+  proto::ToolCallConfig invalid_tool_call_config;
+  invalid_tool_call_config.set_fence_start("<tool_call>");
+  invalid_tool_call_config.set_fence_end("</tool_call>");
+  EXPECT_THAT(CreateDataProcessorConfigFromLlmModelType(
+                  generic_model_type, invalid_tool_call_config),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 

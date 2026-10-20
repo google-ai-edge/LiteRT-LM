@@ -204,9 +204,14 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     processor_config = *overwrite_processor_config;
   } else {
     // Build the processor config from the model metadata.
-    ABSL_ASSIGN_OR_RETURN(processor_config,
-                          CreateDataProcessorConfigFromLlmModelType(
-                              session_config_copy.GetLlmModelType()));
+    std::optional<proto::ToolCallConfig> tool_call_config = std::nullopt;
+    if (metadata.has_value() && metadata->has_tool_call_config()) {
+      tool_call_config = metadata->tool_call_config();
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        processor_config,
+        CreateDataProcessorConfigFromLlmModelType(
+            session_config_copy.GetLlmModelType(), tool_call_config));
   }
 
   return ConversationConfig(

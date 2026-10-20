@@ -58,6 +58,142 @@ message PromptTemplates {
   optional PromptAffixes system = 3;
 }
 
+// Configuration for parsing tool/function calls from model outputs.
+//
+// Parsing operates in two stages:
+//
+// 1. **Fence extraction (`fence_start` / `fence_end`)**:
+//    The parser scans the model response for blocks delimited by
+//    `fence_start` and `fence_end`:
+//
+//    ```
+//    <fence_start>
+//    <tool_call_regex>
+//    <fence_end>
+//    ```
+//
+//    - **Multiple tool call fences**: A single model response may contain
+//      multiple fenced blocks interleaved with regular text:
+//
+//      ```
+//      Optional text before...
+//      <fence_start>
+//      <tool_call_regex>
+//      <fence_end>
+//      Optional text between...
+//      <fence_start>
+//      <tool_call_regex>
+//      <fence_end>
+//      Optional text after...
+//      ```
+//
+//      All text outside the fences is collected into the message's `content`
+//      array, and tool calls parsed from every fenced block are appended in
+//      order to the message's `tool_calls` array.
+//
+// 2. **Inner syntax parsing (`syntax_config`)**:
+//    The content inside each fenced block is parsed according to
+//    `syntax_config` (e.g., `regex_syntax`).
+//
+//    - **Multiple tool calls inside a single fence**: A single fenced block may
+//      contain multiple tool calls back-to-back:
+//
+//      ```
+//      <fence_start>
+//      <tool_call_regex>
+//      <tool_call_regex>
+//      <fence_end>
+//      ```
+//
+//      For `regex_syntax`, `tool_call_regex` is matched repeatedly across the
+//      fenced block to extract each tool call in order.
+//
+// Example (Qwen 3.5 XML format):
+//   Model output:
+//   ```
+//   <tool_call>
+//   <function=get_weather>
+//   <parameter=location>
+//   Paris
+//   </parameter>
+//   </function>
+//   </tool_call>
+//   ```
+//   Configuration:
+//   ```
+//   tool_call_config {
+//     fence_start: "<tool_call>"
+//     fence_end: "</tool_call>"
+//     regex_syntax {
+//       tool_call_regex: "(?s)<function=([^>]+)>(.*?)</function>"
+//       argument_regex: "(?s)<parameter=([^>]+)>\\s*(.*?)\\s*</parameter>"
+//     }
+//   }
+//   ```
+message ToolCallConfig {
+  // The literal string that marks the beginning of a tool call fence block
+  // (e.g., "<tool_call>"). Special regex characters are escaped automatically.
+  optional string fence_start = 1;
+
+  // The literal string that marks the end of a tool call fence block
+  // (e.g., "</tool_call>"). Special regex characters are escaped automatically.
+  optional string fence_end = 2;
+
+  // Regex-based extraction for XML/tag formats (e.g., Qwen 3.5).
+  //
+  // Given the following content inside a fenced block (`fence_start` ...
+  // `fence_end`):
+  //
+  // ```
+  // <function=get_weather>
+  // <parameter=location>
+  // Paris
+  // </parameter>
+  // </function>
+  // ```
+  //
+  // Extraction proceeds in two steps:
+  // 1. `tool_call_regex` matches each `<function=...>` block and captures the
+  //    function name and the inner arguments block.
+  // 2. `argument_regex` matches each `<parameter=...>` block inside that
+  //    arguments block and captures each parameter's key and value.
+  message RegexSyntax {
+    // Regular expression matched repeatedly inside a fenced tool call block to
+    // extract each tool call. Must define two capture groups:
+    //   (1) function name
+    //   (2) arguments block
+    //
+    // For the `<function=get_weather>...</function>` block above with
+    // `tool_call_regex = "(?s)<function=([^>]+)>(.*?)</function>"`:
+    //   - capture group (1): `"get_weather"`
+    //   - capture group (2): `"\n<parameter=location>\nParis\n</parameter>\n"`
+    optional string tool_call_regex = 1;
+
+    // Regular expression matched repeatedly inside the captured arguments block
+    // (capture group (2) of `tool_call_regex`) to extract each parameter. Must
+    // define two capture groups:
+    //   (1) parameter key
+    //   (2) parameter value (kept as a raw string when the tool schema declares
+    //       the parameter as `string`; otherwise parsed as a JSON value if
+    //       valid, or kept as a raw string)
+    //
+    // For the captured arguments block above with
+    // `argument_regex = "(?s)<parameter=([^>]+)>\\s*(.*?)\\s*</parameter>"`:
+    //   - capture group (1): `"location"`
+    //   - capture group (2): `"Paris"`
+    //
+    // If omitted, the entire arguments block (capture group (2) of
+    // `tool_call_regex`) is parsed directly as a JSON object.
+    optional string argument_regex = 2;
+  }
+
+  // The syntax configuration used to parse tool calls inside a fenced block.
+  oneof syntax_config {
+    // Regex-based extraction for XML/tag tool call formats.
+    RegexSyntax regex_syntax = 3;
+  }
+}
+
 // Parameters for Large Language Models (LLM).
 message LlmMetadata {
   enum TfLiteModelType {
@@ -154,4 +290,8 @@ message LlmMetadata {
   // "0.11.0"). Note: This refers to the official LiteRT-LM release version, not
   // the C API release version.
   optional string min_runtime_version = 14;
+
+  // Configuration for parsing tool/function calls from model outputs.
+  // Currently only supported when `llm_model_type` is `generic_model`.
+  optional ToolCallConfig tool_call_config = 15;
 }

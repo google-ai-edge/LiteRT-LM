@@ -31,6 +31,7 @@
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
 #include "runtime/conversation/model_data_processor/model_data_processor_factory_common.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 
 namespace litert::lm {
@@ -49,7 +50,12 @@ void EnsureBuiltinProcessorsRegistered() {
 }  // namespace
 
 absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
-    const proto::LlmModelType& model_type) {
+    const proto::LlmModelType& model_type,
+    const std::optional<proto::ToolCallConfig>& tool_call_config) {
+  if (tool_call_config.has_value() && !model_type.has_generic_model()) {
+    return absl::InvalidArgumentError(
+        "tool_call_config is only supported for generic_model.");
+  }
   switch (model_type.model_type_case()) {
     case proto::LlmModelType::kGemma3:
     case proto::LlmModelType::kGemma3N:
@@ -57,7 +63,7 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     case proto::LlmModelType::kGemma4:
       return CreateGemma4DataProcessorConfig(model_type);
     case proto::LlmModelType::kGenericModel:
-      return CreateGenericDataProcessorConfig(model_type);
+      return CreateGenericDataProcessorConfig(model_type, tool_call_config);
     case proto::LlmModelType::kLfm2:
     case proto::LlmModelType::kMinicpm5:
     case proto::LlmModelType::kMinicpmv4:

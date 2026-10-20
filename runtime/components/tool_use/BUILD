@@ -238,6 +238,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
+        "@com_googlesource_code_re2//:re2",
     ],
 )
 
@@ -292,5 +293,6 @@ cc_test(
         "@com_google_absl//absl/status",
         "@nlohmann_json//:json",
         "//runtime/util:test_utils",
+        "@com_googlesource_code_re2//:re2",
     ],
 )

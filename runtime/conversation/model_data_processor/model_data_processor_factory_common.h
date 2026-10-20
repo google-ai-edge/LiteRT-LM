@@ -15,11 +15,13 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_MODEL_DATA_PROCESSOR_FACTORY_COMMON_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_MODEL_DATA_PROCESSOR_FACTORY_COMMON_H_
 
+#include <optional>
 #include <string>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
 
@@ -38,7 +40,9 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
     const proto::LlmModelType& model_type);
 
 absl::StatusOr<DataProcessorConfig> CreateGenericDataProcessorConfig(
-    const proto::LlmModelType& model_type);
+    const proto::LlmModelType& model_type,
+    const std::optional<proto::ToolCallConfig>& tool_call_config =
+        std::nullopt);
 
 }  // namespace litert::lm
 

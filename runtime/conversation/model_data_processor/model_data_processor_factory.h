@@ -26,7 +26,6 @@
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
-#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -44,11 +43,13 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     const std::vector<std::vector<int>>& stop_token_ids = {},
     bool enable_constrained_decoding = false);
 
-// Creates data processor config from the given LlmModelType. The
-// DataProcessorConfig has default values if the corresponding fields are not
-// set in the LlmModelType.
+// Creates data processor config from the given LlmModelType and optional
+// ToolCallConfig. The DataProcessorConfig has default values if the
+// corresponding fields are not set in the LlmModelType.
 absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
-    const proto::LlmModelType& llm_model_type);
+    const proto::LlmModelType& llm_model_type,
+    const std::optional<proto::ToolCallConfig>& tool_call_config =
+        std::nullopt);
 
 absl::Status ValidateVisualTokenBudget(const DataProcessorArguments& args,
                                        int max_vision_tokens_per_image);

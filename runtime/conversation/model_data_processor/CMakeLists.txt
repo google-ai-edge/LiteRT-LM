@@ -271,6 +271,7 @@ target_link_libraries(runtime_conversation_model_data_processor_generic_data_pro
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::GenericConfig
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::MultimodalProcessorHelper
     LiteRTLM::Runtime::Conversation::IoTypes
@@ -333,6 +334,7 @@ target_link_libraries(runtime_conversation_model_data_processor_factory_common
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Gemma3Config
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Generic
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::GenericConfig
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
     LiteRTLM::Runtime::Conversation::IoTypes

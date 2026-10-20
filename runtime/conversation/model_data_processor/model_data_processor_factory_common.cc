@@ -26,7 +26,9 @@
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/generic_data_processor.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "support/preprocessor/audio_preprocessor.h"
@@ -185,13 +187,19 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
 }
 
 absl::StatusOr<DataProcessorConfig> CreateGenericDataProcessorConfig(
-    const proto::LlmModelType& model_type) {
+    const proto::LlmModelType& model_type,
+    const std::optional<proto::ToolCallConfig>& tool_call_config) {
   if (!model_type.has_generic_model()) {
     return absl::InvalidArgumentError(
         "GenericModel LlmModelType is required to create "
         "GenericDataProcessorConfig.");
   }
   GenericDataProcessorConfig config;
+  if (tool_call_config.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        GenericDataProcessor::ValidateToolCallConfig(*tool_call_config));
+    config.tool_call_config = tool_call_config;
+  }
   proto::GenericModel generic_model = model_type.generic_model();
 
   if (generic_model.image_enabled() || generic_model.audio_enabled()) {

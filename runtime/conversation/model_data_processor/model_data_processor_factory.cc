@@ -62,6 +62,7 @@
 #include "runtime/conversation/model_data_processor/qwen3_data_processor.h"
 #endif
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 
 namespace litert::lm {
@@ -316,7 +317,12 @@ absl::StatusOr<DataProcessorConfig> CreateMiniCpmVDataProcessorConfig(
 }
 
 absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
-    const proto::LlmModelType& model_type) {
+    const proto::LlmModelType& model_type,
+    const std::optional<proto::ToolCallConfig>& tool_call_config) {
+  if (tool_call_config.has_value() && !model_type.has_generic_model()) {
+    return absl::InvalidArgumentError(
+        "tool_call_config is only supported for generic_model.");
+  }
   switch (model_type.model_type_case()) {
     case proto::LlmModelType::kGemma3:
     case proto::LlmModelType::kGemma3N:
@@ -333,7 +339,7 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     case proto::LlmModelType::kQwen2P5:
       return CreateQwen3DataProcessorConfig(model_type);
     case proto::LlmModelType::kGenericModel:
-      return CreateGenericDataProcessorConfig(model_type);
+      return CreateGenericDataProcessorConfig(model_type, tool_call_config);
     case proto::LlmModelType::kFastVlm:
       return CreateFastVlmDataProcessorConfig(model_type);
     case proto::LlmModelType::kFunctionGemma:

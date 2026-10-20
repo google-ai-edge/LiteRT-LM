@@ -14,13 +14,17 @@
 
 #include "runtime/components/tool_use/parser_utils.h"
 
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
@@ -68,6 +72,121 @@ std::string FilterLines(absl::string_view input, const RE2& regex) {
   return absl::StrJoin(captured_lines, "\n");
 }
 
+bool IsStringParameter(const nlohmann::ordered_json& tools,
+                       absl::string_view function_name,
+                       absl::string_view param_key) {
+  if (!tools.is_array()) {
+    return false;
+  }
+  for (const auto& tool : tools) {
+    if (!tool.is_object()) {
+      continue;
+    }
+    const nlohmann::ordered_json& function =
+        (tool.contains("function") && tool["function"].is_object())
+            ? tool["function"]
+            : tool;
+    if (!function.contains("name") || !function["name"].is_string() ||
+        function["name"].get<std::string>() != function_name) {
+      continue;
+    }
+    if (!function.contains("parameters") ||
+        !function["parameters"].is_object()) {
+      continue;
+    }
+    const auto& parameters = function["parameters"];
+    if (!parameters.contains("properties") ||
+        !parameters["properties"].is_object()) {
+      continue;
+    }
+    const auto& properties = parameters["properties"];
+    if (!properties.contains(param_key) || !properties[param_key].is_object()) {
+      continue;
+    }
+    const auto& prop = properties[param_key];
+    if (prop.contains("type") && prop["type"].is_string()) {
+      return absl::EqualsIgnoreCase(prop["type"].get<std::string>(), "string");
+    }
+  }
+  return false;
+}
+
+absl::StatusOr<nlohmann::ordered_json> ParseRegexExpression(
+    absl::string_view text,
+    const std::optional<RegexParserOptions>& regex_options) {
+  if (absl::StripAsciiWhitespace(text).empty()) {
+    return nlohmann::ordered_json::array();
+  }
+  if (!regex_options.has_value() || regex_options->tool_call_regex == nullptr) {
+    return absl::InvalidArgumentError(
+        "regex_options.tool_call_regex must be provided for kRegex syntax.");
+  }
+  const RE2* tool_call_re = regex_options->tool_call_regex;
+  if (!tool_call_re->ok() || tool_call_re->NumberOfCapturingGroups() < 2) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid tool_call_regex: ", tool_call_re->pattern()));
+  }
+
+  const RE2* argument_re = regex_options->argument_regex;
+  if (argument_re != nullptr &&
+      (!argument_re->ok() || argument_re->NumberOfCapturingGroups() < 2)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid argument_regex: ", argument_re->pattern()));
+  }
+
+  nlohmann::ordered_json tool_calls = nlohmann::ordered_json::array();
+  absl::string_view input = text;
+  std::string function_name;
+  std::string arguments_block;
+  while (RE2::FindAndConsume(&input, *tool_call_re, &function_name,
+                             &arguments_block)) {
+    std::string name = std::string(absl::StripAsciiWhitespace(function_name));
+    nlohmann::ordered_json tool_call = nlohmann::ordered_json::object();
+    tool_call["name"] = name;
+    tool_call["arguments"] = nlohmann::ordered_json::object();
+
+    if (argument_re == nullptr) {
+      absl::string_view trimmed_args =
+          absl::StripAsciiWhitespace(arguments_block);
+      if (!trimmed_args.empty()) {
+        nlohmann::ordered_json parsed_args = nlohmann::ordered_json::parse(
+            trimmed_args, nullptr, /*allow_exceptions=*/false);
+        if (parsed_args.is_discarded() || !parsed_args.is_object()) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "Failed to parse JSON arguments: ", arguments_block));
+        }
+        tool_call["arguments"] = std::move(parsed_args);
+      }
+    } else {
+      absl::string_view args_input = arguments_block;
+      std::string param_key;
+      std::string param_value;
+      while (RE2::FindAndConsume(&args_input, *argument_re, &param_key,
+                                 &param_value)) {
+        std::string key = std::string(absl::StripAsciiWhitespace(param_key));
+        if (IsStringParameter(regex_options->tools, name, key)) {
+          tool_call["arguments"][key] = param_value;
+          continue;
+        }
+        nlohmann::ordered_json parsed_val = nlohmann::ordered_json::parse(
+            param_value, nullptr, /*allow_exceptions=*/false);
+        if (!parsed_val.is_discarded()) {
+          tool_call["arguments"][key] = std::move(parsed_val);
+        } else {
+          tool_call["arguments"][key] = param_value;
+        }
+      }
+    }
+    tool_calls.push_back(std::move(tool_call));
+  }
+
+  if (tool_calls.empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Failed to match tool_call_regex in code block: ", text));
+  }
+  return tool_calls;
+}
+
 }  // namespace
 
 SyntaxType GetSyntaxType(absl::string_view syntax_type) {
@@ -77,6 +196,7 @@ SyntaxType GetSyntaxType(absl::string_view syntax_type) {
           {"python", SyntaxType::kPython},
           {"json", SyntaxType::kJson},
           {"fc", SyntaxType::kFc},
+          {"regex", SyntaxType::kRegex},
       });
   auto it = kStringToSyntaxType->find(syntax_type);
   if (it == kStringToSyntaxType->end()) {
@@ -131,6 +251,8 @@ absl::StatusOr<nlohmann::ordered_json> ParseTextAndToolCalls(
         tool_calls = ParseJsonExpression(code_block);
       } else if (syntax_type == SyntaxType::kFc) {
         tool_calls = ParseFcExpression(code_block);
+      } else if (syntax_type == SyntaxType::kRegex) {
+        tool_calls = ParseRegexExpression(code_block, options.regex_options);
       } else {
         return absl::InvalidArgumentError(absl::StrCat(
             "Unsupported syntax type: ", static_cast<int>(syntax_type)));

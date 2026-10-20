@@ -96,10 +96,16 @@ absl::StatusOr<ordered_json> ResponseTextToMessage(
   ordered_json message = {{"role", "assistant"}};
   if (preface.has_value() && std::holds_alternative<JsonPreface>(*preface) &&
       !std::get<JsonPreface>(*preface).tools.empty()) {
+    ParserOptions options_with_tools = options;
+    if (options_with_tools.regex_options.has_value() &&
+        options_with_tools.regex_options->tools.empty()) {
+      options_with_tools.regex_options->tools =
+          std::get<JsonPreface>(*preface).tools;
+    }
     ABSL_ASSIGN_OR_RETURN(
         ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(response_text, code_fence_start, code_fence_end,
-                              syntax_type, options));
+                              syntax_type, options_with_tools));
     if (content_and_tool_calls.contains("content")) {
       message["content"] = content_and_tool_calls["content"];
     }

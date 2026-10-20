@@ -18,6 +18,7 @@
 #include <optional>
 
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/image_preprocessor.h"
 
@@ -48,6 +49,9 @@ struct MultimodalConfig {
 struct GenericDataProcessorConfig {
   // When set, the generic processor operates in multimodal mode
   std::optional<MultimodalConfig> multimodal;
+
+  // When set, the generic processor parses tool calls from model responses.
+  std::optional<proto::ToolCallConfig> tool_call_config;
 };
 
 struct GenericDataProcessorArguments {

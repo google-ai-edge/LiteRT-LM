@@ -4,6 +4,14 @@
 stop_tokens {
   token_str: "<|im_end|>"
 }
+# Used to pad unused trailing slots in fixed-size prefill input buffers.
+# Qwen 3.5's exported prefill graph computes `valid_mask = (tokens != pad_token_id)`
+# to mask out padded positions before updating its stateful Gated DeltaNet and
+# causal 1D convolution states. Without this, LiteRT-LM defaults to padding with
+# token ID 0 ("!"), which would be treated as a real token and corrupt the state.
+pad_token {
+  token_str: "<|endoftext|>"
+}
 sampler_params {
   type: TOP_P
   k: 20
@@ -13,6 +21,16 @@ sampler_params {
 max_num_tokens: 4096
 llm_model_type {
   generic_model {
+  }
+}
+supports_thinking: true
+supports_function_calling: true
+tool_call_config {
+  fence_start: "<tool_call>"
+  fence_end: "</tool_call>"
+  regex_syntax {
+    tool_call_regex: "(?s)<function=([^>]+)>(.*?)</function>"
+    argument_regex: "(?s)<parameter=([^>]+)>\\s*(.*?)\\s*</parameter>"
   }
 }
 jinja_prompt_template:
@@ -100,3 +118,6 @@ channels {
   start: "<think>\n"
   end: "\n</think>"
 }
+
+# Function calling support is added in 0.19.0.
+min_runtime_version: "0.19.0"

@@ -15,11 +15,13 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_TOOL_USE_PARSER_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_TOOL_USE_PARSER_UTILS_H_
 
+#include <optional>
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "re2/re2.h"  // from @com_googlesource_code_re2
 
 namespace litert::lm {
 
@@ -29,25 +31,46 @@ enum class SyntaxType {
   kPython = 1,
   kJson = 2,
   kFc = 3,
+  kRegex = 4,
 };
 
 // Maps from string to SyntaxType.
 SyntaxType GetSyntaxType(absl::string_view syntax_type);
+
+// Options specific to `SyntaxType::kRegex` tool call parsing.
+struct RegexParserOptions {
+  // Precompiled regex for extracting (1) function name and (2) arguments block
+  // from a fenced tool call block. Required.
+  const RE2* tool_call_regex = nullptr;
+
+  // Optional precompiled regex for extracting (1) parameter key and (2)
+  // parameter value from the arguments block. If null, the arguments block is
+  // parsed as a JSON object.
+  const RE2* argument_regex = nullptr;
+
+  // Tool declarations (JSON array) used to determine parameter types (e.g.,
+  // preserving string-typed parameters as raw strings without JSON coercion).
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+};
 
 // Options for parsing text and tool calls.
 struct ParserOptions {
   // If true, regex special characters within the fence strings will be escaped.
   bool escape_fence_strings = true;
 
-  // A regex with a capture group used to filter each line of the tool call
-  // string. If provided, only the captured substring will be parsed as a tool
-  // call.
+  // A regex with a single capture group applied line-by-line to pre-filter the
+  // fenced code block before syntax-specific parsing (e.g., stripping outer
+  // `print(...)` wrappers). If provided, only the captured substring on each
+  // matching line is passed to the syntax parser.
   std::string tool_code_regex = "";
 
   // If true, returns an error status when a tool call fails to parse. If false,
   // the string containing the invalid tool call is returned as text content
   // along with an `error` field containing the error message from the parser.
   bool return_error_on_parse_failure = true;
+
+  // Options for `SyntaxType::kRegex`. Ignored for other syntax types.
+  std::optional<RegexParserOptions> regex_options = std::nullopt;
 };
 
 // Parses a string into text and tool calls.
