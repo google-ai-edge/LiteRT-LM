@@ -140,6 +140,15 @@ internal object LiteRtLmJni {
   external fun nativeDeleteSession(sessionPointer: Long)
 
   /**
+   * Clones the LiteRT-LM session.
+   *
+   * @param sessionPointer A pointer to the native session instance.
+   * @return A pointer to the cloned native session instance.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeCloneSession(sessionPointer: Long): Long
+
+  /**
    * Runs the prefill step for the given input data.
    *
    * @param sessionPointer A pointer to the native session instance.
@@ -259,6 +268,15 @@ internal object LiteRtLmJni {
    * @param conversationPointer A pointer to the native conversation instance.
    */
   external fun nativeDeleteConversation(conversationPointer: Long)
+
+  /**
+   * Clones the LiteRT-LM conversation.
+   *
+   * @param conversationPointer A pointer to the native conversation instance.
+   * @return A pointer to the cloned native conversation instance.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeCloneConversation(conversationPointer: Long): Long
 
   /**
    * Send message from the given input data asynchronously.

@@ -958,6 +958,20 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteSession)(
   delete reinterpret_cast<Engine::Session*>(session_pointer);
 }
 
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCloneSession)(
+    JNIEnv* env, jclass thiz, jlong session_pointer) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  auto cloned_session = session->Clone();
+  if (!cloned_session.ok()) {
+    ThrowLiteRtLmJniException(env,
+                              absl::StrCat("Failed to clone session: ",
+                                           cloned_session.status().ToString()));
+    return 0;
+  }
+  return reinterpret_cast<jlong>(cloned_session->release());
+}
+
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRunPrefill)(
     JNIEnv* env, jclass thiz, jlong session_pointer, jobjectArray input_data) {
   Engine::Session* session =
@@ -1337,6 +1351,20 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteConversation)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer) {
   delete reinterpret_cast<Conversation*>(conversation_pointer);
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCloneConversation)(
+    JNIEnv* env, jclass thiz, jlong conversation_pointer) {
+  Conversation* conversation =
+      reinterpret_cast<Conversation*>(conversation_pointer);
+  auto cloned_conversation = conversation->Clone();
+  if (!cloned_conversation.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to clone conversation: ",
+                          cloned_conversation.status().ToString()));
+    return 0;
+  }
+  return reinterpret_cast<jlong>(cloned_conversation->release());
 }
 
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(

@@ -736,6 +736,24 @@ class Conversation(
   }
 
   /**
+   * Clones the current conversation into a new [Conversation] instance sharing the current history,
+   * KV cache state, and configuration.
+   *
+   * @return A new [Conversation] instance with the cloned state.
+   * @throws IllegalStateException if the conversation is not alive.
+   * @throws LiteRtLmJniException if the native clone operation fails.
+   */
+  fun clone(): Conversation {
+    checkIsAlive()
+    return Conversation(
+      LiteRtLmJni.nativeCloneConversation(handle),
+      toolManager,
+      automaticToolCalling,
+      enableResponseFormat,
+    )
+  }
+
+  /**
    * Closes the conversation and releases the native conversation's resources.
    *
    * @throws IllegalStateException if the conversation has already been closed.
