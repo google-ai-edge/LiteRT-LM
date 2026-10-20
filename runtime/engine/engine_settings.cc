@@ -665,6 +665,10 @@ std::ostream& operator<<(std::ostream& os, const EngineSettings& settings) {
     os << "  MaxVisionTokensPerImage: "
        << settings.GetMaxVisionTokensPerImage().value() << std::endl;
   }
+  if (settings.GetMinVisionTokensPerImage().has_value()) {
+    os << "  MinVisionTokensPerImage: "
+       << settings.GetMinVisionTokensPerImage().value() << std::endl;
+  }
   os << "  ParallelFileSectionLoading: "
      << settings.GetParallelFileSectionLoading() << std::endl;
   os << "  SingleThreadedExecution: " << settings.GetSingleThreadedExecution()
@@ -679,6 +683,15 @@ std::optional<int> EngineSettings::GetMaxVisionTokensPerImage() const {
 void EngineSettings::SetMaxVisionTokensPerImage(
     int max_vision_tokens_per_image) {
   max_vision_tokens_per_image_ = max_vision_tokens_per_image;
+}
+
+std::optional<int> EngineSettings::GetMinVisionTokensPerImage() const {
+  return min_vision_tokens_per_image_;
+}
+
+void EngineSettings::SetMinVisionTokensPerImage(
+    int min_vision_tokens_per_image) {
+  min_vision_tokens_per_image_ = min_vision_tokens_per_image;
 }
 
 proto::LlmMetadata& EngineSettings::GetMutableLlmMetadata() {

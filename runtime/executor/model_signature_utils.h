@@ -112,33 +112,37 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
     std::optional<int> min_input_length = std::nullopt);
 
 // Selects the vision encoder signatures to load based on
-// `vision_tokens_per_image`. Loads signatures for all lengths up to
-// `vision_tokens_per_image`, plus the smallest signature that can accommodate
-// `vision_tokens_per_image`. If `vision_tokens_per_image` exceeds all
-// available signatures, returns an error.
+// `vision_tokens_per_image`. Loads signatures for all lengths in
+// [`min_vision_tokens_per_image`, `vision_tokens_per_image`], plus the smallest
+// signature that can accommodate `vision_tokens_per_image`. If
+// `vision_tokens_per_image` exceeds all available signatures, returns an error.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
-    const std::vector<SignatureInfo>& signatures, int vision_tokens_per_image);
+    const std::vector<SignatureInfo>& signatures, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image = std::nullopt);
 
 // Convenience overload that retrieves vision encoder signatures from
 // ModelResources.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
-    ModelResources& resources, int vision_tokens_per_image);
+    ModelResources& resources, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image = std::nullopt);
 
 // Selects the vision adapter signatures to load based on
-// `vision_tokens_per_image`. Loads signatures for all lengths up to
-// `vision_tokens_per_image`, plus the smallest signature that can accommodate
-// `vision_tokens_per_image`. If `vision_tokens_per_image` exceeds all
-// available signatures, returns an error. Returns nullopt if no adapter
-// signatures are present.
+// `vision_tokens_per_image`. Loads signatures for all lengths in
+// [`min_vision_tokens_per_image`, `vision_tokens_per_image`], plus the smallest
+// signature that can accommodate `vision_tokens_per_image`. If
+// `vision_tokens_per_image` exceeds all available signatures, returns an error.
+// Returns nullopt if no adapter signatures are present.
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
-SelectVisionAdapterSignatures(const std::vector<SignatureInfo>& signatures,
-                              int vision_tokens_per_image);
+SelectVisionAdapterSignatures(
+    const std::vector<SignatureInfo>& signatures, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image = std::nullopt);
 
 // Convenience overload that retrieves vision adapter signatures from
 // ModelResources.
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
-SelectVisionAdapterSignatures(ModelResources& resources,
-                              int vision_tokens_per_image);
+SelectVisionAdapterSignatures(
+    ModelResources& resources, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image = std::nullopt);
 
 // Extracts the primary input dimension (number of patches or sequence length)
 // from the signature's input shape.

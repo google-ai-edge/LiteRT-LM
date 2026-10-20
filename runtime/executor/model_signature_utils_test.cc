@@ -543,6 +543,65 @@ TEST(ModelSignatureUtilsTest,
               StatusIs(absl::StatusCode::kNotFound));
 }
 
+TEST(ModelSignatureUtilsTest,
+     SelectVisionEncoderSignatures_MinVisionTokensSkipsSmallerSignatures) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "vision_280", .length = 280},
+      {.signature_name = "vision_70", .length = 70},
+      {.signature_name = "vision_140", .length = 140},
+  };
+
+  // min == max selects a single signature.
+  ASSERT_OK_AND_ASSIGN(
+      auto result_140,
+      SelectVisionEncoderSignatures(signatures, /*vision_tokens_per_image=*/140,
+                                    /*min_vision_tokens_per_image=*/140));
+  EXPECT_THAT(result_140.signature_names, ElementsAre("vision_140"));
+
+  // min == max between signature sizes selects the next larger signature.
+  ASSERT_OK_AND_ASSIGN(
+      auto result_200,
+      SelectVisionEncoderSignatures(signatures, /*vision_tokens_per_image=*/200,
+                                    /*min_vision_tokens_per_image=*/200));
+  EXPECT_THAT(result_200.signature_names, ElementsAre("vision_280"));
+
+  // A lower min keeps the signatures in [min, max].
+  ASSERT_OK_AND_ASSIGN(
+      auto result_100_280,
+      SelectVisionEncoderSignatures(signatures, /*vision_tokens_per_image=*/280,
+                                    /*min_vision_tokens_per_image=*/100));
+  EXPECT_THAT(result_100_280.signature_names,
+              ElementsAre("vision_140", "vision_280"));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectVisionEncoderSignatures_InvalidMinVisionTokensReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "vision_70", .length = 70},
+      {.signature_name = "vision_140", .length = 140},
+  };
+  EXPECT_THAT(SelectVisionEncoderSignatures(signatures, 140, -1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(SelectVisionEncoderSignatures(signatures, 70, 140),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("must not exceed")));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectVisionAdapterSignatures_MinVisionTokensSelectsSingleSignature) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "adapter_280", .length = 280},
+      {.signature_name = "adapter_70", .length = 70},
+      {.signature_name = "adapter_140", .length = 140},
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto result,
+      SelectVisionAdapterSignatures(signatures, /*vision_tokens_per_image=*/280,
+                                    /*min_vision_tokens_per_image=*/280));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_THAT(result->signature_names, ElementsAre("adapter_280"));
+}
+
 TEST(ModelSignatureUtilsTest, SelectVisionAdapterSignatures_Success) {
   std::vector<SignatureInfo> signatures = {
       {.signature_name = "adapter_280", .length = 280},

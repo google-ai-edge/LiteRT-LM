@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -268,52 +269,82 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
                                      min_input_length);
 }
 
-absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
-    const std::vector<SignatureInfo>& signatures, int vision_tokens_per_image) {
+namespace {
+
+absl::Status ValidateVisionTokensPerImage(
+    int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image) {
   if (vision_tokens_per_image <= 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("vision_tokens_per_image must be positive, got: ",
                      vision_tokens_per_image));
   }
+  if (min_vision_tokens_per_image.has_value() &&
+      *min_vision_tokens_per_image < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("min_vision_tokens_per_image must be non-negative, got: ",
+                     *min_vision_tokens_per_image));
+  }
+  if (min_vision_tokens_per_image.has_value() &&
+      *min_vision_tokens_per_image > vision_tokens_per_image) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "min_vision_tokens_per_image (", *min_vision_tokens_per_image,
+        ") must not exceed vision_tokens_per_image (", vision_tokens_per_image,
+        ")."));
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
+    const std::vector<SignatureInfo>& signatures, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image) {
+  ABSL_RETURN_IF_ERROR(ValidateVisionTokensPerImage(
+      vision_tokens_per_image, min_vision_tokens_per_image));
   if (signatures.empty()) {
     return absl::NotFoundError("No vision encoder signatures found in model.");
   }
-  return SelectSignaturesByCapacity(signatures, vision_tokens_per_image);
+  return SelectSignaturesByCapacity(signatures, vision_tokens_per_image,
+                                    min_vision_tokens_per_image);
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
-    ModelResources& resources, int vision_tokens_per_image) {
+    ModelResources& resources, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image) {
   LITERT_ASSIGN_OR_RETURN(
       auto signatures,
       GetAvailableSignatures(resources,
                              proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER));
-  return SelectVisionEncoderSignatures(signatures, vision_tokens_per_image);
+  return SelectVisionEncoderSignatures(signatures, vision_tokens_per_image,
+                                       min_vision_tokens_per_image);
 }
 
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
 SelectVisionAdapterSignatures(const std::vector<SignatureInfo>& signatures,
-                              int vision_tokens_per_image) {
+                              int vision_tokens_per_image,
+                              std::optional<int> min_vision_tokens_per_image) {
   if (signatures.empty()) {
     return std::nullopt;
   }
-  if (vision_tokens_per_image <= 0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("vision_tokens_per_image must be positive, got: ",
-                     vision_tokens_per_image));
-  }
-  return SelectSignaturesByCapacity(signatures, vision_tokens_per_image);
+  ABSL_RETURN_IF_ERROR(ValidateVisionTokensPerImage(
+      vision_tokens_per_image, min_vision_tokens_per_image));
+  return SelectSignaturesByCapacity(signatures, vision_tokens_per_image,
+                                    min_vision_tokens_per_image);
 }
 
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
 SelectVisionAdapterSignatures(ModelResources& resources,
-                              int vision_tokens_per_image) {
+                              int vision_tokens_per_image,
+                              std::optional<int> min_vision_tokens_per_image) {
   auto adapter_signatures = GetAvailableSignatures(
       resources, proto::EmbeddingMetadata::TF_LITE_VISION_ADAPTER);
   if (!adapter_signatures.ok() || adapter_signatures->empty()) {
     return std::nullopt;
   }
   return SelectVisionAdapterSignatures(*adapter_signatures,
-                                       vision_tokens_per_image);
+                                       vision_tokens_per_image,
+                                       min_vision_tokens_per_image);
 }
 
 int GetSignatureInputLength(const SignatureInfo& signature) {

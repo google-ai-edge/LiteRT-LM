@@ -156,6 +156,13 @@ class EngineSettings {
   std::optional<int> GetMaxVisionTokensPerImage() const;
   void SetMaxVisionTokensPerImage(int max_vision_tokens_per_image);
 
+  // Smallest vision signature capacity to load, or std::nullopt for no
+  // minimum. Smaller signatures are skipped to save memory. On web, the engine
+  // defaults this to the max, so only one signature is loaded.
+  std::optional<int> GetMinVisionTokensPerImage() const;
+  // Must be non-negative and not exceed the max vision tokens per image.
+  void SetMinVisionTokensPerImage(int min_vision_tokens_per_image);
+
  private:
   explicit EngineSettings(
       LlmExecutorSettings executor_settings,
@@ -188,6 +195,9 @@ class EngineSettings {
 
   // Desired maximum number of vision tokens generated per image.
   std::optional<int> max_vision_tokens_per_image_;
+
+  // Smallest vision signature capacity to load.
+  std::optional<int> min_vision_tokens_per_image_;
 };
 std::ostream& operator<<(std::ostream& os, const EngineSettings& settings);
 

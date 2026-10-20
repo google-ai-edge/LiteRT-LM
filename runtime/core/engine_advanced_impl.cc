@@ -118,6 +118,67 @@ std::optional<int> GetVisionTokensPerImageFromMetadata(
   return max_num_patches / patch_num_shrink_factor;
 }
 
+// Selects vision encoder and adapter signatures if max_vision_tokens_per_image
+// is set by user, or falls back to the metadata from the proto if it exists.
+// Does nothing if vision is not enabled in `engine_settings`.
+absl::Status MaybeSelectVisionSignatures(
+    EngineSettings& engine_settings, ModelResources& model_resources,
+    const proto::LlmMetadata* llm_metadata) {
+  if (!engine_settings.GetVisionExecutorSettings().has_value()) {
+    return absl::OkStatus();
+  }
+  std::optional<int> vision_token_limit;
+  if (engine_settings.GetMaxVisionTokensPerImage().has_value()) {
+    const int max_vision_tokens_per_image =
+        *engine_settings.GetMaxVisionTokensPerImage();
+    if (max_vision_tokens_per_image <= 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
+                       max_vision_tokens_per_image));
+    }
+    if (GetVisionTokensPerImageFromMetadata(llm_metadata).has_value()) {
+      vision_token_limit = max_vision_tokens_per_image;
+    }
+  } else {
+    vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
+    if (vision_token_limit.has_value() && *vision_token_limit > 0) {
+      engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);
+    }
+  }
+
+  if (!vision_token_limit.has_value() || *vision_token_limit <= 0) {
+    return absl::OkStatus();
+  }
+#ifdef __EMSCRIPTEN__
+  // On web, load a single vision signature by default. Each extra signature
+  // takes hundreds of MB to GBs of heap on GPU, and loading all of them
+  // overflows the 4GB wasm32 address space. Users can still lower the min to
+  // load more signatures.
+  if (!engine_settings.GetMinVisionTokensPerImage().has_value()) {
+    engine_settings.SetMinVisionTokensPerImage(*vision_token_limit);
+  }
+#endif  // __EMSCRIPTEN__
+  const std::optional<int> min_vision_tokens_per_image =
+      engine_settings.GetMinVisionTokensPerImage();
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto vision_sig_info,
+      SelectVisionEncoderSignatures(model_resources, *vision_token_limit,
+                                    min_vision_tokens_per_image));
+  engine_settings.GetMutableVisionExecutorSettings()
+      ->SetEncoderSelectedSignatures(vision_sig_info.signature_names);
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto adapter_sig_info,
+      SelectVisionAdapterSignatures(model_resources, *vision_token_limit,
+                                    min_vision_tokens_per_image));
+  if (adapter_sig_info.has_value()) {
+    engine_settings.GetMutableVisionExecutorSettings()
+        ->SetAdapterSelectedSignatures(adapter_sig_info->signature_names);
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 namespace {
@@ -466,44 +527,8 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
         BenchmarkInfo::InitPhase::kLlmMetadata));
   }
 
-  // Select vision encoder and adapter signatures if max_vision_tokens_per_image
-  // is set by user, or fallback to metadata from proto if it exists.
-  std::optional<int> vision_token_limit;
-  if (engine_settings.GetVisionExecutorSettings().has_value()) {
-    if (engine_settings.GetMaxVisionTokensPerImage().has_value()) {
-      const int max_vision_tokens_per_image =
-          *engine_settings.GetMaxVisionTokensPerImage();
-      if (max_vision_tokens_per_image <= 0) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
-                         max_vision_tokens_per_image));
-      }
-      if (GetVisionTokensPerImageFromMetadata(llm_metadata).has_value()) {
-        vision_token_limit = max_vision_tokens_per_image;
-      }
-    } else {
-      vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
-      if (vision_token_limit.has_value() && *vision_token_limit > 0) {
-        engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);
-      }
-    }
-  }
-
-  if (vision_token_limit.has_value() && *vision_token_limit > 0) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto vision_sig_info,
-        SelectVisionEncoderSignatures(*model_resources, *vision_token_limit));
-    engine_settings.GetMutableVisionExecutorSettings()
-        ->SetEncoderSelectedSignatures(vision_sig_info.signature_names);
-
-    ABSL_ASSIGN_OR_RETURN(
-        auto adapter_sig_info,
-        SelectVisionAdapterSignatures(*model_resources, *vision_token_limit));
-    if (adapter_sig_info.has_value()) {
-      engine_settings.GetMutableVisionExecutorSettings()
-          ->SetAdapterSelectedSignatures(adapter_sig_info->signature_names);
-    }
-  }
+  ABSL_RETURN_IF_ERROR(MaybeSelectVisionSignatures(
+      engine_settings, *model_resources, llm_metadata));
   bool hasLlmModelType =
       llm_metadata != nullptr && llm_metadata->has_llm_model_type();
   absl::Duration tokenizer_duration = absl::ZeroDuration();
