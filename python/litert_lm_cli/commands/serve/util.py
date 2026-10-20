@@ -16,8 +16,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+import contextlib
 import http.server
 import socket
+from typing import Any
 
 import click
 
@@ -40,6 +43,9 @@ class LiteRTLMServer(http.server.HTTPServer):
     vision_backend: The hardware backend used for vision encoding, or None.
     audio_backend: The hardware backend used for audio encoding, or None.
     activation_data_type: The activation data type used for model execution, or
+      None.
+    litert_lm_conversation: The currently cached conversation instance, or None.
+    conversation_cache_key: The cache key tuple for the cached conversation, or
       None.
     litert_lm_embedding_engine: The LiteRT-LM embedding engine instance, or None
       if not initialized.
@@ -73,11 +79,20 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
     self.activation_data_type: litert_lm.ActivationDataType | None = None
+    self.litert_lm_conversation: litert_lm.AbstractConversation | None = None
+    self.conversation_cache_key: tuple[Any, ...] | None = None
     self.litert_lm_embedding_engine: litert_lm.EmbeddingEngine | None = None
     self.embedding_model_id: str | None = None
     self.embedding_backend: litert_lm.Backend | None = None
     self.embedding_vision_backend: litert_lm.Backend | None = None
     self.embedding_audio_backend: litert_lm.Backend | None = None
+
+  def close_conversation(self) -> None:
+    """Closes and resets the currently cached conversation, if any."""
+    if self.litert_lm_conversation is not None:
+      self.litert_lm_conversation.__exit__(None, None, None)
+      self.litert_lm_conversation = None
+    self.conversation_cache_key = None
 
 
 class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -198,6 +213,7 @@ def get_or_initialize_server_engine(
     )
     # TODO: b/513076049 - Support multiple concurrent engines instead of
     # re-initializing (which is disruptive to other clients).
+    server.close_conversation()
     server.litert_lm_engine.__exit__(None, None, None)
     server.litert_lm_engine = None
     server.model_id = None
@@ -318,3 +334,112 @@ def get_or_initialize_server_embedding_engine(
   server.embedding_vision_backend = vision_backend
   server.embedding_audio_backend = audio_backend
   return engine
+
+
+@contextlib.contextmanager
+def get_or_create_server_conversation(
+    server: Any,
+    engine: litert_lm.Engine,
+    *,
+    context_messages: list[dict[str, Any]],
+    prompt: str | dict[str, Any],
+    tools: list[Any] | None,
+    sampler_config: litert_lm.SamplerConfig | None,
+    thinking_config: litert_lm.ThinkingConfig | None,
+    constrained_decoding_config: litert_lm.ConstrainedDecodingConfig | None,
+) -> Iterator[tuple[Any, Callable[[dict[str, Any] | None], None]]]:
+  """Yields a cached or newly created Conversation and a save callback.
+
+  On each turn, the caller splits the incoming request's messages into
+  `context_messages` (`translated_messages[:-1]`, representing all prior turns)
+  and `prompt` (`translated_messages[-1]`, the new user or tool message for the
+  current turn). If `context_messages` and the decoding configuration match the
+  `conversation_cache_key` saved at the end of the previous turn
+  (`[*prev_context_messages, prev_prompt, prev_assistant]`), the existing
+  conversation is reused.
+
+  Args:
+    server: The HTTP server instance (cached when it is a `LiteRTLMServer`).
+    engine: The active LiteRT-LM Engine instance.
+    context_messages: Prior conversation messages excluding the current turn's
+      prompt (`translated_messages[:-1]`).
+    prompt: The current turn's user or tool message (`translated_messages[-1]`).
+    tools: Optional list of tool definitions (`_ProxyTool` instances).
+    sampler_config: Optional sampler configuration.
+    thinking_config: Optional thinking configuration.
+    constrained_decoding_config: Optional constrained decoding configuration.
+
+  Yields:
+    A tuple `(conv, save_assistant)` where `conv` is the LiteRT-LM Conversation
+    and `save_assistant` records the generated assistant message so the cache
+    key can be advanced to `[*context_messages, prompt, assistant_msg]`.
+  """
+  cache_server = server if isinstance(server, LiteRTLMServer) else None
+  cache_key = (
+      context_messages,
+      tools,
+      sampler_config,
+      thinking_config,
+      constrained_decoding_config,
+  )
+  if (
+      cache_server is not None
+      and cache_server.litert_lm_conversation is not None
+      and cache_server.conversation_cache_key == cache_key
+  ):
+    click.echo(
+        click.style(
+            "Conversation cache hit (reusing conversation with"
+            f" {len(context_messages)} context messages)",
+            fg="green",
+        )
+    )
+    conv = cache_server.litert_lm_conversation
+  else:
+    click.echo(
+        click.style(
+            "Conversation cache miss (initializing new conversation with"
+            f" {len(context_messages)} context messages)",
+            fg="cyan",
+        )
+    )
+    if cache_server is not None:
+      cache_server.close_conversation()
+    conv = engine.create_conversation(
+        messages=context_messages,
+        tools=tools,
+        automatic_tool_calling=False,
+        sampler_config=sampler_config,
+        thinking_config=thinking_config,
+        constrained_decoding_config=constrained_decoding_config,
+    ).__enter__()
+    if cache_server is not None:
+      cache_server.litert_lm_conversation = conv
+
+  saved_assistant: list[dict[str, Any] | None] = [None]
+
+  def save_assistant(assistant_msg: dict[str, Any] | None) -> None:
+    saved_assistant[0] = assistant_msg
+
+  try:
+    yield conv, save_assistant
+  except Exception:
+    if cache_server is not None:
+      cache_server.close_conversation()
+    else:
+      conv.__exit__(None, None, None)
+    raise
+  else:
+    if cache_server is not None:
+      if saved_assistant[0] is not None:
+        cache_server.conversation_cache_key = (
+            [*context_messages, prompt, saved_assistant[0]],
+            tools,
+            sampler_config,
+            thinking_config,
+            constrained_decoding_config,
+        )
+      else:
+        cache_server.close_conversation()
+    else:
+      conv.__exit__(None, None, None)
