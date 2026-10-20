@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Engine, getOrLoadGlobalLiteRtLm} from '@litert-lm/core';
+import {Engine, getOrLoadGlobalLiteRtLm, Message} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
 import {ChatSessionStore} from './chat_session_store.js';
@@ -190,13 +190,13 @@ describe('ChatSessionStore', () => {
          // idx: 3
        ];
 
-       const extractText = await chatSessionStore.rewindAndEdit(2);
+       const extractParts = await chatSessionStore.rewindAndEdit(2);
 
        expect(chatSessionStore.messages.length)
            .toBe(2);  // array was truncated right before the user message
-       expect(extractText)
-           .toEqual('Please edit me');  // the target user message is extracted
-                                        // correctly
+       expect(extractParts).toEqual([
+         {type: 'text', text: 'Please edit me'}
+       ]);  // the target user message is extracted correctly
      });
 
   it('creates conversation session cleanly', async () => {
@@ -213,8 +213,86 @@ describe('ChatSessionStore', () => {
 
     expect(chatSessionStore.messages.length).toBe(2);
     expect(chatSessionStore.messages[0].text).toBe('Hello model');
+    expect(chatSessionStore.messages[0].parts).toBeUndefined();
     expect(chatSessionStore.messages[1].text).toBe('hello from fake');
     expect(chatSessionStore.isGenerating).toBeFalse();
+  });
+
+  it('sendMessage sends images in the order they were placed', async () => {
+    await chatSessionStore.createConversationSession();
+    const blob = new Blob([new Uint8Array([1, 2, 3])], {type: 'image/png'});
+    const image = chatSessionStore.createImage('cat.png', blob);
+    const sendSpy =
+        spyOn(chatSessionStore.activeConversation!, 'sendMessageStreaming')
+            .and.callThrough();
+
+    await chatSessionStore.sendMessage([
+      {type: 'text', text: '  What is '},
+      {type: 'image', image},
+      {type: 'text', text: ' doing?  '},
+    ]);
+
+    const expectedMessage: Message = {
+      role: 'user',
+      content: [
+        {type: 'text', text: 'What is '},
+        {type: 'image', data: blob},
+        {type: 'text', text: ' doing?'},
+      ],
+    };
+    expect(sendSpy.calls.mostRecent().args[0]).toEqual(expectedMessage);
+    const userMsg = chatSessionStore.messages[0];
+    expect(userMsg.text).toBe('What is [image: cat.png] doing?');
+    expect(userMsg.parts).toEqual([
+      {type: 'text', text: 'What is '},
+      {type: 'image', id: image.id, name: 'cat.png'},
+      {type: 'text', text: ' doing?'},
+    ]);
+
+    // Only image references are persisted, not image bytes.
+    const history = window.localStorage.getItem(
+        `litertlm-chat-history-${chatSessionStore.activeSavedConvId}`);
+    expect(history).toContain(image.id);
+  });
+
+  it('restores images from memory and placeholders otherwise', () => {
+    const image = chatSessionStore.createImage('cat.png', new Blob([], {type: 'image/png'}));
+    const parts = chatSessionStore.getMessageParts({
+      role: 'user',
+      text: '',
+      senderName: 'User',
+      parts: [
+        {type: 'image', id: image.id, name: 'cat.png'},
+        {type: 'text', text: ' and '},
+        {type: 'image', id: 'gone', name: 'dog.png'},
+      ],
+    });
+
+    expect(parts).toEqual([
+      {type: 'image', image},
+      {type: 'text', text: ' and '},
+      {type: 'text', text: '[image: dog.png]'},
+    ]);
+  });
+
+  it('redoResponse resends images', async () => {
+    const image = chatSessionStore.createImage('cat.png', new Blob([], {type: 'image/png'}));
+    chatSessionStore.messages = [
+      {
+        role: 'user',
+        text: '[image: cat.png]',
+        parts: [{type: 'image', id: image.id, name: 'cat.png'}],
+        senderName: 'User'
+      },
+      {role: 'assistant', text: 'A cat', senderName: 'Assistant'},
+    ];
+    spyOn(chatSessionStore, 'sendMessage').and.returnValue(Promise.resolve());
+
+    await chatSessionStore.redoResponse(1);
+
+    expect(chatSessionStore.sendMessage).toHaveBeenCalledWith([
+      {type: 'image', image}
+    ]);
   });
 
   it('sendMessage processes simulated function calls correctly', async () => {

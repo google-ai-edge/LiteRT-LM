@@ -16,7 +16,7 @@
 
 import './chat_bubble';
 
-import {ChatSessionStore} from '../stores/chat_session_store.js';
+import {ChatSessionStore, PromptImage, PromptPart} from '../stores/chat_session_store.js';
 import {LlmChatStateController} from '../state_controller.js';
 import {LitertChatBubble} from './chat_bubble.js';
 
@@ -43,6 +43,7 @@ describe('litert-chat-bubble', () => {
     mockChatSession = jasmine.createSpyObj('ChatSessionStore', [
       'rewindAndEdit',
       'redoResponse',
+      'getImage',
     ]);
     mockState = {
       chatSession: mockChatSession,
@@ -174,11 +175,12 @@ describe('litert-chat-bubble', () => {
     expect(editBtn.textContent!.trim()).toBe('✎ Edit');
 
     // Setup spy return
-    mockChatSession.rewindAndEdit.and.returnValue(Promise.resolve('Edit me'));
+    const parts: PromptPart[] = [{type: 'text', text: 'Edit me'}];
+    mockChatSession.rewindAndEdit.and.returnValue(Promise.resolve(parts));
 
-    let eventDetail: {prompt: string} | null = null;
+    let eventDetail: {parts: PromptPart[]}|null = null;
     element.addEventListener('edit-prompt', (e: Event) => {
-      eventDetail = (e as CustomEvent<{prompt: string}>).detail;
+      eventDetail = (e as CustomEvent<{parts: PromptPart[]}>).detail;
     });
 
     editBtn.click();
@@ -187,7 +189,44 @@ describe('litert-chat-bubble', () => {
     await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(mockState.chatSession.rewindAndEdit).toHaveBeenCalledWith(4);
-    expect(eventDetail as {prompt: string} | null).toEqual({prompt: 'Edit me'});
+    expect(eventDetail as {parts: PromptPart[]} | null).toEqual({parts});
+  });
+
+  it('renders images inline in a user message', async () => {
+    const image: PromptImage = {
+      id: 'img1',
+      name: 'cat.png',
+      blob: new Blob(),
+      url: 'blob:fake-url',
+    };
+    mockChatSession.getImage.and.callFake(
+        (id: string) => id === 'img1' ? image : undefined);
+    element.message = {
+      role: 'user',
+      text: 'Before [image: cat.png] after [image: dog.png]',
+      parts: [
+        {type: 'text', text: 'Before '},
+        {type: 'image', id: 'img1', name: 'cat.png'},
+        {type: 'text', text: ' after '},
+        {type: 'image', id: 'img2', name: 'dog.png'},
+      ],
+      senderName: 'User',
+    };
+    element.index = 0;
+    await element.updateComplete;
+
+    const content = element.shadowRoot!.querySelector('.message-user-text')!;
+    const img = content.querySelector('img.message-image') as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toBe('blob:fake-url');
+    expect(img.alt).toBe('cat.png');
+
+    // Images from an earlier page load are shown as placeholders.
+    const missing = content.querySelector('.message-image-missing');
+    expect(missing!.textContent).toContain('dog.png');
+
+    expect(content.textContent).toContain('Before');
+    expect(content.textContent).toContain('after');
   });
 
   it('triggers redoResponse when user clicks Retry', async () => {

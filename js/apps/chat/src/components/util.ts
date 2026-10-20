@@ -32,6 +32,11 @@ export function registerAppServiceWorker(container: ServiceWorkerContainer): Pro
   return container.register('./sw.js', {scope: './'});
 }
 
+/** Creates an object URL for a media blob using standard URL.createObjectURL. */
+export function createObjectUrl(blob: Blob): string {
+  return URL.createObjectURL(blob);
+}
+
 /** Renders HTML using standard unsafeHTML. */
 export function renderHtml(htmlText: string) {
   return unsafeHTML(htmlText);

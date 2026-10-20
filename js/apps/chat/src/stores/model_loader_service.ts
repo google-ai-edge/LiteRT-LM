@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig} from '@litert-lm/core';
+import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
@@ -323,6 +323,9 @@ export class ModelLoaderService {
             use_autosized_ringbuffers: true,
           } as GpuArtisanConfig
         },
+        // Always enable image input. On web, only one vision signature is
+        // loaded by default to fit in the wasm heap.
+        visionBackend: Backend.GPU,
         benchmarkEnabled: true
       });
 

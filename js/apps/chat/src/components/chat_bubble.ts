@@ -178,6 +178,26 @@ export class LitertChatBubble extends LitElement {
       .message-user-text {
         white-space: pre-wrap; 
       }
+
+      .message-image {
+        display: block;
+        max-width: 100%;
+        max-height: 240px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        margin: 6px 0;
+        object-fit: contain;
+      }
+
+      .message-image-missing {
+        display: inline-block;
+        padding: 2px 8px;
+        margin: 0 2px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        font-size: 0.8em;
+        color: var(--text-muted);
+      }
       
       .message-content {
         white-space: normal; 
@@ -349,15 +369,31 @@ export class LitertChatBubble extends LitElement {
   }
 
   private async handleRewindEdit() {
-    const originalPrompt =
+    const originalParts =
         await this.state.chatSession.rewindAndEdit(this.index);
-    if (originalPrompt) {
+    if (originalParts) {
       this.dispatchEvent(new CustomEvent('edit-prompt', {
-        detail: {prompt: originalPrompt},
+        detail: {parts: originalParts},
         bubbles: true,
         composed: true,
       }));
     }
+  }
+
+  /** Renders a user message's text with its images inline. */
+  private renderUserContent(msg: StoredMessage) {
+    if (!msg.parts) {
+      return html`<div class="message-user-text">${msg.text}</div>`;
+    }
+    return html`<div class="message-user-text">${msg.parts.map(part => {
+      if (part.type === 'text') return part.text;
+      const image = this.state.chatSession.getImage(part.id);
+      return image ?
+          html`<img class="message-image" src=${image.url} alt=${
+              part.name} title=${part.name} />` :
+          html`<span class="message-image-missing" title="Images are not saved across page reloads">🖼 ${
+              part.name}</span>`;
+    })}</div>`;
   }
 
   override render() {
@@ -380,21 +416,21 @@ export class LitertChatBubble extends LitElement {
         <div class="message-content">
           <!-- Thought block rendering -->
           ${
-        msg.thoughtText ? html`
+        msg.thoughtText ?
+            html`
             <details class="thought-details" open>
               <summary class="thought-summary">Thought Process</summary>
               <div class="thought-content">${
-                              renderHtml(this.renderMarkdown(
-                                  msg.thoughtText || ''))}</div>
+                renderHtml(this.renderMarkdown(msg.thoughtText || ''))}</div>
             </details>
           ` :
-                          ''}
+            ''}
           
           <!-- Main message bubble content -->
           ${
-        isUser ? html`<div class="message-user-text">${msg.text}</div>` :
-                 html`<div>${
-                     renderHtml(this.renderMarkdown(msg.text || ''))}</div>`}
+        isUser ?
+            this.renderUserContent(msg) :
+            html`<div>${renderHtml(this.renderMarkdown(msg.text || ''))}</div>`}
         </div>
 
         <!-- Message actions bar (Edit / Copy & Retry) -->

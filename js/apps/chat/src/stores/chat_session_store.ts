@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import {AutoToolChat, ChatInterface, JsonValue, SamplerType, ToolProgressEvent, ToolWithImplementation} from '@litert-lm/core';
+import {AutoToolChat, ChatInterface, ContentPart, JsonValue, MessageLike, SamplerType, ToolProgressEvent, ToolWithImplementation} from '@litert-lm/core';
 import {z} from 'zod';
 
 import {CodeSandbox} from '../components/code_sandbox.js';
+import {createObjectUrl} from '../components/util.js';
 
 import {ModelLoaderService} from './model_loader_service.js';
 import {ModelSettings, SettingsStore} from './settings_store.js';
@@ -31,9 +32,21 @@ const ConversationMetaSchema = z.object({
 
 const ConversationMetaListSchema = z.array(ConversationMetaSchema);
 
+/**
+ * A persisted part of a user message. Only an image's id and name are saved;
+ * its bytes are kept in memory for the lifetime of the page.
+ */
+const StoredPartSchema = z.union([
+  z.object({type: z.literal('text'), text: z.string()}),
+  z.object({type: z.literal('image'), id: z.string(), name: z.string()}),
+]);
+
 const StoredMessageSchema = z.object({
   role: z.union([z.literal('user'), z.literal('assistant')]),
+  // Plain-text form of the message. Images appear as `[image: name]`.
   text: z.string(),
+  // Ordered text and image parts, present only for messages with images.
+  parts: z.array(StoredPartSchema).optional(),
   senderName: z.string(),
   thoughtText: z.string().optional(),
   prefillSpeed: z.string().optional(),
@@ -45,6 +58,58 @@ const StoredMessageListSchema = z.array(StoredMessageSchema);
 
 /** Represents an individual chat message in the UI history. */
 export type StoredMessage = z.infer<typeof StoredMessageSchema>;
+
+/** A persisted part of a user message. */
+export type StoredPart = z.infer<typeof StoredPartSchema>;
+
+/** An image attached to a prompt. */
+export interface PromptImage {
+  id: string;
+  name: string;
+  blob: Blob;
+  /** Object URL of `blob`, for previews. */
+  url: string;
+}
+
+/**
+ * A single element of a prompt, in the order the user arranged it. Images are
+ * interleaved with text so the user controls where each image sits relative
+ * to the surrounding words.
+ */
+export type PromptPart = {
+  type: 'text'; text: string;
+}|{
+  type: 'image';
+  image: PromptImage;
+};
+
+/** Returns the placeholder text used for an image the model cannot see. */
+export function imagePlaceholder(name: string): string {
+  return `[image: ${name}]`;
+}
+
+/** Returns the plain-text form of a prompt, with images as placeholders. */
+export function promptPartsToText(parts: PromptPart[]): string {
+  return parts
+      .map(p => p.type === 'text' ? p.text : imagePlaceholder(p.image.name))
+      .join('');
+}
+
+/** Whether a prompt has anything worth sending. */
+export function promptHasContent(parts: PromptPart[]): boolean {
+  return parts.some(p => p.type === 'image' || p.text.trim().length > 0);
+}
+
+/** Trims leading and trailing whitespace from a prompt. */
+function trimPromptParts(parts: PromptPart[]): PromptPart[] {
+  const trimmed = parts.filter(p => p.type === 'image' || p.text.length > 0)
+                      .map(p => ({...p}));
+  const first = trimmed[0];
+  if (first?.type === 'text') first.text = first.text.trimStart();
+  const last = trimmed[trimmed.length - 1];
+  if (last?.type === 'text') last.text = last.text.trimEnd();
+  return trimmed.filter(p => p.type === 'image' || p.text.length > 0);
+}
 
 /** Represents a saved conversation in the sidebar history index. */
 export type ConversationMeta = z.infer<typeof ConversationMetaSchema>;
@@ -63,12 +128,50 @@ export class ChatSessionStore {
 
   private readonly CONVS_LIST_KEY = 'litertlm-conversations-list';
 
+  /**
+   * Images attached to prompts during this page's lifetime, by id. Saved
+   * history only references images by id, so images from a previous page
+   * load are not found here.
+   */
+  private readonly images = new Map<string, PromptImage>();
+
   constructor(
       private readonly updateCallback: () => void,
       private readonly settings: SettingsStore,
       private readonly modelLoader: ModelLoaderService,
       private readonly updateStatus: (msg: string) => void) {
     this.loadSavedConversationsIndex();
+  }
+
+  /** Creates an image that can be placed in a prompt. */
+  createImage(name: string, blob: Blob): PromptImage {
+    const image: PromptImage = {
+      id: Math.random().toString(36).substring(2) + Date.now().toString(36),
+      name,
+      blob,
+      url: createObjectUrl(blob),
+    };
+    this.images.set(image.id, image);
+    return image;
+  }
+
+  /** Returns an image created during this page's lifetime, if available. */
+  getImage(id: string): PromptImage|undefined {
+    return this.images.get(id);
+  }
+
+  /**
+   * Returns the prompt parts of a stored message. Images that are no longer
+   * in memory become text placeholders.
+   */
+  getMessageParts(msg: StoredMessage): PromptPart[] {
+    if (!msg.parts) return [{type: 'text', text: msg.text}];
+    return msg.parts.map((p): PromptPart => {
+      if (p.type === 'text') return p;
+      const image = this.images.get(p.id);
+      return image ? {type: 'image', image} :
+                     {type: 'text', text: imagePlaceholder(p.name)};
+    });
   }
 
   loadSavedConversationsIndex() {
@@ -248,6 +351,8 @@ export class ChatSessionStore {
           }
         },
         preface: {
+          // Images in the history are replayed as `[image: name]` text
+          // placeholders; only images in new messages are seen by the model.
           messages: this.messages.length > 0 ?
               this.messages.map(msg => ({role: msg.role, content: msg.text})) :
               undefined,
@@ -284,8 +389,14 @@ export class ChatSessionStore {
            this.activeModelSettings.enableThinking !== settings.enableThinking;
   }
 
-  async sendMessage(promptText: string) {
-    if (this.isGenerating || !promptText.trim()) return;
+  /**
+   * Sends a prompt to the model. A prompt is either plain text or an ordered
+   * list of text and image parts.
+   */
+  async sendMessage(prompt: string|PromptPart[]) {
+    const parts = trimPromptParts(
+        typeof prompt === 'string' ? [{type: 'text', text: prompt}] : prompt);
+    if (this.isGenerating || !promptHasContent(parts)) return;
 
     const settings = this.settings.modelSettings;
     if (this.modelLoader.needsModelReload(settings)) {
@@ -302,10 +413,33 @@ export class ChatSessionStore {
     this.isCancelled = false;
     this.updateStatus('Thinking...');
 
-    const userMsg: StoredMessage =
-        {role: 'user', text: promptText, senderName: 'User', tokensCount: '-'};
+    const promptText = promptPartsToText(parts);
+    const hasImages = parts.some(p => p.type === 'image');
+    const userMsg: StoredMessage = {
+      role: 'user',
+      text: promptText,
+      senderName: 'User',
+      tokensCount: '-'
+    };
+    if (hasImages) {
+      userMsg.parts = parts.map(
+          (p): StoredPart => p.type === 'text' ?
+              p :
+              {type: 'image', id: p.image.id, name: p.image.name});
+    }
     this.messages.push(userMsg);
     this.commitActiveChatHistory();
+
+    // Keep plain-text prompts as strings; send image prompts as an ordered
+    // content array so each image sits where the user placed it.
+    const modelMessage: MessageLike = hasImages ? {
+      role: 'user',
+      content: parts.map(
+          (p): ContentPart => p.type === 'text' ?
+              {type: 'text', text: p.text} :
+              {type: 'image', data: p.image.blob}),
+    } :
+                                                  promptText;
 
     const modelName =
         this.settings.selectedModelPath.split('/').pop() || 'Assistant';
@@ -322,7 +456,7 @@ export class ChatSessionStore {
 
     try {
       const responseStream =
-          await this.activeConversation!.sendMessageStreaming(promptText);
+          await this.activeConversation!.sendMessageStreaming(modelMessage);
       const reader = responseStream.getReader();
 
       while (true) {
@@ -452,22 +586,24 @@ export class ChatSessionStore {
       this.activeConversation = null;
     }
 
-    await this.sendMessage(previousUserMsg.text);
+    await this.sendMessage(
+        previousUserMsg.parts ? this.getMessageParts(previousUserMsg) :
+                                previousUserMsg.text);
   }
 
-  async rewindAndEdit(targetMessageIndex: number): Promise<string|null> {
+  /**
+   * Removes the given message, the messages after it, and its user prompt
+   * from the history. Returns that prompt so it can be edited and re-sent.
+   */
+  async rewindAndEdit(targetMessageIndex: number):
+      Promise<PromptPart[]|null> {
     if (this.isGenerating || targetMessageIndex < 0) return null;
 
-    let previousUserMsgText = '';
-
-    if (this.messages[targetMessageIndex]?.role === 'user') {
-      previousUserMsgText = this.messages[targetMessageIndex]!.text;
-      this.messages = this.messages.slice(0, targetMessageIndex);
-    } else {
-      const userMsgIdx = targetMessageIndex - 1;
-      previousUserMsgText = this.messages[userMsgIdx]?.text || '';
-      this.messages = this.messages.slice(0, userMsgIdx);
-    }
+    const userMsgIdx = this.messages[targetMessageIndex]?.role === 'user' ?
+        targetMessageIndex :
+        targetMessageIndex - 1;
+    const userMsg = this.messages[userMsgIdx];
+    this.messages = this.messages.slice(0, Math.max(0, userMsgIdx));
 
     this.commitActiveChatHistory();
 
@@ -476,6 +612,6 @@ export class ChatSessionStore {
       this.activeConversation = null;
     }
 
-    return previousUserMsgText;
+    return userMsg ? this.getMessageParts(userMsg) : null;
   }
 }
