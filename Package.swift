@@ -38,15 +38,15 @@ let package = Package(
     .binaryTarget(
       name: "CLiteRTLM",
       url:
-        "https://storage.googleapis.com/litert/litert_lm/swift/nightly/CLiteRTLM_0.19.0-20261018.xcframework.zip",
-      checksum: "bdd1d4abc0396137dc20041f9fc08b917ee74ad080107cd62748052e9116af2f"
+        "https://storage.googleapis.com/litert/litert_lm/swift/nightly/CLiteRTLM_0.19.0-20261019.xcframework.zip",
+      checksum: "d68cd0b58ca7c5e39b95b59abcdb1e6c8f3ee42f00754229328e4bb8d561ebc4"
     ),
     // The Prebuilt Binary Target for Mac
     .binaryTarget(
       name: "CLiteRTLM_mac",
       url:
-        "https://storage.googleapis.com/litert/litert_lm/swift/nightly/CLiteRTLM_mac_0.19.0-20261018.xcframework.zip",
-      checksum: "75c8f47965c3ec6ccc6d4fe6e47c49ca5f601fbbdc28decd6ca68465fa0fd4bb"
+        "https://storage.googleapis.com/litert/litert_lm/swift/nightly/CLiteRTLM_mac_0.19.0-20261019.xcframework.zip",
+      checksum: "1ffe15e38222b07fe73546aa67c2ce8d2e01c054658292c6d1a7073347d24f9a"
     ),
     // The Swift Wrapper Target
     .target(
