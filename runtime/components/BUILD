@@ -18,9 +18,11 @@
 # [Google-internal load of `cc_test`]
 # [Google-internal load of `objc_library`]
 load(
-    "@litert//litert/build_common:litert_build_defs.bzl",
+    "@bazel_skylib//rules:copy_file.bzl",
     "copy_file",
 )
+load("@build_bazel_rules_apple//apple:ios.bzl", "ios_framework", "ios_unit_test")
+load("@build_bazel_rules_apple//apple:macos.bzl", "macos_dylib", "macos_unit_test")
 
 LITERT_MIN_IOS_VERSION = "15.0"
 
@@ -280,11 +282,11 @@ cc_test(
         ":sampler_factory",
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
+        "@litert//litert/cc:litert_environment",
         "@litert//litert/test:matchers",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:test_utils",
-        "@litert//litert/cc:litert_environment",
     ],
 )
 
@@ -369,6 +371,774 @@ cc_library(
         "//runtime/util:model_asset_bundle_resources",
         "//support/tokenizer:sentencepiece_tokenizer",
     ],
+)
+
+cc_library(
+    name = "top_k_gpu_sampler",
+    srcs = ["top_k_gpu_sampler.cc"],
+    hdrs = ["top_k_gpu_sampler.h"],
+    deps = [
+        ":sampler",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@ml_drift//ml_drift/common:data_type",
+        "@ml_drift//ml_drift/common:gpu_info",
+        "@ml_drift//ml_drift/common:gpu_model",
+        "@ml_drift//ml_drift/common:gpu_model_builder",
+        "@ml_drift//ml_drift/common:operations",
+        "@ml_drift//ml_drift/common:precision",
+        "@ml_drift//ml_drift/common:shape",
+        "@ml_drift//ml_drift/common:types",
+        "@ml_drift//ml_drift/common/task:buffer_desc",
+        "@ml_drift//ml_drift/common/task:gpu_operation",
+        "@ml_drift//ml_drift/common/task:tensor_desc",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+METAL_SAMPLER_COMMON_DEPS = [
+    ":top_k_gpu_sampler",
+    "@com_google_absl//absl/memory",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@ml_drift//ml_drift/common:data_type",
+    "@ml_drift//ml_drift/common:gpu_info",
+    "@ml_drift//ml_drift/common:gpu_model",
+    "@ml_drift//ml_drift/common:gpu_model_builder",
+    "@ml_drift//ml_drift/common:model",
+    "@ml_drift//ml_drift/common:model_hints",
+    "@ml_drift//ml_drift/common:precision",
+    "@ml_drift//ml_drift/common:shape",
+    "@ml_drift//ml_drift/common:util",
+    "@ml_drift//ml_drift/common/task:gpu_operation",
+    "@ml_drift//ml_drift/common/task:tensor_desc",
+    "@ml_drift//ml_drift/metal:common",
+    "@ml_drift//ml_drift/metal:compute_task",
+    "@ml_drift//ml_drift/metal:environment",
+    "@ml_drift//ml_drift/metal:inference_context",
+    "@ml_drift//ml_drift/metal:metal_spatial_tensor",
+    "@litert//ml_drift_delegate/delegate:custom_event_metal",
+    "//runtime/executor:executor_settings_base",
+    "//runtime/proto:sampler_params_cc_proto",
+    "//runtime/util:litert_status_util",
+]
+
+objc_library(
+    name = "top_k_metal_sampler_static",
+    srcs = ["top_k_metal_sampler.mm"],
+    copts = ["-ObjC++"],
+    defines = ["LITERT_LM_USE_STATIC_LINKED_GPU_SAMPLER"],
+    features = ["-layering_check"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    textual_hdrs = ["top_k_metal_sampler.h"],
+    deps = METAL_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/debugging:leak_check",
+        "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/c:litert_tensor_buffer",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_event",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_handle",
+    ],
+    alwayslink = 1,
+)
+
+# This module requires the shared library of LiteRT runtime `libLiteRt.so`.
+# Need extra flag to build this target: --define=litert_runtime_link_mode=dynamic.
+objc_library(
+    name = "top_k_metal_sampler_runtimecapi",
+    srcs = ["top_k_metal_sampler.mm"],
+    copts = ["-ObjC++"],
+    features = ["-layering_check"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    textual_hdrs = ["top_k_metal_sampler.h"],
+    visibility = ["//visibility:private"],
+    deps = METAL_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/debugging:leak_check",
+        "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/c/internal:litert_runtime_builtin_none",
+        "@litert//litert/cc:litert_environment_api",
+        "@litert//litert/cc:litert_event",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_handle",
+    ],
+)
+
+OPENCL_SAMPLER_COMMON_DEPS = [
+    ":top_k_gpu_sampler",
+    "@com_google_absl//absl/base:nullability",
+    "@com_google_absl//absl/log:absl_log",
+    "@com_google_absl//absl/memory",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@ml_drift//ml_drift/cl:cl_command_queue",
+    "@ml_drift//ml_drift/cl:cl_context",
+    "@ml_drift//ml_drift/cl:cl_device",
+    "@ml_drift//ml_drift/cl:cl_event",
+    "@ml_drift//ml_drift/cl:cl_operation",
+    "@ml_drift//ml_drift/cl:environment",
+    "@ml_drift//ml_drift/cl:inference_context",
+    "@ml_drift//ml_drift/cl:opencl_wrapper",
+    "@ml_drift//ml_drift/cl:tensor",
+    "@ml_drift//ml_drift/cl:util",
+    "@ml_drift//ml_drift/common:data_type",
+    "@ml_drift//ml_drift/common:gpu_info",
+    "@ml_drift//ml_drift/common:gpu_model",
+    "@ml_drift//ml_drift/common:gpu_model_builder",
+    "@ml_drift//ml_drift/common:model",
+    "@ml_drift//ml_drift/common:model_hints",
+    "@ml_drift//ml_drift/common:precision",
+    "@ml_drift//ml_drift/common:shape",
+    "@ml_drift//ml_drift/common:util",
+    "@ml_drift//ml_drift/common/task:gpu_operation",
+    "@ml_drift//ml_drift/common/task:tensor_desc",
+    "//runtime/executor:executor_settings_base",
+    "//runtime/proto:sampler_params_cc_proto",
+    "//runtime/util:litert_status_util",
+    "@litert//tflite/delegates/gpu/cl:opencl_wrapper",
+]
+
+# Basic version of TopKOpenClSampler that can be directly used with #include.
+cc_library(
+    name = "top_k_opencl_sampler",
+    srcs = ["top_k_opencl_sampler.cc"],
+    hdrs = ["top_k_opencl_sampler.h"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = OPENCL_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/cc:litert_any",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_handle",
+    ],
+)
+
+# Static version of the OpenCL Sampler module for LiteRT LM.
+cc_library(
+    name = "top_k_opencl_sampler_static",
+    srcs = ["top_k_opencl_sampler.cc"],
+    hdrs = ["top_k_opencl_sampler.h"],
+    defines = ["LITERT_LM_USE_STATIC_LINKED_GPU_SAMPLER"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = OPENCL_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/cc:litert_any",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_handle",
+    ],
+    alwayslink = 1,
+)
+
+# This module requires the shared library of LiteRT runtime `libLiteRt.so`.
+# Need extra flag to build this target: --define=litert_runtime_link_mode=dynamic.
+cc_library(
+    name = "top_k_opencl_sampler_runtimecapi",
+    srcs = ["top_k_opencl_sampler.cc"],
+    hdrs = ["top_k_opencl_sampler.h"],
+    features = ["-layering_check"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:private"],
+    deps = OPENCL_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/c/internal:litert_runtime_builtin_none",
+        "@litert//litert/cc:litert_any",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment_api",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_handle",
+    ],
+)
+
+cc_test(
+    name = "top_k_opencl_sampler_test",
+    srcs = ["top_k_opencl_sampler_test.cc"],
+    data = ["//runtime/testdata"],
+    tags = [
+        "manual",
+        "requires-gpu-sm80",
+    ],
+    deps = [
+        ":model_resources",
+        ":model_resources_task",
+        ":top_k_opencl_sampler",
+        ":top_p_cpu_sampler",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_accelerator",
+        "@litert//litert/test:matchers",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_test(
+    name = "top_k_opencl_sampler_c_api_test",
+    srcs = ["top_k_opencl_sampler_c_api_test.cc"],
+    copts = ["-Wreturn-type-c-linkage"],
+    data = ["//runtime/testdata"],
+    tags = [
+        "manual",
+        "requires-gpu-sm80",
+    ],
+    deps = [
+        ":model_resources",
+        ":model_resources_task",
+        ":top_k_opencl_sampler",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_accelerator",
+        "@litert//litert/test:matchers",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_shared_library(
+    name = "top_k_opencl_sampler_so",
+    shared_lib_name = "libLiteRtTopKOpenClSampler.so",
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    user_link_flags = select({
+        "@platforms//os:android": [
+            "-landroid",
+            "-Wl,-soname=libLiteRtTopKOpenClSampler.so",
+            # Align PT_LOAD segments and pad GNU_RELRO to a 16 KB boundary.
+            # See https://developer.android.com/guide/practices/page-sizes#relro-flag.
+            "-Wl,-z,max-page-size=16384",
+            "-Wl,-z,common-page-size=16384",
+        ],
+        "@platforms//os:ios": [],
+        "@platforms//os:macos": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["-Wl,-soname=libLiteRtTopKOpenClSampler.so"],
+    }),
+    deps = [":top_k_opencl_sampler_runtimecapi"],
+)
+
+cc_library(
+    name = "top_k_opencl_sampler_shared_lib",
+    srcs = [":top_k_opencl_sampler_so"],
+    linkstatic = 1,
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    alwayslink = 1,
+)
+
+cc_test(
+    name = "top_k_opencl_sampler_c_api_dlopen_test",
+    srcs = ["top_k_opencl_sampler_c_api_dlopen_test.cc"],
+    copts = ["-Wreturn-type-c-linkage"],
+    data = [
+        ":top_k_opencl_sampler_so",
+        "//runtime/testdata",
+    ],
+    tags = [
+        "manual",
+        # Sanitizer runtimes are incompatible with RTLD_DEEPBIND.
+        "noasan",
+        "nomsan",
+        "notsan",
+        "requires-gpu-sm80",
+    ],
+    deps = [
+        ":model_resources",
+        ":model_resources_task",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/debugging:leak_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/internal:litert_shared_library",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_accelerator",
+        "@litert//litert/test:matchers",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_library(
+    name = "webgpu_dawn_shared_lib",
+    srcs = select({
+        "//build_config:android_arm64": ["//prebuilt/android_arm64:libwebgpu_dawn.so"],
+        "//build_config:android_x86_64": ["//prebuilt/android_x86_64:libwebgpu_dawn.so"],
+        "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:libwebgpu_dawn.so"],
+        "//build_config:linux_arm64": ["//prebuilt/linux_arm64:libwebgpu_dawn.so"],
+        "@platforms//os:macos": ["//prebuilt/macos_arm64:libwebgpu_dawn.dylib"],
+        "//conditions:default": [],
+    }),
+)
+
+TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
+    ":top_k_gpu_sampler",
+    "@com_google_absl//absl/base:nullability",
+    "@com_google_absl//absl/cleanup",
+    "@com_google_absl//absl/memory",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/time",
+    "@ml_drift//ml_drift/common:data_type",
+    "@ml_drift//ml_drift/common:gpu_info",
+    "@ml_drift//ml_drift/common:gpu_model",
+    "@ml_drift//ml_drift/common:gpu_model_builder",
+    "@ml_drift//ml_drift/common:model",
+    "@ml_drift//ml_drift/common:model_hints",
+    "@ml_drift//ml_drift/common:precision",
+    "@ml_drift//ml_drift/common:shape",
+    "@ml_drift//ml_drift/common:tensor",
+    "@ml_drift//ml_drift/common:util",
+    "@ml_drift//ml_drift/common/task:gpu_operation",
+    "@ml_drift//ml_drift/common/task:tensor_desc",
+    "@ml_drift//ml_drift/webgpu:compute_task",
+    "@ml_drift//ml_drift/webgpu:environment",
+    "@ml_drift//ml_drift/webgpu:execution_environment",
+    "@ml_drift//ml_drift/webgpu:inference_context",
+    "@ml_drift//ml_drift/webgpu:instance",
+    "@ml_drift//ml_drift/webgpu:spatial_tensor",
+    "@ml_drift//ml_drift/webgpu:webgpu_headers",
+    "//runtime/executor:executor_settings_base",
+    "//runtime/proto:sampler_params_cc_proto",
+    "//runtime/util:litert_status_util",
+    "@litert//litert/cc:litert_environment_api",
+    "@litert//litert/cc:litert_environment_options",
+    "@litert//litert/cc:litert_macros",
+    "@litert//litert/cc:litert_tensor_buffer",
+    "@litert//litert/cc/internal:litert_handle",
+]
+
+cc_library(
+    name = "top_k_webgpu_sampler",
+    srcs = ["top_k_webgpu_sampler.cc"],
+    hdrs = ["top_k_webgpu_sampler.h"],
+    deps = TOP_K_WEBGPU_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/status:status_macros",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+# Static version of the WebGPU Sampler module for LiteRT LM.
+cc_library(
+    name = "top_k_webgpu_sampler_static",
+    srcs = ["top_k_webgpu_sampler.cc"],
+    hdrs = ["top_k_webgpu_sampler.h"],
+    defines = ["LITERT_LM_USE_STATIC_LINKED_GPU_SAMPLER"],
+    deps = TOP_K_WEBGPU_SAMPLER_COMMON_DEPS + ["@com_google_absl//absl/status:status_macros"],
+    alwayslink = 1,
+)
+
+# This module requires the shared library of LiteRT runtime `libLiteRt.so`.
+cc_library(
+    name = "top_k_webgpu_sampler_runtimecapi",
+    srcs = ["top_k_webgpu_sampler.cc"],
+    hdrs = ["top_k_webgpu_sampler.h"],
+    features = ["-layering_check"],
+    local_defines = ["LITERT_SAMPLER_LINKED_DYNAMICALLY"],
+    visibility = ["//visibility:private"],
+    deps = TOP_K_WEBGPU_SAMPLER_COMMON_DEPS + [
+        "@com_google_absl//absl/status:status_macros",
+        "@litert//litert/c/internal:litert_runtime_builtin_none",
+    ],
+)
+
+cc_test(
+    name = "top_k_webgpu_sampler_test",
+    srcs = ["top_k_webgpu_sampler_test.cc"],
+    data = ["//runtime/testdata"],
+    tags = [
+        "manual",
+        "notap",
+        "requires-gpu-sm90-full",
+    ],
+    deps = [
+        ":model_resources",
+        ":model_resources_task",
+        ":top_k_webgpu_sampler",
+        ":top_p_cpu_sampler",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/test:matchers",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:scoped_file",
+    ] + select({
+        "@platforms//os:linux": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
+        ],
+        "//conditions:default": [
+            "//runtime/executor:default_static_gpu_accelerator",
+        ],
+    }),
+)
+
+cc_test(
+    name = "top_k_webgpu_sampler_c_api_test",
+    srcs = ["top_k_webgpu_sampler_c_api_test.cc"],
+    copts = ["-Wreturn-type-c-linkage"],
+    data = ["//runtime/testdata"],
+    tags = [
+        "manual",
+        "notap",
+        "requires-gpu-sm90-full",
+    ],
+    deps = [
+        ":model_resources",
+        ":model_resources_task",
+        ":top_k_webgpu_sampler",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/test:matchers",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:scoped_file",
+    ] + select({
+        "@platforms//os:linux": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
+        ],
+        "//conditions:default": [
+            "//runtime/executor:default_static_gpu_accelerator",
+        ],
+    }),
+)
+
+cc_shared_library(
+    name = "top_k_webgpu_sampler_so",
+    shared_lib_name = "libLiteRtTopKWebGpuSampler.so",
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    user_link_flags = select({
+        "@platforms//os:android": [
+            "-landroid",
+            "-Wl,-soname=libLiteRtTopKWebGpuSampler.so",
+            # Align PT_LOAD segments and pad GNU_RELRO to a 16 KB boundary.
+            # See https://developer.android.com/guide/practices/page-sizes#relro-flag.
+            "-Wl,-z,max-page-size=16384",
+            "-Wl,-z,common-page-size=16384",
+        ],
+        "@platforms//os:ios": [],
+        "@platforms//os:macos": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["-Wl,-soname=libLiteRtTopKWebGpuSampler.so"],
+    }),
+    deps = [":top_k_webgpu_sampler_runtimecapi"],
+)
+
+macos_dylib(
+    name = "build_top_k_webgpu_sampler_dylib",
+    exported_symbols_lists = ["webgpu_exported_symbols.lds"],
+    linkopts = [
+        "-undefined dynamic_lookup",
+        "-install_name @rpath/libLiteRtTopKWebGpuSampler.dylib",
+    ],
+    minimum_os_version = LITERT_MIN_MACOS_VERSION,
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+    deps = [":top_k_webgpu_sampler_runtimecapi"],
+)
+
+copy_file(
+    name = "top_k_webgpu_sampler_dylib",
+    src = ":build_top_k_webgpu_sampler_dylib",
+    out = "libLiteRtTopKWebGpuSampler.dylib",
+    tags = ["manual"],
+)
+
+macos_dylib(
+    name = "build_top_k_metal_sampler_dylib",
+    exported_symbols_lists = ["metal_exported_symbols.lds"],
+    linkopts = [
+        "-undefined dynamic_lookup",
+        "-install_name @rpath/libLiteRtTopKMetalSampler.dylib",
+    ],
+    minimum_os_version = LITERT_MIN_MACOS_VERSION,
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+    deps = [":top_k_metal_sampler_runtimecapi"],
+)
+
+copy_file(
+    name = "top_k_metal_sampler_dylib",
+    src = ":build_top_k_metal_sampler_dylib",
+    out = "libLiteRtTopKMetalSampler.dylib",
+    tags = ["manual"],
+)
+
+ios_framework(
+    name = "build_top_k_metal_sampler_framework",
+    bundle_id = "com.google.litert_lm.runtime",
+    bundle_name = "libLiteRtTopKMetalSampler.dylib",
+    exported_symbols_lists = ["metal_exported_symbols.lds"],
+    families = [
+        "iphone",
+        "ipad",
+    ],
+    infoplists = ["LiteRtTopKMetalSamplerInfo.plist"],
+    linkopts = [
+        "-undefined dynamic_lookup",
+        "-install_name @rpath/libLiteRtTopKMetalSampler.dylib",
+    ],
+    minimum_os_version = LITERT_MIN_IOS_VERSION,
+    tags = [
+        "manual",
+        "nofastbuild",
+    ],
+    visibility = ["//visibility:private"],
+    deps = [":top_k_metal_sampler_runtimecapi"],
+)
+
+# Target for windows libLiteRtTopKWebGpuSampler.dll.
+cc_binary(
+    name = "libLiteRtTopKWebGpuSampler",
+    linkshared = 1,
+    tags = [
+        "nobuilder",
+        "notap",
+        "windows",
+    ],
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:private"],
+    win_def_file = ":windows_exported_symbols.def",
+    deps = [":top_k_webgpu_sampler_runtimecapi"] + select({
+        "@platforms//os:windows": [
+            "@litert//litert/c:litert_runtime_c_api_import",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "top_k_webgpu_sampler_dll",
+    actual = ":libLiteRtTopKWebGpuSampler",
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "top_k_webgpu_sampler_shared_lib",
+    srcs = [":top_k_webgpu_sampler_so"],
+    linkstatic = 1,
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    alwayslink = 1,
+)
+
+# Need extra flag to run this test: --define=litert_runtime_link_mode=dynamic.
+cc_test(
+    name = "top_k_webgpu_sampler_c_api_dlopen_test",
+    srcs = ["top_k_webgpu_sampler_c_api_dlopen_test.cc"],
+    copts = ["-Wreturn-type-c-linkage"],
+    data = [
+        ":top_k_webgpu_sampler_so",
+        "//runtime/testdata",
+    ] + select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_so",
+        ],
+        "//conditions:default": [],
+    }),
+    defines = ["litert_runtime_link_mode=dynamic"],
+    tags = [
+        "manual",
+        "norapid",
+        # Sanitizer runtimes are incompatible with RTLD_DEEPBIND.
+        "noasan",
+        "nomsan",
+        "notsan",
+        "requires-gpu-sm90-full",
+        "notap",  # remove when dynamic linking is enabled
+    ],
+    deps = [
+        ":model_resources",
+        ":model_resources_task",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/debugging:leak_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/internal:litert_shared_library",
+        "@litert//litert/cc/options:litert_google_tensor_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_intel_openvino_options",
+        "@litert//litert/cc/options:litert_mediatek_options",
+        "@litert//litert/cc/options:litert_qualcomm_options",
+        "@litert//litert/cc/options:litert_samsung_options",
+        "@litert//litert/test:matchers",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:scoped_file",
+    ] + select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_runtimecapi",
+        ],
+        "//conditions:default": [
+            "//runtime/executor:default_static_gpu_accelerator",
+        ],
+    }),
 )
 
 cc_library(
