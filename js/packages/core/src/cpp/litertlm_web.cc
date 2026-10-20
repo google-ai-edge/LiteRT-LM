@@ -28,6 +28,7 @@
 #include "js/packages/core/src/cpp/unwrap_statusor.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
@@ -114,6 +115,38 @@ static litert::lm::EmbeddingOptions ParseEmbeddingOptions(
   return options;
 }
 
+// Parses an optional Backend from a JS value. Accepts undefined/null (returns
+// std::nullopt), an embind enum element (`{value: n}`), or a plain number.
+static std::optional<litert::lm::Backend> OptionalBackendFromVal(
+    emscripten::val backend_val) {
+  if (backend_val.isUndefined() || backend_val.isNull()) {
+    return std::nullopt;
+  }
+  int val_int = 0;
+  if (backend_val.hasOwnProperty("value")) {
+    val_int = backend_val["value"].as<int>();
+  } else {
+    val_int = backend_val.as<int>();
+  }
+  return static_cast<litert::lm::Backend>(val_int);
+}
+
+// Builds the optional args for a SendMessage call. `visual_token_budget` <= 0
+// means no budget. The budget caps the number of patches produced by the image
+// preprocessor so the image fits in the selected vision encoder signatures.
+static litert::lm::OptionalArgs MakeOptionalArgs(
+    const litert::lm::Conversation& conversation, int visual_token_budget) {
+  litert::lm::OptionalArgs optional_args;
+  if (visual_token_budget > 0 && conversation.GetConfig()
+                                     .GetSessionConfig()
+                                     .GetLlmModelType()
+                                     .has_gemma4()) {
+    optional_args.args = litert::lm::Gemma4DataProcessorArguments{
+        .visual_token_budget = visual_token_budget};
+  }
+  return optional_args;
+}
+
 static std::string ReadBytesFromVal(emscripten::val data_val) {
   if (data_val.isUndefined() || data_val.isNull()) {
     return "";
@@ -137,6 +170,70 @@ static std::string ReadBytesFromVal(emscripten::val data_val) {
     return result;
   }
   return data_val.as<std::string>();
+}
+
+static std::vector<uint8_t> ReadByteVectorFromVal(emscripten::val data_val) {
+  if (data_val.isUndefined() || data_val.isNull()) {
+    return {};
+  }
+  emscripten::val uint8_array = data_val;
+  if (data_val.instanceof(emscripten::val::global("ArrayBuffer"))) {
+    uint8_array = emscripten::val::global("Uint8Array").new_(data_val);
+  }
+  size_t length = uint8_array["length"].as<size_t>();
+  std::vector<uint8_t> result(length);
+  if (length > 0) {
+    emscripten::val memory_view =
+        emscripten::val(emscripten::typed_memory_view(length, result.data()));
+    memory_view.call<void>("set", uint8_array);
+  }
+  return result;
+}
+
+// Replaces each `blob_index` content part field in `message` with a `blob`
+// field holding the bytes of `blobs_val[blob_index]`.
+static absl::Status AttachBlobsToSingleMessage(nlohmann::ordered_json& message,
+                                               emscripten::val blobs_val) {
+  if (!message.is_object() || !message.contains("content") ||
+      !message["content"].is_array()) {
+    return absl::OkStatus();
+  }
+  const size_t num_blobs = blobs_val["length"].as<size_t>();
+  for (auto& part : message["content"]) {
+    if (!part.is_object() || !part.contains("blob_index")) {
+      continue;
+    }
+    if (!part["blob_index"].is_number_unsigned()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("blob_index must be a non-negative integer, got: ",
+                       part["blob_index"].dump()));
+    }
+    const size_t index = part["blob_index"].get<size_t>();
+    if (index >= num_blobs) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "blob_index ", index, " is out of range for ", num_blobs, " blobs."));
+    }
+    part.erase("blob_index");
+    part["blob"] =
+        nlohmann::ordered_json::binary(ReadByteVectorFromVal(blobs_val[index]));
+  }
+  return absl::OkStatus();
+}
+
+static absl::StatusOr<nlohmann::ordered_json> ParseMessageJsonWithBlobs(
+    const std::string& message_json, emscripten::val blobs_val) {
+  auto message = nlohmann::ordered_json::parse(message_json);
+  if (blobs_val.isUndefined() || blobs_val.isNull()) {
+    return message;
+  }
+  if (message.is_array()) {
+    for (auto& msg : message) {
+      ABSL_RETURN_IF_ERROR(AttachBlobsToSingleMessage(msg, blobs_val));
+    }
+  } else {
+    ABSL_RETURN_IF_ERROR(AttachBlobsToSingleMessage(message, blobs_val));
+  }
+  return message;
 }
 
 static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
@@ -246,6 +343,47 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 std::move(model_assets), backend));
           }),
           emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
+      .class_function(
+          "createDefaultMultimodal",
+          optional_override([](litert::lm::ModelAssets model_assets,
+                               litert::lm::Backend backend,
+                               emscripten::val vision_backend_val,
+                               emscripten::val audio_backend_val) {
+            auto settings =
+                UnwrapStatusOr(litert::lm::EngineSettings::CreateDefault(
+                    std::move(model_assets), backend,
+                    OptionalBackendFromVal(vision_backend_val),
+                    OptionalBackendFromVal(audio_backend_val)));
+            // Caching is not supported in JS.
+            if (settings.GetVisionExecutorSettings().has_value()) {
+              settings.GetMutableVisionExecutorSettings()->SetCacheDir(
+                  ":nocache");
+            }
+            if (settings.GetAudioExecutorSettings().has_value()) {
+              settings.GetMutableAudioExecutorSettings()->SetCacheDir(
+                  ":nocache");
+            }
+            return settings;
+          }),
+          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
+      .function("getVisionBackend",
+                optional_override([](const litert::lm::EngineSettings& settings)
+                                      -> emscripten::val {
+                  const auto& vision_settings =
+                      settings.GetVisionExecutorSettings();
+                  if (!vision_settings.has_value()) {
+                    return emscripten::val::undefined();
+                  }
+                  return emscripten::val(vision_settings->GetBackend());
+                }))
+      .function("getMaxVisionTokensPerImage",
+                &litert::lm::EngineSettings::GetMaxVisionTokensPerImage)
+      .function("setMaxVisionTokensPerImage",
+                &litert::lm::EngineSettings::SetMaxVisionTokensPerImage)
+      .function("getMinVisionTokensPerImage",
+                &litert::lm::EngineSettings::GetMinVisionTokensPerImage)
+      .function("setMinVisionTokensPerImage",
+                &litert::lm::EngineSettings::SetMinVisionTokensPerImage)
       .function("getParallelFileSectionLoading",
                 &litert::lm::EngineSettings::GetParallelFileSectionLoading)
       .function("setParallelFileSectionLoading",
@@ -613,19 +751,27 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 litert::lm::Conversation::Create(engine, config));
           }),
           emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
-      .function("sendMessage",
-                optional_override([](litert::lm::Conversation& conversation,
-                                     std::string message_json) {
-                  auto message = nlohmann::ordered_json::parse(message_json);
-                  auto result = conversation.SendMessage(message);
-                  return UnwrapStatusOr(result).dump();
-                }) LITERTLM_EM_ASYNC)
+      .function(
+          "sendMessage",
+          optional_override([](litert::lm::Conversation& conversation,
+                               std::string message_json,
+                               emscripten::val blobs_val,
+                               int visual_token_budget) {
+            auto message = UnwrapStatusOr(
+                ParseMessageJsonWithBlobs(message_json, blobs_val));
+            auto result = conversation.SendMessage(
+                message, MakeOptionalArgs(conversation, visual_token_budget));
+            return UnwrapStatusOr(result).dump();
+          }) LITERTLM_EM_ASYNC)
       .function(
           "sendMessageAsync",
           optional_override([](litert::lm::Conversation& conversation,
                                std::string message_json,
-                               emscripten::val callback) {
-            auto message = nlohmann::ordered_json::parse(message_json);
+                               emscripten::val blobs_val,
+                               emscripten::val callback,
+                               int visual_token_budget) {
+            auto message = UnwrapStatusOr(
+                ParseMessageJsonWithBlobs(message_json, blobs_val));
             auto status = conversation.SendMessageAsync(
                 message,
                 // Note: This capture is not thread-safe, but we're only using
@@ -642,7 +788,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   } else {
                     callback(result->dump(), false, emscripten::val::null());
                   }
-                });
+                },
+                MakeOptionalArgs(conversation, visual_token_budget));
             UnwrapStatus(status);
           }) LITERTLM_EM_ASYNC)
       .function(
@@ -760,32 +907,11 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                litert::lm::Backend backend,
                                emscripten::val vision_backend_val,
                                emscripten::val audio_backend_val) {
-            std::optional<litert::lm::Backend> vision_backend;
-            if (!vision_backend_val.isUndefined() &&
-                !vision_backend_val.isNull()) {
-              int val_int = 0;
-              if (vision_backend_val.hasOwnProperty("value")) {
-                val_int = vision_backend_val["value"].as<int>();
-              } else {
-                val_int = vision_backend_val.as<int>();
-              }
-              vision_backend = static_cast<litert::lm::Backend>(val_int);
-            }
-            std::optional<litert::lm::Backend> audio_backend;
-            if (!audio_backend_val.isUndefined() &&
-                !audio_backend_val.isNull()) {
-              int val_int = 0;
-              if (audio_backend_val.hasOwnProperty("value")) {
-                val_int = audio_backend_val["value"].as<int>();
-              } else {
-                val_int = audio_backend_val.as<int>();
-              }
-              audio_backend = static_cast<litert::lm::Backend>(val_int);
-            }
             auto settings = UnwrapStatusOr(
                 litert::lm::EmbeddingEngineSettings::CreateDefault(
-                    std::move(model_assets), backend, vision_backend,
-                    audio_backend));
+                    std::move(model_assets), backend,
+                    OptionalBackendFromVal(vision_backend_val),
+                    OptionalBackendFromVal(audio_backend_val)));
             settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
             if (settings.GetVisionExecutorSettings().has_value()) {
               settings.GetMutableVisionExecutorSettings()->SetCacheDir(

@@ -14,12 +14,15 @@
 
 #include "runtime/conversation/model_data_processor/data_utils.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT
 #include <fstream>
 #include <ios>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -77,6 +80,19 @@ TEST(DataUtilsTest, LoadItemData_ImageItemWithBlob) {
                "image_contents");
 }
 
+TEST(DataUtilsTest, LoadItemData_ImageItemWithBinaryBlob) {
+  std::vector<uint8_t> raw_bytes = {'i', 'm', 'a', 'g', 'e', '_', 'c',
+                                    'o', 'n', 't', 'e', 'n', 't', 's'};
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> memory_mapped_file,
+                       LoadItemData({
+                           {"type", "image"},
+                           {"blob", ordered_json::binary(std::move(raw_bytes))},
+                       }));
+  EXPECT_EQ(std::string(static_cast<const char*>(memory_mapped_file->data()),
+                        memory_mapped_file->length()),
+            "image_contents");
+}
+
 TEST(DataUtilsTest, LoadItemData_AudioItemWithPath) {
   auto path = std::filesystem::path(::testing::TempDir()) / "test_audio.wav";
   WriteFile(path.string(), "audio_contents");
@@ -95,6 +111,19 @@ TEST(DataUtilsTest, LoadItemData_AudioItemWithBlob) {
                        LoadItemData({
                            {"type", "audio"},
                            {"blob", "YXVkaW9fY29udGVudHM="},
+                       }));
+  EXPECT_EQ(std::string(static_cast<const char*>(memory_mapped_file->data()),
+                        memory_mapped_file->length()),
+            "audio_contents");
+}
+
+TEST(DataUtilsTest, LoadItemData_AudioItemWithBinaryBlob) {
+  std::vector<uint8_t> raw_bytes = {'a', 'u', 'd', 'i', 'o', '_', 'c',
+                                    'o', 'n', 't', 'e', 'n', 't', 's'};
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> memory_mapped_file,
+                       LoadItemData({
+                           {"type", "audio"},
+                           {"blob", ordered_json::binary(std::move(raw_bytes))},
                        }));
   EXPECT_EQ(std::string(static_cast<const char*>(memory_mapped_file->data()),
                         memory_mapped_file->length()),

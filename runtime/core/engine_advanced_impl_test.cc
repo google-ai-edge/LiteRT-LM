@@ -574,6 +574,43 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   EXPECT_FALSE(responses->GetTexts()[0].empty());
 }
 
+TEST(EngineTest, CreateEngine_StreamedModelLoading_VisionWithoutVisionModel) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  std::shared_ptr<FileDataStream> file_stream;
+  ASSERT_OK_AND_ASSIGN(file_stream,
+                       FileDataStream::Create(model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+
+  auto engine_settings = EngineSettings::CreateDefault(
+      std::move(model_assets), Backend::CPU, /*vision_backend=*/Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  // The engine is still created, matching the non-streamed path, but vision
+  // is unavailable.
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(*engine_settings));
+
+  // The engine doesn't advertise vision, so callers (e.g. the Web SDK, which
+  // enables the vision modality by default when vision settings are present)
+  // don't create sessions that fail.
+  EXPECT_FALSE(
+      llm->GetEngineSettings().GetVisionExecutorSettings().has_value());
+
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetVisionModalityEnabled(true);
+  EXPECT_FALSE(llm->CreateSession(session_config).ok());
+
+  // Text-only sessions still work.
+  EXPECT_OK(llm->CreateSession(SessionConfig::CreateDefault()));
+}
+
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
 TEST(EngineTest, CreateEngine_StreamedModelLoading_HfTokenizer) {
   auto model_path =

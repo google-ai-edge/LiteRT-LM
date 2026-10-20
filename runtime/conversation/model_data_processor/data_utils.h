@@ -44,7 +44,7 @@ namespace litert::lm {
 //  }
 //  {
 //    "type": "image",
-//    "blob": "base64 encoded image bytes as string",
+//    "blob": "base64 encoded image bytes as string (or binary JSON value)",
 //  }
 //
 // 3. Audio item
@@ -54,7 +54,7 @@ namespace litert::lm {
 //  }
 //  {
 //    "type": "audio",
-//    "blob": "base64 encoded audio bytes as string",
+//    "blob": "base64 encoded audio bytes as string (or binary JSON value)",
 //  }
 //
 // Note: though we support loading image and audio data from blob, this format

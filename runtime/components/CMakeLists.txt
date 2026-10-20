@@ -173,7 +173,9 @@ target_include_directories(runtime_components_model_resources_streaming
 target_link_libraries(runtime_components_model_resources_streaming
   PUBLIC
     LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Runtime::Util::DataStream
     LiteRTLM::Runtime::Util::LitertLmLoader
+    LiteRTLM::Runtime::Util::ScopedFile
     LiteRTLM::Runtime::Components::TokenizerInterface
     LiteRTLM::Schema::Core
 

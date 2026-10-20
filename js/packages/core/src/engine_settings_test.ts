@@ -119,5 +119,26 @@ describe('EngineSettings', () => {
     });
     wasmSettings.delete();
   });
+
+  it('round-trips multimodal vision settings', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU,
+            liteRtLm.liteRtLmWasm.Backend.CPU, undefined);
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {
+          model: '/path/to/model',
+          backend: Backend.GPU,
+          visionBackend: Backend.CPU,
+          maxVisionTokensPerImage: 280,
+          minVisionTokensPerImage: 140,
+        },
+        Backend.GPU, liteRtLm.liteRtLmWasm);
+    const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+    expect(resolved.visionBackend).toBe(Backend.CPU);
+    expect(resolved.maxVisionTokensPerImage).toBe(280);
+    expect(resolved.minVisionTokensPerImage).toBe(140);
+    wasmSettings.delete();
+  });
 });
 

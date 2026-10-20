@@ -131,6 +131,14 @@ declare interface EngineSettingsConstructor {
   createDefault(
       modelAssets: ModelAssets,
       backend: EmscriptenEnumElement<Backend>): Promise<EngineSettings>;
+  // Embind requires all arguments to be passed; use `undefined` to disable a
+  // modality.
+  createDefaultMultimodal(
+      modelAssets: ModelAssets,
+      backend: EmscriptenEnumElement<Backend>,
+      visionBackend: EmscriptenEnumElement<Backend>|undefined,
+      audioBackend: EmscriptenEnumElement<Backend>|undefined):
+      Promise<EngineSettings>;
 }
 
 declare const EngineSettingsBrand: unique symbol;
@@ -142,6 +150,12 @@ export declare interface EngineSettings extends Deletable {
   // Prevent accidentally assigning other objects as EngineSettings.
   [EngineSettingsBrand]: void;
   getMutableMainExecutorSettings(): LlmExecutorSettings;
+  /** Returns undefined if vision is not enabled. */
+  getVisionBackend(): EmscriptenEnumElement<Backend>|undefined;
+  getMaxVisionTokensPerImage(): number|undefined;
+  setMaxVisionTokensPerImage(maxVisionTokensPerImage: number): void;
+  getMinVisionTokensPerImage(): number|undefined;
+  setMinVisionTokensPerImage(minVisionTokensPerImage: number): void;
   getParallelFileSectionLoading(): boolean;
   setParallelFileSectionLoading(parallelFileSectionLoading: boolean): void;
   getSingleThreadedExecution(): boolean;
@@ -467,12 +481,19 @@ declare const ConversationBrand: unique symbol;
  */
 export declare interface Conversation extends Deletable {
   [ConversationBrand]: void;
-  sendMessage(messageJson: string): Promise<string>;
+  /**
+   * @param blobs Binary payloads referenced by `blob_index` in `messageJson`.
+   * @param visualTokenBudget Max vision tokens per image for this message, or
+   *     <= 0 for no budget.
+   */
+  sendMessage(
+      messageJson: string, blobs: Uint8Array[],
+      visualTokenBudget: number): Promise<string>;
   sendMessageAsync(
-      messageJson: string,
+      messageJson: string, blobs: Uint8Array[],
       callback:
-          (chunk: string|null, isDone: boolean, error: string|null) => void):
-      Promise<void>;
+          (chunk: string|null, isDone: boolean, error: string|null) => void,
+      visualTokenBudget: number): Promise<void>;
   getHistory(): string;
   getTokenCount(): number;
   getBenchmarkInfo(): BenchmarkInfo;

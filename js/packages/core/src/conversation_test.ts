@@ -46,15 +46,80 @@ describe('Conversation', () => {
 
     expect(response.content).toBe('hello');
     expect(mockWasmConversation.sendMessage)
-        .toHaveBeenCalledWith(JSON.stringify({role: 'user', content: 'hi'}));
+        .toHaveBeenCalledWith(
+            JSON.stringify({role: 'user', content: 'hi'}), [], 0);
   });
+
+  it('forwards the visual token budget', async () => {
+    const conversation = new Conversation(
+        mockWasmConversation, mockWasmEngine, mockMutexes,
+        /* visualTokenBudget= */ 140);
+
+    mockWasmConversation.sendMessage.and.returnValue(
+        Promise.resolve(JSON.stringify({role: 'assistant', content: 'hello'})));
+
+    await conversation.sendMessage('hi');
+
+    expect(mockWasmConversation.sendMessage)
+        .toHaveBeenCalledWith(
+            JSON.stringify({role: 'user', content: 'hi'}), [], 140);
+  });
+
+  it('extracts binary image data into blobs array and forwards visualTokenBudget in streaming',
+     async () => {
+       const conversation = new Conversation(
+           mockWasmConversation, mockWasmEngine, mockMutexes,
+           /* visualTokenBudget= */ 280);
+
+       mockWasmConversation.sendMessageAsync.and.callFake(
+           (messageJson, blobs, callback, visualTokenBudget) => {
+             callback(
+                 JSON.stringify({role: 'assistant', content: 'apple'}), false,
+                 null);
+             callback(null, true, null);
+             return Promise.resolve();
+           });
+
+       const imageBytes = new Uint8Array([104, 105]);
+       const imageBlob = new Blob([new Uint8Array([1, 2, 3])]);
+       const stream = conversation.sendMessageStreaming({
+         role: 'user',
+         content: [
+           {type: 'image', data: imageBytes},
+           {type: 'image', data: imageBlob},
+           {type: 'image', data: 'aGk='},
+           {type: 'text', text: 'What is this?'},
+         ],
+       });
+
+       const reader = stream.getReader();
+       const chunk = await reader.read();
+       expect(chunk.done).toBeFalse();
+       expect(chunk.value?.content).toBe('apple');
+       const done = await reader.read();
+       expect(done.done).toBeTrue();
+
+       expect(mockWasmConversation.sendMessageAsync)
+           .toHaveBeenCalledWith(
+               JSON.stringify({
+                 role: 'user',
+                 content: [
+                   {type: 'image', blob_index: 0},
+                   {type: 'image', blob_index: 1},
+                   {type: 'image', blob: 'aGk='},
+                   {type: 'text', text: 'What is this?'},
+                 ],
+               }),
+               [imageBytes, new Uint8Array([1, 2, 3])],
+               jasmine.any(Function), 280);
+     });
 
   it('handles stream error and does not throw TypeError on close', async () => {
     const conversation =
         new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
 
     mockWasmConversation.sendMessageAsync.and.callFake(
-        (messageJson, callback) => {
+        (messageJson, blobs, callback) => {
           callback(null, false, 'Some WASM error');
           return Promise.resolve();
         });
@@ -70,8 +135,9 @@ describe('Conversation', () => {
 
   it('clones conversation properly and allows independent message sending',
      async () => {
-       const conversation =
-           new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+       const conversation = new Conversation(
+           mockWasmConversation, mockWasmEngine, mockMutexes,
+           /* visualTokenBudget= */ 70);
 
        const mockClonedWasmConversation = jasmine.createSpyObj(
            'WasmConversation', ['sendMessage', 'delete']);
@@ -87,7 +153,7 @@ describe('Conversation', () => {
        expect(response.content).toBe('cloned response');
        expect(mockClonedWasmConversation.sendMessage)
            .toHaveBeenCalledWith(
-               JSON.stringify({role: 'user', content: 'test'}));
+               JSON.stringify({role: 'user', content: 'test'}), [], 70);
      });
 
   it('throws an error when cloning a busy conversation', async () => {

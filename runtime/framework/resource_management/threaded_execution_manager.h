@@ -44,6 +44,7 @@
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/framework/resource_management/resource_manager.h"
@@ -71,6 +72,8 @@ class ThreadedExecutionManager : public ExecutionManager {
   //   the audio executor. This can be null if no audio modality is used.
   // - litert_env: The LIRTER environment used for creating the LLM context.
   //   This can be null if no LLM context is needed.
+  // - vision_executor: An optional pre-built vision executor. If null, the
+  //   vision executor is lazily created from vision_executor_settings.
   static absl::StatusOr<std::unique_ptr<ThreadedExecutionManager>> Create(
       Tokenizer* absl_nonnull tokenizer,
       ModelResources* absl_nullable model_resources,
@@ -81,8 +84,8 @@ class ThreadedExecutionManager : public ExecutionManager {
       audio_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
       std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr,
-      std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger =
-          nullptr);
+      std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger = nullptr,
+      std::unique_ptr<VisionExecutor> absl_nullable vision_executor = nullptr);
 
   ~ThreadedExecutionManager() override;
 

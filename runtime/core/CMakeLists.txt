@@ -191,6 +191,7 @@ target_link_libraries(runtime_core_engine_advanced_impl
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Framework::Threadpool
     LiteRTLM::Runtime::Util
+    LiteRTLM::Schema::Core
     LITERTLM_DEPS
 )
 
@@ -215,6 +216,7 @@ target_link_libraries(runtime_core_embedding_engine_impl
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Framework::Threadpool
     LiteRTLM::Runtime::Util
+    LiteRTLM::Schema::Core
     LITERTLM_DEPS
 )
 

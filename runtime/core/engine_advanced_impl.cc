@@ -55,8 +55,10 @@
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/model_signature_utils.h"
+#include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/executor/vision/vision_executor_utils.h"
+#include "runtime/executor/vision_litert_compiled_model_executor.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/framework/resource_management/serial_execution_manager.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
@@ -238,13 +240,17 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
   {
 #ifdef __EMSCRIPTEN__
     SetCurrentlyCompilingModel(model_type);
+#endif
     // Reset on failure too: the weight upload callback resolves its source
     // purely from this global, so a stale value would misdirect the next
-    // submodel's upload.
-    absl::Cleanup reset_compiling_model = [] {
+    // submodel's upload. Also clear the stored weights stream for `model_type`
+    // now that compilation has finished consuming it.
+    absl::Cleanup cleanup_weights_stream = [model_type] {
+#ifdef __EMSCRIPTEN__
       SetCurrentlyCompilingModel("");
-    };
 #endif
+      ClearStoredWeightsStream(model_type).IgnoreError();
+    };
     LITERT_ASSIGN_OR_RETURN(
         auto compiled_model_tmp,
         CompiledModel::Create(lrt_env, model_buffer, compilation_options));
@@ -978,6 +984,30 @@ EngineAdvancedImpl::CreateStreamingWeights(
               section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
               model_type, *section->data_stream, size));
+        } else if (model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER ||
+                   model_type == proto::LlmMetadata::TF_LITE_VISION_ADAPTER) {
+          // Vision weights are always stored in host memory before being
+          // loaded, even when the encoder runs on GPU, due to an issue with
+          // streaming float32 weights. The vision executor is compiled from
+          // them after all sections are processed.
+          if (!engine_settings.GetVisionExecutorSettings().has_value()) {
+            ABSL_LOG(INFO) << "Vision is not enabled. Skipping weights for "
+                              "model type: "
+                           << static_cast<int>(model_type);
+            ABSL_RETURN_IF_ERROR(section->data_stream->Discard(
+                0, section_metadata->end_offset() -
+                       section_metadata->begin_offset()));
+            break;
+          }
+          const size_t size =
+              section_metadata->end_offset() - section_metadata->begin_offset();
+          ABSL_LOG(INFO) << "Reading weights (" << size
+                         << " bytes) for model type "
+                         << static_cast<int>(model_type)
+                         << " into host memory...";
+          ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
+              model_type, *section->data_stream, size));
+          ABSL_LOG(INFO) << "Weights read.";
         } else {
           if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
             const auto& advanced_settings =
@@ -1146,9 +1176,52 @@ EngineAdvancedImpl::CreateStreamingWeights(
 
   std::unique_ptr<ExecutionManager> execution_manager;
   std::unique_ptr<VisionExecutorSettings> vision_executor_settings_ptr;
+  std::unique_ptr<VisionExecutor> vision_executor;
   if (engine_settings.GetVisionExecutorSettings().has_value()) {
-    vision_executor_settings_ptr = std::make_unique<VisionExecutorSettings>(
-        std::move(engine_settings.GetVisionExecutorSettings().value()));
+    if (streaming_model_resources
+            ->GetTFLiteModel(proto::LlmMetadata::TF_LITE_VISION_ENCODER)
+            .ok()) {
+      ABSL_RETURN_IF_ERROR(MaybeSelectVisionSignatures(
+          engine_settings, *streaming_model_resources,
+          set_llm_metadata ? &llm_metadata : nullptr));
+      vision_executor_settings_ptr = std::make_unique<VisionExecutorSettings>(
+          std::move(engine_settings.GetVisionExecutorSettings().value()));
+      if (vision_executor_settings_ptr->GetAdapterBackend() != Backend::CPU) {
+        ABSL_LOG(WARNING) << "Vision adapter backend is not CPU, which may "
+                             "cause precision loss.";
+      }
+
+      // The vision executor must be created now, while the vision encoder
+      // weights are still in host memory. It can not be lazily created later
+      // since the model can not be reloaded from the (already consumed) stream.
+      //
+      // The encoder and adapter keep a reference to the settings they are
+      // created with, so use the heap-allocated settings that the
+      // ResourceManager takes ownership of below, which outlive the executor.
+      ABSL_LOG(INFO) << "Creating vision executor from stream...";
+      ABSL_ASSIGN_OR_RETURN(vision_executor,
+                            VisionLiteRtCompiledModelExecutor::Create(
+                                *vision_executor_settings_ptr, owned_env->env,
+                                *streaming_model_resources));
+      ABSL_LOG(INFO) << "Vision executor created.";
+
+      // We only need to keep the encoder weights in host memory when running
+      // on CPU. Don't release the vision adapter weights, as it always runs on
+      // CPU.
+      if (vision_executor_settings_ptr->GetBackend() != Backend::CPU) {
+        streaming_model_resources->ReleaseWeights(
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+        ABSL_LOG(INFO) << "Released host memory for vision encoder weights.";
+      }
+    } else {
+      ABSL_LOG(WARNING) << "Vision executor settings are set, but the model "
+                           "has no vision encoder. Vision is disabled.";
+      // Clear the settings so the engine doesn't report vision support.
+      // Otherwise sessions that enable the vision modality (which the Web SDK
+      // does by default when vision settings are present) fail to load the
+      // vision executor.
+      engine_settings.GetMutableVisionExecutorSettings().reset();
+    }
   }
 
   std::unique_ptr<AudioExecutorSettings> audio_executor_settings_ptr;
@@ -1163,14 +1236,18 @@ EngineAdvancedImpl::CreateStreamingWeights(
         ThreadedExecutionManager::Create(
             tokenizer.get(), streaming_model_resources.get(),
             std::move(executor), std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env));
+            std::move(audio_executor_settings_ptr), &owned_env->env,
+            /*audio_executor=*/nullptr, /*runtime_debugger=*/nullptr,
+            std::move(vision_executor)));
   } else {
     ABSL_ASSIGN_OR_RETURN(
         execution_manager,
         SerialExecutionManager::Create(
             tokenizer.get(), streaming_model_resources.get(),
             std::move(executor), std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env));
+            std::move(audio_executor_settings_ptr), &owned_env->env,
+            /*audio_executor=*/nullptr, /*runtime_debugger=*/nullptr,
+            std::move(vision_executor)));
   }
 
   if (benchmark_info.has_value()) {

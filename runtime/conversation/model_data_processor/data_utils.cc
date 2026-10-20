@@ -48,6 +48,11 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
       return MemoryMappedFile::Create(item["path"].get<std::string>());
     }
     if (item.contains("blob")) {
+      if (item["blob"].is_binary()) {
+        const auto& blob = item["blob"].get_binary();
+        return InMemoryFile::Create(std::string(
+            reinterpret_cast<const char*>(blob.data()), blob.size()));
+      }
       std::string blob_b64 = item["blob"].get<std::string>();
       std::string blob;
       if (!absl::Base64Unescape(blob_b64, &blob)) {

@@ -119,7 +119,8 @@ export class LitertLmSettingsEditor extends LitElement {
   };
 
   @state()
-  private editedSettings: Omit<Required<EngineSettings>, 'model'> = {
+  private editedSettings: Required<Pick<
+      EngineSettings, 'backend'|'mainExecutorSettings'|'benchmarkEnabled'>> = {
     backend: Backend.GPU_ARTISAN,
     mainExecutorSettings: {
       maxNumTokens: 128,
@@ -626,7 +627,8 @@ export class LitertLmSettingsEditor extends LitElement {
 
   private renderField<T, K extends keyof T,
                                    Type extends 'number'|'text'|'checkbox'>(
-      label: string, obj: T, loadedObj: T|undefined, key: K, type: Type,
+      label: string, obj: T, loadedObj: Partial<T>|undefined, key: K,
+      type: Type,
       onChange: (val: Type extends 'checkbox'? boolean: Type extends 'number'?
                  number: string) => void,
       description?: string) {

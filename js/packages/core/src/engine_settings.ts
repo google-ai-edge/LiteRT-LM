@@ -48,9 +48,39 @@ export interface LlmExecutorSettings {
 export interface EngineSettings {
   model: string|Blob|ReadableStream<Uint8Array>;
   backend?: Backend;
+  /**
+   * Backend for the vision encoder. Can be `Backend.CPU` or `Backend.GPU`.
+   * If unset, vision input is disabled.
+   */
+  visionBackend?: Backend;
+  /**
+   * Maximum number of vision tokens per image. Only used when vision is
+   * enabled. If unset, the model's default is used.
+   */
+  maxVisionTokensPerImage?: number;
+  /**
+   * Smallest vision signature, in tokens per image, to prepare. Defaults to
+   * `maxVisionTokensPerImage`, which prepares exactly one vision signature.
+   *
+   * Lowering this prepares additional smaller signatures so that small images
+   * run on a tighter graph instead of being padded, but each extra signature
+   * costs a lot of memory and can exceed the 4GB wasm32 limit.
+   */
+  minVisionTokensPerImage?: number;
   mainExecutorSettings?: LlmExecutorSettings;
   benchmarkEnabled?: boolean;
 }
+
+type OptionalEngineSettingsKeys =
+    'visionBackend'|'maxVisionTokensPerImage'|'minVisionTokensPerImage';
+
+/**
+ * EngineSettings with all defaults resolved. Fields that have no default
+ * (e.g. vision settings when vision is disabled) remain optional.
+ */
+export type ResolvedEngineSettings =
+    RecursiveRequired<Omit<EngineSettings, OptionalEngineSettingsKeys>>&
+    Pick<EngineSettings, OptionalEngineSettingsKeys>;
 
 /**
  * Fills a WasmEngineSettings with the values from a EngineSettings.
@@ -68,6 +98,15 @@ export function fillWasmEngineSettingsFromEngineSettings(
 
   if (engineSettings.benchmarkEnabled) {
     wasmEngineSettings.enableBenchmark();
+  }
+
+  if (engineSettings.maxVisionTokensPerImage !== undefined) {
+    wasmEngineSettings.setMaxVisionTokensPerImage(
+        engineSettings.maxVisionTokensPerImage);
+  }
+  if (engineSettings.minVisionTokensPerImage !== undefined) {
+    wasmEngineSettings.setMinVisionTokensPerImage(
+        engineSettings.minVisionTokensPerImage);
   }
 
   if (engineSettings.mainExecutorSettings) {
@@ -145,7 +184,7 @@ export function fillWasmEngineSettingsFromEngineSettings(
  */
 export function wasmEngineSettingsToEngineSettings(
     wasmEngineSettings: WasmEngineSettings):
-    RecursiveRequired<Omit<EngineSettings, 'model'>> {
+    Omit<ResolvedEngineSettings, 'model'> {
   const wasmExecutorSettings =
       wasmEngineSettings.getMutableMainExecutorSettings();
 
@@ -177,6 +216,9 @@ export function wasmEngineSettingsToEngineSettings(
 
   return {
     backend,
+    visionBackend: wasmEngineSettings.getVisionBackend()?.value,
+    maxVisionTokensPerImage: wasmEngineSettings.getMaxVisionTokensPerImage(),
+    minVisionTokensPerImage: wasmEngineSettings.getMinVisionTokensPerImage(),
     mainExecutorSettings: {
       maxNumTokens: wasmExecutorSettings.getMaxNumTokens(),
       samplerBackend: wasmExecutorSettings.getSamplerBackend().value,

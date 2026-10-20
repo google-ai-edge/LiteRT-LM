@@ -533,9 +533,11 @@ ResourceManager::ResourceManager(
     std::unique_ptr<AudioExecutorSettings> audio_executor_settings,
     LlmExecutorSettings llm_executor_settings,
     ::litert::Environment* absl_nullable litert_env,
-    std::unique_ptr<AudioExecutor> audio_executor)
+    std::unique_ptr<AudioExecutor> audio_executor,
+    std::unique_ptr<VisionExecutor> vision_executor)
     :  // dummy comment to prevent clang-format from moving the next line here
       llm_executor_(std::move(llm_executor)),
+      vision_executor_(std::move(vision_executor)),
       vision_executor_settings_(std::move(vision_executor_settings)),
       audio_executor_(std::move(audio_executor)),
       audio_executor_settings_(std::move(audio_executor_settings)),
@@ -925,7 +927,8 @@ absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
     std::unique_ptr<litert::lm::AudioExecutorSettings> absl_nullable
     audio_executor_settings,
     ::litert::Environment* absl_nullable litert_env,
-    std::unique_ptr<AudioExecutor> absl_nullable audio_executor) {
+    std::unique_ptr<AudioExecutor> absl_nullable audio_executor,
+    std::unique_ptr<VisionExecutor> absl_nullable vision_executor) {
   if (llm_executor == nullptr) {
     return absl::InvalidArgumentError("Llm executor is null.");
   }
@@ -934,7 +937,8 @@ absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
   auto llm_resource_manager = std::make_unique<ResourceManager>(
       model_resources, std::move(llm_executor),
       std::move(vision_executor_settings), std::move(audio_executor_settings),
-      std::move(llm_executor_settings), litert_env, std::move(audio_executor));
+      std::move(llm_executor_settings), litert_env, std::move(audio_executor),
+      std::move(vision_executor));
   return llm_resource_manager;
 }
 

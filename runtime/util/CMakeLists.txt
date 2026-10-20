@@ -110,7 +110,7 @@ target_link_libraries(runtime_util_file_util
 # File Data Stream
 # ==============================================================================
 add_litertlm_library(runtime_util_file_data_stream STATIC
-  data_stream.cc
+  file_data_stream.cc
 )
 add_library(LiteRTLM::Runtime::Util::FileDataStream ALIAS runtime_util_file_data_stream)
 
@@ -234,6 +234,9 @@ target_include_directories(runtime_util_litert_util
 
 target_link_libraries(runtime_util_litert_util
   PUBLIC
+    LiteRTLM::Runtime::Util::LitertLmLoader
+    LiteRTLM::Runtime::Util::ScopedFile
+    LiteRTLM::Schema::Core
     LITERTLM_DEPS
 )
 
@@ -476,7 +479,9 @@ target_include_directories(runtime_util_streamed_weights_manager
 
 target_link_libraries(runtime_util_streamed_weights_manager
   PUBLIC
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Engine::IoTypes
+    LiteRTLM::Runtime::Util::DataStream
     LITERTLM_DEPS
 )
 

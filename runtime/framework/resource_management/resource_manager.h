@@ -52,20 +52,26 @@ class ResourceManager {
       std::unique_ptr<AudioExecutorSettings> audio_executor_settings,
       LlmExecutorSettings llm_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> audio_executor = nullptr);
+      std::unique_ptr<AudioExecutor> audio_executor = nullptr,
+      std::unique_ptr<VisionExecutor> vision_executor = nullptr);
 
   // Creates a ResourceManager with the provided llm_executor.
   // Note that the audio_executor is used for testing only (dependency
-  // injection)
+  // injection).
+  // The vision_executor is optional. If provided, it is used instead of lazily
+  // creating one from vision_executor_settings in TryLoadingVisionExecutor().
+  // This is needed when the vision model can not be (re)loaded from the model
+  // assets later on, e.g. when the model was loaded from a stream.
   static absl::StatusOr<std::unique_ptr<ResourceManager>> Create(
       ModelResources* absl_nullable model_resources,
       std::unique_ptr<LlmExecutor> absl_nonnull llm_executor,
       std::unique_ptr<VisionExecutorSettings> absl_nullable
-          vision_executor_settings,
+      vision_executor_settings,
       std::unique_ptr<AudioExecutorSettings> absl_nullable
-          audio_executor_settings,
+      audio_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr);
+      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr,
+      std::unique_ptr<VisionExecutor> absl_nullable vision_executor = nullptr);
 
   ~ResourceManager();
 

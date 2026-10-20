@@ -17,20 +17,19 @@
 import {Cleanup} from './cleanup.js';
 import {Conversation} from './conversation.js';
 import {ConversationConfig} from './conversation_config.js';
-import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
+import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {Session} from './session.js';
-import {sessionConfigToWasmSessionConfig} from './session_config.js';
+import {SessionConfig, sessionConfigToWasmSessionConfig} from './session_config.js';
 import {createStreamingModelAssets} from './stream_utils.js';
-import {RecursiveRequired} from './types.js';
 import {Backend, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
 
 /**
  * LiteRT-LM Engine
  */
 export class Engine implements Deletable {
-  readonly settings: RecursiveRequired<EngineSettings>;
+  readonly settings: ResolvedEngineSettings;
   private mutexes = {
     executor: new Mutex(),
   };
@@ -60,9 +59,11 @@ export class Engine implements Deletable {
     engineSettings = {...engineSettings, backend};
 
     const samplerBackend = engineSettings.mainExecutorSettings?.samplerBackend;
+    const visionBackend = engineSettings.visionBackend;
     if (backend === Backend.GPU || backend === Backend.GPU_ARTISAN ||
         samplerBackend === Backend.GPU ||
-        samplerBackend === Backend.GPU_ARTISAN) {
+        samplerBackend === Backend.GPU_ARTISAN ||
+        visionBackend === Backend.GPU) {
       await litertlm.setupDefaultWebGpuDevice();
     }
 
@@ -73,8 +74,12 @@ export class Engine implements Deletable {
       const {modelAssets, cleanupModelAssets} =
           await createStreamingModelAssets(engineSettings.model, wasm, cleanup);
 
-      const wasmEngineSettings = await wasm.EngineSettings.createDefault(
-          modelAssets, {value: backend});
+      const wasmEngineSettings = visionBackend === undefined ?
+          await wasm.EngineSettings.createDefault(
+              modelAssets, {value: backend}) :
+          await wasm.EngineSettings.createDefaultMultimodal(
+              modelAssets, {value: backend}, {value: visionBackend},
+              /* audioBackend= */ undefined);
       // Delete our copy of the ModelAssets object (not the underlying file).
       cleanupModelAssets();
 
@@ -99,7 +104,7 @@ export class Engine implements Deletable {
               wasmEngineSettings, inputPromptAsHint);
         }
       } finally {
-        if (resolvedBackend === Backend.GPU) {
+        if (resolvedBackend === Backend.GPU || visionBackend === Backend.GPU) {
           try {
             await wasm.clearStoredWeightsStreams();
           } catch (cleanupError) {
@@ -120,10 +125,22 @@ export class Engine implements Deletable {
     }
   }
 
-  async createSession(sessionConfig = {}): Promise<Session> {
+  /**
+   * Returns `sessionConfig` with modalities supported by this engine enabled
+   * unless they were explicitly configured.
+   */
+  private withDefaultModalities(sessionConfig: SessionConfig): SessionConfig {
+    if (this.settings.visionBackend !== undefined &&
+        sessionConfig.visionModalityEnabled === undefined) {
+      return {...sessionConfig, visionModalityEnabled: true};
+    }
+    return sessionConfig;
+  }
+
+  async createSession(sessionConfig: SessionConfig = {}): Promise<Session> {
     return this.mutexes.executor.acquireAndRun(() => {
-      const wasmSessionConfig =
-          sessionConfigToWasmSessionConfig(sessionConfig, this.wasm);
+      const wasmSessionConfig = sessionConfigToWasmSessionConfig(
+          this.withDefaultModalities(sessionConfig), this.wasm);
 
       const wasmSession = this.engine.createSession(wasmSessionConfig);
       wasmSessionConfig.delete();
@@ -132,13 +149,18 @@ export class Engine implements Deletable {
   }
 
   async createConversation(config?: ConversationConfig): Promise<Conversation> {
+    if (!config && this.settings.visionBackend !== undefined) {
+      // A custom config is needed to enable the vision modality. Match the C++
+      // ConversationConfig defaults.
+      config = {filterChannelContentFromKvCache: true};
+    }
     return this.mutexes.executor.acquireAndRun(async () => {
       let wasmConfig: WasmConversationConfig;
       let wasmSessionConfig: WasmSessionConfig|undefined;
 
       if (config) {
         wasmSessionConfig = sessionConfigToWasmSessionConfig(
-            config.sessionConfig || {}, this.wasm);
+            this.withDefaultModalities(config.sessionConfig || {}), this.wasm);
         const prefaceJson =
             config.preface ? JSON.stringify(config.preface) : '';
         const usesAutosizedRingbuffers =
@@ -165,7 +187,9 @@ export class Engine implements Deletable {
         wasmSessionConfig.delete();
       }
 
-      return new Conversation(wasmConversation, this.engine, this.mutexes);
+      return new Conversation(
+          wasmConversation, this.engine, this.mutexes,
+          this.settings.maxVisionTokensPerImage ?? 0);
     });
   }
 
