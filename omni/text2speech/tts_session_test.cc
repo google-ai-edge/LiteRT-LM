@@ -16,6 +16,7 @@
 
 #include <filesystem>  // NOLINT: Required for std::filesystem.
 #include <fstream>
+#include <ios>
 #include <memory>
 #include <string>
 #include <system_error>  // NOLINT: Required for std::error_code.
@@ -38,6 +39,7 @@
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "omni/text2speech/kokoro.h"
+#include "omni/text2speech/kokoro/common.h"
 #include "omni/text2speech/kokoro/kokoro_factory.h"
 #include "omni/text2speech/qwen3_tts/common.h"
 #include "omni/text2speech/stream_text_source.h"
@@ -358,6 +360,13 @@ TEST_F(TtsSessionTest, KokoroCodeToBcp47Mapping) {
   EXPECT_EQ(KokoroCodeToBcp47("de"), "");
 }
 
+// Writes a zero-filled Kokoro voice pack (`kVoicePackSize` floats) to `path`.
+void WriteMockVoicePack(const std::filesystem::path& path) {
+  std::ofstream file(path, std::ios::binary);
+  const std::string payload(kokoro::kVoicePackSize * sizeof(float), '\0');
+  file.write(payload.data(), payload.size());
+}
+
 class ScopedMockKokoroModelDir {
  public:
   ScopedMockKokoroModelDir() {
@@ -373,7 +382,7 @@ class ScopedMockKokoroModelDir {
         "pm_santa", "jf_alpha", "zf_xiaobei", "zf_xiaoxiao",
     };
     for (const auto& name : voice_names) {
-      std::ofstream(voices_dir / (name + ".bin")).close();
+      WriteMockVoicePack(voices_dir / (name + ".bin"));
     }
   }
 
@@ -400,12 +409,15 @@ TEST_F(TtsSessionTest, DiscoversKokoroVoicesFromDirectory) {
   std::error_code ec;
   std::filesystem::create_directories(voices_dir, ec);
 
-  std::ofstream(voices_dir / "custom_voice1.bin").close();
-  std::ofstream(voices_dir / "custom_voice2.bin").close();
-  std::ofstream(voices_dir / "readme.txt").close();
+  WriteMockVoicePack(voices_dir / "af_custom.bin");
+  WriteMockVoicePack(voices_dir / "zm_custom.bin");
+  // Not voice packs: wrong extension, unconventional name, or wrong size.
+  WriteMockVoicePack(voices_dir / "bf_readme.txt");
+  WriteMockVoicePack(voices_dir / "custom_voice.bin");
+  std::ofstream(voices_dir / "am_empty.bin").close();
 
   auto discovered = GetAvailableKokoroVoices(model_dir.string());
-  EXPECT_THAT(discovered, ElementsAre("custom_voice1", "custom_voice2"));
+  EXPECT_THAT(discovered, ElementsAre("af_custom", "zm_custom"));
 
   std::filesystem::remove_all(model_dir, ec);
 }

@@ -38,6 +38,7 @@
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
+#include "omni/text2speech/kokoro/common.h"
 #include "omni/text2speech/kokoro/espeak_assets.h"
 #include "omni/text2speech/kokoro/kokoro_model_config.h"
 #include "omni/text2speech/stream_text_source.h"
@@ -57,14 +58,39 @@ namespace schema = ::litert::lm::schema;
 
 using ::testing::ElementsAre;
 
-// ModelResources stub that only reports GenericBinaryData section names.
-class FakeSectionNames : public lm::ModelResources {
+// Byte size of one Kokoro voice pack section.
+constexpr size_t kVoicePackBytes = kokoro::kVoicePackSize * sizeof(float);
+
+// A GenericBinaryData section name and its payload size in bytes.
+struct SectionSpec {
+  std::string name;
+  size_t size = kVoicePackBytes;
+};
+
+// ModelResources stub that only reports GenericBinaryData sections.
+class FakeSections : public lm::ModelResources {
  public:
-  explicit FakeSectionNames(std::vector<std::string> names)
-      : names_(std::move(names)) {}
+  explicit FakeSections(const std::vector<SectionSpec>& sections) {
+    for (const SectionSpec& section : sections) {
+      sections_.emplace_back(section.name, std::string(section.size, '\0'));
+    }
+  }
 
   std::vector<std::string> GetGenericBinaryDataNames() const override {
-    return names_;
+    std::vector<std::string> names;
+    names.reserve(sections_.size());
+    for (const auto& [name, data] : sections_) {
+      names.push_back(name);
+    }
+    return names;
+  }
+
+  absl::StatusOr<absl::string_view> GetGenericBinaryDataBuffer(
+      absl::string_view name) override {
+    for (const auto& [section_name, data] : sections_) {
+      if (section_name == name) return absl::string_view(data);
+    }
+    return absl::NotFoundError(name);
   }
 
   // Unused parts of the interface.
@@ -108,7 +134,7 @@ class FakeSectionNames : public lm::ModelResources {
   }
 
  private:
-  std::vector<std::string> names_;
+  std::vector<std::pair<std::string, std::string>> sections_;
 };
 
 TEST(KokoroFactoryTest, InitKokoroResourcesFailsWithNonexistentModels) {
@@ -150,33 +176,82 @@ TEST(KokoroFactoryTest, CreateKokoroComponentsRejectsMissingModels) {
 }
 
 TEST(KokoroFactoryTest, GetAvailableKokoroVoicesSkipsNonVoiceSections) {
-  FakeSectionNames lm_resources(
-      {"af_heart", std::string(kokoro::kEspeakNgSectionName), "ja-lexicon",
-       "zh-lexicon", "zh-textnorm", "ef_dora.bin"});
+  // Every section has the size of a voice pack, so the non-voice sections are
+  // rejected by their names alone.
+  FakeSections lm_resources({{"af_heart"},
+                             {std::string(kokoro::kEspeakNgSectionName)},
+                             {"ja-lexicon"},
+                             {"zh-lexicon"},
+                             {"zh-textnorm"},
+                             {std::string(kTraditionalChineseSectionName)},
+                             {"ef_dora.bin"}});
 
   EXPECT_THAT(GetAvailableKokoroVoices(/*model_folder=*/"", &lm_resources),
               ElementsAre("af_heart", "ef_dora"));
 }
 
+TEST(KokoroFactoryTest, GetAvailableKokoroVoicesRequiresVoicePackSize) {
+  FakeSections lm_resources({{"af_heart", /*size=*/16},
+                             {"am_adam", kVoicePackBytes + sizeof(float)},
+                             {"am_echo", kVoicePackBytes - sizeof(float)},
+                             {"bf_emma", kVoicePackBytes}});
+
+  EXPECT_THAT(GetAvailableKokoroVoices(/*model_folder=*/"", &lm_resources),
+              ElementsAre("bf_emma"));
+}
+
+TEST(KokoroFactoryTest, GetAvailableKokoroVoicesRequiresVoiceNamePattern) {
+  FakeSections lm_resources({{"xf_unknown"},  // Unknown language letter.
+                             {"ax_heart"},    // Unknown gender letter.
+                             {"af_"},         // Missing name.
+                             {"afheart"},     // Missing separator.
+                             {"af_he-art"},   // Unexpected character.
+                             {"zf_xiaobei"}});
+
+  EXPECT_THAT(GetAvailableKokoroVoices(/*model_folder=*/"", &lm_resources),
+              ElementsAre("zf_xiaobei"));
+}
+
+TEST(KokoroFactoryTest, GetAvailableKokoroVoicesFiltersVoiceFiles) {
+  const std::filesystem::path model_dir =
+      std::filesystem::path(::testing::TempDir()) / "kokoro_voice_files";
+  const std::filesystem::path voices_dir = model_dir / "voices";
+  std::filesystem::create_directories(voices_dir);
+  const auto write_file = [&voices_dir](const std::string& name, size_t size) {
+    std::ofstream file(voices_dir / name, std::ios::binary);
+    const std::string payload(size, '\0');
+    file.write(payload.data(), payload.size());
+  };
+  write_file("af_heart.bin", kVoicePackBytes);
+  write_file("af_short.bin", 16);
+  write_file("zh-t2s.bin", kVoicePackBytes);
+  write_file("notes.bin", kVoicePackBytes);
+  write_file("bf_emma.txt", kVoicePackBytes);
+
+  EXPECT_THAT(GetAvailableKokoroVoices(model_dir.string()),
+              ElementsAre("af_heart"));
+}
+
 // Writes a minimal `.litertlm` file whose only payload is one
-// GenericBinaryData section per name in `section_names`.
+// GenericBinaryData section per entry in `sections`.
 std::string WriteLitertLmWithSections(
-    const std::string& path, const std::vector<std::string>& section_names) {
+    const std::string& path, const std::vector<SectionSpec>& sections) {
   flatbuffers::FlatBufferBuilder builder(1024);
-  std::vector<flatbuffers::Offset<schema::SectionObject>> sections;
+  std::vector<flatbuffers::Offset<schema::SectionObject>> section_objects;
   uint64_t offset = 0;
-  for (const std::string& name : section_names) {
-    auto kv = schema::CreateKeyValuePair(builder, "name", name);
+  for (const SectionSpec& section : sections) {
+    auto kv = schema::CreateKeyValuePair(builder, "name", section.name);
     auto items = builder.CreateVector(
         std::vector<flatbuffers::Offset<schema::KeyValuePair>>{kv});
-    sections.push_back(schema::CreateSectionObject(
-        builder, items, offset, offset + 16,
+    section_objects.push_back(schema::CreateSectionObject(
+        builder, items, offset, offset + section.size,
         schema::AnySectionDataType_GenericBinaryData));
-    offset += 16;
+    offset += section.size;
   }
   auto metadata = schema::CreateLiteRTLMMetaData(
       builder, 0,
-      schema::CreateSectionMetadata(builder, builder.CreateVector(sections)));
+      schema::CreateSectionMetadata(builder,
+                                    builder.CreateVector(section_objects)));
   builder.Finish(metadata);
 
   std::ofstream file(path, std::ios::binary);
@@ -196,8 +271,11 @@ TEST(KokoroFactoryTest, GetAvailableKokoroVoicesReadsLitertLmBundle) {
   const std::string bundle = WriteLitertLmWithSections(
       (std::filesystem::path(::testing::TempDir()) / "kokoro_voices.litertlm")
           .string(),
-      {"zf_xiaobei", std::string(kokoro::kEspeakNgSectionName), "af_heart",
-       "zh-lexicon"});
+      {{"zf_xiaobei"},
+       {std::string(kokoro::kEspeakNgSectionName), /*size=*/16},
+       {"af_heart"},
+       {"zh-lexicon", /*size=*/16},
+       {std::string(kTraditionalChineseSectionName), /*size=*/16}});
 
   // Only the bundle path is given, as `TextToSpeech::ListVoices()` does.
   EXPECT_THAT(GetAvailableKokoroVoices(bundle),

@@ -277,6 +277,7 @@ cc_library(
         ":kokoro_model_config",
         ":kokoro_vocoder_stage",
         ":phonemizer",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -303,6 +304,7 @@ cc_test(
     name = "kokoro_factory_test",
     srcs = ["kokoro_factory_test.cc"],
     deps = [
+        ":common",
         ":espeak_assets",
         ":kokoro_factory",
         ":kokoro_model_config",

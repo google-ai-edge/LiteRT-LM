@@ -15,6 +15,7 @@
 #include "omni/text2speech/kokoro/kokoro_factory.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>  // NOLINT
 #include <memory>
 #include <optional>
@@ -23,10 +24,12 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -62,6 +65,41 @@ ModelOptions MakeModelOptions(absl::string_view model_dir,
   options.backend = backend;
   options.num_threads = num_threads;
   return options;
+}
+
+// Byte size of one Kokoro voice pack: `kVoicePackSize` float32 values.
+constexpr size_t kVoicePackBytes = kokoro::kVoicePackSize * sizeof(float);
+
+// Returns whether `name` follows the Kokoro voice naming convention
+// `<language><gender>_<name>` (e.g. "af_heart", "zm_yunxi"), where the language
+// letter is one `LanguageForVoiceName()` understands and the gender letter is
+// 'f' or 'm'.
+bool IsKokoroVoiceName(absl::string_view name) {
+  if (name.size() < 4 || name[2] != '_') return false;
+  if (LanguageForVoiceName(name).empty()) return false;
+  const char gender = absl::ascii_tolower(name[1]);
+  if (gender != 'f' && gender != 'm') return false;
+  return absl::c_all_of(name.substr(3), [](char c) {
+    return absl::ascii_isalnum(c) || c == '_';
+  });
+}
+
+// Appends the `.bin` voice packs in `dir` that are named and sized like Kokoro
+// voices to `voices`.
+void AppendVoicePackFiles(const std::filesystem::path& dir,
+                          std::vector<std::string>& voices) {
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (!entry.is_regular_file(ec) || entry.path().extension() != ".bin") {
+      continue;
+    }
+    std::string voice = entry.path().stem().string();
+    if (!IsKokoroVoiceName(voice) || entry.file_size(ec) != kVoicePackBytes ||
+        ec) {
+      continue;
+    }
+    voices.push_back(std::move(voice));
+  }
 }
 
 }  // namespace
@@ -235,7 +273,7 @@ absl::Status CreateKokoroComponents(
 }
 
 std::vector<std::string> GetAvailableKokoroVoices(
-    absl::string_view model_folder, const lm::ModelResources* lm_resources) {
+    absl::string_view model_folder, lm::ModelResources* lm_resources) {
   std::vector<std::string> voices;
   // A `.litertlm` bundle (or a folder holding one) carries its voices as
   // sections, so open it when the caller did not pass its resources.
@@ -254,16 +292,15 @@ std::vector<std::string> GetAvailableKokoroVoices(
 
   if (lm_resources != nullptr) {
     for (const auto& name : lm_resources->GetGenericBinaryDataNames()) {
-      // Not every GenericBinaryData section is a voice pack.
-      if (name == kokoro::kEspeakNgSectionName ||
-          absl::EndsWith(name, kTextNormSectionSuffix) ||
-          absl::EndsWith(name, kLexiconSectionSuffix)) {
-        continue;
-      }
+      // Not every GenericBinaryData section is a voice pack (e.g. espeak-ng
+      // data, text normalization tables, CJK lexicons, the zh-t2s table). Only
+      // keep sections that are named and sized like a Kokoro voice pack.
       std::string voice = kokoro::VoiceNameFromIdentifier(name);
-      if (!voice.empty()) {
-        voices.push_back(std::move(voice));
-      }
+      if (!IsKokoroVoiceName(voice)) continue;
+      const absl::StatusOr<absl::string_view> buffer =
+          lm_resources->GetGenericBinaryDataBuffer(name);
+      if (!buffer.ok() || buffer->size() != kVoicePackBytes) continue;
+      voices.push_back(std::move(voice));
     }
   }
 
@@ -276,19 +313,9 @@ std::vector<std::string> GetAvailableKokoroVoices(
     }
     std::filesystem::path voices_dir = base_path / "voices";
     if (std::filesystem::is_directory(voices_dir, ec)) {
-      for (const auto& entry :
-           std::filesystem::directory_iterator(voices_dir, ec)) {
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".bin") {
-          voices.push_back(entry.path().stem().string());
-        }
-      }
+      AppendVoicePackFiles(voices_dir, voices);
     } else if (std::filesystem::is_directory(base_path, ec)) {
-      for (const auto& entry :
-           std::filesystem::directory_iterator(base_path, ec)) {
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".bin") {
-          voices.push_back(entry.path().stem().string());
-        }
-      }
+      AppendVoicePackFiles(base_path, voices);
     }
   }
   std::sort(voices.begin(), voices.end());

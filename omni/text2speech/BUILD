@@ -243,6 +243,7 @@ cc_test(
         "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "//omni/text2speech/kokoro:common",
         "//omni/text2speech/kokoro:kokoro_factory",
         "//omni/text2speech/qwen3_tts:common",
         "//runtime/framework:threadpool",

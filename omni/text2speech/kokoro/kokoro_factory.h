@@ -109,6 +109,12 @@ absl::Status CreateKokoroComponents(
 // `lm_resources` or voice files (*.bin) in `model_folder/voices` /
 // `model_folder`.
 //
+// Only entries that look like a Kokoro voice pack are returned: the name must
+// follow the `<language><gender>_<name>` convention (e.g. "af_heart") and the
+// payload must be exactly one voice pack (`kVoicePackSize` float32 values).
+// Other GenericBinaryData sections or `.bin` files (espeak-ng data, text
+// normalization tables, CJK lexicons, the zh-t2s table, ...) are skipped.
+//
 // args
 // - model_folder: Optional path to a `.litertlm` bundle, a directory holding
 //   one, or a directory containing voice `.bin` files. A bundle is opened to
@@ -121,7 +127,7 @@ absl::Status CreateKokoroComponents(
 //   suffixes).
 std::vector<std::string> GetAvailableKokoroVoices(
     absl::string_view model_folder = "",
-    const lm::ModelResources* lm_resources = nullptr);
+    lm::ModelResources* lm_resources = nullptr);
 
 // Returns the canonical Kokoro (`espeak-ng`) language code corresponding to a
 // Kokoro voice identifier (e.g. "ef_dora" -> "es", "if_sara" -> "it",
