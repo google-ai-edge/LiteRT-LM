@@ -70,8 +70,14 @@ cc_library(
         "//omni/base:stage",
         "//runtime/components:model_resources",
         "//support/tokenizer",
-        "//support/tokenizer:huggingface_tokenizer",
-    ],
+    ] + select({
+        "//build_config:disable_huggingface_tokenizer": [
+            "//support/tokenizer:huggingface_tokenizer_noop",
+        ],
+        "//conditions:default": [
+            "//support/tokenizer:huggingface_tokenizer",
+        ],
+    }),
 )
 
 cc_library(

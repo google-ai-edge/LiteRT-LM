@@ -134,7 +134,7 @@ ENGINE_IMPL_LITE_COMMON_DEPS = ENGINE_IMPL_BASE_DEPS + [
 ]
 
 cc_library(
-    name = "engine_advanced_impl",
+    name = "engine_advanced_impl_common",
     srcs = ["engine_advanced_impl.cc"],
     local_defines = select({
         "//conditions:default": [],
@@ -144,10 +144,8 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
-    deps = ENGINE_IMPL_COMMON_DEPS + [
-        "//runtime/components:default_static_gpu_samplers",
-        "//runtime/executor:default_static_gpu_accelerator",
-    ] + select({
+    visibility = ["//visibility:private"],
+    deps = ENGINE_IMPL_COMMON_DEPS + select({
         "//conditions:default": [],
     }) + select({
         "//runtime/util:litert_lm_debugger_enabled": [
@@ -159,20 +157,20 @@ cc_library(
 )
 
 cc_library(
+    name = "engine_advanced_impl",
+    deps = [
+        ":engine_advanced_impl_common",
+        "//runtime/components:default_static_gpu_samplers",
+        "//runtime/executor:default_static_gpu_accelerator",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
     name = "engine_advanced_impl_cpu_only",
-    srcs = ["engine_advanced_impl.cc"],
-    local_defines = select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "LITERT_LM_DEBUGGER_ENABLED=1",
-        ],
-        "//conditions:default": [],
-    }),
-    deps = ENGINE_IMPL_COMMON_DEPS + select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "//runtime/util:runtime_debugger",
-        ],
-        "//conditions:default": [],
-    }),
+    deps = [
+        ":engine_advanced_impl_common",
+    ],
     alwayslink = 1,
 )
 

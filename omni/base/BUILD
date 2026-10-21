@@ -141,9 +141,15 @@ cc_library(
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
         "//support/tokenizer",
-        "//support/tokenizer:huggingface_tokenizer",
         "//support/util:convert_tensor_buffer",
-    ],
+    ] + select({
+        "//build_config:disable_huggingface_tokenizer": [
+            "//support/tokenizer:huggingface_tokenizer_noop",
+        ],
+        "//conditions:default": [
+            "//support/tokenizer:huggingface_tokenizer",
+        ],
+    }),
 )
 
 cc_test(
