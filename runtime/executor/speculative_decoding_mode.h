@@ -60,8 +60,9 @@ inline std::ostream& operator<<(std::ostream& os,
 // Per-session speculative decoding (MTP) options.
 struct SpeculativeDecodingConfig {
   // How speculative decoding is used. std::nullopt inherits the engine's
-  // configuration: speculate if and only if the MTP drafter was loaded when
-  // the engine was created.
+  // configuration: if the MTP drafter was loaded when the engine was created,
+  // backends that support adaptive gating behave like kAdaptive and the others
+  // speculate on every step; otherwise, no speculation.
   std::optional<SpeculativeDecodingMode> mode;
 
   bool operator==(const SpeculativeDecodingConfig&) const = default;

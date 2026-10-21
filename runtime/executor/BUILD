@@ -358,6 +358,7 @@ cc_library(
         ":llm_processed_context",
         ":mtp_gating_policy",
         ":speculative_decoding_controller",
+        ":speculative_decoding_mode",
         ":state_interface",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
@@ -411,7 +412,6 @@ cc_library(
         "//runtime/util:log_tensor_buffer",
         "//runtime/util:lora_util",
         "//runtime/util:tensor_buffer_util",
-        "@litert//tflite/types:half",
     ],
 )
 

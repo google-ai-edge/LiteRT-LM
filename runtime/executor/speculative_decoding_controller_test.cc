@@ -139,6 +139,38 @@ TEST(SpeculativeDecodingControllerTest,
   EXPECT_EQ(drafter.load_calls(), 1);
 }
 
+TEST(SpeculativeDecodingControllerTest, UnsetModeGatesWithAdaptiveDefault) {
+  SpeculativeDecodingController controller(MtpGatingConfig(),
+                                           SpeculativeDecodingMode::kAdaptive);
+  FakeDrafter drafter(absl::OkStatus(), /*loaded=*/true);
+  int64_t reported_switches = 0;
+  for (int i = 0; i < 40; ++i) {
+    ASSERT_OK_AND_ASSIGN(const Decision decision,
+                         Decide(controller, std::nullopt, drafter));
+    EXPECT_TRUE(decision.adaptive);
+    reported_switches += controller.Observe(
+        decision, /*tokens_emitted=*/1,
+        decision.speculate ? absl::Milliseconds(50) : absl::Milliseconds(10));
+  }
+  EXPECT_EQ(reported_switches, 1);
+  ASSERT_NE(controller.gating_policy(), nullptr);
+  EXPECT_FALSE(controller.gating_policy()->stats().speculating);
+  EXPECT_EQ(drafter.load_calls(), 0);
+}
+
+TEST(SpeculativeDecodingControllerTest,
+     UnsetModeWithAdaptiveDefaultSpeculatesUnderConstraints) {
+  SpeculativeDecodingController controller(MtpGatingConfig(),
+                                           SpeculativeDecodingMode::kAdaptive);
+  FakeDrafter drafter(absl::OkStatus(), /*loaded=*/true);
+  ASSERT_OK_AND_ASSIGN(
+      const Decision decision,
+      Decide(controller, std::nullopt, drafter,
+             /*sampler_params=*/std::nullopt, /*constrained=*/true));
+  EXPECT_TRUE(decision.speculate);
+  EXPECT_FALSE(decision.adaptive);
+}
+
 TEST(SpeculativeDecodingControllerTest, DisabledNeverLoadsDrafter) {
   SpeculativeDecodingController controller;
   FakeDrafter drafter;

@@ -313,9 +313,10 @@ class SessionConfig {
   //
   // `mode`:
   // - std::nullopt (default): inherits the engine's speculative decoding
-  //   configuration: speculate if and only if the engine was initialized with
-  //   speculative decoding enabled (a drafter lazily loaded for another
-  //   session does not change this).
+  //   configuration. If the engine was initialized with speculative decoding,
+  //   backends that support adaptive gating behave like kAdaptive and the
+  //   others speculate on every step; otherwise, no speculation (a drafter
+  //   lazily loaded for another session does not change this).
   // - kDisabled: never speculate, even if the engine was initialized with
   //   speculative decoding enabled.
   // - kAlways: speculate on every decode step.

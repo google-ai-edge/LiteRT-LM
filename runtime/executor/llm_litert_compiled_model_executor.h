@@ -50,6 +50,7 @@
 #include "runtime/executor/llm_processed_context.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_controller.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/executor_metadata.pb.h"
 
@@ -277,10 +278,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         resources_(resources),
         // Sessions that request no mode follow the creation-time
         // configuration, even after a drafter is lazily loaded for another
-        // session.
+        // session: adaptive if the drafter was loaded at creation, plain
+        // decoding otherwise.
         speculative_decoding_controller_(
             MtpGatingConfig(), mtp_drafter_ != nullptr
-                                   ? SpeculativeDecodingMode::kAlways
+                                   ? SpeculativeDecodingMode::kAdaptive
                                    : SpeculativeDecodingMode::kDisabled) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, nullptr, ProcessedTokens());

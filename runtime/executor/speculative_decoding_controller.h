@@ -33,9 +33,10 @@ namespace litert::lm {
 // round or a plain decode step, according to the requested
 // `SpeculativeDecodingMode`.
 //
-// In `SpeculativeDecodingMode::kAdaptive`, the decision is delegated to an
-// `MtpGatingPolicy`, which the controller creates on first use and keeps
-// informed of turn and conversation boundaries and of sampler changes.
+// In `SpeculativeDecodingMode::kAdaptive` (requested, or the default mode for
+// steps that request none), the decision is delegated to an `MtpGatingPolicy`,
+// which the controller creates on first use and keeps informed of turn and
+// conversation boundaries and of sampler changes.
 //
 // The controller does not depend on LiteRT: the caller owns the MTP drafter and
 // runs the decode steps, and passes a callback that loads the drafter.
@@ -61,7 +62,7 @@ class SpeculativeDecodingController {
   // `gating_config` configures the `MtpGatingPolicy` used in
   // `SpeculativeDecodingMode::kAdaptive`. `default_mode` is used for steps
   // that request no mode; it should reflect the executor's creation-time
-  // configuration (e.g. `kAlways` if the drafter was loaded at creation,
+  // configuration (e.g. `kAdaptive` if the drafter was loaded at creation,
   // `kDisabled` otherwise), so that a drafter lazily loaded for one session
   // does not change the behavior of sessions that request no mode.
   explicit SpeculativeDecodingController(
