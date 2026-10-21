@@ -162,6 +162,12 @@ LiteRtLmSession* CreateSession(LiteRtLmEngine* engine,
   return HandleOrNull(status, session);
 }
 
+LiteRtLmSession* CloneSession(LiteRtLmSession* session) {
+  LiteRtLmSession* cloned = nullptr;
+  const int status = litert_lm_session_clone(session, &cloned);
+  return HandleOrNull(status, cloned);
+}
+
 LiteRtLmSessionConfig* CreateSessionConfig() {
   LiteRtLmSessionConfig* config = nullptr;
   const int status = litert_lm_session_config_create(&config);
@@ -1798,6 +1804,63 @@ TEST(EngineCTest, ConversationCloneSuccess) {
   ASSERT_NE(cloned_conversation, nullptr);
 }
 
+TEST(EngineCTest, SessionCloneNull) {
+  litert_lm_clear_last_error();
+  LiteRtLmSession* cloned = reinterpret_cast<LiteRtLmSession*>(0x1);
+  const int status = litert_lm_session_clone(nullptr, &cloned);
+  EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+  EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
+  EXPECT_EQ(cloned, nullptr);
+}
+
+TEST(EngineCTest, SessionCloneSuccess) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(CreateSession(engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  InputDataPtr input_data(
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
+      &litert_lm_input_data_delete);
+  ASSERT_NE(input_data, nullptr);
+  const LiteRtLmInputData* inputs[] = {input_data.get()};
+  ASSERT_EQ(litert_lm_session_run_prefill(session.get(), inputs, 1),
+            kLiteRtLmStatusOk);
+
+  LiteRtLmSession* cloned_raw = CloneSession(session.get());
+  SessionPtr cloned_session(cloned_raw, &litert_lm_session_delete);
+  ASSERT_NE(cloned_session, nullptr);
+
+  ResponsesPtr orig_responses(RunDecode(session.get()),
+                              &litert_lm_responses_delete);
+  ASSERT_NE(orig_responses, nullptr);
+  ResponsesPtr cloned_responses(RunDecode(cloned_session.get()),
+                                &litert_lm_responses_delete);
+  ASSERT_NE(cloned_responses, nullptr);
+
+  const char* orig_text = GetOk<const char*>(
+      litert_lm_responses_get_response_text_at, orig_responses.get(), 0);
+  const char* cloned_text = GetOk<const char*>(
+      litert_lm_responses_get_response_text_at, cloned_responses.get(), 0);
+  ASSERT_NE(orig_text, nullptr);
+  ASSERT_NE(cloned_text, nullptr);
+  EXPECT_STREQ(orig_text, cloned_text);
+}
+
 struct StreamCallbackData {
   std::string response;
   absl::Notification done;
@@ -2591,6 +2654,8 @@ TEST(EngineCErrorTest, CreateWithNullOutParamReturnsInvalidArgument) {
       litert_lm_engine_create(/*settings=*/nullptr, /*out_engine=*/nullptr));
   expect_invalid_out_param(litert_lm_engine_create_session(
       /*engine=*/nullptr, /*config=*/nullptr, /*out_session=*/nullptr));
+  expect_invalid_out_param(litert_lm_session_clone(
+      /*session=*/nullptr, /*out_session=*/nullptr));
 }
 
 TEST(EngineCErrorTest, EngineSettingsCreateFailureSetsLastError) {
@@ -2692,6 +2757,10 @@ void ExpectInvalidArgumentResetsOut(const char* name,
 TEST(EngineCErrorTest, ResultProducersWithNullHandleResetOutParam) {
   const char* target_text[] = {"a"};
   const int tokens[] = {1};
+  ExpectInvalidArgumentResetsOut<LiteRtLmSession>(
+      "session_clone", [](LiteRtLmSession** out) {
+        return litert_lm_session_clone(nullptr, out);
+      });
   ExpectInvalidArgumentResetsOut<LiteRtLmResponses>(
       "session_run_decode", [](LiteRtLmResponses** out) {
         return litert_lm_session_run_decode(nullptr, out);

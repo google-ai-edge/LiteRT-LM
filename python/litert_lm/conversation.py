@@ -97,8 +97,45 @@ class Conversation(interfaces.AbstractConversation):
   def __del__(self):
     self.close()
 
+  def __enter__(self) -> Conversation:
+    return self
+
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.close()
+
+  def clone(self) -> Conversation:
+    """Clones the conversation, copying its state for independent use.
+
+    Returns:
+        A new Conversation instance with the same message history, KV cache
+        state, and configuration.
+
+    Raises:
+        RuntimeError: If the conversation is closed or cloning fails.
+    """
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
+    cloned_ptr = create_checked(
+        self._lib, "litert_lm_conversation_clone", self._ptr
+    )
+    return Conversation(
+        self._lib,
+        cloned_ptr,
+        engine=self._engine,
+        messages=list(self.messages),
+        tools=list(self.tools),
+        tools_map=dict(self._tools_map),
+        tool_event_handler=self.tool_event_handler,
+        automatic_tool_calling=self.automatic_tool_calling,
+        extra_context=dict(self.extra_context),
+        thinking_config=self.thinking_config,
+        sampler_config=self.sampler_config,
+        lora_config=self.lora_config,
+        max_output_tokens=self.max_output_tokens,
+        chat_template=self.chat_template,
+        constrained_decoding_config=self.constrained_decoding_config,
+        visual_token_budget=self._visual_token_budget,
+    )
 
   def _handle_tool_calls(
       self, response_dict: collections.abc.Mapping[str, Any]

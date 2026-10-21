@@ -1097,6 +1097,23 @@ LiteRtLmStatusCode litert_lm_engine_create_session(
 
 void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }
 
+LiteRtLmStatusCode litert_lm_session_clone(LiteRtLmSession* session,
+                                           LiteRtLmSession** out_session) {
+  LITERT_LM_C_RETURN_IF_NULL(out_session);
+  *out_session = nullptr;
+  if (!session || !session->session) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid session.");
+  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::unique_ptr<litert::lm::Engine::Session> cloned_session,
+      session->session->Clone());
+  auto c_session = std::make_unique<LiteRtLmSession>();
+  c_session->session = std::move(cloned_session);
+  *out_session = c_session.release();
+  return kLiteRtLmStatusOk;
+}
+
 LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session) {
   if (!session || !session->session) {
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,

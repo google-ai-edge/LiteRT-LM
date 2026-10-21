@@ -856,6 +856,89 @@ class EngineTest(LiteRtLmTestBase):
       conversation.send_message(user_message)
       self.assertEqual(conversation.token_count, 10)
 
+  def test_conversation_clone(self):
+    def get_weather(location: str) -> str:
+      """Gets weather for a location."""
+      return f"Weather in {location} is sunny."
+
+    messages = [litert_lm.Message.system("You are a helpful assistant.")]
+    extra_context = {"key": "value"}
+    thinking_config = litert_lm.ThinkingConfig(
+        enable_thinking=True, thinking_token_budget=10
+    )
+    sampler_config = litert_lm.SamplerConfig(
+        top_k=1, top_p=1.0, temperature=0.0, seed=42
+    )
+    constrained_config = litert_lm.ConstrainedDecodingConfig(enable=True)
+    tmpl = "{{ bos_token }}{% for m in messages %}{{ m.content }}{% endfor %}"
+
+    engine = self._create_engine(max_num_tokens=64)
+    with (
+        engine,
+        engine.create_conversation(
+            messages=messages,
+            tools=[get_weather],
+            automatic_tool_calling=False,
+            extra_context=extra_context,
+            thinking_config=thinking_config,
+            sampler_config=sampler_config,
+            max_output_tokens=2,
+            chat_template=tmpl,
+            constrained_decoding_config=constrained_config,
+            visual_token_budget=70,
+        ) as conversation,
+    ):
+      first_response = conversation.send_message("Hello")
+      self.assertIsNotNone(first_response)
+      token_count_after_first = conversation.token_count
+      self.assertGreater(token_count_after_first, 0)
+
+      with conversation.clone() as cloned:
+        self.assertIsInstance(cloned, litert_lm.Conversation)
+        self.assertEqual(cloned.messages, conversation.messages)
+        self.assertIsNot(cloned.messages, conversation.messages)
+        self.assertEqual(cloned.tools, conversation.tools)
+        self.assertIsNot(cloned.tools, conversation.tools)
+        self.assertEqual(
+            cloned.automatic_tool_calling, conversation.automatic_tool_calling
+        )
+        self.assertEqual(cloned.extra_context, conversation.extra_context)
+        self.assertIsNot(cloned.extra_context, conversation.extra_context)
+        self.assertEqual(cloned.thinking_config, conversation.thinking_config)
+        self.assertEqual(cloned.sampler_config, conversation.sampler_config)
+        self.assertEqual(
+            cloned.max_output_tokens, conversation.max_output_tokens
+        )
+        self.assertEqual(cloned.chat_template, conversation.chat_template)
+        self.assertEqual(
+            cloned.constrained_decoding_config,
+            conversation.constrained_decoding_config,
+        )
+        self.assertEqual(cloned.token_count, token_count_after_first)
+
+        orig_second = conversation.send_message("world")
+        cloned_second = cloned.send_message("world")
+        self.assertEqual(orig_second, cloned_second)
+
+  def test_conversation_clone_after_original_closed(self):
+    with self._create_engine(max_num_tokens=20) as engine:
+      conversation = engine.create_conversation(max_output_tokens=2)
+      conversation.send_message("Hello")
+      cloned = conversation.clone()
+      conversation.close()
+
+      with cloned:
+        response = cloned.send_message("world")
+        self.assertEqual(response.role, litert_lm.Role.MODEL)
+        self.assertNotEmpty(str(response))
+
+  def test_conversation_clone_when_closed_raises(self):
+    with self._create_engine() as engine:
+      conversation = engine.create_conversation()
+      conversation.close()
+      with self.assertRaisesRegex(RuntimeError, "Conversation is closed."):
+        conversation.clone()
+
   def test_conversation_get_benchmark_info(self):
     with (
         self._create_engine(enable_benchmark=True) as engine,
@@ -964,6 +1047,37 @@ class EngineTest(LiteRtLmTestBase):
       self.assertEqual(responses.texts, [self._EXPECTED_RESPONSE])
       self.assertLen(responses.scores, 1)
       self.assertEmpty(responses.token_lengths)
+
+  def test_session_clone(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_session() as session,
+    ):
+      session.run_prefill(["Hello", " world!"])
+      with session.clone() as cloned:
+        self.assertIsInstance(cloned, litert_lm.Session)
+        orig_responses = session.run_decode()
+        cloned_responses = cloned.run_decode()
+        self.assertEqual(orig_responses.texts, [self._EXPECTED_RESPONSE])
+        self.assertEqual(cloned_responses.texts, [self._EXPECTED_RESPONSE])
+
+  def test_session_clone_after_original_closed(self):
+    with self._create_engine() as engine:
+      session = engine.create_session()
+      session.run_prefill(["Hello", " world!"])
+      cloned = session.clone()
+      session.close()
+
+      with cloned:
+        cloned_responses = cloned.run_decode()
+        self.assertEqual(cloned_responses.texts, [self._EXPECTED_RESPONSE])
+
+  def test_session_clone_when_closed_raises(self):
+    with self._create_engine() as engine:
+      session = engine.create_session()
+      session.close()
+      with self.assertRaisesRegex(RuntimeError, "Session is closed."):
+        session.clone()
 
   def test_session_api_run_text_scoring_with_token_lengths(self):
     with (

@@ -13,11 +13,14 @@
 # limitations under the License.
 """Session wrapper for LiteRT-LM."""
 
+from __future__ import annotations
+
 import collections.abc
 import ctypes
 import pathlib
 import queue
 import warnings
+
 from . import interfaces
 from ._ffi import call_checked
 from ._ffi import check_status
@@ -53,8 +56,25 @@ class Session(interfaces.AbstractSession):
   def __del__(self):
     self.close()
 
+  def __enter__(self) -> Session:
+    return self
+
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.close()
+
+  def clone(self) -> Session:
+    """Clones the session, copying its state for independent use.
+
+    Returns:
+        A new Session instance with the same KV cache state and configuration.
+
+    Raises:
+        RuntimeError: If the session is closed or cloning fails.
+    """
+    if not self._ptr:
+      raise RuntimeError("Session is closed.")
+    cloned_ptr = create_checked(self._lib, "litert_lm_session_clone", self._ptr)
+    return Session(self._lib, cloned_ptr, engine=self._engine)
 
   def run_prefill(self, contents: list[str]) -> None:
     num_inputs = len(contents)

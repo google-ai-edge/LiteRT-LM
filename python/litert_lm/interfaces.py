@@ -762,6 +762,15 @@ class AbstractConversation(abc.ABC):
     """The number of tokens in the KV Cache (prefill + decode)."""
 
   @abc.abstractmethod
+  def clone(self) -> AbstractConversation:
+    """Clones the conversation, copying its state for independent use.
+
+    Returns:
+        A new conversation instance with the same message history, KV cache
+        state, and configuration.
+    """
+
+  @abc.abstractmethod
   def get_benchmark_info(self) -> BenchmarkInfo:
     """Returns the benchmark info of the conversation."""
 
@@ -965,7 +974,6 @@ class Responses:
   token_scores: list[list[float]] = dataclasses.field(default_factory=list)
 
 
-# TODO(b/482060476): Add clone() API once switching to advanced engine.
 class AbstractSession(abc.ABC):
   """Abstract base class for managing LiteRT-LM sessions."""
 
@@ -979,6 +987,14 @@ class AbstractSession(abc.ABC):
   def __exit__(self, exc_type, exc_val, exc_tb) -> None:
     """Releases the session."""
     del exc_type, exc_val, exc_tb
+
+  @abc.abstractmethod
+  def clone(self) -> AbstractSession:
+    """Clones the session, copying its state for independent use.
+
+    Returns:
+        A new session instance with the same KV cache state and configuration.
+    """
 
   @abc.abstractmethod
   def run_prefill(self, contents: list[str]) -> None:

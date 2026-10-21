@@ -419,6 +419,11 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_session_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_session_clone.restype = ctypes.c_int
+  lib.litert_lm_session_clone.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_session_cancel_process.restype = ctypes.c_int
   lib.litert_lm_session_cancel_process.argtypes = [ctypes.c_void_p]
   lib.litert_lm_session_run_prefill.restype = ctypes.c_int
@@ -666,6 +671,11 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_void_p),
   ]
   lib.litert_lm_conversation_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_clone.restype = ctypes.c_int
+  lib.litert_lm_conversation_clone.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
   lib.litert_lm_conversation_send_message.restype = ctypes.c_int
   lib.litert_lm_conversation_send_message.argtypes = [
       ctypes.c_void_p,

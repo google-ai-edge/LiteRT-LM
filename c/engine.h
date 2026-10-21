@@ -1189,6 +1189,21 @@ LiteRtLmStatusCode litert_lm_engine_create_session(
 LITERT_LM_C_API_EXPORT
 void litert_lm_session_delete(LiteRtLmSession* session);
 
+// Clones a LiteRT LM Session, copying its state so the new session can be used
+// independently.
+//
+// @param session The session to clone.
+// @param out_session On success, receives the cloned session, owned by the
+//   caller; release with `litert_lm_session_delete`. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   or `out_session` is NULL.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_session_clone(LiteRtLmSession* session,
+                                           LiteRtLmSession** out_session);
+
 // Cancels the current processing in the session.
 //
 // This function only requests cancellation and does not wait for it: the
