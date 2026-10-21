@@ -53,7 +53,6 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
-#include "runtime/engine/accelerator_memory_monitor.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -63,6 +62,7 @@
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/memory_mapped_file.h"
+#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #include "tflite/profiling/memory_usage_monitor.h"  // from @litert

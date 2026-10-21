@@ -136,33 +136,6 @@ cc_library(
 )
 
 cc_library(
-    name = "accelerator_memory_monitor",
-    srcs = ["accelerator_memory_monitor.cc"],
-    hdrs = ["accelerator_memory_monitor.h"],
-    deps = [
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
-    ],
-)
-
-cc_test(
-    name = "accelerator_memory_monitor_test",
-    srcs = ["accelerator_memory_monitor_test.cc"],
-    deps = [
-        ":accelerator_memory_monitor",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
-    ],
-)
-
-cc_library(
     name = "io_types",
     srcs = ["io_types.cc"],
     hdrs = ["io_types.h"],
@@ -211,7 +184,6 @@ cc_library(
     srcs = ["litert_lm_lib.cc"],
     hdrs = ["litert_lm_lib.h"],
     deps = [
-        ":accelerator_memory_monitor",
         ":engine_factory",
         ":engine_impl_selected",
         ":engine_interface",
@@ -250,6 +222,7 @@ cc_library(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
+        "//runtime/util/memory_profiling:accelerator_memory_monitor",
         "//support/tokenizer",
         "@com_googlesource_code_re2//:re2",
         "@stb//:stb_image",
@@ -391,7 +364,6 @@ cc_library(
     srcs = ["embedding_litert_lm_lib.cc"],
     hdrs = ["embedding_litert_lm_lib.h"],
     deps = [
-        ":accelerator_memory_monitor",
         ":embedding_engine",
         ":embedding_engine_settings",
         ":io_types",
@@ -417,6 +389,7 @@ cc_library(
         "//runtime/util:litert_util",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:scoped_file",
+        "//runtime/util/memory_profiling:accelerator_memory_monitor",
         "//support/preprocessor:audio_preprocessor_miniaudio",  # buildcleaner: keep
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "@litert//tflite/profiling:memory_usage_monitor",

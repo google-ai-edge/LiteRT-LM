@@ -14,6 +14,8 @@
 
 set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+add_subdirectory(memory_profiling)
+
 # ==============================================================================
 # Convert Tensor Buffer
 # ==============================================================================
@@ -506,6 +508,7 @@ target_link_libraries(runtime_util_libs INTERFACE
   LiteRTLM::Runtime::Util::LoggingTensorBuffer
   LiteRTLM::Runtime::Util::LoraData
   LiteRTLM::Runtime::Util::LoraUtil
+  LiteRTLM::Runtime::Util::MemoryProfiling
   LiteRTLM::Runtime::Util::MetadataUtil
   LiteRTLM::Runtime::Util::MetricsUtil
   LiteRTLM::Runtime::Util::ModelAssetBundleResources

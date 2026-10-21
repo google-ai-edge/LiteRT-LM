@@ -23,7 +23,7 @@
 
 #include "runtime/engine/litert_lm_lib.h"
 
-#include "runtime/engine/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
 
 #if defined(_WIN32)
 #include <io.h>

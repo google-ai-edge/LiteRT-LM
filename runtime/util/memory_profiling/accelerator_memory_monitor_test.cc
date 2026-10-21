@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/engine/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
 
 #include <cstddef>
 #include <cstdint>
