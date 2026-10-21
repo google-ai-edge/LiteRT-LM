@@ -959,5 +959,42 @@ TEST(ParserUtilsTest, ParseRegexInvalidToolCallReturnsError) {
                    .ok());
 }
 
+TEST(ParserUtilsTest, ParseRegexMiniCpm5ToolCallAndCdata) {
+  const RE2 kToolCallRegex(R"((?s)\s*name\s*=\s*["']([^"']+)["']\s*>(.*))");
+  const RE2 kArgumentRegex(
+      R"((?s)<param\s+name\s*=\s*["']([^"']+)["']\s*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</param>)");
+  EXPECT_THAT(ParseTextAndToolCalls(
+                  R"(Let me run that for you.
+<function name="execute_code"><param name="language">python</param><param name="timeout">30</param><param name="code"><![CDATA[if a < b && c > d:
+  print("hello")]]></param></function>)",
+                  /*code_fence_start=*/"<function",
+                  /*code_fence_end=*/"</function>",
+                  /*syntax_type=*/SyntaxType::kRegex,
+                  {.regex_options =
+                       RegexParserOptions{.tool_call_regex = &kToolCallRegex,
+                                          .argument_regex = &kArgumentRegex}}),
+              IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
+        "content": [
+          {
+            "type": "text",
+            "text": "Let me run that for you.\n"
+          }
+        ],
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "name": "execute_code",
+              "arguments": {
+                "language": "python",
+                "timeout": 30,
+                "code": "if a < b && c > d:\n  print(\"hello\")"
+              }
+            }
+          }
+        ]
+      })json")));
+}
+
 }  // namespace
 }  // namespace litert::lm

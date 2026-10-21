@@ -344,6 +344,62 @@ Paris
             })json"));
 }
 
+TEST(GenericDataProcessorTest, ToMessageWithMiniCpm5RegexToolCall) {
+  proto::ToolCallConfig tool_call_config;
+  tool_call_config.set_fence_start("<function");
+  tool_call_config.set_fence_end("</function>");
+  tool_call_config.mutable_regex_syntax()->set_tool_call_regex(
+      R"((?s)\s*name\s*=\s*["']([^"']+)["']\s*>(.*))");
+  tool_call_config.mutable_regex_syntax()->set_argument_regex(
+      R"((?s)<param\s+name\s*=\s*["']([^"']+)["']\s*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</param>)");
+  GenericDataProcessorConfig config = {
+      .tool_call_config = tool_call_config,
+  };
+  Preface preface = JsonPreface{.tools = json::parse(R"json([
+        {
+          "type": "function",
+          "function": {
+            "name": "execute_code",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "code": {"type": "string"},
+                "timeout": {"type": "integer"}
+              }
+            }
+          }
+        }
+      ])json")};
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       GenericDataProcessor::Create(config, preface));
+  EXPECT_EQ(processor->CodeFenceStart(), "<function");
+  EXPECT_EQ(processor->CodeFenceEnd(), "</function>");
+
+  ASSERT_OK_AND_ASSIGN(
+      const Message message,
+      processor->ToMessage(
+          Responses(
+              TaskState::kProcessing,
+              {R"(<function name="execute_code"><param name="code"><![CDATA[x < 1 && y > 2]]></param><param name="timeout">10</param></function>)"}),
+          std::monostate{}));
+
+  EXPECT_EQ(message, json::parse(R"json({
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "execute_code",
+                    "arguments": {
+                      "code": "x < 1 && y > 2",
+                      "timeout": 10
+                    }
+                  }
+                }
+              ]
+            })json"));
+}
+
 TEST(GenericDataProcessorTest, InvalidToolCallConfigReturnsError) {
   // Empty fence_start / fence_end.
   {

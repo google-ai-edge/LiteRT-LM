@@ -16,7 +16,17 @@ stop_tokens {
 }
 max_num_tokens: 4096
 llm_model_type {
-  minicpm5 {
+  generic_model {
+  }
+}
+supports_thinking: true
+supports_function_calling: true
+tool_call_config {
+  fence_start: "<function"
+  fence_end: "</function>"
+  regex_syntax {
+    tool_call_regex: "(?s)\\s*name\\s*=\\s*[\"']([^\"']+)[\"']\\s*>(.*)"
+    argument_regex: "(?s)<param\\s+name\\s*=\\s*[\"']([^\"']+)[\"']\\s*>(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?\\s*</param>"
   }
 }
 
@@ -110,3 +120,6 @@ channels {
   start: "<think>\n"
   end: "</think>"
 }
+
+# Function calling support is added in 0.19.0.
+min_runtime_version: "0.19.0"

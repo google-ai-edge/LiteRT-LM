@@ -16,7 +16,8 @@ Canonical LiteRT-LM prompt templates and metadata configuration for the MiniCPM
     -   Supports function/tool signatures enclosed in `<tools>` and `</tools>`
         XML tags in the system prompt.
     -   Assistant function calls are formatted as XML within `<function
-        name="...">` tags.
+        name="...">` tags and parsed by `GenericDataProcessor` via
+        `tool_call_config.regex_syntax` in `LlmMetadataProto.pbtext`.
     -   Multi-step tool responses are wrapped within `<tool_response>` tags
         under the `tool` role.
 
@@ -40,7 +41,7 @@ using `litert-torch`:
 ```bash
 litert-torch export_hf \
   --model=openbmb/MiniCPM5-1B \
-  --litert_lm_llm_metadata_override=/tmp/minicpm_metadata.textpb \
+  --litert_lm_llm_metadata_override=models/minicpm5/LlmMetadataProto.pbtext \
   --quantization_recipe=dynamic_wi8_afp32 \
   --use_bool_mask=True \
   --apply_gpu_composites=True \

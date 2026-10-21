@@ -34,6 +34,11 @@
 namespace litert::lm {
 
 // MiniCpm5DataProcessor is a ModelDataProcessor for MiniCPM5 models.
+//
+// NOTE: Newer MiniCPM5 models use GenericDataProcessor with
+// ToolCallConfig.RegexSyntax in LlmMetadata. This class is kept for backward
+// compatibility with existing .litertlm models that set
+// llm_model_type { minicpm5 {} }.
 class MiniCpm5DataProcessor
     : public TypeSafeModelDataProcessor<MiniCpm5DataProcessorConfig,
                                         MiniCpm5DataProcessorArguments> {
