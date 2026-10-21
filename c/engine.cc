@@ -1536,6 +1536,14 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
   return kLiteRtLmStatusOk;
 }
 
+LiteRtLmStatusCode litert_lm_benchmark_info_get_max_num_tokens(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_max_num_tokens) {
+  LITERT_LM_C_RETURN_IF_NULL(out_max_num_tokens);
+  LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
+  *out_max_num_tokens = benchmark_info->benchmark_info.GetMaxNumTokens();
+  return kLiteRtLmStatusOk;
+}
+
 LiteRtLmStatusCode litert_lm_engine_tokenize(
     LiteRtLmEngine* engine, const char* text,
     LiteRtLmTokenizeResult** out_result) {

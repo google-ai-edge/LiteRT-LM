@@ -381,6 +381,12 @@ void BenchmarkInfo::SetExecutorStats(ExecutorStats executor_stats) {
   executor_stats_ = std::move(executor_stats);
 }
 
+int BenchmarkInfo::GetMaxNumTokens() const { return max_num_tokens_; }
+
+void BenchmarkInfo::SetMaxNumTokens(int max_num_tokens) {
+  max_num_tokens_ = max_num_tokens;
+}
+
 std::ostream& operator<<(std::ostream& os, const BenchmarkTurnData& data) {
   os << "Processed " << data.num_tokens << " tokens in " << data.duration
      << " duration." << std::endl;

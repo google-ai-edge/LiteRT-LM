@@ -36,6 +36,11 @@ public struct BenchmarkInfo {
 
   /// The number of tokens processed per second in the last decode.
   public let lastDecodeTokensPerSecond: Double
+
+  /// The max number of tokens, i.e. the KV cache size, that the engine used. It can differ from the
+  /// requested one, e.g. for a model whose KV cache size is fixed when it is compiled. 0 if the
+  /// engine didn't report it.
+  public let maxNumTokens: Int
 }
 
 /// Runs a benchmark on the LiteRT-LM engine.
