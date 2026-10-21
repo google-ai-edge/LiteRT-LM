@@ -680,13 +680,19 @@ public final class Conversation: Sendable {
       }
     }
 
+    let maxNumTokens = try Int(
+      LiteRTLMError.get(
+        Int32(0), "litert_lm_benchmark_info_get_max_num_tokens", makeError
+      ) { litert_lm_benchmark_info_get_max_num_tokens(benchmarkInfoPtr, $0) })
+
     return BenchmarkInfo(
       initTimeInSecond: initTimeInSecond,
       timeToFirstTokenInSecond: timeToFirstTokenInSecond,
       lastPrefillTokenCount: lastPrefillTokenCount,
       lastDecodeTokenCount: lastDecodeTokenCount,
       lastPrefillTokensPerSecond: lastPrefillTokensPerSec,
-      lastDecodeTokensPerSecond: lastDecodeTokensPerSec
+      lastDecodeTokensPerSecond: lastDecodeTokensPerSec,
+      maxNumTokens: maxNumTokens
     )
   }
 
