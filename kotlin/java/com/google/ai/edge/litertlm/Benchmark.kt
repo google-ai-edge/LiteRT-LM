@@ -43,6 +43,9 @@ package com.google.ai.edge.litertlm
  *       (when using an external sampler).
  *     - `"executor_decode_and_sample"`: Time spent in the combined `Decode` and sampling call for
  *       the last decoded token (when the executor performs sampling internally).
+ * @property maxNumTokens The max number of tokens, i.e. the KV cache size, that the engine used. It
+ *   can differ from the requested one, e.g. for a model whose KV cache size is fixed when it is
+ *   compiled. Returns 0 if the engine didn't report it.
  */
 data class BenchmarkInfo(
   val initTimeInSecond: Double,
@@ -52,6 +55,7 @@ data class BenchmarkInfo(
   val lastPrefillTokensPerSecond: Double,
   val lastDecodeTokensPerSecond: Double,
   val markDurationsInSecond: Map<String, Double> = emptyMap(),
+  val maxNumTokens: Int = 0,
 )
 
 /**
@@ -82,6 +86,10 @@ data class BenchmarkInfo(
  *   same logit-mask runner as grammar constraints, so it is a cheap way to make a benchmark
  *   exercise the masking path. `null` disables the penalties.
  * @param loraConfig Configuration for LoRA weights. If `null`, no LoRA weights are loaded.
+ * @param maxNumTokens The maximum number of the sum of input and output tokens, i.e. the size of the
+ *   KV cache, like [EngineConfig.maxNumTokens]. When `null`, use the default value from the model
+ *   or the engine. Note that the KV cache size affects the prefill and decode speed. The value that
+ *   the engine actually used is returned in [BenchmarkInfo.maxNumTokens].
  * @return The benchmark info.
  */
 @ExperimentalApi
@@ -96,7 +104,11 @@ fun benchmark(
   contents: Contents = Contents.of("How are you"),
   repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
   loraConfig: LoraConfig? = null,
+  maxNumTokens: Int? = null,
 ): BenchmarkInfo {
+  require(maxNumTokens == null || maxNumTokens > 0) {
+    "maxNumTokens must be positive, but got $maxNumTokens."
+  }
   val enginePointer =
     LiteRtLmJni.nativeCreateBenchmark(
       modelPath,
@@ -111,6 +123,7 @@ fun benchmark(
       (audioBackend as? Backend.NPU)?.nativeLibraryDir ?: "",
       ExperimentalFlags.enableSpeculativeDecoding,
       ExperimentalFlags.enableYnnpack,
+      maxNumTokens ?: -1,
     )
 
   try {

@@ -295,6 +295,14 @@ class BenchmarkInfo {
   const std::optional<ExecutorStats>& GetExecutorStats() const;
   void SetExecutorStats(ExecutorStats executor_stats);
 
+  // --- Max number of tokens ---
+  // The max number of tokens (i.e. the KV cache size) used by the executor,
+  // after the executor resolved it from the requested value and the model. For
+  // example, a static or NPU model uses its own size when it can't support the
+  // requested one. 0 if the executor didn't report it.
+  int GetMaxNumTokens() const;
+  void SetMaxNumTokens(int max_num_tokens);
+
  private:
   proto::BenchmarkParams benchmark_params_;
 
@@ -314,6 +322,7 @@ class BenchmarkInfo {
   std::vector<BenchmarkTurnData> text_to_token_ids_turns_;
   std::string profile_summary_;
   std::optional<ExecutorStats> executor_stats_;
+  int max_num_tokens_ = 0;
 };
 std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info);
 
