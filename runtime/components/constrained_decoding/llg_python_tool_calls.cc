@@ -17,11 +17,15 @@
 #include <string>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
+
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/str_replace.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llg_tool_call_utils.h"
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
@@ -117,16 +121,44 @@ NULL: "None"
 %ignore /[ \t]+/ )";
 }
 
+// `python_start` is the Lark expression that opens a tool call block.
 std::string GetPythonFunctionBlock(
-    const std::vector<std::string>& tool_call_cases) {
+    const std::vector<std::string>& tool_call_cases,
+    absl::string_view python_start) {
   return absl::StrFormat(
       R"(python_block
 python_block: python_start (python_call)* python_end
-python_start: "```tool_code\n"
+python_start: %s
 python_end: "\n```"
 python_call: (%s) "\n"?
 )",
-      absl::StrJoin(tool_call_cases, " | "));
+      python_start, absl::StrJoin(tool_call_cases, " | "));
+}
+
+// Returns the terminals and the `function_block` rule for the modes that mix
+// free text with tool call blocks. The code fence is plain text and LLGuidance
+// lexes terminals greedily with one byte of lookahead, so a standalone
+// free-text terminal would consume the fence and everything after it, and any
+// call (even a malformed one) would be accepted as text. Instead, the text
+// preceding each block is folded into the terminal that opens it:
+// TEXT_AND_FENCE cannot contain the fence before its end, so it ends exactly at
+// the first fence. TEXT_CONTENT only covers the optional trailing text after
+// the last block.
+std::string GetTextAndFunctionBlockRules(
+    const std::vector<std::string>& tool_call_cases,
+    absl::string_view code_fence_start) {
+  const std::string escaped_fence =
+      absl::StrReplaceAll(code_fence_start, {{"\n", "\\n"}});
+  return absl::StrFormat(
+      R"(
+FORBIDDEN_CALL: /(.|\n)*%s(.|\n)*/
+SAFE_TEXT: /(.|\n)*/ & ~FORBIDDEN_CALL
+TEXT_AND_FENCE: SAFE_TEXT "%s"
+TEXT_CONTENT: /(.|\n)+/ & ~FORBIDDEN_CALL
+function_block: %s
+)",
+      escaped_fence, escaped_fence,
+      GetPythonFunctionBlock(tool_call_cases, "TEXT_AND_FENCE"));
 }
 
 }  // namespace
@@ -158,15 +190,27 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
   }
 
   std::vector<std::string> tool_call_cases;
-  tool_call_cases.reserve(tool_names.size());
-  for (const auto& tool_name : tool_names) {
-    tool_call_cases.push_back(absl::StrFormat(R"raw("%s" "(" %s-args ")")raw",
-                                              tool_name,
-                                              SanitizeLarkRuleName(tool_name)));
+  if (options.forced_function_name.has_value()) {
+    const std::string& forced_name = *options.forced_function_name;
+    if (!absl::c_linear_search(tool_names, forced_name)) {
+      return absl::InvalidArgumentError(absl::StrFormat(
+          "Forced function '%s' not found in provided tools.", forced_name));
+    }
+    tool_call_cases.push_back(
+        absl::StrFormat(R"raw("%s" "(" %s-args ")")raw", forced_name,
+                        SanitizeLarkRuleName(forced_name)));
+  } else {
+    tool_call_cases.reserve(tool_names.size());
+    for (const auto& tool_name : tool_names) {
+      tool_call_cases.push_back(
+          absl::StrFormat(R"raw("%s" "(" %s-args ")")raw", tool_name,
+                          SanitizeLarkRuleName(tool_name)));
+    }
   }
 
   std::string python_grammar = GetPythonGrammar(options);
-  std::string function_block = GetPythonFunctionBlock(tool_call_cases);
+  std::string function_block =
+      GetPythonFunctionBlock(tool_call_cases, R"("```tool_code\n")");
   std::string text_only_block = GetTextOnlyBlock(options);
 
   std::string start_rule;
@@ -175,7 +219,7 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
       return text_only_block;
     }
     case LlgConstraintMode::kFunctionCallsOnly: {
-      if (tool_names.empty()) {
+      if (tool_call_cases.empty()) {
         return absl::InvalidArgumentError(
             "No tools provided for FunctionCallsOnly mode.");
       }
@@ -183,16 +227,22 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
       break;
     }
     case LlgConstraintMode::kTextAndOrFunctionCalls: {
-      if (tool_names.empty()) {
+      if (tool_call_cases.empty()) {
         return text_only_block;
       }
-      start_rule = absl::StrFormat(
-          R"(
-start: (TEXT_CONTENT | function_block)*
-TEXT_CONTENT: /(.|\n)+/
-function_block: %s
-)",
-          function_block);
+      start_rule = absl::StrCat("start: function_block* TEXT_CONTENT?",
+                                GetTextAndFunctionBlockRules(
+                                    tool_call_cases, options.code_fence_start));
+      break;
+    }
+    case LlgConstraintMode::kFunctionCallsRequired: {
+      if (tool_call_cases.empty()) {
+        return absl::InvalidArgumentError(
+            "No tools provided for FunctionCallsRequired mode.");
+      }
+      start_rule = absl::StrCat("start: function_block+ TEXT_CONTENT?",
+                                GetTextAndFunctionBlockRules(
+                                    tool_call_cases, options.code_fence_start));
       break;
     }
   }

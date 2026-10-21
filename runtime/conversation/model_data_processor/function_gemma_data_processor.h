@@ -27,9 +27,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
-#endif
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -76,34 +77,30 @@ class FunctionGemmaDataProcessor
   absl::string_view CodeFenceEnd() const override;
 
  private:
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  explicit FunctionGemmaDataProcessor(
-      const FunctionGemmaDataProcessorConfig& config =
-          FunctionGemmaDataProcessorConfig(),
-      std::optional<Preface> preface = std::nullopt)
-      : config_(config), preface_(preface) {};
-#else
-  explicit FunctionGemmaDataProcessor(
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // TODO(b/574011343): Remove the FST path once LLGuidance tool call
+  // constraints are validated and made the default.
+  using ConstraintProviderPtr =
       std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                      decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-          constraint_provider,
+                      decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>;
+#else
+  using ConstraintProviderPtr = std::unique_ptr<ConstraintProvider>;
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+
+  explicit FunctionGemmaDataProcessor(
+      ConstraintProviderPtr constraint_provider,
       const FunctionGemmaDataProcessorConfig& config =
           FunctionGemmaDataProcessorConfig(),
       std::optional<Preface> preface = std::nullopt)
-      : constraint_provider_c_(std::move(constraint_provider)),
+      : constraint_provider_(std::move(constraint_provider)),
         config_(config),
-        preface_(preface) {};
-#endif
+        preface_(preface) {}
 
   absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses,
       const FunctionGemmaDataProcessorArguments& args) const override;
 
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                  decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-      constraint_provider_c_;
-#endif
+  ConstraintProviderPtr constraint_provider_;
   FunctionGemmaDataProcessorConfig config_;
   std::optional<Preface> preface_;
 };

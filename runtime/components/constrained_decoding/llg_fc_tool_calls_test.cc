@@ -39,6 +39,7 @@
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 #include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {
@@ -118,8 +119,8 @@ class LlgFcToolCallsTest : public testing::Test {
   static const LlGuidanceConfig& GetConfig() {
     static const auto* const config = new LlGuidanceConfig{
         .eos_id = 1,
-        .special_tokens = {"<|tool_call>", "<tool_call|>", "<|tool_response>",
-                           "<tool_response|>", "<|\"|>"}};
+        .special_tokens = {"<eos>", "<|tool_call>", "<tool_call|>",
+                           "<|tool_response>", "<tool_response|>", "<|\"|>"}};
     return *config;
   }
   static inline TestSentencePieceTokenizer* tokenizer_ = nullptr;
@@ -1095,6 +1096,168 @@ TEST_F(LlgFcToolCallsTest, CaseSensitiveToolNamesCoexist) {
   AssertRejects(
       *constraint,
       R"(<|tool_call>call:get_Weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, ForcedFunctionRestrictsToNamedTool) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.forced_function_name = "get_weather";
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Forced function is accepted.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
+
+  // Non-forced function is rejected.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+
+  // Text only is rejected.
+  AssertRejects(*constraint, "Just plain text.");
+}
+
+TEST_F(LlgFcToolCallsTest, ForcedFunctionNotFoundReturnsError) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.forced_function_name = "non_existent_tool";
+
+  auto result = CreateLarkGrammarForFcToolCalls(tools, options);
+  EXPECT_THAT(result.status(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       testing::HasSubstr("not found in provided tools")));
+}
+
+TEST_F(LlgFcToolCallsTest, ForcedFunctionWithTextAndOrMode) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  options.forced_function_name = "get_weather";
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Plain text accepted in TextAndOr mode
+  AssertAccepts(*constraint, "Just talking without tool.");
+  // Non-forced tool rejected
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Comedy<|"|>}<tool_call|><|tool_response>)");
+  // Forced tool accepted with prefix text
+  AssertAccepts(
+      *constraint,
+      R"(I'll look up the weather:<|tool_call>call:get_weather{location:<|"|>London<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsRequired) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired));
+  ASSERT_NE(constraint, nullptr);
+
+  // Pure text without tool calls is rejected.
+  AssertRejects(*constraint, "Just plain text without any tool call.");
+
+  // Tool call without surrounding text is accepted.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+
+  // Tool call preceded by text is accepted.
+  AssertAccepts(
+      *constraint,
+      R"(Let me check the weather:<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+
+  // Multiple tool calls with prefix text are accepted.
+  AssertAccepts(
+      *constraint,
+      R"(Checking both:<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsRequiredEmptyToolsReturnsError) {
+  nlohmann::ordered_json empty_tools = nlohmann::ordered_json::array();
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+
+  auto result = CreateLarkGrammarForFcToolCalls(empty_tools, options);
+  EXPECT_THAT(
+      result.status(),
+      StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          testing::HasSubstr("No tools provided for FunctionCallsRequired")));
 }
 
 }  // namespace

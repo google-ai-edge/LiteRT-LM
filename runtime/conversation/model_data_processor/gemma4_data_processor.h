@@ -27,9 +27,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
-#endif
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -69,31 +70,27 @@ class Gemma4DataProcessor
   absl::string_view CodeFenceEnd() const override;
 
  private:
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  explicit Gemma4DataProcessor(
-      const Gemma4DataProcessorConfig& config = Gemma4DataProcessorConfig(),
-      std::optional<Preface> preface = std::nullopt,
-      std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
-      std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
-      : config_(config),
-        preface_(preface),
-        image_preprocessor_(std::move(image_preprocessor)),
-        audio_preprocessor_(std::move(audio_preprocessor)) {};
-#else
-  explicit Gemma4DataProcessor(
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // TODO(b/574011343): Remove the FST path once LLGuidance tool call
+  // constraints are validated and made the default.
+  using ConstraintProviderPtr =
       std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                      decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-          constraint_provider,
+                      decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>;
+#else
+  using ConstraintProviderPtr = std::unique_ptr<ConstraintProvider>;
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+
+  explicit Gemma4DataProcessor(
+      ConstraintProviderPtr constraint_provider,
       const Gemma4DataProcessorConfig& config = Gemma4DataProcessorConfig(),
       std::optional<Preface> preface = std::nullopt,
       std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
       std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
-      : constraint_provider_c_(std::move(constraint_provider)),
+      : constraint_provider_(std::move(constraint_provider)),
         config_(config),
         preface_(preface),
         image_preprocessor_(std::move(image_preprocessor)),
-        audio_preprocessor_(std::move(audio_preprocessor)) {};
-#endif
+        audio_preprocessor_(std::move(audio_preprocessor)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
@@ -104,11 +101,7 @@ class Gemma4DataProcessor
       const Responses& responses,
       const Gemma4DataProcessorArguments& args) const override;
 
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                  decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-      constraint_provider_c_;
-#endif
+  ConstraintProviderPtr constraint_provider_;
   Gemma4DataProcessorConfig config_;
   std::optional<Preface> preface_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;

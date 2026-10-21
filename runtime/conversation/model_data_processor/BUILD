@@ -28,7 +28,10 @@ package(
 
 # Pass --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 or
 # --//build_config:enable_fst_constraints=false
-# to disable FST constraints.
+# to disable FST constraints. The Gemma 3, Gemma 4 and FunctionGemma processors
+# then build their tool call constraints with LLGuidance instead of the legacy
+# FST constraint provider.
+# TODO(b/574011343): Make LLGuidance the default once it is validated.
 alias(
     name = "litert_lm_fst_constraints_disabled",
     actual = "//build_config:disable_fst_constraints",
@@ -619,6 +622,7 @@ GEMMA3_DATA_PROCESSOR_COMMON_DEPS = [
     "@nlohmann_json//:json",
     "@litert//litert/cc:litert_layout",
     "//runtime/components/constrained_decoding:constraint",
+    "//runtime/components/constrained_decoding:constraint_provider",
     "//runtime/components/tool_use:python_tool_format_utils",
     "//runtime/conversation:io_types",
     "//runtime/engine:io_types",
@@ -629,7 +633,6 @@ GEMMA3_DATA_PROCESSOR_COMMON_DEPS = [
     "//support/preprocessor:image_preprocessor",
     "//support/preprocessor:image_preprocessor_impl",
     "//support/tokenizer",
-    "//support/tokenizer:sentencepiece_tokenizer",
     "@com_googlesource_code_re2//:re2",
     "@sentencepiece//:sentencepiece_model_cc_proto",
 ]
@@ -675,8 +678,8 @@ cc_library(
     srcs = ["function_gemma_data_processor.cc"],
     hdrs = ["function_gemma_data_processor.h"],
     defines = ["ENABLE_FUNCTION_GEMMA_DATA_PROCESSOR"] + select({
-        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-        "//conditions:default": [],
+        ":litert_lm_fst_constraints_disabled": [],
+        "//conditions:default": ["LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS"],
     }),
     deps = [
         ":data_utils",
@@ -691,16 +694,20 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "//runtime/components/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:constraint_provider",
         "//runtime/components/tool_use:fc_tool_format_utils",
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
         "//support/tokenizer",
-        "//support/tokenizer:sentencepiece_tokenizer",
         "@sentencepiece//:sentencepiece_model_cc_proto",
     ] + select({
-        ":litert_lm_fst_constraints_disabled": [],
+        ":litert_lm_fst_constraints_disabled": [
+            "//runtime/components/constrained_decoding:llg_constraint_config",
+            "//runtime/components/constrained_decoding:llg_constraint_provider",
+            "//runtime/components/constrained_decoding:llguidance_schema_utils",
+        ],
         "//conditions:default": [
             "//runtime/components/constrained_decoding:gemma_model_constraint_provider_lib",
         ],
@@ -751,6 +758,7 @@ GEMMA4_DATA_PROCESSOR_COMMON_DEPS = [
     "@com_google_absl//absl/strings:string_view",
     "@nlohmann_json//:json",
     "//runtime/components/constrained_decoding:constraint",
+    "//runtime/components/constrained_decoding:constraint_provider",
     "//runtime/conversation:io_types",
     "//runtime/engine:io_types",
     "//runtime/util:litert_status_util",
@@ -760,7 +768,6 @@ GEMMA4_DATA_PROCESSOR_COMMON_DEPS = [
     "//support/preprocessor:image_preprocessor",
     "//support/preprocessor:stb_image_preprocessor",
     "//support/tokenizer",
-    "//support/tokenizer:sentencepiece_tokenizer",
     "@com_googlesource_code_re2//:re2",
     "@sentencepiece//:sentencepiece_model_cc_proto",
 ]

@@ -26,6 +26,10 @@ def gemma_data_processor_libraries(
         visibility = None):
     """Defines `<name>` and `<name>_lite` cc_library targets for a Gemma data processor.
 
+    `<name>` builds tool call constraints with the legacy FST constraint
+    provider by default, and with LLGuidance when FST constraints are disabled.
+    `<name>_lite` links neither, so it does not support constrained decoding.
+
     Args:
       name: Base name of the data processor library (e.g., "gemma3_data_processor").
       srcs: Source files for the data processor.
@@ -39,14 +43,18 @@ def gemma_data_processor_libraries(
         srcs = srcs,
         hdrs = hdrs,
         defines = [enable_define] + select({
-            "//runtime/conversation/model_data_processor:litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-            "//conditions:default": [],
+            "//runtime/conversation/model_data_processor:litert_lm_fst_constraints_disabled": [],
+            "//conditions:default": ["LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS"],
         }),
         visibility = visibility,
         deps = common_deps + [
             "//runtime/components/tool_use:parser_utils",
         ] + select({
-            "//runtime/conversation/model_data_processor:litert_lm_fst_constraints_disabled": [],
+            "//runtime/conversation/model_data_processor:litert_lm_fst_constraints_disabled": [
+                "//runtime/components/constrained_decoding:llg_constraint_config",
+                "//runtime/components/constrained_decoding:llg_constraint_provider",
+                "//runtime/components/constrained_decoding:llguidance_schema_utils",
+            ],
             "//conditions:default": [
                 "//runtime/components/constrained_decoding:gemma_model_constraint_provider_lib",
             ],
@@ -59,7 +67,7 @@ def gemma_data_processor_libraries(
         hdrs = hdrs,
         defines = [
             enable_define,
-            "LITERT_LM_FST_CONSTRAINTS_DISABLED",
+            "LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED",
         ],
         visibility = visibility,
         deps = common_deps + [

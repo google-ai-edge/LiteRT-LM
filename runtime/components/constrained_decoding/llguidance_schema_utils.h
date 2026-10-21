@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_
 
+#include <optional>
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -31,9 +32,11 @@ enum class FuncallFormat {
 
 // Supported constraint modes.
 enum class LlgConstraintMode {
-  kTextAndOrFunctionCalls,  // Optional text + optional function calls.
+  kTextAndOrFunctionCalls,  // Optional text + optional function calls ("auto").
   kFunctionCallsOnly,       // Only function calls are allowed.
-  kTextOnly,                // Only text is allowed (no function calls).
+  kTextOnly,                // Only text is allowed (no function calls, "none").
+  kFunctionCallsRequired,   // Optional text + at least one required function
+                            // call ("required").
 };
 
 // Options for formatting constraints.
@@ -46,6 +49,9 @@ struct LlgConstraintsOptions {
   std::string open_quote;
   std::string close_quote;
   std::string function_response_start;
+
+  // If set, constrains tool calling strictly to this specific function name.
+  std::optional<std::string> forced_function_name = std::nullopt;
 };
 
 // Converts tools to a Lark grammar string.
