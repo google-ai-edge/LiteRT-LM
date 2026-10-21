@@ -13,6 +13,8 @@
 # limitations under the License.
 
 # [Google-internal load of `cc_binary`]
+
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_shared_library`]
 # [Google-internal load of `cc_test`]
@@ -249,9 +251,16 @@ cc_library(
 cc_library(
     name = "default_static_gpu_samplers",
     deps = select({
-        # If CAPI is linked dynamically, need to link the sampler dynamically as well.
-        "@litert//litert:litert_runtime_link_mode_dynamic": [],
-        "//conditions:default": [],
+        ":android_webgpu": [":top_k_webgpu_sampler_static"],
+        "@platforms//os:android": [":top_k_opencl_sampler_static"],
+        "//runtime/executor:ios_webgpu": [":top_k_webgpu_sampler_static"],
+        "//runtime/executor:macos_metal": [":top_k_metal_sampler_static"],
+        "@platforms//os:ios": [":top_k_metal_sampler_static"],
+        "@platforms//os:macos": [
+            ":top_k_metal_sampler_static",
+            ":top_k_webgpu_sampler_static",
+        ],
+        "//conditions:default": [":top_k_webgpu_sampler_static"],
     }),
 )
 
@@ -447,7 +456,6 @@ objc_library(
         "@com_google_absl//absl/debugging:leak_check",
         "@com_google_absl//absl/status:status_macros",
         "@litert//litert/c:litert_common",
-        "@litert//litert/c:litert_tensor_buffer",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_event",
         "@litert//litert/cc:litert_macros",
@@ -547,6 +555,10 @@ cc_library(
     srcs = ["top_k_opencl_sampler.cc"],
     hdrs = ["top_k_opencl_sampler.h"],
     defines = ["LITERT_LM_USE_STATIC_LINKED_GPU_SAMPLER"],
+    linkopts = select({
+        "@platforms//os:android": ["-landroid"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = select({
         "@platforms//os:android": [],
         "@platforms//os:linux": [],
@@ -765,6 +777,35 @@ cc_test(
     ],
 )
 
+genrule(
+    name = "generate_webgpu_dawn_stub",
+    srcs = ["@dawn//:include/dawn/webgpu.h"],
+    outs = ["webgpu_dawn_stub.cc"],
+    cmd = "sed -n -E 's/.*WGPU_EXPORT .* (wgpu[A-Za-z0-9_]+)\\(.*/extern \"C\" __declspec(dllexport) void \\1() {}/p' $(location @dawn//:include/dawn/webgpu.h) > $@",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+cc_binary(
+    name = "stub/webgpu_dawn.dll",
+    srcs = [":webgpu_dawn_stub.cc"],
+    linkshared = 1,
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+filegroup(
+    name = "webgpu_dawn_interface_lib",
+    srcs = [":stub/webgpu_dawn.dll"],
+    output_group = "interface_library",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+cc_import(
+    name = "webgpu_dawn_dll_import",
+    interface_library = ":webgpu_dawn_interface_lib",
+    system_provided = 1,
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
 cc_library(
     name = "webgpu_dawn_shared_lib",
     srcs = select({
@@ -775,10 +816,31 @@ cc_library(
         "@platforms//os:macos": ["//prebuilt/macos_arm64:libwebgpu_dawn.dylib"],
         "//conditions:default": [],
     }),
+    data = select({
+        "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:libwebgpu_dawn.so"],
+        "//build_config:linux_arm64": ["//prebuilt/linux_arm64:libwebgpu_dawn.so"],
+        "@platforms//os:macos": ["//prebuilt/macos_arm64:libwebgpu_dawn.dylib"],
+        "@platforms//os:windows": ["//prebuilt/windows_x86_64:webgpu_dawn.dll"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
+        "@platforms//os:ios": ["-Wl,-rpath,@loader_path"],
+        "@platforms//os:windows": [
+            "/DELAYLOAD:webgpu_dawn.dll",
+            "delayimp.lib",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = select({
+        "@platforms//os:windows": [":webgpu_dawn_dll_import"],
+        "//conditions:default": [],
+    }),
 )
 
 TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
     ":top_k_gpu_sampler",
+    ":webgpu_dawn_shared_lib",
     "@com_google_absl//absl/base:nullability",
     "@com_google_absl//absl/cleanup",
     "@com_google_absl//absl/memory",
@@ -831,6 +893,9 @@ cc_library(
     srcs = ["top_k_webgpu_sampler.cc"],
     hdrs = ["top_k_webgpu_sampler.h"],
     defines = ["LITERT_LM_USE_STATIC_LINKED_GPU_SAMPLER"],
+    local_defines = select({
+        "//conditions:default": ["LITERT_SAMPLER_LINKED_DYNAMICALLY"],
+    }),
     deps = TOP_K_WEBGPU_SAMPLER_COMMON_DEPS + ["@com_google_absl//absl/status:status_macros"],
     alwayslink = 1,
 )

@@ -42,7 +42,11 @@
 #include "runtime/proto/sampler_params.pb.h"
 
 #ifndef SAMPLER_EXPORT
+#if defined(_WIN32)
+#define SAMPLER_EXPORT __declspec(dllexport)
+#else
 #define SAMPLER_EXPORT __attribute__((visibility("default")))
+#endif  // defined(_WIN32)
 #endif  // SAMPLER_EXPORT
 
 extern "C" {
