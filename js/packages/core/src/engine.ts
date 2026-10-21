@@ -60,10 +60,11 @@ export class Engine implements Deletable {
 
     const samplerBackend = engineSettings.mainExecutorSettings?.samplerBackend;
     const visionBackend = engineSettings.visionBackend;
+    const audioBackend = engineSettings.audioBackend;
     if (backend === Backend.GPU || backend === Backend.GPU_ARTISAN ||
         samplerBackend === Backend.GPU ||
         samplerBackend === Backend.GPU_ARTISAN ||
-        visionBackend === Backend.GPU) {
+        visionBackend === Backend.GPU || audioBackend === Backend.GPU) {
       await litertlm.setupDefaultWebGpuDevice();
     }
 
@@ -74,12 +75,14 @@ export class Engine implements Deletable {
       const {modelAssets, cleanupModelAssets} =
           await createStreamingModelAssets(engineSettings.model, wasm, cleanup);
 
-      const wasmEngineSettings = visionBackend === undefined ?
+      const wasmEngineSettings =
+          visionBackend === undefined && audioBackend === undefined ?
           await wasm.EngineSettings.createDefault(
               modelAssets, {value: backend}) :
           await wasm.EngineSettings.createDefaultMultimodal(
-              modelAssets, {value: backend}, {value: visionBackend},
-              /* audioBackend= */ undefined);
+              modelAssets, {value: backend},
+              visionBackend === undefined ? undefined : {value: visionBackend},
+              audioBackend === undefined ? undefined : {value: audioBackend});
       // Delete our copy of the ModelAssets object (not the underlying file).
       cleanupModelAssets();
 
@@ -104,7 +107,8 @@ export class Engine implements Deletable {
               wasmEngineSettings, inputPromptAsHint);
         }
       } finally {
-        if (resolvedBackend === Backend.GPU || visionBackend === Backend.GPU) {
+        if (resolvedBackend === Backend.GPU || visionBackend === Backend.GPU ||
+            audioBackend === Backend.GPU) {
           try {
             await wasm.clearStoredWeightsStreams();
           } catch (cleanupError) {
@@ -130,11 +134,16 @@ export class Engine implements Deletable {
    * unless they were explicitly configured.
    */
   private withDefaultModalities(sessionConfig: SessionConfig): SessionConfig {
+    const result = {...sessionConfig};
     if (this.settings.visionBackend !== undefined &&
-        sessionConfig.visionModalityEnabled === undefined) {
-      return {...sessionConfig, visionModalityEnabled: true};
+        result.visionModalityEnabled === undefined) {
+      result.visionModalityEnabled = true;
     }
-    return sessionConfig;
+    if (this.settings.audioBackend !== undefined &&
+        result.audioModalityEnabled === undefined) {
+      result.audioModalityEnabled = true;
+    }
+    return result;
   }
 
   async createSession(sessionConfig: SessionConfig = {}): Promise<Session> {
@@ -149,9 +158,11 @@ export class Engine implements Deletable {
   }
 
   async createConversation(config?: ConversationConfig): Promise<Conversation> {
-    if (!config && this.settings.visionBackend !== undefined) {
-      // A custom config is needed to enable the vision modality. Match the C++
-      // ConversationConfig defaults.
+    if (!config &&
+        (this.settings.visionBackend !== undefined ||
+         this.settings.audioBackend !== undefined)) {
+      // A custom config is needed to enable the vision and audio modalities.
+      // Match the C++ ConversationConfig defaults.
       config = {filterChannelContentFromKvCache: true};
     }
     return this.mutexes.executor.acquireAndRun(async () => {

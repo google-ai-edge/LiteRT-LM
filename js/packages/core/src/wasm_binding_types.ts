@@ -152,6 +152,8 @@ export declare interface EngineSettings extends Deletable {
   getMutableMainExecutorSettings(): LlmExecutorSettings;
   /** Returns undefined if vision is not enabled. */
   getVisionBackend(): EmscriptenEnumElement<Backend>|undefined;
+  /** Returns undefined if audio is not enabled. */
+  getAudioBackend(): EmscriptenEnumElement<Backend>|undefined;
   getMaxVisionTokensPerImage(): number|undefined;
   setMaxVisionTokensPerImage(maxVisionTokensPerImage: number): void;
   getMinVisionTokensPerImage(): number|undefined;

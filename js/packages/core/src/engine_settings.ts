@@ -67,12 +67,17 @@ export interface EngineSettings {
    * costs a lot of memory and can exceed the 4GB wasm32 limit.
    */
   minVisionTokensPerImage?: number;
+  /**
+   * Backend for the audio encoder. Can be `Backend.CPU` or `Backend.GPU`.
+   * If unset, audio input is disabled.
+   */
+  audioBackend?: Backend;
   mainExecutorSettings?: LlmExecutorSettings;
   benchmarkEnabled?: boolean;
 }
 
-type OptionalEngineSettingsKeys =
-    'visionBackend'|'maxVisionTokensPerImage'|'minVisionTokensPerImage';
+type OptionalEngineSettingsKeys = 'visionBackend'|'maxVisionTokensPerImage'|
+    'minVisionTokensPerImage'|'audioBackend';
 
 /**
  * EngineSettings with all defaults resolved. Fields that have no default
@@ -219,6 +224,7 @@ export function wasmEngineSettingsToEngineSettings(
     visionBackend: wasmEngineSettings.getVisionBackend()?.value,
     maxVisionTokensPerImage: wasmEngineSettings.getMaxVisionTokensPerImage(),
     minVisionTokensPerImage: wasmEngineSettings.getMinVisionTokensPerImage(),
+    audioBackend: wasmEngineSettings.getAudioBackend()?.value,
     mainExecutorSettings: {
       maxNumTokens: wasmExecutorSettings.getMaxNumTokens(),
       samplerBackend: wasmExecutorSettings.getSamplerBackend().value,

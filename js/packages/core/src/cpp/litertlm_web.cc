@@ -376,6 +376,16 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   }
                   return emscripten::val(vision_settings->GetBackend());
                 }))
+      .function("getAudioBackend",
+                optional_override([](const litert::lm::EngineSettings& settings)
+                                      -> emscripten::val {
+                  const auto& audio_settings =
+                      settings.GetAudioExecutorSettings();
+                  if (!audio_settings.has_value()) {
+                    return emscripten::val::undefined();
+                  }
+                  return emscripten::val(audio_settings->GetBackend());
+                }))
       .function("getMaxVisionTokensPerImage",
                 &litert::lm::EngineSettings::GetMaxVisionTokensPerImage)
       .function("setMaxVisionTokensPerImage",

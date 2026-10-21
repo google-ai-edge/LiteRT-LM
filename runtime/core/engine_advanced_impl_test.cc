@@ -611,6 +611,37 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading_VisionWithoutVisionModel) {
   EXPECT_OK(llm->CreateSession(SessionConfig::CreateDefault()));
 }
 
+TEST(EngineTest, CreateEngine_StreamedModelLoading_AudioWithoutAudioModel) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  std::shared_ptr<FileDataStream> file_stream;
+  ASSERT_OK_AND_ASSIGN(file_stream,
+                       FileDataStream::Create(model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+
+  auto engine_settings = EngineSettings::CreateDefault(
+      std::move(model_assets), Backend::CPU, /*vision_backend=*/std::nullopt,
+      /*audio_backend=*/Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(*engine_settings));
+
+  EXPECT_FALSE(llm->GetEngineSettings().GetAudioExecutorSettings().has_value());
+
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetAudioModalityEnabled(true);
+  EXPECT_FALSE(llm->CreateSession(session_config).ok());
+
+  EXPECT_OK(llm->CreateSession(SessionConfig::CreateDefault()));
+}
+
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
 TEST(EngineTest, CreateEngine_StreamedModelLoading_HfTokenizer) {
   auto model_path =

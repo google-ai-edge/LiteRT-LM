@@ -140,5 +140,34 @@ describe('EngineSettings', () => {
     expect(resolved.minVisionTokensPerImage).toBe(140);
     wasmSettings.delete();
   });
+
+  it('round-trips multimodal audio settings', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU, undefined,
+            liteRtLm.liteRtLmWasm.Backend.CPU);
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {
+          model: '/path/to/model',
+          backend: Backend.GPU,
+          audioBackend: Backend.CPU,
+        },
+        Backend.GPU, liteRtLm.liteRtLmWasm);
+    const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+    expect(resolved.audioBackend).toBe(Backend.CPU);
+    expect(resolved.visionBackend).toBeUndefined();
+    wasmSettings.delete();
+  });
+
+  it('leaves vision and audio backends unset for text-only settings',
+     async () => {
+       const wasmSettings =
+           await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+       const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+       expect(resolved.visionBackend).toBeUndefined();
+       expect(resolved.audioBackend).toBeUndefined();
+       wasmSettings.delete();
+     });
 });
 

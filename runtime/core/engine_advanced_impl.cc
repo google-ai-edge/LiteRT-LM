@@ -44,8 +44,10 @@
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/audio/audio_executor_utils.h"
+#include "runtime/executor/audio_litert_compiled_model_executor.h"
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -994,9 +996,26 @@ EngineAdvancedImpl::CreateStreamingWeights(
             ABSL_LOG(INFO) << "Vision is not enabled. Skipping weights for "
                               "model type: "
                            << static_cast<int>(model_type);
-            ABSL_RETURN_IF_ERROR(section->data_stream->Discard(
-                0, section_metadata->end_offset() -
-                       section_metadata->begin_offset()));
+            break;
+          }
+          const size_t size =
+              section_metadata->end_offset() - section_metadata->begin_offset();
+          ABSL_LOG(INFO) << "Reading weights (" << size
+                         << " bytes) for model type "
+                         << static_cast<int>(model_type)
+                         << " into host memory...";
+          ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
+              model_type, *section->data_stream, size));
+          ABSL_LOG(INFO) << "Weights read.";
+        } else if (model_type == proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW ||
+                   model_type == proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER) {
+          // Same as vision above: audio weights are stored in host memory and
+          // the audio executor is compiled from them after all sections are
+          // processed.
+          if (!engine_settings.GetAudioExecutorSettings().has_value()) {
+            ABSL_LOG(INFO) << "Audio is not enabled. Skipping weights for "
+                              "model type: "
+                           << static_cast<int>(model_type);
             break;
           }
           const size_t size =
@@ -1226,9 +1245,38 @@ EngineAdvancedImpl::CreateStreamingWeights(
   }
 
   std::unique_ptr<AudioExecutorSettings> audio_executor_settings_ptr;
+  std::unique_ptr<AudioExecutor> audio_executor;
   if (engine_settings.GetAudioExecutorSettings().has_value()) {
-    audio_executor_settings_ptr = std::make_unique<AudioExecutorSettings>(
-        std::move(engine_settings.GetAudioExecutorSettings().value()));
+    if (streaming_model_resources
+            ->GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)
+            .ok()) {
+      audio_executor_settings_ptr = std::make_unique<AudioExecutorSettings>(
+          std::move(engine_settings.GetAudioExecutorSettings().value()));
+
+      // Create the audio executor now, while the audio encoder weights are
+      // still in host memory. It can not be lazily created later since the
+      // model can not be reloaded from the (already consumed) stream.
+      ABSL_LOG(INFO) << "Creating audio executor from stream...";
+      ABSL_ASSIGN_OR_RETURN(audio_executor,
+                            AudioLiteRtCompiledModelExecutor::Create(
+                                *audio_executor_settings_ptr, owned_env->env,
+                                *streaming_model_resources));
+      ABSL_LOG(INFO) << "Audio executor created.";
+
+      // Only keep the encoder weights in host memory when running on CPU.
+      // The audio adapter always runs on CPU, so keep its weights.
+      if (audio_executor_settings_ptr->GetBackend() != Backend::CPU) {
+        streaming_model_resources->ReleaseWeights(
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW);
+        ABSL_LOG(INFO) << "Released host memory for audio encoder weights.";
+      }
+    } else {
+      ABSL_LOG(WARNING) << "Audio executor settings are set, but the model "
+                           "has no audio encoder. Audio is disabled.";
+      // Clear the settings so the engine doesn't report audio support (see the
+      // vision case above).
+      engine_settings.GetMutableAudioExecutorSettings().reset();
+    }
   }
 
   if (!engine_settings.GetSingleThreadedExecution()) {
@@ -1238,7 +1286,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
             tokenizer.get(), streaming_model_resources.get(),
             std::move(executor), std::move(vision_executor_settings_ptr),
             std::move(audio_executor_settings_ptr), &owned_env->env,
-            /*audio_executor=*/nullptr, /*runtime_debugger=*/nullptr,
+            std::move(audio_executor), /*runtime_debugger=*/nullptr,
             std::move(vision_executor)));
   } else {
     ABSL_ASSIGN_OR_RETURN(
@@ -1247,7 +1295,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
             tokenizer.get(), streaming_model_resources.get(),
             std::move(executor), std::move(vision_executor_settings_ptr),
             std::move(audio_executor_settings_ptr), &owned_env->env,
-            /*audio_executor=*/nullptr, /*runtime_debugger=*/nullptr,
+            std::move(audio_executor), /*runtime_debugger=*/nullptr,
             std::move(vision_executor)));
   }
 
