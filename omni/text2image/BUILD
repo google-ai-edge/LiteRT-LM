@@ -258,6 +258,7 @@ cc_binary(
         "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:model_utils",
+        "//runtime/executor:default_static_gpu_accelerator",
         "//runtime/proto:image_gen_model_type_cc_proto",
         "//runtime/proto:text2image_metadata_cc_proto",
         "//runtime/proto:text2image_session_config_cc_proto",

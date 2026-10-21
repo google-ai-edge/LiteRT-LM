@@ -58,6 +58,8 @@ struct OmniEngineSettings {
   //     otherwise model creation fails with `PermissionDeniedError`.
   std::string cache_dir;
   int num_threads = 4;
+  // If true, forces FP32 precision on GPU instead of the default FP16.
+  bool force_fp32_on_gpu = false;
 
   // Optional per-model asset paths and download URLs.
   std::string model_path;

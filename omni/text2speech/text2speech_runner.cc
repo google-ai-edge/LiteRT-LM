@@ -68,6 +68,8 @@ ABSL_FLAG(int, num_threads, 4,
           "Number of CPU threads for LiteRT model execution.");
 ABSL_FLAG(std::string, backend, "cpu",
           "Backend to use for model execution: 'cpu' or 'gpu'.");
+ABSL_FLAG(bool, force_fp32_on_gpu, false,
+          "If true, forces FP32 precision on GPU instead of FP16.");
 ABSL_FLAG(std::string, vocoder_backend, "",
           "Optional backend override for Kokoro vocoder ('cpu' or 'gpu'). "
           "If empty, inherits the engine backend.");
@@ -125,6 +127,7 @@ absl::Status Run() {
   litert::omni::OmniEngine::Settings engine_settings;
   engine_settings.cache_dir = absl::GetFlag(FLAGS_cache_dir);
   engine_settings.num_threads = absl::GetFlag(FLAGS_num_threads);
+  engine_settings.force_fp32_on_gpu = absl::GetFlag(FLAGS_force_fp32_on_gpu);
 
   ABSL_ASSIGN_OR_RETURN(
       engine_settings.backend,

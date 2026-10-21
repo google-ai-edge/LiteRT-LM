@@ -136,6 +136,8 @@ TEST(OmniRegistryTest,
      RegisterSessionFactoryForwardsSettingsAndValidatesTypes) {
   auto& registry = OmniRegistry::Get();
   OmniEngine::Settings captured_settings;
+  LiteRtDelegatePrecision captured_gpu_precision =
+      kLiteRtDelegatePrecisionDefault;
   float captured_overlap_ratio = 0.0f;
   int captured_input_milliseconds = 0;
 
@@ -147,11 +149,17 @@ TEST(OmniRegistryTest,
               const OmniEngine::Settings& settings,
               const MessageLite* absl_nullable session_cfg,
               const MessageLite* absl_nullable metadata,
-              ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+              ::litert::Environment& /*env*/, ::litert::Options& options,
               std::shared_ptr<lm::ModelResources> absl_nullable
               /*lm_resources*/)
           -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
         captured_settings = settings;
+        captured_gpu_precision = kLiteRtDelegatePrecisionDefault;
+        if (auto gpu_options = options.GetOptions<::litert::GpuOptions>();
+            gpu_options) {
+          LrtGetGpuAcceleratorCompilationOptionsPrecision(
+              &captured_gpu_precision, gpu_options->Get());
+        }
         if (session_cfg != nullptr) {
           const auto* asr_cfg =
               static_cast<const lm::proto::Speech2TextSessionConfig*>(
@@ -191,6 +199,7 @@ TEST(OmniRegistryTest,
       .backend = OmniEngine::Settings::Backend::kGpu,
       .cache_dir = "/custom/cache",
       .num_threads = 8,
+      .force_fp32_on_gpu = true,
   };
   lm::proto::Speech2TextSessionConfig caller_session_config;
   caller_session_config.set_overlap_ratio(0.5f);
@@ -205,8 +214,19 @@ TEST(OmniRegistryTest,
   EXPECT_EQ(captured_settings.backend, OmniEngine::Settings::Backend::kGpu);
   EXPECT_EQ(captured_settings.cache_dir, "/custom/cache");
   EXPECT_EQ(captured_settings.num_threads, 8);
+  EXPECT_TRUE(captured_settings.force_fp32_on_gpu);
+  EXPECT_EQ(captured_gpu_precision, kLiteRtDelegatePrecisionFp32);
   EXPECT_FLOAT_EQ(captured_overlap_ratio, 0.5f);
   EXPECT_EQ(captured_input_milliseconds, 3000);
+
+  caller_settings.force_fp32_on_gpu = false;
+  ASSERT_OK_AND_ASSIGN(auto factory_fp16,
+                       registry.CreateSessionFactory(
+                           "custom-registry-test-model", caller_settings,
+                           &caller_session_config, &caller_metadata));
+  EXPECT_THAT(factory_fp16, NotNull());
+  EXPECT_FALSE(captured_settings.force_fp32_on_gpu);
+  EXPECT_EQ(captured_gpu_precision, kLiteRtDelegatePrecisionFp16);
 }
 
 TEST(OmniRegistryTest, ConfiguresWeightCachesOnlyForWritableCacheDir) {

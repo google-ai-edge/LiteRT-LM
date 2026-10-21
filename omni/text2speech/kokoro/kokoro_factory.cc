@@ -64,6 +64,9 @@ ModelOptions MakeModelOptions(absl::string_view model_dir,
   options.cache_dir = cache_dir;
   options.backend = backend;
   options.num_threads = num_threads;
+  // Kokoro's iSTFTNet neural vocoder requires FP32 precision on GPU to preserve
+  // synthesized audio quality and avoid FP16 numerical degradation.
+  options.force_fp32_on_gpu = true;
   return options;
 }
 

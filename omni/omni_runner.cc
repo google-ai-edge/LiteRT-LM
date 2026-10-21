@@ -57,6 +57,8 @@ ABSL_FLAG(std::string, model_path, "",
           "Path to a .litertlm model package or model directory.");
 ABSL_FLAG(std::string, backend, "cpu",
           "Hardware backend accelerator: cpu, gpu, or npu.");
+ABSL_FLAG(bool, force_fp32_on_gpu, false,
+          "If true, forces FP32 precision on GPU instead of FP16.");
 ABSL_FLAG(int, num_threads, 4, "Number of CPU threads for LiteRT inference.");
 ABSL_FLAG(std::string, cache_dir, "/tmp/omni_cache",
           "Cache directory for downloaded models and compiled backend caches.");
@@ -239,6 +241,7 @@ absl::Status RunOmniRunner() {
   OmniEngine::Settings settings;
   settings.cache_dir = cache_dir;
   settings.num_threads = absl::GetFlag(FLAGS_num_threads);
+  settings.force_fp32_on_gpu = absl::GetFlag(FLAGS_force_fp32_on_gpu);
   ABSL_ASSIGN_OR_RETURN(settings.backend,
                         ParseOmniBackend(absl::GetFlag(FLAGS_backend)));
 

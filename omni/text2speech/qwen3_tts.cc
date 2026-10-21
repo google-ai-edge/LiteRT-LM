@@ -154,6 +154,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetQwen3TtsSessionFactory(
   }
   lm::proto::Text2SpeechMetadata resolved_metadata = ResolveMetadata(metadata);
   Qwen3TtsModelConfig config;
+  config.force_fp32_on_gpu = settings.force_fp32_on_gpu;
   PopulateQwen3TtsConfigFromProto(
       resolved_metadata.tts_model_type().qwen3_tts(), config);
 

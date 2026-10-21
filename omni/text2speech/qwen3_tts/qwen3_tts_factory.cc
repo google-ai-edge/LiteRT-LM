@@ -167,6 +167,11 @@ absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateTalkerLmRunner(
     cpu_config.number_of_threads = options.num_threads;
     executor_settings.SetBackendConfig(cpu_config);
   }
+  if (options.backend == lm::Backend::GPU) {
+    executor_settings.SetActivationDataType(
+        options.force_fp32_on_gpu ? lm::ActivationDataType::FLOAT32
+                                  : lm::ActivationDataType::FLOAT16);
+  }
   if (!options.cache_dir.empty()) {
     executor_settings.SetCacheDir(options.cache_dir);
   }
@@ -192,6 +197,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
   model_options.cache_dir = cache_dir;
   model_options.backend = backend;
   model_options.num_threads = num_threads;
+  model_options.force_fp32_on_gpu = config.force_fp32_on_gpu;
 
   // Only the 28-layer Talker LM runs on GPU when backend == GPU.
   // Embedding lookup tables, the single-shot text projection MLP, the 16-step

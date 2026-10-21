@@ -230,14 +230,17 @@ TEST(ModelUtilsTest, ToLmModelOptionsMapsEngineSettings) {
   EXPECT_EQ(opts.backend, lm::Backend::GPU);
   EXPECT_EQ(opts.cache_dir, "/tmp/custom_cache");
   EXPECT_EQ(opts.num_threads, 6);
+  EXPECT_FALSE(opts.force_fp32_on_gpu);
 
   settings.backend = OmniEngine::Settings::Backend::kNpu;
   settings.cache_dir.clear();
   settings.num_threads = 0;
+  settings.force_fp32_on_gpu = true;
   opts = ToLmModelOptions(settings);
   EXPECT_EQ(opts.backend, lm::Backend::NPU);
   EXPECT_EQ(opts.cache_dir, ":nocache");
   EXPECT_EQ(opts.num_threads, 4);
+  EXPECT_TRUE(opts.force_fp32_on_gpu);
 }
 
 TEST(ModelUtilsTest, CreateTokenizerReturnsInvalidArgumentWhenMissing) {

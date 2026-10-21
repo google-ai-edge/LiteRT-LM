@@ -230,6 +230,7 @@ ModelOptions ToLmModelOptions(const OmniEngine::Settings& settings) {
   lm_options.num_threads = settings.num_threads > 0 ? settings.num_threads : 4;
   lm_options.cache_dir = settings.cache_dir.empty() ? std::string(kNoCacheDir)
                                                     : settings.cache_dir;
+  lm_options.force_fp32_on_gpu = settings.force_fp32_on_gpu;
   return lm_options;
 }
 
@@ -348,11 +349,16 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
     LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
                             comp_options.GetOptions<::litert::GpuOptions>());
     gpu_compilation_options.EnableInfiniteFloatCapping(true);
-    gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
+    gpu_compilation_options.SetPrecision(options.force_fp32_on_gpu
+                                             ? GpuOptions::Precision::kFp32
+                                             : GpuOptions::Precision::kFp16);
 #if defined(__APPLE__)
     // Metal argument buffers setting.
+    gpu_compilation_options.SetPreferTextureWeights(false);
     gpu_compilation_options.SetUseMetalArgumentBuffers(true);
-#endif  // !__APPLE__
+#elif defined(__ANDROID__)
+    gpu_compilation_options.SetPreferTextureWeights(true);
+#endif
     gpu_compilation_options.EnableConstantTensorSharing(true);
     gpu_compilation_options.SetMadviseOriginalSharedTensors(true);
     gpu_compilation_options.SetConvertWeightsOnGpu(true);
@@ -478,13 +484,22 @@ absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
       std::make_shared<lm::ScopedFile>(std::move(scoped_file));
   ABSL_ASSIGN_OR_RETURN(auto model_assets,
                         lm::ModelAssets::Create(shared_scoped_file));
+  // `LiteRtLmRunner` exposes `DecodeLogits()` for CPU-side decoding, so keep
+  // `sampler_backend` on CPU to preserve the model's FP32 output logits buffer
+  // even when `options.backend == lm::Backend::GPU` uses FP16 precision.
   ABSL_ASSIGN_OR_RETURN(auto executor_settings,
                         lm::LlmExecutorSettings::CreateDefault(
-                            std::move(model_assets), options.backend));
+                            std::move(model_assets), options.backend,
+                            /*sampler_backend=*/lm::Backend::CPU));
   if (options.backend == lm::Backend::CPU && options.num_threads > 0) {
     lm::CpuConfig cpu_config;
     cpu_config.number_of_threads = options.num_threads;
     executor_settings.SetBackendConfig(cpu_config);
+  }
+  if (options.backend == lm::Backend::GPU) {
+    executor_settings.SetActivationDataType(
+        options.force_fp32_on_gpu ? lm::ActivationDataType::FLOAT32
+                                  : lm::ActivationDataType::FLOAT16);
   }
   if (!options.cache_dir.empty()) {
     executor_settings.SetCacheDir(options.cache_dir);
@@ -518,6 +533,17 @@ absl::StatusOr<std::unique_ptr<LiteRtLmEngineRunner>> CreateLmEngineRunner(
     cpu_config.number_of_threads = options.num_threads;
     engine_settings.GetMutableMainExecutorSettings().SetBackendConfig(
         cpu_config);
+  }
+  if (options.backend == lm::Backend::GPU) {
+    const auto activation_type = options.force_fp32_on_gpu
+                                     ? lm::ActivationDataType::FLOAT32
+                                     : lm::ActivationDataType::FLOAT16;
+    engine_settings.GetMutableMainExecutorSettings().SetActivationDataType(
+        activation_type);
+    if (engine_settings.GetMutableAudioExecutorSettings().has_value()) {
+      engine_settings.GetMutableAudioExecutorSettings()->SetActivationDataType(
+          activation_type);
+    }
   }
   if (!options.cache_dir.empty()) {
     engine_settings.GetMutableMainExecutorSettings().SetCacheDir(

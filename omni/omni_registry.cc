@@ -204,8 +204,16 @@ absl::Status ConfigureLiteRtOptions(absl::string_view model_name,
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kGpu);
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
                             options.GetOptions<::litert::GpuOptions>());
-    gpu_options.SetPrecision(::litert::GpuOptions::Precision::kFp32);
+    gpu_options.SetPrecision(settings.force_fp32_on_gpu
+                                 ? ::litert::GpuOptions::Precision::kFp32
+                                 : ::litert::GpuOptions::Precision::kFp16);
+    gpu_options.EnableInfiniteFloatCapping(true);
     gpu_options.EnableConstantTensorSharing(true);
+    gpu_options.EnableAllowSrcQuantizedFcConvOps(true);
+#if defined(__ANDROID__)
+    gpu_options.SetPreferTextureWeights(true);
+#endif  // defined(__ANDROID__)
+    gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
     ABSL_RETURN_IF_ERROR(
         ConfigureGpuModelCache(model_name, cache, gpu_options));
   } else if (settings.backend == OmniEngine::Settings::Backend::kNpu) {

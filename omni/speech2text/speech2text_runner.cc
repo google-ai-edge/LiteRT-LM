@@ -46,6 +46,8 @@ ABSL_FLAG(std::string, cache_dir, "/tmp/omni_models",
           "Cache directory to download and store models and tokenizers.");
 ABSL_FLAG(std::string, backend, "cpu",
           "Hardware backend accelerator: cpu, gpu, or npu.");
+ABSL_FLAG(bool, force_fp32_on_gpu, false,
+          "If true, forces FP32 precision on GPU instead of FP16.");
 ABSL_FLAG(int, num_threads, 4, "Number of CPU threads for LiteRT inference.");
 ABSL_FLAG(float, overlap_ratio, 0.4f,
           "Overlap ratio between consecutive audio chunks from audio source "
@@ -112,6 +114,7 @@ absl::Status RunAsrRunner(absl::string_view model_name,
   litert::omni::OmniEngine::Settings engine_settings;
   engine_settings.cache_dir = std::string(cache_dir);
   engine_settings.num_threads = num_threads;
+  engine_settings.force_fp32_on_gpu = absl::GetFlag(FLAGS_force_fp32_on_gpu);
   if (!model_path_flag.empty()) {
     engine_settings.model_path = std::string(model_path_flag);
   } else {

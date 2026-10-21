@@ -31,6 +31,7 @@ struct Qwen3TtsModelConfig {
   float temperature = 0.9f;
   float repetition_penalty = 1.05f;
   int mtp_threads = 2;
+  bool force_fp32_on_gpu = false;
   std::optional<uint64_t> seed = 1;
 
   std::string talker_file = "talker_int4.tflite";

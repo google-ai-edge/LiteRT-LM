@@ -81,6 +81,8 @@ struct ModelOptions {
   lm::Backend backend = lm::Backend::CPU;
   // Number of threads for CPU execution.
   int num_threads = 4;
+  // If true, forces FP32 precision on GPU instead of FP16.
+  bool force_fp32_on_gpu = false;
   // Patterns for tensor names to be declared as external tensors for GPU
   // (ml_drift).
   std::vector<std::string> external_tensor_patterns;
@@ -268,6 +270,11 @@ absl::StatusOr<CompiledModel> CreateCompiledModelForStatefulRunner(
     size_t num_non_state_inputs, size_t num_non_state_outputs);
 
 // Creates a LiteRtLmRunner from model directory and filename.
+//
+// `LiteRtLmRunner` exposes `DecodeLogits()` for CPU-side decoding (e.g., via
+// `LmDecoder`), so `sampler_backend` is always configured to `lm::Backend::CPU`
+// to preserve the model's FP32 output logits buffer even when `options.backend`
+// is `lm::Backend::GPU` (which runs inference in FP16 precision by default).
 //
 // args
 // - env: LiteRT environment instance.

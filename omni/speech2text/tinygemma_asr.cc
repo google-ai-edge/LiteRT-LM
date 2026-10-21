@@ -158,9 +158,13 @@ GetTinyGemmaAsrSessionFactory(
         "lm_resources must not be null (model_path: ", settings.model_path,
         ")."));
   }
-  ABSL_ASSIGN_OR_RETURN(auto lm_engine_runner,
-                        CreateLmEngineRunner(env, ToLmModelOptions(settings),
-                                             settings.model_path));
+  ModelOptions lm_options = ToLmModelOptions(settings);
+  // tinygemma-asr's USM Conformer audio encoder requires FP32 precision on GPU
+  // to avoid FP16 numerical degradation.
+  lm_options.force_fp32_on_gpu = true;
+  ABSL_ASSIGN_OR_RETURN(
+      auto lm_engine_runner,
+      CreateLmEngineRunner(env, lm_options, settings.model_path));
   ABSL_ASSIGN_OR_RETURN(
       auto tokenizer,
       CreateTokenizer(lm_resources.get(), settings.tokenizer_path));
