@@ -261,5 +261,15 @@ TEST(PromptTemplateCustomTest, CapabilitiesTest) {
   EXPECT_TRUE(single_turn_template.GetCapabilities().supports_single_turn);
 }
 
+TEST(PromptTemplateCustomTest, GenerationTagReplacementTest) {
+  PromptTemplate prompt_template(
+      "{% generation %}{{ 'hello' }}{% endgeneration %}"
+      "{%- generation -%}{{ ' world' }}{%- endgeneration -%}");
+  PromptTemplateInput input;
+  ASSERT_OK_AND_ASSIGN(const std::string rendered,
+                       prompt_template.Apply(input));
+  EXPECT_EQ(rendered, "hello world");
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -68,9 +68,10 @@ std::string EditTemplateForMinijinja(absl::string_view template_content) {
                      R"( | trim(\1))");
   RE2::GlobalReplace(&modified_template, R"regex(\.items\(\))regex",
                      " | items");
-  RE2::GlobalReplace(&modified_template, R"regex({% generation %})regex", "");
-  RE2::GlobalReplace(&modified_template, R"regex({% endgeneration %})regex",
-                     "");
+  RE2::GlobalReplace(&modified_template,
+                     R"regex(\{%\s*-?\s*generation\s*-?\s*%\})regex", "");
+  RE2::GlobalReplace(&modified_template,
+                     R"regex(\{%\s*-?\s*endgeneration\s*-?\s*%\})regex", "");
   return modified_template;
 }
 

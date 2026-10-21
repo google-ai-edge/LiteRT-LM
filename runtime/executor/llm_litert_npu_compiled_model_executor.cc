@@ -159,6 +159,21 @@ int GetDynamicKvCacheGrowthStep() {
   return GetIntFromEnvOrDefault(kDynamicKvCacheGrowthStepEnvVar,
                                 /*default_value=*/512);
 }
+
+bool IsQuantizedIntegerElementType(::litert::ElementType type) {
+  switch (type) {
+    case ::litert::ElementType::Int2:
+    case ::litert::ElementType::Int4:
+    case ::litert::ElementType::UInt4:
+    case ::litert::ElementType::Int8:
+    case ::litert::ElementType::UInt8:
+    case ::litert::ElementType::Int16:
+    case ::litert::ElementType::UInt16:
+      return true;
+    default:
+      return false;
+  }
+}
 }  // namespace
 
 LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
@@ -230,28 +245,54 @@ LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
 
   // Initialize kv_quant_params from the prefill signature output tensors if
   // available.
-  auto prefill_sig =
-      text_decoder_model->FindSignature(prefill_signatures.prefill);
-  if (prefill_sig.HasValue()) {
-    for (auto output_name : prefill_sig->OutputNames()) {
-      if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
-          absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
-        auto tensor_expected = prefill_sig->OutputTensor(output_name);
-        if (tensor_expected.HasValue()) {
-          HWQuantParams q_params;
-          if (tensor_expected->HasQuantization()) {
-            auto pq = tensor_expected->PerTensorQuantization();
-            q_params.scale = pq.scale;
-            q_params.zero_point = pq.zero_point;
-          }
-          kv_quant_params[output_name] = q_params;
+  LITERT_ASSIGN_OR_RETURN(auto prefill_sig, text_decoder_model->FindSignature(
+                                                prefill_signatures.prefill));
+  for (auto output_name : prefill_sig.OutputNames()) {
+    if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
+        absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
+      auto tensor_expected = prefill_sig.OutputTensor(output_name);
+      if (tensor_expected.HasValue()) {
+        HWQuantParams q_params;
+        if (tensor_expected->HasQuantization()) {
+          auto pq = tensor_expected->PerTensorQuantization();
+          q_params.scale = pq.scale;
+          q_params.zero_point = pq.zero_point;
         }
+        kv_quant_params[output_name] = q_params;
       }
     }
   }
 
-  // Create input buffers for prefill signature.
-  for (auto input_name : prefill_sig->InputNames()) {
+  // Create input buffers for decode signature. We create input_kv_cache_buffers
+  // from decode_sig first so that all layers (including the last layer, which
+  // may have float32 dummy inputs in prefill) receive the correct decode dtype
+  // (e.g. int16_t) and NPU buffer requirements for persistent decoding and
+  // cache updates. Any size/dtype mismatch in prefill will be corrected in
+  // CreateTextDecoderInferenceContext.
+  LITERT_ASSIGN_OR_RETURN(auto decode_sig,
+                          text_decoder_model->FindSignature(decode_signature));
+  for (auto input_name : decode_sig.InputNames()) {
+    if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
+        absl::StartsWith(input_name, kv_cache_v_root_name) ||
+        absl::StartsWith(input_name, kv_cache_c_root_name)) {
+      if (!input_kv_cache_buffers.contains(input_name)) {
+        LITERT_ASSIGN_OR_RETURN(input_kv_cache_buffers[input_name],
+                                text_decoder_compiled_model.CreateInputBuffer(
+                                    decode_signature, input_name));
+        LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(
+            input_kv_cache_buffers[input_name], kv_cache_init_value));
+      }
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(text_decoder_decode_input_buffers[input_name],
+                            text_decoder_compiled_model.CreateInputBuffer(
+                                decode_signature, input_name));
+    text_decoder_decode_input_buffers[input_name].Clear();
+  }
+
+  // Create input buffers for prefill signature. Skip kv cache input buffers as
+  // they are already created with the decode signature.
+  for (auto input_name : prefill_sig.InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name) ||
         absl::StartsWith(input_name, kv_cache_c_root_name)) {
@@ -269,32 +310,9 @@ LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
       text_decoder_prefill_input_buffers[input_name].Clear();
     }
   }
-  // Create input buffers for decode signature. Skip kv cache input buffers as
-  // they are already created in the prefill signature.
-  auto decode_sig = text_decoder_model->FindSignature(decode_signature);
-  for (auto input_name : decode_sig->InputNames()) {
-    if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
-        absl::StartsWith(input_name, kv_cache_v_root_name) ||
-        absl::StartsWith(input_name, kv_cache_c_root_name)) {
-      // Create the input kv cache buffer for the decode signature if it is not
-      // created in the prefill signature.
-      if (!input_kv_cache_buffers.contains(input_name)) {
-        LITERT_ASSIGN_OR_RETURN(input_kv_cache_buffers[input_name],
-                                text_decoder_compiled_model.CreateInputBuffer(
-                                    decode_signature, input_name));
-        LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(
-            input_kv_cache_buffers[input_name], kv_cache_init_value));
-      }
-      continue;
-    }
-    LITERT_ASSIGN_OR_RETURN(text_decoder_decode_input_buffers[input_name],
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                decode_signature, input_name));
-    text_decoder_decode_input_buffers[input_name].Clear();
-  }
 
   // Create output buffers for prefill signature.
-  for (auto output_name : prefill_sig->OutputNames()) {
+  for (auto output_name : prefill_sig.OutputNames()) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
         absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
         absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
@@ -305,7 +323,7 @@ LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     }
   }
   // Create output buffers for decode signature.
-  for (auto output_name : decode_sig->OutputNames()) {
+  for (auto output_name : decode_sig.OutputNames()) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
         absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
         absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
@@ -376,7 +394,42 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
         continue;
       }
 
-      LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto prefill_tensor_type,
+                              text_decoder_compiled_model.GetInputTensorType(
+                                  prefill_signatures.prefill, key));
+      LITERT_ASSIGN_OR_RETURN(auto decode_tensor_type, value.TensorType());
+      if (prefill_tensor_type == decode_tensor_type) {
+        LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
+      } else if (prefill_tensor_type.Layout() == decode_tensor_type.Layout() &&
+                 prefill_tensor_type.ElementType() ==
+                     ::litert::ElementType::Float32 &&
+                 IsQuantizedIntegerElementType(
+                     decode_tensor_type.ElementType())) {
+        // TODO(b/416702118): Unconnected KV cache inputs in the prefill
+        // signature (e.g. last-layer KV cache tensors) may remain Float32 after
+        // quantization while the decode signature quantizes them to an integer
+        // type. Allocate a separate cleared buffer for prefill until the
+        // exporter strips or matches these inputs.
+        ABSL_LOG(WARNING)
+            << "KV cache input '" << key << "' has mismatched element types "
+            << "between prefill ("
+            << static_cast<int>(prefill_tensor_type.ElementType())
+            << ") and decode ("
+            << static_cast<int>(decode_tensor_type.ElementType())
+            << "); allocating a separate cleared prefill buffer.";
+        LITERT_ASSIGN_OR_RETURN(auto prefill_buf,
+                                text_decoder_compiled_model.CreateInputBuffer(
+                                    prefill_signatures.prefill, key));
+        prefill_buf.Clear();
+        prefill_input_buffers[key] = std::move(prefill_buf);
+      } else {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Incompatible KV cache tensor types for '", key,
+            "' between prefill (element_type=",
+            static_cast<int>(prefill_tensor_type.ElementType()),
+            ") and decode (element_type=",
+            static_cast<int>(decode_tensor_type.ElementType()), ")."));
+      }
     }
   }
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
