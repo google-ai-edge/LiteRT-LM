@@ -101,8 +101,23 @@ cc_library(
 # The selected engine implementations based on the build flags.
 cc_library(
     name = "engine_impl_selected",
-    deps = select({
-        "//conditions:default": ["//runtime/core:engine_advanced_impl"],
+    deps = [
+        "//runtime/core:engine_advanced_impl",
+    ] + select({
+        "//conditions:default": [
+        ],
+    }),
+    alwayslink = 1,
+)
+
+# The selected CPU-only engine implementations based on the build flags.
+cc_library(
+    name = "engine_impl_cpu_only_selected",
+    deps = [
+        "//runtime/core:engine_advanced_impl_cpu_only",
+    ] + select({
+        "//conditions:default": [
+        ],
     }),
     alwayslink = 1,
 )

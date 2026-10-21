@@ -76,9 +76,9 @@ cc_binary(
         "@litert//litert/cc:litert_environment",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/core:embedding_engine_impl",  # buildcleaner: keep
-        "//runtime/core:engine_impl",  # buildcleaner: keep
         "//runtime/engine:embedding_engine",
         "//runtime/engine:embedding_engine_settings",
+        "//runtime/engine:engine_impl_selected",  # buildcleaner: keep
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],

@@ -320,7 +320,7 @@ cc_library(
     defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
-        "//runtime/core:engine_impl",
+        "//runtime/engine:engine_impl_selected",
     ],
     alwayslink = True,
 )
@@ -340,7 +340,7 @@ cc_library(
     defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
-        "//runtime/core:engine_advanced_impl_cpu_only",
+        "//runtime/engine:engine_impl_cpu_only_selected",
     ],
     alwayslink = True,
 )
@@ -394,7 +394,7 @@ cc_library(
     defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
-        "//runtime/core:engine_impl",
+        "//runtime/engine:engine_impl_selected",
     ],
     alwayslink = True,
 )
@@ -422,7 +422,7 @@ cc_library(
     defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
-        "//runtime/core:engine_advanced_impl_cpu_only",
+        "//runtime/engine:engine_impl_cpu_only_selected",
     ],
     alwayslink = True,
 )
@@ -584,7 +584,7 @@ cc_binary(
         ":engine_headers",
         ":experimental_headers",
         ":model_info_headers",
-        "//runtime/core:engine_impl",
+        "//runtime/engine:engine_impl_selected",
     ] + select({
         "//conditions:default": [],
     }),
