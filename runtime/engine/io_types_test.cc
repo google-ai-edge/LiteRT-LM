@@ -558,6 +558,14 @@ TEST(AudioExecutorPropertiesTest, OperatorOutput) {
   EXPECT_THAT(ss.str(), ContainsRegex("audio_shrink_factor: 8"));
 }
 
+TEST(BenchmarkInfoTest, SetAndGetMaxNumTokens) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  EXPECT_EQ(benchmark_info.GetMaxNumTokens(), 0);
+
+  benchmark_info.SetMaxNumTokens(2048);
+  EXPECT_EQ(benchmark_info.GetMaxNumTokens(), 2048);
+}
+
 TEST(BenchmarkInfoTest, SetAndGetExecutorStats) {
   BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
   EXPECT_FALSE(benchmark_info.GetExecutorStats().has_value());

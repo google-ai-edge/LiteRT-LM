@@ -618,6 +618,11 @@ absl::StatusOr<Responses> Prefill(
   ABSL_RETURN_IF_ERROR(executor.Prefill(inputs, params));
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimePrefillTurnEnd(num_token_ids));
+    // Unlike TryGetMaxNumTokens(), don't fall back to a default value: report
+    // only the max number of tokens that the executor actually resolved.
+    if (auto settings = executor.GetExecutorSettings(); settings.ok()) {
+      benchmark_info->SetMaxNumTokens(settings->GetMaxNumTokens());
+    }
     auto profile_summary = executor.GetProfileSummary();
     if (profile_summary.ok()) {
       if (profile_summary->empty()) {
