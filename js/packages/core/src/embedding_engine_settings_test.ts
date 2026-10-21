@@ -27,7 +27,7 @@ describe('EmbeddingEngineSettings', () => {
 
   beforeAll(async () => {
     unloadLiteRtLm();
-    liteRtLm = await loadLiteRtLm(trustedResourceUrl`/wasm`);
+    liteRtLm = await loadLiteRtLm('/wasm');
     cleanup = new Cleanup();
     ({modelAssets} = await createStreamingModelAssets(
          new Blob([]), liteRtLm.liteRtLmWasm, cleanup));

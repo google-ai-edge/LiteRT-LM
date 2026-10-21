@@ -24,7 +24,7 @@ describe('ModelAssets tests', () => {
   let liteRtLm: LiteRtLm;
   beforeAll(async () => {
     unloadLiteRtLm();
-    liteRtLm = await loadLiteRtLm(trustedResourceUrl`/wasm`);
+    liteRtLm = await loadLiteRtLm('/wasm');
   });
 
   describe('ModelAssets', () => {

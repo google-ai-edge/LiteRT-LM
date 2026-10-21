@@ -29,7 +29,7 @@ describe('LlmExecutorSettings', () => {
 
   beforeAll(async () => {
     unloadLiteRtLm();
-    liteRtLm = await loadLiteRtLm(trustedResourceUrl`/wasm`);
+    liteRtLm = await loadLiteRtLm('/wasm');
   });
 
   beforeEach(async () => {
