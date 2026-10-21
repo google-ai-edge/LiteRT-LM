@@ -395,3 +395,64 @@ alias(
     name = "text2image_session_config_py_pb2",
     actual = ":text2image_session_config_py_proto",
 )
+
+tf_proto_library(
+    name = "any2any_model_type",
+    srcs = ["any2any_model_type.proto"],
+)
+
+alias(
+    name = "any2any_model_type_proto",
+    actual = ":any2any_model_type",
+)
+
+alias(
+    name = "any2any_model_type_cc_proto",
+    actual = ":any2any_model_type_cc",
+)
+
+alias(
+    name = "any2any_model_type_py_pb2",
+    actual = ":any2any_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "any2any_metadata",
+    srcs = ["any2any_metadata.proto"],
+    deps = [":any2any_model_type"],
+)
+
+alias(
+    name = "any2any_metadata_proto",
+    actual = ":any2any_metadata",
+)
+
+alias(
+    name = "any2any_metadata_cc_proto",
+    actual = ":any2any_metadata_cc",
+)
+
+alias(
+    name = "any2any_metadata_py_pb2",
+    actual = ":any2any_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "any2any_session_config",
+    srcs = ["any2any_session_config.proto"],
+)
+
+alias(
+    name = "any2any_session_config_proto",
+    actual = ":any2any_session_config",
+)
+
+alias(
+    name = "any2any_session_config_cc_proto",
+    actual = ":any2any_session_config_cc",
+)
+
+alias(
+    name = "any2any_session_config_py_pb2",
+    actual = ":any2any_session_config_py_proto",
+)

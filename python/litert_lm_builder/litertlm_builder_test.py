@@ -23,6 +23,7 @@ from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import any2any_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
@@ -1878,8 +1879,67 @@ data_path = "{vae_path}"
     self.assertIn("Key: model_type, Value (String): tf_lite_image_denoiser", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_image_decoder", ss)
 
+  def test_from_toml_with_any2any_metadata(self):
+    """Tests that TOML with Any2AnyMetadata and capability model types builds properly."""
+    any2any_meta_content = """
+    input_sample_rate_hz: 16000
+    output_sample_rate_hz: 24000
+    supported_languages: "en-US"
+    any2any_model_type {
+      minicpm_o {
+        llm_hidden_size: 3584
+        tts_hidden_size: 768
+      }
+    }
+    """
+    any2any_meta_path = self._create_dummy_file(
+        "any2any_meta.textproto", any2any_meta_content.encode()
+    )
+    vision_enc_path = self._create_dummy_file(
+        "vision.tflite", b"dummy vision tflite"
+    )
+    llm_path = self._create_dummy_file("llm.tflite", b"dummy llm tflite")
+    vocoder_path = self._create_dummy_file(
+        "vocoder.tflite", b"dummy vocoder tflite"
+    )
+
+    toml_content = f"""
+[system_metadata]
+entries = [
+  {{ key = "author", value_type = "String", value = "ODML" }}
+]
+
+[[section]]
+section_type = "Any2AnyMetadata"
+data_path = "{any2any_meta_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "TF_LITE_VISION_ENCODER"
+data_path = "{vision_enc_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "LLM_BACKBONE"
+data_path = "{llm_path}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "AUDIO_VOCODER"
+data_path = "{vocoder_path}"
+"""
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_str(toml_content)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (4)", ss)
+    self.assertIn("Data Type:    Any2AnyMetadataProto", ss)
+    self.assertIn("input_sample_rate_hz: 16000", ss)
+    self.assertIn("output_sample_rate_hz: 24000", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_vision_encoder", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_llm_backbone", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_audio_vocoder", ss)
+
   def test_capability_tflite_model_type_int_enum_resolution(self):
-    """Tests resolving capability proto enum ints for ASR, TTS, and Text2Image."""
+    """Tests resolving capability proto enum ints for ASR, TTS, Text2Image, and Any2Any."""
     tflite_path = self._create_dummy_file("m.tflite", b"dummy")
     asr_path = self._create_dummy_file(
         "asr.pb",
@@ -1923,6 +1983,22 @@ data_path = "{vae_path}"
         " tf_lite_diffusion_transformer_initial",
         ss_img,
     )
+
+    any2any_path = self._create_dummy_file(
+        "any2any.pb",
+        any2any_metadata_pb2.Any2AnyMetadata().SerializeToString(),
+    )
+    builder_any2any = litertlm_builder.LitertLmFileBuilder()
+    builder_any2any.add_any2any_metadata(any2any_path)
+    builder_any2any.add_tflite_model(
+        tflite_path,
+        any2any_metadata_pb2.Any2AnyMetadata.TF_LITE_LLM_BACKBONE,
+    )
+    ss_any2any = self._build_and_read_litertlm(builder_any2any)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_llm_backbone",
+        ss_any2any,
+    )
     self.assertNotIn(
         "unspecified", litertlm_builder.get_all_tflite_model_types()
     )
@@ -1954,6 +2030,9 @@ data_path = "{vae_path}"
     text2image_meta_path = self._create_dummy_file(
         "text2image.textproto", b"image_gen_model_type { bonsai_flux2 {} }\n"
     )
+    any2any_meta_path = self._create_dummy_file(
+        "any2any.textproto", b"any2any_model_type { minicpm_o {} }\n"
+    )
     builder = litertlm_builder.LitertLmFileBuilder()
     builder.add_llm_metadata(llm_meta_path)
     with self.assertRaisesRegex(
@@ -1968,6 +2047,10 @@ data_path = "{vae_path}"
         ValueError, "can contain only one top-level capability metadata section"
     ):
       builder.add_text2image_metadata(text2image_meta_path)
+    with self.assertRaisesRegex(
+        ValueError, "can contain only one top-level capability metadata section"
+    ):
+      builder.add_any2any_metadata(any2any_meta_path)
 
 
 if __name__ == "__main__":

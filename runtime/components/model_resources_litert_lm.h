@@ -28,6 +28,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
@@ -102,6 +103,8 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<const proto::Text2ImageMetadata*> GetText2ImageMetadata()
       override;
 
+  absl::StatusOr<const proto::Any2AnyMetadata*> GetAny2AnyMetadata() override;
+
   absl::StatusOr<absl::string_view> GetGenericBinaryDataBuffer(
       absl::string_view name) override;
 
@@ -145,6 +148,7 @@ class ModelResourcesLitertLm : public ModelResources {
   std::unique_ptr<proto::Text2SpeechMetadata> text2speech_metadata_;
   std::unique_ptr<proto::Speech2TextMetadata> speech2text_metadata_;
   std::unique_ptr<proto::Text2ImageMetadata> text2image_metadata_;
+  std::unique_ptr<proto::Any2AnyMetadata> any2any_metadata_;
   std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 };
 

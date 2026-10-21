@@ -579,6 +579,7 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_buffer_ref",
         "//runtime/components:model_resources",
+        "//runtime/proto:any2any_metadata_cc_proto",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//schema/core:litertlm_header_schema",

@@ -62,6 +62,7 @@ import tomli as tomllib
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import any2any_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
@@ -302,6 +303,7 @@ _ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
     | set(speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.keys())
     | set(text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.keys())
     | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.keys())
+    | set(any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.keys())
 ) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
 
 
@@ -351,6 +353,10 @@ def _resolve_model_type_wire_string(
       ).lower()
     if capability_type == "text2image":
       return text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.Name(
+          model_type
+      ).lower()
+    if capability_type == "any2any":
+      return any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
     if capability_type == "embedding":
@@ -471,6 +477,7 @@ class LitertLmFileBuilder:
     self._has_speech2text_metadata = False
     self._has_text2speech_metadata = False
     self._has_text2image_metadata = False
+    self._has_any2any_metadata = False
     self._capability_types: set[str] = set()
     self._tokenizers_by_model_type: set[str | None] = set()
 
@@ -723,6 +730,11 @@ class LitertLmFileBuilder:
           )
         elif section_type == "Text2ImageMetadata":
           builder.add_text2image_metadata(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section_type == "Any2AnyMetadata":
+          builder.add_any2any_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
@@ -1090,6 +1102,23 @@ class LitertLmFileBuilder:
         text2image_metadata_pb2.Text2ImageMetadata,
         schema.AnySectionDataType.Text2ImageMetadataProto,
         "Text2Image",
+        additional_metadata,
+    )
+
+  def add_any2any_metadata(
+      self,
+      any2any_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds any-to-any metadata to the litertlm file."""
+    assert not self._has_any2any_metadata, "Any2Any metadata already added."
+    self._check_no_capability_metadata_added("any2any")
+    self._has_any2any_metadata = True
+    return self._add_proto_metadata_section(
+        any2any_metadata_path,
+        any2any_metadata_pb2.Any2AnyMetadata,
+        schema.AnySectionDataType.Any2AnyMetadataProto,
+        "Any2Any",
         additional_metadata,
     )
 

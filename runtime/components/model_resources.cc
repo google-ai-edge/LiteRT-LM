@@ -29,6 +29,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
@@ -65,6 +66,12 @@ std::string TfLiteModelTypeToWireString(
     proto::Text2ImageMetadata::TfLiteModelType model_type) {
   return absl::AsciiStrToLower(
       proto::Text2ImageMetadata::TfLiteModelType_Name(model_type));
+}
+
+std::string TfLiteModelTypeToWireString(
+    proto::Any2AnyMetadata::TfLiteModelType model_type) {
+  return absl::AsciiStrToLower(
+      proto::Any2AnyMetadata::TfLiteModelType_Name(model_type));
 }
 
 absl::StatusOr<proto::LlmMetadata::TfLiteModelType> ParseLlmTfLiteModelType(

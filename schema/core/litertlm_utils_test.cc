@@ -49,6 +49,8 @@ TEST(LitertLmUtilsTest, AnySectionDataTypeToString) {
   EXPECT_EQ(
       AnySectionDataTypeToString(AnySectionDataType_Text2ImageMetadataProto),
       "AnySectionDataType_Text2ImageMetadataProto");
+  EXPECT_EQ(AnySectionDataTypeToString(AnySectionDataType_Any2AnyMetadataProto),
+            "AnySectionDataType_Any2AnyMetadataProto");
 }
 
 }  // namespace

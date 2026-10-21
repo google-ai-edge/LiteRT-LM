@@ -38,6 +38,7 @@
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/sentencepiece_tokenizer.h"
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -69,6 +70,8 @@ std::string TfLiteModelTypeToWireString(
     proto::Speech2TextMetadata::TfLiteModelType model_type);
 std::string TfLiteModelTypeToWireString(
     proto::Text2ImageMetadata::TfLiteModelType model_type);
+std::string TfLiteModelTypeToWireString(
+    proto::Any2AnyMetadata::TfLiteModelType model_type);
 
 // Parses a wire string (e.g. "tf_lite_prefill_decode") or enum name (e.g.
 // "TF_LITE_PREFILL_DECODE") into the LLM capability-scoped Protobuf enum. The
@@ -92,8 +95,9 @@ constexpr bool kIsTfLiteModelType = std::is_enum_v<TfLiteModelTypeT>;
 // True for the capability-scoped Protobuf TfLiteModelType enums other than the
 // LLM one, e.g. proto::EmbeddingMetadata::TfLiteModelType,
 // proto::Text2SpeechMetadata::TfLiteModelType,
-// proto::Speech2TextMetadata::TfLiteModelType or
-// proto::Text2ImageMetadata::TfLiteModelType. Used to route these enums to the
+// proto::Speech2TextMetadata::TfLiteModelType,
+// proto::Text2ImageMetadata::TfLiteModelType or
+// proto::Any2AnyMetadata::TfLiteModelType. Used to route these enums to the
 // by-name (wire string) ModelResources overloads.
 template <typename TfLiteModelTypeT>
 constexpr bool kIsNonLlmTfLiteModelType =
@@ -145,9 +149,10 @@ class ModelResources {
   // capability-scoped Engines. Here TfLiteModelTypeT is an enum type defined in
   // the capability-scoped metadata proto, e.g.
   // - proto::EmbeddingMetadata::TfLiteModelType,
-  // - proto::Text2SpeechMetadata::TfLiteModelType
-  // - proto::Speech2TextMetadata::TfLiteModelType
-  // - proto::Text2ImageMetadata::TfLiteModelType.
+  // - proto::Text2SpeechMetadata::TfLiteModelType,
+  // - proto::Speech2TextMetadata::TfLiteModelType,
+  // - proto::Text2ImageMetadata::TfLiteModelType,
+  // - proto::Any2AnyMetadata::TfLiteModelType.
   template <
       typename TfLiteModelTypeT,
       typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
@@ -357,6 +362,11 @@ class ModelResources {
   GetText2ImageMetadata() {
     return absl::UnimplementedError(
         "GetText2ImageMetadata is not implemented.");
+  }
+
+  // Returns the Any2Any metadata.
+  virtual absl::StatusOr<const proto::Any2AnyMetadata*> GetAny2AnyMetadata() {
+    return absl::UnimplementedError("GetAny2AnyMetadata is not implemented.");
   }
 
   // Returns a zero-copy buffer for a GenericBinaryData section matching the

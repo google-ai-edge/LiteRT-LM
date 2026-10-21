@@ -50,6 +50,8 @@ std::string AnySectionDataTypeToString(AnySectionDataType value) {
       return "AnySectionDataType_Speech2TextMetadataProto";
     case AnySectionDataType_Text2ImageMetadataProto:
       return "AnySectionDataType_Text2ImageMetadataProto";
+    case AnySectionDataType_Any2AnyMetadataProto:
+      return "AnySectionDataType_Any2AnyMetadataProto";
     default:
       // Handle cases for MIN/MAX or potentially invalid values.
       return "Unknown AnySectionDataType value";

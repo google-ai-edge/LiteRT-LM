@@ -92,6 +92,7 @@ _SUBCOMMANDS = (
     "speech2text_metadata",
     "text2speech_metadata",
     "text2image_metadata",
+    "any2any_metadata",
     "tflite_model",
     "tflite_weights",
     "sp_tokenizer",
@@ -277,6 +278,25 @@ def _add_text2image_metadata_parser(subparsers) -> None:
   _add_metadata_arguments(text2image_metadata_parser)
 
 
+def _add_any2any_metadata_parser(subparsers) -> None:
+  """Adds a parser for any2any metadata to the subparsers."""
+  any2any_metadata_parser = subparsers.add_parser(
+      "any2any_metadata",
+      description=(
+          "Add any2any metadata to the LiteRT-LM file. Can be a text or binary"
+          " proto file."
+      ),
+      help="Add any2any metadata.",
+  )
+  any2any_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the any2any metadata file.",
+  )
+  _add_metadata_arguments(any2any_metadata_parser)
+
+
 def _add_tflite_model_parser(subparsers) -> None:
   """Adds a parser for tflite model to the subparsers."""
   tflite_model_parser = subparsers.add_parser(
@@ -448,6 +468,7 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_speech2text_metadata_parser(subparsers)
   _add_text2speech_metadata_parser(subparsers)
   _add_text2image_metadata_parser(subparsers)
+  _add_any2any_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
   _add_sentencepiece_tokenizer_parser(subparsers)
@@ -604,6 +625,15 @@ def _build_text2image_metadata(
   builder.add_text2image_metadata(args.path, additional_metadata=metadata)
 
 
+def _build_any2any_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds any2any metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_any2any_metadata(args.path, additional_metadata=metadata)
+
+
 def _resolve_required_cli_model_type(
     model_type_str: str,
 ) -> litertlm_builder.TfLiteModelType | str:
@@ -738,6 +768,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_text2speech_metadata(parsed_arg, builder)
         case "text2image_metadata":
           _build_text2image_metadata(parsed_arg, builder)
+        case "any2any_metadata":
+          _build_any2any_metadata(parsed_arg, builder)
         case "tflite_model":
           _build_tflite_model(parsed_arg, builder)
         case "tflite_weights":

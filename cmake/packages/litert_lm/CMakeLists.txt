@@ -141,6 +141,9 @@ if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_CORROSION_LINKER_V
 endif()
 
 set(LITERTLM_PROTO_FILES
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/any2any_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/any2any_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/any2any_session_config.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_metadata.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_model_type.proto"
   "${LITERTLM_PROJECT_ROOT}/runtime/proto/engine.proto"

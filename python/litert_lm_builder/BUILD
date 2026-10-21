@@ -65,6 +65,7 @@ pytype_strict_library(
     deps = [
         ":litertlm_core",
         ":litertlm_header_schema_py",
+        "//runtime/proto:any2any_metadata_py_pb2",
         "//runtime/proto:embedding_metadata_py_pb2",
         "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
@@ -111,6 +112,7 @@ pytype_strict_library(
         ":litertlm_header_schema_py",
         ":litertlm_peek",
         "@flatbuffers//:runtime_py",
+        "//runtime/proto:any2any_metadata_py_pb2",
         "//runtime/proto:embedding_metadata_py_pb2",
         "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
@@ -131,6 +133,7 @@ py_test(
         ":litertlm_core",
         ":litertlm_header_schema_py",
         ":litertlm_peek",
+        "//runtime/proto:any2any_metadata_py_pb2",
         "//runtime/proto:embedding_metadata_py_pb2",
         "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
@@ -214,6 +217,8 @@ genrule(
         "//runtime/proto:image_gen_model_type_py_pb2",
         "//runtime/proto:text2speech_metadata_py_pb2",
         "//runtime/proto:text2speech_model_type_py_pb2",
+        "//runtime/proto:any2any_metadata_py_pb2",
+        "//runtime/proto:any2any_model_type_py_pb2",
     ],
     outs = [
         "shaded/litert_lm_builder/__init__.py",
@@ -236,6 +241,8 @@ genrule(
         "shaded/litert_lm_builder/runtime/proto/image_gen_model_type_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/text2speech_metadata_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/text2speech_model_type_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/any2any_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/any2any_model_type_pb2.py",
     ],
     cmd = """
         for src in $(SRCS); do

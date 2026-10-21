@@ -1,0 +1,63 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package litert.lm.proto;
+
+option java_multiple_files = true;
+option java_outer_classname = "Any2AnyModelTypeOuterClass";
+
+// openbmb/MiniCPM-o-2_6: SigLIP + Resampler vision encoder, Whisper + AvgPool1d
+// audio encoder, Qwen2-7B LLM backbone, ConditionalChatTTS speech decoder, and
+// DVAE + Vocos 24 kHz audio vocoder.
+message MiniCpmO {
+  // LLM backbone hidden dimension (default 3584).
+  optional int32 llm_hidden_size = 1;
+  // LLM backbone vocabulary size (default 151700).
+  optional int32 llm_vocab_size = 2;
+  // TTS decoder hidden dimension (default 768).
+  optional int32 tts_hidden_size = 3;
+  // Number of discrete audio tokens in TTS vocabulary (default 6260).
+  optional int32 tts_vocab_size = 4;
+  // Number of mel spectrogram bins for TTS/vocoder (default 80).
+  optional int32 tts_num_mel_bins = 5;
+  // Vision scale resolution in pixels (default 448).
+  optional int32 vision_scale_resolution = 6;
+  // Vision patch size in pixels (default 14).
+  optional int32 vision_patch_size = 7;
+  // Maximum number of high-resolution image slices (default 9).
+  optional int32 vision_max_slice_nums = 8;
+  // Number of resampler query tokens per image slice (default 64).
+  optional int32 num_image_queries = 9;
+  // Audio encoder 1D average pooling step (default 2).
+  optional int32 audio_pool_step = 10;
+  // Whether to synthesize speech output by default.
+  optional bool generate_audio = 11;
+  // Maximum number of LLM tokens to generate per turn (default 512).
+  optional int32 max_new_tokens = 12;
+  // Maximum number of TTS audio frames to generate per turn (default 1024).
+  optional int32 max_tts_tokens = 13;
+  // Default speaker or voice identifier.
+  optional string voice = 14;
+  // Default language code in BCP-47 format (e.g., "en-US").
+  optional string language = 15;
+}
+
+// Architecture-specific parameters for Any-to-Any multimodal models.
+message Any2AnyModelType {
+  oneof model_type {
+    MiniCpmO minicpm_o = 1;
+  }
+}

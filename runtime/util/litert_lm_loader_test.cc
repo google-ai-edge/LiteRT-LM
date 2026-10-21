@@ -32,6 +32,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/text2speech_metadata.pb.h"
@@ -561,6 +562,67 @@ TEST(LitertLmLoaderTest, LoadCapabilityText2ImageMetadataAndSections) {
               proto::Text2ImageMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
           .Size(),
       16);
+}
+
+TEST(LitertLmLoaderTest, LoadCapabilityAny2AnyMetadataAndSections) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "any2any_capability_model.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+
+  auto any2any_meta_section = schema::CreateSectionObject(
+      builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
+      schema::AnySectionDataType_Any2AnyMetadataProto);
+
+  const std::string vision_model_type = "tf_lite_vision_encoder";
+  auto vision_kv =
+      schema::CreateKeyValuePair(builder, "model_type", vision_model_type);
+  auto vision_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{vision_kv});
+  auto vision_section = schema::CreateSectionObject(
+      builder, vision_items, /*begin_offset=*/216, /*end_offset=*/240,
+      schema::AnySectionDataType_TFLiteModel);
+
+  const std::string vocoder_model_type = "tf_lite_audio_vocoder";
+  auto vocoder_kv =
+      schema::CreateKeyValuePair(builder, "model_type", vocoder_model_type);
+  auto vocoder_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{vocoder_kv});
+  auto vocoder_section = schema::CreateSectionObject(
+      builder, vocoder_items, /*begin_offset=*/240, /*end_offset=*/272,
+      schema::AnySectionDataType_TFLiteModel);
+
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
+      any2any_meta_section, vision_section, vocoder_section};
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  {
+    std::ofstream file(test_file_path.string(),
+                       std::ios::binary | std::ios::app);
+    std::string dummy(300, 'c');
+    file.write(dummy.data(), dummy.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  ASSERT_TRUE(loader->GetAny2AnyMetadata().has_value());
+  EXPECT_EQ(loader->GetAny2AnyMetadata()->Size(), 16);
+
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::Any2AnyMetadata::TF_LITE_VISION_ENCODER)
+          .Size(),
+      24);
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::Any2AnyMetadata::TF_LITE_AUDIO_VOCODER)
+          .Size(),
+      32);
 }
 
 }  // namespace

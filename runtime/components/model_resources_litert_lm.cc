@@ -42,6 +42,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
@@ -340,6 +341,23 @@ ModelResourcesLitertLm::GetText2ImageMetadata() {
     text2image_metadata_ = std::move(text2image_metadata);
   }
   return text2image_metadata_.get();
+}
+
+absl::StatusOr<const proto::Any2AnyMetadata*>
+ModelResourcesLitertLm::GetAny2AnyMetadata() {
+  if (any2any_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetAny2AnyMetadata();
+    if (!buffer_ref.has_value()) {
+      return absl::NotFoundError("No Any2AnyMetadata found in the model.");
+    }
+    auto any2any_metadata = std::make_unique<proto::Any2AnyMetadata>();
+    if (!any2any_metadata->ParseFromArray(buffer_ref->Data(),
+                                          buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse Any2AnyMetadata");
+    }
+    any2any_metadata_ = std::move(any2any_metadata);
+  }
+  return any2any_metadata_.get();
 }
 
 absl::StatusOr<absl::string_view>

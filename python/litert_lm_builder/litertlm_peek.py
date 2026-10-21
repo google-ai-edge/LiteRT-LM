@@ -21,6 +21,7 @@ from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
+from runtime.proto import any2any_metadata_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
@@ -321,6 +322,22 @@ def _dump_text2image_metadata_proto(
       dump_files_dir,
       output_stream,
       text2image_metadata_pb2.Text2ImageMetadata,
+  )
+
+
+def _dump_any2any_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps Any2AnyMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      any2any_metadata_pb2.Any2AnyMetadata,
   )
 
 
@@ -700,6 +717,11 @@ def peek_litertlm_file(
         elif data_type == schema.AnySectionDataType.Text2ImageMetadataProto:
           section_info["section_type"] = "Text2ImageMetadata"
           dumped_file_name = _dump_text2image_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.Any2AnyMetadataProto:
+          section_info["section_type"] = "Any2AnyMetadata"
+          dumped_file_name = _dump_any2any_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.TFLiteModel:

@@ -1122,6 +1122,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
       case schema::AnySectionDataType_Text2SpeechMetadataProto:
       case schema::AnySectionDataType_Speech2TextMetadataProto:
       case schema::AnySectionDataType_Text2ImageMetadataProto:
+      case schema::AnySectionDataType_Any2AnyMetadataProto:
         ABSL_LOG(WARNING) << "Skipping section with data type: "
                           << section_metadata->data_type();
         break;

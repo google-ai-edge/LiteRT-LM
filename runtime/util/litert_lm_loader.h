@@ -194,6 +194,10 @@ class LitertLmLoader {
   // std::nullopt.
   std::optional<litert::BufferRef<uint8_t>> GetText2ImageMetadata();
 
+  // Returns the Any2Any metadata section buffer. If not found, returns
+  // std::nullopt.
+  std::optional<litert::BufferRef<uint8_t>> GetAny2AnyMetadata();
+
   // Returns a GenericBinaryData section buffer matching the given name.
   std::optional<litert::BufferRef<uint8_t>> GetGenericBinaryData(
       absl::string_view name);

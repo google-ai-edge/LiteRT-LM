@@ -38,6 +38,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -96,6 +97,11 @@ bool IsValidTfLiteModelTypeWireString(absl::string_view model_type_str) {
                                                        &image_gen_type) &&
       image_gen_type !=
           proto::Text2ImageMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+    return true;
+  }
+  proto::Any2AnyMetadata::TfLiteModelType any2any_type;
+  if (proto::Any2AnyMetadata::TfLiteModelType_Parse(upper, &any2any_type) &&
+      any2any_type != proto::Any2AnyMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
     return true;
   }
   return false;
@@ -572,6 +578,11 @@ std::optional<litert::BufferRef<uint8_t>>
 LitertLmLoader::GetText2ImageMetadata() {
   return GetSectionBuffer(
       BufferKey(schema::AnySectionDataType_Text2ImageMetadataProto));
+}
+
+std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetAny2AnyMetadata() {
+  return GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_Any2AnyMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetGenericBinaryData(
