@@ -168,6 +168,95 @@ TEST_F(TasksTest, PrefillTooLong) {
   EXPECT_THAT(task_respones, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST_F(TasksTest, PrefillExceedsRemainingContext) {
+  const std::string prompt = "Hello World!";
+  std::optional<BenchmarkInfo> benchmark_info;
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> token_ids,
+                       tokenizer_->TextToTokenIds(prompt));
+  // Prepend the bos token id.
+  token_ids.insert(token_ids.begin(), 2);
+  // The input alone fits, but not together with the tokens already in the
+  // context (e.g. from previous turns).
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       executor_->GetExecutorSettings());
+  executor_settings.SetMaxNumTokens(token_ids.size() + 4);
+  ASSERT_OK(executor_->UpdateExecutorSettings(executor_settings));
+  ASSERT_OK(executor_->SetCurrentStep(5));
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+
+  auto task_responses =
+      Tasks::Prefill(*executor_, inputs,
+                     /*wait_for_completion=*/true, benchmark_info);
+
+  EXPECT_THAT(task_responses, StatusIs(absl::StatusCode::kResourceExhausted));
+  // The prefill must not have reached the executor.
+  ASSERT_OK_AND_ASSIGN(int current_step, executor_->GetCurrentStep());
+  EXPECT_EQ(current_step, 5);
+}
+
+TEST_F(TasksTest, PrefillFillingRemainingContextFails) {
+  const std::string prompt = "Hello World!";
+  std::optional<BenchmarkInfo> benchmark_info;
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> token_ids,
+                       tokenizer_->TextToTokenIds(prompt));
+  // Prepend the bos token id.
+  token_ids.insert(token_ids.begin(), 2);
+  // The input exactly fills the space left in the context, so no room would be
+  // left for the decode that follows.
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       executor_->GetExecutorSettings());
+  executor_settings.SetMaxNumTokens(5 + token_ids.size());
+  ASSERT_OK(executor_->UpdateExecutorSettings(executor_settings));
+  ASSERT_OK(executor_->SetCurrentStep(5));
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+
+  auto task_responses =
+      Tasks::Prefill(*executor_, inputs,
+                     /*wait_for_completion=*/true, benchmark_info);
+
+  EXPECT_THAT(task_responses, StatusIs(absl::StatusCode::kResourceExhausted));
+  // The prefill must not have reached the executor.
+  ASSERT_OK_AND_ASSIGN(int current_step, executor_->GetCurrentStep());
+  EXPECT_EQ(current_step, 5);
+}
+
+TEST_F(TasksTest, PrefillLeavingOneTokenForDecodeSucceeds) {
+  const std::string prompt = "Hello World!";
+  std::optional<BenchmarkInfo> benchmark_info;
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> token_ids,
+                       tokenizer_->TextToTokenIds(prompt));
+  // Prepend the bos token id.
+  token_ids.insert(token_ids.begin(), 2);
+  // After the input, one token is left in the context for the decode.
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       executor_->GetExecutorSettings());
+  executor_settings.SetMaxNumTokens(5 + token_ids.size() + 1);
+  ASSERT_OK(executor_->UpdateExecutorSettings(executor_settings));
+  ASSERT_OK(executor_->SetCurrentStep(5));
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto task_response,
+      Tasks::Prefill(*executor_, inputs,
+                     /*wait_for_completion=*/true, benchmark_info));
+
+  EXPECT_EQ(task_response.GetTaskState(), TaskState::kDone);
+  ASSERT_OK_AND_ASSIGN(int current_step, executor_->GetCurrentStep());
+  EXPECT_EQ(current_step, 5 + static_cast<int>(token_ids.size()));
+}
+
 TEST_F(TasksTest, PrefillSucceed) {
   const std::string prompt = "Hello World!";
   std::optional<BenchmarkInfo> benchmark_info;
@@ -310,14 +399,13 @@ TEST_F(TasksTest, DecodeCancelledWithBenchmarkReportsExecutorStats) {
   // cancellation path deterministically.
   std::atomic<bool> cancelled = true;
   EXPECT_THAT(
-      Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    kNumOutputCandidates, benchmark_info,
-                    /*sampler=*/std::nullopt,
-                    RepetitionPenaltyConfig::Default(),
-                    NoRepeatNgramConfig::Default(),
-                    SuppressTokensConfig::Default(),
-                    /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
-                    /*callback=*/callback, &cancelled),
+      Tasks::Decode(
+          executor, *tokenizer_, stop_token_detector, kNumOutputCandidates,
+          benchmark_info,
+          /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+          /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
+          /*callback=*/callback, &cancelled),
       testing::status::StatusIs(absl::StatusCode::kCancelled));
 
   EXPECT_EQ(executor.num_resets_, 1);

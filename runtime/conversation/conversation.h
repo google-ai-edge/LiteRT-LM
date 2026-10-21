@@ -102,7 +102,8 @@ class ConversationConfig {
     return return_error_on_parse_failure_;
   }
 
-  // Returns whether to return an error status when max num tokens reached.
+  // Returns whether a reply that is cut off at the max number of tokens fails
+  // with an error. See `Builder::SetReturnErrorOnMaxTokensReached()`.
   bool return_error_on_max_tokens_reached() const {
     return return_error_on_max_tokens_reached_;
   }
@@ -219,7 +220,19 @@ class ConversationConfig {
       return *this;
     }
 
-    // Sets whether to return an error status when max num tokens reached.
+    // Sets what happens when the model's reply is cut off because the
+    // conversation reaches the max number of tokens (the size of the context
+    // window):
+    // - false (default): the reply generated so far is returned as a
+    //   successful response.
+    // - true: the message fails with a RESOURCE_EXHAUSTED error and is removed
+    //   from the history.
+    //
+    // This setting only applies to the reply. If the input of a message does
+    // not fit in the space left in the context window (e.g. because an earlier
+    // reply filled it), the message always fails with RESOURCE_EXHAUSTED and
+    // is removed from the history, regardless of this setting, because no
+    // reply was generated that could be returned.
     Builder& SetReturnErrorOnMaxTokensReached(
         bool return_error_on_max_tokens_reached) {
       return_error_on_max_tokens_reached_ = return_error_on_max_tokens_reached;
@@ -561,9 +574,7 @@ class Conversation {
   // enabled: work queued by the asynchronous APIs above only makes progress
   // while a caller drives it. With multi-threaded execution this simply blocks
   // until the pending work completes.
-  absl::Status WaitUntilDone() {
-    return session_->WaitUntilDone();
-  }
+  absl::Status WaitUntilDone() { return session_->WaitUntilDone(); }
 
   // Scores the target text after the prefill process is done. This function
   // will run the decode process (with the existing context history) by feeding

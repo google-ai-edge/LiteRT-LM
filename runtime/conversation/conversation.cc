@@ -81,6 +81,28 @@ absl::Status IgnoreEmptyInputError(const absl::Status& status) {
   return IsEmptyInputError(status) ? absl::OkStatus() : status;
 }
 
+// Returns whether a prefill did not run because its input does not fit in the
+// context window. This is the case when the context window has no space left
+// for the input, or when it was already full: the prefill then inherits the
+// `kMaxNumTokensReached` end state of the decode that filled it.
+bool IsContextWindowFull(const absl::StatusOr<Responses>& responses) {
+  if (!responses.ok()) {
+    return absl::IsResourceExhausted(responses.status());
+  }
+  return responses->GetTaskState() == TaskState::kMaxNumTokensReached;
+}
+
+// Returns the error to report for a prefill for which `IsContextWindowFull()`
+// is true.
+absl::Status ContextWindowFullError(
+    const absl::StatusOr<Responses>& responses) {
+  if (!responses.ok()) {
+    return responses.status();
+  }
+  return absl::ResourceExhaustedError(
+      "Max number of tokens reached, the context window is full.");
+}
+
 bool IsEmptyPreface(const Preface& preface) {
   auto json_preface = std::get<JsonPreface>(preface);
   return (json_preface.messages.is_null() || json_preface.messages.empty()) &&
@@ -597,8 +619,10 @@ absl::Status Conversation::SendMessageAsync(
     is_appending_message = is_appending_message_;
   }
 
-  absl::AnyInvocable<void()> cancel_callback = [this, num_messages_added,
-                                                prev_is_appending_message]() {
+  // Removes the messages of this turn from the history, e.g. when the turn is
+  // cancelled or its input could not be prefilled.
+  auto remove_turn_from_history = [this, num_messages_added,
+                                   prev_is_appending_message]() {
     absl::MutexLock lock(history_mutex_);
     for (size_t i = 0; i < num_messages_added && !history_.empty(); ++i) {
       history_.pop_back();
@@ -666,14 +690,21 @@ absl::Status Conversation::SendMessageAsync(
     ABSL_ASSIGN_OR_RETURN(
         auto task_controller,
         session_->RunPrefillAsync(
-            session_inputs, [callback = std::move(user_callback),
-                             cancel_callback = std::move(cancel_callback)](
-                                absl::StatusOr<Responses> responses) mutable {
+            session_inputs,
+            [callback = std::move(user_callback), remove_turn_from_history](
+                absl::StatusOr<Responses> responses) mutable {
+              if (IsContextWindowFull(responses)) {
+                // The input was not prefilled, so it is not part of the
+                // conversation.
+                remove_turn_from_history();
+                callback(ContextWindowFullError(responses));
+                return;
+              }
               if (!responses.ok()) {
                 auto status = IgnoreEmptyInputError(responses.status());
                 if (!status.ok()) {
                   if (absl::IsCancelled(status)) {
-                    cancel_callback();
+                    remove_turn_from_history();
                   }
                   callback(status);
                 } else {
@@ -686,7 +717,7 @@ absl::Status Conversation::SendMessageAsync(
               } else if (responses->GetTaskState() == TaskState::kCancelled ||
                          responses->GetTaskState() ==
                              TaskState::kDependentTaskCancelled) {
-                cancel_callback();
+                remove_turn_from_history();
                 callback(absl::CancelledError("Task cancelled"));
               } else if (IsTaskEndState(responses->GetTaskState())) {
                 callback(absl::InternalError(absl::StrCat(
@@ -800,7 +831,7 @@ absl::Status Conversation::SendMessageAsync(
           CreateInternalCallback(
               *model_data_processor_, std::move(data_processor_args),
               config_.GetChannels(), std::move(wrapped_user_callback),
-              std::move(cancel_callback), std::move(complete_message_callback),
+              remove_turn_from_history, std::move(complete_message_callback),
               open_channel_name, config_.return_error_on_max_tokens_reached(),
               config_.stream_tool_calls(),
               config_.stream_tool_calls_channel_name()));
@@ -824,14 +855,20 @@ absl::Status Conversation::SendMessageAsync(
       session_->RunPrefillAsync(
           session_inputs,
           [this, callback = internal_callback, decode_config,
-           open_channel_name = std::move(open_channel_name),
-           task_group_id](absl::StatusOr<Responses> responses) mutable {
+           open_channel_name = std::move(open_channel_name), task_group_id,
+           remove_turn_from_history = std::move(remove_turn_from_history)](
+              absl::StatusOr<Responses> responses) mutable {
             // First, check if prefill returned an error. Ignore errors
             // caused by empty input, as this is a valid case for triggering
             // decode only.
             auto status = IgnoreEmptyInputError(responses.status());
-            // Scenario 1: Prefill failed with an unexpected error.
-            if (!status.ok()) {
+            if (IsContextWindowFull(responses)) {
+              // The input was not prefilled, so it is not part of the
+              // conversation.
+              remove_turn_from_history();
+              (*callback)(ContextWindowFullError(responses));
+            } else if (!status.ok()) {
+              // Scenario 1: Prefill failed with an unexpected error.
               // If prefill failed, invoke the callback with the error
               // status and do not proceed to decode.
               (*callback)(responses.status());

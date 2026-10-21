@@ -553,6 +553,23 @@ class DecodeOneStep {
   SpeculativeDecodingConfig speculative_decoding_config_;
 };
 
+// Prefills the tokens sampled by the external sampler at the last decode step
+// again, at the step that the decode already counted for them, so that the
+// executor holds them as pending input tokens. This does not take more space in
+// the context window, so unlike `Prefill()`, it does not leave room for a
+// following decode step.
+absl::Status PrefillLastSampledTokens(LlmExecutor& executor,
+                                      const litert::TensorBuffer& decoded_ids) {
+  LITERT_ASSIGN_OR_RETURN(auto duplicated_decoded_ids, decoded_ids.Duplicate());
+  ExecutorInputs inputs;
+  inputs.SetTextData(ExecutorTextData(std::move(duplicated_decoded_ids)));
+  ABSL_ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
+  ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
+  ExecutorPrefillParams params;
+  params.SetWaitForCompletion(true);
+  return executor.Prefill(inputs, params);
+}
+
 }  // namespace
 
 absl::StatusOr<Responses> Prefill(
@@ -569,6 +586,18 @@ absl::StatusOr<Responses> Prefill(
         "Input token ids are too long. Exceeding the maximum number of tokens "
         "allowed: ",
         num_tokens, " >= ", max_num_tokens));
+  }
+  // The input is appended after the tokens already in the context (e.g.
+  // previous turns), so they count against the limit too. As above, at least
+  // one token must remain for the decode that follows, which runs a step before
+  // it checks the limit. Otherwise the prefill or that decode step would go
+  // past `max_num_tokens`.
+  if (auto current_step = executor.GetCurrentStep();
+      current_step.ok() && *current_step + num_tokens >= max_num_tokens) {
+    return absl::ResourceExhaustedError(absl::StrCat(
+        "Not enough space left in the context window for the input: ",
+        *current_step, " tokens in the context + ", num_tokens,
+        " input tokens >= ", max_num_tokens, " max number of tokens."));
   }
   size_t num_token_ids;
   {
@@ -719,18 +748,7 @@ absl::StatusOr<Responses> Decode(
         // For external sampling, the sampled tokens are provided by the
         // sampler. We must run one prefill to add the last token as pending
         // token in the LLM Executor when cancellation happens.
-        LITERT_ASSIGN_OR_RETURN(auto duplicated_decoded_ids,
-                                decoded_ids->Duplicate());
-        ExecutorInputs inputs;
-        inputs.SetTextData(ExecutorTextData(std::move(duplicated_decoded_ids)));
-        std::optional<BenchmarkInfo> unused_benchmark_info;
-        ABSL_ASSIGN_OR_RETURN(auto current_step, executor.GetCurrentStep());
-        ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
-        auto status = Prefill(executor, inputs, /*wait_for_completion=*/true,
-                              unused_benchmark_info);
-        if (!status.ok()) {
-          return status.status();
-        }
+        ABSL_RETURN_IF_ERROR(PrefillLastSampledTokens(executor, *decoded_ids));
       }
       return absl::CancelledError("Process cancelled.");
     }
@@ -839,18 +857,7 @@ absl::StatusOr<Responses> Decode(
     // For external sampling, the sampled tokens are provided by the sampler. We
     // must run one prefill to add the stop token as pending token in the LLM
     // Executor when stop condition is met.
-    LITERT_ASSIGN_OR_RETURN(auto duplicated_decoded_ids,
-                            decoded_ids->Duplicate());
-    ExecutorInputs inputs;
-    inputs.SetTextData(ExecutorTextData(std::move(duplicated_decoded_ids)));
-    std::optional<BenchmarkInfo> unused_benchmark_info;
-    ABSL_ASSIGN_OR_RETURN(auto current_step, executor.GetCurrentStep());
-    ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
-    auto status = Prefill(executor, inputs, /*wait_for_completion=*/true,
-                          unused_benchmark_info);
-    if (!status.ok()) {
-      return status.status();
-    }
+    ABSL_RETURN_IF_ERROR(PrefillLastSampledTokens(executor, *decoded_ids));
   }
 
   if (is_streaming) {

@@ -67,8 +67,8 @@ using ::testing::HasSubstr;
 using ::testing::Not;
 using ::testing::Optional;
 using ::testing::Return;
-using ::testing::status::StatusIs;
 using ::testing::VariantWith;
+using ::testing::status::StatusIs;
 
 absl::string_view kTestLlmPath =
     "litert_lm/runtime/testdata/test_lm.litertlm";
@@ -446,13 +446,12 @@ class ConversationTest : public testing::TestWithParam<ConversationTestParams> {
       std::unique_ptr<MockSession> mock_session) {
     std::unique_ptr<MockEngine> mock_engine =
         CreateMockEngine(std::move(mock_session));
-    ABSL_ASSIGN_OR_RETURN(
-        ConversationConfig conversation_config,
-        ConversationConfig::Builder()
-            .SetSessionConfig(session_config_)
-            .SetOverwritePromptTemplate(
-                PromptTemplate(kTestJinjaPromptTemplate))
-            .Build(*mock_engine));
+    ABSL_ASSIGN_OR_RETURN(ConversationConfig conversation_config,
+                          ConversationConfig::Builder()
+                              .SetSessionConfig(session_config_)
+                              .SetOverwritePromptTemplate(
+                                  PromptTemplate(kTestJinjaPromptTemplate))
+                              .Build(*mock_engine));
     ABSL_ASSIGN_OR_RETURN(
         std::unique_ptr<Conversation> conversation,
         Conversation::Create(*mock_engine, conversation_config));
@@ -655,6 +654,99 @@ TEST_P(ConversationTest, GetTokenCountWithPreface) {
 
   ASSERT_OK_AND_ASSIGN(int tokens_after, conversation->GetTokenCount());
   EXPECT_EQ(tokens_after, 50);
+}
+
+TEST_P(ConversationTest, SendMessageWhenContextIsFullFails) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(20);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  // The first turn decodes until the context window is full.
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  ASSERT_OK(conversation->SendMessage(user_message).status());
+  ASSERT_OK_AND_ASSIGN(int tokens_after_first_turn,
+                       conversation->GetTokenCount());
+  ASSERT_EQ(tokens_after_first_turn, 20);
+  ASSERT_THAT(conversation->GetHistory(), testing::SizeIs(2));
+
+  // The next turn does not fit anymore. It must fail instead of returning an
+  // empty response, and must not be added to the history.
+  EXPECT_THAT(conversation->SendMessage(user_message),
+              StatusIs(absl::StatusCode::kResourceExhausted));
+  ASSERT_OK_AND_ASSIGN(int tokens_after_second_turn,
+                       conversation->GetTokenCount());
+  EXPECT_EQ(tokens_after_second_turn, 20);
+  EXPECT_THAT(conversation->GetHistory(), testing::SizeIs(2));
+}
+
+TEST_P(ConversationTest, SendMessageNotFittingInContextFails) {
+  constexpr int kMaxNumTokens = 30;
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  // The first turn ends before the context window is full.
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  ASSERT_OK(
+      conversation
+          ->SendMessage(user_message, OptionalArgs{.max_output_tokens = 2})
+          .status());
+  ASSERT_OK_AND_ASSIGN(int tokens_after_first_turn,
+                       conversation->GetTokenCount());
+  ASSERT_LT(tokens_after_first_turn, kMaxNumTokens);
+  ASSERT_THAT(conversation->GetHistory(), testing::SizeIs(2));
+
+  // The next message fits in an empty context window, but not in the space
+  // left.
+  std::string long_text = "Hello";
+  Message long_message = {{"role", "user"}, {"content", long_text}};
+  ASSERT_OK_AND_ASSIGN(int long_message_tokens,
+                       conversation->CountTokens(long_message));
+  while (tokens_after_first_turn + long_message_tokens <= kMaxNumTokens) {
+    absl::StrAppend(&long_text, " Hello");
+    long_message = {{"role", "user"}, {"content", long_text}};
+    ASSERT_OK_AND_ASSIGN(long_message_tokens,
+                         conversation->CountTokens(long_message));
+  }
+  ASSERT_LT(long_message_tokens, kMaxNumTokens);
+
+  // The message must be rejected instead of being written past the context
+  // window, and must not be added to the history.
+  EXPECT_THAT(conversation->SendMessage(long_message),
+              StatusIs(absl::StatusCode::kResourceExhausted));
+  ASSERT_OK_AND_ASSIGN(int tokens_after_second_turn,
+                       conversation->GetTokenCount());
+  EXPECT_EQ(tokens_after_second_turn, tokens_after_first_turn);
+  EXPECT_THAT(conversation->GetHistory(), testing::SizeIs(2));
 }
 
 TEST_P(ConversationTest, SendMessageGemma3Template) {
@@ -1552,9 +1644,9 @@ TEST_P(ConversationTest, WaitUntilDonePropagatesSessionError) {
   EXPECT_CALL(session, WaitUntilDone())
       .WillOnce(Return(absl::InternalError("session failed")));
 
-  EXPECT_THAT(mock_conv.conversation->WaitUntilDone(),
-              StatusIs(absl::StatusCode::kInternal,
-                       HasSubstr("session failed")));
+  EXPECT_THAT(
+      mock_conv.conversation->WaitUntilDone(),
+      StatusIs(absl::StatusCode::kInternal, HasSubstr("session failed")));
 }
 
 TEST_P(ConversationTest, SendMultipleMessages) {
