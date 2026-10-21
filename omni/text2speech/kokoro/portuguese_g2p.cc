@@ -1436,8 +1436,8 @@ bool IsVowelPhonemeCp(char32_t cp) {
   }
 }
 
-// Ordinal stems without their gender vowel, as Host Kokoro's espeak-ng reads
-// them: units 1..9 and tens 10..90, indexed by digit.
+// Ordinal stems without their gender vowel, as Host Kokoro reads them:
+// units 1..9 and tens 10..90, indexed by digit.
 constexpr std::array<absl::string_view, 10> kPtOrdinalUnitStems = {
     "",      "prˌimˈAɾ", "sˌeɡˈũŋd", "tˌeɾəsˈAɾ", "kwˈaɾət",
     "kˈiŋt", "sˈest",    "sˈɛʧim",   "ˌoɪtˈav",   "nˈon"};
@@ -1474,10 +1474,10 @@ std::string DropFirstSecondaryStress(absl::string_view ph) {
   return out;
 }
 
-// Returns the phoneme words of the ordinal `n` the way espeak-ng reads it, or
+// Returns the phoneme words of the ordinal `n` the way Host Kokoro reads it, or
 // an empty vector when `n` is outside 1..199. When the part after a tens or
-// hundreds stem starts with a secondary-stressed syllable, espeak-ng moves that
-// stress onto the stem's gender vowel ("13º" -> "dˈɛsimˌʊteɾəsˈAɾʊ").
+// hundreds stem starts with a secondary-stressed syllable, that stress moves
+// onto the stem's gender vowel ("13º" -> "dˈɛsimˌʊteɾəsˈAɾʊ").
 std::vector<std::string> PtOrdinalWords(int n, bool feminine) {
   const absl::string_view gender = feminine ? "æ" : "ʊ";
   if (n <= 0 || n >= 200) {
@@ -1499,7 +1499,7 @@ std::vector<std::string> PtOrdinalWords(int n, bool feminine) {
     return {absl::StrCat(tens, gender, unit)};
   }
   if (n == 100) {
-    // espeak-ng splits the gender vowel of a bare "centésimo" off as a word.
+    // Host Kokoro splits the gender vowel of a bare "centésimo" off as a word.
     return {std::string(kPtOrdinalHundredStem), std::string(gender)};
   }
   const std::string rest = PtOrdinalWords(n - 100, feminine).front();

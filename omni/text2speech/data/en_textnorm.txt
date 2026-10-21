@@ -3,11 +3,9 @@
 # Format is documented in omni/tts/text_normalizer.h. Records are
 # tab-separated, and `rule` records apply in the order they appear here.
 #
-# The phonemizer hands whole clauses to espeak-ng, which already reads plain
-# cardinals, ordinals ("2nd"), percent signs and most letter acronyms. This
-# table only rewrites what espeak-ng reads differently from Host Kokoro's
-# misaki English front end (the reference the on-device engine is compared
-# against):
+# This table normalizes English numbers, currency, decimals, and abbreviations
+# to match Host Kokoro's misaki English front end (the reference the on-device
+# engine is compared against):
 #   * four-digit numbers are read as years: 2026 -> twenty twenty-six,
 #     1500 -> fifteen hundred, 1990s -> nineteen nineties;
 #   * currency amounts are read with units and cents: $6.50 -> six dollars and
@@ -15,8 +13,7 @@
 #   * decimals are read with "point" and digit by digit: 0.05 -> zero point
 #     zero five;
 #   * slashes and hyphens between digits are dropped (2 1/2, 1-800-555-0199);
-#   * a few abbreviations that espeak-ng spells or pauses on (e.g., i.e.,
-#     p.m., Dr., ASAP).
+#   * common abbreviations (e.g., i.e., p.m., Dr., ASAP).
 #
 # RE2 has no lookaround, so rules consume the neighbouring character they need
 # and put it back in the replacement.
@@ -171,8 +168,7 @@ rule	(\d)/(\d)	\1 \2
 rule	(\d)-(\d)	\1 \2
 rule	(\d)-(\d)	\1 \2
 
-# Abbreviations espeak-ng spells letter by letter with pauses, or reads as a
-# different word.
+# Common abbreviations and time-of-day markers.
 map	ampm	a	AM
 map	ampm	A	AM
 map	ampm	p	PM

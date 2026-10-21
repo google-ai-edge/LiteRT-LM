@@ -117,10 +117,7 @@ KokoroAcousticStage::Create(
       ResolveOutputIndex(*stage->acoustic_model_, "speech_frame_length"));
 
   // Initialize the phonemizer once during acoustic stage creation.
-  std::string espeak_dir =
-      ResolveEspeakDataDir(stage->config_.espeak_data_dir.empty()
-                               ? stage->model_folder_
-                               : stage->config_.espeak_data_dir);
+  std::string data_dir;
   // A language with no rule table in the container is left unnormalized.
   const std::string normalized_lang =
       NormalizeLanguageCode(stage->config_.language);
@@ -142,7 +139,7 @@ KokoroAcousticStage::Create(
   }
   ABSL_ASSIGN_OR_RETURN(
       stage->phonemizer_,
-      KokoroPhonemizer::Create(espeak_dir, stage->config_.language,
+      KokoroPhonemizer::Create(data_dir, stage->config_.language,
                                stage->config_.custom_lexicon, text_norm_rules,
                                cjk_lexicon, stage->config_.zh_t2s_dictionary));
 

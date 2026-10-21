@@ -39,7 +39,6 @@
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/text2speech/kokoro/common.h"
-#include "omni/text2speech/kokoro/espeak_assets.h"
 #include "omni/text2speech/kokoro/kokoro_model_config.h"
 #include "omni/text2speech/stream_text_source.h"
 #include "omni/text2speech/text_chunk_utils.h"
@@ -179,7 +178,6 @@ TEST(KokoroFactoryTest, GetAvailableKokoroVoicesSkipsNonVoiceSections) {
   // Every section has the size of a voice pack, so the non-voice sections are
   // rejected by their names alone.
   FakeSections lm_resources({{"af_heart"},
-                             {std::string(kokoro::kEspeakNgSectionName)},
                              {"ja-lexicon"},
                              {"zh-lexicon"},
                              {"zh-textnorm"},
@@ -272,7 +270,6 @@ TEST(KokoroFactoryTest, GetAvailableKokoroVoicesReadsLitertLmBundle) {
       (std::filesystem::path(::testing::TempDir()) / "kokoro_voices.litertlm")
           .string(),
       {{"zf_xiaobei"},
-       {std::string(kokoro::kEspeakNgSectionName), /*size=*/16},
        {"af_heart"},
        {"zh-lexicon", /*size=*/16},
        {std::string(kTraditionalChineseSectionName), /*size=*/16}});

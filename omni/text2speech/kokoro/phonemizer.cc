@@ -40,10 +40,6 @@
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
-#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
-#include "espeak-ng/espeak_ng.h"  // from @espeak_ng
-#include "espeak-ng/speak_lib.h"  // from @espeak_ng
-#endif  // defined(LITERT_LM_ESPEAK_NG_ENABLED)
 #include "omni/text2speech/kokoro/chinese_g2p.h"
 #include "omni/text2speech/kokoro/cjk_blob.h"
 #include "omni/text2speech/kokoro/common.h"
@@ -64,71 +60,11 @@ namespace litert::omni::tts {
 using ::litert::omni::tts::kokoro::DecodeUtf8CodePoint;
 using ::litert::omni::tts::kokoro::Utf8CodePoint;
 
-ABSL_CONST_INIT absl::Mutex KokoroPhonemizer::espeak_mutex_(absl::kConstInit);
-
 namespace {
 
 constexpr absl::string_view kMissingJapaneseLexiconError =
     "Japanese TTS requires a bundled 'ja-lexicon' section in the .litertlm "
-    "model container; espeak-ng fallback is disabled for Japanese.";
-
-#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
-// Whether this build links the espeak-ng C library.
-constexpr bool kEspeakNgEnabled = true;
-
-// Thread-safe one-time initialization of the process-global espeak-ng C
-// library.
-//
-// The third-party `libespeak-ng` library is written in legacy C without
-// instance context handles, storing internal phonetic lookup tables, voice
-// structures, and dictionary file pointers in process-global C static
-// variables.
-absl::Status EnsureEspeakInitialized(absl::string_view parent_dir) {
-  static const absl::NoDestructor<absl::Status> init_status([parent_dir]() {
-    std::string path_str(parent_dir);
-    espeak_ng_InitializePath(path_str.c_str());
-    int status =
-        espeak_Initialize(AUDIO_OUTPUT_SYNCHRONOUS, 0, path_str.c_str(),
-                          espeakINITIALIZE_DONT_EXIT);
-    if (status <= 0) {
-      return absl::InternalError(absl::StrCat(
-          "espeak_Initialize failed with parent_dir: ", parent_dir));
-    }
-    return absl::OkStatus();
-  }());
-  return *init_status;
-}
-
-// In tie mode espeak-ng also ties the letters of its language-switch flags
-// (`(e͡n)`). Drops tie characters inside parentheses so StripLanguageSwitches
-// still recognizes the flags.
-std::string RemoveTiesInsideParentheses(absl::string_view phonemes) {
-  constexpr absl::string_view kTie = "\u0361";
-  std::string out;
-  out.reserve(phonemes.size());
-  bool inside = false;
-  size_t i = 0;
-  while (i < phonemes.size()) {
-    if (inside && absl::string_view(phonemes).substr(i, kTie.size()) == kTie) {
-      i += kTie.size();
-      continue;
-    }
-    if (phonemes[i] == '(') inside = true;
-    if (phonemes[i] == ')') inside = false;
-    out.push_back(phonemes[i]);
-    ++i;
-  }
-  return out;
-}
-#else
-// Whether this build links the espeak-ng C library.
-constexpr bool kEspeakNgEnabled = false;
-
-// espeak-ng is not linked into this build; there is nothing to initialize.
-absl::Status EnsureEspeakInitialized(absl::string_view /*parent_dir*/) {
-  return absl::OkStatus();
-}
-#endif  // defined(LITERT_LM_ESPEAK_NG_ENABLED)
+    "model container.";
 
 // Checks whether a character is an opening delimiter (e.g. '(', '[', '"').
 // Used during text phonemization to avoid inserting unnecessary leading spaces
@@ -136,21 +72,6 @@ absl::Status EnsureEspeakInitialized(absl::string_view /*parent_dir*/) {
 bool IsOpenPunctuation(char ch) {
   return ch == '(' || ch == '[' || ch == '{' || ch == '"' || ch == '\'';
 }
-
-// Punctuation marks at which Host Kokoro splits text before handing it to
-// espeak-ng: `phonemizer.punctuation._DEFAULT_MARKS`.
-bool IsPhonemizerMark(absl::string_view symbol) {
-  static const absl::NoDestructor<absl::flat_hash_set<absl::string_view>>
-      kMarks({";", ":", ",", ".", "!", "?", "¡", "¿", "—", "…", "\"",
-              "«", "»", "“", "”", "(", ")", "{", "}", "[", "]"});
-  return kMarks->contains(symbol);
-}
-
-bool IsAsciiSpace(absl::string_view symbol) {
-  return symbol.size() == 1 &&
-         absl::ascii_isspace(static_cast<unsigned char>(symbol[0]));
-}
-
 
 // Creates the rule-based G2P engine `G2p` and registers it for `language`.
 template <typename G2p>
@@ -208,8 +129,8 @@ bool IsHanziCodePoint(char32_t cp) {
          (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x20000 && cp <= 0x2A6DF);
 }
 
-MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice) {
-  std::string normalized = NormalizeLanguageCode(espeak_voice);
+MisakiFlavor FlavorForLanguage(absl::string_view language_code) {
+  std::string normalized = NormalizeLanguageCode(language_code);
   if (normalized == "en-us") {
     return MisakiFlavor::kEnglishUs;
   }
@@ -222,14 +143,14 @@ MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice) {
   if (normalized == "ja") {
     return MisakiFlavor::kJapanese;
   }
-  return MisakiFlavor::kEspeakGeneric;
+  return MisakiFlavor::kGeneric;
 }
 
 std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
                                     MisakiFlavor flavor) {
-  if (flavor == MisakiFlavor::kEspeakGeneric) {
-    // misaki.espeak.EspeakG2P.E2M rules (used for es, fr-fr, hi, it, pt-br).
-    // They only merge phoneme pairs that espeak-ng *ties* into one phoneme
+  if (flavor == MisakiFlavor::kGeneric) {
+    // Generic multilingual G2P normalization rules (used for es, fr-fr, hi, it,
+    // pt-br). They only merge phoneme pairs that are tied into one phoneme
     // (`t͡s`, `a͡ʊ`); an untied `ts` / `aʊ` spans two phonemes (vingt-six,
     // causata) and must stay as is. Preserves Spanish jota ('x'), trill ('r'),
     // and vowel length marker ('ː').
@@ -252,9 +173,9 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
 
   // Step 1: Remove the Unicode tie-bar accent (U+0361 COMBINING DOUBLE INVERTED
   // BREVE, encoded in UTF-8 as 2 bytes: 0xCD 0xA1) and '^' tie marker.
-  // eSpeak-ng uses this tie bar to connect multi-character affricates (e.g.,
-  // "t͡ʃ", "d͡ʒ"). Kokoro vocabulary uses individual characters ("ʧ", "ʤ"), so
-  // stripping the tie bar enables clean mapping in Step 2.
+  // Tie bars connect multi-character affricates (e.g., "t͡ʃ", "d͡ʒ"). Kokoro
+  // vocabulary uses individual characters ("ʧ", "ʤ"), so stripping the tie bar
+  // enables clean mapping in Step 2.
   std::string clean_ipa = absl::StrReplaceAll(
       raw_ipa, {{"\u0361", ""}, {"\xCD\xA1", ""}, {"^", ""}});
 
@@ -275,7 +196,7 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
   }
 
   if (flavor == MisakiFlavor::kEnglishGb) {
-    // misaki.espeak.EspeakFallback (british=True):
+    // British English normalization:
     return absl::StrReplaceAll(clean_ipa, {
                                               {"aɪ", "I"},
                                               {"aʊ", "W"},
@@ -328,68 +249,6 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
                                         });
 }
 
-// Checks whether `body` (the text between a '(' and its ')') is an espeak-ng
-// voice name, i.e. the payload of a language-switch escape such as "(en)",
-// "(cmn)" or "(pt-br)".
-//
-// Voice names follow the BCP-47 shape espeak-ng uses in its voice files: a
-// two- or three-letter lowercase primary subtag, optionally followed by
-// hyphen-separated alphanumeric subtags. Matching the *structure* rather than
-// merely "looks lowercase" matters, because a caller may legitimately hand us
-// parenthesized text, and Kokoro's vocabulary contains '(' and ')'.
-bool IsLanguageSwitchBody(absl::string_view body) {
-  size_t i = 0;
-  while (i < body.size() &&
-         absl::ascii_islower(static_cast<unsigned char>(body[i]))) {
-    ++i;
-  }
-  // Primary subtag: 2-3 lowercase letters (e.g. "en", "cmn").
-  if (i < 2 || i > 3) {
-    return false;
-  }
-  // Optional subtags: "-" followed by 1-8 lowercase alphanumerics.
-  while (i < body.size()) {
-    if (body[i] != '-') {
-      return false;
-    }
-    ++i;
-    const size_t subtag_start = i;
-    while (i < body.size() &&
-           (absl::ascii_islower(static_cast<unsigned char>(body[i])) ||
-            absl::ascii_isdigit(static_cast<unsigned char>(body[i])))) {
-      ++i;
-    }
-    const size_t subtag_len = i - subtag_start;
-    if (subtag_len < 1 || subtag_len > 8) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::string StripLanguageSwitches(absl::string_view phonemes) {
-  if (!absl::StrContains(phonemes, '(')) {
-    return std::string(phonemes);
-  }
-
-  std::string result;
-  result.reserve(phonemes.size());
-  size_t i = 0;
-  while (i < phonemes.size()) {
-    if (phonemes[i] == '(') {
-      const size_t close = phonemes.find(')', i + 1);
-      if (close != absl::string_view::npos &&
-          IsLanguageSwitchBody(phonemes.substr(i + 1, close - i - 1))) {
-        i = close + 1;
-        continue;
-      }
-    }
-    result.push_back(phonemes[i]);
-    ++i;
-  }
-  return result;
-}
-
 bool IsWordCodePoint(char32_t cp) {
   // ASCII Alphanumeric, apostrophe, hyphen
   if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
@@ -416,7 +275,7 @@ bool IsWordCodePoint(char32_t cp) {
   }
   // Hiragana & Katakana: U+3040..U+30FF, excluding the katakana middle dot
   // U+30FB (・), which is a word *separator*. Leaving it classified as a word
-  // character glues it onto the preceding token, where espeak-ng cannot
+  // character glues it onto the preceding token, where the G2P engine cannot
   // pronounce it and the boundary it marks is lost.
   if (cp >= 0x3040 && cp <= 0x30FF) {
     return cp != 0x30FB;
@@ -493,30 +352,6 @@ GetUnicodePunctuationMap() {
   return *kMap;
 }
 
-std::string ResolveEspeakDataDir(absl::string_view path) {
-  if (path.empty()) return "";
-
-  // Check candidate paths: the path itself, a subfolder named
-  // "espeak-ng-data", or the parent directory's "espeak-ng-data" when `path`
-  // is a `.litertlm` model file.
-  std::filesystem::path base_path = std::string(path);
-  std::vector<std::filesystem::path> candidates = {
-      base_path,
-      base_path / "espeak-ng-data",
-  };
-  std::error_code ec;
-  if (std::filesystem::is_regular_file(base_path, ec) && !ec) {
-    candidates.push_back(base_path.parent_path() / "espeak-ng-data");
-  }
-  for (const auto& candidate : candidates) {
-    // A valid espeak-ng data directory MUST contain the "phontab" table file.
-    if (std::filesystem::exists(candidate / "phontab", ec) && !ec) {
-      return candidate.string();
-    }
-  }
-  return "";
-}
-
 std::string NormalizeLanguageCode(absl::string_view language_code) {
   if (language_code.empty()) return "en-us";
   std::string lower = absl::AsciiStrToLower(language_code);
@@ -567,7 +402,7 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
           {"j", "ja"},
           {"ja", "ja"},
           {"japanese", "ja"},
-          // Mandarin Chinese ('z' -> "cmn" in espeak-ng)
+          // Mandarin Chinese ('z' -> "cmn")
           {"z", "cmn"},
           {"zh", "cmn"},
           {"cmn", "cmn"},
@@ -592,25 +427,6 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
     }
   }
   return lower;
-}
-
-std::string EspeakVoiceForLanguage(absl::string_view language_code) {
-  // `espeak_SetVoiceByName` resolves a name against the voice file identifier
-  // (e.g. "roa/es", "gmw/en-US"), never against the `language` attributes
-  // declared inside the file. French is the only Kokoro language whose file
-  // name differs from its misaki code: `roa/fr` declares "fr-fr" as a language
-  // attribute only, so "fr-fr" resolves to nothing and every French word fails
-  // to phonemize.
-  if (language_code == "fr-fr") {
-    return "fr";
-  }
-  if (language_code == "en-gb") {
-    return "en";
-  }
-  if (language_code == "zh") {
-    return "cmn";
-  }
-  return std::string(language_code);
 }
 
 std::string LanguageForVoiceName(absl::string_view voice_name) {
@@ -681,23 +497,15 @@ absl::StatusOr<std::string> ResolveAndValidateLanguage(
 }
 
 absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
-    absl::string_view espeak_data_dir, absl::string_view language,
+    absl::string_view data_dir, absl::string_view language,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon,
     absl::string_view text_norm_rules, absl::string_view cjk_lexicon,
     absl::string_view zh_t2s_dictionary) {
   const std::string normalized_language = NormalizeLanguageCode(language);
-  std::string data_dir;
-  if (!espeak_data_dir.empty()) {
-    data_dir = ResolveEspeakDataDir(espeak_data_dir);
-    if (data_dir.empty()) {
-      return absl::NotFoundError(absl::StrCat(
-          "Could not find espeak-ng-data directory with phontab. Given path: '",
-          espeak_data_dir, "'"));
-    }
-  }
+    std::string resolved_data_dir(data_dir);
 
   auto phonemizer = std::unique_ptr<KokoroPhonemizer>(new KokoroPhonemizer());
-  phonemizer->data_dir_ = data_dir;
+  phonemizer->data_dir_ = resolved_data_dir;
   phonemizer->language_ = normalized_language;
   // Every rule-based engine is created up front so that `SetLanguage` can
   // switch to any of their languages later.
@@ -723,14 +531,9 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
         kokoro::TraditionalChineseConverter::Create(zh_t2s_dictionary));
   }
 
-  // Determine the parent cache directory path expected by espeak_Initialize
-  // and ChineseG2p (which unpacks the cppjieba HMM model file into cache_dir).
-  // If data_dir_ is "/path/to/espeak-ng-data", parent_dir is "/path/to".
+  // Determine the parent cache directory path expected by ChineseG2p (which
+  // unpacks the cppjieba HMM model file into cache_dir).
   std::string parent_dir = phonemizer->data_dir_;
-  if (parent_dir.size() >= 15 &&
-      absl::EndsWith(parent_dir, "/espeak-ng-data")) {
-    parent_dir = parent_dir.substr(0, parent_dir.size() - 15);
-  }
   if (parent_dir.empty()) {
     parent_dir = ".";
   }
@@ -760,9 +563,7 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
           std::make_unique<kokoro::ChineseG2p>(std::move(zh_g2p));
     }
   }
-  const bool use_fallback_english_g2p =
-      !kEspeakNgEnabled || phonemizer->data_dir_.empty();
-  if (phonemizer->english_g2p_ == nullptr && use_fallback_english_g2p) {
+    if (phonemizer->english_g2p_ == nullptr) {
     ABSL_ASSIGN_OR_RETURN(kokoro::EnglishG2p en_g2p,
                           kokoro::EnglishG2p::Create());
     phonemizer->english_g2p_ =
@@ -783,13 +584,6 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     phonemizer->merged_lexicon_[low_w] = ipa;
   }
 
-  // Initialize the process-global espeak-ng G2P C library with the explicit
-  // parent path when espeak-ng-data was supplied. The class-level static mutex
-  // protects one-time library initialization and voice table selection.
-  if (!phonemizer->data_dir_.empty()) {
-    ABSL_RETURN_IF_ERROR(EnsureEspeakInitialized(parent_dir));
-  }
-
   phonemizer->SetLanguage(language);
   ABSL_LOG(INFO) << "KokoroPhonemizer initialized successfully for language '"
                  << phonemizer->language_
@@ -799,16 +593,15 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
 }
 
 absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
-    absl::string_view espeak_data_dir,
+    absl::string_view data_dir,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon) {
-  return Create(espeak_data_dir, "en-us", custom_lexicon);
+  return Create(data_dir, "en-us", custom_lexicon);
 }
 
 absl::string_view KokoroPhonemizer::Language() const { return language_; }
 
 void KokoroPhonemizer::SetLanguage(absl::string_view language) {
   language_ = NormalizeLanguageCode(language);
-  espeak_voice_ = EspeakVoiceForLanguage(language_);
 }
 
 absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
@@ -841,8 +634,7 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
     if (chinese_g2p_ == nullptr) {
       return absl::FailedPreconditionError(
           "Chinese TTS requires a bundled 'zh-lexicon' section in the "
-          ".litertlm model container; espeak-ng fallback is disabled for "
-          "Chinese.");
+          ".litertlm model container.");
     }
     ABSL_ASSIGN_OR_RETURN(const std::vector<absl::string_view> subwords,
                           chinese_g2p_->Segment(word));
@@ -871,70 +663,8 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
     return english_g2p_->WordToIpa(word, /*british=*/false);
   }
 
-  return WordToIpaViaEspeak(word);
-}
-
-absl::StatusOr<std::string> KokoroPhonemizer::WordToIpaViaEspeak(
-    absl::string_view word) const {
-  absl::MutexLock lock(espeak_mutex_);
-#if defined(LITERT_LM_ESPEAK_NG_ENABLED)
-  if (data_dir_.empty()) {
-    return absl::FailedPreconditionError(
-        absl::StrCat("espeak-ng is not initialized for language: ", language_));
-  }
-  if (espeak_SetVoiceByName(espeak_voice_.c_str()) != EE_OK) {
-    return absl::InternalError(
-        absl::StrCat("Failed to set espeak voice for language: ", language_));
-  }
-
-  std::string word_str(word);
-  const void* text_ptr = word_str.c_str();
-
-  // text_mode = espeakCHARS_AUTO: Auto-detects input character encoding (UTF-8
-  // / ASCII).
-  constexpr int text_mode = espeakCHARS_AUTO;
-
-  // phoneme_mode = 0x02: Flag bit 1 (espeakPHONEMES_IPA = 0x02) directs
-  // espeak_TextToPhonemes to produce standard International Phonetic Alphabet
-  // (IPA) UTF-8 strings rather than espeak's internal ASCII phonetic
-  // representation. For the misaki `EspeakG2P` languages, bit 7 plus a U+0361
-  // tie character in bits 8-23 additionally tie the characters of
-  // multi-character phonemes (`t͡s`), exactly like Host `phonemizer` does, so
-  // that NormalizeMisakiPhonemes can tell an affricate from two phonemes.
-  const int phoneme_mode =
-      FlavorForLanguage(language_) == MisakiFlavor::kEspeakGeneric
-          ? (0x02 | (1 << 7) | (0x0361 << 8))
-          : 0x02;
-
-  std::string res;
-  while (text_ptr != nullptr && *static_cast<const char*>(text_ptr) != '\0') {
-    const void* prev_ptr = text_ptr;
-    const char* ph = espeak_TextToPhonemes(&text_ptr, text_mode, phoneme_mode);
-    if (ph != nullptr) {
-      if (!res.empty() && res.back() != ' ') {
-        res += ' ';
-      }
-      res += ph;
-    }
-    if (text_ptr == prev_ptr) {
-      text_ptr = static_cast<const char*>(text_ptr) + 1;
-    }
-  }
-
-  std::string stripped =
-      StripLanguageSwitches(RemoveTiesInsideParentheses(res));
-  if (stripped.size() != res.size()) {
-    ABSL_LOG(WARNING) << "espeak-ng could not phonemize \"" << word
-                      << "\" in voice \"" << espeak_voice_
-                      << "\"; its language-switch fallback was discarded.";
-  }
-  return stripped;
-#else
-  (void)word;
   return absl::FailedPreconditionError(
-      absl::StrCat("Failed to set espeak voice for language: ", language_,
-                   " (espeak-ng support is disabled in this build)"));
-#endif  // defined(LITERT_LM_ESPEAK_NG_ENABLED)
+      absl::StrCat("Unsupported language: ", language_));
 }
 
 absl::Status KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
@@ -959,133 +689,6 @@ absl::Status KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
   }
   current_word.clear();
   return absl::OkStatus();
-}
-
-absl::Status KokoroPhonemizer::AppendEspeakRunIpa(std::string& run,
-                                                  std::string& ipa) const {
-  if (absl::StripAsciiWhitespace(run).empty()) {
-    run.clear();
-    return absl::OkStatus();
-  }
-  ABSL_ASSIGN_OR_RETURN(std::string run_ipa, WordToIpaViaEspeak(run));
-  run.clear();
-  if (!ipa.empty()) ipa += ' ';
-  ipa += run_ipa;
-  return absl::OkStatus();
-}
-
-absl::StatusOr<std::string> KokoroPhonemizer::ChunkToIpa(
-    absl::string_view chunk) const {
-  // Words with a lexicon override are phonemized on their own; the runs of
-  // words between them still reach espeak-ng together.
-  std::string ipa;
-  std::string pending;
-  for (absl::string_view word : absl::StrSplit(chunk, ' ')) {
-    if (const auto it = merged_lexicon_.find(absl::AsciiStrToLower(word));
-        !word.empty() && it != merged_lexicon_.end()) {
-      ABSL_RETURN_IF_ERROR(AppendEspeakRunIpa(pending, ipa));
-      if (!ipa.empty()) ipa += ' ';
-      ipa += it->second;
-      continue;
-    }
-    if (!pending.empty()) pending += ' ';
-    pending.append(word.data(), word.size());
-  }
-  ABSL_RETURN_IF_ERROR(AppendEspeakRunIpa(pending, ipa));
-  // espeak-ng may emit one line per clause; merge them like `phonemizer`.
-  ipa = absl::StrReplaceAll(ipa, {{"\n", " "}});
-  while (absl::StrContains(ipa, "  ")) {
-    ipa = absl::StrReplaceAll(ipa, {{"  ", " "}});
-  }
-  return std::string(absl::StripAsciiWhitespace(ipa));
-}
-
-absl::Status KokoroPhonemizer::AppendChunkIpa(std::string& chunk,
-                                              std::string& ipa) const {
-  if (absl::StripAsciiWhitespace(chunk).empty()) {
-    chunk.clear();
-    return absl::OkStatus();
-  }
-  ABSL_ASSIGN_OR_RETURN(std::string chunk_ipa, ChunkToIpa(chunk));
-  chunk.clear();
-  ipa += chunk_ipa;
-  return absl::OkStatus();
-}
-
-absl::StatusOr<std::string> KokoroPhonemizer::ClauseLevelTextToIpa(
-    absl::string_view text) const {
-  // misaki.espeak.EspeakG2P: angle quotes become curly quotes, then
-  // parentheses are hidden as angle quotes and restored at the end. Script
-  // specific sentence punctuation (Devanagari danda, en dash, fullwidth marks)
-  // is first folded onto the marks Kokoro's vocabulary knows.
-  std::string prepared;
-  prepared.reserve(text.size());
-  const auto& unicode_punct_map = GetUnicodePunctuationMap();
-  for (size_t pos = 0; pos < text.size();) {
-    const size_t len = DecodeUtf8CodePoint(text, pos).length;
-    const absl::string_view symbol = text.substr(pos, len);
-    pos += len;
-    if (const auto it = unicode_punct_map.find(symbol);
-        it != unicode_punct_map.end()) {
-      absl::StrAppend(&prepared, it->second);
-    } else {
-      absl::StrAppend(&prepared, symbol);
-    }
-  }
-  prepared = absl::StrReplaceAll(
-      prepared, {{"«", "“"}, {"»", "”"}, {"(", "«"}, {")", "»"}});
-
-  // `phonemizer` Punctuation.preserve: split at runs matching
-  // (\s*[marks]+\s*)+ and keep each run verbatim.
-  std::string ipa;
-  std::string chunk;
-  std::string run;     // Current punctuation run, including surrounding spaces.
-  std::string spaces;  // Whitespace seen after a chunk, not yet assigned.
-  bool run_has_mark = false;
-
-  size_t i = 0;
-  while (i < prepared.size()) {
-    const size_t char_len = DecodeUtf8CodePoint(prepared, i).length;
-    const absl::string_view symbol =
-        absl::string_view(prepared).substr(i, char_len);
-    i += char_len;
-
-    if (IsPhonemizerMark(symbol)) {
-      if (!run_has_mark) {
-        ABSL_RETURN_IF_ERROR(AppendChunkIpa(chunk, ipa));
-        run = spaces;  // Leading whitespace belongs to the mark run.
-        spaces.clear();
-        run_has_mark = true;
-      }
-      run.append(symbol.data(), symbol.size());
-      continue;
-    }
-    if (IsAsciiSpace(symbol)) {
-      if (run_has_mark) {
-        run.append(symbol.data(), symbol.size());
-      } else {
-        spaces.append(symbol.data(), symbol.size());
-      }
-      continue;
-    }
-    // A word character ends any punctuation run.
-    if (run_has_mark) {
-      ipa += run;
-      run.clear();
-      run_has_mark = false;
-    }
-    if (!spaces.empty()) {
-      chunk += spaces;
-      spaces.clear();
-    }
-    chunk.append(symbol.data(), symbol.size());
-  }
-  ABSL_RETURN_IF_ERROR(AppendChunkIpa(chunk, ipa));
-  if (run_has_mark) ipa += run;
-
-  // Restore parentheses hidden above.
-  ipa = absl::StrReplaceAll(ipa, {{"«", "("}, {"»", ")"}});
-  return std::string(absl::StripAsciiWhitespace(ipa));
 }
 
 absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
@@ -1125,15 +728,12 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
   if (language_ == "cmn" && chinese_g2p_ == nullptr) {
     return absl::FailedPreconditionError(
         "Chinese TTS requires a bundled 'zh-lexicon' section in the "
-        ".litertlm model container; espeak-ng fallback is disabled for "
-        "Chinese.");
+        ".litertlm model container.");
   }
 
-  // espeak-backed languages follow Host Kokoro's clause-level path so that
-  // espeak-ng sees whole clauses rather than isolated words.
   if (language_ != "cmn" && language_ != "ja") {
-    ABSL_ASSIGN_OR_RETURN(std::string clause_ipa, ClauseLevelTextToIpa(text));
-    return NormalizeMisakiPhonemes(clause_ipa, FlavorForLanguage(language_));
+    return absl::FailedPreconditionError(
+        absl::StrCat("Unsupported language: ", language_));
   }
 
   std::string combined_ipa;
@@ -1239,9 +839,9 @@ absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     } else if (symbol == " ") {
       ids.push_back(kokoro::kSpaceTokenId);
     } else {
-      // Silently dropping symbols degrades pronunciation invisibly (e.g. the
-      // lowered/centralized diacritics espeak emits for Japanese), so surface
-      // a single summary instead of discarding them without a trace.
+      // Silently dropping symbols degrades pronunciation invisibly (e.g.
+      // lowered/centralized diacritics for Japanese), so surface a single
+      // summary instead of discarding them without a trace.
       ++dropped_symbols;
     }
   }

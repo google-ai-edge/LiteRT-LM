@@ -66,12 +66,6 @@ cc_library(
     name = "phonemizer",
     srcs = ["phonemizer.cc"],
     hdrs = ["phonemizer.h"],
-    defines = select({
-        "//build_config:enable_espeak_ng_setting": [
-            "LITERT_LM_ESPEAK_NG_ENABLED",
-        ],
-        "//conditions:default": [],
-    }),
     deps = [
         ":chinese_g2p",
         ":cjk_blob",
@@ -98,14 +92,7 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "//omni/text2speech:text_normalizer",
-    ] + select({
-        "//build_config:enable_espeak_ng_setting": [
-            "@espeak_ng//:espeak_ng_base_headers",
-            "@espeak_ng//:espeak_ng_speak_lib_header",
-            "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 cc_test(
@@ -113,19 +100,7 @@ cc_test(
     srcs = ["phonemizer_test.cc"],
     data = [
         "//omni/text2speech:text_normalizer_rule_tables",
-    ] + select({
-        "//build_config:enable_espeak_ng_setting": [
-            "@espeak_ng//:en_dictionary",
-            "@espeak_ng//:es_dictionary",
-            "@espeak_ng//:espeak_ng_data",
-            "@espeak_ng//:fr_dictionary",
-            "@espeak_ng//:hi_dictionary",
-            "@espeak_ng//:it_dictionary",
-            "@espeak_ng//:pt_dictionary",
-            "@espeak_ng//:zh_dictionary",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
     deps = [
         ":cjk_test_blobs",
         ":phonemizer",
@@ -231,48 +206,11 @@ cc_test(
 )
 
 cc_library(
-    name = "espeak_assets",
-    srcs = ["espeak_assets.cc"],
-    hdrs = ["espeak_assets.h"],
-    deps = [
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "//omni/base:model_cache",
-        "//runtime/components:model_resources",
-        "//runtime/util:zip_utils",
-    ],
-)
-
-cc_test(
-    name = "espeak_assets_test",
-    srcs = ["espeak_assets_test.cc"],
-    deps = [
-        ":espeak_assets",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_matchers",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@litert//litert/cc:litert_model",
-        "//omni/base:model_cache",
-        "//runtime/components:model_resources",
-        "//runtime/proto:llm_metadata_cc_proto",
-        "//runtime/util:scoped_file",
-        "//support/util:test_utils",
-    ],
-)
-
-cc_library(
     name = "kokoro_factory",
     srcs = ["kokoro_factory.cc"],
     hdrs = ["kokoro_factory.h"],
     deps = [
         ":common",
-        ":espeak_assets",
         ":kokoro_acoustic_stage",
         ":kokoro_model_config",
         ":kokoro_vocoder_stage",
@@ -305,7 +243,6 @@ cc_test(
     srcs = ["kokoro_factory_test.cc"],
     deps = [
         ":common",
-        ":espeak_assets",
         ":kokoro_factory",
         ":kokoro_model_config",
         "@com_google_googletest//:gtest_main",

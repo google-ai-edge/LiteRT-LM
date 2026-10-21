@@ -132,8 +132,7 @@ absl::StatusOr<std::unique_ptr<cppjieba::DictTrie>> CreateDictTrie(
 }
 
 // Unpacks the HMM parameters from the `zh-lexicon` blob into `cache_dir` in the
-// `hmm_model.utf8` text format that `cppjieba::HMMModel` reads from disk,
-// mirroring `UnpackEspeakDataFromLitertLm` in `espeak_assets.cc`.
+// `hmm_model.utf8` text format that `cppjieba::HMMModel` reads from disk.
 absl::StatusOr<std::string> UnpackHmmModelToCacheDir(
     const CjkBlob& blob, absl::string_view cache_dir) {
   // zh-lexicon stores HMM states in (B=0, M=1, E=2, S=3) order, while

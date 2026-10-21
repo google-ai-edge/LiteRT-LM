@@ -33,8 +33,7 @@ namespace litert::omni::tts::kokoro {
 // mid vowels /ɛ, ɔ/ vs. /e, o/, nasal vowels and coda nasalization, coda /l/
 // vocalization, palatalization of /t, d/ before [i]/[y], final vowel reduction,
 // cross-word sandhi, abbreviations, and cardinal/ordinal/currency/symbol
-// verbalization) emitting Kokoro's Portuguese phoneme inventory directly
-// without depending on `espeak-ng`.
+// verbalization) emitting Kokoro's Portuguese phoneme inventory directly.
 class PortugueseG2p : public LanguageG2p {
  public:
   // Creates a `PortugueseG2p` instance.

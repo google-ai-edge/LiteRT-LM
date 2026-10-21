@@ -1267,9 +1267,9 @@ std::vector<PhoneToken> RealizeWord(const std::vector<PhoneToken>& toks,
                                               : ClassifyConsonant(prev.phone);
     }
     // Textbook Spanish also keeps /d/ a stop after /l/ ("falda"), but Host
-    // Kokoro's espeak-ng spirantizes it ("fˈalða", "el ðˈeðo") and the Kokoro
-    // acoustic model was trained on that output, so only a pause or a nasal
-    // blocks spirantization here.
+    // Kokoro spirantizes it ("fˈalða", "el ðˈeðo") and the Kokoro acoustic
+    // model was trained on that output, so only a pause or a nasal blocks
+    // spirantization here.
     const bool after_pause_or_nasal =
         (left == ContextClass::kPause || left == ContextClass::kNasal);
     if (ph == "B") {

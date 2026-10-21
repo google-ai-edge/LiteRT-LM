@@ -50,10 +50,6 @@ struct KokoroModelConfig {
   std::optional<lm::Backend> vocoder_backend;
   // Optional custom dictionary / pronunciation overrides.
   absl::flat_hash_map<std::string, std::string> custom_lexicon;
-  // Directory containing espeak-ng data. Populated automatically when the data
-  // is unpacked from a .litertlm container; when empty, the data is looked up
-  // relative to the model folder.
-  std::string espeak_data_dir;
   // Text normalization rule tables, keyed by normalized language code (e.g.
   // "cmn"). Populated automatically from the "<language>-textnorm"
   // GenericBinaryData sections of a .litertlm container. A language with no

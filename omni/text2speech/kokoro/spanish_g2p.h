@@ -31,8 +31,7 @@ namespace litert::omni::tts::kokoro {
 // `-mente` double stress, unstressed function-word reduction, within-word and
 // cross-word spirantization of /b, d, g/ and nasal place assimilation,
 // abbreviations, Roman numerals, and cardinal/currency/percentage/symbol
-// verbalization) emitting Kokoro's Spanish phoneme inventory directly without
-// depending on `espeak-ng`.
+// verbalization) emitting Kokoro's Spanish phoneme inventory directly.
 class SpanishG2p : public LanguageG2p {
  public:
   // Creates a `SpanishG2p` instance.

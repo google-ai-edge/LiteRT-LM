@@ -39,7 +39,7 @@ This is [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (82M-par
 [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), Google's open-source on-device inference runtime. Everything needed to turn text into
 24 kHz speech is inside the one file: INT8 acoustic + vocoder models, all 54 voices, and self-contained text
 front-ends (text normalization and grapheme-to-phoneme) for **9 languages / dialects** — no Python, no network, and
-no `espeak-ng`, so the whole stack is Apache-2.0.
+no external GPL phoneme libraries, so the whole stack is Apache-2.0.
 
 - **Languages:** American & British English, Spanish, French, Italian, Brazilian Portuguese, Hindi, Mandarin Chinese, Japanese
 - **Voices:** all 54 Kokoro v1.0 voices (see [Languages & voices](#languages--voices))
@@ -220,12 +220,12 @@ word error rate (WER; character error rate, CER, for Chinese and Japanese) again
 | **5 European languages (500 sentences)** | WER | **2.44 %** |
 | **Chinese + Japanese (200 sentences)** | CER | **4.15 %** |
 
-For context, a previous build of this same pipeline used `espeak-ng` for G2P; the self-contained front-ends in this
-release match or beat it sentence-for-sentence on 96 % of the 800 sentences (100/100 in Spanish and French, 98/100
+For context, the self-contained front-ends in this release match or beat the reference host phonemizer
+sentence-for-sentence on 96 % of the 800 sentences (100/100 in Spanish and French, 98/100
 Italian, 97/100 Portuguese, 99/100 Japanese). Most residual errors are text-normalization edge cases listed under
 [Limitations](#limitations) or ASR spelling choices (e.g. *e-mail* vs *email*).
 
-The text front-ends were also checked directly against Kokoro's own phonemizer (`misaki` + `espeak-ng`): on a
+The text front-ends were also checked directly against Kokoro's reference host phonemizer (`misaki`): on a
 100-word evaluation set per language they produce **identical phonemes** for English (US and UK), Spanish, French,
 Italian, Portuguese and Hindi.
 

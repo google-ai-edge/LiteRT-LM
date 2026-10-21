@@ -32,7 +32,7 @@ namespace litert::omni::tts::kokoro {
 // schwa deletion, clause-level liaison and `h aspiré` blocking, function-word
 // destressing, consonant-only acronym letter-by-letter spelling, and
 // cardinal/ordinal/decimal/time/currency/symbol verbalization) emitting
-// Kokoro's French phoneme inventory directly without depending on `espeak-ng`.
+// Kokoro's French phoneme inventory directly.
 class FrenchG2p : public LanguageG2p {
  public:
   // Creates a `FrenchG2p` instance.

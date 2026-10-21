@@ -3,8 +3,7 @@
 # Format is documented in omni/tts/text_normalizer.h. Records are
 # tab-separated, and `rule` records apply in the order they appear here.
 #
-# `ChineseG2p` (`zh-lexicon`) only phonemizes Hanzi characters, while
-# `espeak-ng`'s `cmn` voice emits incompatible Pinyin tone digits. This table
+# `ChineseG2p` (`zh-lexicon`) only phonemizes Hanzi characters. This table
 # therefore rewrites all numbers, dates, decimals, percentages, currencies, and
 # symbols into spoken Chinese characters before segmentation and G2P:
 #   * four-digit years and decimal fractional parts are read digit-by-digit

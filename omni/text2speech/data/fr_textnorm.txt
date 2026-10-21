@@ -3,10 +3,9 @@
 # Format is documented in omni/tts/text_normalizer.h. Records are
 # tab-separated, and `rule` records apply in the order they appear here.
 #
-# The phonemizer hands whole clauses to espeak-ng, which reads plain cardinals
-# and ordinals (1er, 2e) itself. This table rewrites what espeak-ng reads
-# poorly or not at all: locale number separators (15 000, 9,99), currency,
-# temperatures, clock times, slash dates and common fractions.
+# This table rewrites locale number separators (15 000, 9,99), currency,
+# temperatures, clock times, slash dates and common fractions before
+# phonemization.
 
 map	month	1	janvier
 map	month	01	janvier

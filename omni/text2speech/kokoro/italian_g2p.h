@@ -32,8 +32,7 @@ namespace litert::omni::tts::kokoro {
 // consonant gemination, velar nasal assimilation, post-tonic /ɲ/ gemination,
 // intervocalic /s/ and /z/ voicing, apostrophe clitic attachment, function-word
 // destressing, abbreviations, and cardinal/ordinal/currency/symbol
-// verbalization) emitting Kokoro's Italian phoneme inventory directly without
-// depending on `espeak-ng`.
+// verbalization) emitting Kokoro's Italian phoneme inventory directly.
 class ItalianG2p : public LanguageG2p {
  public:
   // Creates an `ItalianG2p` instance.

@@ -25,7 +25,7 @@
 namespace litert::omni::tts::kokoro {
 
 // Converts American (`en-us`) and British (`en-gb`) English text into Kokoro's
-// IPA phoneme notation without calling `espeak-ng`, `spaCy`, or `num2words`.
+// IPA phoneme notation without calling `spaCy` or `num2words`.
 //
 // The pipeline mirrors `misaki.en.G2P`:
 //   1. Markdown link preprocessing (`[word](/ipa/)`, `[word](stress)`,

@@ -54,16 +54,15 @@ constexpr absl::string_view kTraditionalChineseSectionName = "zh-t2s";
 // ModelResources.
 //
 // When `resources` carries a .litertlm container, the models are compiled from
-// the container's TF_LITE_ACOUSTIC / TF_LITE_VOCODER sections, espeak-ng data
-// packaged in the container is unpacked into `cache_dir` and recorded in
-// `config.espeak_data_dir`, and any `<lang>-textnorm`, `<lang>-lexicon`, or
-// `zh-t2s` sections are recorded in `config.text_norm_rules`,
-// `config.cjk_lexicons`, and `config.zh_t2s_dictionary`.
+// the container's TF_LITE_ACOUSTIC / TF_LITE_VOCODER sections, and any
+// `<lang>-textnorm`, `<lang>-lexicon`, or `zh-t2s` sections are recorded in
+// `config.text_norm_rules`, `config.cjk_lexicons`, and
+// `config.zh_t2s_dictionary`.
 //
 // args
-// - config: Kokoro model configuration. `espeak_data_dir`, `text_norm_rules`,
-//   `cjk_lexicons`, and `zh_t2s_dictionary` are populated when the
-//   corresponding sections are present in the model container.
+// - config: Kokoro model configuration. `text_norm_rules`, `cjk_lexicons`, and
+//   `zh_t2s_dictionary` are populated when the corresponding sections are
+//   present in the model container.
 // - model_folder: Path to the directory containing the Kokoro models.
 // - cache_dir: Path to the directory for caching model data.
 // - backend: Backend to use for model execution.
@@ -112,8 +111,8 @@ absl::Status CreateKokoroComponents(
 // Only entries that look like a Kokoro voice pack are returned: the name must
 // follow the `<language><gender>_<name>` convention (e.g. "af_heart") and the
 // payload must be exactly one voice pack (`kVoicePackSize` float32 values).
-// Other GenericBinaryData sections or `.bin` files (espeak-ng data, text
-// normalization tables, CJK lexicons, the zh-t2s table, ...) are skipped.
+// Other GenericBinaryData sections or `.bin` files (text normalization tables,
+// CJK lexicons, the zh-t2s table, ...) are skipped.
 //
 // args
 // - model_folder: Optional path to a `.litertlm` bundle, a directory holding
@@ -129,7 +128,7 @@ std::vector<std::string> GetAvailableKokoroVoices(
     absl::string_view model_folder = "",
     lm::ModelResources* lm_resources = nullptr);
 
-// Returns the canonical Kokoro (`espeak-ng`) language code corresponding to a
+// Returns the canonical Kokoro language code corresponding to a
 // Kokoro voice identifier (e.g. "ef_dora" -> "es", "if_sara" -> "it",
 // "af_heart" -> "en-us", "zf_xiaobei" -> "cmn").
 //
@@ -154,7 +153,7 @@ std::string GetKokoroVoiceLanguage(absl::string_view voice_name);
 std::string GetDefaultKokoroVoice(absl::string_view language_code = "");
 
 // Converts a BCP-47 language tag or language name (e.g. "en-US", "en-GB", "es",
-// "zh-CN", "pt-BR") into the corresponding canonical Kokoro (`espeak-ng`)
+// "zh-CN", "pt-BR") into the corresponding canonical Kokoro
 // language code (e.g. "en-us", "en-gb", "es", "cmn", "pt-br").
 //
 // args
@@ -165,7 +164,7 @@ std::string GetDefaultKokoroVoice(absl::string_view language_code = "");
 //   or not supported by Kokoro.
 std::string ToKokoroLanguageCode(absl::string_view language);
 
-// Converts a canonical Kokoro (`espeak-ng`) language code (e.g. "en-us",
+// Converts a canonical Kokoro language code (e.g. "en-us",
 // "en-gb", "es", "cmn", "pt-br") to its canonical BCP-47 language tag (e.g.
 // "en-US", "en-GB", "es", "zh-CN", "pt-BR").
 //

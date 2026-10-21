@@ -3,17 +3,13 @@
 # Format is documented in omni/tts/text_normalizer.h. Records are
 # tab-separated, and `rule` records apply in the order they appear here.
 #
-# The phonemizer hands whole clauses to espeak-ng. This table rewrites what
-# espeak-ng reads poorly or not at all: locale number separators (1.500,50),
-# currency, temperatures, clock times, slash dates, common fractions,
-# ordinals and a few abbreviations.
+# This table rewrites locale number separators (1.500,50), currency,
+# temperatures, clock times, slash dates, common fractions, ordinals and
+# abbreviations.
 #
 # It then spells out every remaining number, ordinal and Roman numeral in
-# words, so espeak-ng's own number reader never runs for Italian: that reader
-# (LookupNum2 in the bundled espeak-ng) indexes before the start of a buffer
-# for Italian single digits and whole-word numbers. Numbers are split into
-# the same words espeak-ng would speak (2026 -> due mila ventisei,
-# 1500 -> mille cinquecento, 108 -> cento otto) to keep Host parity.
+# words (2026 -> due mila ventisei, 1500 -> mille cinquecento,
+# 108 -> cento otto) to keep Host Kokoro parity.
 
 map	month	1	gennaio
 map	month	01	gennaio
@@ -250,8 +246,8 @@ rule	(\d)\s?°\s?C\b	\1 gradi Celsius
 
 # Ordinals (1º, 21º) and Roman numerals (XXI secolo, Papa Giovanni XXIII)
 # are marked ⟪N⟫ here and become ordinal words at the end of the table.
-# espeak-ng reads all-caps Roman numerals from II to XLIX, and V./X. with a
-# dot, as ordinals.
+# All-caps Roman numerals from II to XLIX, and V./X. with a dot, are read as
+# ordinals.
 rule	\b(\d{1,3})[ºª]	⟪\1⟫
 rule	\b(10|[1-9])°	⟪\1⟫
 rule	\b(XLIX|XLVIII|XLVII|XLVI|XLV|XLIV|XLIII|XLII|XLI|XL|XXXIX|XXXVIII|XXXVII|XXXVI|XXXV|XXXIV|XXXIII|XXXII|XXXI|XXX|XXIX|XXVIII|XXVII|XXVI|XXV|XXIV|XXIII|XXII|XXI|XX|XIX|XVIII|XVII|XVI|XV|XIV|XIII|XII|XI|IX|VIII|VII|VI|IV|III|II)\b	⟪{roman:\1}⟫

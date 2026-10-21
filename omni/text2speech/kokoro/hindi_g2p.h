@@ -27,8 +27,8 @@ namespace litert::omni::tts::kokoro {
 // Self-contained rule-based Hindi (Devanagari, `hi`) grapheme-to-phoneme (G2P)
 // converter for Kokoro-82M TTS.
 //
-// Produces Kokoro vocabulary IPA strings (`MisakiFlavor::kEspeakGeneric`)
-// without calling `libespeak-ng` or requiring any external lexicon blob.
+// Produces Kokoro vocabulary IPA strings (`MisakiFlavor::kGeneric`)
+// without requiring any external lexicon blob.
 // Covers:
 // - Devanagari consonant, independent vowel, matra, halant (virama), nukta
 //   (both combining U+093C and precomposed U+0958..U+095F), anusvara,

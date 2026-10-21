@@ -614,14 +614,6 @@ http_archive(
 )
 
 http_archive(
-    name = "espeak_ng",
-    build_file = "@//third_party/espeak_ng:espeak_ng.BUILD",
-    sha256 = "bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23",
-    strip_prefix = "espeak-ng-1.52.0",
-    urls = ["https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz"],
-)
-
-http_archive(
     name = "cppjieba",
     build_file = "@//third_party/cppjieba:cppjieba.BUILD",
     patches = ["@//third_party/cppjieba:cppjieba.patch"],

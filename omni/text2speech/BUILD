@@ -218,9 +218,6 @@ cc_library(
 cc_test(
     name = "tts_session_test",
     srcs = ["tts_session_test.cc"],
-    data = [
-        "@espeak_ng//:espeak_ng_data",
-    ],
     deps = [
         ":kokoro",
         ":qwen3_tts",  # build_cleaner: keep

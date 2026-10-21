@@ -42,7 +42,6 @@
 #include "omni/base/model_utils.h"
 #include "omni/base/stage.h"
 #include "omni/text2speech/kokoro/common.h"
-#include "omni/text2speech/kokoro/espeak_assets.h"
 #include "omni/text2speech/kokoro/kokoro_acoustic_stage.h"
 #include "omni/text2speech/kokoro/kokoro_model_config.h"
 #include "omni/text2speech/kokoro/kokoro_vocoder_stage.h"
@@ -159,20 +158,6 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
                                       "kokoro_vocoder"));
     acoustic_opt.emplace(std::move(acoustic_compiled));
     vocoder_opt.emplace(std::move(vocoder_compiled));
-
-    // espeak-ng only reads its data from the filesystem, so data shipped in
-    // the container has to be unpacked before the phonemizer starts. A
-    // container without espeak-ng data is fine: the phonemizer then falls back
-    // to data next to the model.
-    if (config.espeak_data_dir.empty()) {
-      absl::StatusOr<std::string> espeak_data_dir =
-          kokoro::UnpackEspeakDataFromLitertLm(*lm_resources, cache_dir);
-      if (espeak_data_dir.ok()) {
-        config.espeak_data_dir = *std::move(espeak_data_dir);
-      } else if (!absl::IsNotFound(espeak_data_dir.status())) {
-        return espeak_data_dir.status();
-      }
-    }
 
     // Text normalization rule tables and CJK lexicon blobs ride along as data
     // so that language-specific tables stay out of the binary.
@@ -295,9 +280,9 @@ std::vector<std::string> GetAvailableKokoroVoices(
 
   if (lm_resources != nullptr) {
     for (const auto& name : lm_resources->GetGenericBinaryDataNames()) {
-      // Not every GenericBinaryData section is a voice pack (e.g. espeak-ng
-      // data, text normalization tables, CJK lexicons, the zh-t2s table). Only
-      // keep sections that are named and sized like a Kokoro voice pack.
+      // Not every GenericBinaryData section is a voice pack (e.g. text
+      // normalization tables, CJK lexicons, the zh-t2s table). Only keep
+      // sections that are named and sized like a Kokoro voice pack.
       std::string voice = kokoro::VoiceNameFromIdentifier(name);
       if (!IsKokoroVoiceName(voice)) continue;
       const absl::StatusOr<absl::string_view> buffer =

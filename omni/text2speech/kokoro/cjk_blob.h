@@ -27,11 +27,11 @@ namespace litert::omni::tts::kokoro {
 
 // Readers for the Japanese and Chinese lexicon blobs, which are read in place.
 //
-// Unlike `espeak-ng-data`, which rides in the .litertlm as an uncompressed zip
-// and is extracted to a cache directory, these blobs are mapped and used where
-// they lie: the Japanese dictionary is over a hundred megabytes, and can afford
-// neither the copy nor the disk. Nothing below allocates a copy of the data or
-// assumes the buffer is aligned; every multi-byte field is read byte by byte.
+// Rather than unpacking an archive to a cache directory, these blobs are mapped
+// and used where they lie: the Japanese dictionary is over a hundred megabytes,
+// and can afford neither the copy nor the disk. Nothing below allocates a copy
+// of the data or assumes the buffer is aligned; every multi-byte field is read
+// byte by byte.
 //
 // A blob's section table.
 //

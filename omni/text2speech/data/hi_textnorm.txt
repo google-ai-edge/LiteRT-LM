@@ -3,10 +3,9 @@
 # Format is documented in omni/tts/text_normalizer.h. Records are
 # tab-separated, and `rule` records apply in the order they appear here.
 #
-# The phonemizer hands whole clauses to espeak-ng, which reads plain cardinals
-# (including lakh/crore) itself. This table rewrites what espeak-ng reads
-# poorly or not at all: Devanagari digits, Indian digit grouping (1,00,000),
-# decimals, percent, rupee amounts, clock times, fractions and phone numbers.
+# This table rewrites Devanagari digits, Indian digit grouping (1,00,000),
+# decimals, percent, rupee amounts, clock times, fractions and phone numbers
+# before phonemization.
 
 # `#N` reads digits one at a time; each digit becomes a separate word.
 digit	0	 0
@@ -32,8 +31,8 @@ map	half	01	डेढ़
 map	half	2	ढाई
 map	half	02	ढाई
 
-# Devanagari digits -> ASCII digits, so the rules below and espeak-ng see one
-# digit system.
+# Devanagari digits -> ASCII digits, so the rules below and the G2P front end
+# see one digit system.
 rule	०	0
 rule	१	1
 rule	२	2
