@@ -90,6 +90,8 @@ internal object LiteRtLmJni {
    * @param audioNpuNativeLibraryDir The directory for the audio backend NPU libraries.
    * @param enableSpeculativeDecoding Whether to enable speculative decoding.
    * @param enableYnnpack Whether to enable YNNPACK. When null, use the engine's default.
+   * @param maxNumTokens The maximum number of tokens to be processed by the engine. When
+   *   non-positive, use the engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateBenchmark(
@@ -105,6 +107,7 @@ internal object LiteRtLmJni {
     audioNpuNativeLibraryDir: String,
     enableSpeculativeDecoding: Boolean?,
     enableYnnpack: Boolean? = null,
+    maxNumTokens: Int = -1,
   ): Long
 
   /**

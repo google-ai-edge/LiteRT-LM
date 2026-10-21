@@ -278,6 +278,25 @@ TEST_F(TasksTest, PrefillSucceed) {
   EXPECT_EQ(task_response.GetTaskState(), TaskState::kDone);
 }
 
+TEST_F(TasksTest, PrefillWithBenchmarkReportsMaxNumTokens) {
+  ASSERT_OK_AND_ASSIGN(auto* executor_settings,
+                       executor_->GetMutableExecutorSettings());
+  executor_settings->SetMaxNumTokens(512);
+  std::optional<BenchmarkInfo> benchmark_info(std::in_place,
+                                              proto::BenchmarkParams());
+  EXPECT_EQ(benchmark_info->GetMaxNumTokens(), 0);
+
+  std::vector<int> prefill_token_ids = {2, 90, 547, 58, 735, 210, 466, 2294};
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(prefill_token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+  ASSERT_OK(Tasks::Prefill(*executor_, inputs, /*wait_for_completion=*/true,
+                           benchmark_info));
+
+  EXPECT_EQ(benchmark_info->GetMaxNumTokens(), 512);
+}
+
 TEST_F(TasksTest, DecodeSucceed) {
   std::optional<BenchmarkInfo> benchmark_info;
 

@@ -1702,6 +1702,26 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index,
     double* out_tokens_per_sec);
 
+// Returns the max number of tokens, i.e. the KV cache size, that the engine
+// used.
+//
+// It can differ from the value requested with
+// `litert_lm_engine_settings_set_max_num_tokens`, e.g. for a model whose KV
+// cache size is fixed when it is compiled, or when no value was requested.
+//
+// @param benchmark_info The benchmark info object.
+// @param out_max_num_tokens On success, receives the max number of tokens, or
+//   0 if the engine didn't report it (e.g. before the first prefill); not
+//   written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `benchmark_info` or `out_max_num_tokens` is NULL.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_benchmark_info_get_max_num_tokens(
+    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_max_num_tokens);
+
 // Opaque pointer for LiteRT LM Stream Chunk.
 // This object represents a single chunk of data returned during streaming.
 // It is owned by the library and is only valid for the duration of the
