@@ -428,7 +428,6 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
           options.GetOptions<google_tensor::GoogleTensorOptions>());
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                       litert::HwAccelerators::kCpu);
       break;
