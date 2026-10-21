@@ -75,8 +75,10 @@
 #include "runtime/executor/llm_executor_settings_utils.h"
 #include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
+#include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/log_tensor_buffer.h"
 #include "runtime/util/lora_util.h"
@@ -543,6 +545,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RollBackProcessedTokens() {
 absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
     int token_index_to_reduce) {
   mtp_primed_ = false;
+  // A prefill into an empty KV cache starts a new conversation (a new session,
+  // or a session that was reset).
+  speculative_decoding_controller_.OnPrefill(
+      /*new_conversation=*/llm_context_->runtime_state().current_step == 0);
   if (!llm_context_->runtime_state().ran_decode && !force_prepare_needed_) {
     return absl::OkStatus();
   }
@@ -1322,17 +1328,18 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
   const bool was_mtp_primed = mtp_primed_;
   mtp_primed_ = false;
 
-  bool enable_mtp_drafter = false;
-  if (decode_params.GetEnableSpeculativeDecoding().has_value()) {
-    enable_mtp_drafter = *decode_params.GetEnableSpeculativeDecoding();
-    if (enable_mtp_drafter && mtp_drafter_ == nullptr) {
-      ABSL_RETURN_IF_ERROR(EnsureMtpDrafterLoaded());
-    }
-  } else {
-    enable_mtp_drafter = (mtp_drafter_ != nullptr);
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      const SpeculativeDecodingController::Decision speculation,
+      speculative_decoding_controller_.Decide(
+          decode_params.GetSpeculativeDecodingConfig().mode,
+          /*drafter_loaded=*/mtp_drafter_ != nullptr,
+          /*load_drafter=*/[this] { return EnsureMtpDrafterLoaded(); },
+          llm_context_->runtime_config().sampler_params,
+          /*constrained=*/decode_params.GetConstrainedDecoder() != nullptr));
+  const bool enable_mtp_drafter = speculation.speculate;
 
   std::vector<std::vector<int>> output_tokens_vector;
+  absl::Duration step_elapsed;
   if (!enable_mtp_drafter) {
     const absl::Time plain_start = absl::Now();
     ABSL_ASSIGN_OR_RETURN(auto decoded_logits,
@@ -1351,7 +1358,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     ABSL_RETURN_IF_ERROR(SampleLogits(decoded_logits, *output_tokens));
     LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
                             CopyFromTensorBuffer2D<int>(*output_tokens));
-    executor_stats_.AccumulatePlainStep(absl::Now() - plain_start);
+    step_elapsed = absl::Now() - plain_start;
+    executor_stats_.AccumulatePlainStep(step_elapsed);
   } else {
     const absl::Time round_start = absl::Now();
     absl::Duration priming_time = absl::ZeroDuration();
@@ -1429,12 +1437,23 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens_vector[0].size();
       output_tokens_vector[0].insert(output_tokens_vector[0].begin(), token_id);
     }
-    const absl::Duration round_elapsed = absl::Now() - round_start;
+    step_elapsed = absl::Now() - round_start;
     const auto& round_stats = mtp_drafter_->last_round_stats();
     executor_stats_.AccumulateMtpRound(
         round_stats.drafted_tokens, round_stats.accepted_tokens,
         round_stats.emitted_tokens, round_stats.drafting_time,
-        round_stats.verify_time, round_elapsed - priming_time);
+        round_stats.verify_time, step_elapsed - priming_time);
+  }
+
+  if (speculation.adaptive) {
+    RET_CHECK(!output_tokens_vector.empty());
+    const int64_t switches = speculative_decoding_controller_.Observe(
+        speculation,
+        /*tokens_emitted=*/static_cast<int>(output_tokens_vector[0].size()),
+        step_elapsed);
+    if (switches > 0) {
+      executor_stats_.Accumulate(kMtpModeSwitchesMetric, switches);
+    }
   }
 
   // Check for any invalid token ids and set them to zero, if any.

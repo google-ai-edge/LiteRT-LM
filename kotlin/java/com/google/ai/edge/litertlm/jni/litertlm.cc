@@ -60,6 +60,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
@@ -901,7 +902,12 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
   if (auto enable_spec_dec =
           GetOptionalBoolean(env, enable_speculative_decoding);
       enable_spec_dec.has_value()) {
-    session_config.SetEnableSpeculativeDecoding(*enable_spec_dec);
+    litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
+        session_config.GetSpeculativeDecodingConfig();
+    speculative_decoding_config.mode =
+        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kAlways
+                         : litert::lm::SpeculativeDecodingMode::kDisabled;
+    session_config.SetSpeculativeDecodingConfig(speculative_decoding_config);
   }
 
   if (sampler_config_obj != nullptr) {
@@ -1191,7 +1197,12 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
   if (auto enable_spec_dec =
           GetOptionalBoolean(env, enable_speculative_decoding);
       enable_spec_dec.has_value()) {
-    session_config.SetEnableSpeculativeDecoding(*enable_spec_dec);
+    litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
+        session_config.GetSpeculativeDecodingConfig();
+    speculative_decoding_config.mode =
+        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kAlways
+                         : litert::lm::SpeculativeDecodingMode::kDisabled;
+    session_config.SetSpeculativeDecodingConfig(speculative_decoding_config);
   }
   if (max_output_token > 0) {
     session_config.SetMaxOutputTokens(max_output_token);

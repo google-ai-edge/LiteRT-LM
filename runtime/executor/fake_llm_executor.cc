@@ -187,6 +187,8 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode() {
 
 absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
     const ExecutorDecodeParams& decode_params) {
+  last_decode_speculative_decoding_config_ =
+      decode_params.GetSpeculativeDecodingConfig();
   TryDecodeDelay();
   ABSL_RETURN_IF_ERROR(decode_status_);
   if (last_op_ == LastOp::kNone) {

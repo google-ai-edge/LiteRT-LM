@@ -57,6 +57,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "support/tokenizer/buffered_streaming_detokenizer.h"
@@ -202,16 +203,16 @@ class StopTokenStreamFilter {
 // and external sampling.
 class DecodeOneStep {
  private:
-  DecodeOneStep(LlmExecutor* absl_nonnull executor,
-                Tokenizer* absl_nonnull tokenizer, int num_output_candidates,
-                const StopTokenDetector& stop_token_detector,
-                std::optional<BenchmarkInfo>& benchmark_info,
-                std::optional<Sampler*> sampler,
-                std::unique_ptr<CompositeConstraint> composite_constraint,
-                std::unique_ptr<ConstrainedDecoder> constrained_decoder,
-                std::optional<litert::TensorBuffer> scores_tensor,
-                const std::atomic<bool>* cancelled,
-                std::optional<bool> enable_speculative_decoding = std::nullopt)
+  DecodeOneStep(
+      LlmExecutor* absl_nonnull executor, Tokenizer* absl_nonnull tokenizer,
+      int num_output_candidates, const StopTokenDetector& stop_token_detector,
+      std::optional<BenchmarkInfo>& benchmark_info,
+      std::optional<Sampler*> sampler,
+      std::unique_ptr<CompositeConstraint> composite_constraint,
+      std::unique_ptr<ConstrainedDecoder> constrained_decoder,
+      std::optional<litert::TensorBuffer> scores_tensor,
+      const std::atomic<bool>* cancelled,
+      const SpeculativeDecodingConfig& speculative_decoding_config = {})
       : executor_(*executor),
         tokenizer_(*tokenizer),
         detokenizer_(&tokenizer_, num_output_candidates),
@@ -225,7 +226,7 @@ class DecodeOneStep {
         result_text_(num_output_candidates, ""),
         result_token_ids_(num_output_candidates),
         cancelled_(cancelled),
-        enable_speculative_decoding_(enable_speculative_decoding) {
+        speculative_decoding_config_(speculative_decoding_config) {
     if (scores_tensor.has_value()) {
       scores_tensor_ = std::move(*scores_tensor);
     }
@@ -243,7 +244,7 @@ class DecodeOneStep {
       const std::atomic<bool>* cancelled =
           nullptr,  // Add cancelled signal for one decode step (eg.
                     // for diffusion-llm)
-      std::optional<bool> enable_speculative_decoding = std::nullopt) {
+      const SpeculativeDecodingConfig& speculative_decoding_config = {}) {
     ABSL_ASSIGN_OR_RETURN(auto composite_constraint,
                           CompositeConstraint::Create());
     if (repetition_penalty_config.enabled()) {
@@ -294,7 +295,7 @@ class DecodeOneStep {
         executor, tokenizer, num_output_candidates, stop_token_detector,
         benchmark_info, sampler, std::move(composite_constraint),
         std::move(constrained_decoder), std::move(scores_tensor), cancelled,
-        enable_speculative_decoding));
+        speculative_decoding_config));
   }
 
   // Runs one step of the decode process and returns if all stops for all
@@ -513,7 +514,7 @@ class DecodeOneStep {
       auto decode_params = ExecutorDecodeParams();
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
-      decode_params.SetEnableSpeculativeDecoding(enable_speculative_decoding_);
+      decode_params.SetSpeculativeDecodingConfig(speculative_decoding_config_);
       if (constrained_decoder_ != nullptr) {
         decode_params.SetConstrainedDecoder(constrained_decoder_.get());
       }
@@ -549,7 +550,7 @@ class DecodeOneStep {
 
   bool is_first_step_ = true;
   const std::atomic<bool>* cancelled_ = nullptr;
-  std::optional<bool> enable_speculative_decoding_ = std::nullopt;
+  SpeculativeDecodingConfig speculative_decoding_config_;
 };
 
 }  // namespace
@@ -620,7 +621,7 @@ absl::StatusOr<Responses> Decode(
     std::optional<int> thinking_token_budget,
     const std::vector<int>& thinking_end_token_ids,
     const std::vector<int>& thinking_start_token_ids,
-    std::optional<bool> enable_speculative_decoding) {
+    const SpeculativeDecodingConfig& speculative_decoding_config) {
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
 
@@ -703,7 +704,7 @@ absl::StatusOr<Responses> Decode(
           &executor, &tokenizer, num_output_candidates, stop_token_detector,
           benchmark_info, sampler, std::move(repetition_penalty_config),
           std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
-          constraint, cancelled, enable_speculative_decoding));
+          constraint, cancelled, speculative_decoding_config));
   while (true) {
     if (cancelled != nullptr && cancelled->load()) {
       if (benchmark_info.has_value()) {

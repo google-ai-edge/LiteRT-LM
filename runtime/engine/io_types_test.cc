@@ -14,6 +14,7 @@
 
 #include "runtime/engine/io_types.h"
 
+#include <cstdint>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -607,6 +608,31 @@ TEST(BenchmarkInfoTest, SpeculativeDecodingBlockPrintedWhenMtpRoundsExist) {
                 "    Time per round:    22.00 ms (draft 11.80 ms, verify "
                 "10.20 ms)\n"
                 "    Plain decodes:     0\n"));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Mode switches")));
+}
+
+TEST(BenchmarkInfoTest, SpeculativeDecodingBlockPrintsModeSwitches) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3,
+                           /*drafting_time=*/absl::Milliseconds(6),
+                           /*verify_time=*/absl::Milliseconds(14),
+                           /*round_time=*/absl::Milliseconds(20));
+  stats.AccumulatePlainStep(absl::Milliseconds(10));
+  stats.Accumulate(kMtpModeSwitchesMetric, int64_t{2});
+  stats.Accumulate(kMtpModeSwitchesMetric, int64_t{1});
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(),
+              HasSubstr("    Rounds:            1 (50.0% of decode steps)\n"));
+  EXPECT_THAT(ss.str(),
+              HasSubstr("    Plain decodes:     1 (incl. re-priming), "
+                        "10.00 ms/step\n"
+                        "    Mode switches:     3\n"));
 }
 
 TEST(BenchmarkInfoTest, SpeculativeDecodingBlockOmittedWhenNoMtpRounds) {

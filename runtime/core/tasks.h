@@ -33,6 +33,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm::Tasks {
@@ -58,7 +59,7 @@ absl::StatusOr<Responses> Decode(
     std::optional<int> thinking_token_budget = std::nullopt,
     const std::vector<int>& thinking_end_token_ids = {},
     const std::vector<int>& thinking_start_token_ids = {},
-    std::optional<bool> enable_speculative_decoding = std::nullopt);
+    const SpeculativeDecodingConfig& speculative_decoding_config = {});
 
 absl::StatusOr<Responses> Score(
     LlmExecutor& executor, Tokenizer& tokenizer,

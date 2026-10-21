@@ -654,13 +654,9 @@ std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params) {
     os << "not set";
   }
   os << "\n";
-  os << kFieldIndent << "EnableSpeculativeDecoding: ";
-  if (params.GetEnableSpeculativeDecoding().has_value()) {
-    os << (*params.GetEnableSpeculativeDecoding() ? "true" : "false");
-  } else {
-    os << "not set";
-  }
-  os << "\n"
+  os << kFieldIndent
+     << "SpeculativeDecodingConfig: " << params.GetSpeculativeDecodingConfig()
+     << "\n"
      << "}";
   return os;
 }

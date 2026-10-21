@@ -25,6 +25,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -34,6 +35,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -835,6 +837,59 @@ TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstrainedDecoder) {
 
   params.SetConstrainedDecoder(nullptr);
   EXPECT_EQ(params.GetConstrainedDecoder(), nullptr);
+}
+
+TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsSpeculativeDecodingConfig) {
+  ExecutorDecodeParams params;
+  EXPECT_EQ(params.GetSpeculativeDecodingConfig(), SpeculativeDecodingConfig());
+  EXPECT_FALSE(params.GetSpeculativeDecodingConfig().mode.has_value());
+
+  params.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAlways});
+  EXPECT_EQ(params.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kAlways);
+
+  params.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kDisabled});
+  EXPECT_EQ(params.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kDisabled);
+
+  params.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAdaptive});
+  EXPECT_EQ(params.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kAdaptive);
+
+  params.SetSpeculativeDecodingConfig({});
+  EXPECT_FALSE(params.GetSpeculativeDecodingConfig().mode.has_value());
+}
+
+TEST(LlmExecutorIoTypesTest,
+     ExecutorDecodeParamsPrintsSpeculativeDecodingConfig) {
+  ExecutorDecodeParams params;
+  {
+    std::stringstream ss;
+    ss << params;
+    EXPECT_THAT(ss.str(), ::testing::HasSubstr("SpeculativeDecodingConfig: "
+                                               "SpeculativeDecodingConfig{"
+                                               "mode: Not set}"));
+  }
+  params.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAdaptive});
+  {
+    std::stringstream ss;
+    ss << params;
+    EXPECT_THAT(ss.str(), ::testing::HasSubstr("SpeculativeDecodingConfig: "
+                                               "SpeculativeDecodingConfig{"
+                                               "mode: ADAPTIVE}"));
+  }
+}
+
+TEST(SpeculativeDecodingModeTest, Names) {
+  EXPECT_EQ(SpeculativeDecodingModeName(SpeculativeDecodingMode::kDisabled),
+            "DISABLED");
+  EXPECT_EQ(SpeculativeDecodingModeName(SpeculativeDecodingMode::kAlways),
+            "ALWAYS");
+  EXPECT_EQ(absl::StrCat(SpeculativeDecodingMode::kAdaptive), "ADAPTIVE");
 }
 
 TEST(LlmExecutorIoTypesTest, ExecutorVisionDataDuplicate) {

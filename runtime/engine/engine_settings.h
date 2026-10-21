@@ -33,6 +33,7 @@
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -308,29 +309,41 @@ class SessionConfig {
     max_output_tokens_ = max_output_tokens;
   }
 
-  // Speculative decoding:
-  // Getters and setters for configuring speculative decoding in the session.
+  // Speculative decoding (MTP) configuration for the session.
   //
-  // Semantics & Caveats:
-  // - std::nullopt (default): Inherits the engine's speculative decoding
-  // configuration.
-  // - true: Enables speculative decoding for this session. If the engine was
-  //   not initialized with speculative decoding (e.g. MTP drafter was not
-  //   loaded at startup), setting this flag to true causes the executor
-  //   to perform lazy loading of the MTP drafter on the first session request
-  //   that requires it. Note that lazy loading may incur a one-time
-  //   initialization latency and requires that the model asset package contains
-  //   MTP drafter artifacts.
-  // - false: Explicitly disables speculative decoding for this session even if
-  //   the engine was initialized with speculative decoding enabled.
+  // `mode`:
+  // - std::nullopt (default): inherits the engine's speculative decoding
+  //   configuration: speculate if and only if the engine was initialized with
+  //   speculative decoding enabled (a drafter lazily loaded for another
+  //   session does not change this).
+  // - kDisabled: never speculate, even if the engine was initialized with
+  //   speculative decoding enabled.
+  // - kAlways: speculate on every decode step.
+  // - kAdaptive: speculate only while it is measured to be faster than plain
+  //   decoding. Adaptive gating is best effort:
+  //   - Any decoding constraint (e.g. a constrained decoder, a repetition
+  //     penalty or a thinking budget) disables the gating for that request and
+  //     speculation stays on, like kAlways, because the constraint state is
+  //     not carried across plain and speculative steps.
+  //   - If the model has no usable MTP drafter, the session decodes plainly
+  //     instead of failing (kAlways fails).
+  //   - The NPU executor does not support gating and speculates on every step,
+  //     like kAlways.
+  //
+  // Caveats:
+  // - Lazy loading: If the engine was not initialized with speculative
+  //   decoding (e.g. the MTP drafter was not loaded at startup), kAlways and
+  //   kAdaptive lazily load the MTP drafter on the first session request that
+  //   requires it. This may incur a one-time initialization latency and
+  //   requires that the model asset package contains MTP drafter artifacts.
   // - Batching: Speculative decoding (MTP) only supports a single output head
   //   (batch size 1).
-  const std::optional<bool>& GetEnableSpeculativeDecoding() const {
-    return enable_speculative_decoding_;
+  const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
+    return speculative_decoding_config_;
   }
-  void SetEnableSpeculativeDecoding(
-      std::optional<bool> enable_speculative_decoding) {
-    enable_speculative_decoding_ = enable_speculative_decoding;
+  void SetSpeculativeDecodingConfig(
+      const SpeculativeDecodingConfig& speculative_decoding_config) {
+    speculative_decoding_config_ = speculative_decoding_config;
   }
 
  private:
@@ -399,10 +412,10 @@ class SessionConfig {
   // session.
   int max_output_tokens_ = std::numeric_limits<int>::max();
 
-  // Whether to enable speculative decoding for the session.
-  // By default, std::nullopt (inherits the engine's speculative decoding
-  // configuration).
-  std::optional<bool> enable_speculative_decoding_ = std::nullopt;
+  // Speculative decoding configuration for the session.
+  // By default, the mode is std::nullopt (inherits the engine's speculative
+  // decoding configuration).
+  SpeculativeDecodingConfig speculative_decoding_config_;
 };
 
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config);

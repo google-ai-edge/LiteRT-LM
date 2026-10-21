@@ -523,6 +523,10 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
                     absl::ToDoubleMilliseconds(stats.plain_step_time()) /
                         plain_steps)
               : "0");
+      if (stats.GetMetric(kMtpModeSwitchesMetric).has_value()) {
+        PrintSummaryLine(os, "Mode switches",
+                         absl::StrCat(stats.mtp_mode_switches()));
+      }
     }
     // Logits-only decodes (external sampling, scoring) exclude sampling, so
     // they are reported separately from plain steps.

@@ -47,6 +47,10 @@ inline constexpr absl::string_view kMtpEmittedTokensMetric =
     "mtp_emitted_tokens";
 inline constexpr absl::string_view kPlainStepsMetric = "plain_steps";
 inline constexpr absl::string_view kLogitsStepsMetric = "logits_steps";
+// Number of adaptive speculative decoding regime changes (enable <-> disable)
+// decided by the gating policy. Re-enables forced by policy resets (a new
+// conversation or a sampler change) are not counted.
+inline constexpr absl::string_view kMtpModeSwitchesMetric = "mtp_mode_switches";
 
 // Speculative decoding / LLM decode latency names.
 inline constexpr absl::string_view kMtpDraftingTimeLatency =
@@ -115,6 +119,9 @@ struct ExecutorStats {
   }
   int64_t plain_steps() const { return GetMetricAsInt64(kPlainStepsMetric); }
   int64_t logits_steps() const { return GetMetricAsInt64(kLogitsStepsMetric); }
+  int64_t mtp_mode_switches() const {
+    return GetMetricAsInt64(kMtpModeSwitchesMetric);
+  }
   absl::Duration mtp_drafting_time() const {
     return GetLatencyOrZero(kMtpDraftingTimeLatency);
   }

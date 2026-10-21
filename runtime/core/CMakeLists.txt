@@ -35,6 +35,7 @@ target_link_libraries(runtime_core_tasks
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
+    LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
     LiteRTLM::Runtime::Framework::Threadpool
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
 

@@ -79,6 +79,17 @@ absl::Status UpdateOrRecreateSampler(
 // seed 0.
 proto::SamplerParameters GreedySamplerParams();
 
+// Returns whether `a` and `b` select the same sampler configuration. Unset
+// parameters and parameters with type `TYPE_UNSPECIFIED` both select the
+// default sampler, so they compare equal to each other whatever their other
+// fields hold. Otherwise all fields are compared; an unset `seed` equals seed
+// 0, which is how the samplers read it.
+//
+// Note: the fields are compared one by one; update this function when a field
+// is added to `SamplerParameters`.
+bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
+                             const std::optional<proto::SamplerParameters>& b);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_FACTORY_H_

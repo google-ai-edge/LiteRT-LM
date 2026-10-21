@@ -33,6 +33,7 @@
 #include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
@@ -1505,6 +1506,35 @@ TEST(SessionConfigTest, SetAndGetSamplerBackend) {
   EXPECT_EQ(session_config.GetSamplerBackend(), Backend::CPU);
   session_config.SetSamplerBackend(Backend::GPU);
   EXPECT_EQ(session_config.GetSamplerBackend(), Backend::GPU);
+}
+
+TEST(SessionConfigTest, SetAndGetSpeculativeDecodingConfig) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_FALSE(session_config.GetSpeculativeDecodingConfig().mode.has_value());
+  {
+    std::stringstream oss;
+    oss << session_config;
+    EXPECT_THAT(
+        oss.str(),
+        ContainsRegex("  SpeculativeDecodingConfig: "
+                      "SpeculativeDecodingConfig\\{mode: Not set\\}\n"));
+  }
+
+  session_config.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAdaptive});
+  EXPECT_EQ(session_config.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kAdaptive);
+  {
+    std::stringstream oss;
+    oss << session_config;
+    EXPECT_THAT(
+        oss.str(),
+        ContainsRegex("  SpeculativeDecodingConfig: "
+                      "SpeculativeDecodingConfig\\{mode: ADAPTIVE\\}\n"));
+  }
+
+  session_config.SetSpeculativeDecodingConfig({});
+  EXPECT_FALSE(session_config.GetSpeculativeDecodingConfig().mode.has_value());
 }
 
 TEST(SessionConfigTest,

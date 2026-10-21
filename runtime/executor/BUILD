@@ -356,6 +356,8 @@ cc_library(
         ":llm_litert_compiled_model_cache_utils",
         ":llm_litert_mtp_drafter",
         ":llm_processed_context",
+        ":mtp_gating_policy",
+        ":speculative_decoding_controller",
         ":state_interface",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
@@ -403,6 +405,7 @@ cc_library(
         "//runtime/executor/litert:state",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//runtime/util:log_tensor_buffer",
@@ -435,6 +438,7 @@ cc_test(
         ":llm_executor_settings",
         ":llm_executor_settings_utils",
         ":llm_litert_compiled_model_executor",
+        ":speculative_decoding_mode",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -461,6 +465,7 @@ cc_test(
         "//runtime/components/constrained_decoding:constrained_decoder",
         "//runtime/components/constrained_decoding:fake_constraint",
         "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_status_util",
@@ -564,6 +569,7 @@ cc_library(
         ":llm_executor_io_types",
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
+        ":speculative_decoding_mode",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -637,6 +643,7 @@ cc_library(
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
         ":llm_processed_context",
+        ":speculative_decoding_mode",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
@@ -798,12 +805,22 @@ cc_test(
 )
 
 cc_library(
+    name = "speculative_decoding_mode",
+    hdrs = ["speculative_decoding_mode.h"],
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
     name = "llm_executor_io_types",
     srcs = ["llm_executor_io_types.cc"],
     hdrs = ["llm_executor_io_types.h"],
     deps = [
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
+        ":speculative_decoding_mode",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -819,7 +836,9 @@ cc_test(
     srcs = ["llm_executor_io_types_test.cc"],
     deps = [
         ":llm_executor_io_types",
+        ":speculative_decoding_mode",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_tensor_buffer_types",
         "@litert//litert/cc:litert_common",
@@ -1354,6 +1373,41 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
+    ],
+)
+
+cc_library(
+    name = "speculative_decoding_controller",
+    srcs = ["speculative_decoding_controller.cc"],
+    hdrs = ["speculative_decoding_controller.h"],
+    deps = [
+        ":mtp_gating_policy",
+        ":speculative_decoding_mode",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "//runtime/components:sampler_factory",
+        "//runtime/proto:sampler_params_cc_proto",
+    ],
+)
+
+cc_test(
+    name = "speculative_decoding_controller_test",
+    srcs = ["speculative_decoding_controller_test.cc"],
+    deps = [
+        ":mtp_gating_policy",
+        ":speculative_decoding_controller",
+        ":speculative_decoding_mode",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/time",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:test_utils",
     ],
 )
 

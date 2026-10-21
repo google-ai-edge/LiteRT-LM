@@ -48,6 +48,8 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/llm_processed_context.h"
+#include "runtime/executor/mtp_gating_policy.h"
+#include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/executor_metadata.pb.h"
 
@@ -197,6 +199,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // non-speculative steps invalidate it.
   void set_mtp_primed_for_testing(bool primed) { mtp_primed_ = primed; }
 
+  // Returns the adaptive speculative decoding policy, or nullptr if no decode
+  // step has used `SpeculativeDecodingMode::kAdaptive` gating yet.
+  const MtpGatingPolicy* mtp_gating_policy_for_testing() const {
+    return speculative_decoding_controller_.gating_policy();
+  }
+
   const ProcessedTokens& processed_tokens_for_testing() const {
     return llm_context_->processed_context().processed_tokens();
   }
@@ -266,7 +274,14 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         executor_metadata_(executor_metadata),
         pre_graph_run_callback_(std::move(pre_graph_run_callback)),
         post_graph_run_callback_(std::move(post_graph_run_callback)),
-        resources_(resources) {
+        resources_(resources),
+        // Sessions that request no mode follow the creation-time
+        // configuration, even after a drafter is lazily loaded for another
+        // session.
+        speculative_decoding_controller_(
+            MtpGatingConfig(), mtp_drafter_ != nullptr
+                                   ? SpeculativeDecodingMode::kAlways
+                                   : SpeculativeDecodingMode::kDisabled) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, nullptr, ProcessedTokens());
     auto runtime_config = std::make_unique<RuntimeConfig>();
@@ -490,6 +505,14 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // state/context restore, step change or failed round invalidates it, and the
   // next MTP round then goes through the priming path.
   bool mtp_primed_ = false;
+
+  // Decides, for every decode step, whether to run an MTP round, according to
+  // the requested `SpeculativeDecodingMode`.
+  // Note: the executor, and hence the adaptive gating policy and its
+  // estimates, is shared by all sessions using it. Guarded by the
+  // ResourceManager executor lock (the executor is only ever driven through
+  // `LockedLlmExecutor`).
+  SpeculativeDecodingController speculative_decoding_controller_;
 };
 
 // The static executor for the prefill-decode compiled model.

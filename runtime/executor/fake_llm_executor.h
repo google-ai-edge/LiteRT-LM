@@ -32,6 +32,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 
 namespace litert::lm {
 
@@ -182,6 +183,13 @@ class FakeLlmExecutor : public LlmExecutor {
 
   absl::Status Reset() override;
 
+  // Returns the effective speculative decoding mode of the last
+  // `Decode(const ExecutorDecodeParams&)` call.
+  const SpeculativeDecodingConfig& last_decode_speculative_decoding_config()
+      const {
+    return last_decode_speculative_decoding_config_;
+  }
+
  private:
   // Util function to try to sleep for the decode delay duration (if set). This
   // is used to simulate a long-running task.
@@ -228,6 +236,8 @@ class FakeLlmExecutor : public LlmExecutor {
     kDecode,
   };
   LastOp last_op_ = LastOp::kNone;
+
+  SpeculativeDecodingConfig last_decode_speculative_decoding_config_;
 
   mutable std::optional<::litert::Environment> env_;
 };

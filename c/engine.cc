@@ -47,6 +47,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
@@ -442,7 +443,13 @@ LiteRtLmStatusCode litert_lm_session_config_set_enable_speculative_decoding(
   if (!IsValidSessionConfig(config)) {
     return kLiteRtLmStatusInvalidArgument;
   }
-  config->config->SetEnableSpeculativeDecoding(enable_speculative_decoding);
+  litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
+      config->config->GetSpeculativeDecodingConfig();
+  speculative_decoding_config.mode =
+      enable_speculative_decoding
+          ? litert::lm::SpeculativeDecodingMode::kAlways
+          : litert::lm::SpeculativeDecodingMode::kDisabled;
+  config->config->SetSpeculativeDecodingConfig(speculative_decoding_config);
   return kLiteRtLmStatusOk;
 }
 

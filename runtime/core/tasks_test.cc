@@ -43,6 +43,7 @@
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
@@ -352,6 +353,37 @@ TEST_F(TasksTest, DecodeWithoutBenchmarkDoesNotResetExecutorStats) {
       /*callback=*/callback, /*cancelled=*/nullptr));
 
   EXPECT_EQ(executor.num_resets_, 0);
+}
+
+TEST_F(TasksTest, DecodeForwardsSpeculativeDecodingMode) {
+  std::optional<BenchmarkInfo> benchmark_info;
+  std::vector<int> prefill_token_ids = {2, 90, 547, 58, 735, 210, 466, 2294};
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(prefill_token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+  ASSERT_OK(Tasks::Prefill(*executor_, inputs, /*wait_for_completion=*/true,
+                           benchmark_info));
+
+  constexpr int kNumOutputCandidates = 1;
+  StopTokenDetector stop_token_detector(kNumOutputCandidates);
+  ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+
+  ASSERT_OK(Tasks::Decode(
+      *executor_, *tokenizer_, stop_token_detector, kNumOutputCandidates,
+      benchmark_info,
+      /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+      /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
+      /*callback=*/callback, /*cancelled=*/nullptr,
+      /*max_output_tokens=*/std::numeric_limits<int>::max(),
+      /*thinking_token_budget=*/std::nullopt,
+      /*thinking_end_token_ids=*/{}, /*thinking_start_token_ids=*/{},
+      /*speculative_decoding_config=*/
+      {.mode = SpeculativeDecodingMode::kAdaptive}));
+  EXPECT_EQ(executor_->last_decode_speculative_decoding_config().mode,
+            SpeculativeDecodingMode::kAdaptive);
 }
 
 TEST_F(TasksTest, DecodeWithCancellation) {

@@ -59,6 +59,7 @@ cc_binary(
         "//runtime/engine:io_types",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/executor:speculative_decoding_mode",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:file_util",
         "//runtime/util:litert_lm_loader",

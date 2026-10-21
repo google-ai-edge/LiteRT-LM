@@ -15,6 +15,7 @@
 #include "runtime/components/sampler_factory.h"
 
 #include <memory>
+#include <optional>
 #include <random>
 #include <utility>
 #include <vector>
@@ -215,6 +216,59 @@ TEST(SamplerFactoryTest, GreedySamplerParamsAreGreedyTopP) {
   EXPECT_EQ(params.k(), 1);
   EXPECT_EQ(params.temperature(), 1.0f);
   EXPECT_EQ(params.seed(), 0);
+}
+
+TEST(SamplerFactoryTest, SamplerParamsEquivalentTreatsUnspecifiedAsDefault) {
+  // Unspecified parameters select the default sampler like unset ones, whatever
+  // the other fields hold.
+  proto::SamplerParameters unspecified;
+  unspecified.set_k(40);
+  unspecified.set_temperature(0.7f);
+  EXPECT_TRUE(SamplerParamsEquivalent(std::nullopt, std::nullopt));
+  EXPECT_TRUE(SamplerParamsEquivalent(std::nullopt, unspecified));
+  EXPECT_TRUE(SamplerParamsEquivalent(unspecified, std::nullopt));
+  EXPECT_TRUE(SamplerParamsEquivalent(unspecified, proto::SamplerParameters()));
+
+  EXPECT_FALSE(SamplerParamsEquivalent(std::nullopt, GreedySamplerParams()));
+  EXPECT_FALSE(SamplerParamsEquivalent(GreedySamplerParams(), unspecified));
+}
+
+TEST(SamplerFactoryTest, SamplerParamsEquivalentComparesEveryField) {
+  proto::SamplerParameters base;
+  base.set_type(proto::SamplerParameters::TOP_P);
+  base.set_k(40);
+  base.set_p(0.95f);
+  base.set_temperature(1.0f);
+  base.set_seed(7);
+  EXPECT_TRUE(SamplerParamsEquivalent(base, base));
+
+  proto::SamplerParameters unset_seed = base;
+  unset_seed.clear_seed();
+  proto::SamplerParameters zero_seed = base;
+  zero_seed.set_seed(0);
+  EXPECT_TRUE(SamplerParamsEquivalent(unset_seed, zero_seed));
+
+  proto::SamplerParameters changed = base;
+  changed.set_type(proto::SamplerParameters::TOP_K);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
+  changed = base;
+  changed.set_k(10);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
+  changed = base;
+  changed.set_p(0.5f);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
+  changed = base;
+  changed.set_temperature(0.7f);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
+  changed = base;
+  changed.set_seed(8);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
+  changed = base;
+  changed.set_backend(proto::SamplerParameters::CPU);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
+  changed = base;
+  changed.set_compute_exact_log_probs(true);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
 }
 
 }  // namespace

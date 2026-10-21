@@ -44,6 +44,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace {
@@ -730,16 +731,16 @@ TEST(EngineCTest, CreateSessionConfigWithEnableSpeculativeDecoding) {
                           &litert_lm_session_config_delete);
   ASSERT_NE(config, nullptr);
 
-  // By default, enable_speculative_decoding is std::nullopt.
-  EXPECT_FALSE(config->config->GetEnableSpeculativeDecoding().has_value());
+  // By default, the speculative decoding mode is std::nullopt.
+  EXPECT_FALSE(config->config->GetSpeculativeDecodingConfig().mode.has_value());
 
   litert_lm_session_config_set_enable_speculative_decoding(config.get(), true);
-  ASSERT_TRUE(config->config->GetEnableSpeculativeDecoding().has_value());
-  EXPECT_TRUE(*config->config->GetEnableSpeculativeDecoding());
+  EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kAlways);
 
   litert_lm_session_config_set_enable_speculative_decoding(config.get(), false);
-  ASSERT_TRUE(config->config->GetEnableSpeculativeDecoding().has_value());
-  EXPECT_FALSE(*config->config->GetEnableSpeculativeDecoding());
+  EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kDisabled);
 }
 
 TEST(EngineCTest, CreateConversationConfig) {

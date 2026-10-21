@@ -70,6 +70,7 @@
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
@@ -1139,10 +1140,17 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 
   // Early return for non-speculative decode if MTP is not enabled, explicitly
   // disabled in decode params, or when constrained decoding is requested.
+  const std::optional<SpeculativeDecodingMode>& speculative_decoding_mode =
+      decode_params.GetSpeculativeDecodingConfig().mode;
   if (speculative_decoding_type_ != SpeculativeDecodingType::kMTP ||
-      !decode_params.GetEnableSpeculativeDecoding().value_or(true) ||
+      speculative_decoding_mode == SpeculativeDecodingMode::kDisabled ||
       decode_params.GetConstrainedDecoder() != nullptr) {
     return DecodeNonSpeculative(decode_params, start);
+  }
+  if (speculative_decoding_mode == SpeculativeDecodingMode::kAdaptive) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "Adaptive speculative decoding is not supported by the NPU "
+           "executor; speculative decoding is always on.";
   }
 
   // Speculative MTP cycle.

@@ -817,4 +817,21 @@ proto::SamplerParameters GreedySamplerParams() {
   return sampler_params;
 }
 
+bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
+                             const std::optional<proto::SamplerParameters>& b) {
+  const auto is_default = [](const std::optional<proto::SamplerParameters>& p) {
+    return !p.has_value() ||
+           p->type() == proto::SamplerParameters::TYPE_UNSPECIFIED;
+  };
+  const bool a_is_default = is_default(a);
+  const bool b_is_default = is_default(b);
+  if (a_is_default || b_is_default) {
+    return a_is_default == b_is_default;
+  }
+  return a->type() == b->type() && a->k() == b->k() && a->p() == b->p() &&
+         a->temperature() == b->temperature() && a->seed() == b->seed() &&
+         a->backend() == b->backend() &&
+         a->compute_exact_log_probs() == b->compute_exact_log_probs();
+}
+
 }  // namespace litert::lm

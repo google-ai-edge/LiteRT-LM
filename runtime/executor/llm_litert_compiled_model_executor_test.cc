@@ -63,7 +63,9 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -1230,18 +1232,20 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   ASSERT_OK(executor->Prefill(inputs));
 
-  // Decode with default/nullopt enable_speculative_decoding succeeds.
+  // Decode with the default (unset) speculative decoding mode succeeds.
   ASSERT_OK(executor->Decode());
 
-  // Decode with enable_speculative_decoding = false succeeds.
+  // Decode with SpeculativeDecodingMode::kDisabled succeeds.
   ExecutorDecodeParams decode_params_disabled;
-  decode_params_disabled.SetEnableSpeculativeDecoding(false);
+  decode_params_disabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kDisabled});
   ASSERT_OK(executor->Decode(decode_params_disabled));
 
-  // Decode with enable_speculative_decoding = true attempts lazy load and fails
+  // Decode with SpeculativeDecodingMode::kAlways attempts lazy load and fails
   // when model does not meet MTP requirements (e.g. embedding lookup).
   ExecutorDecodeParams decode_params_enabled;
-  decode_params_enabled.SetEnableSpeculativeDecoding(true);
+  decode_params_enabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAlways});
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
 }
@@ -1280,14 +1284,16 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
 
   // Plain decode.
   ExecutorDecodeParams decode_params_disabled;
-  decode_params_disabled.SetEnableSpeculativeDecoding(false);
+  decode_params_disabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kDisabled});
   executor->set_mtp_primed_for_testing(true);
   ASSERT_OK(executor->Decode(decode_params_disabled));
   EXPECT_FALSE(executor->mtp_primed_for_testing());
 
   // Failed MTP attempt.
   ExecutorDecodeParams decode_params_enabled;
-  decode_params_enabled.SetEnableSpeculativeDecoding(true);
+  decode_params_enabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAlways});
   executor->set_mtp_primed_for_testing(true);
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
@@ -1338,7 +1344,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   EXPECT_FALSE(executor->GetExecutorStats().has_value());
 
   ExecutorDecodeParams decode_params_disabled;
-  decode_params_disabled.SetEnableSpeculativeDecoding(false);
+  decode_params_disabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kDisabled});
   ASSERT_OK(executor->Decode(decode_params_disabled));
   ASSERT_OK(executor->Decode(decode_params_disabled));
 
@@ -1351,7 +1358,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
 
   // A failed MTP attempt (no drafter in this model) records nothing.
   ExecutorDecodeParams decode_params_enabled;
-  decode_params_enabled.SetEnableSpeculativeDecoding(true);
+  decode_params_enabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAlways});
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
   stats = executor->GetExecutorStats();
@@ -1418,6 +1426,59 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   EXPECT_EQ(stats->mtp_rounds(), 0);
 }
 
+TEST(LlmLiteRtCompiledModelExecutorStaticTest, Decode_SpeculativeDecodingMode) {
+  // No hermetic test model can run a full MTP round: lazily loading the
+  // drafter fails with kInternal.
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources, TfLiteModelResources::Create(
+                                                 model_assets,
+                                                 /*with_mtp_drafter=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
+  ASSERT_TRUE(executor);
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  auto input_tokens_buffer =
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
+  ASSERT_TRUE(input_tokens_buffer);
+  inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+
+  // kDisabled never loads the drafter.
+  ExecutorDecodeParams disabled;
+  disabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kDisabled});
+  ASSERT_OK(executor->Decode(disabled));
+
+  // Without a loadable drafter, kAdaptive is best effort: it decodes plainly
+  // instead of failing, and never creates the gating policy.
+  ExecutorDecodeParams adaptive;
+  adaptive.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAdaptive});
+  ASSERT_OK(executor->Decode(adaptive));
+  EXPECT_EQ(executor->mtp_gating_policy_for_testing(), nullptr);
+  // Later adaptive steps keep decoding plainly.
+  ASSERT_OK(executor->Decode(adaptive));
+  EXPECT_EQ(executor->mtp_gating_policy_for_testing(), nullptr);
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // kAlways requires the drafter and surfaces the load failure.
+  ExecutorDecodeParams always;
+  always.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAlways});
+  EXPECT_THAT(executor->Decode(always), StatusIs(absl::StatusCode::kInternal));
+}
+
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      Decode_WithoutDrafterSkipsVerifierSamplerConfig) {
   // Without an MTP drafter, keeping the verifier sampler in sync with the
@@ -1449,7 +1510,8 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   ASSERT_OK(executor->Prefill(inputs));
   ASSERT_OK(executor->Decode());
   ExecutorDecodeParams disabled;
-  disabled.SetEnableSpeculativeDecoding(false);
+  disabled.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kDisabled});
   ASSERT_OK(executor->Decode(disabled));
 }
 

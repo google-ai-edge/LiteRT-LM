@@ -27,6 +27,7 @@
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 
 namespace litert::lm {
 
@@ -457,24 +458,23 @@ class ExecutorDecodeParams {
   // Returns the cancellation flag if set, otherwise nullptr.
   const std::atomic<bool>* GetCancelled() const { return cancelled_; }
 
-  // Sets whether to enable speculative decoding for this decode step.
-  // If std::nullopt, the executor inherits the engine's speculative decoding
-  // configuration. If true, speculative decoding is enabled (with lazy loading
-  // if not previously initialized). If false, speculative decoding is disabled.
-  void SetEnableSpeculativeDecoding(
-      std::optional<bool> enable_speculative_decoding) {
-    enable_speculative_decoding_ = enable_speculative_decoding;
+  // Sets the speculative decoding configuration for this decode step. See
+  // `SpeculativeDecodingConfig`; an unset mode inherits the engine's
+  // speculative decoding configuration.
+  void SetSpeculativeDecodingConfig(
+      const SpeculativeDecodingConfig& speculative_decoding_config) {
+    speculative_decoding_config_ = speculative_decoding_config;
   }
 
-  // Returns whether speculative decoding is enabled for this decode step.
-  const std::optional<bool>& GetEnableSpeculativeDecoding() const {
-    return enable_speculative_decoding_;
+  // Returns the speculative decoding configuration for this decode step.
+  const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
+    return speculative_decoding_config_;
   }
 
  private:
   ConstrainedDecoder* constrained_decoder_ = nullptr;
   const std::atomic<bool>* cancelled_ = nullptr;
-  std::optional<bool> enable_speculative_decoding_ = std::nullopt;
+  SpeculativeDecodingConfig speculative_decoding_config_;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 
