@@ -326,6 +326,9 @@ export class ModelLoaderService {
         // Always enable image input. On web, only one vision signature is
         // loaded by default to fit in the wasm heap.
         visionBackend: Backend.GPU,
+        // Always enable audio input. On GPU, the audio encoder's weights are
+        // released from the wasm heap after they are uploaded.
+        audioBackend: Backend.GPU,
         benchmarkEnabled: true
       });
 

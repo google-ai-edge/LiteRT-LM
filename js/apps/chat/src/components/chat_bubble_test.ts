@@ -16,7 +16,7 @@
 
 import './chat_bubble';
 
-import {ChatSessionStore, PromptImage, PromptPart} from '../stores/chat_session_store.js';
+import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
 import {LlmChatStateController} from '../state_controller.js';
 import {LitertChatBubble} from './chat_bubble.js';
 
@@ -43,7 +43,7 @@ describe('litert-chat-bubble', () => {
     mockChatSession = jasmine.createSpyObj('ChatSessionStore', [
       'rewindAndEdit',
       'redoResponse',
-      'getImage',
+      'getMedia',
     ]);
     mockState = {
       chatSession: mockChatSession,
@@ -192,23 +192,36 @@ describe('litert-chat-bubble', () => {
     expect(eventDetail as {parts: PromptPart[]} | null).toEqual({parts});
   });
 
-  it('renders images inline in a user message', async () => {
-    const image: PromptImage = {
+  it('renders images and audio inline in a user message', async () => {
+    const image: PromptMedia = {
       id: 'img1',
+      kind: 'image',
       name: 'cat.png',
       blob: new Blob(),
       url: 'blob:fake-url',
     };
-    mockChatSession.getImage.and.callFake(
-        (id: string) => id === 'img1' ? image : undefined);
+    const audio: PromptMedia = {
+      id: 'aud1',
+      kind: 'audio',
+      name: 'meow.wav',
+      blob: new Blob(),
+      url: 'blob:fake-audio-url',
+    };
+    const media = new Map([[image.id, image], [audio.id, audio]]);
+    mockChatSession.getMedia.and.callFake((id: string) => media.get(id));
     element.message = {
       role: 'user',
-      text: 'Before [image: cat.png] after [image: dog.png]',
+      text: 'Before [image: cat.png] after [image: dog.png] ' +
+          '[audio: meow.wav] [audio: bark.wav]',
       parts: [
         {type: 'text', text: 'Before '},
         {type: 'image', id: 'img1', name: 'cat.png'},
         {type: 'text', text: ' after '},
         {type: 'image', id: 'img2', name: 'dog.png'},
+        {type: 'text', text: ' '},
+        {type: 'audio', id: 'aud1', name: 'meow.wav'},
+        {type: 'text', text: ' '},
+        {type: 'audio', id: 'aud2', name: 'bark.wav'},
       ],
       senderName: 'User',
     };
@@ -221,9 +234,16 @@ describe('litert-chat-bubble', () => {
     expect(img.getAttribute('src')).toBe('blob:fake-url');
     expect(img.alt).toBe('cat.png');
 
-    // Images from an earlier page load are shown as placeholders.
-    const missing = content.querySelector('.message-image-missing');
-    expect(missing!.textContent).toContain('dog.png');
+    const audioEl =
+        content.querySelector('audio.message-audio') as HTMLAudioElement;
+    expect(audioEl).toBeTruthy();
+    expect(audioEl.getAttribute('src')).toBe('blob:fake-audio-url');
+
+    // Media from an earlier page load are shown as placeholders.
+    const missing = content.querySelectorAll('.message-media-missing');
+    expect(missing.length).toBe(2);
+    expect(missing[0]!.textContent).toContain('dog.png');
+    expect(missing[1]!.textContent).toContain('bark.wav');
 
     expect(content.textContent).toContain('Before');
     expect(content.textContent).toContain('after');

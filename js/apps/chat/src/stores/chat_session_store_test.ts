@@ -218,45 +218,58 @@ describe('ChatSessionStore', () => {
     expect(chatSessionStore.isGenerating).toBeFalse();
   });
 
-  it('sendMessage sends images in the order they were placed', async () => {
+  it('sendMessage sends media in the order they were placed', async () => {
     await chatSessionStore.createConversationSession();
-    const blob = new Blob([new Uint8Array([1, 2, 3])], {type: 'image/png'});
-    const image = chatSessionStore.createImage('cat.png', blob);
+    const imageBlob =
+        new Blob([new Uint8Array([1, 2, 3])], {type: 'image/png'});
+    const audioBlob =
+        new Blob([new Uint8Array([4, 5, 6])], {type: 'audio/wav'});
+    const image = chatSessionStore.createMedia('image', 'cat.png', imageBlob);
+    const audio = chatSessionStore.createMedia('audio', 'meow.wav', audioBlob);
     const sendSpy =
         spyOn(chatSessionStore.activeConversation!, 'sendMessageStreaming')
             .and.callThrough();
 
     await chatSessionStore.sendMessage([
-      {type: 'text', text: '  What is '},
-      {type: 'image', image},
-      {type: 'text', text: ' doing?  '},
+      {type: 'text', text: '  Is '},
+      {type: 'media', media: image},
+      {type: 'text', text: ' making this sound: '},
+      {type: 'media', media: audio},
+      {type: 'text', text: '?  '},
     ]);
 
     const expectedMessage: Message = {
       role: 'user',
       content: [
-        {type: 'text', text: 'What is '},
-        {type: 'image', data: blob},
-        {type: 'text', text: ' doing?'},
+        {type: 'text', text: 'Is '},
+        {type: 'image', data: imageBlob},
+        {type: 'text', text: ' making this sound: '},
+        {type: 'audio', data: audioBlob},
+        {type: 'text', text: '?'},
       ],
     };
     expect(sendSpy.calls.mostRecent().args[0]).toEqual(expectedMessage);
     const userMsg = chatSessionStore.messages[0];
-    expect(userMsg.text).toBe('What is [image: cat.png] doing?');
+    expect(userMsg.text)
+        .toBe('Is [image: cat.png] making this sound: [audio: meow.wav]?');
     expect(userMsg.parts).toEqual([
-      {type: 'text', text: 'What is '},
+      {type: 'text', text: 'Is '},
       {type: 'image', id: image.id, name: 'cat.png'},
-      {type: 'text', text: ' doing?'},
+      {type: 'text', text: ' making this sound: '},
+      {type: 'audio', id: audio.id, name: 'meow.wav'},
+      {type: 'text', text: '?'},
     ]);
 
-    // Only image references are persisted, not image bytes.
+    // Only media references are persisted, not media bytes.
     const history = window.localStorage.getItem(
         `litertlm-chat-history-${chatSessionStore.activeSavedConvId}`);
     expect(history).toContain(image.id);
+    expect(history).toContain(audio.id);
   });
 
-  it('restores images from memory and placeholders otherwise', () => {
-    const image = chatSessionStore.createImage('cat.png', new Blob([], {type: 'image/png'}));
+  it('restores media from memory and placeholders otherwise', () => {
+    const image = chatSessionStore.createMedia(
+        'image', 'cat.png', new Blob([], {type: 'image/png'}));
     const parts = chatSessionStore.getMessageParts({
       role: 'user',
       text: '',
@@ -265,23 +278,26 @@ describe('ChatSessionStore', () => {
         {type: 'image', id: image.id, name: 'cat.png'},
         {type: 'text', text: ' and '},
         {type: 'image', id: 'gone', name: 'dog.png'},
+        {type: 'audio', id: 'gone too', name: 'bark.wav'},
       ],
     });
 
     expect(parts).toEqual([
-      {type: 'image', image},
+      {type: 'media', media: image},
       {type: 'text', text: ' and '},
       {type: 'text', text: '[image: dog.png]'},
+      {type: 'text', text: '[audio: bark.wav]'},
     ]);
   });
 
-  it('redoResponse resends images', async () => {
-    const image = chatSessionStore.createImage('cat.png', new Blob([], {type: 'image/png'}));
+  it('redoResponse resends media', async () => {
+    const audio = chatSessionStore.createMedia(
+        'audio', 'meow.wav', new Blob([], {type: 'audio/wav'}));
     chatSessionStore.messages = [
       {
         role: 'user',
-        text: '[image: cat.png]',
-        parts: [{type: 'image', id: image.id, name: 'cat.png'}],
+        text: '[audio: meow.wav]',
+        parts: [{type: 'audio', id: audio.id, name: 'meow.wav'}],
         senderName: 'User'
       },
       {role: 'assistant', text: 'A cat', senderName: 'Assistant'},
@@ -291,7 +307,7 @@ describe('ChatSessionStore', () => {
     await chatSessionStore.redoResponse(1);
 
     expect(chatSessionStore.sendMessage).toHaveBeenCalledWith([
-      {type: 'image', image}
+      {type: 'media', media: audio}
     ]);
   });
 

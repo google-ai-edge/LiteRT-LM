@@ -189,7 +189,13 @@ export class LitertChatBubble extends LitElement {
         object-fit: contain;
       }
 
-      .message-image-missing {
+      .message-audio {
+        display: block;
+        max-width: 100%;
+        margin: 6px 0;
+      }
+
+      .message-media-missing {
         display: inline-block;
         padding: 2px 8px;
         margin: 0 2px;
@@ -380,19 +386,24 @@ export class LitertChatBubble extends LitElement {
     }
   }
 
-  /** Renders a user message's text with its images inline. */
+  /** Renders a user message's text with its images and audio inline. */
   private renderUserContent(msg: StoredMessage) {
     if (!msg.parts) {
       return html`<div class="message-user-text">${msg.text}</div>`;
     }
     return html`<div class="message-user-text">${msg.parts.map(part => {
       if (part.type === 'text') return part.text;
-      const image = this.state.chatSession.getImage(part.id);
-      return image ?
-          html`<img class="message-image" src=${image.url} alt=${
+      const media = this.state.chatSession.getMedia(part.id);
+      if (!media) {
+        const icon = part.type === 'image' ? '🖼' : '🎵';
+        return html`<span class="message-media-missing" title="Images and audio are not saved across page reloads">${
+            icon} ${part.name}</span>`;
+      }
+      return part.type === 'image' ?
+          html`<img class="message-image" src=${media.url} alt=${
               part.name} title=${part.name} />` :
-          html`<span class="message-image-missing" title="Images are not saved across page reloads">🖼 ${
-              part.name}</span>`;
+          html`<audio class="message-audio" controls src=${media.url} title=${
+              part.name}></audio>`;
     })}</div>`;
   }
 

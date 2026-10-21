@@ -17,7 +17,7 @@
 import './chat_window';
 
 import {LlmChatStateController} from '../state_controller.js';
-import {ChatSessionStore, PromptImage, PromptPart} from '../stores/chat_session_store.js';
+import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
 import {ModelLoaderService} from '../stores/model_loader_service.js';
 import {SettingsStore} from '../stores/settings_store.js';
 import {LitertChatWindow} from './chat_window.js';
@@ -29,8 +29,10 @@ describe('litert-chat-window', () => {
   let mockSettings: jasmine.SpyObj<SettingsStore>;
   let mockModelLoader: jasmine.SpyObj<ModelLoaderService>;
   let cachedModelsMap: Map<string, number>;
-  const fakeImage: PromptImage = {
+  let createdMedia: Map<string, PromptMedia>;
+  const fakeImage: PromptMedia = {
     id: 'img1',
+    kind: 'image',
     name: 'cat.png',
     blob: new Blob(),
     url: 'blob:fake-url',
@@ -40,17 +42,22 @@ describe('litert-chat-window', () => {
     return element.shadowRoot!.querySelector('#chat-input') as HTMLDivElement;
   }
 
-  /** Adds an image through the hidden file input, as the '+' button does. */
-  async function addImageViaPicker(): Promise<File> {
-    const file =
-        new File([new Uint8Array([1])], 'cat.png', {type: 'image/png'});
+  /** Adds a file through the hidden file input, as the '+' button does. */
+  async function addFileViaPicker(file: File): Promise<void> {
     const input =
-        element.shadowRoot!.querySelector('#image-input') as HTMLInputElement;
+        element.shadowRoot!.querySelector('#media-input') as HTMLInputElement;
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(file);
     input.files = dataTransfer.files;
     input.dispatchEvent(new Event('change'));
     await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  /** Adds an image through the hidden file input. */
+  async function addImageViaPicker(): Promise<File> {
+    const file =
+        new File([new Uint8Array([1])], 'cat.png', {type: 'image/png'});
+    await addFileViaPicker(file);
     return file;
   }
 
@@ -58,15 +65,21 @@ describe('litert-chat-window', () => {
     mockChatSession = jasmine.createSpyObj('ChatSessionStore', [
       'sendMessage',
       'cancelGeneration',
-      'createImage',
-      'getImage',
+      'createMedia',
+      'getMedia',
     ]);
     // Initialize properties used during render
     mockChatSession.isGenerating = false;
     mockChatSession.messages = [];
-    mockChatSession.createImage.and.returnValue(fakeImage);
-    mockChatSession.getImage.and.callFake(
-        (id: string) => id === fakeImage.id ? fakeImage : undefined);
+    createdMedia = new Map([[fakeImage.id, fakeImage]]);
+    mockChatSession.createMedia.and.callFake((kind, name, blob) => {
+      if (kind === 'image') return fakeImage;
+      const media: PromptMedia =
+          {id: `media${createdMedia.size}`, kind, name, blob, url: 'blob:x'};
+      createdMedia.set(media.id, media);
+      return media;
+    });
+    mockChatSession.getMedia.and.callFake((id: string) => createdMedia.get(id));
 
     mockSettings = jasmine.createSpyObj('SettingsStore', ['saveSettings']);
     mockSettings.selectedModelPath = 'path/to/model_file.litertlm';
@@ -251,10 +264,12 @@ describe('litert-chat-window', () => {
 
     const file = await addImageViaPicker();
 
-    const chip = editor.querySelector('.image-chip') as HTMLElement;
+    const chip = editor.querySelector('.media-chip') as HTMLElement;
     expect(chip).toBeTruthy();
-    expect(chip.dataset['imageId']).toBe(fakeImage.id);
-    expect(mockChatSession.createImage).toHaveBeenCalledWith('cat.png', file);
+    expect(chip.dataset['mediaId']).toBe(fakeImage.id);
+    expect(chip.querySelector('img.chip-thumb')).toBeTruthy();
+    expect(mockChatSession.createMedia)
+        .toHaveBeenCalledWith('image', 'cat.png', file);
 
     editor.appendChild(document.createTextNode('please'));
     editor.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));
@@ -262,21 +277,51 @@ describe('litert-chat-window', () => {
 
     expect(mockChatSession.sendMessage).toHaveBeenCalledWith([
       {type: 'text', text: 'Describe '},
-      {type: 'image', image: fakeImage},
+      {type: 'media', media: fakeImage},
       // The non-breaking spacer after the chip is sent as a normal space.
       {type: 'text', text: ' please'},
     ]);
-    expect(editor.querySelector('.image-chip')).toBeNull();
+    expect(editor.querySelector('.media-chip')).toBeNull();
   });
 
-  it('removes an image when its chip delete button is clicked', async () => {
+  it('adds picked audio files as playable chips', async () => {
+    const file =
+        new File([new Uint8Array([1])], 'meow.wav', {type: 'audio/wav'});
+    await addFileViaPicker(file);
+
+    expect(mockChatSession.createMedia)
+        .toHaveBeenCalledWith('audio', 'meow.wav', file);
+    const chip = getEditor().querySelector('.media-chip') as HTMLElement;
+    expect(chip).toBeTruthy();
+    expect(chip.querySelector('.chip-play-btn')).toBeTruthy();
+    expect(chip.querySelector('img')).toBeNull();
+
+    getEditor().dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));
+    await element.updateComplete;
+
+    const media = createdMedia.get(chip.dataset['mediaId']!)!;
+    expect(mockChatSession.sendMessage).toHaveBeenCalledWith([
+      {type: 'media', media},
+      {type: 'text', text: ' '},
+    ]);
+  });
+
+  it('rejects files that are not images or audio', async () => {
+    await addFileViaPicker(
+        new File(['text'], 'notes.txt', {type: 'text/plain'}));
+
+    expect(mockChatSession.createMedia).not.toHaveBeenCalled();
+    expect(getEditor().querySelector('.media-chip')).toBeNull();
+  });
+
+  it('removes media when its chip delete button is clicked', async () => {
     await addImageViaPicker();
     const editor = getEditor();
     const deleteBtn =
         editor.querySelector('.chip-del-btn') as HTMLButtonElement;
     deleteBtn.click();
 
-    expect(editor.querySelector('.image-chip')).toBeNull();
+    expect(editor.querySelector('.media-chip')).toBeNull();
   });
 
   it('populates input when clicking quick starter', async () => {
@@ -307,7 +352,7 @@ describe('litert-chat-window', () => {
 
     const parts: PromptPart[] = [
       {type: 'text', text: 'Edited '},
-      {type: 'image', image: fakeImage},
+      {type: 'media', media: fakeImage},
       {type: 'text', text: ' Prompt'},
     ];
     bubble!.dispatchEvent(new CustomEvent('edit-prompt', {
@@ -319,8 +364,8 @@ describe('litert-chat-window', () => {
 
     expect(editor.textContent).toContain('Edited ');
     expect(editor.textContent).toContain(' Prompt');
-    const chip = editor.querySelector('.image-chip') as HTMLElement;
-    expect(chip.dataset['imageId']).toBe(fakeImage.id);
+    const chip = editor.querySelector('.media-chip') as HTMLElement;
+    expect(chip.dataset['mediaId']).toBe(fakeImage.id);
     expect(element.shadowRoot!.activeElement).toBe(editor);
   });
 });

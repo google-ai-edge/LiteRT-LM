@@ -21,8 +21,9 @@ import {css, html, LitElement, render} from 'lit';
 import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
-import {promptHasContent, PromptImage, PromptPart, promptPartsToText} from '../stores/chat_session_store.js';
+import {MediaKind, promptHasContent, PromptMedia, PromptPart, promptPartsToText} from '../stores/chat_session_store.js';
 import {sharedStyles} from '../styles/shared_styles.js';
+import {AudioRecorder, toSupportedAudio} from '../utils/audio.js';
 
 /* tslint:disable:no-new-decorators */
 
@@ -62,6 +63,14 @@ export class LitertChatWindow extends LitElement {
   @state() private isCameraModalOpen = false;
   private cameraStream: MediaStream|null = null;
 
+  private readonly audioRecorder = new AudioRecorder();
+  @state() private isRecording = false;
+  @state() private recordingSeconds = 0;
+  private recordingTimer: number|undefined;
+
+  /** Audio element for previewing an audio chip, if one is playing. */
+  private chipAudio: HTMLAudioElement|null = null;
+
   private wasGenerating = false;
   private isProgrammaticScroll = false;
 
@@ -71,7 +80,7 @@ export class LitertChatWindow extends LitElement {
   @query('#chat-messages') private msgBox!: HTMLDivElement;
 
   @query('#chat-input') private chatInput!: HTMLDivElement;
-  @query('#image-input') private imageInput?: HTMLInputElement;
+  @query('#media-input') private mediaInput?: HTMLInputElement;
   @query('#camera-fallback-input')
   private cameraFallbackInput?: HTMLInputElement;
   @query('#camera-video') private cameraVideo?: HTMLVideoElement;
@@ -198,7 +207,7 @@ export class LitertChatWindow extends LitElement {
         user-select: none;
       }
 
-      .image-chip {
+      .media-chip {
         display: inline-flex;
         align-items: center;
         vertical-align: middle;
@@ -212,8 +221,8 @@ export class LitertChatWindow extends LitElement {
         max-width: 220px;
       }
 
-      .image-chip::selection,
-      .image-chip *::selection {
+      .media-chip::selection,
+      .media-chip *::selection {
         background: rgba(0, 201, 158, 0.35);
       }
 
@@ -223,6 +232,19 @@ export class LitertChatWindow extends LitElement {
         border-radius: 6px;
         object-fit: cover;
         flex-shrink: 0;
+      }
+
+      .chip-play-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 6px;
+        border: none;
+        background: var(--bg-input);
+        color: var(--teal);
+        cursor: pointer;
+        font-size: 0.9rem;
+        flex-shrink: 0;
+        user-select: none;
       }
 
       .chip-name {
@@ -278,6 +300,16 @@ export class LitertChatWindow extends LitElement {
         font-size: 1.3rem;
         font-weight: 700;
         color: var(--teal);
+      }
+
+      .btn-icon.recording {
+        width: auto;
+        padding: 0 10px;
+        border-radius: 18px;
+        font-size: 0.8rem;
+        font-variant-numeric: tabular-nums;
+        color: #ef4444;
+        border-color: #ef4444;
       }
 
       .btn-input {
@@ -358,6 +390,9 @@ export class LitertChatWindow extends LitElement {
 
   override disconnectedCallback() {
     this.closeCamera();
+    this.cancelRecording();
+    this.chipAudio?.pause();
+    this.chipAudio = null;
     this.state.removeHost(this);
     super.disconnectedCallback();
   }
@@ -414,7 +449,7 @@ export class LitertChatWindow extends LitElement {
     for (const part of parts) {
       editor.appendChild(
           part.type === 'text' ? document.createTextNode(part.text) :
-                                 this.createImageChip(part.image));
+                                 this.createMediaChip(part.media));
     }
     this.updateEmptyState();
 
@@ -455,11 +490,11 @@ export class LitertChatWindow extends LitElement {
         }
         if (!(child instanceof HTMLElement)) continue;
 
-        const imageId = child.dataset['imageId'];
-        const image =
-            imageId ? this.state.chatSession.getImage(imageId) : undefined;
-        if (image) {
-          parts.push({type: 'image', image});
+        const mediaId = child.dataset['mediaId'];
+        const media =
+            mediaId ? this.state.chatSession.getMedia(mediaId) : undefined;
+        if (media) {
+          parts.push({type: 'media', media});
         } else if (child.tagName === 'BR') {
           pushText('\n');
         } else {
@@ -482,23 +517,55 @@ export class LitertChatWindow extends LitElement {
     editor.classList.toggle(
         'is-empty',
         (editor.textContent ?? '') === '' &&
-            editor.querySelector('.image-chip') === null);
+            editor.querySelector('.media-chip') === null);
   }
 
-  private createImageChip(image: PromptImage): HTMLElement {
+  /** Plays or stops the audio clip of a chip. */
+  private toggleChipAudio(media: PromptMedia, button: HTMLButtonElement) {
+    const wasPlayingThis =
+        this.chipAudio?.src === media.url && !this.chipAudio.paused;
+    this.chipAudio?.pause();
+    this.chipAudio = null;
+    for (const b of Array.from(
+             this.chatInput?.querySelectorAll('.chip-play-btn') ?? [])) {
+      b.textContent = '▶';
+    }
+    if (wasPlayingThis) return;
+
+    const audio = new Audio(media.url);
+    audio.addEventListener('ended', () => {
+      button.textContent = '▶';
+    });
+    this.chipAudio = audio;
+    button.textContent = '⏸';
+    void audio.play();
+  }
+
+  private createMediaChip(media: PromptMedia): HTMLElement {
     const span = document.createElement('span');
-    span.className = 'image-chip';
+    span.className = 'media-chip';
     // Makes the chip atomic: the caret steps over it and Backspace deletes
     // the whole chip rather than editing its innards.
     span.contentEditable = 'false';
-    span.dataset['imageId'] = image.id;
+    span.dataset['mediaId'] = media.id;
+    const preview = media.kind === 'image' ?
+        html`<img class="chip-thumb" src=${media.url} alt=${media.name} />` :
+        html`<button
+          class="chip-play-btn"
+          title="Play audio"
+          @mousedown=${(e: Event) => e.preventDefault()}
+          @click=${(e: Event) => {
+          e.stopPropagation();
+          this.toggleChipAudio(media, e.currentTarget as HTMLButtonElement);
+        }}
+        >▶</button>`;
     render(
         html`
-          <img class="chip-thumb" src=${image.url} alt=${image.name} />
-          <span class="chip-name" title=${image.name}>${image.name}</span>
+          ${preview}
+          <span class="chip-name" title=${media.name}>${media.name}</span>
           <button
             class="chip-del-btn"
-            title="Remove image"
+            title="Remove ${media.kind}"
             @mousedown=${(e: Event) => e.preventDefault()}
             @click=${(e: Event) => {
           e.stopPropagation();
@@ -534,14 +601,14 @@ export class LitertChatWindow extends LitElement {
   }
 
   /**
-   * Inserts an image where the caret is, so the user controls where the image
-   * sits relative to the surrounding text. Falls back to appending.
+   * Inserts media where the caret is, so the user controls where it sits
+   * relative to the surrounding text. Falls back to appending.
    */
-  private insertImageAtCaret(image: PromptImage) {
+  private insertMediaAtCaret(media: PromptMedia) {
     const editor = this.chatInput;
     if (!editor) return;
 
-    const node = this.createImageChip(image);
+    const node = this.createMediaChip(media);
     let range = this.getEditorRange() ?? this.savedRange;
     if (!range || !editor.contains(range.commonAncestorContainer)) {
       range = document.createRange();
@@ -569,13 +636,13 @@ export class LitertChatWindow extends LitElement {
     if (range) this.savedRange = range.cloneRange();
   }
 
-  /** Inserts pasted images as chips and pasted rich text as plain text. */
+  /** Inserts pasted media as chips and pasted rich text as plain text. */
   private handleEditorPaste(e: ClipboardEvent) {
     e.preventDefault();
     const files = e.clipboardData?.files;
     if (files && files.length > 0) {
       this.handleEditorSelect();
-      void this.addImageFiles(Array.from(files));
+      void this.addMediaFiles(Array.from(files));
       return;
     }
     const text = e.clipboardData?.getData('text/plain') ?? '';
@@ -604,7 +671,7 @@ export class LitertChatWindow extends LitElement {
       // Drop position wins over the last caret position.
       const dropRange = this.rangeFromPoint(e.clientX, e.clientY);
       if (dropRange) this.savedRange = dropRange;
-      void this.addImageFiles(Array.from(files));
+      void this.addMediaFiles(Array.from(files));
     }
   }
 
@@ -620,10 +687,10 @@ export class LitertChatWindow extends LitElement {
                                                                      null;
   }
 
-  private handleImageInputChange(e: Event) {
+  private handleMediaInputChange(e: Event) {
     const input = e.target as HTMLInputElement;
     if (input.files && input.files.length > 0) {
-      void this.addImageFiles(Array.from(input.files));
+      void this.addMediaFiles(Array.from(input.files));
       input.value = '';
     }
   }
@@ -633,22 +700,74 @@ export class LitertChatWindow extends LitElement {
     this.state.requestUpdate();
   }
 
-  /** Adds image files to the prompt at the saved caret position. */
-  private async addImageFiles(files: File[]) {
+  /** Adds image and audio files to the prompt at the saved caret position. */
+  private async addMediaFiles(files: File[]) {
     for (const file of files) {
-      if (!file.type.startsWith('image/')) {
-        this.setStatus(`Only images can be added to a prompt: ${file.name}`);
+      let kind: MediaKind;
+      if (file.type.startsWith('image/')) {
+        kind = 'image';
+      } else if (file.type.startsWith('audio/')) {
+        kind = 'audio';
+      } else {
+        this.setStatus(
+            `Only images and audio can be added to a prompt: ${file.name}`);
         continue;
       }
       try {
-        const blob = await toSupportedImage(file);
-        this.insertImageAtCaret(
-            this.state.chatSession.createImage(file.name, blob));
+        const blob = kind === 'image' ? await toSupportedImage(file) :
+                                        await toSupportedAudio(file);
+        this.insertMediaAtCaret(
+            this.state.chatSession.createMedia(kind, file.name, blob));
       } catch (e) {
-        console.error('[LiteRT-LM] Failed to read image:', e);
-        this.setStatus(`Could not read image ${file.name}.`);
+        console.error(`[LiteRT-LM] Failed to read ${kind}:`, e);
+        this.setStatus(`Could not read ${kind} ${file.name}.`);
       }
     }
+  }
+
+  private async toggleRecording() {
+    if (this.isRecording) {
+      await this.finishRecording();
+      return;
+    }
+    try {
+      await this.audioRecorder.start();
+    } catch (e) {
+      console.error('[LiteRT-LM] Failed to start recording:', e);
+      this.setStatus('Could not access the microphone.');
+      return;
+    }
+    this.isRecording = true;
+    this.recordingSeconds = 0;
+    this.recordingTimer = window.setInterval(() => {
+      this.recordingSeconds = Math.floor(this.audioRecorder.durationSeconds);
+    }, 250);
+  }
+
+  private stopRecordingTimer() {
+    window.clearInterval(this.recordingTimer);
+    this.recordingTimer = undefined;
+    this.isRecording = false;
+  }
+
+  /** Stops recording and adds the recording to the prompt. */
+  private async finishRecording() {
+    this.stopRecordingTimer();
+    try {
+      const blob = await this.audioRecorder.stop();
+      const name = `Recording ${new Date().toLocaleTimeString()}.wav`;
+      this.insertMediaAtCaret(
+          this.state.chatSession.createMedia('audio', name, blob));
+    } catch (e) {
+      console.error('[LiteRT-LM] Failed to record audio:', e);
+      this.setStatus('Could not record audio.');
+    }
+  }
+
+  private cancelRecording() {
+    if (!this.isRecording) return;
+    this.stopRecordingTimer();
+    this.audioRecorder.cancel();
   }
 
   private async openCamera() {
@@ -699,7 +818,8 @@ export class LitertChatWindow extends LitElement {
     canvas.toBlob((blob) => {
       if (blob) {
         const name = `Camera photo ${new Date().toLocaleTimeString()}.jpg`;
-        this.insertImageAtCaret(this.state.chatSession.createImage(name, blob));
+        this.insertMediaAtCaret(
+            this.state.chatSession.createMedia('image', name, blob));
       }
       this.closeCamera();
     }, 'image/jpeg', 0.92);
@@ -823,11 +943,11 @@ export class LitertChatWindow extends LitElement {
       <div class="chat-input-container">
         <input
           type="file"
-          id="image-input"
-          accept="image/*"
+          id="media-input"
+          accept="image/*,audio/*"
           multiple
           hidden
-          @change=${this.handleImageInputChange}
+          @change=${this.handleMediaInputChange}
         />
         <input
           type="file"
@@ -835,7 +955,7 @@ export class LitertChatWindow extends LitElement {
           accept="image/*"
           capture="environment"
           hidden
-          @change=${this.handleImageInputChange}
+          @change=${this.handleMediaInputChange}
         />
         <div
           class="input-wrapper ${this.isDragOver ? 'drag-over' : ''}"
@@ -844,12 +964,12 @@ export class LitertChatWindow extends LitElement {
           @drop=${this.handleDrop}
         >
           <button
-            id="btn-add-image"
+            id="btn-add-media"
             class="btn-icon plus"
-            title="Add images"
+            title="Add images or audio"
             ?disabled=${isLoading}
             @mousedown=${(e: Event) => e.preventDefault()}
-            @click=${() => this.imageInput?.click()}
+            @click=${() => this.mediaInput?.click()}
           >+</button>
           <button
             id="btn-camera"
@@ -859,6 +979,18 @@ export class LitertChatWindow extends LitElement {
             @mousedown=${(e: Event) => e.preventDefault()}
             @click=${this.openCamera}
           >📷</button>
+          <button
+            id="btn-record"
+            class="btn-icon ${this.isRecording ? 'recording' : ''}"
+            title=${this.isRecording ? 'Stop recording' : 'Record audio'}
+            ?disabled=${isLoading}
+            @mousedown=${(e: Event) => e.preventDefault()}
+            @click=${this.toggleRecording}
+          >${
+        this.isRecording ?
+            `⏹ ${Math.floor(this.recordingSeconds / 60)}:${
+                String(this.recordingSeconds % 60).padStart(2, '0')}` :
+            '🎤'}</button>
 
           <!--
             Lit intentionally renders no children here; setEditorParts and the
@@ -874,8 +1006,9 @@ export class LitertChatWindow extends LitElement {
             aria-label="Message"
             aria-disabled=${isLoading ? 'true' : 'false'}
             data-placeholder=${
-        isLoading ? 'Model is preparing, please wait...' :
-                    'Message LiteRT-LM... Add images anywhere in your message.'}
+        isLoading ?
+            'Model is preparing, please wait...' :
+            'Message LiteRT-LM... Add images or audio anywhere in your message.'}
             @input=${this.updateEmptyState}
             @keyup=${this.handleEditorSelect}
             @mouseup=${this.handleEditorSelect}

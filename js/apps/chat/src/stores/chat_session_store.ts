@@ -33,19 +33,23 @@ const ConversationMetaSchema = z.object({
 const ConversationMetaListSchema = z.array(ConversationMetaSchema);
 
 /**
- * A persisted part of a user message. Only an image's id and name are saved;
- * its bytes are kept in memory for the lifetime of the page.
+ * A persisted part of a user message. Only an image's or audio clip's id and
+ * name are saved; its bytes are kept in memory for the lifetime of the page.
  */
 const StoredPartSchema = z.union([
   z.object({type: z.literal('text'), text: z.string()}),
-  z.object({type: z.literal('image'), id: z.string(), name: z.string()}),
+  z.object({
+    type: z.union([z.literal('image'), z.literal('audio')]),
+    id: z.string(),
+    name: z.string(),
+  }),
 ]);
 
 const StoredMessageSchema = z.object({
   role: z.union([z.literal('user'), z.literal('assistant')]),
-  // Plain-text form of the message. Images appear as `[image: name]`.
+  // Plain-text form of the message. Media appear as e.g. `[image: name]`.
   text: z.string(),
-  // Ordered text and image parts, present only for messages with images.
+  // Ordered text and media parts, present only for messages with media.
   parts: z.array(StoredPartSchema).optional(),
   senderName: z.string(),
   thoughtText: z.string().optional(),
@@ -62,53 +66,59 @@ export type StoredMessage = z.infer<typeof StoredMessageSchema>;
 /** A persisted part of a user message. */
 export type StoredPart = z.infer<typeof StoredPartSchema>;
 
-/** An image attached to a prompt. */
-export interface PromptImage {
+/** The kinds of media that can be attached to a prompt. */
+export type MediaKind = 'image'|'audio';
+
+/** An image or audio clip attached to a prompt. */
+export interface PromptMedia {
   id: string;
+  kind: MediaKind;
   name: string;
   blob: Blob;
-  /** Object URL of `blob`, for previews. */
+  /** Object URL of `blob`, for previews and playback. */
   url: string;
 }
 
 /**
- * A single element of a prompt, in the order the user arranged it. Images are
- * interleaved with text so the user controls where each image sits relative
- * to the surrounding words.
+ * A single element of a prompt, in the order the user arranged it. Media are
+ * interleaved with text so the user controls where each image or audio clip
+ * sits relative to the surrounding words.
  */
 export type PromptPart = {
   type: 'text'; text: string;
 }|{
-  type: 'image';
-  image: PromptImage;
+  type: 'media';
+  media: PromptMedia;
 };
 
-/** Returns the placeholder text used for an image the model cannot see. */
-export function imagePlaceholder(name: string): string {
-  return `[image: ${name}]`;
+/** Returns the placeholder text used for media the model cannot see. */
+export function mediaPlaceholder(kind: MediaKind, name: string): string {
+  return `[${kind}: ${name}]`;
 }
 
-/** Returns the plain-text form of a prompt, with images as placeholders. */
+/** Returns the plain-text form of a prompt, with media as placeholders. */
 export function promptPartsToText(parts: PromptPart[]): string {
   return parts
-      .map(p => p.type === 'text' ? p.text : imagePlaceholder(p.image.name))
+      .map(
+          p => p.type === 'text' ? p.text :
+                                   mediaPlaceholder(p.media.kind, p.media.name))
       .join('');
 }
 
 /** Whether a prompt has anything worth sending. */
 export function promptHasContent(parts: PromptPart[]): boolean {
-  return parts.some(p => p.type === 'image' || p.text.trim().length > 0);
+  return parts.some(p => p.type === 'media' || p.text.trim().length > 0);
 }
 
 /** Trims leading and trailing whitespace from a prompt. */
 function trimPromptParts(parts: PromptPart[]): PromptPart[] {
-  const trimmed = parts.filter(p => p.type === 'image' || p.text.length > 0)
+  const trimmed = parts.filter(p => p.type === 'media' || p.text.length > 0)
                       .map(p => ({...p}));
   const first = trimmed[0];
   if (first?.type === 'text') first.text = first.text.trimStart();
   const last = trimmed[trimmed.length - 1];
   if (last?.type === 'text') last.text = last.text.trimEnd();
-  return trimmed.filter(p => p.type === 'image' || p.text.length > 0);
+  return trimmed.filter(p => p.type === 'media' || p.text.length > 0);
 }
 
 /** Represents a saved conversation in the sidebar history index. */
@@ -129,11 +139,11 @@ export class ChatSessionStore {
   private readonly CONVS_LIST_KEY = 'litertlm-conversations-list';
 
   /**
-   * Images attached to prompts during this page's lifetime, by id. Saved
-   * history only references images by id, so images from a previous page
-   * load are not found here.
+   * Media attached to prompts during this page's lifetime, by id. Saved
+   * history only references media by id, so media from a previous page load
+   * are not found here.
    */
-  private readonly images = new Map<string, PromptImage>();
+  private readonly media = new Map<string, PromptMedia>();
 
   constructor(
       private readonly updateCallback: () => void,
@@ -143,34 +153,35 @@ export class ChatSessionStore {
     this.loadSavedConversationsIndex();
   }
 
-  /** Creates an image that can be placed in a prompt. */
-  createImage(name: string, blob: Blob): PromptImage {
-    const image: PromptImage = {
+  /** Creates an image or audio clip that can be placed in a prompt. */
+  createMedia(kind: MediaKind, name: string, blob: Blob): PromptMedia {
+    const media: PromptMedia = {
       id: Math.random().toString(36).substring(2) + Date.now().toString(36),
+      kind,
       name,
       blob,
       url: createObjectUrl(blob),
     };
-    this.images.set(image.id, image);
-    return image;
+    this.media.set(media.id, media);
+    return media;
   }
 
-  /** Returns an image created during this page's lifetime, if available. */
-  getImage(id: string): PromptImage|undefined {
-    return this.images.get(id);
+  /** Returns media created during this page's lifetime, if available. */
+  getMedia(id: string): PromptMedia|undefined {
+    return this.media.get(id);
   }
 
   /**
-   * Returns the prompt parts of a stored message. Images that are no longer
-   * in memory become text placeholders.
+   * Returns the prompt parts of a stored message. Media that are no longer in
+   * memory become text placeholders.
    */
   getMessageParts(msg: StoredMessage): PromptPart[] {
     if (!msg.parts) return [{type: 'text', text: msg.text}];
     return msg.parts.map((p): PromptPart => {
       if (p.type === 'text') return p;
-      const image = this.images.get(p.id);
-      return image ? {type: 'image', image} :
-                     {type: 'text', text: imagePlaceholder(p.name)};
+      const media = this.media.get(p.id);
+      return media ? {type: 'media', media} :
+                     {type: 'text', text: mediaPlaceholder(p.type, p.name)};
     });
   }
 
@@ -351,8 +362,8 @@ export class ChatSessionStore {
           }
         },
         preface: {
-          // Images in the history are replayed as `[image: name]` text
-          // placeholders; only images in new messages are seen by the model.
+          // Media in the history are replayed as text placeholders (e.g.
+          // `[image: name]`); only media in new messages reach the model.
           messages: this.messages.length > 0 ?
               this.messages.map(msg => ({role: msg.role, content: msg.text})) :
               undefined,
@@ -391,7 +402,7 @@ export class ChatSessionStore {
 
   /**
    * Sends a prompt to the model. A prompt is either plain text or an ordered
-   * list of text and image parts.
+   * list of text, image, and audio parts.
    */
   async sendMessage(prompt: string|PromptPart[]) {
     const parts = trimPromptParts(
@@ -414,32 +425,33 @@ export class ChatSessionStore {
     this.updateStatus('Thinking...');
 
     const promptText = promptPartsToText(parts);
-    const hasImages = parts.some(p => p.type === 'image');
+    const hasMedia = parts.some(p => p.type === 'media');
     const userMsg: StoredMessage = {
       role: 'user',
       text: promptText,
       senderName: 'User',
       tokensCount: '-'
     };
-    if (hasImages) {
+    if (hasMedia) {
       userMsg.parts = parts.map(
           (p): StoredPart => p.type === 'text' ?
               p :
-              {type: 'image', id: p.image.id, name: p.image.name});
+              {type: p.media.kind, id: p.media.id, name: p.media.name});
     }
     this.messages.push(userMsg);
     this.commitActiveChatHistory();
 
-    // Keep plain-text prompts as strings; send image prompts as an ordered
-    // content array so each image sits where the user placed it.
-    const modelMessage: MessageLike = hasImages ? {
+    // Keep plain-text prompts as strings; send prompts with media as an
+    // ordered content array so each image or audio clip sits where the user
+    // placed it.
+    const modelMessage: MessageLike = hasMedia ? {
       role: 'user',
       content: parts.map(
           (p): ContentPart => p.type === 'text' ?
               {type: 'text', text: p.text} :
-              {type: 'image', data: p.image.blob}),
+              {type: p.media.kind, data: p.media.blob}),
     } :
-                                                  promptText;
+                                                 promptText;
 
     const modelName =
         this.settings.selectedModelPath.split('/').pop() || 'Assistant';
