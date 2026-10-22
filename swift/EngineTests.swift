@@ -385,6 +385,25 @@ class EngineTests: XCTestCase {
     XCTAssertGreaterThan(info.timeToFirstTokenInSecond, 0)
     XCTAssertGreaterThan(info.lastPrefillTokenCount, 0)
     XCTAssertGreaterThan(info.lastDecodeTokenCount, 0)
+    // The engine picks a default max number of tokens when none is requested.
+    XCTAssertGreaterThan(info.maxNumTokens, 0)
+  }
+
+  func testBenchmark_WithMaxNumTokens_ReportsMaxNumTokens() async throws {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    let info = try await benchmark(
+      modelPath: modelPath,
+      backend: .cpu(),
+      prefillTokens: 16,
+      decodeTokens: 16,
+      maxNumTokens: 64
+    )
+
+    XCTAssertEqual(info.maxNumTokens, 64)
   }
 
   /// Tests that deinit runs without crashing after initialization.
