@@ -1,6 +1,6 @@
 {
   "name": "@litert-lm/model-tester",
-  "version": "0.12.1",
+  "version": "0.13.1",
   "publishConfig": {
     "access": "public"
   },
@@ -25,7 +25,7 @@
   "description": "",
   "dependencies": {
     "@lit/task": "^1.0.2",
-    "@litert-lm/core": "^0.12.1",
+    "@litert-lm/core": "^0.13.1",
     "@material/web": "^2.3.0",
     "argparse": "^2.0.1",
     "esbuild": "^0.23.0",
