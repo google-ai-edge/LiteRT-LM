@@ -323,20 +323,14 @@ build:macos --define=PROTOBUF_INCLUDE_PATH=$(PREFIX)/include
 # TF_SYSTEM_LIBS do not work on windows.
 
 # By default, build TF in C++ 20 mode.
-# Note: Bazel's ObjcCompile action does not inherit --cxxopt, so we explicitly
-# pass -std=c++20 to Objective-C++ (.mm) files on Apple platforms to avoid
-# C++17/C++20 ABI mismatches (e.g., absl::SourceLocation vs std::source_location
-# in absl::StatusBuilder).
 build:android --cxxopt=-std=c++20
 build:android --host_cxxopt=-std=c++20
 build:ios --cxxopt=-std=c++20
 build:ios --host_cxxopt=-std=c++20
-build:ios --per_file_copt=.*\.mm$@-std=c++20
 build:linux --cxxopt=-std=c++20
 build:linux --host_cxxopt=-std=c++20
 build:macos --cxxopt=-std=c++20
 build:macos --host_cxxopt=-std=c++20
-build:macos --per_file_copt=.*\.mm$@-std=c++20
 build:windows --cxxopt=/std:c++20
 build:windows --host_cxxopt=/std:c++20
 
