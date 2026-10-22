@@ -303,7 +303,20 @@ cc_library(
     deps = select({
         # If CAPI is linked dynamically, need to link the accelerator dynamically as well.
         "@litert//litert:litert_runtime_link_mode_dynamic": [],
+        "@platforms//os:android": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator",
+        ],
+        ":ios_webgpu": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
+        ],
+        ":macos_metal": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator",
+        ],
+        "@platforms//os:ios": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator",
+        ],
         "//conditions:default": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
         ],
     }),
 )

@@ -233,11 +233,13 @@ load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:version.bzl", "VERSION")
 load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
 
+# Prebuilt shared libraries staged alongside liblitert-lm.{so,dylib} so they can
+# be resolved via $ORIGIN / @loader_path at runtime.
 _PREBUILT_LIBS = [
     "libGemmaModelConstraintProvider",
     "libLiteRtWebGpuAccelerator",
-    "libLiteRtTopKWebGpuSampler",
     "libLiteRt",
+    "libwebgpu_dawn",
 ]
 
 genrule(

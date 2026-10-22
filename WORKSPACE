@@ -487,6 +487,7 @@ http_archive(
         # to find.exe on Windows.
         "for f in third_party/*/*; do if [ -f \"$f\" ]; then sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' \"$f\" || exit 1; fi; done",
         "sed -i -e 's|build_file = \"//third_party/dawn:dawn.BUILD\"|build_file = \"@litert//third_party/dawn:dawn.BUILD\"|g' third_party/dawn/workspace.bzl",
+        "sed -i -e 's|python3 -c|$(if python3 -V >/dev/null 2>/dev/null; then echo python3; else echo python; fi) -c|g' third_party/dawn/workspace.bzl",
         # TODO: b/465678331 - Remove patch_cmds for visibility and legacy_create_init once
         # cl/1000909231 is submitted and LITERT_REF is updated.
         # Allow external @litert_lm workspace to depend on ml_drift_delegate and litert_runtime_builtin_none targets.
@@ -528,6 +529,12 @@ http_archive(
         "sed -i -e 's|\"-I .\",|\"-I .\", \"-I external/ml_drift\",|g' ml_drift/gl/BUILD",
         # Point ml_drift_delegate references to @litert//ml_drift_delegate.
         "sed -i -e 's|@//ml_drift_delegate|@litert//ml_drift_delegate|g' ml_drift/common/default/BUILD ml_drift/common/task/BUILD ml_drift/common/kernels/BUILD",
+        # Avoid passing -ldl to MSVC linker on Windows in opencl_wrapper.
+        "sed -i -e 's|\"//conditions:default\": \\[\"-ldl\"\\],|\"@platforms//os:windows\": [], \"//conditions:default\": [\"-ldl\"],|g' ml_drift/cl/BUILD",
+        # Use @FP16//:FP16 from tf_workspace2() to avoid case-insensitive @fp16/@FP16 collision on Windows.
+        "sed -i -e 's|\"@fp16\"|\"@FP16//:FP16\"|g' ml_drift/common/BUILD",
+        # Avoid int -> uint32_t narrowing conversion in VulkanInfo default member initializers on MSVC.
+        "sed -i -e 's|uint32_t api_version\\(.*\\) = -1;|uint32_t api_version\\1 = static_cast<uint32_t>(-1);|g' ml_drift/common/gpu_info.h",
     ],
     repo_mapping = {
         "@fp16": "@FP16",
