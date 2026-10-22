@@ -24,7 +24,6 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/speech2text/speech_recognizer.h"
@@ -53,9 +52,11 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
     return std::vector<SpeechRecognizer::DecodedToken>();
   }
 
-  std::vector<float> logits(total_floats);
-  LITERT_RETURN_IF_ERROR(
-      encoder_outputs[0].Read<float>(absl::MakeSpan(logits)));
+  LITERT_ASSIGN_OR_RETURN(
+      auto lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create<const float>(
+          encoder_outputs[0], ::litert::TensorBuffer::LockMode::kRead));
+  const float* logits = lock_and_addr.second;
 
   // Decodes the model output (FloatArray logits) into an array of token IDs.
   // Performs CTC decoding (collapse repeats -> remove blanks) and text cleanup.
@@ -85,10 +86,8 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
   for (int t = 0; t < frames_to_decode; ++t) {
     const int start = t * vocab_size_;
     const int end = start + vocab_size_;
-    auto max_it =
-        std::max_element(logits.begin() + start, logits.begin() + end);
-    int token_id =
-        static_cast<int>(std::distance(logits.begin() + start, max_it));
+    auto max_it = std::max_element(logits + start, logits + end);
+    int token_id = static_cast<int>(std::distance(logits + start, max_it));
     if (token_id == previous_token_id) {
       continue;
     }

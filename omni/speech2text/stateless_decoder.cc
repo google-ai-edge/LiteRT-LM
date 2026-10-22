@@ -148,25 +148,29 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs,
   }
   bool seen_skip_until_token_id = decode_skip_until_token_id_ < 0;
 
-  std::vector<float> logits(num_logits_per_token_ * num_token_ids_);
+  const size_t total_logits = num_logits_per_token_ * num_token_ids_;
   for (size_t i = first_step; i < num_token_ids_ - 1; ++i) {
     LITERT_RETURN_IF_ERROR(inputs[token_id_input_index].Write<int32_t>(
         absl::MakeConstSpan(token_ids)));
     LITERT_RETURN_IF_ERROR(
         runner_.Run(kDecodeSignatureName, inputs, decode_output_buffers_));
-    LITERT_RETURN_IF_ERROR(
-        decode_output_buffers_[0].Read<float>(absl::MakeSpan(logits)));
 
     const size_t start_index = i * num_logits_per_token_;
     const size_t end_index = (i + 1) * num_logits_per_token_;
-    if (start_index >= logits.size() || end_index > logits.size()) {
+    if (start_index >= total_logits || end_index > total_logits) {
       break;
     }
 
-    auto max_it = std::max_element(logits.begin() + start_index,
-                                   logits.begin() + end_index);
-    const int token_id =
-        static_cast<int>(std::distance(logits.begin() + start_index, max_it));
+    int token_id = 0;
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock,
+          TensorBufferScopedLock::Create<const float>(
+              decode_output_buffers_[0], TensorBuffer::LockMode::kRead));
+      const float* logits = lock.second;
+      auto max_it = std::max_element(logits + start_index, logits + end_index);
+      token_id = static_cast<int>(std::distance(logits + start_index, max_it));
+    }
     if (decode_stop_token_id_ >= 0 && token_id == decode_stop_token_id_) {
       break;
     }

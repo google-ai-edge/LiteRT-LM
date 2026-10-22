@@ -32,6 +32,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/stateful_litert_runner.h"
 #include "omni/speech2text/litert_speech_recognizer.h"
@@ -176,6 +177,12 @@ struct DecodeState {
   bool did_mid_chunk_sos_reset = false;
   // Whether the previous encoder frame rolled back a zero-duration burst.
   bool prev_frame_had_burst = false;
+  // Cached output logits buffer from the most recent `RunDecodeStep` call,
+  // reused across consecutive blank frames while prediction network inputs
+  // (`token_ids` and LSTM state) are unchanged.
+  const TensorBuffer* current_logits_buffer = nullptr;
+  // Whether `current_logits_buffer` was produced by `stateful_runner`.
+  bool was_stateful_step = false;
   // Output tokens accumulated for the current chunk.
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
 };
@@ -350,6 +357,8 @@ absl::Status ResetToSos(std::vector<TensorBuffer>& decode_input_buffers,
   state.sos_emission_frames = 0;
   state.sos_was_forced = false;
   state.prev_frame_had_burst = false;
+  state.current_logits_buffer = nullptr;
+  state.was_stateful_step = false;
   if (stateful_runner != nullptr) {
     LITERT_RETURN_IF_ERROR(stateful_runner->Reset());
   }
@@ -569,6 +578,12 @@ void TrimAbortiveMidChunkSosReset(DecodeState& state) {
   }
 }
 
+bool IsDeviceMemory(const TensorBuffer& buf) {
+  auto buffer_type = buf.BufferType();
+  return buffer_type.HasValue() &&
+         *buffer_type != TensorBufferType::kHostMemory;
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
@@ -669,21 +684,45 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                                     stateful_runner_.get(), num_token_ids_,
                                     blank_token_id_, state));
 
+  // If the encoder is on GPU and the decoder is on CPU, copy the encoder
+  // output data into the host decode input buffers once before the decode
+  // loop; otherwise, pass the encoder output buffers as input directly.
+  absl::Span<const TensorBuffer> active_encoder_outputs = encoder_outputs;
+  if (!encoder_outputs.empty() &&
+      encoder_outputs.size() < decode_input_buffers_.size() &&
+      IsDeviceMemory(encoder_outputs[0]) &&
+      !IsDeviceMemory(decode_input_buffers_[0])) {
+    for (size_t j = 0; j < encoder_outputs.size(); ++j) {
+      LITERT_ASSIGN_OR_RETURN(auto num_bytes, encoder_outputs[j].PackedSize());
+      LITERT_ASSIGN_OR_RETURN(
+          auto src_lock,
+          TensorBufferScopedLock::Create<const uint8_t>(
+              encoder_outputs[j], TensorBuffer::LockMode::kRead));
+      LITERT_RETURN_IF_ERROR(decode_input_buffers_[j].Write<uint8_t>(
+          absl::MakeConstSpan(src_lock.second, num_bytes)));
+    }
+    active_encoder_outputs = absl::MakeConstSpan(decode_input_buffers_)
+                                 .first(encoder_outputs.size());
+  }
+
   while (state.time_index < state.effective_max_time_index) {
-    bool was_stateful_step = false;
-    LITERT_ASSIGN_OR_RETURN(
-        const TensorBuffer* current_logits_buffer,
-        RunDecodeStep(runner_, stateful_runner_.get(), encoder_outputs,
-                      decode_input_buffers_, decode_output_buffers_, state,
-                      was_stateful_step));
+    if (state.current_logits_buffer == nullptr) {
+      LITERT_ASSIGN_OR_RETURN(
+          state.current_logits_buffer,
+          RunDecodeStep(runner_, stateful_runner_.get(), active_encoder_outputs,
+                        decode_input_buffers_, decode_output_buffers_, state,
+                        state.was_stateful_step));
+    }
 
     LITERT_ASSIGN_OR_RETURN(
-        auto lock, TensorBufferScopedLock::Create<const float>(
-                       *current_logits_buffer, TensorBuffer::LockMode::kRead));
+        auto lock,
+        TensorBufferScopedLock::Create<const float>(
+            *state.current_logits_buffer, TensorBuffer::LockMode::kRead));
     auto [token_id, duration] = SelectGreedyTokenAndDuration(
         lock.second, state, num_logits_per_token_, blank_token_id_);
 
     if (token_id != blank_token_id_) {
+      state.current_logits_buffer = nullptr;
       // When a single forced near-threshold `<sos>` token is immediately
       // followed by a single frame that dumps `max_symbols_per_step_` tokens
       // across the remaining stateless slots, treat that single-frame dump as a
@@ -725,7 +764,8 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     }
     state.time_index += duration;
 
-    if (was_stateful_step && token_id != blank_token_id_ && stateful_runner_) {
+    if (state.was_stateful_step && token_id != blank_token_id_ &&
+        stateful_runner_) {
       // Stateful RNN decoder: adopt the new LSTM states by swapping the input
       // and output state buffers — but only on a non-blank emission. In RNN-T
       // greedy decoding the prediction network advances only when a token is
