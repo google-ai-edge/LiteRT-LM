@@ -103,6 +103,9 @@ fetch the latest prebuilt binaries.
 
 Building on Windows requires several prerequisites to be installed first.
 
+> Note: These instructions are for x86-64. For Windows on ARM (e.g. Snapdragon X
+> Elite), see [Building on Windows ARM64](./build-windows-arm64.md).
+
 #### Prerequisites
 
 1.  **Visual Studio 2022** - Download from
