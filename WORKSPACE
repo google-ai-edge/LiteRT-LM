@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-10-13
-LITERT_REF = "9b8c7f77e7a29e6073e614a05e1e38be7b761229"
+# UPDATED = 2026-10-22
+LITERT_REF = "67055c6f0fc2a9b09b2963288ffee530b1069d73"
 
-LITERT_SHA256 = "9f071b680abacb23650b15f67b2643453333ae367339b8af66f04bc36b9bc684"
+LITERT_SHA256 = "51a6ab2adb7e6a03b67356cc612d80aae2fbdab99071cac3b144f6b043f2a7e3"
 
-TENSORFLOW_REF = "5d0718098a02fad818408b60cd69a2e891766b68"
+TENSORFLOW_REF = "dca3c607680b991d2dcdc286d92b0e02b68d5dfb"
 
-TENSORFLOW_SHA256 = "d6f15aeb17a6ee06c786bd9f607ef04e405fe210ef44b86557466a65e21e7dd1"
+TENSORFLOW_SHA256 = "3a6e954614003e452bf3131078179d21cb09e0f11238e6b3d3d8e8e999fe9300"
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
@@ -23,6 +23,37 @@ http_archive(
     name = "bazel_skylib",
     sha256 = "3b5b49006181f5f8ff626ef8ddceaa95e9bb8ad294f7b5d7b11ea9f7ddaf8c59",
     urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz"],
+)
+
+# Declared before `tf_workspace2()` so that it takes precedence over TensorFlow's
+# `FP16`, whose BUILD file lacks the lowercase `fp16` target that ml_drift
+# depends on (via the `@fp16` -> `@FP16` repo_mapping below). A separate
+# lowercase `fp16` repository must not be declared: it collides with `FP16` in
+# the `external/` directory on case-insensitive filesystems (e.g. Windows).
+http_archive(
+    name = "FP16",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+cc_library(
+    name = "FP16",
+    hdrs = glob(["include/**/*.h"]),
+    includes = ["include"],
+    strip_include_prefix = "include",
+)
+
+alias(
+    name = "fp16",
+    actual = ":FP16",
+)
+""",
+    sha256 = "d973501a40c55126b31accc2d9f08d931ec3cc190c0430309a5e341d3c0ce32a",
+    strip_prefix = "FP16-4dfe081cf6bcd15db339cf2680b9281b8451eeb3",
+    url = "https://github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
 )
 
 http_archive(
@@ -476,12 +507,13 @@ http_archive(
     url = "https://github.com/google-ai-edge/LiteRT/archive/" + LITERT_REF + ".tar.gz",
 )
 
+# SafeInt. Same version that LiteRT uses.
 http_archive(
-    name = "fp16",
-    build_file = "@litert//third_party/FP16:FP16.BUILD",
-    sha256 = "d973501a40c55126b31accc2d9f08d931ec3cc190c0430309a5e341d3c0ce32a",
-    strip_prefix = "FP16-4dfe081cf6bcd15db339cf2680b9281b8451eeb3",
-    url = "https://github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+    name = "SafeInt",
+    build_file = "@litert//:BUILD.SafeInt",
+    sha256 = "4bd737e5885112e796742b7b6ba7181ff346855dc22d29ed2b258de567a1de8d",
+    strip_prefix = "SafeInt-72f0745e26091af6d1186fd91426377f16688ba7",
+    url = "https://github.com/dcleblanc/SafeInt/archive/72f0745e26091af6d1186fd91426377f16688ba7.tar.gz",
 )
 
 ML_DRIFT_COMMIT = "1b18771f44c0be3d972847b31a80f6dc3d6964b5"
@@ -498,6 +530,7 @@ http_archive(
         "sed -i -e 's|@//ml_drift_delegate|@litert//ml_drift_delegate|g' ml_drift/common/default/BUILD ml_drift/common/task/BUILD ml_drift/common/kernels/BUILD",
     ],
     repo_mapping = {
+        "@fp16": "@FP16",
         "@com_github_google_re2": "@com_googlesource_code_re2",
     },
     sha256 = ML_DRIFT_SHA256,
