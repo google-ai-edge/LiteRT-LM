@@ -430,6 +430,7 @@ litert::Expected<litert::Options> CreateLiteRtNpuOptions(
   qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
   qnn_opts.SetHtpPerformanceMode(
       ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  qnn_opts.SetHtpFileReadMemoryBudgetMB(16);
   // Dynamic models embed fine-grained EdgetpuMemoryPowerState directives
   // directly in the graph bytecode. Setting PerformanceMode here causes
   // SouthBound to reject execution due to mutual exclusivity (Cannot mix
