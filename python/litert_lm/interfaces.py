@@ -144,7 +144,13 @@ class NPU(Backend):
       # openvino package place the NPU libs in "libs".
       # Includes to PATH so Windows can load it.
       libs_dir = os.path.join(os.path.dirname(ov.__file__), "libs")
-      os.environ["PATH"] = os.environ["PATH"] + ";" + libs_dir
+      current_path = os.environ.get("PATH", "")
+      if libs_dir not in current_path.split(os.pathsep):
+        os.environ["PATH"] = (
+            f"{current_path}{os.pathsep}{libs_dir}"
+            if current_path
+            else libs_dir
+        )
 
     if not self.litert_dispatch_lib_dir:
       raise RuntimeError(

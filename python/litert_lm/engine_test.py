@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import pathlib
 from unittest import mock
 import warnings
@@ -423,18 +424,56 @@ class EngineTest(LiteRtLmTestBase):
     mock_path = mock.MagicMock()
     mock_path.__truediv__.return_value = "mocked_resolved_path"
 
-    with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
-      with mock.patch("importlib.resources.files") as mock_files:
-        mock_files.return_value = mock_path
-        npu = litert_lm.Backend.NPU()
+    with (
+        mock.patch.dict("sys.modules", {"openvino": mock_ov}),
+        mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+        mock.patch("importlib.resources.files") as mock_files,
+    ):
+      mock_files.return_value = mock_path
+      npu = litert_lm.Backend.NPU()
 
-        mock_files.assert_called_once_with(
-            "litert_lm"
+      mock_files.assert_called_once_with(
+          "litert_lm"
+      )
+      mock_path.__truediv__.assert_called_once_with(
+          "vendors/intel_openvino/dispatch/"
+      )
+      self.assertEqual(npu.litert_dispatch_lib_dir, "mocked_resolved_path")
+      expected_libs_dir = os.path.join("path/to/openvino", "libs")
+      self.assertEqual(
+          os.environ["PATH"], f"/usr/bin{os.pathsep}{expected_libs_dir}"
+      )
+
+  @mock.patch("sys.platform", "win32")
+  def test_npu_backend_windows_openvino_path_deduplication(self):
+    mock_ov = mock.MagicMock()
+    mock_ov.__file__ = "path/to/openvino/__init__.py"
+    mock_ov.Core.return_value.available_devices = ["CPU", "NPU"]
+
+    mock_path = mock.MagicMock()
+    mock_path.__truediv__.return_value = "mocked_resolved_path"
+    expected_libs_dir = os.path.join("path/to/openvino", "libs")
+
+    with (
+        mock.patch.dict("sys.modules", {"openvino": mock_ov}),
+        mock.patch("importlib.resources.files", return_value=mock_path),
+    ):
+      with mock.patch.dict(os.environ, {}, clear=True):
+        litert_lm.Backend.NPU()
+        self.assertEqual(os.environ["PATH"], expected_libs_dir)
+        litert_lm.Backend.NPU()
+        self.assertEqual(os.environ["PATH"], expected_libs_dir)
+
+      prefix_match_dir = f"{expected_libs_dir}_extra"
+      with mock.patch.dict(
+          os.environ, {"PATH": prefix_match_dir}, clear=True
+      ):
+        litert_lm.Backend.NPU()
+        litert_lm.Backend.NPU()
+        self.assertEqual(
+            os.environ["PATH"],
+            f"{prefix_match_dir}{os.pathsep}{expected_libs_dir}",
         )
-        mock_path.__truediv__.assert_called_once_with(
-            "vendors/intel_openvino/dispatch/"
-        )
-        self.assertEqual(npu.litert_dispatch_lib_dir, "mocked_resolved_path")
 
   def test_engine_init_with_legacy_backend_class(self):
     with warnings.catch_warnings(record=True) as w:
