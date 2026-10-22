@@ -352,6 +352,22 @@ jobs:
             --define=litert_runtime_link_mode=dynamic `
             //runtime/engine:litert_lm_main
 
+      # Regression tests for the dynamically linked LiteRT runtime, where each DLL
+      # has its own C runtime (e.g. file-backed model loading crashing with
+      # 0xC0000409, https://github.com/google-ai-edge/LiteRT-LM/issues/4023).
+      # Unlike "Run bazel test on Windows", failures here fail the job.
+      - name: Run bazel test on Windows with dynamic linking
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            test --disk_cache=~/.cache/bazel --test_output=errors `
+            --repository_cache=~/.cache/bazel/repo `
+            --define=litert_runtime_link_mode=dynamic `
+            --test_tag_filters='-nowindows' `
+            --action_env=TMP="$env:TMP" `
+            --action_env=TEMP="$env:TEMP" `
+            -- `
+            //runtime/components:model_resources_litert_lm_test
+
       - name: Run pytest for dynamic linking
         # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
         run: python -m pytest tools/pytest/ -v `
