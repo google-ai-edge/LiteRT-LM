@@ -471,6 +471,8 @@ http_archive(
         "sed -i -e 's|\"\\:dawn_native\",|\":dawn_native\", \"@//runtime/components:webgpu_dawn_shared_lib\",|g' third_party/dawn/dawn.BUILD",
         "sed -i -e 's|name = \"generate_build_identifier_py\",|name = \"generate_build_identifier_py\", legacy_create_init = 0,|g' ml_drift_delegate/delegate/serialization_weight_cache/BUILD",
     ],
+    # TODO: Remove once LITERT_REF is updated past cl/1003219051.
+    patches = ["@//third_party/litert:litert_custom_handle.patch"],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
     url = "https://github.com/google-ai-edge/LiteRT/archive/" + LITERT_REF + ".tar.gz",

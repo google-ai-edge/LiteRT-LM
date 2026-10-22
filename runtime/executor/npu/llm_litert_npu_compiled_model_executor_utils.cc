@@ -37,6 +37,8 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/litert_custom_tensor_buffer.h"  // from @litert
+#include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -1460,6 +1462,22 @@ absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
                         env, target_type, host_mem_addr, target_bytes));
       return std::move(buf);
     }
+  }
+
+  // Custom buffer types (e.g. Intel OpenVINO): create a view of the same
+  // buffer type from the source's custom handle, via the type's registered
+  // import handler, so the dispatch keeps getting its own buffer type (a
+  // host-memory alias would not match the dispatch's buffer requirements and
+  // would be copied instead of shared). The view doesn't own the memory; the
+  // source buffer must outlive it.
+  if (IsUserCustomBuffer(static_cast<LiteRtTensorBufferType>(buffer_type))) {
+    LITERT_ASSIGN_OR_RETURN(HwMemoryHandle custom_handle,
+                            source_buffer.GetCustomHandle());
+    LITERT_ASSIGN_OR_RETURN(
+        auto buf,
+        ::litert::TensorBuffer::CreateFromCustomHandle(
+            env, target_type, buffer_type, custom_handle, target_bytes));
+    return std::move(buf);
   }
 
 #if LITERT_HAS_AHWB_SUPPORT
