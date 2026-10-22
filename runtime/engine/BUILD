@@ -419,7 +419,9 @@ cc_binary(
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:executor_settings_base",
     ],
 )
 

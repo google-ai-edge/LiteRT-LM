@@ -298,6 +298,9 @@ absl::Status SetEmbeddingFlag(EmbeddingLiteRtLmSettings* settings,
     settings->report_peak_memory_footprint = ParseBool(value);
   } else if (name == "lazy_load_multimodal_encoders") {
     settings->lazy_load_multimodal_encoders = ParseBool(value);
+  } else if (name == "gpu_use_ir_model") {
+    LITERT_ASSIGN_OR_RETURN(settings->gpu_use_ir_model,
+                            GetUseIrModelFromString(value));
   } else if (name == "num_warmup" || name == "num_iterations" ||
              name == "min_input_length" || name == "max_input_length" ||
              name == "benchmark_prefill_tokens" ||
@@ -465,6 +468,17 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
 
   settings.SetLazyLoadMultimodalEncoders(
       run_settings.lazy_load_multimodal_encoders);
+
+  settings.GetMutableMainExecutorSettings().SetUseIrModel(
+      run_settings.gpu_use_ir_model);
+  if (settings.GetMutableVisionExecutorSettings().has_value()) {
+    settings.GetMutableVisionExecutorSettings()->SetUseIrModel(
+        run_settings.gpu_use_ir_model);
+  }
+  if (settings.GetMutableAudioExecutorSettings().has_value()) {
+    settings.GetMutableAudioExecutorSettings()->SetUseIrModel(
+        run_settings.gpu_use_ir_model);
+  }
 
   const std::string activation_data_type_str =
       run_settings.activation_data_type;

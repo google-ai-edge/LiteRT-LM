@@ -34,6 +34,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -214,6 +215,7 @@ absl::Status ConfigureLiteRtOptions(absl::string_view model_name,
     gpu_options.SetPreferTextureWeights(true);
 #endif  // defined(__ANDROID__)
     gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
+    LrtSetGpuOptionsUseIrModel(gpu_options.Get(), false);
     ABSL_RETURN_IF_ERROR(
         ConfigureGpuModelCache(model_name, cache, gpu_options));
   } else if (settings.backend == OmniEngine::Settings::Backend::kNpu) {

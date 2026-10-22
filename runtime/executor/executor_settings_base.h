@@ -100,6 +100,11 @@ std::ostream& operator<<(std::ostream& os,
 absl::StatusOr<ActivationDataType> GetActivationDataTypeFromString(
     const std::string& activation_data_type);
 
+// Parses a tri-state GPU IR model setting. Case-insensitive.
+// "enabled" -> true, "disabled" -> false, "default" -> std::nullopt.
+absl::StatusOr<std::optional<bool>> GetUseIrModelFromString(
+    absl::string_view use_ir_model);
+
 // Fake weights mode.
 enum class FakeWeightsMode {
   // Don't use fake weights, read real weights from disk.
@@ -334,6 +339,13 @@ class ExecutorSettingsBase {
   bool IsWeightCacheDisabled() const { return disable_weight_cache_; }
   bool IsProgramCacheDisabled() const { return disable_program_cache_; }
 
+  // Sets whether the GPU backend uses the IR model path. std::nullopt means
+  // "default", which is currently resolved to disabled.
+  void SetUseIrModel(std::optional<bool> use_ir_model) {
+    use_ir_model_ = use_ir_model;
+  }
+  const std::optional<bool>& UseIrModel() const { return use_ir_model_; }
+
  protected:
   explicit ExecutorSettingsBase(ModelAssets model_assets)
       : model_assets_(std::move(model_assets)) {}
@@ -379,6 +391,9 @@ class ExecutorSettingsBase {
 
   bool disable_weight_cache_ = false;
   bool disable_program_cache_ = false;
+  // Optional setting to use the IR model path on the GPU backend. If not set,
+  // the default (disabled) is used.
+  std::optional<bool> use_ir_model_;
 };
 
 }  // namespace litert::lm

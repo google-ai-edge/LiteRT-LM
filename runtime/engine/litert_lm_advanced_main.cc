@@ -47,6 +47,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/engine/litert_lm_lib.h"
 #include "runtime/engine/shared_flags.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/litert_lm_metrics.pb.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/metrics_util.h"
@@ -222,6 +223,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--score_target_text=<target_text>] "
            "[--gpu_madvise_original_shared_tensors=<true|false>] "
            "[--gpu_enable_metal_residency_set=<true|false>] "
+           "[--gpu_use_ir_model=<enabled|disabled|default>] "
            "[--preferred_device_substr=<device_substr>] "
            "[--num_threads_to_upload=<num_threads_to_upload>] "
            "[--num_threads_to_compile=<num_threads_to_compile>] "
@@ -304,6 +306,9 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_gpu_madvise_original_shared_tensors);
   settings.gpu_enable_metal_residency_set =
       absl::GetFlag(FLAGS_gpu_enable_metal_residency_set);
+  ABSL_ASSIGN_OR_RETURN(settings.gpu_use_ir_model,
+                        litert::lm::GetUseIrModelFromString(
+                            absl::GetFlag(FLAGS_gpu_use_ir_model)));
   settings.disable_cache = absl::GetFlag(FLAGS_disable_cache);
   settings.disable_weight_cache = absl::GetFlag(FLAGS_disable_weight_cache);
   settings.disable_gpu_program_cache =

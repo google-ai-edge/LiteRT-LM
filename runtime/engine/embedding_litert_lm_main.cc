@@ -26,8 +26,10 @@
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "runtime/engine/embedding_litert_lm_lib.h"
 #include "runtime/engine/shared_flags.h"
+#include "runtime/executor/executor_settings_base.h"
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
@@ -117,6 +119,9 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
   settings.lazy_load_multimodal_encoders =
       absl::GetFlag(FLAGS_lazy_load_multimodal_encoders);
+  ABSL_ASSIGN_OR_RETURN(settings.gpu_use_ir_model,
+                        litert::lm::GetUseIrModelFromString(
+                            absl::GetFlag(FLAGS_gpu_use_ir_model)));
 
   return litert::lm::RunEmbedding(settings);
 }

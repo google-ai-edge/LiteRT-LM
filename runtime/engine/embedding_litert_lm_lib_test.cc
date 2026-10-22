@@ -14,6 +14,7 @@
 
 #include "runtime/engine/embedding_litert_lm_lib.h"
 
+#include <optional>
 #include <string>
 
 #include <gmock/gmock.h>
@@ -72,6 +73,20 @@ TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagSuccess) {
 
   EXPECT_TRUE(SetEmbeddingFlag(&settings, "num_iterations", "5").ok());
   EXPECT_EQ(settings.num_iterations, 5);
+
+  EXPECT_EQ(settings.gpu_use_ir_model, std::nullopt);
+  EXPECT_TRUE(SetEmbeddingFlag(&settings, "gpu_use_ir_model", "enabled").ok());
+  EXPECT_THAT(settings.gpu_use_ir_model, Optional(true));
+  EXPECT_TRUE(SetEmbeddingFlag(&settings, "gpu_use_ir_model", "disabled").ok());
+  EXPECT_THAT(settings.gpu_use_ir_model, Optional(false));
+  EXPECT_TRUE(SetEmbeddingFlag(&settings, "gpu_use_ir_model", "default").ok());
+  EXPECT_EQ(settings.gpu_use_ir_model, std::nullopt);
+}
+
+TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagInvalidGpuUseIrModel) {
+  EmbeddingLiteRtLmSettings settings;
+  EXPECT_FALSE(SetEmbeddingFlag(&settings, "gpu_use_ir_model", "true").ok());
+  EXPECT_FALSE(SetEmbeddingFlag(&settings, "gpu_use_ir_model", "on").ok());
 }
 
 TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagInvalidInteger) {

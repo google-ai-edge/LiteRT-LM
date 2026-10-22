@@ -36,6 +36,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -413,6 +414,10 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
           cache_files.cache_key,
           /*logging_prefix=*/VisionExecutorSettings::kAdapterName,
           /*cache_compiled_shaders_only=*/false, gpu_options));
+      // "default" (unset) currently resolves to disabled.
+      LrtSetGpuOptionsUseIrModel(
+          gpu_options.Get(),
+          vision_executor_settings_.UseIrModel().value_or(false));
 
       break;
     }

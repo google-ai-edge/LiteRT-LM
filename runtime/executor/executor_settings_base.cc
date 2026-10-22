@@ -16,6 +16,7 @@
 
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -195,6 +196,21 @@ absl::StatusOr<ActivationDataType> GetActivationDataTypeFromString(
         absl::StrCat("Unsupported activation data type: ", activation_data_type,
                      ". Supported activation data types are: [FLOAT32, "
                      "FLOAT16, INT16, INT8]"));
+  }
+}
+
+absl::StatusOr<std::optional<bool>> GetUseIrModelFromString(
+    absl::string_view use_ir_model) {
+  if (absl::EqualsIgnoreCase(use_ir_model, "enabled")) {
+    return true;
+  } else if (absl::EqualsIgnoreCase(use_ir_model, "disabled")) {
+    return false;
+  } else if (absl::EqualsIgnoreCase(use_ir_model, "default")) {
+    return std::nullopt;
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported gpu_use_ir_model value: ", use_ir_model,
+                     ". Supported values are: [enabled, disabled, default]"));
   }
 }
 

@@ -1916,6 +1916,17 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
             kLiteRtStatusOk);
   EXPECT_TRUE(convert_weights);
 
+  bool use_ir_model = true;
+  EXPECT_EQ(LrtGetGpuOptionsUseIrModel(&use_ir_model, gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_FALSE(use_ir_model);
+
+  executor_settings.SetUseIrModel(true);
+  EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
+  EXPECT_EQ(LrtGetGpuOptionsUseIrModel(&use_ir_model, gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_TRUE(use_ir_model);
+
   bool prefer_texture = false;
   EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPreferTextureWeights(
                 &prefer_texture, gpu_options.Get()),

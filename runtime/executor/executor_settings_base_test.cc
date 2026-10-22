@@ -17,6 +17,7 @@
 #include <filesystem>  // NOLINT
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <system_error>  // NOLINT
@@ -35,6 +36,9 @@
 
 namespace litert::lm {
 namespace {
+
+using ::testing::Optional;
+using ::testing::status::StatusIs;
 
 std::string GetTestModelPath() {
   const auto model_path =
@@ -106,6 +110,21 @@ TEST(LlmExecutorConfigTest, StringToActivationDataType) {
                 "Unsupported activation data type: invalid. Supported "
                 "activation data types are: [FLOAT32, "
                 "FLOAT16, INT16, INT8]"));
+}
+
+TEST(LlmExecutorConfigTest, StringToUseIrModel) {
+  ASSERT_OK_AND_ASSIGN(auto use_ir_model, GetUseIrModelFromString("enabled"));
+  EXPECT_THAT(use_ir_model, Optional(true));
+  ASSERT_OK_AND_ASSIGN(use_ir_model, GetUseIrModelFromString("ENABLED"));
+  EXPECT_THAT(use_ir_model, Optional(true));
+  ASSERT_OK_AND_ASSIGN(use_ir_model, GetUseIrModelFromString("disabled"));
+  EXPECT_THAT(use_ir_model, Optional(false));
+  ASSERT_OK_AND_ASSIGN(use_ir_model, GetUseIrModelFromString("default"));
+  EXPECT_EQ(use_ir_model, std::nullopt);
+  EXPECT_THAT(GetUseIrModelFromString("true"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(GetUseIrModelFromString(""),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(LlmExecutorConfigTest, ActivatonDataType) {

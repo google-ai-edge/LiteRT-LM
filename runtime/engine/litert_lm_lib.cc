@@ -766,6 +766,18 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       configure_caches(*engine_settings.GetMutableAudioExecutorSettings());
     }
   }
+  engine_settings.GetMutableMainExecutorSettings().SetUseIrModel(
+      settings.gpu_use_ir_model);
+  if (settings.vision_backend.has_value() &&
+      engine_settings.GetMutableVisionExecutorSettings().has_value()) {
+    engine_settings.GetMutableVisionExecutorSettings()->SetUseIrModel(
+        settings.gpu_use_ir_model);
+  }
+  if (settings.audio_backend.has_value() &&
+      engine_settings.GetMutableAudioExecutorSettings().has_value()) {
+    engine_settings.GetMutableAudioExecutorSettings()->SetUseIrModel(
+        settings.gpu_use_ir_model);
+  }
   if (!settings.litert_dispatch_lib_dir.empty()) {
     engine_settings.GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
         settings.litert_dispatch_lib_dir);

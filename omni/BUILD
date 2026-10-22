@@ -102,6 +102,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
+        "@litert//litert/c/options:litert_gpu_options",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",

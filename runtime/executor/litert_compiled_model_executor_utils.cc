@@ -44,6 +44,7 @@
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/litert_compiled_model.h"  // from @litert
 #include "litert/c/litert_metrics.h"  // from @litert
+#include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -1048,6 +1049,9 @@ absl::Status SetCommonGpuOptions(
 #endif  // !__APPLE__
   gpu_options.SetMadviseOriginalSharedTensors(true);
   gpu_options.SetConvertWeightsOnGpu(true);
+  // "default" (unset) currently resolves to disabled.
+  LrtSetGpuOptionsUseIrModel(gpu_options.Get(),
+                             executor_settings.UseIrModel().value_or(false));
   return absl::OkStatus();
 }
 
