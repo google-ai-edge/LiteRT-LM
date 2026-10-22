@@ -96,6 +96,7 @@ TEST(FileUtilTest, GetFileCacheIdentifier) {
   EXPECT_EQ(parts[1], "9");
 
   EXPECT_FALSE(GetFileCacheIdentifier("non_existent_file").ok());
+  EXPECT_FALSE(GetFileCacheIdentifier(testing::TempDir()).ok());
 }
 
 TEST(FileUtilTest, GetFileCacheIdentifier_FromScopedFile) {
