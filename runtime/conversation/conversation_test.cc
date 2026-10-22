@@ -176,6 +176,7 @@ class MockSession : public SessionInterface {
               (override));
   MOCK_METHOD(absl::Status, RestoreContext, (absl::string_view label),
               (override));
+  MOCK_METHOD(absl::StatusOr<int>, GetCurrentStep, (), (const, override));
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
 };
 
@@ -2301,7 +2302,10 @@ TEST_P(ConversationTest,
     testing::InSequence seq;
 
     // Because the prompt template opens a channel in add_generation_prompt,
-    // the checkpoint is saved before prefilling the user message.
+    // the checkpoint is saved before prefilling the user message after waiting
+    // for any in-flight tasks.
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
     EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
 
@@ -2349,6 +2353,9 @@ TEST_P(ConversationTest,
           user_callback(Responses(TaskState::kDone));
           return nullptr;
         });
+
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
   }
 
   Message user_message = {{"role", "user"}, {"content", "How are you?"}};
@@ -3097,8 +3104,9 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
           return nullptr;
         });
 
-    // Expect eager rewind to checkpoint and prefill of the stripped assistant
-    // message before the turn completes.
+    // Expect rewind to checkpoint and async prefill of the stripped assistant
+    // message to be scheduled in the background without blocking turn
+    // completion.
     EXPECT_CALL(*mock_session_ptr,
                 RewindToCheckpoint("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
@@ -3113,7 +3121,10 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
         .WillOnce([](const std::vector<InputData>& contents,
                      absl::AnyInvocable<void(absl::StatusOr<Responses>)>
                          user_callback) {
-          user_callback(Responses(TaskState::kDone));
+          // Do not invoke user_callback(Responses(TaskState::kDone)) here,
+          // verifying that SendMessageAsync still emits the completion
+          // Message() sentinel immediately without waiting for the background
+          // refill task to finish.
           return nullptr;
         });
   }
@@ -3180,6 +3191,98 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
   EXPECT_OK(conversation->SendMessageAsync(user_message_2,
                                            std::move(message_callback_2)));
   ASSERT_TRUE(done_2.WaitForNotificationWithTimeout(absl::Seconds(10)));
+
+  // Verify GetTokenCount and GetBenchmarkInfo wait for any in-flight tasks
+  // (such as background KV-cache refill) before querying the session.
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
+    EXPECT_CALL(*mock_session_ptr, GetCurrentStep()).WillOnce(Return(42));
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
+    EXPECT_CALL(*mock_session_ptr, GetBenchmarkInfo())
+        .WillOnce(Return(BenchmarkInfo(proto::BenchmarkParams())));
+  }
+  ASSERT_OK_AND_ASSIGN(int token_count, conversation->GetTokenCount());
+  EXPECT_EQ(token_count, 42);
+  EXPECT_OK(conversation->GetBenchmarkInfo());
+}
+
+TEST_P(ConversationTest,
+       SendMessageAsyncWithChannelContentFilteringRefillError) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .SetFilterChannelContentFromKvCache(true)
+          .SetChannels({litert::lm::Channel{
+              .channel_name = "thought",
+              .start = "<|channel>thought\n",
+              .end = "<channel|>",
+          }})
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  {
+    testing::InSequence seq;
+
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce([](const std::vector<InputData>& contents,
+                     absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback) {
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+
+    EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+
+    EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+        .WillOnce([](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback,
+                     const DecodeConfig& decode_config) {
+          user_callback(
+              Responses(TaskState::kProcessing,
+                        {"<|channel>thought\nhmm<channel|>I am good."}));
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+
+    EXPECT_CALL(*mock_session_ptr,
+                RewindToCheckpoint("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+
+    // Simulate synchronous failure when scheduling the background refill task.
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce(Return(absl::InternalError("Refill queue failed")));
+  }
+
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
+  absl::Status received_error;
+  bool received_null_completion = false;
+  auto message_callback = [&](absl::StatusOr<Message> message) {
+    if (!message.ok()) {
+      received_error = message.status();
+      return;
+    }
+    if (message->is_null()) {
+      received_null_completion = true;
+    }
+  };
+  EXPECT_OK(conversation->SendMessageAsync(user_message,
+                                           std::move(message_callback)));
+  EXPECT_THAT(received_error,
+              StatusIs(absl::StatusCode::kInternal, "Refill queue failed"));
+  EXPECT_FALSE(received_null_completion);
 }
 
 TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {

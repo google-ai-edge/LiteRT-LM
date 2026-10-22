@@ -636,7 +636,9 @@ class Conversation {
   const ConversationConfig& GetConfig() const { return config_; }
 
   // Returns the number of tokens in the conversation KV Cache (prefill +
-  // decode).
+  // decode). Blocks until any in-flight session tasks complete, including any
+  // background KV-cache refill scheduled after `SendMessageAsync` to strip
+  // channel content (such as thinking/reasoning tokens) from the KV cache.
   absl::StatusOr<int> GetTokenCount() const;
 
   // Returns the number of tokens the given message would consume if added
