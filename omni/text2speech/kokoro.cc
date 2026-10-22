@@ -259,6 +259,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetKokoroSessionFactory(
   }
   lm::proto::Text2SpeechMetadata resolved_metadata = ResolveMetadata(metadata);
   KokoroModelConfig config;
+  config.force_fp32_on_gpu = settings.force_fp32_on_gpu;
   LITERT_RETURN_IF_ERROR(PopulateKokoroConfigFromProto(
       resolved_metadata.tts_model_type().kokoro(), config));
 

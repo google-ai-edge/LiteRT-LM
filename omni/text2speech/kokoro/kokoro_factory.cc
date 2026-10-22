@@ -57,15 +57,13 @@ namespace {
 
 ModelOptions MakeModelOptions(absl::string_view model_dir,
                               absl::string_view cache_dir, lm::Backend backend,
-                              int num_threads) {
+                              int num_threads, bool force_fp32_on_gpu) {
   ModelOptions options;
   options.model_dir = model_dir;
   options.cache_dir = cache_dir;
   options.backend = backend;
   options.num_threads = num_threads;
-  // Kokoro's iSTFTNet neural vocoder requires FP32 precision on GPU to preserve
-  // synthesized audio quality and avoid FP16 numerical degradation.
-  options.force_fp32_on_gpu = true;
+  options.force_fp32_on_gpu = force_fp32_on_gpu;
   return options;
 }
 
@@ -120,9 +118,11 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
   const lm::Backend vocoder_backend = config.vocoder_backend.value_or(backend);
 
   ModelOptions acoustic_options =
-      MakeModelOptions(model_folder, cache_dir, acoustic_backend, num_threads);
+      MakeModelOptions(model_folder, cache_dir, acoustic_backend, num_threads,
+                       config.force_fp32_on_gpu);
   ModelOptions vocoder_options =
-      MakeModelOptions(model_folder, cache_dir, vocoder_backend, num_threads);
+      MakeModelOptions(model_folder, cache_dir, vocoder_backend, num_threads,
+                       config.force_fp32_on_gpu);
 
   if (!resources.HasLmModelResources() && !model_folder.empty()) {
     const std::string litertlm_path =

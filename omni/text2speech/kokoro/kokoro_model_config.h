@@ -38,6 +38,8 @@ struct KokoroModelConfig {
   std::string voice_file;
   // Target sequence length bucket (0 = auto / load all available).
   int target_bucket = 0;
+  // If true, forces FP32 precision on GPU instead of FP16.
+  bool force_fp32_on_gpu = false;
   // Model filenames under model directory.
   std::string acoustic_file = "kokoro_acoustic.tflite";
   std::string vocoder_file = "kokoro_vocoder.tflite";

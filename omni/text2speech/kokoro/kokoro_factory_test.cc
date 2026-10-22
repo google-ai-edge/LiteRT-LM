@@ -138,6 +138,7 @@ class FakeSections : public lm::ModelResources {
 
 TEST(KokoroFactoryTest, InitKokoroResourcesFailsWithNonexistentModels) {
   KokoroModelConfig config;
+  EXPECT_FALSE(config.force_fp32_on_gpu);
   config.acoustic_file = "nonexistent_acoustic.tflite";
   config.vocoder_file = "nonexistent_vocoder.tflite";
 
@@ -150,6 +151,14 @@ TEST(KokoroFactoryTest, InitKokoroResourcesFailsWithNonexistentModels) {
       InitKokoroResources(config, "/tmp/invalid_path", "", lm::Backend::CPU, 1,
                           *shared_env, resources);
   EXPECT_FALSE(status.ok());
+
+  for (bool force_fp32_on_gpu : {false, true}) {
+    config.force_fp32_on_gpu = force_fp32_on_gpu;
+    auto gpu_status =
+        InitKokoroResources(config, "/tmp/invalid_path", "", lm::Backend::GPU,
+                            1, *shared_env, resources);
+    EXPECT_FALSE(gpu_status.ok());
+  }
 }
 
 TEST(KokoroFactoryTest, CreateKokoroComponentsRejectsMissingModels) {
