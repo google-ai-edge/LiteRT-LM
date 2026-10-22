@@ -52,8 +52,13 @@
 #include "runtime/util/status_macros.h"
 #include "runtime/engine/shared_flags.h"
 
-ABSL_FLAG(std::string, backend, "gpu",
-          "Executor backend to use for LLM execution (cpu, gpu, etc.)");
+ABSL_FLAG(
+    std::string, backend, "gpu",
+    "Executor backend to use for LLM execution: cpu, gpu, npu. For the "
+    "GPU path, 'gpu' (or 'auto') uses the build-preferred default "
+    "delegate; pass 'opencl', 'opengl', or 'webgpu' to force a specific "
+    "one. WebGPU can only be selected in a build that links it. Applies to "
+    "the main text executor only.");
 ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
@@ -126,11 +131,26 @@ absl::Status MainHelper(int argc, char** argv) {
   ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets,  // NOLINT
                         ModelAssets::Create(model_path));
   auto backend_str = absl::GetFlag(FLAGS_backend);
-  ABSL_ASSIGN_OR_RETURN(Backend backend,
-                        litert::lm::GetBackendFromString(backend_str));
+  // Resolve the single backend string into the hardware backend plus, for the
+  // GPU path, the specific delegate (opencl/opengl/webgpu); "gpu"/"auto" keep
+  // the default (build-preferred) delegate.
+  ABSL_ASSIGN_OR_RETURN(auto resolved_backend,
+                        litert::lm::ResolveBackendString(backend_str));
+  Backend backend = resolved_backend.first;
+  litert::lm::GpuBackend gpu_backend = resolved_backend.second;
   ABSL_ASSIGN_OR_RETURN(
       EngineSettings engine_settings,
       EngineSettings::CreateDefault(std::move(model_assets), backend));
+  // Propagate an explicitly requested GPU delegate. kDefault needs no advanced
+  // settings: CreateCompilationOptions resolves the build-preferred delegate.
+  if (backend == Backend::GPU &&
+      gpu_backend != litert::lm::GpuBackend::kDefault) {
+    auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
+    auto advanced_settings = executor_settings.GetAdvancedSettings().value_or(
+        litert::lm::AdvancedSettings());
+    advanced_settings.gpu_backend = gpu_backend;
+    executor_settings.SetAdvancedSettings(advanced_settings);
+  }
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
