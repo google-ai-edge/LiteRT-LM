@@ -102,10 +102,10 @@ declaration:{{- tool_data['function']['name'] -}}
 {%- set ns = namespace(prev_message_type=None) -%}
 {#- Tool Declarations -#}
 {%- set loop_messages = messages -%}
-{%- if tools or messages[0]['role'] == 'system' or messages[0]['role'] == 'developer' -%}
+{%- if tools or (messages and (messages[0]['role'] == 'system' or messages[0]['role'] == 'developer')) -%}
     {{- '<start_of_turn>developer
 ' -}}
-    {%- if messages[0]['role'] == 'system' or messages[0]['role'] == 'developer' -%}
+    {%- if messages and (messages[0]['role'] == 'system' or messages[0]['role'] == 'developer') -%}
         {%- if messages[0]['content'] is string -%}
             {{- messages[0]['content'] | trim -}}
         {%- elif messages[0]['content'] is sequence -%}

@@ -749,6 +749,59 @@ class EngineTest(LiteRtLmTestBase):
     ):
       self.assertEqual(conversation.chat_template, tmpl)
 
+  def test_conversation_tools_without_system_message_gemma4_templates(self):
+    def get_weather(location: str) -> str:
+      """Get the current weather for a given location.
+
+      Args:
+        location: The city and state, e.g. San Francisco, CA.
+
+      Returns:
+        A string describing the weather.
+      """
+      return f"Sunny in {location}"
+
+    base_dir = (
+        pathlib.Path(FLAGS.test_srcdir)
+        / "litert_lm"
+    )
+    full_history_tmpl = (
+        base_dir / "models/gemma4/chat_template_e2b_e4b.jinja"
+    ).read_text(encoding="utf-8")
+    multi_prefill_tmpl = (
+        base_dir
+        / "runtime/components/testdata/google-gemma-4-multi-prefill.jinja"
+    ).read_text(encoding="utf-8")
+
+    with self._create_engine(max_num_tokens=200) as engine:
+      with engine.create_conversation(
+          tools=[get_weather],
+          chat_template=full_history_tmpl,
+          automatic_tool_calling=False,
+          max_output_tokens=1,
+      ) as conversation:
+        rendered = conversation.render_message_to_string("Hello world!")
+        self.assertIn("get_weather", rendered)
+        self.assertIn("Hello world!", rendered)
+        message = conversation.send_message("Hello world!")
+        self.assertEqual(message["role"], "assistant")
+
+      with engine.create_conversation(
+          tools=[get_weather],
+          chat_template=multi_prefill_tmpl,
+          automatic_tool_calling=False,
+          max_output_tokens=1,
+      ) as conversation:
+        # With a single-turn/multi-prefill template (`is_appending_to_prefill`),
+        # `RenderSingleTurnTemplate` first renders the preface alone with
+        # `messages=[]` and `tools=[get_weather]` before rendering the user
+        # turn.
+        rendered = conversation.render_message_to_string("Hello world!")
+        self.assertIn("get_weather", rendered)
+        self.assertIn("Hello world!", rendered)
+        message = conversation.send_message("Hello world!")
+        self.assertEqual(message["role"], "assistant")
+
   def test_create_conversation_with_filter_channel_content_from_kv_cache(self):
     with (
         self._create_engine() as engine,

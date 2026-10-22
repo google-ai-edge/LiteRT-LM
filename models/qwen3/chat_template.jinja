@@ -12,17 +12,18 @@
     {%- endfor -%}
 {%- endmacro -%}
 
-{%- set loop_messages = messages[1:] if messages[0]['role'] == 'system' else messages -%}
+{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}
+{%- set loop_messages = messages[1:] if is_first_system else messages -%}
 {#- Handle System/Tool Definitions Block -#}
-{%- if tools or messages[0]['role'] == 'system' -%}
+{%- if tools or is_first_system -%}
     {{- '<|im_start|>system\n' -}}
 
-    {%- if messages[0]['role'] == 'system' -%}
+    {%- if is_first_system -%}
         {{- format_content(messages[0]['content']) -}}
     {%- endif -%}
 
     {%- if tools -%}
-        {%- if messages[0]['role'] == 'system' -%}
+        {%- if is_first_system -%}
             {{- '\n\n' -}}
         {%- endif -%}
         {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" -}}

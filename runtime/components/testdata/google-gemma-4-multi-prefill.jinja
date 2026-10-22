@@ -155,7 +155,7 @@
 {%- if not is_appending_to_prefill -%}
     {{ bos_token }}
     {#- Handle System/Tool Definitions Block -#}
-    {%- if (enable_thinking is defined and enable_thinking) or tools or messages[0]['role'] in ['system', 'developer'] -%}
+    {%- if (enable_thinking is defined and enable_thinking) or tools or (messages and messages[0]['role'] in ['system', 'developer']) -%}
         {{- '<|turn>system\n' -}}
 
         {#- Inject Thinking token at the very top of the FIRST system turn -#}
@@ -163,7 +163,7 @@
             {{- '<|think|>' -}}
         {%- endif -%}
 
-        {%- if messages[0]['role'] in ['system', 'developer'] -%}
+        {%- if messages and messages[0]['role'] in ['system', 'developer'] -%}
             {%- if messages[0]['content'] is string -%}
                 {{- messages[0]['content'] | trim -}}
             {%- elif messages[0]['content'] is sequence -%}

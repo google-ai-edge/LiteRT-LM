@@ -135,9 +135,9 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- set ns = namespace(prev_message_type=None) -%}
 {#- Tool Declarations -#}
 {%- set loop_messages = messages -%}
-{%- if tools or messages[0]['role'] == 'system' -%}
+{%- if tools or (messages and messages[0]['role'] == 'system') -%}
     {{- '<start_of_turn>developer\n' -}}
-    {%- if messages[0]['role'] == 'system' -%}
+    {%- if messages and messages[0]['role'] == 'system' -%}
         {%- for item in messages[0]['content'] -%}
             {%- if item['type'] == 'text' -%}
                 {{- item['text'] | trim -}}
@@ -227,7 +227,7 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- endif -%})tmpl";
     case proto::LlmModelType::kGemma3:
       return R"tmpl({{ bos_token }}
-{%- if messages[0]['role'] == 'system' -%}
+{%- if messages and messages[0]['role'] == 'system' -%}
     {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
     {%- set loop_messages = messages[1:] -%}
 {%- else -%}
@@ -268,7 +268,7 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     {%- endfor %}
     {{- '<end_of_turn>\n'}}
 {%- endif %}
-{%- if messages[0]['role'] == 'system' -%}
+{%- if messages and messages[0]['role'] == 'system' -%}
     {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
     {%- set loop_messages = messages[1:] -%}
 {%- else -%}

@@ -5498,6 +5498,137 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
                                       {.has_pending_message = false}));
 }
 
+TEST(AppendMessageTest, Gemma4ToolsPrefaceWithoutSystemMessage) {
+  std::string template_text = ReadFile(GetTestdataPath(kGemma4TemplatePath));
+  ASSERT_OK_AND_ASSIGN(
+      auto tokenizer,
+      SentencePieceTokenizer::CreateFromFile(
+          (std::filesystem::path(::testing::SrcDir()) / kTestTokenizerPath)
+              .string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetStartTokenId(0);
+  session_config.GetMutableStopTokenIds().push_back({1});
+  *session_config.GetMutableLlmModelType().mutable_gemma4() = {};
+  session_config.SetApplyPromptTemplateInSession(false);
+
+  const JsonPreface tools_only_preface{.tools = nlohmann::ordered_json::parse(
+                                           R"json([{
+                    "type": "function",
+                    "function": {
+                      "name": "tool_name",
+                      "description": "",
+                      "parameters": {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": ["x"]
+                      }
+                    }
+                  }])json")};
+
+  absl::string_view expected_tools_preface =
+      "<|turn>system\n\n\n"
+      "<|tool>declaration:tool_name{"
+      "description:<|\"|><|\"|>,"
+      "parameters:{"
+      "properties:{"
+      "x:{"
+      "type:<|\"|>INTEGER<|\"|>"
+      "}"   // x
+      "},"  // properties
+      "required:[<|\"|>x<|\"|>],"
+      "type:<|\"|>OBJECT<|\"|>}"
+      "}<tool|><turn|>\n";
+
+  // 1. With prefill_preface_on_init = true: renders the tool-only preface on
+  //    Conversation::Create when Preface.messages is empty.
+  {
+    auto mock_session = std::make_unique<MockSession>();
+    MockSession* mock_session_ptr = mock_session.get();
+    EXPECT_CALL(*mock_session_ptr, GetSessionConfig())
+        .WillRepeatedly(testing::ReturnRef(session_config));
+    EXPECT_CALL(*mock_session_ptr,
+                RunPrefill(testing::ElementsAre(testing::VariantWith<InputText>(
+                    testing::Property(&InputText::GetRawTextString,
+                                      expected_tools_preface)))))
+        .Times(1)
+        .WillOnce(testing::Return(absl::OkStatus()));
+
+    auto mock_engine = std::make_unique<MockEngine>();
+    EXPECT_CALL(*mock_engine, CreateSession(testing::_))
+        .WillOnce(testing::Return(std::move(mock_session)));
+    EXPECT_CALL(*mock_engine, GetTokenizer())
+        .WillRepeatedly(testing::ReturnRef(*tokenizer));
+    EXPECT_CALL(*mock_engine, GetEngineSettings())
+        .WillRepeatedly(testing::ReturnRef(engine_settings));
+
+    ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::Builder()
+                                          .SetSessionConfig(session_config)
+                                          .SetOverwritePromptTemplate(
+                                              PromptTemplate(template_text))
+                                          .SetPreface(tools_only_preface)
+                                          .SetPrefillPrefaceOnInit(true)
+                                          .Build(*mock_engine));
+    ASSERT_OK_AND_ASSIGN(auto conversation,
+                         Conversation::Create(*mock_engine, config));
+  }
+
+  // 2. With prefill_preface_on_init = false: renders the tool-only preface on
+  //    the first SendMessage via RenderSingleTurnTemplate when Preface.messages
+  //    is empty.
+  {
+    auto mock_session = std::make_unique<MockSession>();
+    MockSession* mock_session_ptr = mock_session.get();
+    EXPECT_CALL(*mock_session_ptr, GetSessionConfig())
+        .WillRepeatedly(testing::ReturnRef(session_config));
+
+    std::string expected_first_turn =
+        absl::StrCat(expected_tools_preface, "<|turn>user\nHello world!");
+    EXPECT_CALL(
+        *mock_session_ptr,
+        RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
+                            testing::Property(&InputText::GetRawTextString,
+                                              expected_first_turn))),
+                        testing::_))
+        .Times(1)
+        .WillOnce(
+            [](const std::vector<InputData>& contents,
+               absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+              callback(Responses(TaskState::kDone));
+              return nullptr;
+            });
+
+    auto mock_engine = std::make_unique<MockEngine>();
+    EXPECT_CALL(*mock_engine, CreateSession(testing::_))
+        .WillOnce(testing::Return(std::move(mock_session)));
+    EXPECT_CALL(*mock_engine, GetTokenizer())
+        .WillRepeatedly(testing::ReturnRef(*tokenizer));
+    EXPECT_CALL(*mock_engine, GetEngineSettings())
+        .WillRepeatedly(testing::ReturnRef(engine_settings));
+
+    ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::Builder()
+                                          .SetSessionConfig(session_config)
+                                          .SetOverwritePromptTemplate(
+                                              PromptTemplate(template_text))
+                                          .SetPreface(tools_only_preface)
+                                          .SetPrefillPrefaceOnInit(false)
+                                          .Build(*mock_engine));
+    ASSERT_OK_AND_ASSIGN(auto conversation,
+                         Conversation::Create(*mock_engine, config));
+    ASSERT_OK(conversation->SendMessage(
+        Message{{"role", "user"}, {"content", "Hello world!"}},
+        {.has_pending_message = true}));
+  }
+}
+
 TEST_P(ConversationTest,
        SendMessageVisualTokenBudgetExceedingEngineSettingFails) {
   ASSERT_OK(engine_settings_);

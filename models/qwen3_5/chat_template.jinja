@@ -12,7 +12,7 @@
     {%- endfor -%}
 {%- endmacro -%}
 
-{%- set is_first_system = messages[0]['role'] == 'system' -%}
+{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}
 {%- set loop_messages = messages[1:] if is_first_system else messages -%}
 {#- Handle System/Tool Definitions Block -#}
 {%- if tools or is_first_system -%}

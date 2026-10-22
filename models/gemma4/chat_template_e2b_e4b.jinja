@@ -122,9 +122,10 @@
 
 {%- set thinking = enable_thinking | default(false) -%}
 {%- set ns = namespace(prev_message_type=None) -%}
-{%- set loop_messages = messages -%}
+{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}
+{%- set loop_messages = messages[1:] if is_first_system else messages -%}
 {#- Handle System/Tool Definitions Block -#}
-{%- if thinking or tools or messages[0]['role'] == 'system' -%}
+{%- if thinking or tools or is_first_system -%}
     {{- '<|turn>system' -}}
 
     {#- Inject Thinking token at the very top of the FIRST system turn -#}
@@ -132,9 +133,8 @@
         {{- '\n<|think|>' -}}
     {%- endif -%}
 
-    {%- if messages[0]['role'] == 'system' -%}
+    {%- if is_first_system -%}
         {{- '\n' + format_content(messages[0]['content']) -}}
-        {%- set loop_messages = messages[1:] -%}
     {%- endif -%}
 
     {%- if tools -%}

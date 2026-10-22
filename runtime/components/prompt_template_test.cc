@@ -18,8 +18,10 @@
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -269,6 +271,84 @@ TEST(PromptTemplateCustomTest, GenerationTagReplacementTest) {
   ASSERT_OK_AND_ASSIGN(const std::string rendered,
                        prompt_template.Apply(input));
   EXPECT_EQ(rendered, "hello world");
+}
+
+TEST(PromptTemplateCustomTest, EmptyMessagesAllTestdataTemplates) {
+  const std::filesystem::path testdata_dir = GetTestdataPath("");
+  ASSERT_TRUE(std::filesystem::exists(testdata_dir))
+      << "Testdata directory does not exist: " << testdata_dir;
+
+  std::vector<std::filesystem::path> jinja_files;
+  for (const auto& entry : std::filesystem::directory_iterator(testdata_dir)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".jinja") {
+      jinja_files.push_back(entry.path());
+    }
+  }
+  std::sort(jinja_files.begin(), jinja_files.end());
+  ASSERT_FALSE(jinja_files.empty())
+      << "No .jinja files found in: " << testdata_dir;
+
+  for (const auto& jinja_path : jinja_files) {
+    ASSERT_OK_AND_ASSIGN(const std::string template_content,
+                         GetContents(jinja_path.string()));
+    PromptTemplate prompt_template(template_content);
+
+    json synthetic_tools;
+    if (absl::StrContains(template_content, "tool | trim")) {
+      synthetic_tools = json::array({"declaration of dummy_tool"});
+    } else {
+      synthetic_tools = json::array({
+          {
+              {"type", "function"},
+              {"function",
+               {
+                   {"name", "dummy_function"},
+                   {"description", "A dummy function description"},
+                   {"parameters",
+                    {
+                        {"type", "object"},
+                        {"properties",
+                         {
+                             {"param1",
+                              {
+                                  {"type", "string"},
+                                  {"description", "dummy string parameter"},
+                              }},
+                         }},
+                        {"required", json::array({"param1"})},
+                    }},
+               }},
+          },
+      });
+    }
+
+    const std::vector<std::optional<json>> tool_variants = {
+        std::nullopt,
+        json::array({}),
+        synthetic_tools,
+    };
+
+    for (const auto& tools : tool_variants) {
+      for (bool enable_thinking : {false, true}) {
+        for (bool add_generation_prompt : {false, true}) {
+          PromptTemplateInput input;
+          input.messages = json::array({});
+          if (tools.has_value()) {
+            input.tools = *tools;
+          }
+          input.add_generation_prompt = add_generation_prompt;
+          input.extra_context["enable_thinking"] = enable_thinking;
+
+          EXPECT_OK(prompt_template.Apply(input))
+              << "Failed rendering empty messages for template: "
+              << jinja_path.filename().string() << " with tools="
+              << (tools.has_value() ? tools->dump() : "nullopt")
+              << ", enable_thinking=" << enable_thinking
+              << ", add_generation_prompt=" << add_generation_prompt;
+        }
+      }
+    }
+  }
 }
 
 }  // namespace

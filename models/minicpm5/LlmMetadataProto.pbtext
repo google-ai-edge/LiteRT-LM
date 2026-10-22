@@ -45,7 +45,7 @@ jinja_prompt_template:
   "    {%- endfor -%}\n"
   "{%- endmacro -%}\n"
   "\n"
-  "{%- set is_first_system = messages[0]['role'] == 'system' -%}\n"
+  "{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}\n"
   "{%- set loop_messages = messages[1:] if is_first_system else messages -%}\n"
   "{#- Handle System/Tool Definitions Block -#}\n"
   "{%- if tools or is_first_system -%}\n"

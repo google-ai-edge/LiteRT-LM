@@ -2,9 +2,9 @@
 {%- set ns = namespace(prev_message_type=None) -%}
 {#- Tool Declarations -#}
 {%- set loop_messages = messages -%}
-{%- if tools or messages[0]['role'] == 'system' -%}
+{%- if tools or (messages and messages[0]['role'] == 'system') -%}
     {{- '<start_of_turn>developer\n' -}}
-    {%- if messages[0]['role'] == 'system' -%}
+    {%- if messages and messages[0]['role'] == 'system' -%}
         {%- if messages[0]['content'] is string -%}
             {{- messages[0]['content'] | trim -}}
         {%- else -%}

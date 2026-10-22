@@ -26,6 +26,8 @@ def _to_runfiles_path(path):
 
 def _resolve_data_srcs(path, glob_ext):
     """Resolves data targets or globs for data dependencies."""
+    if not path:
+        return []
     if path.startswith("//") or path.startswith(":"):
         return [path]
     else:
@@ -60,9 +62,11 @@ def chat_template_test(
 
     runner_args = [
         "--chat_template=" + _to_runfiles_path(chat_template),
-        "--input_dir=" + _to_runfiles_path(input_dir),
-        "--golden_dir=" + _to_runfiles_path(golden_dir),
     ]
+    if input_dir:
+        runner_args.append("--input_dir=" + _to_runfiles_path(input_dir))
+    if golden_dir:
+        runner_args.append("--golden_dir=" + _to_runfiles_path(golden_dir))
 
     if pbtext_files:
         pbtext_runfiles = [_to_runfiles_path(f) for f in pbtext_files]

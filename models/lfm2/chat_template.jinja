@@ -49,7 +49,7 @@
 {%- endmacro -%}
 
 {{- bos_token -}}
-{%- set is_first_system = messages[0]['role'] == 'system' -%}
+{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}
 {%- set loop_messages = messages[1:] if is_first_system else messages -%}
 {%- set system_content = format_content(messages[0]['content']) if is_first_system and messages[0]['content'] else '' -%}
 {%- if tools -%}

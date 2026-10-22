@@ -14,6 +14,7 @@
 
 #include "runtime/util/model_type_utils.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -192,6 +193,164 @@ TEST(ModelTypeUtilsTest, GetDefaultJinjaPromptTemplateWithImageAndAudio) {
             "is a user audio <start_of_audio><end_of_turn>\n"
             "<start_of_turn>model\nThis is a model message<end_of_turn>\n"
             "<start_of_turn>model\n");
+}
+
+TEST(ModelTypeUtilsTest, GetDefaultJinjaPromptTemplateEmptyMessages) {
+  proto::PromptTemplates prompt_templates;
+  prompt_templates.mutable_user()->set_prefix("<start_of_turn>user\n");
+  prompt_templates.mutable_model()->set_prefix("<start_of_turn>model\n");
+  prompt_templates.mutable_system()->set_prefix("<start_of_turn>system\n");
+  prompt_templates.mutable_user()->set_suffix("<end_of_turn>\n");
+  prompt_templates.mutable_model()->set_suffix("<end_of_turn>\n");
+  prompt_templates.mutable_system()->set_suffix("<end_of_turn>\n");
+
+  std::vector<proto::LlmModelType> model_types;
+  {
+    proto::LlmModelType mt;
+    mt.mutable_function_gemma();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_gemma3();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_gemma3n();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_qwen3();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_qwen2p5();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_generic_model();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_gemma4();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_fast_vlm();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_lfm2();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_minicpm5();
+    model_types.push_back(mt);
+  }
+  {
+    proto::LlmModelType mt;
+    mt.mutable_minicpmv4();
+    model_types.push_back(mt);
+  }
+
+  const std::vector<std::optional<nlohmann::ordered_json>> tool_variants = {
+      std::nullopt,
+      nlohmann::ordered_json::array({"tool_decl_1"}),
+  };
+
+  for (const auto& model_type : model_types) {
+    auto tmpl_status =
+        GetDefaultJinjaPromptTemplate(prompt_templates, model_type);
+    if (!tmpl_status.ok()) {
+      continue;
+    }
+    PromptTemplate prompt_template(*tmpl_status);
+
+    for (const auto& tools : tool_variants) {
+      for (bool add_generation_prompt : {false, true}) {
+        PromptTemplateInput input;
+        input.messages = nlohmann::ordered_json::array();
+        if (tools.has_value()) {
+          input.tools = *tools;
+        }
+        input.add_generation_prompt = add_generation_prompt;
+
+        EXPECT_OK(prompt_template.Apply(input))
+            << "Failed rendering empty messages for model_type="
+            << GetModelTypeName(model_type)
+            << ", tools=" << (tools.has_value() ? tools->dump() : "nullopt")
+            << ", add_generation_prompt=" << add_generation_prompt;
+      }
+    }
+  }
+
+  // Specifically verify expected rendered output for FunctionGemma and Gemma3N.
+  {
+    proto::LlmModelType fg_type;
+    fg_type.mutable_function_gemma();
+    ASSERT_OK_AND_ASSIGN(
+        const std::string fg_tmpl_str,
+        GetDefaultJinjaPromptTemplate(prompt_templates, fg_type));
+    PromptTemplate fg_tmpl(fg_tmpl_str);
+
+    PromptTemplateInput fg_input_no_gen;
+    fg_input_no_gen.messages = nlohmann::ordered_json::array();
+    fg_input_no_gen.tools = nlohmann::ordered_json::array({"tool_decl_1"});
+    fg_input_no_gen.add_generation_prompt = false;
+    ASSERT_OK_AND_ASSIGN(const std::string fg_rendered_no_gen,
+                         fg_tmpl.Apply(fg_input_no_gen));
+    EXPECT_EQ(
+        fg_rendered_no_gen,
+        "<start_of_turn>developer\n"
+        "<start_function_declaration>tool_decl_1<end_function_declaration>"
+        "<end_of_turn>\n");
+
+    PromptTemplateInput fg_input_gen = fg_input_no_gen;
+    fg_input_gen.add_generation_prompt = true;
+    ASSERT_OK_AND_ASSIGN(const std::string fg_rendered_gen,
+                         fg_tmpl.Apply(fg_input_gen));
+    EXPECT_EQ(
+        fg_rendered_gen,
+        "<start_of_turn>developer\n"
+        "<start_function_declaration>tool_decl_1<end_function_declaration>"
+        "<end_of_turn>\n"
+        "<start_of_turn>model\n");
+  }
+
+  {
+    proto::LlmModelType g3n_type;
+    g3n_type.mutable_gemma3n();
+    ASSERT_OK_AND_ASSIGN(
+        const std::string g3n_tmpl_str,
+        GetDefaultJinjaPromptTemplate(prompt_templates, g3n_type));
+    PromptTemplate g3n_tmpl(g3n_tmpl_str);
+
+    PromptTemplateInput g3n_input_no_gen;
+    g3n_input_no_gen.messages = nlohmann::ordered_json::array();
+    g3n_input_no_gen.tools = nlohmann::ordered_json::array({"tool_decl_1"});
+    g3n_input_no_gen.add_generation_prompt = false;
+    ASSERT_OK_AND_ASSIGN(const std::string g3n_rendered_no_gen,
+                         g3n_tmpl.Apply(g3n_input_no_gen));
+    EXPECT_EQ(g3n_rendered_no_gen,
+              "<start_of_turn>system\ntool_decl_1\n\n<end_of_turn>\n");
+
+    PromptTemplateInput g3n_input_gen = g3n_input_no_gen;
+    g3n_input_gen.add_generation_prompt = true;
+    ASSERT_OK_AND_ASSIGN(const std::string g3n_rendered_gen,
+                         g3n_tmpl.Apply(g3n_input_gen));
+    EXPECT_EQ(
+        g3n_rendered_gen,
+        "<start_of_turn>system\ntool_decl_1\n\n<end_of_turn>\n<start_of_turn>"
+        "model\n");
+  }
 }
 
 TEST(ModelTypeUtilsTest, GetModelTypeName) {
