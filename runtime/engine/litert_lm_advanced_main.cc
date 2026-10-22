@@ -346,6 +346,10 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.use_hw_ple_for_npu = absl::GetFlag(FLAGS_use_hw_ple_for_npu);
   settings.enable_npu_debug_logging =
       absl::GetFlag(FLAGS_enable_npu_debug_logging);
+  settings.npu_dynamic_kv_cache_initial_size =
+      absl::GetFlag(FLAGS_npu_dynamic_kv_cache_initial_size);
+  settings.npu_dynamic_kv_cache_growth_step =
+      absl::GetFlag(FLAGS_npu_dynamic_kv_cache_growth_step);
   settings.disable_input_prompt_as_hint =
       absl::GetFlag(FLAGS_disable_input_prompt_as_hint);
 
