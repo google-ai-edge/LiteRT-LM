@@ -186,7 +186,7 @@ jobject CreateBenchmarkInfoJni(
   ScopedLocalRef<jclass> benchmark_info_cls(
       env, env->FindClass("com/google/ai/edge/litertlm/BenchmarkInfo"));
   jmethodID benchmark_info_ctor = env->GetMethodID(
-      benchmark_info_cls.get(), "<init>", "(DDIIDDLjava/util/Map;)V");
+      benchmark_info_cls.get(), "<init>", "(DDIIDDLjava/util/Map;I)V");
 
   double total_init_time_ms = 0.0;
   for (const auto& phase : benchmark_info.GetInitPhases()) {
@@ -200,7 +200,8 @@ jobject CreateBenchmarkInfoJni(
       total_init_time_ms / 1000.0, benchmark_info.GetTimeToFirstToken(),
       last_prefill_token_count, last_decode_token_count,
       last_prefill_tokens_per_second, last_decode_tokens_per_second,
-      mark_durations_map.get());
+      mark_durations_map.get(),
+      static_cast<jint>(benchmark_info.GetMaxNumTokens()));
 }
 
 // Converts a Java InputData array to a C++ vector of InputData.
@@ -733,7 +734,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     jstring vision_backend, jstring audio_backend, jint prefill_tokens,
     jint decode_tokens, jstring cache_dir, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
-    jobject enable_speculative_decoding, jobject enable_ynnpack) {
+    jobject enable_speculative_decoding, jobject enable_ynnpack,
+    jint max_num_tokens) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -878,6 +880,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   auto& benchmark_params = settings->GetMutableBenchmarkParams();
   benchmark_params.set_num_prefill_tokens(prefill_tokens);
   benchmark_params.set_num_decode_tokens(decode_tokens);
+
+  if (max_num_tokens > 0) {
+    settings->GetMutableMainExecutorSettings().SetMaxNumTokens(max_num_tokens);
+  }
 
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
