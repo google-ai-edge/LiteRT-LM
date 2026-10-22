@@ -34,6 +34,10 @@ internal object NativeLibraryLoader {
       return
     }
 
+    // Pre-load LiteRt.so if available. This is needed if we are using dynamic linking
+    // mode where liblitertlm_jni.so dlopens libLiteRt.so.
+    tryLoadLibrary("LiteRt")
+
     // 1. Try loading from library path. (e.g., for Android)
     if (tryLoadLibrary(JNI_LIBNAME)) {
       log("Loaded $JNI_LIBNAME from library path.")
