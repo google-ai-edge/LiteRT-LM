@@ -2305,6 +2305,10 @@ TEST(EngineCTest, Benchmark) {
                       benchmark_info.get(), i),
         0.0);
   }
+  // The engine uses the requested max number of tokens.
+  EXPECT_EQ(GetOk<int>(litert_lm_benchmark_info_get_max_num_tokens,
+                       benchmark_info.get()),
+            16);
 
   // Turn indices past the end are rejected, and scalar out-parameters are left
   // untouched.
@@ -3380,6 +3384,11 @@ TEST(EngineCErrorTest, AccessorsWithNullOutParamReturnInvalidArgument) {
              return litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
                  benchmark_info, 0, nullptr);
            }},
+          {"benchmark_info_get_max_num_tokens",
+           [&] {
+             return litert_lm_benchmark_info_get_max_num_tokens(benchmark_info,
+                                                                nullptr);
+           }},
           {"stream_chunk_get_text",
            [&] { return litert_lm_stream_chunk_get_text(&chunk, nullptr); }},
           {"stream_chunk_is_final",
@@ -3530,6 +3539,11 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
            [&] {
              return litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
                  nullptr, 0, &out_double);
+           }},
+          {"benchmark_info_get_max_num_tokens",
+           [&] {
+             return litert_lm_benchmark_info_get_max_num_tokens(nullptr,
+                                                                &out_int);
            }},
           {"stream_chunk_get_text",
            [&] { return litert_lm_stream_chunk_get_text(nullptr, &out_text); }},
