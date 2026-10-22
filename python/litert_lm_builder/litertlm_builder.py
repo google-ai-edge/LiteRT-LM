@@ -288,13 +288,48 @@ class _SectionObject:
   source_path: str | None = None
 
 
-def _get_model_type(section: _SectionObject) -> str | None:
+@dataclasses.dataclass(frozen=True)
+class _PendingModelType:
+  """A proto `TfLiteModelType` enum value whose capability is not known yet.
+
+  Proto `TfLiteModelType` enums are scoped to a capability metadata proto (e.g.
+  `LlmMetadata.TF_LITE_PREFILL_DECODE` vs.
+  `EmbeddingMetadata.TF_LITE_TEXT_ENCODER`), so an integer model type can only
+  be resolved to its wire string once the capability metadata is known. A
+  section added before any capability metadata stores this placeholder as its
+  `model_type` metadata value until `LitertLmFileBuilder.build` resolves it.
+
+  Attributes:
+    value: The capability-scoped proto `TfLiteModelType` enum value.
+  """
+
+  value: int
+
+
+def _get_raw_model_type(
+    section: _SectionObject,
+) -> str | _PendingModelType | None:
+  """Returns the section's model_type, which may still be pending."""
   values = [item.value for item in section.metadata if item.key == "model_type"]
   if not values:
     return None
-  if len(values) != 1 or not isinstance(values[0], str) or not values[0]:
+  if (
+      len(values) != 1
+      or not isinstance(values[0], (str, _PendingModelType))
+      or not values[0]
+  ):
     raise ValueError("Section must have exactly one string model_type")
   return values[0]
+
+
+def _get_model_type(section: _SectionObject) -> str | None:
+  """Returns the section's resolved model_type wire string, if any."""
+  model_type = _get_raw_model_type(section)
+  if isinstance(model_type, _PendingModelType):
+    raise ValueError(
+        f"Section has an unresolved integer model_type {model_type.value}."
+    )
+  return model_type
 
 
 _ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
@@ -305,6 +340,22 @@ _ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
     | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.keys())
     | set(any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.keys())
 ) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
+
+# Every valid (non-UNSPECIFIED) proto `TfLiteModelType` enum value across the
+# capability metadata protos.
+_ALL_CAPABILITY_TFLITE_MODEL_TYPE_VALUES: set[int] = (
+    set(llm_metadata_pb2.LlmMetadata.TfLiteModelType.values())
+    | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.values())
+    | set(speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.values())
+    | set(text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.values())
+    | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.values())
+    | set(any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.values())
+) - {0}
+
+
+def _is_proto_enum_model_type(model_type: Any) -> bool:
+  """Returns whether `model_type` is a proto `TfLiteModelType` enum value."""
+  return isinstance(model_type, int) and not isinstance(model_type, bool)
 
 
 def get_all_tflite_model_types() -> list[str]:
@@ -363,7 +414,11 @@ def _resolve_model_type_wire_string(
       return embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.Name(
           model_type
       ).lower()
-    return llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(model_type).lower()
+    if capability_type == "llm":
+      return llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
+          model_type
+      ).lower()
+    raise ValueError(f"Unknown capability_type: {capability_type!r}")
   if isinstance(model_type, str):
     try:
       return TfLiteModelType.get_enum_from_tf_free_value(model_type).value
@@ -377,6 +432,45 @@ def _resolve_model_type_wire_string(
         return wire_str
       raise ValueError(f"Unknown TfLiteModelType: {model_type}") from None
   raise ValueError(f"Unsupported model_type type: {type(model_type)}")
+
+
+_TOKENIZER_SECTION_TYPES = frozenset({
+    schema.AnySectionDataType.SP_Tokenizer,
+    schema.AnySectionDataType.HF_Tokenizer_Zlib,
+})
+
+
+def _check_and_record_tokenizer(
+    model_type_key: str | _PendingModelType | None,
+    tokenizers_by_model_type: set[str | _PendingModelType | None],
+) -> None:
+  """Checks that a tokenizer is unique for its model type and records it.
+
+  A tokenizer without a model type is the default tokenizer and conflicts with
+  a `tf_lite_prefill_decode` tokenizer. A pending model type only conflicts with
+  the same pending value here; it is re-validated once resolved at build time.
+
+  Args:
+    model_type_key: The tokenizer's model type wire string, pending model type,
+      or None for the default tokenizer.
+    tokenizers_by_model_type: The model types of the tokenizers added so far.
+      `model_type_key` is added to it.
+
+  Raises:
+    ValueError: If a tokenizer was already added for the model type.
+  """
+  prefill_decode = TfLiteModelType.PREFILL_DECODE.value
+  if model_type_key is None or model_type_key == prefill_decode:
+    if (
+        None in tokenizers_by_model_type
+        or prefill_decode in tokenizers_by_model_type
+    ):
+      raise ValueError("Tokenizer already added.")
+  elif model_type_key in tokenizers_by_model_type:
+    raise ValueError(
+        f"Tokenizer already added for model_type: {model_type_key}."
+    )
+  tokenizers_by_model_type.add(model_type_key)
 
 
 def _get_active_model_type_message(
@@ -479,9 +573,10 @@ class LitertLmFileBuilder:
     self._has_text2image_metadata = False
     self._has_any2any_metadata = False
     self._capability_types: set[str] = set()
-    self._tokenizers_by_model_type: set[str | None] = set()
+    self._tokenizers_by_model_type: set[str | _PendingModelType | None] = set()
 
   def _check_no_capability_metadata_added(self, new_capability: str) -> None:
+    """Validates capability compatibility and resolves pending model types."""
     new_set = self._capability_types | {new_capability}
     if len(new_set) > 1 and not (new_set <= {"llm", "embedding"}):
       existing = ", ".join(sorted(self._capability_types))
@@ -491,6 +586,110 @@ class LitertLmFileBuilder:
           f" '{new_capability}'."
       )
     self._capability_types.add(new_capability)
+    if len(self._capability_types) == 1:
+      try:
+        self._resolve_pending_model_types()
+      except ValueError:
+        self._capability_types.discard(new_capability)
+        raise
+
+  def _model_type_key(
+      self, model_type: TfLiteModelType | int | str
+  ) -> str | _PendingModelType:
+    """Resolves a model_type argument to its wire string, or defers it.
+
+    Strings and `TfLiteModelType` values are always resolved immediately. A
+    proto `TfLiteModelType` enum value is resolved immediately when capability
+    metadata has already been added; otherwise its resolution is deferred to
+    `build`, so model sections can be added before the capability metadata.
+
+    Args:
+      model_type: The model type argument passed to a builder method.
+
+    Returns:
+      The lowercase wire string (e.g. "tf_lite_prefill_decode"), or a
+      `_PendingModelType` if the integer cannot be resolved yet.
+
+    Raises:
+      ValueError: If the model type is invalid.
+    """
+    if _is_proto_enum_model_type(model_type) and not self._capability_types:
+      model_type = cast(int, model_type)
+      if model_type == 0:
+        raise ValueError(
+            "TF_LITE_MODEL_TYPE_UNSPECIFIED (0) is not a valid model_type."
+        )
+      if model_type not in _ALL_CAPABILITY_TFLITE_MODEL_TYPE_VALUES:
+        raise ValueError(f"Unknown TfLiteModelType enum value: {model_type}")
+      return _PendingModelType(model_type)
+    return _resolve_model_type_wire_string(model_type, self._capability_types)
+
+  def _try_resolve_model_type(
+      self, model_type: str | _PendingModelType | None
+  ) -> str | _PendingModelType | None:
+    """Resolves a pending model type if exactly one capability is known."""
+    if (
+        isinstance(model_type, _PendingModelType)
+        and len(self._capability_types) == 1
+    ):
+      try:
+        return _resolve_model_type_wire_string(
+            model_type.value, self._capability_types
+        )
+      except ValueError:
+        return model_type
+    return model_type
+
+  def _section_model_type(
+      self, section: _SectionObject
+  ) -> str | _PendingModelType | None:
+    """Returns the section's model type, resolving it on demand if possible."""
+    return self._try_resolve_model_type(_get_raw_model_type(section))
+
+  def _resolve_pending_model_types(self) -> None:
+    """Resolves every pending integer model_type to its wire string.
+
+    Called by `build` once all capability metadata has been added. Tokenizer
+    uniqueness is re-validated when any tokenizer had a pending model type.
+
+    Raises:
+      ValueError: If an integer model_type still cannot be resolved, e.g. no or
+        multiple capability metadata sections were added, or if resolving
+        reveals a duplicate tokenizer.
+    """
+    has_pending_tokenizer = False
+    for section in self._sections:
+      for i, item in enumerate(section.metadata):
+        if item.key != "model_type" or not isinstance(
+            item.value, _PendingModelType
+        ):
+          continue
+        try:
+          wire_str = _resolve_model_type_wire_string(
+              item.value.value, self._capability_types
+          )
+        except ValueError as e:
+          raise ValueError(
+              f"Cannot resolve integer model_type {item.value.value} at build"
+              f" time: {e}"
+          ) from e
+        section.metadata[i] = dataclasses.replace(item, value=wire_str)
+        if section.data_type in _TOKENIZER_SECTION_TYPES:
+          has_pending_tokenizer = True
+
+    if has_pending_tokenizer:
+      tokenizers_by_model_type: set[str | _PendingModelType | None] = set()
+      for section in self._sections:
+        if section.data_type not in _TOKENIZER_SECTION_TYPES:
+          continue
+        model_type = _get_model_type(section)
+        _check_and_record_tokenizer(
+            _resolve_model_type_wire_string(model_type, self._capability_types)
+            if model_type is not None
+            else None,
+            tokenizers_by_model_type,
+        )
+      self._tokenizers_by_model_type = tokenizers_by_model_type
 
   @property
   def _has_tokenizer(self) -> bool:
@@ -502,7 +701,7 @@ class LitertLmFileBuilder:
     if self._has_llm_metadata:
       return True
     return any(
-        _get_model_type(s)
+        self._section_model_type(s)
         in (
             TfLiteModelType.PREFILL_DECODE.value,
             TfLiteModelType.ARTISAN_TEXT_DECODER.value,
@@ -520,7 +719,7 @@ class LitertLmFileBuilder:
   def is_vision_model(self) -> bool:
     """Returns True if the builder contains a vision adapter/encoder model."""
     return any(
-        _get_model_type(s)
+        self._section_model_type(s)
         in (
             TfLiteModelType.VISION_ADAPTER.value,
             TfLiteModelType.VISION_ENCODER.value,
@@ -1134,7 +1333,10 @@ class LitertLmFileBuilder:
 
     Args:
       tflite_model_path: The path to the tflite model file.
-      model_type: The type of the tflite model.
+      model_type: The type of the tflite model. A capability-scoped proto enum
+        value (e.g. `llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE`) is
+        resolved against the capability metadata; if none has been added yet, it
+        is resolved when `build` is called.
       backend_constraint: The backend constraint for the tflite model.
       prefer_activation_type: The preferred activation type for the tflite
         model. - fp16/float16 for float16 activation. - fp32/float32 for float32
@@ -1153,10 +1355,10 @@ class LitertLmFileBuilder:
       raise FileNotFoundError(
           f"Tflite model file not found: {tflite_model_path}"
       )
-    wire_str = _resolve_model_type_wire_string(
-        model_type, self._capability_types
-    )
-    metadata = [Metadata(key="model_type", value=wire_str, dtype=DType.STRING)]
+    model_type_key = self._model_type_key(model_type)
+    metadata = [
+        Metadata(key="model_type", value=model_type_key, dtype=DType.STRING)
+    ]
     if backend_constraint:
       _validate_backend_constraints(backend_constraint)
       metadata.append(
@@ -1220,10 +1422,10 @@ class LitertLmFileBuilder:
       raise FileNotFoundError(
           f"Tflite weights file not found: {tflite_weights_path}"
       )
-    wire_str = _resolve_model_type_wire_string(
-        model_type, self._capability_types
-    )
-    metadata = [Metadata(key="model_type", value=wire_str, dtype=DType.STRING)]
+    model_type_key = self._model_type_key(model_type)
+    metadata = [
+        Metadata(key="model_type", value=model_type_key, dtype=DType.STRING)
+    ]
     if additional_metadata is not None:
       for metadata_item in additional_metadata:
         if metadata_item.key == "model_type":
@@ -1250,9 +1452,7 @@ class LitertLmFileBuilder:
   ) -> list[Metadata]:
     """Validates tokenizer uniqueness and prepares its metadata."""
     model_type_key = (
-        _resolve_model_type_wire_string(model_type, self._capability_types)
-        if model_type is not None
-        else None
+        self._model_type_key(model_type) if model_type is not None else None
     )
 
     metadata: list[Metadata] = []
@@ -1266,29 +1466,15 @@ class LitertLmFileBuilder:
         if metadata_item.key == "model_type":
           if model_type_key is not None:
             raise ValueError("Model type metadata cannot be overridden.")
-          model_type_key = _resolve_model_type_wire_string(
-              metadata_item.value, self._capability_types
-          )
-      metadata.extend(additional_metadata)
+          model_type_key = self._model_type_key(metadata_item.value)
+          if _is_proto_enum_model_type(metadata_item.value):
+            # Integers are stored as their (possibly pending) wire string.
+            metadata_item = dataclasses.replace(
+                metadata_item, value=model_type_key
+            )
+        metadata.append(metadata_item)
 
-    # Check for conflicts
-    if (
-        model_type_key is None
-        or model_type_key == TfLiteModelType.PREFILL_DECODE.value
-    ):
-      if (
-          None in self._tokenizers_by_model_type
-          or TfLiteModelType.PREFILL_DECODE.value
-          in self._tokenizers_by_model_type
-      ):
-        raise ValueError("Tokenizer already added.")
-    else:
-      if model_type_key in self._tokenizers_by_model_type:
-        raise ValueError(
-            f"Tokenizer already added for model_type: {model_type_key}."
-        )
-
-    self._tokenizers_by_model_type.add(model_type_key)
+    _check_and_record_tokenizer(model_type_key, self._tokenizers_by_model_type)
     return metadata
 
   def add_sentencepiece_tokenizer(
@@ -1405,7 +1591,7 @@ class LitertLmFileBuilder:
 
   def set_backend_constraint(
       self,
-      model_type: TfLiteModelType | str,
+      model_type: TfLiteModelType | int | str,
       backend_constraint: str | None,
   ) -> LitertLmFileBuilderT:
     """Sets or clears the backend_constraint metadata on matching sections.
@@ -1414,8 +1600,8 @@ class LitertLmFileBuilder:
     where a section previously constrained to CPU can now run elsewhere.
 
     Args:
-      model_type: Target section model type (enum or TF-free string such as
-        'audio_encoder_hw').
+      model_type: Target section model type (enum, TF-free string such as
+        'audio_encoder_hw', or a capability-scoped proto enum value).
       backend_constraint: New constraint string (e.g. 'npu', 'cpu, gpu'), or
         None to remove the constraint entirely.
 
@@ -1424,19 +1610,30 @@ class LitertLmFileBuilder:
 
     Raises:
       KeyError: If no section with the given model_type exists.
-      ValueError: If backend_constraint is not a valid backend string.
+      ValueError: If backend_constraint is not a valid backend string, or if an
+        integer model_type cannot be matched against a string one because no
+        capability metadata has been added yet.
     """
-    target_enum = (
-        model_type
+    target_model_type = (
+        model_type.value
         if isinstance(model_type, TfLiteModelType)
-        else TfLiteModelType.get_enum_from_tf_free_value(model_type)
+        else self._model_type_key(model_type)
     )
     if backend_constraint is not None:
       _validate_backend_constraints(backend_constraint)
 
     matched = False
+    has_unresolved_pending = False
     for section in self._sections:
-      if _get_model_type(section) == target_enum.value:
+      section_model_type = self._section_model_type(section)
+      if section_model_type is None:
+        continue
+      if isinstance(section_model_type, _PendingModelType) != isinstance(
+          target_model_type, _PendingModelType
+      ):
+        has_unresolved_pending = True
+        continue
+      if section_model_type == target_model_type:
         matched = True
         section.metadata = [
             m for m in section.metadata if m.key != "backend_constraint"
@@ -1450,11 +1647,17 @@ class LitertLmFileBuilder:
               )
           )
     if not matched:
-      raise KeyError(f"No section found with model_type {target_enum.value}")
+      if has_unresolved_pending:
+        raise ValueError(
+            "Cannot match an integer model_type against a string model_type"
+            " before capability metadata is added; add the capability"
+            " metadata first."
+        )
+      raise KeyError(f"No section found with model_type {target_model_type}")
     return self  # pyrefly: ignore[bad-return]
 
   def remove_backend_constraint(
-      self, model_type: TfLiteModelType | str
+      self, model_type: TfLiteModelType | int | str
   ) -> LitertLmFileBuilderT:
     """Removes the backend_constraint metadata from matching sections."""
     return self.set_backend_constraint(model_type, None)
@@ -1465,7 +1668,27 @@ class LitertLmFileBuilder:
       *,
       validate_metadata: bool = False,
   ) -> ExternalizationSummary | None:
-    """Builds the litertlm into the given stream."""
+    """Builds the litertlm into the given stream.
+
+    Integer (proto enum) model types of sections added before any capability
+    metadata are resolved to their wire strings here.
+
+    Args:
+      stream: The binary output stream to write the LiteRT-LM file to.
+      validate_metadata: Whether to validate the metadata before building.
+      externalize_weights: Whether to externalize large tensor weights into a
+        separate weights section.
+      externalization_work_dir: Optional directory path for temporary weight
+        externalization files.
+      num_elements_threshold: Minimum number of tensor elements for a weight to
+        be externalized.
+      weight_group_name: Name of the externalized weights group section.
+
+    Returns:
+      An `ExternalizationSummary` when `externalize_weights` is True, or None
+      otherwise.
+    """
+    self._resolve_pending_model_types()
     if validate_metadata:
       self.validate_metadata()
     self._build_sections(stream, self._sections)

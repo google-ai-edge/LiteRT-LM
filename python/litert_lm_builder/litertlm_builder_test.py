@@ -2004,19 +2004,270 @@ data_path = "{vocoder_path}"
     )
 
     builder_no_cap = litertlm_builder.LitertLmFileBuilder()
+    builder_no_cap.add_tflite_model(
+        tflite_path,
+        speech2text_metadata_pb2.Speech2TextMetadata.TF_LITE_AUDIO_ENCODER,
+    )
     with self.assertRaisesRegex(
         ValueError, "Capability metadata must be added before resolving"
     ):
-      builder_no_cap.add_tflite_model(
-          tflite_path,
-          speech2text_metadata_pb2.Speech2TextMetadata.TF_LITE_AUDIO_ENCODER,
-      )
+      self._build_and_read_litertlm(builder_no_cap)
 
     with self.assertRaisesRegex(ValueError, "TF_LITE_MODEL_TYPE_UNSPECIFIED"):
       builder_img.add_tflite_model(
           tflite_path,
           text2image_metadata_pb2.Text2ImageMetadata.TF_LITE_MODEL_TYPE_UNSPECIFIED,
       )
+
+  def test_int_model_type_before_llm_metadata_resolves_at_build(self):
+    """Tests proto enum model types added before LlmMetadata."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    weights_path = self._create_dummy_file("w.bin", b"weights")
+    sp_path = self._create_dummy_file("sp.model", b"dummy sp")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    builder.add_tflite_weights(
+        weights_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    builder.add_tflite_model(
+        tflite_path,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
+        backend_constraint="cpu",
+    )
+    builder.add_sentencepiece_tokenizer(
+        sp_path, model_type=llm_metadata_pb2.LlmMetadata.TF_LITE_EMBEDDER
+    )
+    builder.add_llm_metadata(llm_path)
+
+    out_path = os.path.join(self.temp_dir, "llm.litertlm")
+    with litertlm_core.open_file(out_path, "wb") as f:
+      builder.build(f, validate_metadata=True)
+    stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(out_path, self.temp_dir, stream)
+    ss = stream.getvalue()
+    self.assertEqual(
+        ss.count("Key: model_type, Value (String): tf_lite_prefill_decode"), 2
+    )
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_audio_encoder_hw", ss
+    )
+    self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
+    # Building again is a no-op for already resolved model types.
+    self.assertEqual(
+        self._build_and_read_litertlm(builder).count(
+            "Key: model_type, Value (String): tf_lite_prefill_decode"
+        ),
+        2,
+    )
+
+  def test_int_model_type_before_embedding_metadata_resolves_at_build(self):
+    """Tests that a pending int resolves against EmbeddingMetadata, not LLM."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    emb_path = self._create_embedding_metadata_file("emb.pb")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    # EmbeddingMetadata.TF_LITE_TEXT_ENCODER shares enum value 1 with
+    # LlmMetadata.TF_LITE_PREFILL_DECODE.
+    builder.add_tflite_model(
+        tflite_path,
+        embedding_metadata_pb2.EmbeddingMetadata.TF_LITE_TEXT_ENCODER,
+    )
+    builder.add_tflite_model(
+        tflite_path, embedding_metadata_pb2.EmbeddingMetadata.TF_LITE_EMBEDDER
+    )
+    self.assertFalse(builder.is_llm_model)
+    builder.add_embedding_metadata(emb_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: model_type, Value (String): tf_lite_text_encoder", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
+    self.assertNotIn("tf_lite_prefill_decode", ss)
+
+  def test_int_model_type_after_capability_metadata_resolves_eagerly(self):
+    """Tests that ints added after capability metadata resolve immediately."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    emb_path = self._create_embedding_metadata_file("emb.pb")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_llm_metadata(llm_path)
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    # Adding a second capability does not change already resolved sections.
+    builder.add_embedding_metadata(emb_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
+    # With two capabilities, a new int is ambiguous and fails eagerly.
+    with self.assertRaisesRegex(ValueError, "Ambiguous integer model_type"):
+      builder.add_tflite_model(
+          tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_EMBEDDER
+      )
+
+  def test_int_model_type_without_capability_metadata_raises_at_build(self):
+    """Tests a clear build error when an int model type cannot be resolved."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    with self.assertRaisesRegex(
+        ValueError,
+        "Cannot resolve integer model_type 1 at build time: Capability metadata"
+        " must be added",
+    ):
+      builder.build(io.BytesIO())
+
+  def test_int_model_type_resolved_when_first_capability_metadata_added(self):
+    """Tests that pending ints resolve when the first capability is added."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    emb_path = self._create_embedding_metadata_file("emb.pb")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    builder.add_llm_metadata(llm_path)
+    # Pending int was resolved against llm when add_llm_metadata was called,
+    # so subsequently adding embedding metadata succeeds at build time.
+    builder.add_embedding_metadata(emb_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
+
+  def test_pending_int_out_of_range_for_capability_raises_on_metadata_add(self):
+    """Tests that out-of-range pending ints do not break boolean properties."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    emb_path = self._create_embedding_metadata_file("emb.pb")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_MTP_DRAFTER
+    )
+    # MTP_DRAFTER (13) is valid for LlmMetadata, not EmbeddingMetadata.
+    with self.assertRaisesRegex(
+        ValueError, "Cannot resolve integer model_type 13"
+    ):
+      builder.add_embedding_metadata(emb_path)
+    # Capability rollback leaves boolean properties safe to inspect.
+    self.assertFalse(builder.is_llm_model)
+    self.assertFalse(builder.is_vision_model)
+
+  def test_invalid_int_model_type_raises_eagerly(self):
+    """Tests that invalid ints fail at add time even without capability."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    with self.assertRaisesRegex(ValueError, "TF_LITE_MODEL_TYPE_UNSPECIFIED"):
+      builder.add_tflite_model(tflite_path, 0)
+    with self.assertRaisesRegex(ValueError, "Unknown TfLiteModelType enum"):
+      builder.add_tflite_model(tflite_path, 9999)
+    self.assertEmpty(builder._sections)
+
+  def test_pending_int_model_type_properties(self):
+    """Tests is_llm_model / is_vision_model with pending int model types."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER
+    )
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    # The capability is not known yet, so the ints cannot be interpreted.
+    self.assertFalse(builder.is_vision_model)
+    builder.add_llm_metadata(llm_path)
+    self.assertTrue(builder.is_vision_model)
+    self.assertTrue(builder.is_llm_model)
+
+  def test_set_backend_constraint_with_pending_int_model_type(self):
+    """Tests set/remove_backend_constraint on sections with pending ints."""
+    tflite_path = self._create_dummy_file("m.tflite", b"dummy")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        tflite_path,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
+        backend_constraint="cpu",
+    )
+    builder.add_tflite_model(
+        tflite_path,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
+        backend_constraint="cpu",
+    )
+    # An int target matches pending int sections before the capability is known.
+    builder.set_backend_constraint(
+        llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW, "npu"
+    )
+    # A string target cannot be compared with a pending int section yet.
+    with self.assertRaisesRegex(ValueError, "Cannot match an integer"):
+      builder.set_backend_constraint("audio_encoder_hw", "gpu")
+    with self.assertRaises(KeyError):
+      builder.set_backend_constraint(
+          llm_metadata_pb2.LlmMetadata.TF_LITE_END_OF_AUDIO, "npu"
+      )
+    # Mixed-representation sections: a string-typed section can still be matched
+    # by string while another section has a pending int model_type.
+    builder.add_tflite_model(
+        tflite_path, "text_encoder", backend_constraint="cpu"
+    )
+    builder.set_backend_constraint("text_encoder", "gpu")
+    builder.remove_backend_constraint("text_encoder")
+
+    builder.add_llm_metadata(llm_path)
+    # Once the capability is known, strings and ints match pending sections.
+    builder.set_backend_constraint("audio_encoder_hw", "gpu")
+    builder.remove_backend_constraint(
+        llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_audio_encoder_hw", ss
+    )
+    self.assertEqual(ss.count("Key: backend_constraint"), 1)
+    self.assertIn("Key: backend_constraint, Value (String): gpu", ss)
+
+  def test_tokenizer_with_pending_int_model_type(self):
+    """Tests tokenizer uniqueness checks with pending int model types."""
+    sp_path = self._create_dummy_file("sp.model", b"dummy sp")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_sentencepiece_tokenizer(
+        sp_path, model_type=llm_metadata_pb2.LlmMetadata.TF_LITE_EMBEDDER
+    )
+    # The same pending int is a duplicate right away.
+    with self.assertRaisesRegex(ValueError, "Tokenizer already added"):
+      builder.add_sentencepiece_tokenizer(
+          sp_path, model_type=llm_metadata_pb2.LlmMetadata.TF_LITE_EMBEDDER
+      )
+    # The same pending int via additional_metadata is a duplicate as well.
+    with self.assertRaisesRegex(ValueError, "Tokenizer already added"):
+      builder.add_hf_tokenizer(
+          self._create_dummy_file("tokenizer.json", b"{}"),
+          additional_metadata=[
+              litertlm_builder.Metadata(
+                  key="model_type",
+                  value=llm_metadata_pb2.LlmMetadata.TF_LITE_EMBEDDER,
+                  dtype=litertlm_builder.DType.STRING,
+              )
+          ],
+      )
+    builder.add_llm_metadata(llm_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
+
+  def test_tokenizer_pending_int_conflict_detected_on_metadata_add(self):
+    """Tests that a pending int resolving to a duplicate tokenizer fails."""
+    sp_path = self._create_dummy_file("sp.model", b"dummy sp")
+    llm_path = self._create_llm_metadata_file("llm.pb", "gemma3n")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    # The default tokenizer is the prefill_decode tokenizer.
+    builder.add_sentencepiece_tokenizer(sp_path)
+    builder.add_sentencepiece_tokenizer(
+        sp_path, model_type=llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    with self.assertRaisesRegex(ValueError, "Tokenizer already added"):
+      builder.add_llm_metadata(llm_path)
 
   def test_multiple_capability_metadata_raises_error(self):
     """Tests that adding conflicting capability metadata raises ValueError."""
