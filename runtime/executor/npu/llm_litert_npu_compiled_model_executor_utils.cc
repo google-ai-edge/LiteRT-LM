@@ -33,6 +33,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
@@ -632,53 +633,185 @@ absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
                                      is_dynamic_model);
 }
 
+namespace {
+
+// Resolves "<base>_cache_<context_size>" when `model` has such a signature,
+// otherwise the single-context `base`.
+std::string ResolveContextSignature(const litert::Model& model,
+                                    absl::string_view base, int context_size) {
+  if (context_size > 0) {
+    std::string candidate = absl::StrCat(base, "_cache_", context_size);
+    if (model.FindSignature(candidate).HasValue()) {
+      return candidate;
+    }
+  }
+  return std::string(base);
+}
+
+bool IsKVCacheInput(absl::string_view input_name) {
+  return absl::StartsWith(input_name, kKvCacheKRootName) ||
+         absl::StartsWith(input_name, kKvCacheVRootName);
+}
+
+}  // namespace
+
+std::string ResolveMtpDrafterSignature(const litert::Model& mtp_drafter_model,
+                                       int context_size) {
+  return ResolveContextSignature(mtp_drafter_model, MtpSignatures::kMtpDrafter,
+                                 context_size);
+}
+
+std::string ResolveMtpMaskSignature(const litert::Model& mtp_aux_model,
+                                    int context_size) {
+  return ResolveContextSignature(mtp_aux_model, MtpSignatures::kMtpMask,
+                                 context_size);
+}
+
+absl::Status MissingContextSignatureError(absl::string_view model_description,
+                                          absl::string_view base_signature,
+                                          absl::string_view resolved_signature,
+                                          int context_size) {
+  std::string missing;
+  if (context_size > 0 && resolved_signature == base_signature) {
+    // The per-context candidate was looked up first and is missing too.
+    missing = absl::StrCat("neither signature \"", base_signature, "_cache_",
+                           context_size, "\" nor \"", base_signature, "\"");
+  } else {
+    missing = absl::StrCat("no signature \"", resolved_signature, "\"");
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat(model_description, " has ", missing,
+                   " for text decoder context size ", context_size, "."));
+}
+
+bool IsCompatibleTensorType(const ::litert::RankedTensorType& signature_type,
+                            const ::litert::RankedTensorType& buffer_type) {
+  if (signature_type.ElementType() != buffer_type.ElementType()) {
+    return false;
+  }
+  absl::Span<const int32_t> signature_dims =
+      signature_type.Layout().Dimensions();
+  absl::Span<const int32_t> buffer_dims = buffer_type.Layout().Dimensions();
+  if (signature_dims.size() != buffer_dims.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < signature_dims.size(); ++i) {
+    if (signature_dims[i] >= 0 && signature_dims[i] != buffer_dims[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 absl::StatusOr<DrafterContext> DrafterContext::Create(
     ::litert::Environment& env, const litert::Model& mtp_drafter_model,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        drafter_input_kv_cache_buffers,
-    ::litert::TensorBuffer& output_activations_buffers) {
+    absl::Span<const ContextGroup> context_groups) {
+  RET_CHECK(!context_groups.empty())
+      << "At least one text decoder context group is required.";
   LITERT_ASSIGN_OR_RETURN(
       auto mtp_compiled_model,
       CompiledModelWrapper::Create(env, mtp_drafter_model.Get(),
                                    litert::HwAccelerators::kCpu));
+
+  // Input buffers are shared between context groups whenever the input has
+  // the same tensor type in every drafter signature (activations, position,
+  // RoPE embeddings). Inputs whose shape depends on the context size (the
+  // attention masks) get a dedicated buffer per context group. KV cache inputs
+  // are not allocated at all: they alias the text decoder's KV cache buffers
+  // and are bound in `BindContextGroup`.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      mtp_input_buffers;
+      shared_input_buffers;
+  std::vector<ContextBinding> context_bindings;
+  context_bindings.reserve(context_groups.size());
+  for (const ContextGroup& context_group : context_groups) {
+    ContextBinding binding;
+    binding.signature = ResolveMtpDrafterSignature(mtp_drafter_model,
+                                                   context_group.context_size);
+    auto signature = mtp_compiled_model.FindSignature(binding.signature);
+    if (!signature) {
+      return MissingContextSignatureError(
+          "MTP drafter model", MtpSignatures::kMtpDrafter, binding.signature,
+          context_group.context_size);
+    }
+    for (absl::string_view input_name : signature->InputNames()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto input_type,
+          mtp_drafter_model.GetInputTensorType(binding.signature, input_name));
+      if (IsKVCacheInput(input_name)) {
+        auto kv_it = context_group.input_kv_cache_buffers.find(input_name);
+        if (kv_it == context_group.input_kv_cache_buffers.end()) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "MTP drafter input \"", input_name,
+              "\" has no matching KV cache buffer in the text decoder context "
+              "group of size ",
+              context_group.context_size, "."));
+        }
+        LITERT_ASSIGN_OR_RETURN(auto kv_type, kv_it->second.TensorType());
+        if (!IsCompatibleTensorType(input_type, kv_type)) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "MTP drafter signature \"", binding.signature, "\" expects \"",
+              input_name, "\" with shape [",
+              absl::StrJoin(input_type.Layout().Dimensions(), ", "),
+              "] but the text decoder context group of size ",
+              context_group.context_size, " provides shape [",
+              absl::StrJoin(kv_type.Layout().Dimensions(), ", "),
+              "]. The drafter must provide a signature per text decoder "
+              "context size."));
+        }
+        continue;
+      }
+      auto shared_it = shared_input_buffers.find(input_name);
+      if (shared_it != shared_input_buffers.end()) {
+        LITERT_ASSIGN_OR_RETURN(auto shared_type,
+                                shared_it->second.TensorType());
+        if (shared_type == input_type) {
+          LITERT_ASSIGN_OR_RETURN(binding.input_buffers[input_name],
+                                  shared_it->second.Duplicate());
+          continue;
+        }
+      }
+      LITERT_ASSIGN_OR_RETURN(
+          auto input_buffer,
+          mtp_compiled_model.CreateInputBuffer(binding.signature, input_name));
+      input_buffer.Clear();
+      if (shared_it == shared_input_buffers.end()) {
+        LITERT_ASSIGN_OR_RETURN(shared_input_buffers[input_name],
+                                input_buffer.Duplicate());
+      }
+      binding.input_buffers[input_name] = std::move(input_buffer);
+    }
+    context_bindings.push_back(std::move(binding));
+  }
+
+  // Output shapes do not depend on the context size, so the outputs are
+  // allocated once for all context groups.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       mtp_output_buffers;
+  const std::string& first_signature = context_bindings.front().signature;
+  LITERT_ASSIGN_OR_RETURN(
+      auto output_names,
+      mtp_compiled_model.GetSignatureOutputNames(first_signature));
+  for (absl::string_view output_name : output_names) {
+    LITERT_ASSIGN_OR_RETURN(
+        mtp_output_buffers[output_name],
+        mtp_compiled_model.CreateOutputBuffer(first_signature, output_name));
+  }
 
-  // Create input and output buffers for the MTP drafter.
-  auto mtp_signature =
-      mtp_compiled_model.FindSignature(MtpSignatures::kMtpDrafter);
-  for (const auto& input_name : mtp_signature->InputNames()) {
-    // Reuse kv cache buffers from main model
-    if (absl::StartsWith(input_name, kKvCacheKRootName) ||
-        absl::StartsWith(input_name, kKvCacheVRootName)) {
-      LITERT_ASSIGN_OR_RETURN(
-          mtp_input_buffers[input_name],
-          drafter_input_kv_cache_buffers[input_name].Duplicate());
-    } else {
-      LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[input_name],
-                              mtp_compiled_model.CreateInputBuffer(
-                                  MtpSignatures::kMtpDrafter, input_name));
-      mtp_input_buffers[input_name].Clear();
-    }
-  }
-  for (const auto& output_name : mtp_signature->OutputNames()) {
-    {
-      LITERT_ASSIGN_OR_RETURN(mtp_output_buffers[output_name],
-                              mtp_compiled_model.CreateOutputBuffer(
-                                  MtpSignatures::kMtpDrafter, output_name));
-    }
-  }
-  return DrafterContext(std::move(mtp_compiled_model),
-                        std::move(mtp_input_buffers),
-                        std::move(mtp_output_buffers));
+  DrafterContext drafter_context(std::move(mtp_compiled_model),
+                                 std::move(context_bindings),
+                                 std::move(mtp_output_buffers));
+  LITERT_RETURN_IF_ERROR(
+      drafter_context.BindContextGroup(0, context_groups.front()));
+  return drafter_context;
 }
 
 absl::Status DrafterContext::SetInputPos(int32_t pos) {
   auto it = mtp_input_buffers.find(MtpSignatures::kInputPos);
   if (it == mtp_input_buffers.end()) {
-    return absl::NotFoundError("Drafter input pos buffer not found.");
+    // Drafters with externalized RoPE and attention masks do not consume the
+    // position; converters that drop unused inputs leave it out of the
+    // signature.
+    return absl::OkStatus();
   }
   LITERT_ASSIGN_OR_RETURN(
       auto lock, ::litert::TensorBufferScopedLock::Create(
@@ -687,13 +820,31 @@ absl::Status DrafterContext::SetInputPos(int32_t pos) {
   return absl::OkStatus();
 }
 
-absl::Status DrafterContext::UpdateKVCacheBuffers(
-    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        new_input_kv_cache_buffers) {
-  for (const auto& [name, buf] : new_input_kv_cache_buffers) {
-    if (mtp_input_buffers.contains(name)) {
-      LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[name], buf.Duplicate());
+absl::Status DrafterContext::BindContextGroup(
+    size_t index, const ContextGroup& context_group) {
+  RET_CHECK_LT(index, context_bindings.size())
+      << "Drafter context group index out of range.";
+  const ContextBinding& binding = context_bindings[index];
+  signature = binding.signature;
+  // Every entry is a duplicate of a binding or KV cache buffer, so rebuilding
+  // the map from scratch only drops references.
+  mtp_input_buffers.clear();
+  for (const auto& [name, buffer] : binding.input_buffers) {
+    LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[name], buffer.Duplicate());
+  }
+  // KV cache inputs alias the text decoder's KV cache buffers of the group.
+  LITERT_ASSIGN_OR_RETURN(auto compiled_signature,
+                          mtp_compiled_model.FindSignature(signature));
+  for (absl::string_view input_name : compiled_signature.InputNames()) {
+    if (!IsKVCacheInput(input_name)) {
+      continue;
     }
+    auto kv_it = context_group.input_kv_cache_buffers.find(input_name);
+    RET_CHECK(kv_it != context_group.input_kv_cache_buffers.end())
+        << "Text decoder context group has no KV cache buffer \"" << input_name
+        << "\" for the drafter.";
+    LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[input_name],
+                            kv_it->second.Duplicate());
   }
   return absl::OkStatus();
 }

@@ -790,9 +790,15 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
 
 absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
     ::litert::Environment& env, const litert::Model& mtp_aux_model,
-    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        drafter_aux_output_buffers,
-    MaskUpdateMethod mtp_mask_update_method, const NpuModelGeometry* geometry) {
+    const DrafterContext& drafter_context,
+    absl::Span<const ContextGroup> context_groups,
+    MaskUpdateMethod mtp_mask_update_method) {
+  RET_CHECK(!context_groups.empty())
+      << "At least one text decoder context group is required.";
+  RET_CHECK_EQ(drafter_context.context_bindings.size(), context_groups.size())
+      << "The drafter must be created with the same text decoder context "
+         "groups.";
+  const NpuModelGeometry* geometry = &context_groups.front().geometry;
   LITERT_ASSIGN_OR_RETURN(
       auto mtp_aux_compiled_model,
       CompiledModelWrapper::Create(env, mtp_aux_model.Get(),
@@ -806,6 +812,10 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       mask_output_buffers;
 
+  // The RoPE embeddings and masks are written straight into the drafter's
+  // input buffers.
+  const auto& drafter_input_buffers = drafter_context.mtp_input_buffers;
+
   // Drafter aux rope signature.
   LITERT_ASSIGN_OR_RETURN(
       rope_input_buffers[MtpSignatures::kInputPos],
@@ -817,28 +827,93 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
       auto rope_output_names,
       mtp_aux_compiled_model.GetSignatureOutputNames(MtpSignatures::kMtpRope));
   for (const auto& name : rope_output_names) {
+    auto drafter_input_it = drafter_input_buffers.find(name);
+    if (drafter_input_it == drafter_input_buffers.end()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "MTP drafter signature \"", drafter_context.signature,
+          "\" has no input \"", name,
+          "\" for the output of drafter RoPE signature \"",
+          MtpSignatures::kMtpRope, "\"."));
+    }
     LITERT_ASSIGN_OR_RETURN(rope_output_buffers[name],
-                            drafter_aux_output_buffers.at(name).Duplicate());
+                            drafter_input_it->second.Duplicate());
   }
 
-  // Drafter aux mask signature.
+  // Drafter aux mask signatures: one per text decoder context group. The mask
+  // outputs must match the drafter inputs of the same context group, which is
+  // where the mask of that group is written to.
+  std::vector<std::string> mask_signatures;
+  mask_signatures.reserve(context_groups.size());
+  for (size_t i = 0; i < context_groups.size(); ++i) {
+    std::string mask_signature =
+        ResolveMtpMaskSignature(mtp_aux_model, context_groups[i].context_size);
+    if (!mtp_aux_compiled_model.FindSignature(mask_signature)) {
+      return MissingContextSignatureError(
+          "MTP auxiliary model", MtpSignatures::kMtpMask, mask_signature,
+          context_groups[i].context_size);
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto mask_output_names,
+        mtp_aux_compiled_model.GetSignatureOutputNames(mask_signature));
+    const auto& drafter_inputs =
+        drafter_context.context_bindings[i].input_buffers;
+    for (absl::string_view name : mask_output_names) {
+      auto drafter_input_it = drafter_inputs.find(name);
+      if (drafter_input_it == drafter_inputs.end()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "MTP drafter signature \"",
+            drafter_context.context_bindings[i].signature, "\" has no input \"",
+            name, "\" for the output of drafter mask signature \"",
+            mask_signature, "\"."));
+      }
+      LITERT_ASSIGN_OR_RETURN(auto drafter_input_type,
+                              drafter_input_it->second.TensorType());
+      LITERT_ASSIGN_OR_RETURN(
+          auto mask_output_type,
+          mtp_aux_model.GetOutputTensorType(mask_signature, name));
+      if (!IsCompatibleTensorType(mask_output_type, drafter_input_type)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Drafter mask signature \"", mask_signature, "\" produces \"", name,
+            "\" with shape [",
+            absl::StrJoin(mask_output_type.Layout().Dimensions(), ", "),
+            "] but MTP drafter signature \"",
+            drafter_context.context_bindings[i].signature, "\" expects shape [",
+            absl::StrJoin(drafter_input_type.Layout().Dimensions(), ", "),
+            "]. The MTP auxiliary model must provide a drafter mask signature "
+            "per text decoder context size."));
+      }
+    }
+    mask_signatures.push_back(std::move(mask_signature));
+  }
+
+  // The mask inputs do not depend on the context size; the outputs are bound
+  // to the drafter inputs of the context group the drafter is bound to.
+  const std::string& first_mask_signature = mask_signatures.front();
   LITERT_ASSIGN_OR_RETURN(
       mask_input_buffers[MtpSignatures::kInputTimeStep],
-      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpMask,
+      mtp_aux_compiled_model.CreateInputBuffer(first_mask_signature,
                                                MtpSignatures::kInputTimeStep));
   mask_input_buffers[MtpSignatures::kInputTimeStep].Clear();
 
+  // The token ids are not consumed by every drafter mask builder; converters
+  // that drop unused inputs leave them out of the signature.
   LITERT_ASSIGN_OR_RETURN(
-      mask_input_buffers[MtpSignatures::kInputTokens],
-      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpMask,
-                                               MtpSignatures::kInputTokens));
+      auto mask_input_names,
+      mtp_aux_compiled_model.GetSignatureInputNames(first_mask_signature));
+  if (absl::c_find(mask_input_names, MtpSignatures::kInputTokens) !=
+      mask_input_names.end()) {
+    LITERT_ASSIGN_OR_RETURN(
+        mask_input_buffers[MtpSignatures::kInputTokens],
+        mtp_aux_compiled_model.CreateInputBuffer(first_mask_signature,
+                                                 MtpSignatures::kInputTokens));
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto mask_output_names,
-      mtp_aux_compiled_model.GetSignatureOutputNames(MtpSignatures::kMtpMask));
+      mtp_aux_compiled_model.GetSignatureOutputNames(first_mask_signature));
   for (const auto& name : mask_output_names) {
     LITERT_ASSIGN_OR_RETURN(mask_output_buffers[name],
-                            drafter_aux_output_buffers.at(name).Duplicate());
+                            drafter_input_buffers.at(name).Duplicate());
   }
 
   LITERT_ASSIGN_OR_RETURN(
@@ -853,26 +928,67 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
                                 std::move(mask_input_buffers),
                                 std::move(mask_output_buffers), geometry));
 
-  return DrafterAuxContext(std::move(mtp_aux_compiled_model),
-                           std::move(drafter_rope), std::move(drafter_mask));
+  DrafterAuxContext drafter_aux_context(
+      std::move(mtp_aux_compiled_model), std::move(drafter_rope),
+      std::move(drafter_mask), std::move(mask_signatures));
+  LITERT_RETURN_IF_ERROR(drafter_aux_context.BindContextGroup(
+      0, context_groups.front(), drafter_input_buffers));
+  return drafter_aux_context;
+}
+
+absl::Status DrafterAuxContext::BindContextGroup(
+    size_t index, const ContextGroup& context_group,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        drafter_input_buffers) {
+  RET_CHECK_LT(index, mask_signatures.size())
+      << "Drafter context group index out of range.";
+  mask_signature = mask_signatures[index];
+  // The mask builder reads the cache lengths of the bound context group from
+  // its geometry (e.g. to build the mask on the CPU in kWH mode), so the
+  // signature and the geometry are always switched together.
+  drafter_mask.SetGeometry(&context_group.geometry);
+  LITERT_RETURN_IF_ERROR(drafter_rope.UpdateOutputBuffers(
+      /*text_decoder_prefill_input_buffers=*/{}, drafter_input_buffers,
+      /*text_decoder_verify_input_buffers=*/{}));
+  LITERT_RETURN_IF_ERROR(drafter_mask.UpdateOutputBuffers(
+      /*text_decoder_prefill_input_buffers=*/{}, drafter_input_buffers,
+      /*text_decoder_verify_input_buffers=*/{}));
+  return absl::OkStatus();
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
-    const DrafterContext& drafter_context,
-    const DrafterAuxContext& drafter_aux_context) {
-  auto result = drafter_context.mtp_compiled_model.Run(
-      MtpSignatures::kMtpDrafter, drafter_context.mtp_input_buffers,
-      drafter_context.mtp_output_buffers);
-  RET_CHECK(result) << "Inference warmup run for MTP failed."
-                    << result.Error().Message();
+    DrafterContext& drafter_context, DrafterAuxContext& drafter_aux_context,
+    absl::Span<const ContextGroup> context_groups) {
+  // Like the text decoder, warm up every context group so that all drafter
+  // signatures are initialized before the first inference.
+  for (size_t i = 0; i < context_groups.size(); ++i) {
+    LITERT_RETURN_IF_ERROR(
+        drafter_context.BindContextGroup(i, context_groups[i]));
+    LITERT_RETURN_IF_ERROR(drafter_aux_context.BindContextGroup(
+        i, context_groups[i], drafter_context.mtp_input_buffers));
 
-  auto mask_result = drafter_aux_context.drafter_mask.RunDrafter();
-  RET_CHECK(mask_result.ok())
-      << "Inference warmup run for MTP mask failed." << mask_result.message();
+    auto result = drafter_context.mtp_compiled_model.Run(
+        drafter_context.signature, drafter_context.mtp_input_buffers,
+        drafter_context.mtp_output_buffers);
+    RET_CHECK(result) << "Inference warmup run for MTP failed."
+                      << result.Error().Message();
 
-  auto rope_result = drafter_aux_context.drafter_rope.RunDrafter();
-  RET_CHECK(rope_result.ok())
-      << "Inference warmup run for MTP rope failed." << rope_result.message();
+    auto mask_result = drafter_aux_context.drafter_mask.RunDrafter(
+        drafter_aux_context.mask_signature);
+    RET_CHECK(mask_result.ok())
+        << "Inference warmup run for MTP mask failed." << mask_result.message();
+
+    auto rope_result = drafter_aux_context.drafter_rope.RunDrafter();
+    RET_CHECK(rope_result.ok())
+        << "Inference warmup run for MTP rope failed." << rope_result.message();
+  }
+
+  // Leave the drafter bound to the first context group, which is the group
+  // the executor starts out with.
+  LITERT_RETURN_IF_ERROR(
+      drafter_context.BindContextGroup(0, context_groups.front()));
+  LITERT_RETURN_IF_ERROR(drafter_aux_context.BindContextGroup(
+      0, context_groups.front(), drafter_context.mtp_input_buffers));
   return absl::OkStatus();
 }
 
@@ -1164,13 +1280,39 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     return absl::InvalidArgumentError("No id available to be decoded.");
   }
 
-  int mtp_start_step = internal_start_step;
   int mtp_start_token_id = pending_input_token[0]->id();
 
   auto start_mark = absl::Now();
   LITERT_RETURN_IF_ERROR(processed_tokens_.MarkPendingInputTokenAsProcessed());
   latency_stats_.decode_token_queue_latency_us +=
       absl::ToInt64Microseconds(absl::Now() - start_mark);
+
+  // On a cold start the main decode below produces the anchor token at
+  // `internal_start_step`, and the MTP drafter starts from the position after
+  // it. On a warm cycle the drafter starts from `internal_start_step` itself.
+  const int mtp_start_step =
+      has_valid_verify_activations_ ? internal_start_step
+                                    : internal_start_step + 1;
+
+  // Ensure the active context group can accommodate the entire MTP cycle
+  // before any of its KV cache positions is written: the anchor token at
+  // `mtp_start_step` followed by N draft tokens occupy N + 1 positions, so
+  // N + 1 more positions must fit (the same convention as `step + 1` for a
+  // single decode token). This must happen before the cold start decode:
+  // that decode writes the anchor's K/V at `internal_start_step` while
+  // `current_step_` is only advanced at the end of the cycle, so a context
+  // switch after it would migrate one position too few and the drafter would
+  // read the new group's never-written decode outputs.
+  LITERT_ASSIGN_OR_RETURN(
+      RankedTensorType verify_output_tensor_type,
+      ActiveContextGroup()
+          .text_decoder_inference_context
+          .verify_output_buffers[MtpSignatures::kInputActivations]
+          .TensorType());
+  const int drafter_sequence_length =
+      verify_output_tensor_type.Layout().Dimensions()[1] - 1;
+  LITERT_RETURN_IF_ERROR(SwitchContextSizeIfRequired(
+      mtp_start_step + drafter_sequence_length + 1));
 
   if (!has_valid_verify_activations_) {
     // Cold start (e.g. right after prefill): we run the main model decode once
@@ -1191,9 +1333,6 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
             npu_config_.enable_neon_for_npu_greedy_sampling));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
-
-    // The MTP drafter starts from the position of the token we just generated.
-    mtp_start_step = internal_start_step + 1;
   } else {
     // Warm cycle: Skip main decode entirely. RunDrafterLoop directly consumes
     // the cached last_verify_activations_ and writes them to the drafter input
@@ -1207,19 +1346,6 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
                          << ": Starting MTP Speculative Cycle";
   NPU_EXECUTOR_LOG(INFO) << "    [Verify] Step -1 at pos " << mtp_start_step - 1
                          << ": Good token ID " << mtp_start_token_id;
-
-  // Ensure the active context group can accommodate the entire verification
-  // batch (anchor token + N draft tokens).
-  LITERT_ASSIGN_OR_RETURN(
-      RankedTensorType verify_output_tensor_type,
-      ActiveContextGroup()
-          .text_decoder_inference_context
-          .verify_output_buffers[MtpSignatures::kInputActivations]
-          .TensorType());
-  const int drafter_sequence_length =
-      verify_output_tensor_type.Layout().Dimensions()[1] - 1;
-  LITERT_RETURN_IF_ERROR(
-      SwitchContextSizeIfRequired(mtp_start_step + drafter_sequence_length));
 
   LITERT_ASSIGN_OR_RETURN(std::vector<int> draft_tokens,
                           RunDrafterLoop(mtp_start_step, mtp_start_token_id));
@@ -1928,7 +2054,8 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
       absl::ToInt64Microseconds(absl::Now() - start);
 
   start = absl::Now();
-  LITERT_RETURN_IF_ERROR(aux_ctx.drafter_mask.RunDrafter());
+  LITERT_RETURN_IF_ERROR(
+      aux_ctx.drafter_mask.RunDrafter(aux_ctx.mask_signature));
   latency_stats_.decode_mask_inference_latency_us +=
       absl::ToInt64Microseconds(absl::Now() - start);
 
@@ -1962,8 +2089,7 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
     }
     start = absl::Now();
     LITERT_RETURN_IF_ERROR(ctx.mtp_compiled_model.Run(
-        MtpSignatures::kMtpDrafter, ctx.mtp_input_buffers,
-        ctx.mtp_output_buffers));
+        ctx.signature, ctx.mtp_input_buffers, ctx.mtp_output_buffers));
     latency_stats_.decode_drafter_inference_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
 
@@ -2383,12 +2509,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   ran_decode_ = false;
   active_context_group_index_ = 0;
   if (!context_groups_.empty()) {
-    const auto& active_group = context_groups_[0];
-    main_mask_.SetGeometry(&active_group.geometry);
-    main_cache_.SetGeometry(&active_group.geometry);
-    if (drafter_aux_context_.has_value()) {
-      drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
-    }
+    // Re-bind all sub-components (including the drafter's signature, KV cache
+    // aliases and mask geometry) to the first context group, like
+    // RestoreContext() does for an empty context.
+    LITERT_RETURN_IF_ERROR(RebindActiveContextGroup());
   }
   LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(0));
   latency_stats_ = {};
@@ -2521,9 +2645,6 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RebindActiveContextGroup() {
   auto& active_group = ActiveContextGroup();
   main_mask_.SetGeometry(&active_group.geometry);
   main_cache_.SetGeometry(&active_group.geometry);
-  if (drafter_aux_context_.has_value()) {
-    drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
-  }
   LITERT_RETURN_IF_ERROR(main_cache_.UpdateKVCacheBuffers(
       active_group.input_kv_cache_buffers,
       active_group.text_decoder_inference_context.prefill_output_buffers,
@@ -2542,8 +2663,15 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RebindActiveContextGroup() {
       active_group.text_decoder_inference_context.decode_input_buffers,
       active_group.text_decoder_inference_context.verify_input_buffers));
   if (drafter_context_.has_value()) {
-    LITERT_RETURN_IF_ERROR(drafter_context_->UpdateKVCacheBuffers(
-        active_group.input_kv_cache_buffers));
+    // Select the drafter signature of the active context group and re-alias
+    // its KV cache buffers, then bind the drafter RoPE/mask builders to that
+    // group (mask signature, geometry) and point their outputs at the
+    // drafter's input buffers for that group.
+    LITERT_RETURN_IF_ERROR(drafter_context_->BindContextGroup(
+        active_context_group_index_, active_group));
+    LITERT_RETURN_IF_ERROR(drafter_aux_context_->BindContextGroup(
+        active_context_group_index_, active_group,
+        drafter_context_->mtp_input_buffers));
   }
   return absl::OkStatus();
 }
@@ -3148,27 +3276,23 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
             "Speculative decoding is not supported for model without per layer "
             "embedding.");
       }
+      // The drafter follows the text decoder's context groups: it is created
+      // for all of them and starts out bound to the same (smallest) one.
       LITERT_ASSIGN_OR_RETURN(
           drafter_context,
-          DrafterContext::Create(
-              env, **mtp_drafter_model,
-              context_groups[0].input_kv_cache_buffers,
-              context_groups[0]
-                  .text_decoder_inference_context.decode_output_buffers
-                      [TextDecoderSignatures::kLastLayerActivationsOutput]));
+          DrafterContext::Create(env, **mtp_drafter_model, context_groups));
       MaskUpdateMethod mtp_mask_update_method = MaskUpdateMethod::kModel;
       if (npu_config_status.ok() && npu_config_status->use_hw_masking_for_npu) {
         mtp_mask_update_method = MaskUpdateMethod::kWH;
       }
       LITERT_ASSIGN_OR_RETURN(
           drafter_aux_context,
-          DrafterAuxContext::Create(
-              env, **mtp_aux_model, drafter_context->mtp_input_buffers,
-              mtp_mask_update_method, &context_groups[0].geometry));
+          DrafterAuxContext::Create(env, **mtp_aux_model, *drafter_context,
+                                    context_groups, mtp_mask_update_method));
       speculative_decoding_type = SpeculativeDecodingType::kMTP;
 
       LITERT_RETURN_IF_ERROR(WarmupDrafterInference(
-          drafter_context.value(), drafter_aux_context.value()));
+          *drafter_context, *drafter_aux_context, context_groups));
     }
   }
 

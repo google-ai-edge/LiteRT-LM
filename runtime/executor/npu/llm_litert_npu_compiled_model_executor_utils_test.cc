@@ -20,21 +20,34 @@
 #include <limits>
 #include <optional>
 #include <random>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
+#include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -44,6 +57,10 @@ using ::litert::Layout;
 using ::litert::RankedTensorType;
 using ::litert::TensorBuffer;
 using ::litert::TensorBufferScopedLock;
+using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
+using ::testing::ElementsAre;
+using ::testing::HasSubstr;
+using ::testing::status::StatusIs;
 
 template <typename T>
 int ReferenceFindMaxIndex(const std::vector<T>& data) {
@@ -660,6 +677,650 @@ TEST_F(ExecutorUtilsTest, ResolveModelGeometry_UniformNoRingbuffer) {
   EXPECT_FALSE(geometry.uses_ringbuffer);
   EXPECT_FALSE(geometry.local_cache_length.has_value());
   EXPECT_EQ(geometry.sliding_window_size, 512);
+}
+
+// Builds a drafter-like model with one signature per entry of `signatures`
+// (signature key -> context size). Every signature has the inputs
+// `activations` [1, 1, 8], `input_pos` [1] (unless `with_input_pos` is false),
+// `mask_local` [1, 1, 1, N], `kv_cache_k_0` [1, 1, N, 4] and `kv_cache_v_0`
+// [1, 1, 4, N] for context size N, and computes the output `logits` [1, 1, 8]
+// as ABS(activations).
+std::vector<uint8_t> BuildDrafterModelBuffer(
+    const std::vector<std::pair<std::string, int32_t>>& signatures,
+    bool with_input_pos = true) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec = builder.CreateVector({opcode});
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+  for (size_t i = 0; i < signatures.size(); ++i) {
+    const int32_t context_size = signatures[i].second;
+    auto create_tensor = [&](std::vector<int32_t> dims, tflite::TensorType type,
+                             absl::string_view name) {
+      return tflite::CreateTensor(
+          builder, builder.CreateVector(dims), type,
+          /*buffer=*/0, builder.CreateString(name.data(), name.size()));
+    };
+    auto tensors_vec = builder.CreateVector(
+        {create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, "activations"),
+         create_tensor({1}, tflite::TensorType_INT32, "input_pos"),
+         create_tensor({1, 1, 1, context_size}, tflite::TensorType_FLOAT32,
+                       "mask_local"),
+         create_tensor({1, 1, context_size, 4}, tflite::TensorType_FLOAT32,
+                       "kv_cache_k_0"),
+         create_tensor({1, 1, 4, context_size}, tflite::TensorType_FLOAT32,
+                       "kv_cache_v_0"),
+         create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, "logits")});
+
+    std::vector<int32_t> op_inputs = {0};
+    std::vector<int32_t> op_outputs = {5};
+    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                     builder.CreateVector(op_inputs),
+                                     builder.CreateVector(op_outputs));
+    auto ops_vec = builder.CreateVector({op});
+    std::vector<int32_t> sg_inputs = {0, 2, 3, 4};
+    if (with_input_pos) sg_inputs.insert(sg_inputs.begin() + 1, 1);
+    std::vector<int32_t> sg_outputs = {5};
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        builder.CreateVector(sg_outputs), ops_vec,
+        builder.CreateString(signatures[i].first)));
+
+    auto create_map = [&](absl::string_view name, uint32_t tensor_index) {
+      return tflite::CreateTensorMap(
+          builder, builder.CreateString(name.data(), name.size()),
+          tensor_index);
+    };
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> inputs_map = {
+        create_map("activations", 0), create_map("mask_local", 2),
+        create_map("kv_cache_k_0", 3), create_map("kv_cache_v_0", 4)};
+    if (with_input_pos) inputs_map.push_back(create_map("input_pos", 1));
+    auto inputs_map_vec = builder.CreateVector(inputs_map);
+    auto outputs_map_vec = builder.CreateVector({create_map("logits", 5)});
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, inputs_map_vec, outputs_map_vec,
+        builder.CreateString(signatures[i].first), /*subgraph_index=*/i));
+  }
+
+  auto subgraphs_vec = builder.CreateVector(subgraphs);
+  auto sig_defs_vec = builder.CreateVector(sig_defs);
+  auto buffer = tflite::CreateBuffer(builder);
+  auto buffers_vec = builder.CreateVector({buffer});
+  auto model =
+      tflite::CreateModel(builder, /*version=*/3, opcodes_vec, subgraphs_vec,
+                          builder.CreateString("drafter_model"), buffers_vec,
+                          /*metadata_buffer=*/0, /*metadata=*/0, sig_defs_vec);
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+RankedTensorType MakeType(ElementType type, const std::vector<int32_t>& dims) {
+  ::litert::Dimensions dimensions;
+  for (auto d : dims) dimensions.push_back(d);
+  return RankedTensorType(type, Layout(std::move(dimensions)));
+}
+
+std::vector<int32_t> DimensionsOf(const TensorBuffer& buffer) {
+  auto type = buffer.TensorType();
+  ABSL_CHECK(type.HasValue());
+  auto dims = type->Layout().Dimensions();
+  return std::vector<int32_t>(dims.begin(), dims.end());
+}
+
+const void* HostAddressOf(const TensorBuffer& buffer) {
+  auto lock =
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kRead);
+  ABSL_CHECK(lock.HasValue());
+  return lock->second;
+}
+
+// Returns true when both buffers are backed by the same host memory. The
+// buffers are locked one after the other as duplicates share a single lock.
+bool SharesMemory(const TensorBuffer& a, const TensorBuffer& b) {
+  return HostAddressOf(a) == HostAddressOf(b);
+}
+
+class DrafterContextTest : public ExecutorUtilsTest {
+ protected:
+  // Loads `buffer` as a model. The model does not own the bytes, so they are
+  // kept alive by the fixture.
+  ::litert::Model LoadModel(std::vector<uint8_t> buffer) {
+    model_buffers_.push_back(std::move(buffer));
+    const std::vector<uint8_t>& stored = model_buffers_.back();
+    auto model = ::litert::Model::CreateFromBuffer(
+        *env_, ::litert::BufferRef<uint8_t>(stored.data(), stored.size()));
+    ABSL_CHECK(model.HasValue()) << model.Error().Message();
+    return std::move(*model);
+  }
+
+  // A text decoder context group of `context_size` with KV cache buffers
+  // matching the drafter model of `BuildDrafterModelBuffer`.
+  ContextGroup MakeContextGroup(int context_size) {
+    ContextGroup group;
+    group.context_size = context_size;
+    group.geometry.global_cache_length = context_size;
+    std::vector<float> data(context_size * 4, 0.0f);
+    group.input_kv_cache_buffers.emplace(
+        "kv_cache_k_0", CreateTensorBufferWithDims(data, ElementType::Float32,
+                                                   {1, 1, context_size, 4}));
+    group.input_kv_cache_buffers.emplace(
+        "kv_cache_v_0", CreateTensorBufferWithDims(data, ElementType::Float32,
+                                                   {1, 1, 4, context_size}));
+    return group;
+  }
+
+  std::vector<std::vector<uint8_t>> model_buffers_;
+};
+
+TEST_F(DrafterContextTest, ResolveMtpSignaturesPrefersPerContextSignatures) {
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter_cache_640", 640},
+                                         {"mtp_drafter_cache_4096", 4096},
+                                         {"mask_cache_640", 640},
+                                         {"mask", 4096}}));
+  EXPECT_EQ(ResolveMtpDrafterSignature(model, 640), "mtp_drafter_cache_640");
+  EXPECT_EQ(ResolveMtpDrafterSignature(model, 4096), "mtp_drafter_cache_4096");
+  EXPECT_EQ(ResolveMtpMaskSignature(model, 640), "mask_cache_640");
+  // Context sizes without a dedicated signature, including the context size 0
+  // of dynamic models, resolve to the single-context names.
+  EXPECT_EQ(ResolveMtpDrafterSignature(model, 1024), "mtp_drafter");
+  EXPECT_EQ(ResolveMtpDrafterSignature(model, 0), "mtp_drafter");
+  EXPECT_EQ(ResolveMtpMaskSignature(model, 4096), "mask");
+  EXPECT_EQ(ResolveMtpMaskSignature(model, 0), "mask");
+}
+
+TEST_F(DrafterContextTest, ResolveMtpSignaturesSingleContextModel) {
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 4096}}));
+  EXPECT_EQ(ResolveMtpDrafterSignature(model, 4096), "mtp_drafter");
+  EXPECT_EQ(ResolveMtpDrafterSignature(model, 640), "mtp_drafter");
+  EXPECT_EQ(ResolveMtpMaskSignature(model, 4096), "mask");
+}
+
+TEST(IsCompatibleTensorTypeTest, ComparesElementTypeRankAndStaticDimensions) {
+  const RankedTensorType static_640 =
+      MakeType(ElementType::Float32, {1, 1, 1, 640});
+  const RankedTensorType static_4096 =
+      MakeType(ElementType::Float32, {1, 1, 1, 4096});
+  const RankedTensorType dynamic =
+      MakeType(ElementType::Float32, {1, 1, 1, -1});
+  const RankedTensorType rank_3 = MakeType(ElementType::Float32, {1, 1, 640});
+  const RankedTensorType int8_640 = MakeType(ElementType::Int8, {1, 1, 1, 640});
+
+  EXPECT_TRUE(IsCompatibleTensorType(static_640, static_640));
+  EXPECT_FALSE(IsCompatibleTensorType(static_4096, static_640));
+  EXPECT_FALSE(IsCompatibleTensorType(static_640, static_4096));
+  // A dynamic signature dimension accepts any buffer size, but a static one
+  // does not accept a dynamic buffer dimension.
+  EXPECT_TRUE(IsCompatibleTensorType(dynamic, static_640));
+  EXPECT_TRUE(IsCompatibleTensorType(dynamic, static_4096));
+  EXPECT_FALSE(IsCompatibleTensorType(static_640, dynamic));
+  EXPECT_FALSE(IsCompatibleTensorType(static_640, rank_3));
+  EXPECT_FALSE(IsCompatibleTensorType(static_640, int8_640));
+}
+
+TEST_F(DrafterContextTest, CreateBindsOneDrafterSignaturePerContextGroup) {
+  ::litert::Model model = LoadModel(BuildDrafterModelBuffer(
+      {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, model, groups));
+
+  // Starts out bound to the first context group.
+  ASSERT_EQ(drafter_context.context_bindings.size(), 2);
+  EXPECT_EQ(drafter_context.context_bindings[0].signature,
+            "mtp_drafter_cache_640");
+  EXPECT_EQ(drafter_context.context_bindings[1].signature,
+            "mtp_drafter_cache_1024");
+  EXPECT_EQ(drafter_context.signature, "mtp_drafter_cache_640");
+  EXPECT_TRUE(drafter_context.mtp_output_buffers.contains("logits"));
+
+  // KV cache inputs are not allocated by the drafter; the bound ones alias the
+  // KV cache buffers of the bound context group.
+  EXPECT_FALSE(drafter_context.context_bindings[0].input_buffers.contains(
+      "kv_cache_k_0"));
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_k_0"),
+                   groups[0].input_kv_cache_buffers.at("kv_cache_k_0")));
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_v_0"),
+                   groups[0].input_kv_cache_buffers.at("kv_cache_v_0")));
+  // Context size dependent inputs get a buffer per context group; the others
+  // are shared between the context groups.
+  EXPECT_THAT(DimensionsOf(drafter_context.mtp_input_buffers.at("mask_local")),
+              ElementsAre(1, 1, 1, 640));
+  EXPECT_FALSE(SharesMemory(
+      drafter_context.context_bindings[0].input_buffers.at("mask_local"),
+      drafter_context.context_bindings[1].input_buffers.at("mask_local")));
+  EXPECT_TRUE(SharesMemory(
+      drafter_context.context_bindings[0].input_buffers.at("activations"),
+      drafter_context.context_bindings[1].input_buffers.at("activations")));
+  EXPECT_TRUE(SharesMemory(
+      drafter_context.context_bindings[0].input_buffers.at("input_pos"),
+      drafter_context.context_bindings[1].input_buffers.at("input_pos")));
+  LITERT_EXPECT_OK(drafter_context.mtp_compiled_model.Run(
+      drafter_context.signature, drafter_context.mtp_input_buffers,
+      drafter_context.mtp_output_buffers));
+
+  // Binding the second context group switches the signature, the KV cache
+  // aliases and the context size dependent inputs.
+  ASSERT_OK(drafter_context.BindContextGroup(1, groups[1]));
+  EXPECT_EQ(drafter_context.signature, "mtp_drafter_cache_1024");
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_k_0"),
+                   groups[1].input_kv_cache_buffers.at("kv_cache_k_0")));
+  EXPECT_THAT(DimensionsOf(drafter_context.mtp_input_buffers.at("mask_local")),
+              ElementsAre(1, 1, 1, 1024));
+  EXPECT_TRUE(SharesMemory(
+      drafter_context.mtp_input_buffers.at("activations"),
+      drafter_context.context_bindings[0].input_buffers.at("activations")));
+  LITERT_EXPECT_OK(drafter_context.mtp_compiled_model.Run(
+      drafter_context.signature, drafter_context.mtp_input_buffers,
+      drafter_context.mtp_output_buffers));
+
+  // Re-binding picks up re-allocated KV cache buffers of a context group.
+  groups[1] = MakeContextGroup(1024);
+  ASSERT_OK(drafter_context.BindContextGroup(1, groups[1]));
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_v_0"),
+                   groups[1].input_kv_cache_buffers.at("kv_cache_v_0")));
+
+  EXPECT_THAT(drafter_context.BindContextGroup(2, groups[1]),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST_F(DrafterContextTest, CreateSingleContextDrafter) {
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, model, groups));
+  EXPECT_EQ(drafter_context.signature, "mtp_drafter");
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_k_0"),
+                   groups[0].input_kv_cache_buffers.at("kv_cache_k_0")));
+  LITERT_EXPECT_OK(drafter_context.mtp_compiled_model.Run(
+      drafter_context.signature, drafter_context.mtp_input_buffers,
+      drafter_context.mtp_output_buffers));
+}
+
+TEST_F(DrafterContextTest, SetInputPosWritesPositionWhenInputExists) {
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, model, groups));
+  ASSERT_OK(drafter_context.SetInputPos(42));
+  EXPECT_EQ(*static_cast<const int32_t*>(HostAddressOf(
+                drafter_context.mtp_input_buffers.at("input_pos"))),
+            42);
+}
+
+TEST_F(DrafterContextTest, SetInputPosIsNoOpWithoutInputPosInput) {
+  // Converters that drop unused inputs leave `input_pos` out of drafters with
+  // externalized RoPE and masks.
+  ::litert::Model model = LoadModel(BuildDrafterModelBuffer(
+      {{"mtp_drafter", 640}}, /*with_input_pos=*/false));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, model, groups));
+  EXPECT_FALSE(drafter_context.mtp_input_buffers.contains("input_pos"));
+  EXPECT_OK(drafter_context.SetInputPos(42));
+  LITERT_EXPECT_OK(drafter_context.mtp_compiled_model.Run(
+      drafter_context.signature, drafter_context.mtp_input_buffers,
+      drafter_context.mtp_output_buffers));
+}
+
+TEST_F(DrafterContextTest, CreateRejectsDrafterWithoutSignatureForContextSize) {
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter_cache_640", 640}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+
+  EXPECT_THAT(
+      DrafterContext::Create(*env_, model, groups),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("neither signature \"mtp_drafter_cache_1024\" nor "
+                         "\"mtp_drafter\" for text decoder context size "
+                         "1024")));
+}
+
+TEST(MissingContextSignatureErrorTest, NamesBothCandidatesForContextSize) {
+  EXPECT_THAT(MissingContextSignatureError("MTP drafter model", "mtp_drafter",
+                                           "mtp_drafter", 1024),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "MTP drafter model has neither signature "
+                       "\"mtp_drafter_cache_1024\" nor \"mtp_drafter\" for "
+                       "text decoder context size 1024."));
+  // Context size 0 (dynamic models) only ever looks up the base signature.
+  EXPECT_THAT(MissingContextSignatureError("MTP auxiliary model", "mask",
+                                           "mask", 0),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "MTP auxiliary model has no signature \"mask\" for "
+                       "text decoder context size 0."));
+  EXPECT_THAT(MissingContextSignatureError("MTP auxiliary model", "mask",
+                                           "mask_cache_640", 640),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "MTP auxiliary model has no signature "
+                       "\"mask_cache_640\" for text decoder context size "
+                       "640."));
+}
+
+TEST_F(DrafterContextTest, CreateRejectsKVCacheShapeMismatch) {
+  // A single-context drafter built for 4096 tokens cannot attend over the KV
+  // cache of a 640 token context group.
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 4096}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+
+  EXPECT_THAT(DrafterContext::Create(*env_, model, groups),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("provides shape [1, 1, 640, 4]")));
+}
+
+// Builds an MTP auxiliary model with a "rope" signature (`input_pos` [1] ->
+// `rope_output_name` [1, 1, 8]) and one mask signature per entry of
+// `mask_signatures` (signature key -> context size N, mapping `time_step` [1]
+// and optional `input_tokens` [1] to `mask_output_name` [1, 1, 1, N]). Each
+// signature casts its scalar int32 position/step input to float32 and adds a
+// zero constant of the output shape so the output buffer is filled with the
+// scalar input value.
+std::vector<uint8_t> BuildMtpAuxModelBuffer(
+    const std::vector<std::pair<std::string, int32_t>>& mask_signatures,
+    bool with_input_tokens = true,
+    absl::string_view rope_output_name = "activations",
+    absl::string_view mask_output_name = "mask_local") {
+  flatbuffers::FlatBufferBuilder builder;
+  auto cast_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_CAST);
+  auto add_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
+  auto opcodes_vec = builder.CreateVector({cast_opcode, add_opcode});
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  buffers.push_back(tflite::CreateBuffer(builder));  // Buffer 0: empty.
+  auto add_zeros_buffer = [&](size_t num_floats) -> uint32_t {
+    const std::vector<uint8_t> zero_bytes(num_floats * sizeof(float), 0);
+    buffers.push_back(
+        tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes)));
+    return buffers.size() - 1;
+  };
+  auto create_tensor = [&](std::vector<int32_t> dims, tflite::TensorType type,
+                           uint32_t buffer_idx, absl::string_view name) {
+    return tflite::CreateTensor(
+        builder, builder.CreateVector(dims), type, buffer_idx,
+        builder.CreateString(name.data(), name.size()));
+  };
+  auto create_map = [&](absl::string_view name, uint32_t tensor_index) {
+    return tflite::CreateTensorMap(
+        builder, builder.CreateString(name.data(), name.size()), tensor_index);
+  };
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  // Subgraph 0: "rope".
+  {
+    const uint32_t zeros_buf = add_zeros_buffer(8);
+    auto tensors_vec = builder.CreateVector(
+        {create_tensor({1}, tflite::TensorType_INT32, 0, "input_pos"),
+         create_tensor({1}, tflite::TensorType_FLOAT32, 0, "pos_f32"),
+         create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, zeros_buf,
+                       "rope_zeros"),
+         create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, 0,
+                       rope_output_name)});
+    auto cast_op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                          builder.CreateVector<int32_t>({0}),
+                                          builder.CreateVector<int32_t>({1}));
+    auto add_op = tflite::CreateOperator(builder, /*opcode_index=*/1,
+                                         builder.CreateVector<int32_t>({1, 2}),
+                                         builder.CreateVector<int32_t>({3}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector<int32_t>({0}),
+        builder.CreateVector<int32_t>({3}),
+        builder.CreateVector({cast_op, add_op}), builder.CreateString("rope")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector({create_map("input_pos", 0)}),
+        builder.CreateVector({create_map(rope_output_name, 3)}),
+        builder.CreateString("rope"), /*subgraph_index=*/0));
+  }
+
+  // Subgraphs 1..K: mask signatures.
+  for (size_t i = 0; i < mask_signatures.size(); ++i) {
+    const int32_t context_size = mask_signatures[i].second;
+    const uint32_t zeros_buf = add_zeros_buffer(context_size);
+    auto tensors_vec = builder.CreateVector(
+        {create_tensor({1}, tflite::TensorType_INT32, 0, "time_step"),
+         create_tensor({1}, tflite::TensorType_INT32, 0, "input_tokens"),
+         create_tensor({1}, tflite::TensorType_FLOAT32, 0, "step_f32"),
+         create_tensor({1, 1, 1, context_size}, tflite::TensorType_FLOAT32,
+                       zeros_buf, "mask_zeros"),
+         create_tensor({1, 1, 1, context_size}, tflite::TensorType_FLOAT32, 0,
+                       mask_output_name)});
+    auto cast_op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                          builder.CreateVector<int32_t>({0}),
+                                          builder.CreateVector<int32_t>({2}));
+    auto add_op = tflite::CreateOperator(builder, /*opcode_index=*/1,
+                                         builder.CreateVector<int32_t>({2, 3}),
+                                         builder.CreateVector<int32_t>({4}));
+    std::vector<int32_t> sg_inputs = {0};
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> inputs_map = {
+        create_map("time_step", 0)};
+    if (with_input_tokens) {
+      sg_inputs.push_back(1);
+      inputs_map.push_back(create_map("input_tokens", 1));
+    }
+    const uint32_t subgraph_index = subgraphs.size();
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        builder.CreateVector<int32_t>({4}),
+        builder.CreateVector({cast_op, add_op}),
+        builder.CreateString(mask_signatures[i].first)));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector(inputs_map),
+        builder.CreateVector({create_map(mask_output_name, 4)}),
+        builder.CreateString(mask_signatures[i].first), subgraph_index));
+  }
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("mtp_aux_model"), builder.CreateVector(buffers),
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+TEST_F(DrafterContextTest,
+       RunDrafterMaskInvokesExplicitAndDefaultFallbackSignature) {
+  const std::vector<uint8_t> aux_buffer =
+      BuildMtpAuxModelBuffer({{"mask_cache_640", 640}, {"mask", 640}});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      ::litert::CompiledModel::Create(
+          *env_,
+          ::litert::BufferRef<uint8_t>(aux_buffer.data(), aux_buffer.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      in_buffers[MaskSignatures::kMaskInputTimeStep],
+      compiled_model.CreateInputBuffer("mask_cache_640",
+                                       MaskSignatures::kMaskInputTimeStep));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      in_buffers[MaskSignatures::kMaskInputTokens],
+      compiled_model.CreateInputBuffer("mask_cache_640",
+                                       MaskSignatures::kMaskInputTokens));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      out_buffers["mask_local"],
+      compiled_model.CreateOutputBuffer("mask_cache_640", "mask_local"));
+
+  NpuModelGeometry geometry;
+  geometry.global_cache_length = 640;
+  ASSERT_OK_AND_ASSIGN(
+      NpuMask mask,
+      NpuMask::CreateForDrafter(MaskUpdateMethod::kModel, &compiled_model,
+                                std::move(in_buffers), std::move(out_buffers),
+                                &geometry));
+
+  ASSERT_OK(mask.SetDecodeInput(/*step=*/7, /*token_id=*/11));
+  ASSERT_OK(mask.RunDrafter("mask_cache_640"));
+  EXPECT_EQ(*static_cast<const float*>(
+                HostAddressOf(mask.Context().decode_output_buffers.at(
+                    "mask_local"))),
+            7.0f);
+
+  // An empty signature falls back to the single-context "mask" signature.
+  ASSERT_OK(mask.SetDecodeInput(/*step=*/13, /*token_id=*/17));
+  ASSERT_OK(mask.RunDrafter());
+  EXPECT_EQ(*static_cast<const float*>(
+                HostAddressOf(mask.Context().decode_output_buffers.at(
+                    "mask_local"))),
+            13.0f);
+}
+
+TEST_F(DrafterContextTest,
+       DrafterAuxContextBindsMaskSignaturesAndRealiasesOutputsAcrossGroups) {
+  ::litert::Model drafter_model = LoadModel(BuildDrafterModelBuffer(
+      {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
+  ::litert::Model aux_model = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask_cache_640", 640}, {"mask_cache_1024", 1024}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+  ASSERT_OK_AND_ASSIGN(
+      DrafterAuxContext drafter_aux_context,
+      DrafterAuxContext::Create(*env_, aux_model, drafter_context, groups,
+                                MaskUpdateMethod::kModel));
+
+  EXPECT_THAT(drafter_aux_context.mask_signatures,
+              ElementsAre("mask_cache_640", "mask_cache_1024"));
+  EXPECT_EQ(drafter_aux_context.mask_signature, "mask_cache_640");
+  EXPECT_TRUE(SharesMemory(
+      drafter_aux_context.drafter_rope.Context().decode_output_buffers.at(
+          "activations"),
+      drafter_context.mtp_input_buffers.at("activations")));
+  EXPECT_TRUE(SharesMemory(
+      drafter_aux_context.drafter_mask.Context().decode_output_buffers.at(
+          "mask_local"),
+      drafter_context.context_bindings[0].input_buffers.at("mask_local")));
+
+  ASSERT_OK(drafter_aux_context.drafter_rope.SetDecodePosition(19));
+  ASSERT_OK(drafter_aux_context.drafter_rope.RunDrafter());
+  EXPECT_EQ(*static_cast<const float*>(HostAddressOf(
+                drafter_context.mtp_input_buffers.at("activations"))),
+            19.0f);
+
+  ASSERT_OK(drafter_aux_context.drafter_mask.SetDecodeInput(23, 0));
+  ASSERT_OK(drafter_aux_context.drafter_mask.RunDrafter(
+      drafter_aux_context.mask_signature));
+  EXPECT_EQ(*static_cast<const float*>(HostAddressOf(
+                drafter_context.mtp_input_buffers.at("mask_local"))),
+            23.0f);
+
+  // Switching to the second context group updates the active mask signature,
+  // re-points the mask output at the 1024-token drafter mask input buffer, and
+  // updates the geometry pointer used by kWH mask generation.
+  ASSERT_OK(drafter_context.BindContextGroup(1, groups[1]));
+  ASSERT_OK(drafter_aux_context.BindContextGroup(
+      1, groups[1], drafter_context.mtp_input_buffers));
+  EXPECT_EQ(drafter_aux_context.mask_signature, "mask_cache_1024");
+  EXPECT_TRUE(SharesMemory(
+      drafter_aux_context.drafter_mask.Context().decode_output_buffers.at(
+          "mask_local"),
+      drafter_context.context_bindings[1].input_buffers.at("mask_local")));
+  ASSERT_OK(drafter_aux_context.drafter_mask.SetDecodeInput(31, 0));
+  ASSERT_OK(drafter_aux_context.drafter_mask.RunDrafter(
+      drafter_aux_context.mask_signature));
+  EXPECT_EQ(*static_cast<const float*>(HostAddressOf(
+                drafter_context.mtp_input_buffers.at("mask_local"))),
+            31.0f);
+}
+
+TEST_F(DrafterContextTest,
+       DrafterAuxContextToleratesOmittedInputTokensInMaskSignature) {
+  ::litert::Model drafter_model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
+  ::litert::Model aux_model = LoadModel(
+      BuildMtpAuxModelBuffer({{"mask", 640}}, /*with_input_tokens=*/false));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+  ASSERT_OK_AND_ASSIGN(
+      DrafterAuxContext drafter_aux_context,
+      DrafterAuxContext::Create(*env_, aux_model, drafter_context, groups,
+                                MaskUpdateMethod::kModel));
+  EXPECT_FALSE(drafter_aux_context.drafter_mask.Context()
+                   .decode_input_buffers.contains("input_tokens"));
+  ASSERT_OK(drafter_aux_context.drafter_mask.SetDecodeInput(11, 99));
+  ASSERT_OK(drafter_aux_context.drafter_mask.RunDrafter(
+      drafter_aux_context.mask_signature));
+  EXPECT_EQ(*static_cast<const float*>(HostAddressOf(
+                drafter_context.mtp_input_buffers.at("mask_local"))),
+            11.0f);
+}
+
+TEST_F(DrafterContextTest,
+       DrafterAuxContextRejectsMismatchedRopeOrMaskOutputs) {
+  ::litert::Model drafter_model = LoadModel(BuildDrafterModelBuffer(
+      {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
+  std::vector<ContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+
+  // Missing RoPE output in the drafter inputs.
+  ::litert::Model bad_rope_aux = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask_cache_640", 640}, {"mask_cache_1024", 1024}},
+      /*with_input_tokens=*/true, /*rope_output_name=*/"unknown_rope_out"));
+  EXPECT_THAT(DrafterAuxContext::Create(*env_, bad_rope_aux, drafter_context,
+                                        groups, MaskUpdateMethod::kModel),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("has no input \"unknown_rope_out\"")));
+
+  // Missing mask output in the drafter inputs.
+  ::litert::Model bad_mask_name_aux = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask_cache_640", 640}, {"mask_cache_1024", 1024}},
+      /*with_input_tokens=*/true, /*rope_output_name=*/"activations",
+      /*mask_output_name=*/"unknown_mask_out"));
+  EXPECT_THAT(
+      DrafterAuxContext::Create(*env_, bad_mask_name_aux, drafter_context,
+                                groups, MaskUpdateMethod::kModel),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("has no input \"unknown_mask_out\"")));
+
+  // Single-context mask signature whose output shape only matches 640 fails
+  // validation against the 1024 context group.
+  ::litert::Model bad_mask_shape_aux =
+      LoadModel(BuildMtpAuxModelBuffer({{"mask", 640}}));
+  EXPECT_THAT(
+      DrafterAuxContext::Create(*env_, bad_mask_shape_aux, drafter_context,
+                                groups, MaskUpdateMethod::kModel),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("produces \"mask_local\" with shape [1, 1, 1, 640] "
+                         "but MTP drafter signature \"mtp_drafter_cache_1024\" "
+                         "expects shape [1, 1, 1, 1024]")));
 }
 
 }  // namespace

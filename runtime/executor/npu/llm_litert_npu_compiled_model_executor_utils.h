@@ -121,6 +121,13 @@ struct TextDecoderSignatures {
 using LlmSignatures = TextDecoderSignatures;
 
 // Signature names for MTP speculative decoding signatures.
+//
+// Multi-context models follow the same convention as the text decoder: the
+// drafter (`kMtpDrafter`) and its attention mask builder (`kMtpMask`) exist
+// once per supported context size with a "_cache_<N>" suffix, e.g.
+// "mtp_drafter_cache_640" / "mask_cache_640", while the context independent
+// RoPE builder (`kMtpRope`) exists once. See `ResolveMtpDrafterSignature` and
+// `ResolveMtpMaskSignature`.
 struct MtpSignatures {
   static constexpr absl::string_view kMtpDrafter = "mtp_drafter";
   static constexpr absl::string_view kMtpRope = "rope";
@@ -133,6 +140,37 @@ struct MtpSignatures {
   static constexpr absl::string_view kOutputActivations =
       "projected_activations";
 };
+
+// Returns the drafter signature to use for a text decoder context group of
+// `context_size`: "mtp_drafter_cache_<context_size>" when the drafter model
+// provides per-context signatures, otherwise the single-context "mtp_drafter".
+std::string ResolveMtpDrafterSignature(const litert::Model& mtp_drafter_model,
+                                       int context_size);
+
+// Returns the drafter attention mask signature of the MTP auxiliary model to
+// use for a text decoder context group of `context_size`:
+// "mask_cache_<context_size>" when present, otherwise the single-context
+// "mask".
+std::string ResolveMtpMaskSignature(const litert::Model& mtp_aux_model,
+                                    int context_size);
+
+// Returns the InvalidArgument error for `model_description` (e.g. "MTP drafter
+// model") lacking `resolved_signature`, the result of
+// `ResolveMtpDrafterSignature` / `ResolveMtpMaskSignature` for
+// `base_signature` and `context_size`. Names both candidates when the
+// per-context "<base>_cache_<context_size>" signature was looked up as well.
+absl::Status MissingContextSignatureError(absl::string_view model_description,
+                                          absl::string_view base_signature,
+                                          absl::string_view resolved_signature,
+                                          int context_size);
+
+// Returns true when a tensor buffer of `buffer_type` can be bound to a
+// signature tensor of `signature_type`: same element type and rank, and equal
+// sizes in every dimension that is static in `signature_type`. Dynamic
+// signature dimensions (negative sizes) accept any size, as the compiled model
+// resizes them on run.
+bool IsCompatibleTensorType(const ::litert::RankedTensorType& signature_type,
+                            const ::litert::RankedTensorType& buffer_type);
 
 // On Windows, `ERROR` is defined as a macro, which can cause issues if it is
 // expanded prematurely where the literal token `ERROR` is expected.
@@ -470,37 +508,61 @@ absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
     const LlmExecutorSettings& settings, bool is_dynamic_model = false);
 
 // Holds the context for the drafter model.
+//
+// The drafter attends over the text decoder's KV cache: its `kv_cache_*`
+// inputs alias the text decoder's KV cache buffers instead of owning their
+// own. Text decoders with multiple context sizes therefore pair with a drafter
+// that has one signature per context size (see `ResolveMtpDrafterSignature`).
+// `BindContextGroup` binds the drafter to the text decoder's active context
+// group: it selects the matching signature, aliases that group's KV cache
+// buffers and swaps in the input buffers whose shape depends on the context
+// size (the attention masks). All other inputs and all outputs are shared
+// across context groups.
 struct DrafterContext {
+  // Drafter signature and non-KV-cache input buffers of one text decoder
+  // context group.
+  struct ContextBinding {
+    std::string signature;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        input_buffers;
+  };
+
   ::litert::CompiledModel mtp_compiled_model;
+  // One binding per text decoder context group, in the same order.
+  std::vector<ContextBinding> context_bindings;
+  // Signature and input buffers of the currently bound context group.
+  std::string signature;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       mtp_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       mtp_output_buffers;
+
   DrafterContext(::litert::CompiledModel mtp_compiled_model,
-                 absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-                     mtp_input_buffers,
+                 std::vector<ContextBinding> context_bindings,
                  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
                      mtp_output_buffers)
       : mtp_compiled_model(std::move(mtp_compiled_model)),
-        mtp_input_buffers(std::move(mtp_input_buffers)),
+        context_bindings(std::move(context_bindings)),
         mtp_output_buffers(std::move(mtp_output_buffers)) {}
 
   // Sets the drafter step position in
-  // mtp_input_buffers[MtpSignatures::kInputPos].
+  // mtp_input_buffers[MtpSignatures::kInputPos]. No-op for drafter signatures
+  // without that input (externalized RoPE and masks make it unused, and
+  // converters may drop unused inputs).
   absl::Status SetInputPos(int32_t pos);
 
-  // Re-binds the drafter's KV cache input buffers to the new active context
-  // group.
-  absl::Status UpdateKVCacheBuffers(
-      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          new_input_kv_cache_buffers);
+  // Binds the drafter to the text decoder context group `context_group`, the
+  // `index`-th context group it was created with. Always re-aliases the
+  // group's current KV cache buffers, so this must also be called after the
+  // text decoder re-allocated the KV cache of a context group.
+  absl::Status BindContextGroup(size_t index,
+                                const ContextGroup& context_group);
 
-  // Allocates the MTP drafter buffers and creates the DrafterContext.
+  // Allocates the MTP drafter buffers for every text decoder context group and
+  // creates the DrafterContext bound to the first context group.
   static absl::StatusOr<DrafterContext> Create(
       ::litert::Environment& env, const litert::Model& mtp_drafter_model,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          drafter_input_kv_cache_buffers,
-      ::litert::TensorBuffer& output_activations_buffers);
+      absl::Span<const ContextGroup> context_groups);
 };
 
 // Dequantize logits to float32.

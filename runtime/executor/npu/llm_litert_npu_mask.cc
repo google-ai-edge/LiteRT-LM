@@ -858,7 +858,7 @@ absl::Status NpuMask::RunVerify(absl::string_view signature) const {
   return absl::OkStatus();
 }
 
-absl::Status NpuMask::RunDrafter() const {
+absl::Status NpuMask::RunDrafter(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
     RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
     return HWMaskUpdate(
@@ -872,8 +872,10 @@ absl::Status NpuMask::RunDrafter() const {
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
+  absl::string_view sig =
+      signature.empty() ? MaskSignatures::kMtpMask : signature;
   auto res = compiled_model_->Run(
-      MaskSignatures::kMtpMask,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           mask_context_.decode_input_buffers),

@@ -64,7 +64,7 @@ struct MaskSignatures {
 //
 // 3. MTP Speculative Decoding - Draft Generation (on drafter_mask):
 //    drafter_mask.SetDecodeInput(draft_step, draft_token_id);
-//    drafter_mask.RunDrafter();
+//    drafter_mask.RunDrafter(drafter_mask_signature);
 //
 // 4. MTP Speculative Decoding - Verification (on main_mask):
 //    main_mask_.SetVerifyInput(start_step, verify_ids);
@@ -164,7 +164,10 @@ class NpuMask {
   absl::Status RunDecode(absl::string_view signature = "") const;
 
   // --- Stage 3: Speculative Decoding (MTP Draft & Verify) ---
-  absl::Status RunDrafter() const;
+  // Runs the drafter mask `signature`, or `MaskSignatures::kMtpMask` when
+  // empty. Multi-context models provide one drafter mask signature per context
+  // size (e.g. "mask_cache_640").
+  absl::Status RunDrafter(absl::string_view signature = "") const;
   absl::Status SetVerifyInput(int32_t start_step,
                               absl::Span<const int> verify_ids);
   absl::Status RunVerify(absl::string_view signature = "") const;

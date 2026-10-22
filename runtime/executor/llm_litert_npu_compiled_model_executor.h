@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -51,23 +52,40 @@
 namespace litert::lm {
 
 // Holds the context for the drafter auxiliary model (MTP RoPE & Mask).
+//
+// The RoPE builder does not depend on the context size and is shared by all
+// text decoder context groups. The drafter mask builder's output shape follows
+// the KV cache length, so multi-context models provide one mask signature per
+// context size (see `ResolveMtpMaskSignature`). Both write straight into the
+// drafter's input buffers; `BindContextGroup` selects the mask signature and
+// geometry of the active context group and re-points the outputs at the
+// drafter's currently bound input buffers.
 struct DrafterAuxContext {
   ::litert::CompiledModel mtp_aux_compiled_model;
   NpuRope drafter_rope;
   NpuMask drafter_mask;
+  // Drafter mask signature per text decoder context group, in the same order
+  // as the executor's context groups.
+  std::vector<std::string> mask_signatures;
+  // Drafter mask signature of the currently bound context group.
+  std::string mask_signature;
 
   DrafterAuxContext(::litert::CompiledModel mtp_aux_compiled_model,
-                    NpuRope drafter_rope, NpuMask drafter_mask)
+                    NpuRope drafter_rope, NpuMask drafter_mask,
+                    std::vector<std::string> mask_signatures)
       : mtp_aux_compiled_model(std::move(mtp_aux_compiled_model)),
         drafter_rope(std::move(drafter_rope)),
-        drafter_mask(std::move(drafter_mask)) {
+        drafter_mask(std::move(drafter_mask)),
+        mask_signatures(std::move(mask_signatures)) {
     this->drafter_rope.SetCompiledModel(&this->mtp_aux_compiled_model);
     this->drafter_mask.SetCompiledModel(&this->mtp_aux_compiled_model);
   }
   DrafterAuxContext(DrafterAuxContext&& other) noexcept
       : mtp_aux_compiled_model(std::move(other.mtp_aux_compiled_model)),
         drafter_rope(std::move(other.drafter_rope)),
-        drafter_mask(std::move(other.drafter_mask)) {
+        drafter_mask(std::move(other.drafter_mask)),
+        mask_signatures(std::move(other.mask_signatures)),
+        mask_signature(std::move(other.mask_signature)) {
     drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
     drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
   }
@@ -76,6 +94,8 @@ struct DrafterAuxContext {
       mtp_aux_compiled_model = std::move(other.mtp_aux_compiled_model);
       drafter_rope = std::move(other.drafter_rope);
       drafter_mask = std::move(other.drafter_mask);
+      mask_signatures = std::move(other.mask_signatures);
+      mask_signature = std::move(other.mask_signature);
       drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
       drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
     }
@@ -83,13 +103,29 @@ struct DrafterAuxContext {
   }
 
   // Compiles the MTP auxiliary model and initializes drafter_rope and
-  // drafter_mask.
+  // drafter_mask, bound to the first context group (the one `drafter_context`
+  // starts out bound to). `context_groups` are the text decoder context groups
+  // `drafter_context` was created with; `drafter_mask` retains a pointer to the
+  // bound group's `geometry`, so the `context_groups` elements must remain at
+  // stable addresses for as long as they remain bound.
   static absl::StatusOr<DrafterAuxContext> Create(
       ::litert::Environment& env, const litert::Model& mtp_aux_model,
+      const DrafterContext& drafter_context,
+      absl::Span<const ContextGroup> context_groups,
+      MaskUpdateMethod mtp_mask_update_method);
+
+  // Binds the RoPE and mask builders to the text decoder context group
+  // `context_group`, the `index`-th context group the drafter was created
+  // with: selects the drafter mask signature and geometry of that group and
+  // points the builders' outputs at `drafter_input_buffers`, the input buffers
+  // of the drafter after `DrafterContext::BindContextGroup(index, ...)`.
+  // `drafter_mask` retains a pointer to `context_group.geometry`, so
+  // `context_group` must outlive the binding at a stable address (until the
+  // next `BindContextGroup` call or the destruction of `this`).
+  absl::Status BindContextGroup(
+      size_t index, const ContextGroup& context_group,
       const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          drafter_aux_output_buffers,
-      MaskUpdateMethod mtp_mask_update_method,
-      const NpuModelGeometry* geometry);
+          drafter_input_buffers);
 };
 
 // Component intended to be used with an NPU variant of Gemma3.
@@ -470,11 +506,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       MaskUpdateMethod mask_update_method = MaskUpdateMethod::kModel,
       KVCacheUpdateMethod cache_update_method = KVCacheUpdateMethod::kModel);
 
-  // Run a 'warmup' inference on the drafter model.  This is intended to be
-  // called before the first actual inference.
+  // Runs a 'warmup' inference of the drafter model and its RoPE/mask builders
+  // for every text decoder context group and leaves the drafter bound to the
+  // first context group. This is intended to be called before the first actual
+  // inference.
   static absl::Status WarmupDrafterInference(
-      const DrafterContext& drafter_context,
-      const DrafterAuxContext& drafter_aux_context);
+      DrafterContext& drafter_context, DrafterAuxContext& drafter_aux_context,
+      absl::Span<const ContextGroup> context_groups);
 
   // Clears all buffers in the provided 'buffers' map that belong to the KV
   // cache.
