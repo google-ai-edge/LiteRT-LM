@@ -504,5 +504,62 @@ TEST_F(AudioSessionAdvancedTest,
   EXPECT_OK(audio_session->RunPrefill(audio_data));
 }
 
+TEST_F(AudioSessionAdvancedTest, ExtractAudioEmbeddingsSlicesToValidTokens) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<AudioSessionAdvanced> audio_session,
+                       CreateAudioSession());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer tensor,
+      CopyToTensorBuffer<float>(
+          {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}, {1, 4, 2}));
+  ExecutorAudioData audio_data;
+  audio_data.SetAudioEmbeddings(std::move(tensor));
+  audio_data.SetValidTokens(2);
+
+  ASSERT_OK_AND_ASSIGN(TensorBuffer extracted,
+                       audio_session->ExtractAudioEmbeddings(audio_data));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, extracted.TensorType());
+  EXPECT_THAT(tensor_type.Layout().Dimensions(), testing::ElementsAre(1, 2, 2));
+  LITERT_ASSERT_OK_AND_ASSIGN(std::vector<float> extracted_data,
+                              CopyFromTensorBuffer<float>(extracted));
+  EXPECT_THAT(extracted_data, testing::ElementsAre(1.0f, 2.0f, 3.0f, 4.0f));
+}
+
+TEST_F(AudioSessionAdvancedTest,
+       ExtractAudioEmbeddingsWithoutUnprojectedEmbeddingsReturnsError) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<AudioSessionAdvanced> audio_session,
+                       CreateAudioSession());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer projected,
+      CopyToTensorBuffer<float>({1.0f, 2.0f}, {1, 1, 2}));
+  ExecutorAudioData audio_data;
+  audio_data.SetProjectedAudioEmbeddings(std::move(projected));
+  audio_data.SetValidTokens(1);
+
+  EXPECT_THAT(audio_session->ExtractAudioEmbeddings(audio_data),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(AudioSessionAdvancedTest,
+       ExtractAudioEmbeddingsWithoutEngineReturnsError) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<AudioSessionAdvanced> audio_session,
+      AudioSessionAdvanced::Create(execution_manager_, tokenizer_.get(),
+                                   CreateAudioSessionConfig(),
+                                   /*benchmark_info=*/std::nullopt,
+                                   /*living_sessions_count=*/nullptr,
+                                   /*engine=*/nullptr));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer tensor, CopyToTensorBuffer<float>({1.0f, 2.0f}, {1, 1, 2}));
+  ExecutorAudioData audio_data;
+  audio_data.SetAudioEmbeddings(std::move(tensor));
+  audio_data.SetValidTokens(1);
+
+  EXPECT_THAT(audio_session->ExtractAudioEmbeddings(audio_data),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
 }  // namespace
 }  // namespace litert::lm

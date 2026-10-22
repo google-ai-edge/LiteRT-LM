@@ -73,6 +73,9 @@ absl::StatusOr<int> GetAudioSequenceDimensionIndex(absl::Span<const int> dims) {
       ". Expected rank >= 2."));
 }
 
+// Slices `source_tensor` along its audio sequence dimension to `valid_tokens`
+// frames. When `valid_tokens` is -1 or already equals the sequence dimension
+// length, returns a zero-copy duplicate of `source_tensor`.
 absl::StatusOr<TensorBuffer> SliceAudioEmbeddingTensor(
     const TensorBuffer& source_tensor, int valid_tokens,
     const Environment& env) {
@@ -271,6 +274,22 @@ absl::Status AudioSessionAdvanced::RunPrefill(
   std::vector<InputData> inputs;
   inputs.push_back(std::move(input_audio));
   return SessionAdvanced::RunPrefill(inputs);
+}
+
+absl::StatusOr<TensorBuffer> AudioSessionAdvanced::ExtractAudioEmbeddings(
+    const ExecutorAudioData& audio_data) const {
+  ABSL_ASSIGN_OR_RETURN(const auto* env, GetEnvironment());
+  if (env == nullptr) {
+    return absl::InternalError("LiteRT environment is not available.");
+  }
+  absl::StatusOr<const TensorBuffer*> audio_embeddings =
+      audio_data.GetAudioEmbeddingsPtr();
+  if (!audio_embeddings.ok() || *audio_embeddings == nullptr) {
+    return absl::InvalidArgumentError(
+        "ExecutorAudioData does not contain unprojected audio embeddings.");
+  }
+  return SliceAudioEmbeddingTensor(**audio_embeddings,
+                                   audio_data.GetValidTokens(), *env);
 }
 
 }  // namespace litert::lm

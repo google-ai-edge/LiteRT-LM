@@ -84,6 +84,20 @@ class AudioSessionAdvanced : public SessionAdvanced {
   absl::Status RunPrefill(const ExecutorAudioData& audio_data)
       ABSL_LOCKS_EXCLUDED(mutex_);
 
+  // Extracts the unprojected audio embeddings tensor (`GetAudioEmbeddingsPtr`)
+  // from `audio_data` with its sequence dimension sliced to
+  // `audio_data.GetValidTokens()` (mirroring how `RunPrefill` slices projected
+  // audio embeddings).
+  //
+  // Downstream consumers that operate on raw `TensorBuffer`s do not have access
+  // to `ExecutorAudioData::GetValidTokens()` and treat the entire sequence
+  // dimension as valid frames. Slicing ensures trailing padded frames from
+  // partial or flushed audio chunks do not leak. When `GetValidTokens()` is -1
+  // or already matches the tensor's sequence length, this returns a zero-copy
+  // duplicate of the underlying buffer.
+  absl::StatusOr<TensorBuffer> ExtractAudioEmbeddings(
+      const ExecutorAudioData& audio_data) const;
+
  protected:
   absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override
