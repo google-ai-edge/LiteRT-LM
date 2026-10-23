@@ -22,10 +22,12 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
@@ -88,6 +90,90 @@ inline int MaxElement(const float* logits, int size) {
   }
 
   return max_idx;
+}
+
+// The top-k distribution of each (batch, position), in the order that
+// TopKTopPSampling() applies the top-p cut in.
+struct SortedTopK {
+  // min(k, vocab_size).
+  int k = 0;
+  // Shape [batch_size, sequence_size, k] (flattened). Each (batch, position)
+  // is sorted in descending order of probability, with ties broken by
+  // ascending token id so that the order, and hence the top-p cut, doesn't
+  // depend on the order in which TopKTokenIds() returns the ids.
+  std::vector<int> ids;
+  std::vector<float> probs;
+  // Shape [batch_size, sequence_size] (flattened): the max logit of each
+  // (batch, position).
+  std::vector<float> max_logits;
+};
+
+absl::StatusOr<SortedTopK> ComputeSortedTopK(absl::Span<const float> logits,
+                                             int k, float temperature,
+                                             int batch_size,
+                                             int sequence_size) {
+  if (logits.empty()) {
+    return absl::InvalidArgumentError("Logits vector cannot be empty.");
+  }
+  if (batch_size <= 0 || sequence_size <= 0) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("batch_size and sequence_size must be positive, but "
+                        "got %d and %d.",
+                        batch_size, sequence_size));
+  }
+  if (logits.size() % (batch_size * sequence_size) != 0) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Logits vector size must be a multiple of batch "
+                        "size * sequence length. But got %d and %d * %d.",
+                        logits.size(), batch_size, sequence_size));
+  }
+  if (k <= 0) {
+    return absl::InvalidArgumentError("k must be greater than 0.");
+  }
+  const int vocab_size = logits.size() / (batch_size * sequence_size);
+  // Ensure k is not larger than the number of probabilities
+  k = std::min(k, vocab_size);
+
+  ABSL_ASSIGN_OR_RETURN(auto topk_token_ids,
+                        TopKTokenIds(logits, k, batch_size, sequence_size));
+  std::vector<int> flat_topk_token_ids(batch_size * sequence_size * k);
+  for (int b = 0; b < batch_size; ++b) {
+    std::copy(topk_token_ids[b].begin(), topk_token_ids[b].end(),
+              flat_topk_token_ids.begin() + b * sequence_size * k);
+  }
+  std::vector<std::vector<float>> max_logit_values;
+  ABSL_ASSIGN_OR_RETURN(auto probabilities,
+                        Softmax(logits, flat_topk_token_ids, temperature,
+                                batch_size, sequence_size, max_logit_values));
+
+  const int num_rows = batch_size * sequence_size;
+  SortedTopK sorted;
+  sorted.k = k;
+  sorted.ids.resize(num_rows * k);
+  sorted.probs.resize(num_rows * k);
+  sorted.max_logits.resize(num_rows);
+  std::vector<int> order(k);
+  for (int b = 0; b < batch_size; ++b) {
+    for (int s = 0; s < sequence_size; ++s) {
+      const int row = b * sequence_size + s;
+      const float* row_probs = probabilities[b].data() + s * k;
+      const int* row_ids = flat_topk_token_ids.data() + row * k;
+      // O(k log k) time complexity.
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](int i1, int i2) {
+        if (row_probs[i1] != row_probs[i2]) {
+          return row_probs[i1] > row_probs[i2];
+        }
+        return row_ids[i1] < row_ids[i2];
+      });
+      for (int i = 0; i < k; ++i) {
+        sorted.probs[row * k + i] = row_probs[order[i]];
+        sorted.ids[row * k + i] = row_ids[order[i]];
+      }
+      sorted.max_logits[row] = max_logit_values[b][s];
+    }
+  }
+  return sorted;
 }
 
 }  // namespace
@@ -266,73 +352,35 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
 absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
     absl::Span<const float> logits, int k, float p, float temperature,
     std::shared_ptr<std::default_random_engine> rng, int batch_size,
-    int sequence_size, std::vector<std::vector<float>>& sampled_scores) {
-  if (logits.empty()) {
-    return absl::InvalidArgumentError("Logits vector cannot be empty.");
-  }
-  if (logits.size() % (batch_size * sequence_size) != 0) {
-    return absl::InvalidArgumentError(
-        absl::StrFormat("Logits vector size must be a multiple of batch "
-                        "size * sequence length. But got %d and %d * %d.",
-                        logits.size(), batch_size, sequence_size));
-  }
-  if (k <= 0) {
-    return absl::InvalidArgumentError("k must be greater than 0.");
-  }
+    int sequence_size, std::vector<std::vector<float>>& sampled_scores,
+    TopKDistribution* topk_distribution) {
   if (p < 0.0 || p > 1.0) {
     return absl::InvalidArgumentError("p must be in the range [0.0, 1.0].");
   }
   if (rng == nullptr) {
     return absl::InvalidArgumentError("rng cannot be nullptr.");
   }
+  ABSL_ASSIGN_OR_RETURN(
+      SortedTopK sorted_topk,
+      ComputeSortedTopK(logits, k, temperature, batch_size, sequence_size));
+  k = sorted_topk.k;
   const int vocab_size = logits.size() / (batch_size * sequence_size);
-  // Ensure k is not larger than the number of probabilities
-  k = std::min(k, vocab_size);
-
-  auto topk_token_ids = TopKTokenIds(logits, k, batch_size, sequence_size);
-  if (!topk_token_ids.ok()) return topk_token_ids.status();
-
-  std::vector<int> flat_topk_token_ids(batch_size * sequence_size * k);
-  for (int b = 0; b < batch_size; ++b) {
-    std::copy((*topk_token_ids)[b].begin(), (*topk_token_ids)[b].end(),
-              flat_topk_token_ids.begin() + b * sequence_size * k);
-  }
-
-  std::vector<std::vector<float>> max_logit_values;
-  auto probabilities = Softmax(logits, flat_topk_token_ids, temperature,
-                               batch_size, sequence_size, max_logit_values);
-  if (!probabilities.ok()) return probabilities.status();
 
   std::vector<std::vector<int>> sampled_ids(batch_size,
                                             std::vector<int>(sequence_size));
   sampled_scores.assign(batch_size, std::vector<float>(sequence_size));
-  if (k == 1) {  // Greedy sampling. Return the topk_token_ids directly.
-    for (int b = 0; b < batch_size; ++b) {
-      for (int s = 0; s < sequence_size; ++s) {
-        sampled_ids[b][s] = (*topk_token_ids)[b][s];
-        sampled_scores[b][s] = 1.0f;
-      }
-    }
-    return sampled_ids;
-  }
   float current_temp =
       std::max(temperature, std::numeric_limits<float>::epsilon());
   for (int b = 0; b < batch_size; ++b) {
     for (int s = 0; s < sequence_size; ++s) {
-      // Define the comparator for descending probability
-      auto desc_prob_comp = [&probabilities, b, s, k](int i1, int i2) {
-        return (*probabilities)[b][s * k + i1] >
-               (*probabilities)[b][s * k + i2];
-      };
-
-      // Sort Only the Top-K.
-      // O(k log k) time complexity.
-      // Sorts the indices of the top k elements based on their probabilities.
-      // - index_of_topk[i] stores the offset within the current batch's top-k
-      // range.
-      std::vector<int> index_of_topk(k);
-      std::iota(index_of_topk.begin(), index_of_topk.end(), 0);
-      std::sort(index_of_topk.begin(), index_of_topk.end(), desc_prob_comp);
+      const int row = b * sequence_size + s;
+      const int* topk_ids = sorted_topk.ids.data() + row * k;
+      const float* topk_probs = sorted_topk.probs.data() + row * k;
+      if (k == 1) {  // Greedy sampling. Return the top token directly.
+        sampled_ids[b][s] = topk_ids[0];
+        sampled_scores[b][s] = 1.0f;
+        continue;
+      }
 
       // Determine Top-P Cutoff Index within Top-K.
       // O(k) time complexity.
@@ -342,7 +390,7 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
       for (int i = 0; i < k; ++i) {
         // Check if adding this probability would exceed the threshold p. It
         // stops when cumulative_prob >= p.
-        cumulative_prob += (*probabilities)[b][s * k + index_of_topk[i]];
+        cumulative_prob += topk_probs[i];
         final_sample_size = i + 1;  // Include this element
 
         if (cumulative_prob >= p) {
@@ -351,16 +399,14 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
       }
       // final_sample_size now holds min(p_cutoff_within_top_k, k)
 
-      int topk_offset = b * sequence_size * k + s * k;
-      int offset = (b * sequence_size + s) * vocab_size;
+      const int offset = row * vocab_size;
 
       // Handle Edge Case: Cumulative Probability is Zero.
       if (cumulative_prob <= std::numeric_limits<double>::epsilon()) {
-        // Fallback: Return the index with the absolute highest probability
-        // (indices[0] after sorting top-k).
-        sampled_ids[b][s] = flat_topk_token_ids[topk_offset + index_of_topk[0]];
+        // Fallback: Return the token with the highest probability.
+        sampled_ids[b][s] = topk_ids[0];
         sampled_scores[b][s] = std::exp(
-            (logits[offset + sampled_ids[b][s]] - max_logit_values[b][s]) /
+            (logits[offset + sampled_ids[b][s]] - sorted_topk.max_logits[row]) /
             current_temp);
         continue;
       }
@@ -370,17 +416,34 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
       double random_sample = dist(*rng);
       double current_cumulative = 0.0;
       for (int i = 0; i < final_sample_size; ++i) {
-        current_cumulative += (*probabilities)[b][s * k + index_of_topk[i]];
+        current_cumulative += topk_probs[i];
         if (random_sample <= current_cumulative) {
-          sampled_ids[b][s] =
-              flat_topk_token_ids[topk_offset + index_of_topk[i]];
-          sampled_scores[b][s] = (*probabilities)[b][s * k + index_of_topk[i]];
+          sampled_ids[b][s] = topk_ids[i];
+          sampled_scores[b][s] = topk_probs[i];
           break;
         }
       }
     }
   }
+  if (topk_distribution != nullptr) {
+    topk_distribution->k = k;
+    topk_distribution->probs = std::move(sorted_topk.probs);
+    topk_distribution->ids = std::move(sorted_topk.ids);
+  }
   return sampled_ids;
+}
+
+absl::Status ComputeTopKDistribution(absl::Span<const float> logits, int k,
+                                     float temperature, int batch_size,
+                                     int sequence_size,
+                                     std::vector<float>& probs,
+                                     std::vector<int>& ids) {
+  ABSL_ASSIGN_OR_RETURN(
+      SortedTopK sorted_topk,
+      ComputeSortedTopK(logits, k, temperature, batch_size, sequence_size));
+  probs = std::move(sorted_topk.probs);
+  ids = std::move(sorted_topk.ids);
+  return absl::OkStatus();
 }
 
 }  // namespace litert::lm

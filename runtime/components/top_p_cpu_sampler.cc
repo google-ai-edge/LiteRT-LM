@@ -26,6 +26,7 @@
 
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -33,6 +34,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampling_cpu_util.h"
+#include "runtime/components/top_k_distribution_buffer.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
@@ -166,32 +168,19 @@ absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
       compute_exact_log_probs));
 }
 
-absl::Status TopPSampler::SampleToIdAndScoreBuffer(
-    const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-    TensorBuffer* scores_tensor) {
-  auto status = ValidateTensor(logits_tensor, /*max_num_dims=*/3, batch_size_,
-                               "input logits");
-  if (!status.ok()) {
-    return status;
-  }
-  status =
-      ValidateTensor(ids_tensor, /*max_num_dims=*/2, batch_size_, "output ids");
-  if (!status.ok()) {
-    return status;
-  }
-
+absl::StatusOr<absl::Span<float>> TopPSampler::ReadLogits(
+    const TensorBuffer& logits_tensor) {
   LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits_tensor.TensorType());
-  absl::Span<float> logits_data_span;
   if (logits_tensor_type.ElementType() == ElementType::Float32) {
     auto logits_data_or = ReferTensorBufferAsSpan<float>(logits_tensor);
     if (!logits_data_or) {  // Download the data if it is not in host memory.
       LITERT_ASSIGN_OR_RETURN(logits_data_,
                               CopyFromTensorBuffer<float>(logits_tensor));
-      logits_data_span = absl::MakeSpan(logits_data_);
-    } else {
-      logits_data_span = *logits_data_or;
+      return absl::MakeSpan(logits_data_);
     }
-  } else if (logits_tensor_type.ElementType() == ElementType::Float16) {
+    return *logits_data_or;
+  }
+  if (logits_tensor_type.ElementType() == ElementType::Float16) {
     LITERT_ASSIGN_OR_RETURN(auto logits_size, logits_tensor.PackedSize());
     std::vector<uint16_t> logits_data_f16(logits_size / sizeof(uint16_t));
     TensorBuffer& mutable_logits_tensor =
@@ -199,32 +188,75 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
     LITERT_RETURN_IF_ERROR(
         mutable_logits_tensor.Read(absl::MakeSpan(logits_data_f16)));
     ConvertFp16ToFp32(logits_data_f16, logits_data_);
-    logits_data_span = absl::MakeSpan(logits_data_);
-  } else {
-    return absl::InvalidArgumentError(
-        "Unsupported logits data type for sampler.");
+    return absl::MakeSpan(logits_data_);
   }
+  return absl::InvalidArgumentError(
+      "Unsupported logits data type for sampler.");
+}
 
-  std::vector<std::vector<float>> sampled_scores;
-  auto sampled_ids =
-      TopKTopPSampling(logits_data_span, k_, p_, temperature_, generator_,
-                       batch_size_, sequence_size_, sampled_scores);
-  if (!sampled_ids.ok()) {
-    return sampled_ids.status();
+absl::Status TopPSampler::SampleToIdAndScoreBuffer(
+    const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+    TensorBuffer* scores_tensor) {
+  ABSL_RETURN_IF_ERROR(ValidateTensor(logits_tensor, /*max_num_dims=*/3,
+                                      batch_size_, "input logits"));
+  ABSL_RETURN_IF_ERROR(ValidateTensor(ids_tensor, /*max_num_dims=*/2,
+                                      batch_size_, "output ids"));
+  ABSL_ASSIGN_OR_RETURN(absl::Span<float> logits_data_span,
+                        ReadLogits(logits_tensor));
+  return SampleFromLogits(logits_data_span, ids_tensor, scores_tensor,
+                          /*topk_distribution=*/nullptr);
+}
+
+absl::Status TopPSampler::SampleToIdAndTopKBuffer(
+    const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+    TensorBuffer& topk_probs_tensor, TensorBuffer& topk_ids_tensor) {
+  ABSL_RETURN_IF_ERROR(ValidateTensor(logits_tensor, /*max_num_dims=*/3,
+                                      batch_size_, "input logits"));
+  ABSL_RETURN_IF_ERROR(ValidateTensor(ids_tensor, /*max_num_dims=*/2,
+                                      batch_size_, "output ids"));
+  // Validate the output shapes before consuming any randomness.
+  ABSL_ASSIGN_OR_RETURN(const int out_k, GetTopKDistributionBufferSize(
+                                             topk_probs_tensor, topk_ids_tensor,
+                                             batch_size_, sequence_size_));
+  ABSL_ASSIGN_OR_RETURN(absl::Span<float> logits_data_span,
+                        ReadLogits(logits_tensor));
+  const int vocab_size =
+      logits_data_span.size() / (batch_size_ * sequence_size_);
+  const int num_valid = std::min(k_, vocab_size);
+  if (out_k < num_valid) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("The top-k tensors have K = ", out_k,
+                     ", but the sampler's top-k is ", num_valid, "."));
   }
+  TopKDistribution topk_distribution;
+  ABSL_RETURN_IF_ERROR(SampleFromLogits(logits_data_span, ids_tensor,
+                                        /*scores_tensor=*/nullptr,
+                                        &topk_distribution));
+  return WriteTopKDistribution(
+      topk_distribution.probs, topk_distribution.ids,
+      /*src_k=*/topk_distribution.k, /*num_valid=*/topk_distribution.k,
+      batch_size_, sequence_size_, topk_probs_tensor, topk_ids_tensor);
+}
+
+absl::Status TopPSampler::SampleFromLogits(
+    absl::Span<float> logits_data_span, TensorBuffer& ids_tensor,
+    TensorBuffer* scores_tensor, TopKDistribution* topk_distribution) {
+  std::vector<std::vector<float>> sampled_scores;
+  ABSL_ASSIGN_OR_RETURN(
+      auto sampled_ids,
+      TopKTopPSampling(logits_data_span, k_, p_, temperature_, generator_,
+                       batch_size_, sequence_size_, sampled_scores,
+                       topk_distribution));
   std::vector<int> flat_sampled_ids(batch_size_ * sequence_size_);
   for (int i = 0; i < batch_size_; ++i) {
     for (int j = 0; j < sequence_size_; ++j) {
-      flat_sampled_ids[i * sequence_size_ + j] = (*sampled_ids)[i][j];
+      flat_sampled_ids[i * sequence_size_ + j] = sampled_ids[i][j];
     }
   }
   ids_tensor.Write(absl::MakeConstSpan(flat_sampled_ids));
   if (scores_tensor != nullptr) {
-    status = ValidateTensor(*scores_tensor, /*max_num_dims=*/2, batch_size_,
-                            "output scores");
-    if (!status.ok()) {
-      return status;
-    }
+    ABSL_RETURN_IF_ERROR(ValidateTensor(*scores_tensor, /*max_num_dims=*/2,
+                                        batch_size_, "output scores"));
     std::vector<float> scores(batch_size_ * sequence_size_);
     if (!compute_exact_log_probs_) {
       for (int i = 0; i < batch_size_; ++i) {
