@@ -55,7 +55,11 @@ struct Lfm2DataProcessorConfig {
   float normalization_rescale_factor = 1.0f / 255.0f;
 };
 
-struct Lfm2DataProcessorArguments {};
+struct Lfm2DataProcessorArguments {
+  // Whether to only dry run the media preprocessing, to count the tokens the
+  // input consumes. See ModelDataProcessor::WithDryRun().
+  bool dry_run = false;
+};
 
 }  // namespace litert::lm
 

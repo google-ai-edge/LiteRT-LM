@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -26,6 +27,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/conversation/model_data_processor/test_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
@@ -450,6 +452,174 @@ TEST_F(MultimodalProcessorHelperTest, MismatchAudioCountMore) {
       ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
                               audio_preprocessor_.get(), config, image_params),
       testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// Returns the dimensions of `tensor`.
+std::vector<int> GetTensorDimensions(const ::litert::TensorBuffer& tensor) {
+  auto tensor_type = tensor.TensorType();
+  EXPECT_TRUE(tensor_type.HasValue());
+  const auto& dimensions = tensor_type.Value().Layout().Dimensions();
+  return std::vector<int>(dimensions.begin(), dimensions.end());
+}
+
+TEST_F(MultimodalProcessorHelperTest, DryRunPatchifiedImageMatchesFull) {
+  std::string image_path = GetImageTestdataPath("apple.bmp");
+  const std::string prompt = "Here is <img>";
+  const json messages =
+      json::array({{{"role", "user"},
+                    {"content",
+                     {{{"type", "text"}, {"text", "Here is "}},
+                      {{"type", "image"}, {"path", image_path}}}}}});
+  MultimodalPromptProcessingConfig config = {
+      .delimiter_regex = "(<img>)",
+      .image_token_regex = "<img>",
+      .add_image_end = true,
+  };
+  ImagePreprocessParameter image_params;
+  image_params.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> full,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, image_params,
+                              /*visual_token_budget=*/std::nullopt,
+                              /*dry_run=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> dry_run,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, image_params,
+                              /*visual_token_budget=*/std::nullopt,
+                              /*dry_run=*/true));
+
+  InputText expected_text("Here is ");
+  EXPECT_THAT(dry_run, ElementsAre(HasInputText(&expected_text), testing::_,
+                                   HasInputImageEnd()));
+  ASSERT_EQ(full.size(), dry_run.size());
+  ASSERT_OK_AND_ASSIGN(
+      const auto* full_map,
+      std::get<InputImage>(full[1]).GetPreprocessedImageTensorMap());
+  ASSERT_OK_AND_ASSIGN(
+      const auto* dry_run_map,
+      std::get<InputImage>(dry_run[1]).GetPreprocessedImageTensorMap());
+  // Only the patch positions are computed, with the same patch grid.
+  EXPECT_FALSE(dry_run_map->contains("images"));
+  EXPECT_EQ(GetTensorDimensions(dry_run_map->at("positions_xy")),
+            GetTensorDimensions(full_map->at("positions_xy")));
+}
+
+TEST_F(MultimodalProcessorHelperTest, DryRunFixedSizeImageIsNotDecoded) {
+  std::string image_path = GetImageTestdataPath("apple.bmp");
+  const std::string prompt = "<img>";
+  const json messages =
+      json::array({{{"role", "user"},
+                    {"content", {{{"type", "image"}, {"path", image_path}}}}}});
+  MultimodalPromptProcessingConfig config = {
+      .delimiter_regex = "(<img>)",
+      .image_token_regex = "<img>",
+  };
+  ImagePreprocessParameter image_params;
+  image_params.SetTargetDimensions(Dimensions({1, 224, 128, 3}));
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> dry_run,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, image_params,
+                              /*visual_token_budget=*/std::nullopt,
+                              /*dry_run=*/true));
+
+  // A fixed-size image always consumes the same number of tokens, so it is
+  // passed through undecoded.
+  ASSERT_EQ(dry_run.size(), 1);
+  const InputImage& image = std::get<InputImage>(dry_run[0]);
+  EXPECT_FALSE(image.IsTensorBuffer());
+  EXPECT_FALSE(image.IsTensorBufferMap());
+}
+
+TEST_F(MultimodalProcessorHelperTest, DryRunAudioMatchesFull) {
+  std::string audio_path = GetImageTestdataPath("audio_sample.wav");
+  const std::string prompt = "<audio>";
+  const json messages =
+      json::array({{{"role", "user"},
+                    {"content", {{{"type", "audio"}, {"path", audio_path}}}}}});
+  MultimodalPromptProcessingConfig config = {
+      .delimiter_regex = "(<audio>)",
+      .audio_token_regex = "<audio>",
+      .add_audio_end = true,
+  };
+  ImagePreprocessParameter image_params;
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> full,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, image_params,
+                              /*visual_token_budget=*/std::nullopt,
+                              /*dry_run=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> dry_run,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, image_params,
+                              /*visual_token_budget=*/std::nullopt,
+                              /*dry_run=*/true));
+
+  EXPECT_THAT(dry_run, ElementsAre(testing::_, HasInputAudioEnd()));
+  ASSERT_OK_AND_ASSIGN(
+      const ::litert::TensorBuffer* full_audio,
+      std::get<InputAudio>(full[0]).GetPreprocessedAudioTensor());
+  ASSERT_OK_AND_ASSIGN(
+      const ::litert::TensorBuffer* dry_run_audio,
+      std::get<InputAudio>(dry_run[0]).GetPreprocessedAudioTensor());
+  EXPECT_EQ(GetTensorDimensions(*dry_run_audio),
+            GetTensorDimensions(*full_audio));
+}
+
+// Wrapper around AudioPreprocessor that leaves GetPreprocessedAudioDimensions()
+// unimplemented to exercise the fallback to full preprocessing.
+class AudioPreprocessorWithoutDimensions : public AudioPreprocessor {
+ public:
+  explicit AudioPreprocessorWithoutDimensions(AudioPreprocessor& inner)
+      : inner_(inner) {}
+  absl::StatusOr<InputAudio> Preprocess(
+      const InputAudio& input_audio) override {
+    return inner_.Preprocess(input_audio);
+  }
+  void Reset() override { inner_.Reset(); }
+
+ private:
+  AudioPreprocessor& inner_;
+};
+
+TEST_F(MultimodalProcessorHelperTest, DryRunAudioFallsBackToFullPreprocessing) {
+  AudioPreprocessorWithoutDimensions fallback_preprocessor(
+      *audio_preprocessor_);
+  std::string audio_path = GetImageTestdataPath("audio_sample.wav");
+  const std::string prompt = "<audio>";
+  const json messages =
+      json::array({{{"role", "user"},
+                    {"content", {{{"type", "audio"}, {"path", audio_path}}}}}});
+  MultimodalPromptProcessingConfig config = {
+      .delimiter_regex = "(<audio>)",
+      .audio_token_regex = "<audio>",
+      .add_audio_end = true,
+  };
+  ImagePreprocessParameter image_params;
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> dry_run,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              &fallback_preprocessor, config, image_params,
+                              /*visual_token_budget=*/std::nullopt,
+                              /*dry_run=*/true));
+
+  ASSERT_OK_AND_ASSIGN(
+      InputAudio expected_audio,
+      audio_preprocessor_->Preprocess(InputAudio(ReadFile(audio_path))));
+  EXPECT_THAT(dry_run,
+              ElementsAre(HasInputAudio(&expected_audio), HasInputAudioEnd()));
 }
 
 }  // namespace

@@ -59,6 +59,12 @@ class AudioPreprocessorPffft : public AudioPreprocessor {
   // audio) and returns the preprocessed audio mel spectrograms.
   absl::StatusOr<InputAudio> Preprocess(const InputAudio& input_audio) override;
 
+  // Returns the dimensions of the tensor Preprocess() would produce for
+  // `input_audio` in the current state. Only the WAV header is parsed; no
+  // spectrogram is computed and the preprocessor state is not modified.
+  absl::StatusOr<Dimensions> GetPreprocessedAudioDimensions(
+      const InputAudio& input_audio) const override;
+
   // Exposes PcmFramesToSpectrogram for testing purposes.
   absl::Status PcmFramesToSpectrogramForTesting(
       absl::Span<const float> pcm_frames, std::vector<float>& spectrograms) {

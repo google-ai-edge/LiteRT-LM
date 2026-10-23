@@ -44,7 +44,11 @@ struct Gemma3DataProcessorConfig {
 };
 
 // Arguments for Gemma3DataProcessor.
-struct Gemma3DataProcessorArguments {};
+struct Gemma3DataProcessorArguments {
+  // Whether to only dry run the media preprocessing, to count the tokens the
+  // input consumes. See ModelDataProcessor::WithDryRun().
+  bool dry_run = false;
+};
 
 }  // namespace litert::lm
 

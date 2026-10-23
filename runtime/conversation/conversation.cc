@@ -149,6 +149,19 @@ absl::string_view TaskStateToString(TaskState task_state) {
   return "Unknown";
 }
 
+// Validates the visual token budget in `optional_args`, if any, against the
+// max vision tokens per image of `engine`, if set.
+absl::Status ValidateVisualTokenBudgetForEngine(
+    const OptionalArgs& optional_args, const Engine& engine) {
+  if (optional_args.args.has_value() &&
+      engine.GetEngineSettings().GetMaxVisionTokensPerImage().has_value()) {
+    return ValidateVisualTokenBudget(
+        *optional_args.args,
+        *engine.GetEngineSettings().GetMaxVisionTokensPerImage());
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 absl::StatusOr<ConversationConfig> ConversationConfig::CreateDefault(
@@ -579,12 +592,8 @@ absl::Status Conversation::SendMessageAsync(
   if (!message.is_object()) {
     return absl::InvalidArgumentError("Message must be a JSON object.");
   }
-  if (optional_args.args.has_value() &&
-      engine_.GetEngineSettings().GetMaxVisionTokensPerImage().has_value()) {
-    ABSL_RETURN_IF_ERROR(ValidateVisualTokenBudget(
-        *optional_args.args,
-        *engine_.GetEngineSettings().GetMaxVisionTokensPerImage()));
-  }
+  ABSL_RETURN_IF_ERROR(
+      ValidateVisualTokenBudgetForEngine(optional_args, engine_));
 
   bool prev_is_appending_message = false;
   {
@@ -933,15 +942,27 @@ absl::StatusOr<int> Conversation::CountTokens(
   absl::MutexLock lock(history_mutex_);  // NOLINT
   std::vector<Message> messages = {message};
 
-  // const_cast is needed because GetInputDataVectorForMessages() is non-const,
-  // even though constructing the InputData vector does not mutate conversation
-  // state.
+  ABSL_RETURN_IF_ERROR(
+      ValidateVisualTokenBudgetForEngine(optional_args, engine_));
+
+  // Only what is needed to count the tokens of any media is computed, so the
+  // expensive parts of media preprocessing are skipped.
+  ABSL_ASSIGN_OR_RETURN(DataProcessorArguments dry_run_args,
+                        model_data_processor_->WithDryRun(
+                            optional_args.args.value_or(std::monostate())));
+
+  // const_cast is needed because GetPrefillTextForMessages() is non-const,
+  // even though rendering the prefill text does not mutate conversation state.
   ABSL_ASSIGN_OR_RETURN(
-      std::vector<InputData> input_data,
-      const_cast<Conversation*>(this)->GetInputDataVectorForMessages(
+      std::string prefill_text,
+      const_cast<Conversation*>(this)->GetPrefillTextForMessages(
           history_, messages, optional_args,
           /*include_preface=*/history_.empty() &&
               !config_.prefill_preface_on_init()));
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<InputData> input_data,
+      model_data_processor_->ToInputDataVector(
+          prefill_text, nlohmann::ordered_json(messages), dry_run_args));
 
   return CalculateInputDataTokens(input_data, engine_);
 }

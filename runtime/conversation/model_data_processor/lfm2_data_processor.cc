@@ -100,7 +100,8 @@ absl::StatusOr<std::vector<InputData>> Lfm2DataProcessor::ToInputDataVectorImpl(
       .rescale_factor = config_.normalization_rescale_factor});
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
-      /*audio_preprocessor=*/nullptr, multi_config, image_params);
+      /*audio_preprocessor=*/nullptr, multi_config, image_params,
+      /*visual_token_budget=*/std::nullopt, args.dry_run);
 }
 
 absl::StatusOr<Message> Lfm2DataProcessor::ToMessageImpl(

@@ -85,10 +85,22 @@ class ImagePreprocessParameter {
     normalization_config_ = normalization_config;
   }
 
+  // Returns whether preprocessing is a dry run. See SetDryRun().
+  bool IsDryRun() const { return dry_run_; }
+
+  // Sets whether preprocessing is a dry run. In a dry run, Preprocess() may
+  // skip decoding and resizing the image, and return an InputImage that only
+  // carries what is needed to count the tokens the image consumes (e.g. the
+  // shape of the "positions_xy" tensor of a patchified image). The result must
+  // not be fed to a vision encoder. Preprocessors that do not support dry runs
+  // fully preprocess the image.
+  void SetDryRun(bool dry_run) { dry_run_ = dry_run; }
+
  private:
   Dimensions dimensions_;
   std::optional<PatchifyConfig> patchify_config_;
   std::optional<NormalizationConfig> normalization_config_;
+  bool dry_run_ = false;
 };
 
 // A decoded image in 8-bit RGB, HWC (row-major, 3 interleaved channels)
@@ -98,6 +110,12 @@ class ImagePreprocessParameter {
 struct DecodedImage {
   // `width` * `height` * 3 bytes.
   std::vector<uint8_t> pixels;
+  int width = 0;
+  int height = 0;
+};
+
+// The width and height of an image, in pixels.
+struct ImageSize {
   int width = 0;
   int height = 0;
 };
@@ -160,6 +178,22 @@ class ImagePreprocessor {
       const ImagePreprocessParameter& parameter) {
     return absl::UnimplementedError(
         "Preprocessing decoded image is not implemented.");
+  }
+
+  // Returns the size that Preprocess() resizes the raw `input_image` to before
+  // converting it to a tensor (and patchifying it, if `parameter` has a
+  // patchify config). Only the encoded image header is parsed; pixel data is
+  // not decoded. Returns an UnimplementedError for already preprocessed
+  // (tensor buffer) images.
+  //
+  // This lets callers that only need the shape of the preprocessed image, such
+  // as dry runs (see ImagePreprocessParameter::SetDryRun()), avoid the cost of
+  // a full Preprocess() call.
+  virtual absl::StatusOr<ImageSize> GetResizedImageSize(
+      const InputImage& input_image,
+      const ImagePreprocessParameter& parameter) const {
+    return absl::UnimplementedError(
+        "Getting the resized image size is not implemented.");
   }
 };
 

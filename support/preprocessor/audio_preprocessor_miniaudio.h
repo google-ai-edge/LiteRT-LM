@@ -66,6 +66,9 @@ class AudioPreprocessorMiniAudio : public AudioPreprocessor {
   //   with shape (1, num_frames, num_mel_bins).
   absl::StatusOr<InputAudio> Preprocess(const InputAudio& input_audio) override;
 
+  absl::StatusOr<Dimensions> GetPreprocessedAudioDimensions(
+      const InputAudio& input_audio) const override;
+
   // Resets the preprocessor to its initial state.
   void Reset() override {
     input_queue_.clear();

@@ -16,9 +16,17 @@
 #define THIRD_PARTY_ODML_LITERT_LM_SUPPORT_PREPROCESSOR_AUDIO_PREPROCESSOR_H_
 
 #include <array>
+#include <cstddef>
 #include <ostream>
+#include <utility>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "support/util/io_types.h"
 #include "support/util/status_macros.h"  // IWYU pragma: keep
 
@@ -425,6 +433,48 @@ class AudioPreprocessor {
 
   // Reset the audio preprocessor to the initial state.
   virtual void Reset() = 0;
+
+  // Returns the dimensions of the tensor that Preprocess() would produce for
+  // `input_audio` in the preprocessor's current state, without computing the
+  // preprocessed audio or modifying the preprocessor's state.
+  //
+  // This lets callers that only need the shape of the preprocessed audio, such
+  // as PreprocessDryRun(), avoid the cost of a full Preprocess() call.
+  virtual absl::StatusOr<Dimensions> GetPreprocessedAudioDimensions(
+      const InputAudio& input_audio) const {
+    return absl::UnimplementedError(
+        "Getting the preprocessed audio dimensions is not implemented.");
+  }
+
+  // A dry run of Preprocess(): returns an InputAudio holding an uninitialized
+  // tensor with the shape Preprocess() would produce, which is enough to count
+  // the tokens the audio consumes, without computing the audio features or
+  // modifying the preprocessor's state. The result must not be fed to an audio
+  // encoder.
+  //
+  // Falls back to a full Preprocess() call if GetPreprocessedAudioDimensions()
+  // is not implemented.
+  absl::StatusOr<InputAudio> PreprocessDryRun(const InputAudio& input_audio) {
+    absl::StatusOr<Dimensions> dimensions =
+        GetPreprocessedAudioDimensions(input_audio);
+    if (absl::IsUnimplemented(dimensions.status())) {
+      return Preprocess(input_audio);
+    }
+    if (!dimensions.ok()) {
+      return dimensions.status();
+    }
+    size_t num_elements = 1;
+    for (const int dimension : *dimensions) {
+      num_elements *= dimension;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::TensorBuffer audio_tensor,
+        ::litert::TensorBuffer::CreateManagedHostMemory(
+            ::litert::RankedTensorType(::litert::GetElementType<float>(),
+                                       ::litert::Layout(*dimensions)),
+            num_elements * sizeof(float)));
+    return InputAudio(std::move(audio_tensor));
+  }
 };
 
 std::ostream& operator<<(

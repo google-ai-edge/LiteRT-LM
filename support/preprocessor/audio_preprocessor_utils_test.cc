@@ -18,6 +18,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/util/test_utils.h"  // NOLINT
 
@@ -80,6 +82,105 @@ TEST(AudioPreprocessorUtilsTest, GetWindowedSignalsForFftSuccess) {
   for (const auto& sig : windowed_signals) {
     EXPECT_EQ(sig.size(), config.GetFftLength());
   }
+}
+
+TEST(AudioPreprocessorUtilsTest, CountFramedSegmentsMatchesGetFramedSegments) {
+  for (bool semicausal_padding : {false, true}) {
+    for (bool buffer_last_frame : {false, true}) {
+      AudioPreprocessorConfig config =
+          AudioPreprocessorConfig::CreateDefaultUsmConfig();
+      config.SetSemicausalPadding(semicausal_padding);
+      config.SetBufferLastFrame(buffer_last_frame);
+      for (int num_samples :
+           {0, 1, 159, 160, 161, 319, 320, 321, 480, 1000, 16000, 16001}) {
+        SCOPED_TRACE(absl::StrCat("semicausal_padding=", semicausal_padding,
+                                  " buffer_last_frame=", buffer_last_frame,
+                                  " num_samples=", num_samples));
+        // Start from the initial state of AudioPreprocessorPffft.
+        std::vector<float> input_queue;
+        int samples_to_next_step = config.GetFrameLength();
+        if (semicausal_padding) {
+          samples_to_next_step =
+              config.GetFrameLength() - config.GetHopLength();
+          input_queue.resize(config.GetHopLength(), 0.0f);
+        }
+        ASSERT_OK_AND_ASSIGN(
+            int count,
+            CountFramedSegments(config, num_samples, input_queue.size(),
+                                samples_to_next_step));
+        std::vector<float> pcm_frames(num_samples, 0.5f);
+        ASSERT_OK_AND_ASSIGN(std::vector<std::vector<float>> segments,
+                             GetFramedSegments(config, pcm_frames, input_queue,
+                                               samples_to_next_step));
+        EXPECT_EQ(count, segments.size());
+      }
+    }
+  }
+}
+
+TEST(AudioPreprocessorUtilsTest, CountFramedSegmentsInvalidHopLength) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  config.SetHopLength(0);
+  EXPECT_THAT(CountFramedSegments(config, /*num_samples=*/1000,
+                                  /*input_queue_size=*/0,
+                                  /*samples_to_next_step=*/1),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(AudioPreprocessorUtilsTest, GetPreprocessedAudioDimensionsForNumSamples) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  const int samples_to_next_step = config.GetFrameLength();
+  ASSERT_OK_AND_ASSIGN(
+      int num_frames,
+      CountFramedSegments(config, /*num_samples=*/16000,
+                          /*input_queue_size=*/0, samples_to_next_step));
+  ASSERT_GT(num_frames, 0);
+
+  ASSERT_OK_AND_ASSIGN(auto mel_dimensions,
+                       GetPreprocessedAudioDimensionsForNumSamples(
+                           config, /*num_samples=*/16000,
+                           /*input_queue_size=*/0, samples_to_next_step));
+  EXPECT_THAT(mel_dimensions,
+              ::testing::ElementsAre(1, num_frames, config.GetNumMelBins()));
+
+  config.SetSkipMelSpectrogramExtraction(true);
+  ASSERT_OK_AND_ASSIGN(auto frame_dimensions,
+                       GetPreprocessedAudioDimensionsForNumSamples(
+                           config, /*num_samples=*/16000,
+                           /*input_queue_size=*/0, samples_to_next_step));
+  EXPECT_THAT(frame_dimensions,
+              ::testing::ElementsAre(1, num_frames, config.GetFrameLength()));
+
+  // Without any frame to emit, fails as Preprocess() does when mel spectrogram
+  // extraction is skipped.
+  config.SetBufferLastFrame(true);
+  EXPECT_THAT(GetPreprocessedAudioDimensionsForNumSamples(
+                  config, /*num_samples=*/10, /*input_queue_size=*/0,
+                  samples_to_next_step),
+              testing::status::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(AudioPreprocessorUtilsTest, CountFramedSegmentsInvalidStateArguments) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  EXPECT_THAT(CountFramedSegments(config, /*num_samples=*/-1,
+                                  /*input_queue_size=*/0,
+                                  /*samples_to_next_step=*/1),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(CountFramedSegments(config, /*num_samples=*/1000,
+                                  /*input_queue_size=*/-1,
+                                  /*samples_to_next_step=*/1),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(CountFramedSegments(config, /*num_samples=*/1000,
+                                  /*input_queue_size=*/0,
+                                  /*samples_to_next_step=*/0),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(CountFramedSegments(config, /*num_samples=*/1000,
+                                  /*input_queue_size=*/0,
+                                  /*samples_to_next_step=*/-1),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

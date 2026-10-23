@@ -106,6 +106,10 @@ struct Gemma4DataProcessorArguments {
   // If not set, the system will use the max_num_patches in the config to
   // determine the visual token budget.
   std::optional<int> visual_token_budget;
+
+  // Whether to only dry run the media preprocessing, to count the tokens the
+  // input consumes. See ModelDataProcessor::WithDryRun().
+  bool dry_run = false;
 };
 
 }  // namespace litert::lm

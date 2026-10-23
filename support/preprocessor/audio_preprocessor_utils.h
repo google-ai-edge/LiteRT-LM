@@ -20,6 +20,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/mel_filterbank.h"
 
@@ -46,6 +47,22 @@ bool GetNextWindowOfSamples(const AudioPreprocessorConfig& config,
 absl::StatusOr<std::vector<std::vector<float>>> GetFramedSegments(
     const AudioPreprocessorConfig& config, const std::vector<float>& pcm_frames,
     std::vector<float>& input_queue, int& samples_to_next_step);
+
+// Returns the number of segments GetFramedSegments() produces for
+// `num_samples` PCM samples, starting from a state with `input_queue_size`
+// queued samples and `samples_to_next_step`, without copying any samples.
+absl::StatusOr<int> CountFramedSegments(const AudioPreprocessorConfig& config,
+                                        int num_samples, int input_queue_size,
+                                        int samples_to_next_step);
+
+// Returns the dimensions of the tensor an audio preprocessor configured with
+// `config` produces for `num_samples` decoded PCM samples, starting from a
+// state with `input_queue_size` queued samples and `samples_to_next_step`:
+// [1, num_frames, num_mel_bins] for log-mel spectrograms, or
+// [1, num_frames, frame_length] if mel spectrogram extraction is skipped.
+absl::StatusOr<Dimensions> GetPreprocessedAudioDimensionsForNumSamples(
+    const AudioPreprocessorConfig& config, int num_samples,
+    int input_queue_size, int samples_to_next_step);
 
 // Prepares windowed signals for FFT processing:
 // 1. Applies input scaling.
