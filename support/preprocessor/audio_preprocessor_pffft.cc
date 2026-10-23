@@ -25,6 +25,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -160,8 +161,24 @@ absl::Status AudioPreprocessorPffft::PcmFramesToSpectrogram(
                             config_.GetFftBins(), spectrograms);
 }
 
-absl::StatusOr<std::vector<float>> AudioPreprocessorPffft::DecodeAudio(
-    absl::string_view audio_bytes, int num_channels, int sample_rate_hz) {
+namespace {
+
+// The layout of the sample data in a WAV file.
+struct WavDataInfo {
+  uint16_t audio_format = 0;
+  uint16_t num_channels = 0;
+  uint16_t bits_per_sample = 0;
+  // The byte offset of the sample data within the WAV file.
+  size_t data_offset = 0;
+  // The number of sample frames (one sample per channel) in the WAV file.
+  size_t num_frames = 0;
+};
+
+// Parses and validates the WAV header of `audio_bytes` without reading the
+// sample data.
+absl::StatusOr<WavDataInfo> ParseWavHeader(absl::string_view audio_bytes,
+                                           int num_channels,
+                                           int sample_rate_hz) {
   if (num_channels != 1) {
     return absl::InvalidArgumentError("Only mono audio is supported.");
   }
@@ -247,6 +264,9 @@ absl::StatusOr<std::vector<float>> AudioPreprocessorPffft::DecodeAudio(
       data_bytes = chunk_size;
       data_found = true;
     }
+    if (fmt_found && data_found) {
+      break;
+    }
 
     size_t padded_chunk_size = chunk_size + (chunk_size % 2);
     offset += padded_chunk_size;
@@ -261,7 +281,25 @@ absl::StatusOr<std::vector<float>> AudioPreprocessorPffft::DecodeAudio(
   if (bytes_per_frame == 0) {
     return absl::InvalidArgumentError("Invalid WAV frame size.");
   }
-  const size_t num_frames = data_bytes / bytes_per_frame;
+  return WavDataInfo{.audio_format = audio_format,
+                     .num_channels = wav_channels,
+                     .bits_per_sample = bits_per_sample,
+                     .data_offset = data_offset,
+                     .num_frames = data_bytes / bytes_per_frame};
+}
+
+}  // namespace
+
+absl::StatusOr<std::vector<float>> AudioPreprocessorPffft::DecodeAudio(
+    absl::string_view audio_bytes, int num_channels, int sample_rate_hz) {
+  ABSL_ASSIGN_OR_RETURN(
+      WavDataInfo wav_info,
+      ParseWavHeader(audio_bytes, num_channels, sample_rate_hz));
+  const uint16_t audio_format = wav_info.audio_format;
+  const uint16_t wav_channels = wav_info.num_channels;
+  const uint16_t bits_per_sample = wav_info.bits_per_sample;
+  const size_t data_offset = wav_info.data_offset;
+  const size_t num_frames = wav_info.num_frames;
   std::vector<float> pcm_frames(num_frames);
 
   const uint8_t* ptr =
@@ -377,6 +415,37 @@ absl::StatusOr<InputAudio> AudioPreprocessorPffft::Preprocess(
         mel_spectrograms_tensor.Write<float>(absl::MakeSpan(flat_frames)));
     return InputAudio(std::move(mel_spectrograms_tensor));
   }
+}
+
+absl::StatusOr<Dimensions>
+AudioPreprocessorPffft::GetPreprocessedAudioDimensions(
+    const InputAudio& input_audio) const {
+  if (input_audio.IsTensorBuffer()) {
+    ABSL_ASSIGN_OR_RETURN(const TensorBuffer* audio_tensor,
+                          input_audio.GetPreprocessedAudioTensor());
+    LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type,
+                            audio_tensor->TensorType());
+    const auto& dimensions = tensor_type.Layout().Dimensions();
+    return Dimensions(dimensions.begin(), dimensions.end());
+  }
+
+  int num_samples = 0;
+  if (input_audio.IsPcmFrames()) {
+    ABSL_ASSIGN_OR_RETURN(absl::Span<const float> pcm_frames,
+                          input_audio.GetPcmFrames());
+    num_samples = static_cast<int>(pcm_frames.size());
+  } else {
+    ABSL_ASSIGN_OR_RETURN(absl::string_view raw_audio_bytes,
+                          input_audio.GetRawAudioBytes());
+    ABSL_ASSIGN_OR_RETURN(
+        WavDataInfo wav_info,
+        ParseWavHeader(raw_audio_bytes, config_.GetNumChannels(),
+                       config_.GetSampleRateHz()));
+    num_samples = static_cast<int>(wav_info.num_frames);
+  }
+
+  return GetPreprocessedAudioDimensionsForNumSamples(
+      config_, num_samples, input_queue_.size(), samples_to_next_step_);
 }
 
 }  // namespace litert::support

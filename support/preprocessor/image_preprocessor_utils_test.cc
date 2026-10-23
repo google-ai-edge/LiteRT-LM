@@ -577,5 +577,226 @@ TEST(ImagePreprocessorUtilsTest, PatchifyImageMergePatchesEmitPositionsFalse) {
               ElementsAre(1, 2, 48));
 }
 
+// Returns the dimensions of the "positions_xy" tensor in `image`.
+std::vector<int> GetPatchPositionsDimensions(const InputImage& image) {
+  auto tensor_map = image.GetPreprocessedImageTensorMap();
+  if (!tensor_map.ok()) {
+    ADD_FAILURE() << tensor_map.status();
+    return {};
+  }
+  const ::litert::TensorBuffer& positions = (*tensor_map)->at("positions_xy");
+  auto tensor_type = positions.TensorType();
+  EXPECT_TRUE(tensor_type.HasValue());
+  const auto& dimensions = tensor_type.Value().Layout().Dimensions();
+  return std::vector<int>(dimensions.begin(), dimensions.end());
+}
+
+struct PatchPositionsTestCase {
+  int height;
+  int width;
+  ImagePreprocessParameter::PatchifyConfig patchify_config;
+};
+
+class CreatePatchPositionsImageTest
+    : public testing::TestWithParam<PatchPositionsTestCase> {};
+
+TEST_P(CreatePatchPositionsImageTest, MatchesPatchifyImagePositions) {
+  const PatchPositionsTestCase& test_case = GetParam();
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, test_case.height, test_case.width, 3});
+  parameter.SetPatchifyConfig(test_case.patchify_config);
+
+  std::vector<float> image_data(test_case.height * test_case.width * 3);
+  ASSERT_OK_AND_ASSIGN(InputImage patchified,
+                       PatchifyImage(image_data, parameter));
+  ASSERT_OK_AND_ASSIGN(
+      InputImage positions_only,
+      CreatePatchPositionsImage(test_case.height, test_case.width, parameter));
+
+  ASSERT_OK_AND_ASSIGN(const auto* positions_only_map,
+                       positions_only.GetPreprocessedImageTensorMap());
+  EXPECT_FALSE(positions_only_map->contains("images"));
+  EXPECT_EQ(GetPatchPositionsDimensions(positions_only),
+            GetPatchPositionsDimensions(patchified));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PatchGrids, CreatePatchPositionsImageTest,
+    testing::Values(
+        PatchPositionsTestCase{.height = 4,
+                               .width = 4,
+                               .patchify_config = {.patch_width = 2,
+                                                   .patch_height = 2,
+                                                   .max_num_patches = 4,
+                                                   .pooling_kernel_size = 1}},
+        PatchPositionsTestCase{.height = 6,
+                               .width = 12,
+                               .patchify_config = {.patch_width = 2,
+                                                   .patch_height = 2,
+                                                   .max_num_patches = 18,
+                                                   .pooling_kernel_size = 3}},
+        PatchPositionsTestCase{.height = 12,
+                               .width = 6,
+                               .patchify_config = {.patch_width = 2,
+                                                   .patch_height = 2,
+                                                   .max_num_patches = 18,
+                                                   .pooling_kernel_size = 3,
+                                                   .merge_patches = true}}));
+
+TEST(ImagePreprocessorUtilsTest, CreatePatchPositionsImageMissingConfig) {
+  ImagePreprocessParameter parameter;
+  EXPECT_THAT(CreatePatchPositionsImage(4, 4, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Patchify config is not set."));
+}
+
+TEST(ImagePreprocessorUtilsTest, CreatePatchPositionsImageNoPositions) {
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1,
+                               .emit_positions = false});
+  EXPECT_THAT(CreatePatchPositionsImage(4, 4, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Patchify config does not emit patch positions."));
+}
+
+TEST(ImagePreprocessorUtilsTest, CreatePatchPositionsImageNotDivisible) {
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 3,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+  EXPECT_THAT(CreatePatchPositionsImage(4, 4, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be divisible by patch size."));
+}
+
+TEST(ComputeResizedImageSizeTest, PrecedenceWhenBothAreSet) {
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 224, 112, 3});
+  parameter.SetPatchifyConfig({.patch_width = 16,
+                               .patch_height = 16,
+                               .max_num_patches = 49,
+                               .pooling_kernel_size = 3});
+
+  // A 1024x1024 image fits 49 patches at 96x96; see
+  // GetAspectRatioPreservingSize(). Patchify config always takes precedence.
+  ASSERT_OK_AND_ASSIGN(ImageSize size,
+                       ComputeResizedImageSize(1024, 1024, parameter));
+  EXPECT_EQ(size.width, 96);
+  EXPECT_EQ(size.height, 96);
+}
+
+TEST(ComputeResizedImageSizeTest, UsesWhicheverIsSet) {
+  ImagePreprocessParameter target_dimensions_only;
+  target_dimensions_only.SetTargetDimensions({1, 224, 112, 3});
+  ImagePreprocessParameter patchify_config_only;
+  patchify_config_only.SetPatchifyConfig({.patch_width = 16,
+                                          .patch_height = 16,
+                                          .max_num_patches = 49,
+                                          .pooling_kernel_size = 3});
+
+  ASSERT_OK_AND_ASSIGN(ImageSize size, ComputeResizedImageSize(
+                                           1024, 1024, target_dimensions_only));
+  EXPECT_EQ(size.width, 112);
+  EXPECT_EQ(size.height, 224);
+
+  ASSERT_OK_AND_ASSIGN(
+      size, ComputeResizedImageSize(1024, 1024, patchify_config_only));
+  EXPECT_EQ(size.width, 96);
+  EXPECT_EQ(size.height, 96);
+}
+
+TEST(ComputeResizedImageSizeTest, InvalidParameter) {
+  ImagePreprocessParameter empty_parameter;
+  EXPECT_THAT(
+      ComputeResizedImageSize(1024, 1024, empty_parameter),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Either target dimensions or a patchify config")));
+
+  ImagePreprocessParameter invalid_target_dimensions;
+  invalid_target_dimensions.SetTargetDimensions({224, 112});
+  EXPECT_THAT(ComputeResizedImageSize(1024, 1024, invalid_target_dimensions),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Target dimensions must be")));
+}
+
+TEST(CreateDryRunImageTest, PatchifiedImageWithPositions) {
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 18,
+                               .pooling_kernel_size = 3});
+  ASSERT_OK_AND_ASSIGN(
+      InputImage dry_run,
+      CreateDryRunImage(InputImage(std::string("raw image bytes")),
+                        ImageSize{.width = 12, .height = 6}, parameter));
+  ASSERT_OK_AND_ASSIGN(const auto* tensor_map,
+                       dry_run.GetPreprocessedImageTensorMap());
+  EXPECT_FALSE(tensor_map->contains("images"));
+  // 6x12 pixels are split into 3x6 patches of 2x2 pixels.
+  EXPECT_THAT(GetPatchPositionsDimensions(dry_run), ElementsAre(1, 18, 2));
+}
+
+TEST(CreateDryRunImageTest, PatchifiedImageWithoutPositionsValidatesPatchGrid) {
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1,
+                               .emit_positions = false});
+  ASSERT_OK_AND_ASSIGN(
+      InputImage dry_run,
+      CreateDryRunImage(InputImage(std::string("raw image bytes")),
+                        ImageSize{.width = 4, .height = 4}, parameter));
+  // Without a positions tensor, the token count does not depend on the pixels.
+  ASSERT_OK_AND_ASSIGN(auto raw_image_bytes, dry_run.GetRawImageBytes());
+  EXPECT_EQ(raw_image_bytes, "raw image bytes");
+
+  // The patch grid is validated as in PatchifyImage().
+  EXPECT_THAT(CreateDryRunImage(InputImage(std::string("raw image bytes")),
+                                ImageSize{.width = 5, .height = 4}, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be divisible by patch size."));
+  EXPECT_THAT(CreateDryRunImage(InputImage(std::string("raw image bytes")),
+                                ImageSize{.width = 6, .height = 4}, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("exceeds max_num_patches")));
+}
+
+TEST(CreateDryRunImageTest, FixedSizeImageIsCopied) {
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 224, 112, 3});
+  ASSERT_OK_AND_ASSIGN(
+      InputImage dry_run,
+      CreateDryRunImage(InputImage(std::string("raw image bytes")),
+                        ImageSize{.width = 112, .height = 224}, parameter));
+  ASSERT_OK_AND_ASSIGN(auto raw_image_bytes, dry_run.GetRawImageBytes());
+  EXPECT_EQ(raw_image_bytes, "raw image bytes");
+}
+
+TEST(ImagePreprocessorUtilsTest,
+     CreatePatchPositionsImageNonPositiveDimensions) {
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+  EXPECT_THAT(CreatePatchPositionsImage(0, 4, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be positive."));
+  EXPECT_THAT(CreatePatchPositionsImage(4, 0, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be positive."));
+  EXPECT_THAT(CreatePatchPositionsImage(-4, 4, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be positive."));
+  EXPECT_THAT(CreatePatchPositionsImage(4, -4, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be positive."));
+}
+
 }  // namespace
 }  // namespace litert::support

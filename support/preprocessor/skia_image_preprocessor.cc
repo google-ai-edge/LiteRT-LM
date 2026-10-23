@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -67,7 +68,7 @@ namespace {
 
 constexpr int kDesiredChannels = 3;
 
-absl::StatusOr<sk_sp<SkImage>> DecodeDataAsImage(sk_sp<SkData> data) {
+absl::StatusOr<std::unique_ptr<SkCodec>> CreateCodec(sk_sp<SkData> data) {
   if (!data) {
     return absl::InvalidArgumentError("Null data.");
   }
@@ -103,15 +104,23 @@ absl::StatusOr<sk_sp<SkImage>> DecodeDataAsImage(sk_sp<SkData> data) {
   if (!codec) {
     return absl::InvalidArgumentError("Failed to decode image.");
   }
+  return codec;
+}
 
+// Returns the image info for decoding with `codec`, with the dimensions
+// rotated if Exif or similar metadata says the image is rotated.
+SkImageInfo GetOrientedImageInfo(const SkCodec& codec) {
   // Using premul makes the image filtering look better in many cases.
-  SkImageInfo info = codec->getInfo().makeAlphaType(kPremul_SkAlphaType);
-  // If the image is rotated due to Exif or similar metadata, we need to
-  // rotate the dimensions provided by the codec.
-  if (SkEncodedOriginSwapsWidthHeight(codec->getOrigin())) {
+  SkImageInfo info = codec.getInfo().makeAlphaType(kPremul_SkAlphaType);
+  if (SkEncodedOriginSwapsWidthHeight(codec.getOrigin())) {
     info = SkPixmapUtils::SwapWidthHeight(info);
   }
-  auto [image, result] = codec->getImage(info);
+  return info;
+}
+
+absl::StatusOr<sk_sp<SkImage>> DecodeDataAsImage(sk_sp<SkData> data) {
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<SkCodec> codec, CreateCodec(data));
+  auto [image, result] = codec->getImage(GetOrientedImageInfo(*codec));
   if (result != SkCodec::Result::kSuccess || image == nullptr) {
     return absl::InvalidArgumentError("Failed to create SkImage.");
   }
@@ -123,8 +132,8 @@ absl::StatusOr<sk_sp<SkImage>> DecodeDataAsImage(sk_sp<SkData> data) {
 absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
     const InputImage& input_image, const ImagePreprocessParameter& parameter) {
   if (input_image.IsTensorBuffer()) {
-    ASSIGN_OR_RETURN(auto processed_image_tensor,
-                     input_image.GetPreprocessedImageTensor());
+    ABSL_ASSIGN_OR_RETURN(auto processed_image_tensor,
+                          input_image.GetPreprocessedImageTensor());
     LITERT_ASSIGN_OR_RETURN(auto processed_image_tensor_with_reference,
                             processed_image_tensor->Duplicate());
     InputImage processed_image(
@@ -132,17 +141,24 @@ absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
     return processed_image;
   }
 
+  if (parameter.IsDryRun()) {
+    ABSL_ASSIGN_OR_RETURN(ImageSize resized_size,
+                          GetResizedImageSize(input_image, parameter));
+    return CreateDryRunImage(input_image, resized_size, parameter);
+  }
+
   if (parameter.GetPatchifyConfig().has_value()) {
-    ASSIGN_OR_RETURN(absl::string_view image_bytes,
-                     input_image.GetRawImageBytes());
+    ABSL_ASSIGN_OR_RETURN(absl::string_view image_bytes,
+                          input_image.GetRawImageBytes());
     sk_sp<SkData> image_data =
         SkData::MakeWithoutCopy(image_bytes.data(), image_bytes.size());
-    ASSIGN_OR_RETURN(sk_sp<SkImage> image, DecodeDataAsImage(image_data));
+    ABSL_ASSIGN_OR_RETURN(sk_sp<SkImage> image, DecodeDataAsImage(image_data));
 
     // Get the target dimensions based on patchify config.
-    ASSIGN_OR_RETURN(auto size, GetAspectRatioPreservingSize(
-                                    image->width(), image->height(),
-                                    parameter.GetPatchifyConfig().value()));
+    ABSL_ASSIGN_OR_RETURN(
+        auto size,
+        GetAspectRatioPreservingSize(image->width(), image->height(),
+                                     parameter.GetPatchifyConfig().value()));
     int new_height = size.first;
     int new_width = size.second;
 
@@ -190,11 +206,11 @@ absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
                      target_dimensions.size()));
   }
 
-  ASSIGN_OR_RETURN(absl::string_view image_bytes,
-                   input_image.GetRawImageBytes());
+  ABSL_ASSIGN_OR_RETURN(absl::string_view image_bytes,
+                        input_image.GetRawImageBytes());
   sk_sp<SkData> image_data =
       SkData::MakeWithoutCopy(image_bytes.data(), image_bytes.size());
-  ASSIGN_OR_RETURN(sk_sp<SkImage> image, DecodeDataAsImage(image_data));
+  ABSL_ASSIGN_OR_RETURN(sk_sp<SkImage> image, DecodeDataAsImage(image_data));
 
   const int batch_size = target_dimensions.at(0);
   const int target_height = target_dimensions.at(1);
@@ -253,6 +269,28 @@ absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
   InputImage processed_image(std::move(processed_tensor_buffer));
 
   return processed_image;
+}
+
+absl::StatusOr<ImageSize> SkiaImagePreprocessor::GetResizedImageSize(
+    const InputImage& input_image,
+    const ImagePreprocessParameter& parameter) const {
+  if (input_image.IsTensorBuffer() || input_image.IsTensorBufferMap()) {
+    return absl::UnimplementedError(
+        "Getting the resized image size of a preprocessed image is not "
+        "supported.");
+  }
+  ABSL_ASSIGN_OR_RETURN(absl::string_view image_bytes,
+                        input_image.GetRawImageBytes());
+  // Creating the codec only parses the image header; no pixels are decoded.
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<SkCodec> codec,
+                        CreateCodec(SkData::MakeWithoutCopy(
+                            image_bytes.data(), image_bytes.size())));
+  const SkImageInfo info = GetOrientedImageInfo(*codec);
+
+  // Mirrors the sizing in Preprocess(): a patchify config resizes the image to
+  // fit the patch limit while preserving its aspect ratio, otherwise it is
+  // resized to the fixed target dimensions.
+  return ComputeResizedImageSize(info.width(), info.height(), parameter);
 }
 
 }  // namespace litert::support

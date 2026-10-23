@@ -185,7 +185,7 @@ Gemma4DataProcessor::ToInputDataVectorImpl(
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
       audio_preprocessor_.get(), multi_config, image_preprocess_parameter,
-      args.visual_token_budget);
+      args.visual_token_budget, args.dry_run);
 }
 
 absl::StatusOr<Message> Gemma4DataProcessor::ToMessageImpl(

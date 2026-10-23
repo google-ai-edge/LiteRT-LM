@@ -68,6 +68,19 @@ class ModelDataProcessor {
       const nlohmann::ordered_json& messages,
       const DataProcessorArguments& args) const = 0;
 
+  // Returns `args` with dry run enabled, for converting messages with
+  // ToInputDataVector() only to count the tokens they consume. In a dry run,
+  // model data processors may skip the expensive parts of media preprocessing
+  // (e.g. image decoding, audio feature extraction) and return InputData that
+  // only carries what CalculateInputDataTokens() needs. The result must not be
+  // fed to the LLM Session.
+  //
+  // Defaults to returning `args` unchanged, i.e. a full conversion.
+  virtual absl::StatusOr<DataProcessorArguments> WithDryRun(
+      const DataProcessorArguments& args) const {
+    return args;
+  }
+
   // Converts a list of responses from the LLM Session to a Message, which is
   // the output to the user.
   virtual absl::StatusOr<Message> ToMessage(
@@ -157,6 +170,24 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
     }
     return absl::InvalidArgumentError(
         "DataProcessorArguments does not hold the expected type");
+  }
+
+  // Returns `args` as ExpectedArgsT with dry run enabled, if ExpectedArgsT
+  // supports dry runs (i.e. has a `bool dry_run` field). An empty `args`
+  // (std::monostate) is treated as default ExpectedArgsT.
+  absl::StatusOr<DataProcessorArguments> WithDryRun(
+      const DataProcessorArguments& args) const final {
+    ExpectedArgsT typed_args;
+    if (std::holds_alternative<ExpectedArgsT>(args)) {
+      typed_args = std::get<ExpectedArgsT>(args);
+    } else if (!std::holds_alternative<std::monostate>(args)) {
+      return absl::InvalidArgumentError(
+          "DataProcessorArguments does not hold the expected type");
+    }
+    if constexpr (requires { typed_args.dry_run = true; }) {
+      typed_args.dry_run = true;
+    }
+    return typed_args;
   }
 
   // Converts a list of responses from the LLM Session to a Message, with

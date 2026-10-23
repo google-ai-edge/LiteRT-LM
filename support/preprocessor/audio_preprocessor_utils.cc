@@ -20,9 +20,11 @@
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/mel_filterbank.h"
 #include "support/util/status_macros.h"
@@ -146,6 +148,58 @@ absl::StatusOr<std::vector<std::vector<float>>> GetFramedSegments(
     }
   }
   return windowed_signals;
+}
+
+absl::StatusOr<int> CountFramedSegments(const AudioPreprocessorConfig& config,
+                                        int num_samples, int input_queue_size,
+                                        int samples_to_next_step) {
+  const int frame_length = config.GetFrameLength();
+  const int hop_length = config.GetHopLength();
+  if (frame_length <= 0 || hop_length <= 0) {
+    return absl::InvalidArgumentError(
+        "Frame length and hop length must be positive.");
+  }
+  if (num_samples < 0 || input_queue_size < 0 || samples_to_next_step <= 0) {
+    return absl::InvalidArgumentError(
+        "num_samples and input_queue_size must be non-negative, and "
+        "samples_to_next_step must be positive.");
+  }
+  // Mirrors GetNextWindowOfSamples(): every time enough samples are available
+  // to reach the next step, the queue is topped up to exactly one frame.
+  int num_segments = 0;
+  int remaining_samples = num_samples;
+  int queue_size = input_queue_size;
+  while (samples_to_next_step <= remaining_samples) {
+    remaining_samples -= samples_to_next_step;
+    queue_size = frame_length;
+    samples_to_next_step = hop_length;
+    ++num_segments;
+  }
+  queue_size += remaining_samples;
+  // Mirrors the zero-padded trailing frame in GetFramedSegments().
+  if (!config.BufferLastFrame() && queue_size > 0 &&
+      queue_size < frame_length) {
+    ++num_segments;
+  }
+  return num_segments;
+}
+
+absl::StatusOr<Dimensions> GetPreprocessedAudioDimensionsForNumSamples(
+    const AudioPreprocessorConfig& config, int num_samples,
+    int input_queue_size, int samples_to_next_step) {
+  ABSL_ASSIGN_OR_RETURN(
+      int num_frames, CountFramedSegments(config, num_samples, input_queue_size,
+                                          samples_to_next_step));
+  if (!config.SkipMelSpectrogramExtraction()) {
+    return Dimensions({1, num_frames, config.GetNumMelBins()});
+  }
+  // Mirrors Preprocess(), which fails without any frame to emit when mel
+  // spectrogram extraction is skipped.
+  if (num_frames == 0) {
+    return absl::FailedPreconditionError(
+        "Not enough samples to form any frame.");
+  }
+  return Dimensions({1, num_frames, config.GetFrameLength()});
 }
 
 absl::StatusOr<std::vector<std::vector<float>>> GetWindowedSignalsForFft(

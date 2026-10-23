@@ -25,6 +25,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
@@ -36,6 +37,7 @@ namespace litert::support {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::status::StatusIs;
 
 constexpr char kTestdataDir[] =
@@ -334,6 +336,144 @@ TEST(SkiaImagePreprocessorTest, PreprocessWithPatchifyResize) {
     EXPECT_GE(data[i], 0.0f);
     EXPECT_LE(data[i], 1.0f);
   }
+}
+
+std::string ReadSkiaImagePreprocessorTestImage(absl::string_view name) {
+  const std::string image_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  kTestdataDir / std::string(name))
+                                     .string();
+  std::ifstream file_stream(image_path, std::ios::binary);
+  EXPECT_TRUE(file_stream.is_open())
+      << "Failed to open image file: " << image_path;
+  std::stringstream buffer;
+  buffer << file_stream.rdbuf();
+  return buffer.str();
+}
+
+TEST(SkiaImagePreprocessorTest,
+     GetResizedImageSizeMatchesPatchifiedPreprocess) {
+  SkiaImagePreprocessor preprocessor;
+  const InputImage input_image(ReadSkiaImagePreprocessorTestImage("apple.bmp"));
+  for (int max_num_patches : {49, 4096}) {
+    ImagePreprocessParameter parameter;
+    parameter.SetPatchifyConfig({.patch_width = 16,
+                                 .patch_height = 16,
+                                 .max_num_patches = max_num_patches,
+                                 .pooling_kernel_size = 3});
+    ASSERT_OK_AND_ASSIGN(ImageSize size, preprocessor.GetResizedImageSize(
+                                             input_image, parameter));
+    ASSERT_OK_AND_ASSIGN(InputImage preprocessed,
+                         preprocessor.Preprocess(input_image, parameter));
+    ASSERT_OK_AND_ASSIGN(auto tensor_map,
+                         preprocessed.GetPreprocessedImageTensorMap());
+    auto positions_type = tensor_map->at("positions_xy").TensorType();
+    ASSERT_TRUE(positions_type.HasValue());
+    // The resized image is split into 16x16 patches.
+    EXPECT_THAT(positions_type.Value().Layout().Dimensions(),
+                ElementsAre(1, (size.width / 16) * (size.height / 16), 2));
+  }
+}
+
+TEST(SkiaImagePreprocessorTest, GetResizedImageSizeWithPatchify) {
+  SkiaImagePreprocessor preprocessor;
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 16,
+                               .patch_height = 16,
+                               .max_num_patches = 49,
+                               .pooling_kernel_size = 3});
+  // The 1024x1024 test image is resized to 96x96 to fit 49 patches; see
+  // PreprocessWithPatchifyResize.
+  ASSERT_OK_AND_ASSIGN(
+      ImageSize size,
+      preprocessor.GetResizedImageSize(
+          InputImage(ReadSkiaImagePreprocessorTestImage("apple.bmp")),
+          parameter));
+  EXPECT_EQ(size.width, 96);
+  EXPECT_EQ(size.height, 96);
+}
+
+TEST(SkiaImagePreprocessorTest, GetResizedImageSizeWithTargetDimensions) {
+  SkiaImagePreprocessor preprocessor;
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 224, 112, 3});
+  ASSERT_OK_AND_ASSIGN(
+      ImageSize size,
+      preprocessor.GetResizedImageSize(
+          InputImage(ReadSkiaImagePreprocessorTestImage("apple.bmp")),
+          parameter));
+  EXPECT_EQ(size.width, 112);
+  EXPECT_EQ(size.height, 224);
+}
+
+TEST(SkiaImagePreprocessorTest, GetResizedImageSizeFailsWithInvalidImage) {
+  SkiaImagePreprocessor preprocessor;
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 224, 224, 3});
+  EXPECT_THAT(preprocessor.GetResizedImageSize(
+                  InputImage(std::string("invalid_image_bytes")), parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(SkiaImagePreprocessorTest,
+     GetResizedImageSizeOfPreprocessedImageIsUnimplemented) {
+  SkiaImagePreprocessor preprocessor;
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 224, 112, 3});
+  ASSERT_OK_AND_ASSIGN(
+      InputImage preprocessed,
+      preprocessor.Preprocess(
+          InputImage(ReadSkiaImagePreprocessorTestImage("apple.bmp")),
+          parameter));
+  EXPECT_THAT(preprocessor.GetResizedImageSize(preprocessed, parameter),
+              StatusIs(absl::StatusCode::kUnimplemented));
+}
+
+TEST(SkiaImagePreprocessorTest, DryRunPatchifiedImageMatchesPreprocess) {
+  SkiaImagePreprocessor preprocessor;
+  const InputImage input_image(ReadSkiaImagePreprocessorTestImage("apple.bmp"));
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 16,
+                               .patch_height = 16,
+                               .max_num_patches = 49,
+                               .pooling_kernel_size = 3});
+  ASSERT_OK_AND_ASSIGN(InputImage preprocessed,
+                       preprocessor.Preprocess(input_image, parameter));
+  parameter.SetDryRun(true);
+  ASSERT_OK_AND_ASSIGN(InputImage dry_run,
+                       preprocessor.Preprocess(input_image, parameter));
+
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_map,
+                       preprocessed.GetPreprocessedImageTensorMap());
+  ASSERT_OK_AND_ASSIGN(auto dry_run_map,
+                       dry_run.GetPreprocessedImageTensorMap());
+  // Only the patch positions are computed in a dry run.
+  EXPECT_FALSE(dry_run_map->contains("images"));
+  auto preprocessed_type = preprocessed_map->at("positions_xy").TensorType();
+  auto dry_run_type = dry_run_map->at("positions_xy").TensorType();
+  ASSERT_TRUE(preprocessed_type.HasValue());
+  ASSERT_TRUE(dry_run_type.HasValue());
+  EXPECT_THAT(
+      dry_run_type.Value().Layout().Dimensions(),
+      ElementsAreArray(preprocessed_type.Value().Layout().Dimensions()));
+}
+
+TEST(SkiaImagePreprocessorTest, DryRunFixedSizeImageIsNotDecoded) {
+  SkiaImagePreprocessor preprocessor;
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 224, 112, 3});
+  parameter.SetDryRun(true);
+  ASSERT_OK_AND_ASSIGN(
+      InputImage dry_run,
+      preprocessor.Preprocess(
+          InputImage(ReadSkiaImagePreprocessorTestImage("apple.bmp")),
+          parameter));
+  EXPECT_FALSE(dry_run.IsTensorBuffer());
+  EXPECT_FALSE(dry_run.IsTensorBufferMap());
+
+  // The image header is still validated.
+  EXPECT_THAT(preprocessor.Preprocess(
+                  InputImage(std::string("invalid_image_bytes")), parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace
