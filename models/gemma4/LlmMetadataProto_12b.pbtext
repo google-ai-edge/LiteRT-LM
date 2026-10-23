@@ -57,6 +57,8 @@ llm_model_type {
     skip_mel_spectrogram_extraction: true
   }
 }
+supports_thinking: true
+supports_function_calling: true
 prompt_templates {
   user {
     prefix: "<|turn>user\n"

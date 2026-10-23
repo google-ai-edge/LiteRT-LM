@@ -50,6 +50,8 @@ llm_model_type {
     function_response_start: "<|tool_response>"
   }
 }
+supports_thinking: true
+supports_function_calling: true
 prompt_templates {
   user {
     prefix: "<|turn>user\n"
