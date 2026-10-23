@@ -39,4 +39,22 @@
 #endif  // defined(_WIN32)
 #endif  // LITERT_LM_C_API_EXPORT
 
+// Marks a public LiteRT LM C API declaration as deprecated. `message` should
+// name the replacement. Callers get a compiler warning
+// (-Wdeprecated-declarations on GCC/Clang, C4996 on MSVC) when they use the
+// declaration.
+//
+// Clients may define `LITERT_LM_C_API_DEPRECATED(message)` before including any
+// LiteRT LM header to override the default, e.g. with an empty definition to
+// silence the warnings.
+#ifndef LITERT_LM_C_API_DEPRECATED
+#if defined(_MSC_VER)
+#define LITERT_LM_C_API_DEPRECATED(message) __declspec(deprecated(message))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LITERT_LM_C_API_DEPRECATED(message) __attribute__((deprecated(message)))
+#else
+#define LITERT_LM_C_API_DEPRECATED(message)
+#endif  // defined(_MSC_VER)
+#endif  // LITERT_LM_C_API_DEPRECATED
+
 #endif  // THIRD_PARTY_ODML_LITERT_LM_C_API_EXPORT_H_

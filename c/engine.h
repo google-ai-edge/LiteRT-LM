@@ -149,6 +149,13 @@ typedef struct LiteRtLmBenchmarkInfo LiteRtLmBenchmarkInfo;
 // Added in version 0.1.0.
 typedef struct LiteRtLmRepetitionPenaltyConfig LiteRtLmRepetitionPenaltyConfig;
 
+// Opaque pointer for the LiteRT LM Speculative Decoding Config.
+// Use `litert_lm_speculative_decoding_config_delete` to free memory.
+//
+// Added in version 1.0.0.
+typedef struct LiteRtLmSpeculativeDecodingConfig
+    LiteRtLmSpeculativeDecodingConfig;
+
 // Opaque pointer for the LiteRT LM No Repeat Ngram Config.
 //
 // Added in version 0.1.0.
@@ -220,6 +227,23 @@ typedef enum {
   // Pick the token with maximum logit (i.e., argmax).
   kLiteRtLmSamplerTypeGreedy = 3,
 } LiteRtLmSamplerType;
+
+// Represents how speculative decoding (e.g. MTP) is used during decode.
+//
+// The modes match the values of the `--speculative_decoding` flag of the
+// LiteRT-LM CLI (`off`, `on` and `adaptive`).
+//
+// Added in version 1.0.0.
+typedef enum {
+  // Never speculate.
+  kLiteRtLmSpeculativeDecodingModeOff = 0,
+  // Speculate on every decode step.
+  kLiteRtLmSpeculativeDecodingModeOn = 1,
+  // Speculate only while it is measured to be faster than plain decoding.
+  // Backends that do not support adaptive speculation speculate on every
+  // decode step, like `kLiteRtLmSpeculativeDecodingModeOn`.
+  kLiteRtLmSpeculativeDecodingModeAdaptive = 2,
+} LiteRtLmSpeculativeDecodingMode;
 
 // Opaque pointer for LiteRT LM Sampler Parameters.
 // Use `litert_lm_sampler_params_delete` to free memory.
@@ -348,6 +372,12 @@ LiteRtLmStatusCode litert_lm_session_config_set_apply_prompt_template(
     LiteRtLmSessionConfig* config, bool apply_prompt_template);
 
 // Sets whether to enable speculative decoding for this session.
+//
+// Deprecated: use `litert_lm_session_config_set_speculative_decoding_config`
+// instead. Passing true is equivalent to a config whose mode is
+// `kLiteRtLmSpeculativeDecodingModeOn` and passing false to
+// `kLiteRtLmSpeculativeDecodingModeOff`.
+//
 // @param config The config to modify.
 // @param enable_speculative_decoding Whether to enable speculative decoding.
 // If set to true, speculative decoding is enabled for this session. If the
@@ -357,15 +387,91 @@ LiteRtLmStatusCode litert_lm_session_config_set_apply_prompt_template(
 // decoding is explicitly disabled for this session even if the engine was
 // initialized with speculative decoding enabled. If this function is not called
 // on the config, the session inherits the engine's speculative decoding setting
-// by default.
+// by default. This function and
+// `litert_lm_session_config_set_speculative_decoding_config` write the same
+// mode, so the last call wins.
 // @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
 //   `config` is NULL.
 //
 // Added in version 0.2.0.
 // Changed in version 1.0.0: returns a status code instead of void.
+// Deprecated in version 1.0.0.
 LITERT_LM_C_API_EXPORT
+LITERT_LM_C_API_DEPRECATED(
+    "Use litert_lm_session_config_set_speculative_decoding_config instead.")
 LiteRtLmStatusCode litert_lm_session_config_set_enable_speculative_decoding(
     LiteRtLmSessionConfig* config, bool enable_speculative_decoding);
+
+// Creates a LiteRT LM Speculative Decoding Config with every field unset.
+//
+// A speculative decoding config is set on the engine settings, as the default
+// of every session
+// (`litert_lm_engine_settings_set_speculative_decoding_config`), and on a
+// session config, as an override
+// (`litert_lm_session_config_set_speculative_decoding_config`). A field left
+// unset on the session inherits the engine's value, and a field left unset on
+// the engine uses the runtime default.
+//
+// @param out_config On success, receives the created config, owned by the
+//   caller; release with `litert_lm_speculative_decoding_config_delete`. Set to
+//   NULL on failure.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `out_config` is NULL.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_speculative_decoding_config_create(
+    LiteRtLmSpeculativeDecodingConfig** out_config);
+
+// Destroys a LiteRT LM Speculative Decoding Config.
+// @param config The config to destroy.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_speculative_decoding_config_delete(
+    LiteRtLmSpeculativeDecodingConfig* config);
+
+// Sets the speculative decoding mode. If unset, the session inherits the
+// engine's mode, and the engine's mode defaults to
+// `kLiteRtLmSpeculativeDecodingModeOff`.
+//
+// On the engine, `kLiteRtLmSpeculativeDecodingModeOn` and
+// `kLiteRtLmSpeculativeDecodingModeAdaptive` load the speculative decoding
+// drafter (e.g. MTP) when the engine is created. On a session of an engine
+// whose mode is `kLiteRtLmSpeculativeDecodingModeOff`, they load the drafter
+// lazily on the first request that needs it (CPU and GPU only; the NPU backend
+// decodes without speculation).
+//
+// @param config The config to modify.
+// @param mode The speculative decoding mode.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL or `mode` is invalid. An invalid `mode` leaves the config
+//   unchanged.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_mode(
+    LiteRtLmSpeculativeDecodingConfig* config,
+    LiteRtLmSpeculativeDecodingMode mode);
+
+// Sets the speculative decoding config of this session, which overrides the
+// engine's config (see
+// `litert_lm_engine_settings_set_speculative_decoding_config`). Fields left
+// unset in `speculative_decoding_config` inherit the engine's values. The
+// config is copied, so the caller keeps ownership of
+// `speculative_decoding_config`. Replaces any config set before, including the
+// mode set by the deprecated
+// `litert_lm_session_config_set_enable_speculative_decoding`.
+// @param config The config to modify.
+// @param speculative_decoding_config The speculative decoding config.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` or `speculative_decoding_config` is NULL.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_session_config_set_speculative_decoding_config(
+    LiteRtLmSessionConfig* config,
+    const LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config);
 
 // Sets the sampler parameters for this session config.
 // @param config The config to modify.
@@ -970,6 +1076,13 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_num_decode_tokens(
 
 // Sets whether to enable speculative decoding.
 //
+// Deprecated: use `litert_lm_engine_settings_set_speculative_decoding_config`
+// instead. Passing true is equivalent to a config whose mode is
+// `kLiteRtLmSpeculativeDecodingModeOn` and passing false to
+// `kLiteRtLmSpeculativeDecodingModeOff`. This function and
+// `litert_lm_engine_settings_set_speculative_decoding_config` write the same
+// mode, so the last call wins.
+//
 // @param settings The engine settings.
 // @param enable_speculative_decoding Whether to enable speculative decoding.
 // @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
@@ -977,9 +1090,30 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_num_decode_tokens(
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code instead of void.
+// Deprecated in version 1.0.0.
 LITERT_LM_C_API_EXPORT
+LITERT_LM_C_API_DEPRECATED(
+    "Use litert_lm_engine_settings_set_speculative_decoding_config instead.")
 LiteRtLmStatusCode litert_lm_engine_settings_set_enable_speculative_decoding(
     LiteRtLmEngineSettings* settings, bool enable_speculative_decoding);
+
+// Sets the default speculative decoding config of the engine's sessions (see
+// `litert_lm_speculative_decoding_config_create`). Each session can override
+// any field with `litert_lm_session_config_set_speculative_decoding_config`.
+// The config is copied, so the caller keeps ownership of
+// `speculative_decoding_config`. Replaces any config set before, including the
+// mode set by the deprecated
+// `litert_lm_engine_settings_set_enable_speculative_decoding`.
+// @param settings The engine settings.
+// @param speculative_decoding_config The speculative decoding config.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` or `speculative_decoding_config` is NULL.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_engine_settings_set_speculative_decoding_config(
+    LiteRtLmEngineSettings* settings,
+    const LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config);
 
 // Sets the number of decode steps per sync for the GPU backend.
 // Note: This setting is currently only supported for the Artisan GPU

@@ -28,6 +28,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/token.pb.h"
 
 struct LiteRtLmInputData {
@@ -55,6 +56,10 @@ struct LiteRtLmRepetitionPenaltyConfig {
 
 struct LiteRtLmNoRepeatNgramConfig {
   litert::lm::NoRepeatNgramConfig no_repeat_ngram_config;
+};
+
+struct LiteRtLmSpeculativeDecodingConfig {
+  litert::lm::SpeculativeDecodingConfig config;
 };
 
 struct LiteRtLmSuppressTokensConfig {

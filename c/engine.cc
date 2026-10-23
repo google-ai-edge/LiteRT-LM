@@ -452,6 +452,50 @@ LiteRtLmStatusCode litert_lm_session_config_set_enable_speculative_decoding(
   return kLiteRtLmStatusOk;
 }
 
+LiteRtLmStatusCode litert_lm_speculative_decoding_config_create(
+    LiteRtLmSpeculativeDecodingConfig** out_config) {
+  LITERT_LM_C_RETURN_IF_NULL(out_config);
+  *out_config = new LiteRtLmSpeculativeDecodingConfig();
+  return kLiteRtLmStatusOk;
+}
+
+void litert_lm_speculative_decoding_config_delete(
+    LiteRtLmSpeculativeDecodingConfig* config) {
+  delete config;
+}
+
+LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_mode(
+    LiteRtLmSpeculativeDecodingConfig* config,
+    LiteRtLmSpeculativeDecodingMode mode) {
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  switch (mode) {
+    case kLiteRtLmSpeculativeDecodingModeOff:
+      config->config.mode = litert::lm::SpeculativeDecodingMode::kOff;
+      return kLiteRtLmStatusOk;
+    case kLiteRtLmSpeculativeDecodingModeOn:
+      config->config.mode = litert::lm::SpeculativeDecodingMode::kOn;
+      return kLiteRtLmStatusOk;
+    case kLiteRtLmSpeculativeDecodingModeAdaptive:
+      config->config.mode = litert::lm::SpeculativeDecodingMode::kAdaptive;
+      return kLiteRtLmStatusOk;
+  }
+  litert::lm::c::SetLastError(absl::InvalidArgumentError(absl::StrFormat(
+      "Invalid speculative decoding mode: %d", static_cast<int>(mode))));
+  return kLiteRtLmStatusInvalidArgument;
+}
+
+LiteRtLmStatusCode litert_lm_session_config_set_speculative_decoding_config(
+    LiteRtLmSessionConfig* config,
+    const LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config) {
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  LITERT_LM_C_RETURN_IF_NULL(speculative_decoding_config);
+  config->config->SetSpeculativeDecodingConfig(
+      speculative_decoding_config->config);
+  return kLiteRtLmStatusOk;
+}
+
 LiteRtLmStatusCode litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config,
     const LiteRtLmSamplerParams* sampler_params) {
@@ -848,11 +892,24 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_enable_speculative_decoding(
   if (!IsValidEngineSettings(settings)) {
     return kLiteRtLmStatusInvalidArgument;
   }
-  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-  auto advanced_settings = main_settings.GetAdvancedSettings().value_or(
-      litert::lm::AdvancedSettings());
-  advanced_settings.enable_speculative_decoding = enable_speculative_decoding;
-  main_settings.SetAdvancedSettings(advanced_settings);
+  litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
+      settings->settings->GetSpeculativeDecodingConfig();
+  speculative_decoding_config.mode =
+      enable_speculative_decoding ? litert::lm::SpeculativeDecodingMode::kOn
+                                  : litert::lm::SpeculativeDecodingMode::kOff;
+  settings->settings->SetSpeculativeDecodingConfig(speculative_decoding_config);
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_engine_settings_set_speculative_decoding_config(
+    LiteRtLmEngineSettings* settings,
+    const LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  LITERT_LM_C_RETURN_IF_NULL(speculative_decoding_config);
+  settings->settings->SetSpeculativeDecodingConfig(
+      speculative_decoding_config->config);
   return kLiteRtLmStatusOk;
 }
 

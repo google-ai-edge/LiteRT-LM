@@ -605,6 +605,9 @@ TEST(EngineCTest, BenchmarkSettings) {
   EXPECT_EQ(params->num_decode_tokens(), 200);
 }
 
+// The deprecated setter must keep working until it is removed.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 TEST(EngineCTest, SetEnableSpeculativeDecoding) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
@@ -614,25 +617,102 @@ TEST(EngineCTest, SetEnableSpeculativeDecoding) {
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
 
-  // Default should be false.
-  EXPECT_FALSE(settings->settings->GetMainExecutorSettings()
-                   .GetAdvancedSettings()
-                   .value_or(litert::lm::AdvancedSettings())
-                   .enable_speculative_decoding);
+  // By default, the mode is not set (off).
+  EXPECT_FALSE(settings->settings->GetSpeculativeDecodingConfig().mode);
 
+  // The deprecated setter writes the engine's mode.
   litert_lm_engine_settings_set_enable_speculative_decoding(settings.get(),
                                                             true);
-  EXPECT_TRUE(settings->settings->GetMainExecutorSettings()
-                  .GetAdvancedSettings()
-                  .value_or(litert::lm::AdvancedSettings())
-                  .enable_speculative_decoding);
+  EXPECT_EQ(settings->settings->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kOn);
 
   litert_lm_engine_settings_set_enable_speculative_decoding(settings.get(),
                                                             false);
-  EXPECT_FALSE(settings->settings->GetMainExecutorSettings()
-                   .GetAdvancedSettings()
-                   .value_or(litert::lm::AdvancedSettings())
-                   .enable_speculative_decoding);
+  EXPECT_EQ(settings->settings->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kOff);
+}
+#pragma GCC diagnostic pop
+
+TEST(EngineCTest, SetEngineSpeculativeDecodingConfig) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(
+                &speculative_decoding_config),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                speculative_decoding_config,
+                kLiteRtLmSpeculativeDecodingModeAdaptive),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_engine_settings_set_speculative_decoding_config(
+                settings.get(), speculative_decoding_config),
+            kLiteRtLmStatusOk);
+  // The setter copies the config.
+  litert_lm_speculative_decoding_config_delete(speculative_decoding_config);
+  EXPECT_EQ(settings->settings->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kAdaptive);
+  EXPECT_EQ(settings->settings->GetMainExecutorSettings()
+                .GetEffectiveSpeculativeDecodingMode(),
+            litert::lm::SpeculativeDecodingMode::kAdaptive);
+
+  // A null config is rejected.
+  EXPECT_EQ(litert_lm_engine_settings_set_speculative_decoding_config(
+                settings.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(settings->settings->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kAdaptive);
+}
+
+TEST(EngineCTest, SpeculativeDecodingConfigLifecycle) {
+  EXPECT_EQ(litert_lm_speculative_decoding_config_create(nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  // Deleting NULL is a no-op.
+  litert_lm_speculative_decoding_config_delete(nullptr);
+
+  LiteRtLmSpeculativeDecodingConfig* config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(&config),
+            kLiteRtLmStatusOk);
+  ASSERT_NE(config, nullptr);
+  // Every field starts unset.
+  EXPECT_FALSE(config->config.mode.has_value());
+
+  EXPECT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                config, kLiteRtLmSpeculativeDecodingModeOn),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(config->config.mode, litert::lm::SpeculativeDecodingMode::kOn);
+  EXPECT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                config, kLiteRtLmSpeculativeDecodingModeOff),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(config->config.mode, litert::lm::SpeculativeDecodingMode::kOff);
+  EXPECT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                config, kLiteRtLmSpeculativeDecodingModeAdaptive),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(config->config.mode,
+            litert::lm::SpeculativeDecodingMode::kAdaptive);
+
+  // An invalid mode leaves the config unchanged. (3 is the only invalid value
+  // representable by the enum without undefined behavior.)
+  litert_lm_clear_last_error();
+  EXPECT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                config, static_cast<LiteRtLmSpeculativeDecodingMode>(3)),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("Invalid speculative decoding mode"));
+  EXPECT_EQ(config->config.mode,
+            litert::lm::SpeculativeDecodingMode::kAdaptive);
+
+  // A null config is rejected.
+  EXPECT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                nullptr, kLiteRtLmSpeculativeDecodingModeOn),
+            kLiteRtLmStatusInvalidArgument);
+
+  litert_lm_speculative_decoding_config_delete(config);
 }
 
 TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
@@ -726,6 +806,9 @@ TEST(EngineCTest, CreateSessionConfigWithApplyPromptTemplate) {
   EXPECT_TRUE(config->config->GetApplyPromptTemplateInSession());
 }
 
+// The deprecated setter must keep working until it is removed.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 TEST(EngineCTest, CreateSessionConfigWithEnableSpeculativeDecoding) {
   SessionConfigPtr config(CreateSessionConfig(),
                           &litert_lm_session_config_delete);
@@ -741,6 +824,77 @@ TEST(EngineCTest, CreateSessionConfigWithEnableSpeculativeDecoding) {
   litert_lm_session_config_set_enable_speculative_decoding(config.get(), false);
   EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
             litert::lm::SpeculativeDecodingMode::kOff);
+
+  // The deprecated setter and the config setter write the same mode, so the
+  // last call wins.
+  LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(
+                &speculative_decoding_config),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_speculative_decoding_config_set_mode(
+                speculative_decoding_config,
+                kLiteRtLmSpeculativeDecodingModeAdaptive),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_session_config_set_speculative_decoding_config(
+                config.get(), speculative_decoding_config),
+            kLiteRtLmStatusOk);
+  litert_lm_speculative_decoding_config_delete(speculative_decoding_config);
+  EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kAdaptive);
+  litert_lm_session_config_set_enable_speculative_decoding(config.get(), true);
+  EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kOn);
+}
+#pragma GCC diagnostic pop
+
+TEST(EngineCTest, CreateSessionConfigWithSpeculativeDecodingConfig) {
+  SessionConfigPtr config(CreateSessionConfig(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  // By default, the mode is not set (inherits the engine's).
+  EXPECT_FALSE(config->config->GetSpeculativeDecodingConfig().mode.has_value());
+
+  LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(
+                &speculative_decoding_config),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(
+      litert_lm_speculative_decoding_config_set_mode(
+          speculative_decoding_config, kLiteRtLmSpeculativeDecodingModeOn),
+      kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_session_config_set_speculative_decoding_config(
+                config.get(), speculative_decoding_config),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kOn);
+
+  // The setter copies the config: later changes to it don't apply.
+  ASSERT_EQ(
+      litert_lm_speculative_decoding_config_set_mode(
+          speculative_decoding_config, kLiteRtLmSpeculativeDecodingModeOff),
+      kLiteRtLmStatusOk);
+  EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
+            litert::lm::SpeculativeDecodingMode::kOn);
+  litert_lm_speculative_decoding_config_delete(speculative_decoding_config);
+
+  // An empty config clears the override.
+  LiteRtLmSpeculativeDecodingConfig* empty_config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(&empty_config),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_session_config_set_speculative_decoding_config(
+                config.get(), empty_config),
+            kLiteRtLmStatusOk);
+  EXPECT_FALSE(config->config->GetSpeculativeDecodingConfig().mode.has_value());
+
+  // Null arguments are rejected.
+  EXPECT_EQ(litert_lm_session_config_set_speculative_decoding_config(
+                config.get(), nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_session_config_set_speculative_decoding_config(
+                nullptr, empty_config),
+            kLiteRtLmStatusInvalidArgument);
+  litert_lm_speculative_decoding_config_delete(empty_config);
 }
 
 TEST(EngineCTest, CreateConversationConfig) {
@@ -2979,7 +3133,21 @@ TEST(EngineCStatusTest, SessionConfigSettersReturnStatus) {
                           &litert_lm_sampler_params_delete);
   ASSERT_NE(params, nullptr);
   const LiteRtLmSamplerParams* sampler_params = params.get();
+  LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config_ptr = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(
+                &speculative_decoding_config_ptr),
+            kLiteRtLmStatusOk);
+  std::unique_ptr<LiteRtLmSpeculativeDecodingConfig,
+                  decltype(&litert_lm_speculative_decoding_config_delete)>
+      speculative_decoding_config_owner(
+          speculative_decoding_config_ptr,
+          &litert_lm_speculative_decoding_config_delete);
+  const LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config =
+      speculative_decoding_config_ptr;
   using C = LiteRtLmSessionConfig;
+// Covers the deprecated set_enable_speculative_decoding too.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   ExpectSettersReturnStatus<C>(
       config.get(),
       {
@@ -2997,12 +3165,18 @@ TEST(EngineCStatusTest, SessionConfigSettersReturnStatus) {
              return litert_lm_session_config_set_enable_speculative_decoding(
                  c, true);
            }},
+          {"set_speculative_decoding_config",
+           [speculative_decoding_config](C* c) {
+             return litert_lm_session_config_set_speculative_decoding_config(
+                 c, speculative_decoding_config);
+           }},
           {"set_sampler_params",
            [sampler_params](C* c) {
              return litert_lm_session_config_set_sampler_params(c,
                                                                 sampler_params);
            }},
       });
+#pragma GCC diagnostic pop
 }
 
 TEST(EngineCStatusTest, ConstraintConfigSettersReturnStatus) {
@@ -3139,8 +3313,25 @@ AllEngineSettingsSetters() {
        }},
       {"set_enable_speculative_decoding",
        [](E* s) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
          return litert_lm_engine_settings_set_enable_speculative_decoding(s,
                                                                           true);
+#pragma GCC diagnostic pop
+       }},
+      {"set_speculative_decoding_config",
+       [](E* s) {
+         LiteRtLmSpeculativeDecodingConfig* config = nullptr;
+         if (const int status =
+                 litert_lm_speculative_decoding_config_create(&config);
+             status != kLiteRtLmStatusOk) {
+           return status;
+         }
+         const int status =
+             litert_lm_engine_settings_set_speculative_decoding_config(s,
+                                                                       config);
+         litert_lm_speculative_decoding_config_delete(config);
+         return status;
        }},
       {"set_gpu_decode_steps_per_sync",
        [](E* s) {

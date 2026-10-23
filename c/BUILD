@@ -261,6 +261,7 @@ cc_library(
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
+        "//runtime/executor:speculative_decoding_mode",
         "//runtime/proto:token_cc_proto",
     ],
 )
