@@ -2167,6 +2167,7 @@ TEST_F(SessionAdvancedTest,
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionAdvanced::Create(execution_manager, tokenizer_.get(),
                                             session_config, benchmark_info));
+  EXPECT_TRUE(session->GetSessionConfig().GetApplyPromptTemplateInSession());
 
   std::vector<InputData> inputs;
   inputs.emplace_back(InputText("Hello World!"));
@@ -2192,9 +2193,8 @@ TEST_F(SessionAdvancedTest,
 
   auto executor = CreateFakeLlmExecutor(
       // Expected tokens: "Hello World!" (No templates)
-      // Expected tokens: "Hello World!" (No templates)
       /*prefill_tokens=*/{{90, 547, 58, 735, 210, 466, 2294}},
-      /*decode_tokens=*/{{224}});
+      /*decode_tokens=*/{{224}, {2294}});
 
   proto::BenchmarkParams benchmark_params;
   benchmark_params.set_num_prefill_tokens(7);
@@ -2211,12 +2211,15 @@ TEST_F(SessionAdvancedTest,
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionAdvanced::Create(execution_manager, tokenizer_.get(),
                                             session_config, benchmark_info));
+  EXPECT_FALSE(session->GetSessionConfig().GetApplyPromptTemplateInSession());
 
   std::vector<InputData> inputs;
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK(session->RunPrefill(inputs));
+  EXPECT_OK(session->RunDecode());
   ASSERT_OK_AND_ASSIGN(auto actual_benchmark_info, session->GetBenchmarkInfo());
   EXPECT_EQ(actual_benchmark_info.GetTotalPrefillTurns(), 1);
+  EXPECT_EQ(actual_benchmark_info.GetTotalDecodeTurns(), 1);
 }
 
 TEST_F(SessionAdvancedTest,

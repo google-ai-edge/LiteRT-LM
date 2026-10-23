@@ -68,9 +68,17 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  ABSL_ASSIGN_OR_RETURN(auto session_id,
-                        execution_manager_lock->RegisterNewSession(
-                            session_config, benchmark_info));
+  SessionConfig config = session_config;
+  if (benchmark_info.has_value() &&
+      benchmark_info->GetBenchmarkParams().num_prefill_tokens() > 0 &&
+      config.GetApplyPromptTemplateInSession()) {
+    ABSL_LOG(INFO) << "Benchmark has num_prefill_tokens > 0; forcing "
+                      "apply_prompt_template_in_session to false.";
+    config.SetApplyPromptTemplateInSession(false);
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto session_id,
+      execution_manager_lock->RegisterNewSession(config, benchmark_info));
   ABSL_ASSIGN_OR_RETURN(auto session_info_,
                         execution_manager_lock->GetSessionInfo(session_id));
   return absl::WrapUnique(new SessionAdvanced(
