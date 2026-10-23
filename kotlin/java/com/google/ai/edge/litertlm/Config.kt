@@ -331,4 +331,10 @@ data class SessionConfig(
   val samplerConfig: SamplerConfig? = null,
   val loraConfig: LoraConfig? = null,
   val enableSpeculativeDecoding: Boolean? = null,
+  /**
+   * Whether the session applies the bundle's prompt template to the text it is given. `null` keeps
+   * the runtime's default (applied). `false` feeds the text as it is: for a prompt rendered by the
+   * caller, or for scoring continuations of a prompt with [Session.runTextScoring].
+   */
+  val applyPromptTemplate: Boolean? = null,
 )
