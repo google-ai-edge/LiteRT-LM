@@ -705,21 +705,27 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                                  .first(encoder_outputs.size());
   }
 
+  const float* current_logits_ptr = nullptr;
+  std::optional<TensorBufferScopedLock> logits_lock;
   while (state.time_index < state.effective_max_time_index) {
     if (state.current_logits_buffer == nullptr) {
+      logits_lock.reset();
+      current_logits_ptr = nullptr;
       LITERT_ASSIGN_OR_RETURN(
           state.current_logits_buffer,
           RunDecodeStep(runner_, stateful_runner_.get(), active_encoder_outputs,
                         decode_input_buffers_, decode_output_buffers_, state,
                         state.was_stateful_step));
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock_and_ptr,
+          TensorBufferScopedLock::Create<const float>(
+              *state.current_logits_buffer, TensorBuffer::LockMode::kRead));
+      logits_lock.emplace(std::move(lock_and_ptr.first));
+      current_logits_ptr = lock_and_ptr.second;
     }
 
-    LITERT_ASSIGN_OR_RETURN(
-        auto lock,
-        TensorBufferScopedLock::Create<const float>(
-            *state.current_logits_buffer, TensorBuffer::LockMode::kRead));
     auto [token_id, duration] = SelectGreedyTokenAndDuration(
-        lock.second, state, num_logits_per_token_, blank_token_id_);
+        current_logits_ptr, state, num_logits_per_token_, blank_token_id_);
 
     if (token_id != blank_token_id_) {
       state.current_logits_buffer = nullptr;

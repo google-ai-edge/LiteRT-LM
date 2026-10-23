@@ -26,6 +26,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 #include "omni/speech2text/audio_preprocessor.h"
+#include "omni/speech2text/audio_source.h"
 #include "omni/speech2text/utils.h"
 
 namespace litert::omni::asr {
@@ -36,11 +37,17 @@ DummyPreprocessor::DummyPreprocessor(
     : AudioPreprocessor(audio_source),
       pad_to_num_samples_(pad_to_num_samples) {}
 
+DummyPreprocessor::DummyPreprocessor(AudioSource* absl_nonnull audio_source,
+                                     int pad_to_num_samples)
+    : AudioPreprocessor(audio_source),
+      pad_to_num_samples_(pad_to_num_samples) {}
+
 void DummyPreprocessor::ResetInternal() { previous_window_.clear(); }
 
 absl::Status DummyPreprocessor::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
   ABSL_ASSIGN_OR_RETURN(auto raw_speech, audio_source_.GetOutput());
+  const bool is_warm_start = IsLastInputWarmStart();
   // Models that consume raw PCM waveforms directly (such as moonshine-tiny)
   // apply internal normalization inside the encoder subgraph. Feeding digital
   // silence or near-silent background noise causes that internal
@@ -50,7 +57,7 @@ absl::Status DummyPreprocessor::ScheduleInternal() {
   // execution.
   if (IsSilentAudio(raw_speech)) {
     previous_window_.clear();
-    PushOutput(PreprocessedAudio{});
+    PushOutput(PreprocessedAudio{.is_warm_start = is_warm_start});
     return absl::OkStatus();
   }
 
@@ -95,6 +102,7 @@ absl::Status DummyPreprocessor::ScheduleInternal() {
   PushOutput(PreprocessedAudio{
       .features = std::move(raw_speech),
       .decode_range = decode_range,
+      .is_warm_start = is_warm_start,
   });
   return absl::OkStatus();
 }

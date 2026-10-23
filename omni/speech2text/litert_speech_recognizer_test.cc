@@ -64,11 +64,13 @@ class DummyAudioPreprocessor
   void PushFeatures(
       std::vector<float> features,
       std::optional<PreprocessedAudio::DecodeRange> decode_range = std::nullopt,
-      std::optional<std::vector<float>> centered_features = std::nullopt) {
+      std::optional<std::vector<float>> centered_features = std::nullopt,
+      bool is_warm_start = false) {
     PushOutput(PreprocessedAudio{
         .features = std::move(features),
         .centered_features = std::move(centered_features),
         .decode_range = decode_range,
+        .is_warm_start = is_warm_start,
     });
   }
 
@@ -501,6 +503,91 @@ TEST(LiteRtSpeechRecognizerTest,
   ASSERT_OK_AND_ASSIGN(auto chunk3_tokens, recognizer->GetOutput());
   ASSERT_EQ(chunk3_tokens.size(), 2);
   EXPECT_EQ(chunk3_tokens[0].token_id, 13);
+}
+
+TEST(LiteRtSpeechRecognizerTest,
+     MarksWarmStartChunksAndPreservesTrimmedFullWindows) {
+  auto mock_runner = std::make_unique<MockLiteRtRunner>();
+  EXPECT_CALL(*mock_runner, CreateInputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(*mock_runner, CreateOutputBuffers(_))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(*mock_runner, Run("encode", _, _))
+      .Times(3)
+      .WillRepeatedly(Return(absl::OkStatus()));
+
+  DummyAudioPreprocessor preprocessor;
+  // Warm-start chunk (`is_warm_start = true`) with a timestamped decoder
+  // (`kEndOfChunkTokenId` has positive `timestamp_ms = 63`).
+  preprocessor.PushFeatures(
+      {1.0f, 2.0f, 3.0f},
+      PreprocessedAudio::DecodeRange{.start_fraction = 0.0f,
+                                     .valid_fraction = 0.25f},
+      /*centered_features=*/std::nullopt, /*is_warm_start=*/true);
+  // Warm-start chunk (`is_warm_start = true`) with a non-timestamped decoder
+  // (no `kEndOfChunkTokenId` returned by `Decode`).
+  preprocessor.PushFeatures({1.0f, 2.0f, 3.0f},
+                            PreprocessedAudio::DecodeRange{
+                                .start_fraction = 0.0f, .valid_fraction = 0.5f},
+                            /*centered_features=*/std::nullopt,
+                            /*is_warm_start=*/true);
+  // Full window whose trailing room noise was trimmed (`DecodeRange{0.0f,
+  // 0.6f}`, `is_warm_start = false`) must not be tagged as a warm-start prefix.
+  preprocessor.PushFeatures({1.0f, 2.0f, 3.0f},
+                            PreprocessedAudio::DecodeRange{
+                                .start_fraction = 0.0f, .valid_fraction = 0.6f},
+                            /*centered_features=*/std::nullopt,
+                            /*is_warm_start=*/false);
+
+  auto decoder = std::make_unique<SequenceDecoder>(
+      std::vector<std::vector<SpeechRecognizer::DecodedToken>>{
+          {{.token_id = 10, .timestamp_ms = 3},
+           {.token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
+            .timestamp_ms = 63}},
+          {{.token_id = 20, .timestamp_ms = std::nullopt}},
+          {{.token_id = 30, .timestamp_ms = 12},
+           {.token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
+            .timestamp_ms = 63}},
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto recognizer, LiteRtSpeechRecognizer::Create(
+                                            std::move(mock_runner),
+                                            &preprocessor, std::move(decoder)));
+
+  ASSERT_OK(recognizer->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto warm1_tokens, recognizer->GetOutput());
+  ASSERT_EQ(warm1_tokens.size(), 2);
+  EXPECT_EQ(warm1_tokens[0].token_id, 10);
+  EXPECT_EQ(warm1_tokens[1].token_id,
+            SpeechRecognizer::DecodedToken::kEndOfChunkTokenId);
+  EXPECT_EQ(warm1_tokens[1].timestamp_ms, 63);
+  EXPECT_TRUE(warm1_tokens[1].is_warm_start);
+
+  ASSERT_OK(recognizer->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto warm2_tokens, recognizer->GetOutput());
+  ASSERT_EQ(warm2_tokens.size(), 2);
+  EXPECT_EQ(warm2_tokens[0].token_id, 20);
+  EXPECT_EQ(warm2_tokens[1].token_id,
+            SpeechRecognizer::DecodedToken::kEndOfChunkTokenId);
+  EXPECT_EQ(warm2_tokens[1].timestamp_ms, std::nullopt);
+  EXPECT_TRUE(warm2_tokens[1].is_warm_start);
+
+  ASSERT_OK(recognizer->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto trimmed_full_tokens, recognizer->GetOutput());
+  ASSERT_EQ(trimmed_full_tokens.size(), 2);
+  EXPECT_EQ(trimmed_full_tokens[0].token_id, 30);
+  EXPECT_EQ(trimmed_full_tokens[1].token_id,
+            SpeechRecognizer::DecodedToken::kEndOfChunkTokenId);
+  EXPECT_EQ(trimmed_full_tokens[1].timestamp_ms, 63);
+  EXPECT_FALSE(trimmed_full_tokens[1].is_warm_start);
 }
 
 }  // namespace

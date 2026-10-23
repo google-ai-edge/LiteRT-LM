@@ -62,8 +62,16 @@ absl::Status LiteRtRunnerImpl::Run(
     absl::string_view signature_name,
     absl::Span<const TensorBuffer> input_buffers,
     absl::Span<const TensorBuffer> output_buffers) {
-  LITERT_ASSIGN_OR_RETURN(size_t signature_index,
-                          compiled_model_->GetSignatureIndex(signature_name));
+  size_t signature_index = 0;
+  if (cached_signature_index_.has_value() &&
+      cached_signature_name_ == signature_name) {
+    signature_index = *cached_signature_index_;
+  } else {
+    LITERT_ASSIGN_OR_RETURN(signature_index,
+                            compiled_model_->GetSignatureIndex(signature_name));
+    cached_signature_name_ = std::string(signature_name);
+    cached_signature_index_ = signature_index;
+  }
   LITERT_RETURN_IF_ERROR(
       compiled_model_->Run(signature_index, input_buffers, output_buffers));
   return absl::OkStatus();

@@ -48,10 +48,9 @@ namespace litert::omni::asr {
 namespace {
 
 constexpr absl::string_view kModelNames[] = {
-    "qwen3-asr-0.6b",
-    "qwen3-asr-0.6b-int8",
-    "qwen3-asr",
-    "qwen3-asr-int8",
+    "qwen3-asr-0.6b", "qwen3-asr-0.6b-int8", "qwen3-asr-0.6b-int4",
+    "qwen3-asr-1.7b", "qwen3-asr-1.7b-int8", "qwen3-asr-1.7b-int4",
+    "qwen3-asr",      "qwen3-asr-int8",
 };
 
 // Resolves configs and instantiates encoder, decoder, and sessions on demand.
@@ -97,6 +96,8 @@ class Qwen3AsrSessionFactory : public AsrSessionFactory {
         lm_runner_(std::move(lm_runner)) {}
 
  protected:
+  bool ShouldEnableWarmStart() const override { return true; }
+
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithAudioSource(
       std::unique_ptr<AudioSource> absl_nonnull audio_source) override {
     auto encoder = std::make_unique<LiteRtRunnerImpl>(compiled_model_.get());

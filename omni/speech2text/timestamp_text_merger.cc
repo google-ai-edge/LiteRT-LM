@@ -496,6 +496,10 @@ void TimestampTextMerger::ResetInternal() {
   stream_timestamp_offset_ms_ = 0.0;
   prev_chunk_end_ms_ = -1.0;
   last_chunk_end_ms_ = 0;
+  prev_is_warm_start_ = false;
+  consecutive_empty_chunks_ = 0;
+  confirmed_prefix_size_ = 0;
+  confirmed_until_ms_ = -1;
 }
 
 absl::Status TimestampTextMerger::ScheduleInternal() {
@@ -507,23 +511,19 @@ absl::Status TimestampTextMerger::ScheduleInternal() {
 
 absl::Status TimestampTextMerger::Execute() {
   LITERT_ASSIGN_OR_RETURN(auto curr_chunk_words, detokenizer_.GetOutput());
-  if (curr_chunk_words.empty()) {
-    UpdateStreamTimestampOffset(last_chunk_end_ms_);
-    LogAndPushOutput(
-        {"", prev_words_.empty() ? "" : JoinWithCjkAwareSpacing(prev_words_)});
-    return absl::OkStatus();
-  }
 
   const int chunk_start_ms =
       static_cast<int>(std::lround(stream_timestamp_offset_ms_));
   std::vector<std::string> curr_words;
   std::vector<int> curr_timestamps;
   std::optional<int> max_chunk_timestamp_ms;
+  bool is_warm_start_chunk = false;
   // Whether a word had to be split into several units below.
   bool split_word = false;
   curr_words.reserve(curr_chunk_words.size());
   for (const auto& word : curr_chunk_words) {
     if (word.IsEndOfChunk()) {
+      is_warm_start_chunk = word.is_warm_start;
       if (word.timestamp_ms.has_value()) {
         max_chunk_timestamp_ms = word.timestamp_ms.value();
       }
@@ -535,10 +535,14 @@ absl::Status TimestampTextMerger::Execute() {
     std::vector<std::string> units = SplitCjkCharacters({word.text});
     split_word |= units.size() > 1;
     for (std::string& unit : units) {
-      curr_words.push_back(std::move(unit));
       if (word.timestamp_ms.has_value()) {
-        curr_timestamps.push_back(word.timestamp_ms.value() + chunk_start_ms);
+        const int abs_ts = word.timestamp_ms.value() + chunk_start_ms;
+        if (confirmed_until_ms_ >= 0 && abs_ts <= confirmed_until_ms_) {
+          continue;
+        }
+        curr_timestamps.push_back(abs_ts);
       }
+      curr_words.push_back(std::move(unit));
     }
   }
   // End of the chunk relative to its start; falls back to the last word's
@@ -556,22 +560,56 @@ absl::Status TimestampTextMerger::Execute() {
   if (split_word) curr_timestamps.clear();
 
   if (curr_words.empty()) {
-    UpdateStreamTimestampOffset(chunk_end_ms);
+    std::string confirmed;
+    if (!is_warm_start_chunk) {
+      ++consecutive_empty_chunks_;
+      const bool is_gated_followup_silence =
+          !max_chunk_timestamp_ms.has_value() && last_chunk_end_ms_ > 0 &&
+          prev_chunk_end_ms_ > static_cast<double>(last_chunk_end_ms_);
+      if (!prev_words_.empty() && !prev_is_warm_start_ &&
+          ((prev_chunk_end_ms_ >= 0.0 &&
+            prev_chunk_end_ms_ <= stream_timestamp_offset_ms_) ||
+           consecutive_empty_chunks_ >= 2 || is_gated_followup_silence)) {
+        if (!prev_timestamps_.empty()) {
+          confirmed_until_ms_ =
+              prev_timestamps_.back() +
+              std::max(1, static_cast<int>(0.08 * last_chunk_end_ms_));
+        }
+        const size_t prefix =
+            std::min(confirmed_prefix_size_, prev_words_.size());
+        confirmed = JoinWithCjkAwareSpacing(
+            absl::MakeConstSpan(prev_words_).subspan(prefix));
+        prev_words_.clear();
+        prev_timestamps_.clear();
+        confirmed_prefix_size_ = 0;
+      }
+      UpdateStreamTimestampOffset(chunk_end_ms);
+    }
+    const size_t prefix = std::min(confirmed_prefix_size_, prev_words_.size());
     LogAndPushOutput(
-        {"", prev_words_.empty() ? "" : JoinWithCjkAwareSpacing(prev_words_)});
+        {std::move(confirmed),
+         prefix >= prev_words_.size()
+             ? ""
+             : JoinWithCjkAwareSpacing(
+                   absl::MakeConstSpan(prev_words_).subspan(prefix))});
     return absl::OkStatus();
   }
+  consecutive_empty_chunks_ = 0;
 
   if (overlap_ratio_ == 0.0f) {
     LogAndPushOutput({JoinWithCjkAwareSpacing(curr_words), ""});
     return absl::OkStatus();
   }
 
-  if (prev_words_.empty()) {
+  if (prev_words_.empty() || prev_is_warm_start_) {
     prev_words_ = curr_words;
     prev_timestamps_ = curr_timestamps;
-    prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
-    UpdateStreamTimestampOffset(chunk_end_ms);
+    prev_is_warm_start_ = is_warm_start_chunk;
+    confirmed_prefix_size_ = 0;
+    if (!is_warm_start_chunk) {
+      prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
+      UpdateStreamTimestampOffset(chunk_end_ms);
+    }
     LogAndPushOutput({"", JoinWithCjkAwareSpacing(prev_words_)});
     return absl::OkStatus();
   }
@@ -600,8 +638,13 @@ absl::Status TimestampTextMerger::Execute() {
   prev_chunk_end_ms_ = stream_timestamp_offset_ms_ + chunk_end_ms;
   UpdateStreamTimestampOffset(chunk_end_ms);
 
-  LogAndPushOutput({JoinWithCjkAwareSpacing(last_confirmed_words_),
-                    JoinWithCjkAwareSpacing(prev_words_)});
+  const size_t prefix = std::min(confirmed_prefix_size_, prev_words_.size());
+  LogAndPushOutput(
+      {JoinWithCjkAwareSpacing(last_confirmed_words_),
+       prefix >= prev_words_.size()
+           ? ""
+           : JoinWithCjkAwareSpacing(
+                 absl::MakeConstSpan(prev_words_).subspan(prefix))});
   return absl::OkStatus();
 }
 
@@ -610,17 +653,25 @@ void TimestampTextMerger::MergeByTime(absl::Span<const std::string> curr_words,
   if (prev_chunk_end_ms_ <= stream_timestamp_offset_ms_) {
     // The window that produced the previous words ends before this chunk
     // (e.g. an empty chunk in between): the previous words are final.
-    last_confirmed_words_ = std::move(prev_words_);
+    const size_t already_confirmed =
+        std::min(confirmed_prefix_size_, prev_words_.size());
+    last_confirmed_words_.assign(prev_words_.begin() + already_confirmed,
+                                 prev_words_.end());
+    confirmed_prefix_size_ = 0;
     prev_words_.assign(curr_words.begin(), curr_words.end());
     prev_timestamps_.assign(curr_timestamps.begin(), curr_timestamps.end());
     return;
   }
 
   const double overlap_len = prev_chunk_end_ms_ - stream_timestamp_offset_ms_;
+  const double tol_scale =
+      last_chunk_end_ms_ > 0
+          ? std::min(overlap_len, 0.5 * static_cast<double>(last_chunk_end_ms_))
+          : overlap_len;
   const Tolerances tol = {
-      .substitution = std::max(1.0, 0.15 * overlap_len),
-      .match_early = std::max(2.0, 0.25 * overlap_len),
-      .match_late = std::max(2.0, 0.5 * overlap_len),
+      .substitution = std::max(1.0, 0.15 * tol_scale),
+      .match_early = std::max(2.0, 0.25 * tol_scale),
+      .match_late = std::max(2.0, 0.5 * tol_scale),
   };
 
   const std::vector<std::string> canon_prev_words =
@@ -646,8 +697,12 @@ void TimestampTextMerger::MergeByTime(absl::Span<const std::string> curr_words,
          prev_timestamps_[num_confirmed] < chunk_start) {
     ++num_confirmed;
   }
-  last_confirmed_words_.assign(prev_words_.begin(),
+  const size_t already_confirmed =
+      std::min(confirmed_prefix_size_, prev_words_.size());
+  num_confirmed = std::max(num_confirmed, already_confirmed);
+  last_confirmed_words_.assign(prev_words_.begin() + already_confirmed,
                                prev_words_.begin() + num_confirmed);
+  confirmed_prefix_size_ = 0;
   const auto prev_ov_words =
       absl::MakeConstSpan(prev_words_).subspan(num_confirmed);
   const auto canon_prev_ov_words =
@@ -685,6 +740,14 @@ void TimestampTextMerger::MergeByTime(absl::Span<const std::string> curr_words,
 
   prev_words_ = std::move(merged_words);
   prev_timestamps_ = std::move(merged_timestamps);
+  if (overlap_ratio_ >= 0.7f) {
+    const double early_confirm_limit = pivot - tol.substitution;
+    while (confirmed_prefix_size_ < prev_timestamps_.size() &&
+           prev_timestamps_[confirmed_prefix_size_] < early_confirm_limit) {
+      last_confirmed_words_.push_back(prev_words_[confirmed_prefix_size_]);
+      ++confirmed_prefix_size_;
+    }
+  }
   if (ABSL_VLOG_IS_ON(2)) {
     std::string words;
     for (size_t k = 0; k < prev_words_.size(); ++k) {
@@ -698,6 +761,17 @@ void TimestampTextMerger::MergeByTime(absl::Span<const std::string> curr_words,
 void TimestampTextMerger::MergeByWordCount(
     absl::Span<const std::string> curr_words,
     absl::Span<const int> curr_timestamps) {
+  if (confirmed_prefix_size_ > 0) {
+    const size_t drop = std::min(confirmed_prefix_size_, prev_words_.size());
+    prev_words_.erase(prev_words_.begin(), prev_words_.begin() + drop);
+    if (prev_timestamps_.size() >= drop) {
+      prev_timestamps_.erase(prev_timestamps_.begin(),
+                             prev_timestamps_.begin() + drop);
+    } else {
+      prev_timestamps_.clear();
+    }
+    confirmed_prefix_size_ = 0;
+  }
   const bool curr_has_usable_ts =
       HasUsableTimestamps(curr_words, curr_timestamps);
   if (!prev_words_.empty() && !curr_words.empty()) {
@@ -760,14 +834,27 @@ void TimestampTextMerger::MergeByWordCount(
 }
 
 absl::Status TimestampTextMerger::FlushInternal() {
-  if (!prev_words_.empty()) {
-    MergeResult result = {JoinWithCjkAwareSpacing(prev_words_), ""};
+  const size_t prefix = std::min(confirmed_prefix_size_, prev_words_.size());
+  if (prefix < prev_words_.size()) {
+    MergeResult result = {JoinWithCjkAwareSpacing(
+                              absl::MakeConstSpan(prev_words_).subspan(prefix)),
+                          ""};
     prev_words_.clear();
     prev_timestamps_.clear();
     last_confirmed_words_.clear();
+    confirmed_prefix_size_ = 0;
+    confirmed_until_ms_ = -1;
     prev_chunk_end_ms_ = -1.0;
     last_chunk_end_ms_ = 0;
     LogAndPushOutput(std::move(result));
+  } else {
+    prev_words_.clear();
+    prev_timestamps_.clear();
+    last_confirmed_words_.clear();
+    confirmed_prefix_size_ = 0;
+    confirmed_until_ms_ = -1;
+    prev_chunk_end_ms_ = -1.0;
+    last_chunk_end_ms_ = 0;
   }
   return absl::OkStatus();
 }

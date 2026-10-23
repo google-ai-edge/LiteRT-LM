@@ -106,17 +106,20 @@ TEST(ModelUtilsTest, CreateCompiledModelConfiguresModelCaches) {
   ModelOptions cpu_opts{.model_dir = root.string(),
                         .cache_dir = root.string(),
                         .backend = lm::Backend::CPU};
-  (void)CreateCompiledModel(*env, cpu_opts, "model.tflite");
+  EXPECT_FALSE(CreateCompiledModel(*env, cpu_opts, "model.tflite").ok());
   EXPECT_FALSE(
       std::filesystem::exists(root / "model.tflite_1_2.xnnpack_cache"));
 
   ModelOptions gpu_opts{.model_dir = root.string(),
                         .cache_dir = root.string(),
                         .backend = lm::Backend::GPU};
-  (void)CreateCompiledModelFromBuffer(*env, gpu_opts, "dummy",
-                                      "kokoro_vocoder");
+  EXPECT_FALSE(
+      CreateCompiledModelFromBuffer(*env, gpu_opts, "dummy", "kokoro_vocoder")
+          .ok());
   EXPECT_FALSE(std::filesystem::exists(
       root / "kokoro_vocoder_1_2_mldrift_program_cache.bin"));
+  EXPECT_FALSE(CreateLmRunner(*env, cpu_opts, "bundle.litertlm").ok());
+  EXPECT_FALSE(CreateLmEngineRunner(*env, cpu_opts, "bundle.litertlm").ok());
   std::filesystem::remove_all(root);
 }
 

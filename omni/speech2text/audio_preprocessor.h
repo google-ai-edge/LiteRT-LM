@@ -20,6 +20,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "omni/base/stage.h"
+#include "omni/speech2text/audio_source.h"
 
 namespace litert::omni::asr {
 
@@ -45,6 +46,9 @@ struct PreprocessedAudio {
   // encoder/decoder.
   std::optional<std::vector<float>> centered_features;
   std::optional<DecodeRange> decode_range;
+  // True when this chunk is a progressive warm-start prefix emitted before the
+  // first full model window is accumulated.
+  bool is_warm_start = false;
 };
 
 // Abstract interface for preprocessing raw PCM audio into features.
@@ -58,6 +62,9 @@ class AudioPreprocessor
       Stage<std::vector<float>>* absl_nonnull audio_source)
       : audio_source_(*audio_source) {}
 
+  explicit AudioPreprocessor(AudioSource* absl_nonnull audio_source)
+      : audio_source_(*audio_source), typed_audio_source_(audio_source) {}
+
   ~AudioPreprocessor() override = default;
 
  protected:
@@ -65,7 +72,13 @@ class AudioPreprocessor
     return audio_source_.HasOutput();
   }
 
+  bool IsLastInputWarmStart() const {
+    return typed_audio_source_ != nullptr &&
+           typed_audio_source_->IsLastOutputWarmStart();
+  }
+
   Stage<std::vector<float>>& audio_source_;
+  AudioSource* absl_nullable typed_audio_source_ = nullptr;
 };
 
 }  // namespace litert::omni::asr
