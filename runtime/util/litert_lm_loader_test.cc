@@ -403,6 +403,82 @@ TEST(LitertLmLoaderTest, MissingSectionLogsHumanReadableEnumName) {
   EXPECT_FALSE(loader_ptr->GetExecutorMetadata().has_value());
 }
 
+// Writes a model file whose header declares a per-layer embedder section that
+// extends well past the end of the file, so the section is present in the
+// header but can never be mapped.
+std::string WriteTruncatedPerLayerEmbedderModelFile(
+    const std::string& file_name) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) / file_name;
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      proto::LlmMetadata::TfLiteModelType_Name(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/32, /*end_offset=*/1 << 20,
+      schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+  return test_file_path.string();
+}
+
+TEST(LitertLmLoaderTest, GetSectionBufferReportsMapFailureAsError) {
+  const std::string model_path = WriteTruncatedPerLayerEmbedderModelFile(
+      "truncated_per_layer_embedder_scoped_file.litertlm");
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+
+  // The section exists in the header, so a mapping failure must not look like
+  // a missing section.
+  BufferKey per_layer_key(schema::AnySectionDataType_TFLiteModel,
+                          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  ASSERT_OK(loader->GetSectionLocation(per_layer_key));
+  EXPECT_THAT(loader->GetSectionBuffer(per_layer_key),
+              StatusIs(absl::StatusCode::kInternal));
+  // The lossy legacy accessor still degrades to an empty buffer.
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)
+          .Size(),
+      0);
+
+  // A genuinely absent section is still reported as kNotFound.
+  BufferKey embedder_key(schema::AnySectionDataType_TFLiteModel,
+                         proto::LlmMetadata::TF_LITE_EMBEDDER);
+  EXPECT_THAT(loader->GetSectionBuffer(embedder_key),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(LitertLmLoaderTest, GetSectionBufferRejectsSectionPastMappedFile) {
+  const std::string model_path = WriteTruncatedPerLayerEmbedderModelFile(
+      "truncated_per_layer_embedder_mmap.litertlm");
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  BufferKey per_layer_key(schema::AnySectionDataType_TFLiteModel,
+                          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  EXPECT_THAT(loader->GetSectionBuffer(per_layer_key),
+              StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)
+          .Size(),
+      0);
+
+  BufferKey embedder_key(schema::AnySectionDataType_TFLiteModel,
+                         proto::LlmMetadata::TF_LITE_EMBEDDER);
+  EXPECT_THAT(loader->GetSectionBuffer(embedder_key),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
 TEST(LitertLmLoaderTest, LoadCapabilityText2SpeechMetadataAndNamedSections) {
   auto test_file_path = std::filesystem::path(::testing::TempDir()) /
                         "text2speech_capability_model.litertlm";

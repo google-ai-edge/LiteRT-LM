@@ -126,7 +126,17 @@ class LitertLmLoader {
   std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer(
       absl::string_view model_type_str);
 
-  // Returns the TFLite model section buffer.
+  // Returns the section buffer for the given buffer key, mapping the section
+  // on first use. Returns kNotFound when the model file has no such section
+  // and propagates the mapping error when the section exists but could not be
+  // mapped (e.g. the file is truncated or the OS refuses the mapping). Callers
+  // that treat a section as optional should only tolerate kNotFound.
+  absl::StatusOr<litert::BufferRef<uint8_t>> GetSectionBuffer(
+      BufferKey buffer_key) ABSL_LOCKS_EXCLUDED(section_buffers_mutex_);
+
+  // Returns the TFLite model section buffer, or an empty buffer when the
+  // section is missing or could not be mapped. This cannot distinguish the two
+  // cases; prefer GetSectionBuffer() when the failure must be surfaced.
   litert::BufferRef<uint8_t> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type);
   litert::BufferRef<uint8_t> GetTFLiteModel(absl::string_view model_type_str);
@@ -164,21 +174,21 @@ class LitertLmLoader {
 
   // Returns the LlmMetadata section buffer. Requires HasLlmMetadata().
   litert::BufferRef<uint8_t> GetLlmMetadata() {
-    return GetSectionBuffer(
+    return GetOptionalSectionBuffer(
                BufferKey(schema::AnySectionDataType_LlmMetadataProto))
         .value();
   }
 
   // Returns the executor metadata section buffer.
   std::optional<litert::BufferRef<uint8_t>> GetExecutorMetadata() {
-    return GetSectionBuffer(
+    return GetOptionalSectionBuffer(
         BufferKey(schema::AnySectionDataType_ExecutorMetadataProto));
   }
 
   // Returns the embedding metadata section buffer. If not found, returns
   // std::nullopt.
   std::optional<litert::BufferRef<uint8_t>> GetEmbeddingMetadata() {
-    return GetSectionBuffer(
+    return GetOptionalSectionBuffer(
         BufferKey(schema::AnySectionDataType_EmbeddingMetadataProto));
   }
 
@@ -231,9 +241,9 @@ class LitertLmLoader {
   absl::Status MapSection(BufferKey buffer_key, uint64_t begin_offset,
                           uint64_t end_offset)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(section_buffers_mutex_);
-  // Returns the section buffer for the given buffer key. Will map the section
-  // if it has not been mapped yet. If not found, returns std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetSectionBuffer(
+  // Like GetSectionBuffer(), but collapses every failure into std::nullopt.
+  // Used by the optional-section accessors that have no error channel.
+  std::optional<litert::BufferRef<uint8_t>> GetOptionalSectionBuffer(
       BufferKey buffer_key) ABSL_LOCKS_EXCLUDED(section_buffers_mutex_);
 
   // The model file to be loaded, can be either a ScopedFile or a
