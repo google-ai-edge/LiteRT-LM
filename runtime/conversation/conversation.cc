@@ -149,6 +149,115 @@ absl::string_view TaskStateToString(TaskState task_state) {
   return "Unknown";
 }
 
+// Lightweight C++ fallback for rendering turn-based prompts when the Minijinja
+// template engine is disabled (e.g., in `:conversation_lite`).
+std::string ApplyFallbackPromptTemplate(const PromptTemplateInput& input,
+                                        const ConversationConfig& config) {
+  const proto::PromptTemplates& prompt_templates =
+      config.GetSessionConfig().GetPromptTemplates();
+  const proto::LlmModelType& model_type =
+      config.GetSessionConfig().GetLlmModelType();
+  const DataProcessorConfig& processor_config = config.GetProcessorConfig();
+
+  const bool is_gemma4 =
+      model_type.model_type_case() == proto::LlmModelType::kGemma4 ||
+      std::holds_alternative<Gemma4DataProcessorConfig>(processor_config);
+  const bool is_gemma3 =
+      model_type.model_type_case() == proto::LlmModelType::kGemma3 ||
+      model_type.model_type_case() == proto::LlmModelType::kGemma3N ||
+      std::holds_alternative<Gemma3DataProcessorConfig>(processor_config);
+
+  std::string user_prefix = prompt_templates.user().prefix();
+  std::string user_suffix = prompt_templates.user().suffix();
+  std::string model_prefix = prompt_templates.model().prefix();
+  std::string model_suffix = prompt_templates.model().suffix();
+  std::string system_prefix = prompt_templates.system().prefix();
+  std::string system_suffix = prompt_templates.system().suffix();
+
+  if (is_gemma4) {
+    if (!prompt_templates.has_user()) {
+      user_prefix = "<|turn>user\n";
+      user_suffix = "<turn|>\n";
+    }
+    if (!prompt_templates.has_model()) {
+      model_prefix = "<|turn>model\n";
+      model_suffix = "<turn|>\n";
+    }
+    if (!prompt_templates.has_system()) {
+      system_prefix = "<|turn>system\n";
+      system_suffix = "<turn|>\n";
+    }
+  } else if (is_gemma3) {
+    if (!prompt_templates.has_user()) {
+      user_prefix = "<start_of_turn>user\n";
+      user_suffix = "<end_of_turn>\n";
+    }
+    if (!prompt_templates.has_model()) {
+      model_prefix = "<start_of_turn>model\n";
+      model_suffix = "<end_of_turn>\n";
+    }
+    if (!prompt_templates.has_system()) {
+      system_prefix = "<start_of_turn>system\n";
+      system_suffix = "<end_of_turn>\n";
+    }
+  }
+
+  std::string output;
+  if (input.bos_token.is_string()) {
+    absl::StrAppend(&output, input.bos_token.get<std::string>());
+  }
+  if (input.messages.is_array()) {
+    for (const auto& message : input.messages) {
+      if (!message.is_object()) {
+        continue;
+      }
+      const std::string role = message.value("role", "");
+      if (role == "user") {
+        absl::StrAppend(&output, user_prefix);
+      } else if (role == "assistant" || role == "model") {
+        absl::StrAppend(&output, model_prefix);
+      } else if (role == "system") {
+        absl::StrAppend(&output, system_prefix);
+      }
+
+      if (message.contains("content")) {
+        const auto& content = message["content"];
+        if (content.is_string()) {
+          absl::StrAppend(&output, content.get<std::string>());
+        } else if (content.is_array()) {
+          for (const auto& item : content) {
+            if (item.is_string()) {
+              absl::StrAppend(&output, item.get<std::string>());
+            } else if (item.is_object()) {
+              const std::string type = item.value("type", "");
+              if (type == "text" && item.contains("text") &&
+                  item["text"].is_string()) {
+                absl::StrAppend(&output, item["text"].get<std::string>());
+              } else if (type == "image") {
+                absl::StrAppend(&output, "<start_of_image>");
+              } else if (type == "audio") {
+                absl::StrAppend(&output, "<start_of_audio>");
+              }
+            }
+          }
+        }
+      }
+
+      if (role == "user") {
+        absl::StrAppend(&output, user_suffix);
+      } else if (role == "assistant" || role == "model") {
+        absl::StrAppend(&output, model_suffix);
+      } else if (role == "system") {
+        absl::StrAppend(&output, system_suffix);
+      }
+    }
+  }
+  if (input.add_generation_prompt) {
+    absl::StrAppend(&output, model_prefix);
+  }
+  return output;
+}
+
 }  // namespace
 
 absl::StatusOr<ConversationConfig> ConversationConfig::CreateDefault(
@@ -1179,7 +1288,11 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
 absl::StatusOr<std::string> Conversation::ApplyTemplate(
     PromptTemplateInput& input) {
   StripBlobsFromTemplateInput(input);
-  return prompt_template_.Apply(input);
+  absl::StatusOr<std::string> rendered = prompt_template_.Apply(input);
+  if (absl::IsUnimplemented(rendered.status())) {
+    return ApplyFallbackPromptTemplate(input, config_);
+  }
+  return rendered;
 }
 
 }  // namespace litert::lm
