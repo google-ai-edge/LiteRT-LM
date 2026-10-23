@@ -31,9 +31,13 @@ enum class FuncallFormat {
 };
 
 // Supported constraint modes.
+// TODO(b/577134629): Consider replacing this enum with separate settings for
+// text and for function calls, each allowed, disallowed or required.
 enum class LlgConstraintMode {
   kTextAndOrFunctionCalls,  // Optional text + optional function calls ("auto").
-  kFunctionCallsOnly,       // Only function calls are allowed.
+  kFunctionCallsOnly,       // Only function calls are allowed (no text). Like
+                            // FST's FUNCTION_CALL_ONLY mode, the turn may also
+                            // end without a call, unless a function is forced.
   kTextOnly,                // Only text is allowed (no function calls, "none").
   kFunctionCallsRequired,   // Optional text + at least one required function
                             // call ("required").
@@ -51,6 +55,8 @@ struct LlgConstraintsOptions {
   std::string function_response_start;
 
   // If set, constrains tool calling strictly to this specific function name.
+  // TODO(b/577134629): Consider a list of names, so that a call can be
+  // required from any of several functions without allowing text.
   std::optional<std::string> forced_function_name = std::nullopt;
 };
 

@@ -1382,5 +1382,59 @@ TEST_F(LlgPythonToolCallsTest, FunctionCallsRequiredEmptyToolsReturnsError) {
       testing::HasSubstr("No tools provided for FunctionCallsRequired"));
 }
 
+TEST_F(LlgPythonToolCallsTest, FunctionCallsOnlyCanEndTurnWithoutCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  auto constraint = CreateConstraint(
+      nlohmann::ordered_json::array({tool}),
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Tokyo")
+```)");
+  // Like FST's FUNCTION_CALL_ONLY mode, the model can end its turn without a
+  // call, e.g. after the tool responses.
+  AssertAccepts(*constraint, "");
+  AssertRejects(*constraint, "It is sunny in Tokyo.");
+}
+
+TEST_F(LlgPythonToolCallsTest,
+       FunctionCallsOnlyWithForcedFunctionRequiresCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.forced_function_name = "get_weather";
+  auto constraint =
+      CreateConstraint(nlohmann::ordered_json::array({tool}), options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Tokyo")
+```)");
+  // A forced function must be called, so the turn can't end without a call.
+  AssertRejects(*constraint, "");
+  AssertRejects(*constraint, "It is sunny in Tokyo.");
+}
+
 }  // namespace
 }  // namespace litert::lm

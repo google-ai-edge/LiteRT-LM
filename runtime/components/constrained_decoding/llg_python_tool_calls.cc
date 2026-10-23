@@ -223,7 +223,17 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
         return absl::InvalidArgumentError(
             "No tools provided for FunctionCallsOnly mode.");
       }
-      start_rule = absl::StrCat("start: ", function_block, "\n");
+      if (options.forced_function_name.has_value()) {
+        // The forced function must be called. FST doesn't support forcing a
+        // function, so there is no FST behavior to match here.
+        start_rule = absl::StrCat("start: ", function_block, "\n");
+      } else {
+        // Like FST's FUNCTION_CALL_ONLY mode, the model may also end its turn
+        // without a call, e.g. once it has the tool responses it needs.
+        start_rule = absl::StrCat("start: function_block_opt\n",
+                                  "function_block_opt: function_block |\n",
+                                  "function_block: ", function_block, "\n");
+      }
       break;
     }
     case LlgConstraintMode::kTextAndOrFunctionCalls: {

@@ -1260,5 +1260,57 @@ TEST_F(LlgFcToolCallsTest, FunctionCallsRequiredEmptyToolsReturnsError) {
           testing::HasSubstr("No tools provided for FunctionCallsRequired")));
 }
 
+TEST_F(LlgFcToolCallsTest, FunctionCallsOnlyCanEndTurnWithoutCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "harvestPlots",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "plots": {"type": "array", "items": {"type": "integer"}}
+      },
+      "required": ["plots"]
+    }
+  })json");
+  auto constraint = CreateConstraint(
+      nlohmann::ordered_json::array({tool}),
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:harvestPlots{plots:[1]}<tool_call|><|tool_response>)");
+  // Like FST's FUNCTION_CALL_ONLY mode, the model can end its turn without a
+  // call, e.g. after the tool responses. Otherwise it is forced to call tools
+  // until the context is full.
+  AssertAccepts(*constraint, "");
+  AssertRejects(*constraint, "Harvested plot 1.");
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsOnlyWithForcedFunctionRequiresCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "harvestPlots",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "plots": {"type": "array", "items": {"type": "integer"}}
+      },
+      "required": ["plots"]
+    }
+  })json");
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.forced_function_name = "harvestPlots";
+  auto constraint =
+      CreateConstraint(nlohmann::ordered_json::array({tool}), options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:harvestPlots{plots:[1]}<tool_call|><|tool_response>)");
+  // A forced function must be called, so the turn can't end without a call.
+  AssertRejects(*constraint, "");
+  AssertRejects(*constraint, "Harvested plot 1.");
+}
+
 }  // namespace
 }  // namespace litert::lm
