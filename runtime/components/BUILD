@@ -1364,6 +1364,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
+        "@flatbuffers",
         "@litert//litert/c:litert_tensor_buffer_types",
         "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_model",
@@ -1373,6 +1374,7 @@ cc_library(
         "//runtime/util:data_stream",
         "//runtime/util:scoped_file",
         "//support/tokenizer",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
@@ -1380,16 +1382,17 @@ cc_test(
     name = "model_resources_streaming_test",
     srcs = ["model_resources_streaming_test.cc"],
     deps = [
-        ":model_resources",
         ":model_resources_streaming",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@flatbuffers",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:data_stream",
         "//runtime/util:test_utils",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
