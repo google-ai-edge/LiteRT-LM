@@ -61,6 +61,10 @@ ModelOptions MakeModelOptions(absl::string_view model_dir,
   options.cache_dir = cache_dir;
   options.backend = backend;
   options.num_threads = num_threads;
+  // TODO(b/568027544): Enable fp16 on GPU for FLUX.2 models.
+  // FLUX.2 denoising and VAE stages require FP32 precision on GPU to avoid
+  // numerical degradation across diffusion steps.
+  options.force_fp32_on_gpu = true;
   return options;
 }
 
