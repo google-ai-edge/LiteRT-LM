@@ -347,7 +347,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSystemMetadataAndLlmCapabilities) {
 
   std::string file_data =
       CreateTestLiteRTLM("IT", "google/gemma-3-1b-it",
-                         {"tf_lite_vision_adapter", "tf_lite_mtp_drafter",
+                         {"tf_lite_vision_encoder", "tf_lite_mtp_drafter",
                           "tf_lite_video_encoder"},
                          &proto_meta);
 
@@ -389,7 +389,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget) {
   gemma4->set_pooling_kernel_size(3);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/gemma-4-2b-it", {"tf_lite_vision_adapter"}, &proto_meta);
+      "IT", "google/gemma-4-2b-it", {"tf_lite_vision_encoder"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -409,7 +409,7 @@ TEST(ModelInfoFileTest,
   generic->set_pooling_kernel_size(2);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/generic-it", {"tf_lite_vision_adapter"}, &proto_meta);
+      "IT", "google/generic-it", {"tf_lite_vision_encoder"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -428,7 +428,7 @@ TEST(ModelInfoFileTest,
   generic->set_max_num_patches(100);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/generic-it", {"tf_lite_vision_adapter"}, &proto_meta);
+      "IT", "google/generic-it", {"tf_lite_vision_encoder"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -447,7 +447,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget_Lfm2) {
   lfm2->set_pooling_kernel_size(3);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/lfm2-it", {"tf_lite_vision_adapter"}, &proto_meta);
+      "IT", "google/lfm2-it", {"tf_lite_vision_encoder"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -466,7 +466,7 @@ TEST(ModelInfoFileTest,
   lfm2->set_max_num_patches(180);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/lfm2-it", {"tf_lite_vision_adapter"}, &proto_meta);
+      "IT", "google/lfm2-it", {"tf_lite_vision_encoder"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -485,7 +485,7 @@ TEST(ModelInfoFileTest,
   gemma4->set_max_num_patches(2520);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/gemma-4-2b-it", {"tf_lite_vision_adapter"}, &proto_meta);
+      "IT", "google/gemma-4-2b-it", {"tf_lite_vision_encoder"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -504,7 +504,7 @@ TEST(ModelInfoFileTest, GetModelInfo_NoExplicitCapabilities_ReturnsFalse) {
   // Do not set explicit supports_thinking/supports_function_calling
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/gemma-3-1b-it", {"tf_lite_audio_adapter"}, &proto_meta);
+      "IT", "google/gemma-3-1b-it", {"tf_lite_audio_encoder_hw"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -534,7 +534,7 @@ TEST(ModelInfoFileTest, GetModelInfo_NoExplicitCapabilities_ReturnsFalse) {
 TEST(ModelInfoFileTest, GetModelInfo_NoLlmProto_FillsDefaultsAndScanning) {
   std::string file_data =
       CreateTestLiteRTLM("IT", "google/gemma-3-1b-it",
-                         {"tf_lite_vision_adapter", "tf_lite_mtp_drafter"},
+                         {"tf_lite_vision_encoder", "tf_lite_mtp_drafter"},
                          /*llm_metadata_proto=*/nullptr);
 
   std::istringstream stream(file_data, std::ios::binary);
@@ -615,7 +615,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSupportedVisionTokenLengths) {
 TEST(ModelInfoFileTest, GetModelInfo_NoVision_ReturnsNullopt) {
   // Text-only model (no vision section)
   std::string file_data = CreateTestLiteRTLM("IT", "google/gemma-3-1b-it",
-                                             {"tf_lite_audio_adapter"});
+                                             {"tf_lite_audio_encoder_hw"});
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -634,7 +634,7 @@ TEST(ModelInfoFileTest, GetModelInfo_VisionModelNoSignatures_ReturnsNullopt) {
   std::string tflite_model = CreateMinimalTFLiteModel({});
 
   std::string file_data = CreateTestLiteRTLM(
-      /*model_class=*/"", /*tf_hub_model_id=*/"", {"tf_lite_vision_adapter"},
+      /*model_class=*/"", /*tf_hub_model_id=*/"", {"tf_lite_vision_encoder"},
       /*llm_metadata_proto=*/nullptr, {tflite_model});
 
   std::istringstream stream(file_data, std::ios::binary);
@@ -649,12 +649,11 @@ TEST(ModelInfoFileTest, GetModelInfo_VisionModelNoSignatures_ReturnsNullopt) {
 }
 
 TEST(ModelInfoFileTest, GetModelInfo_CorruptVisionModel_ReturnsError) {
-  // We specify we have a vision adapter, but we pass invalid dummy payload
+  // We specify we have a vision encoder, but we pass invalid dummy payload
   // (corrupt).
   std::string file_data = CreateTestLiteRTLM(
-      /*model_class=*/"", /*tf_hub_model_id=*/"", {"tf_lite_vision_adapter"},
-      /*llm_metadata_proto=*/nullptr,
-      {"corrupt_dummy_data_not_a_flatbuffer"});
+      /*model_class=*/"", /*tf_hub_model_id=*/"", {"tf_lite_vision_encoder"},
+      /*llm_metadata_proto=*/nullptr, {"corrupt_dummy_data_not_a_flatbuffer"});
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -1185,12 +1184,10 @@ TEST(ModelInfoFileTest, GetModelInfo_ModalitySpecificSupportedBackends) {
   std::string aux_payload = CreateMockNpuTfliteModel("qnn_partition_0");
   std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
-      {
-          {.model_type = "tf_lite_prefill_decode", .backend_constraint = "cpu"},
-          {.model_type = "tf_lite_vision_adapter", .backend_constraint = "gpu"},
-          {.model_type = "tf_lite_audio_adapter", .backend_constraint = "gpu"},
-          {.model_type = "tf_lite_aux", .payload = aux_payload}
-      });
+      {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "cpu"},
+       {.model_type = "tf_lite_vision_encoder", .backend_constraint = "gpu"},
+       {.model_type = "tf_lite_audio_encoder_hw", .backend_constraint = "gpu"},
+       {.model_type = "tf_lite_aux", .payload = aux_payload}});
   std::stringstream stream(litertlm_data);
   auto cap_or = GetModelInfo(stream);
   ASSERT_OK(cap_or.status());
@@ -1221,6 +1218,162 @@ TEST(ModelInfoFileTest, GetModelInfo_ModalitySpecificSupportedBackends) {
   EXPECT_FALSE(llm.video_supported_backends.cpu);
   EXPECT_FALSE(llm.video_supported_backends.gpu);
   EXPECT_FALSE(llm.video_supported_backends.npu);
+  EXPECT_EQ(llm.video_supported_backends.default_backend,
+            BackendType::kUnspecified);
+}
+
+TEST(ModelInfoFileTest,
+     GetModelInfo_VisionEncoderConstraintTakesPrecedenceOverAdapter) {
+  // Case A: Encoder (gpu) listed before Adapter (cpu)
+  {
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        /*model_class=*/"", /*tf_hub_model_id=*/"",
+        {
+            {.model_type = "tf_lite_prefill_decode",
+             .backend_constraint = "cpu"},
+            {.model_type = "tf_lite_vision_encoder",
+             .backend_constraint = "gpu"},
+            {.model_type = "tf_lite_vision_adapter",
+             .backend_constraint = "cpu"},
+        });
+    std::stringstream stream(litertlm_data);
+    auto cap_or = GetModelInfo(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+
+    EXPECT_FALSE(llm.vision_supported_backends.cpu);
+    EXPECT_TRUE(llm.vision_supported_backends.gpu);
+    EXPECT_FALSE(llm.vision_supported_backends.npu);
+    EXPECT_EQ(llm.vision_supported_backends.default_backend, BackendType::kGpu);
+  }
+
+  // Case B: Adapter (cpu) listed before Encoder (gpu)
+  {
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        /*model_class=*/"", /*tf_hub_model_id=*/"",
+        {
+            {.model_type = "tf_lite_prefill_decode",
+             .backend_constraint = "cpu"},
+            {.model_type = "tf_lite_vision_adapter",
+             .backend_constraint = "cpu"},
+            {.model_type = "tf_lite_vision_encoder",
+             .backend_constraint = "gpu"},
+        });
+    std::stringstream stream(litertlm_data);
+    auto cap_or = GetModelInfo(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+
+    EXPECT_FALSE(llm.vision_supported_backends.cpu);
+    EXPECT_TRUE(llm.vision_supported_backends.gpu);
+    EXPECT_FALSE(llm.vision_supported_backends.npu);
+    EXPECT_EQ(llm.vision_supported_backends.default_backend, BackendType::kGpu);
+  }
+}
+
+TEST(ModelInfoFileTest,
+     GetModelInfo_VisionEncoderUnconstrainedTakesPrecedenceOverAdapter) {
+  // Case A: Unconstrained Encoder (supports CPU+GPU) before Adapter (cpu)
+  {
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        /*model_class=*/"", /*tf_hub_model_id=*/"",
+        {
+            {.model_type = "tf_lite_prefill_decode",
+             .backend_constraint = "cpu"},
+            {.model_type = "tf_lite_vision_encoder", .backend_constraint = ""},
+            {.model_type = "tf_lite_vision_adapter",
+             .backend_constraint = "cpu"},
+        });
+    std::stringstream stream(litertlm_data);
+    auto cap_or = GetModelInfo(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+
+    EXPECT_TRUE(llm.vision_supported_backends.cpu);
+    EXPECT_TRUE(llm.vision_supported_backends.gpu);
+    EXPECT_FALSE(llm.vision_supported_backends.npu);
+    EXPECT_EQ(llm.vision_supported_backends.default_backend, BackendType::kCpu);
+  }
+
+  // Case B: Adapter (cpu) before Unconstrained Encoder (supports CPU+GPU)
+  {
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        /*model_class=*/"", /*tf_hub_model_id=*/"",
+        {
+            {.model_type = "tf_lite_prefill_decode",
+             .backend_constraint = "cpu"},
+            {.model_type = "tf_lite_vision_adapter",
+             .backend_constraint = "cpu"},
+            {.model_type = "tf_lite_vision_encoder", .backend_constraint = ""},
+        });
+    std::stringstream stream(litertlm_data);
+    auto cap_or = GetModelInfo(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+
+    EXPECT_TRUE(llm.vision_supported_backends.cpu);
+    EXPECT_TRUE(llm.vision_supported_backends.gpu);
+    EXPECT_FALSE(llm.vision_supported_backends.npu);
+    EXPECT_EQ(llm.vision_supported_backends.default_backend, BackendType::kCpu);
+  }
+}
+
+TEST(ModelInfoFileTest,
+     GetModelInfo_AudioAndVideoEncoderConstraintTakesPrecedenceOverAuxiliary) {
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {
+          {.model_type = "tf_lite_prefill_decode", .backend_constraint = "cpu"},
+          {.model_type = "tf_lite_audio_adapter", .backend_constraint = "cpu"},
+          {.model_type = "tf_lite_audio_frontend", .backend_constraint = "cpu"},
+          {.model_type = "tf_lite_audio_encoder_hw",
+           .backend_constraint = "gpu"},
+          {.model_type = "tf_lite_video_adapter", .backend_constraint = "cpu"},
+          {.model_type = "tf_lite_video_encoder", .backend_constraint = "gpu"},
+      });
+  std::stringstream stream(litertlm_data);
+  auto cap_or = GetModelInfo(stream);
+  ASSERT_OK(cap_or.status());
+  const auto& llm = *cap_or->llm_capability;
+
+  EXPECT_FALSE(llm.audio_supported_backends.cpu);
+  EXPECT_TRUE(llm.audio_supported_backends.gpu);
+  EXPECT_FALSE(llm.audio_supported_backends.npu);
+  EXPECT_EQ(llm.audio_supported_backends.default_backend, BackendType::kGpu);
+
+  EXPECT_FALSE(llm.video_supported_backends.cpu);
+  EXPECT_TRUE(llm.video_supported_backends.gpu);
+  EXPECT_FALSE(llm.video_supported_backends.npu);
+  EXPECT_EQ(llm.video_supported_backends.default_backend, BackendType::kGpu);
+}
+
+TEST(ModelInfoFileTest, GetModelInfo_AuxiliaryAdaptersIgnoredWithoutEncoders) {
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {
+          {.model_type = "tf_lite_vision_adapter", .backend_constraint = "gpu"},
+          {.model_type = "tf_lite_audio_adapter", .backend_constraint = "gpu"},
+          {.model_type = "tf_lite_audio_frontend", .backend_constraint = "gpu"},
+          {.model_type = "tf_lite_video_adapter", .backend_constraint = "gpu"},
+      });
+  std::stringstream stream(litertlm_data);
+  auto cap_or = GetModelInfo(stream);
+  ASSERT_OK(cap_or.status());
+  const auto& llm = *cap_or->llm_capability;
+
+  EXPECT_FALSE(llm.input_modalities.vision);
+  EXPECT_FALSE(llm.input_modalities.audio);
+  EXPECT_FALSE(llm.input_modalities.video);
+
+  EXPECT_FALSE(llm.vision_supported_backends.gpu);
+  EXPECT_EQ(llm.vision_supported_backends.default_backend,
+            BackendType::kUnspecified);
+
+  EXPECT_FALSE(llm.audio_supported_backends.gpu);
+  EXPECT_EQ(llm.audio_supported_backends.default_backend,
+            BackendType::kUnspecified);
+
+  EXPECT_FALSE(llm.video_supported_backends.gpu);
   EXPECT_EQ(llm.video_supported_backends.default_backend,
             BackendType::kUnspecified);
 }
@@ -1275,7 +1428,7 @@ TEST(ModelInfoFileTest, GetModelInfo_OddCompositeTokens_NotDynamicContext) {
   proto_meta.set_max_num_tokens(2025);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/gemma-3-1b-it", {"tf_lite_audio_adapter"}, &proto_meta);
+      "IT", "google/gemma-3-1b-it", {"tf_lite_audio_encoder_hw"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
@@ -1559,7 +1712,7 @@ TEST(ModelInfoFileTest, GetModelInfo_FromPath_MatchesStream) {
       {{.model_type = "tf_lite_vision_encoder",
         .payload = CreateMinimalTFLiteModel({256, 280})},
        {.model_type = "tf_lite_audio_adapter", .payload = std::string(101, 0)},
-       {.model_type = "tf_lite_vision_adapter",
+       {.model_type = "tf_lite_vision_encoder",
         .payload = CreateMinimalTFLiteModel({140})}});
   const std::string path = ::testing::TempDir() + "/model_info_test.litertlm";
   std::ofstream(path, std::ios::binary)

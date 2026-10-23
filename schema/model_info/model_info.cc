@@ -357,6 +357,7 @@ enum class SectionKind {
   kVideo,
   kSpeculativeDrafter,
   kNpuAux,
+  kAuxiliary,
   kOther,
 };
 
@@ -369,18 +370,20 @@ SectionKind ClassifyModelType(absl::string_view model_type) {
       model_type == "tf_lite_embedder") {
     return SectionKind::kTextEncoder;
   }
-  if (model_type == "tf_lite_vision_adapter" ||
-      model_type == "tf_lite_vision_encoder") {
+  if (model_type == "tf_lite_vision_encoder") {
     return SectionKind::kVision;
   }
-  if (model_type == "tf_lite_audio_adapter" ||
-      model_type == "tf_lite_audio_encoder_hw" ||
-      model_type == "tf_lite_audio_frontend") {
+  if (model_type == "tf_lite_audio_encoder_hw") {
     return SectionKind::kAudio;
   }
-  if (model_type == "tf_lite_video_adapter" ||
-      model_type == "tf_lite_video_encoder") {
+  if (model_type == "tf_lite_video_encoder") {
     return SectionKind::kVideo;
+  }
+  if (model_type == "tf_lite_vision_adapter" ||
+      model_type == "tf_lite_audio_adapter" ||
+      model_type == "tf_lite_audio_frontend" ||
+      model_type == "tf_lite_video_adapter") {
+    return SectionKind::kAuxiliary;
   }
   if (model_type == "tf_lite_mtp_drafter") {
     return SectionKind::kSpeculativeDrafter;
@@ -747,8 +750,10 @@ absl::StatusOr<DiscoveredSections> DiscoverSections(
     // modality.
     auto record_modality = [&](ModalityMetadata& mod) {
       mod.present = true;
-      mod.backend_constraint = backend_constraint;
-      if (!section_soc_name.empty()) {
+      if (mod.backend_constraint.empty()) {
+        mod.backend_constraint = backend_constraint;
+      }
+      if (mod.soc_name.empty() && !section_soc_name.empty()) {
         mod.soc_name = section_soc_name;
       }
     };
@@ -779,6 +784,8 @@ absl::StatusOr<DiscoveredSections> DiscoverSections(
         break;
       case SectionKind::kNpuAux:
         sections.npu_aux = sec;
+        break;
+      case SectionKind::kAuxiliary:
         break;
       case SectionKind::kOther:
         is_adapter = false;
