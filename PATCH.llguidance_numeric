@@ -1,6 +1,7 @@
 --- src/json/numeric.rs
 +++ src/json/numeric.rs
-@@ -20,6 +20,6 @@
+@@ -19,7 +19,7 @@
+         // reduce to simplest form
          let mut coef = coef;
          let mut exp = exp;
 -        while exp > 0 && coef.is_multiple_of(10) {

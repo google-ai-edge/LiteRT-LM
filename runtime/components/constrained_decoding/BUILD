@@ -317,7 +317,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@crate_index__llguidance-1.3.0//:llguidance_cc"
+        "@crate_index__llguidance-1.9.1//:llguidance_cc"
     ] + select({
         "@platforms//os:windows": [
             "//rust:alloc_defs",
@@ -347,7 +347,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/container:flat_hash_set",
         "//support/tokenizer",
-        "@crate_index__llguidance-1.3.0//:llguidance_cc"
+        "@crate_index__llguidance-1.9.1//:llguidance_cc"
     ] + select({
         "@platforms//os:windows": [
             "//rust:alloc_defs",
@@ -489,7 +489,7 @@ cc_test(
         "@com_google_absl//absl/types:span",
         "//support/tokenizer",
         "//runtime/util:test_utils",
-        "@crate_index__llguidance-1.3.0//:llguidance_cc"
+        "@crate_index__llguidance-1.9.1//:llguidance_cc"
     ],
 )
 

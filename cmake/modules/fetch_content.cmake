@@ -75,7 +75,7 @@ endif()
 # --- Llguidance ---
 set(LITERTLM_LLGUIDANCE_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/llguidance CACHE PATH "Path to llguidance source directory")
 set(LITERTLM_LLGUIDANCE_INCLUDE_DIR "${LITERTLM_THIRD_PARTY_DIR}/llguidance/parser")
-set(LITERTLM_LLGUIDANCE_TAG "v1.3.0" CACHE STRING "Llguidance git tag")
+set(LITERTLM_LLGUIDANCE_TAG "v1.9.1" CACHE STRING "Llguidance git tag")
 FetchContent_Declare(
   llguidance
   GIT_REPOSITORY https://github.com/guidance-ai/llguidance.git

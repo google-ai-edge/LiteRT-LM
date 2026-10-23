@@ -397,7 +397,6 @@ crates_repository(
                     "@//:PATCH.llguidance_regexvec",
                     "@//:PATCH.llguidance_numeric",
                     "@//:PATCH.llguidance_grammar",
-                    "@//:PATCH.llguidance_parser",
                     "@//:PATCH.llguidance_perf",
                 ],
             ),
