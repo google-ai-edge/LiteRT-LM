@@ -103,15 +103,19 @@ if(CMAKE_VERBOSE_MAKEFILE)
 endif()
 
 
-option(ENABLE_CCACHE "Enables the use of ccache" OFF)
+option(ENABLE_CCACHE "Enables the use of sccache or ccache" ON)
 if(${ENABLE_CCACHE} STREQUAL "ON")
-  find_program(CCACHE_PROGRAM ccache)
+  find_program(CCACHE_PROGRAM NAMES sccache ccache)
   if(CCACHE_PROGRAM)
-      message(STATUS "Using CCache to speed up builds")
+      message(STATUS "Using compiler launcher (${CCACHE_PROGRAM}) to speed up builds")
       set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
       set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+      list(APPEND LITERTLM_ENV_WRAPPER
+        "CMAKE_C_COMPILER_LAUNCHER=${CCACHE_PROGRAM}"
+        "CMAKE_CXX_COMPILER_LAUNCHER=${CCACHE_PROGRAM}"
+      )
   else()
-      message(WARNING "CCache not found. Install it (`sudo apt install ccache`) for faster builds!")
+      message(WARNING "Neither sccache nor ccache found. Install one (e.g., `sudo apt install sccache` or `sudo apt install ccache`) for faster builds!")
   endif()
 endif()
 

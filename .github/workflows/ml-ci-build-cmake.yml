@@ -22,14 +22,8 @@ on:
   pull_request:
     branches:
     - main
-  schedule:
-    - cron: "0 10 * * *"  # Run at 2am PST (10am UTC) every day to refresh the cache.
   workflow_dispatch:  # Manual trigger
     inputs:
-      REFRESH_CACHE:
-        description: 'Refresh cache to remove unused files'
-        type: boolean
-        default: true
       MyHaltForConnectionInput:
         description: 'Should this workflow run wait for a remote connection?'
         type: choice
@@ -56,14 +50,21 @@ jobs:
       actions: write
       contents: write
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 16
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: 0
+      SCCACHE_GCS_BUCKET: litert-lm-bazel-cache-us-central1
+      SCCACHE_GCS_KEY_PREFIX: sccache
+      SCCACHE_GCS_RW_MODE: READ_WRITE
+      SCCACHE_IDLE_TIMEOUT: 0
+      SCCACHE_IGNORE_SERVER_IO_ERROR: 1
       MODEL_KEY: gemma-4-E2B-it.litertlm
       MODEL_PATH: ./models/gemma4
       GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
       HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
-      REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
-                         (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
 
     steps:
       - name: Install System Dependencies
@@ -82,10 +83,16 @@ jobs:
             apt-file && apt-file update
           git lfs install
 
+      - name: Install sccache
+        run: |
+          SCCACHE_VERSION="0.10.0"
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache"
+          chmod +x /usr/local/bin/sccache
+          sccache --version
 
       - name: Install UV
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
 
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4
@@ -102,152 +109,6 @@ jobs:
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
-
-      - name: Generate Source Hash
-        id: src-hash
-        run: echo "hash=${{ hashFiles('c/**', 'runtime/**', 'schema/**', 'support/**') }}" >> $GITHUB_OUTPUT
-
-      - name: Keys - CCache
-        id: keys-ccache
-        uses: ./.github/workflows/actions/cache-key-gen
-        with:
-          cache-name: 'ccache'
-          presubmit-name: 'presubmit-linux-cmake'
-
-          os: ${{ runner.os }}
-
-      - name: Keys - Prebuild Deps
-        id: keys-prebuild-deps
-        uses: ./.github/workflows/actions/cache-key-gen
-        with:
-          cache-name: 'prebuild-deps'
-          presubmit-name: 'presubmit-linux-cmake'
-
-          os: ${{ runner.os }}
-
-      - name: Keys - LiteRT LM Deps
-        id: keys-litert-lm-deps
-        uses: ./.github/workflows/actions/cache-key-gen
-        with:
-          cache-name: 'litert-lm-deps'
-          presubmit-name: 'presubmit-linux-cmake'
-
-          os: ${{ runner.os }}
-
-      - name: Keys - LiteRT LM Sources
-        id: keys-litert-lm
-        uses: ./.github/workflows/actions/cache-key-gen
-        with:
-          cache-name: 'litert-lm'
-          presubmit-name: 'presubmit-linux-cmake'
-          os: ${{ runner.os }}
-          pr-hash: ${{ steps.src-hash.outputs.hash }}
-
-      - name: Check Android Toolchain Cache in GCS
-        uses: ./.github/workflows/actions/gcs-cache
-        id: android-cache
-        with:
-          mode: 'restore'
-          target-dir: 'android-sdk'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api35-buildtools35-v2'
-          restore-key: 'linux-android-sdk-api35-buildtools35-v2'
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-
-      - name: Install Android SDK
-        if: steps.android-cache.outputs.cache-hit != 'true'
-        run: |
-          export ANDROID_HOME="${{ github.workspace }}/android-sdk"
-          mkdir -p "$ANDROID_HOME/cmdline-tools"
-
-          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
-          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
-          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-          rm cmdline-tools.zip
-
-          set +o pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" > /dev/null
-          set -o pipefail
-
-      - name: Export SDK Environment Variables
-        run: |
-          echo "ANDROID_HOME=${{ github.workspace }}/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=${{ github.workspace }}/android-sdk" >> $GITHUB_ENV
-
-      - name: Save Android Toolchain Cache to GCS
-        uses: ./.github/workflows/actions/gcs-cache
-        with:
-          mode: 'save'
-          target-dir: 'android-sdk'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api35-buildtools35-v2'
-          restore-key: 'linux-android-sdk-api35-buildtools35-v2'
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-        env:
-          CACHE_HIT: ${{ steps.android-cache.outputs.cache-hit }}
-
-      - name: Setup Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
-        with:
-          ndk-version: r28b
-          add-to-path: false
-
-      - name: Export NDK Home globally
-        env:
-          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-
-      - name: Restore CCache from GCS
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
-        uses: ./.github/workflows/actions/gcs-cache
-        id: restore-ccache
-        with:
-          mode: 'restore'
-          target-dir: '.ccache'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
-          cache-key: '${{ steps.keys-ccache.outputs.key }}'
-          restore-key: '${{ steps.keys-ccache.outputs.restore-key }}'
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-
-      - name: Restore Prebuild Deps Cache
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
-        uses: ./.github/workflows/actions/gcs-cache
-        id: restore-prebuild-deps
-        with:
-          mode: 'restore'
-          target-dir: 'cmake/build/default/prebuild/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild-deps'
-          cache-key: '${{ steps.keys-prebuild-deps.outputs.key }}'
-          restore-key: '${{ steps.keys-prebuild-deps.outputs.restore-key }}'
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-
-      - name: Restore LiteRT LM Deps Cache
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
-        uses: ./.github/workflows/actions/gcs-cache
-        id: restore-litert-lm-deps
-        with:
-          mode: 'restore'
-          target-dir: 'cmake/build/default/litert_lm/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm-deps'
-          cache-key: ${{ steps.keys-litert-lm-deps.outputs.key }}
-          restore-key: ${{ steps.keys-litert-lm-deps.outputs.restore-key }}
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-
-      - name: Restore LiteRT LM Cache (internal sources)
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
-        uses: ./.github/workflows/actions/gcs-cache
-        id: restore-litert-lm
-        with:
-          mode: 'restore'
-          target-dir: 'cmake/build/default/litert_lm/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
-          cache-key: ${{ steps.keys-litert-lm.outputs.key }}
-          restore-key: ${{ steps.keys-litert-lm.outputs.restore-key }}
-          refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Download Model
         env:
@@ -284,64 +145,11 @@ jobs:
           cmake --preset default
 
       - name: Build
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: 8
-        run: cmake --build cmake/build/default -j8
+        run: cmake --build cmake/build/default -j16
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats
 
       - name: Run pytest
         run: pytest tools/pytest/ --build-name=default --backend=cpu --model-path=./models/gemma4/gemma-4-E2B-it.litertlm --build-system=cmake
-
-      - name: Save CCache to GCS
-        uses: ./.github/workflows/actions/gcs-cache
-        continue-on-error: true
-        with:
-          mode: 'save'
-          target-dir: '.ccache'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
-          cache-key: ${{ steps.keys-ccache.outputs.key }}
-          restore-key: ${{ steps.keys-ccache.outputs.restore-key }}
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-        env:
-          CACHE_HIT: ${{ steps.restore-ccache.outputs.cache-hit }}
-
-      - name: Save Prebuild Deps Cache
-        uses: ./.github/workflows/actions/gcs-cache
-        continue-on-error: true
-        with:
-          mode: 'save'
-          target-dir: 'cmake/build/default/prebuild/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild-deps'
-          cache-key: ${{ steps.keys-prebuild-deps.outputs.key }}
-          restore-key: ${{ steps.keys-prebuild-deps.outputs.restore-key }}
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-        env:
-          CACHE_HIT: ${{ steps.restore-prebuild-deps.outputs.cache-hit }}
-
-      - name: Save LiteRT LM Deps Cache
-        if: github.event_name != 'pull_request'
-        uses: ./.github/workflows/actions/gcs-cache
-        continue-on-error: true
-        with:
-          mode: 'save'
-          target-dir: 'cmake/build/default/litert_lm/build'
-          target-subdirs: 'external third_party _deps'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm-deps'
-          cache-key: ${{ steps.keys-litert-lm-deps.outputs.key }}
-          restore-key: ${{ steps.keys-litert-lm-deps.outputs.restore-key }}
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-        env:
-          CACHE_HIT: ${{ steps.restore-litert-lm-deps.outputs.cache-hit }}
-
-      - name: Save LiteRT LM Sources Cache
-        uses: ./.github/workflows/actions/gcs-cache
-        continue-on-error: true
-        with:
-          mode: 'save'
-          target-dir: 'cmake/build/default/litert_lm/build'
-          target-subdirs: 'c runtime schema support'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
-          cache-key: ${{ steps.keys-litert-lm.outputs.key }}
-          restore-key: ${{ steps.keys-litert-lm.outputs.restore-key }}
-          refresh-cache: ${{ env.REFRESH_CACHE }}
-        env:
-          CACHE_HIT: ${{ steps.restore-litert-lm.outputs.cache-hit }}
