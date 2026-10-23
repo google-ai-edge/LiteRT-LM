@@ -439,8 +439,8 @@ cc_test(
     tags = [
         "noasan",
         "nomsan",
-        "notap",
         "notsan",
+        "nowindows",
         "requires-gpu-sm90-full",
     ],
     deps = [

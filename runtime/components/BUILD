@@ -921,7 +921,6 @@ cc_test(
     data = ["//runtime/testdata"],
     tags = [
         "manual",
-        "notap",
         "requires-gpu-sm90-full",
     ],
     deps = [
@@ -972,7 +971,6 @@ cc_test(
     data = ["//runtime/testdata"],
     tags = [
         "manual",
-        "notap",
         "requires-gpu-sm90-full",
     ],
     deps = [
