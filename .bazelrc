@@ -462,12 +462,9 @@ build --config=litert_prefixes
 # Remove the flag once tf/lite is fully separated from tf.
 build:disable_tf_lite_py --define=disable_tf_lite_py=true
 
-# Config to use a gcs bucket as remote cache.
-build:public_cache --remote_cache="https://storage.googleapis.com/litert-bazel-artifacts" --remote_upload_local_results=false
-
-# Cache pushes are limited to CI system.
+# Config for GitHub Actions CI to use a GCS bucket as remote cache.
 # WARNING: THIS OPTION WONT WORK IF YOU DO NOT HAVE PROPER AUTHENTICATION AND PERMISSIONS
-build:public_cache_push --config=public_cache --remote_upload_local_results=true --google_default_credentials
+build:github_actions_bazel_cache --remote_cache="https://storage.googleapis.com/litert-lm-bazel-cache-us-central1" --google_default_credentials
 
 # BEGIN LITERT REMOTE BUILD EXECUTION OPTIONS
 # WARNING: THESE OPTIONS WONT WORK IF YOU DO NOT HAVE PROPER AUTHENTICATION AND PERMISSIONS

@@ -20,14 +20,7 @@ on:
   pull_request:
     branches:
     - main
-  schedule:
-    - cron: "0 10 * * *"  # Run at 2am PST (10am UTC) every day to refresh the cache.
   workflow_dispatch:  # Manual trigger
-    inputs:
-      REFRESH_CACHE:
-        description: 'Refresh cache to remove unused files'
-        type: boolean
-        default: true
 defaults:
   run:
     shell: bash
@@ -52,8 +45,6 @@ jobs:
       GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
       HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
-      REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
-                         (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
 
     steps:
       - name: Install System Dependencies
@@ -132,99 +123,6 @@ jobs:
           NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
-
-      - name : Set up cache keys
-        id: cache-keys
-        env:
-          GH_WORKFLOW: ${{ github.workflow }}
-          HASH_WORKSPACE: ${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}
-          HASH_BUILD: ${{ hashFiles('**/BUILD*') }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          CACHE_RESTORE_KEY_2="$GH_WORKFLOW"
-          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-$HASH_WORKSPACE"
-          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-$HASH_BUILD"
-          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-$BASE_SHA"
-
-          CACHE_KEY="$CACHE_RESTORE_KEY_0-$HEAD_SHA"
-          echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_0=$CACHE_RESTORE_KEY_0" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_HEAD=$CACHE_RESTORE_KEY_HEAD" >> "$GITHUB_OUTPUT"
-          echo "CACHE_KEY=$CACHE_KEY" >> "$GITHUB_OUTPUT"
-
-      - name: Clean build outputs if cache is being refreshed.
-        if: env.REFRESH_CACHE == 'true'
-        run: bazelisk clean --expunge
-
-      - name: Restore bazel cache if cache is not being refreshed.
-        id: bazel-cache
-        if: env.REFRESH_CACHE != 'true'
-        env:
-          KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
-          KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
-          KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
-          KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
-          KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
-        run: |
-          TARGET_DIR="$HOME/.cache/bazel"
-          BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
-
-          echo "cache-primary-key=$KEY" >> "$GITHUB_OUTPUT"
-
-          CACHE_KEYS=("$KEY" \
-                      "$KEY_HEAD" \
-                      "$KEY_0" \
-                      "$KEY_1" \
-                      "$KEY_2")
-
-          FOUND_BLOB=""
-
-          GCLOUD_OUTPUT=$(gcloud storage ls "${BUCKET_URL}")
-
-          for key in "${CACHE_KEYS[@]}"; do
-              SEARCH_PATH="${BUCKET_URL}/${key}"
-              echo "Checking for cache key: ${SEARCH_PATH}"
-
-              # Added '|| true' so a grep miss doesn't crash the GitHub Actions step
-              MATCH=$(echo "${GCLOUD_OUTPUT}" | grep -F "${SEARCH_PATH}" | head -n 1 || true)
-
-              if [ -n "$MATCH" ]; then
-                  echo "Found matching cache file: ${MATCH}"
-                  # MATCH already contains the full gs:// path, so just assign it directly!
-                  FOUND_BLOB="${MATCH}"
-                  break
-              else
-                  echo "Key Miss: ${SEARCH_PATH}"
-              fi
-          done
-
-          if [ ! -z "$FOUND_BLOB" ]; then
-            echo "Cache hit! Found blob: $FOUND_BLOB"
-
-            # Parse the clean key name out of the full GCS blob path for logging
-            MATCHED_KEY=$(basename "$FOUND_BLOB" .tar.gz)
-            echo "cache-hit=true" >> "$GITHUB_OUTPUT"
-            echo "cache-matched-key=$MATCHED_KEY" >> "$GITHUB_OUTPUT"
-
-            echo "Downloading cache archive..."
-            # FOUND_BLOB now contains the full gs:// path, so use it directly
-            gcloud storage cp "$FOUND_BLOB" ./cache.tar.gz
-
-            if [ -f ./cache.tar.gz ]; then
-              echo "Extracting artifacts to $TARGET_DIR..."
-              mkdir -p "$TARGET_DIR"
-              tar -xzf ./cache.tar.gz -C "$TARGET_DIR"
-              rm -f ./cache.tar.gz
-            fi
-          else
-            echo "No matching cache found in GCS. Proceeding with clean build."
-            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
-            echo "cache-matched-key=" >> "$GITHUB_OUTPUT"
-          fi
-
-
       - name: Download Model
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -252,7 +150,9 @@ jobs:
 
       - name: Run bazel build on Linux.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
+          bazelisk build \
+            --config=github_actions_bazel_cache \
+            --config=linux_x86_64 \
             --deleted_packages=swift \
             --java_runtime_version=remotejdk_17 \
             //... \
@@ -274,7 +174,9 @@ jobs:
       - name: Run bazel test on Linux.
         continue-on-error: true  # Ignore errors when test fails.
         run: |
-          bazelisk test --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
+          bazelisk test \
+            --config=github_actions_bazel_cache \
+            --config=linux_x86_64 \
             --deleted_packages=swift \
             --test_output=errors \
             //runtime/... \
@@ -290,7 +192,9 @@ jobs:
 
       - name: Run bazel build on Linux with dynamic linking.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
+          bazelisk build \
+            --config=github_actions_bazel_cache \
+            --config=linux_x86_64 \
             --define=litert_runtime_link_mode=dynamic \
             //runtime/engine:litert_lm_main
 
@@ -315,36 +219,3 @@ jobs:
                       -e LiteRtGetTensorBufferRegistry -e LiteRtRegisterTensorBufferHandlers \
                       -e "LiteRtLmGemmaModelConstraintProvider_*" -e TensorBufferRequirements \
                       -e ExternalLiteRtBufferContext
-
-      - name: Remove cache if cache is being refreshed.
-        if: env.REFRESH_CACHE == 'true'
-        continue-on-error: true  # Ignore errors when cache is not found.
-        env:
-          CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
-        run: |
-          BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
-          echo "REFRESH_CACHE is true. Removing existing cache from GCS: $BUCKET_URL/$CACHE_KEY.tar.gz"
-          gcloud storage rm "$BUCKET_URL/$CACHE_KEY.tar.gz"
-
-      - name: Save bazel cache if it's new or being refreshed.
-        if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
-        env:
-          CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
-        run: |
-          TARGET_DIR="$HOME/.cache/bazel"
-          BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
-          ARCHIVE_NAME="cache.tar.gz"
-
-          echo "Checking if target cache folder exists: $TARGET_DIR"
-          if [ ! -d "$TARGET_DIR" ]; then
-              echo "Target cache folder not found. Skipping cache save."
-              exit 0
-          fi
-
-          echo "Compressing cache artifacts from $TARGET_DIR..."
-          tar -czf ./$ARCHIVE_NAME -C "$TARGET_DIR" .
-
-          if [ -f "./$ARCHIVE_NAME" ]; then
-              echo "Uploading cache archive to $BUCKET_URL/$CACHE_KEY.tar.gz..."
-              gcloud storage cp ./$ARCHIVE_NAME "$BUCKET_URL/$CACHE_KEY.tar.gz"
-          fi
