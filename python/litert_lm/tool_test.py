@@ -30,6 +30,9 @@ def multiply(a: int, b: int) -> int:
   Args:
       a: The first integer.
       b: The second integer.
+
+  Returns:
+      The product of a and b.
   """
   return a * b
 
@@ -44,6 +47,9 @@ def get_weather(location: str):
 
   Args:
       location (str): The name of the city.
+
+  Returns:
+      A string describing the weather.
   """
   return f"Weather in {location} is sunny."
 
@@ -142,6 +148,9 @@ class ToolTest(parameterized.TestCase):
 
       Args:
           numbers: List of numbers to multiply.
+
+      Returns:
+          The product of the numbers.
       """
       res = 1.0
       for n in numbers:
@@ -328,14 +337,55 @@ class ConversationToolHandlingTest(absltest.TestCase):
     # Verify output format
     self.assertEqual(
         tool_responses,
-        [{
+        {
             "role": "tool",
             "content": [{
                 "type": "tool_response",
                 "name": "my_tool",
                 "response": "mock_result",
             }],
-        }],
+        },
+    )
+
+  def test_handle_tool_calls_multiple_parallel(self):
+    mock_tool2 = mock.MagicMock()
+    mock_tool2.execute.return_value = "mock_result_2"
+    self.conv._tools_map["my_tool2"] = mock_tool2
+
+    response = {
+        "tool_calls": [
+            {"function": {"name": "my_tool", "arguments": {"arg1": "value1"}}},
+            {
+                "function": {
+                    "name": "my_tool2",
+                    "arguments": {"arg2": "value2"},
+                }
+            },
+        ]
+    }
+
+    tool_responses = self.conv._handle_tool_calls(response)
+
+    self.mock_tool.execute.assert_called_once_with({"arg1": "value1"})
+    mock_tool2.execute.assert_called_once_with({"arg2": "value2"})
+
+    self.assertEqual(
+        tool_responses,
+        {
+            "role": "tool",
+            "content": [
+                {
+                    "type": "tool_response",
+                    "name": "my_tool",
+                    "response": "mock_result",
+                },
+                {
+                    "type": "tool_response",
+                    "name": "my_tool2",
+                    "response": "mock_result_2",
+                },
+            ],
+        },
     )
 
   def test_handle_tool_calls_missing_function_key(self):

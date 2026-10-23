@@ -14,7 +14,6 @@
 
 #include "runtime/conversation/conversation.h"
 
-#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -302,16 +301,11 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
         model_data_processor_->MessageToTemplateInput(history_msg));
     old_tmpl_input.messages.push_back(message_tmpl_input);
   }
-  nlohmann::ordered_json messages =
-      message.is_array() ? message : nlohmann::ordered_json::array({message});
+  ABSL_ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
+                        model_data_processor_->MessageToTemplateInput(message));
   if (history_.empty() && !config_.prefill_preface_on_init()) {
     PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
-    for (const auto& message : messages) {
-      ABSL_ASSIGN_OR_RETURN(
-          nlohmann::ordered_json message_tmpl_input,
-          model_data_processor_->MessageToTemplateInput(message));
-      new_tmpl_input.messages.push_back(message_tmpl_input);
-    }
+    new_tmpl_input.messages.push_back(std::move(message_tmpl_input));
     new_tmpl_input.add_generation_prompt = true;
     return ApplyTemplate(new_tmpl_input);
   }
@@ -323,12 +317,7 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
   }
 
   PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
-  for (const auto& message : messages) {
-    ABSL_ASSIGN_OR_RETURN(
-        nlohmann::ordered_json message_tmpl_input,
-        model_data_processor_->MessageToTemplateInput(message));
-    new_tmpl_input.messages.push_back(message_tmpl_input);
-  }
+  new_tmpl_input.messages.push_back(std::move(message_tmpl_input));
   new_tmpl_input.add_generation_prompt = true;
   ABSL_ASSIGN_OR_RETURN(const std::string& new_string,
                         ApplyTemplate(new_tmpl_input));
@@ -344,6 +333,9 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
 
 absl::StatusOr<std::string> Conversation::GetSingleTurnText(
     const Message& message, const OptionalArgs& optional_args) {
+  if (!message.is_object()) {
+    return absl::InvalidArgumentError("Message must be a JSON object.");
+  }
   if (!prompt_template_.GetCapabilities().supports_single_turn &&
       optional_args.has_pending_message) {
     return absl::InvalidArgumentError(
@@ -584,6 +576,9 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
+  if (!message.is_object()) {
+    return absl::InvalidArgumentError("Message must be a JSON object.");
+  }
   if (optional_args.args.has_value() &&
       engine_.GetEngineSettings().GetMaxVisionTokensPerImage().has_value()) {
     ABSL_RETURN_IF_ERROR(ValidateVisualTokenBudget(
@@ -601,30 +596,20 @@ absl::Status Conversation::SendMessageAsync(
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
-  size_t num_messages_added = 0;
   bool was_history_empty = false;
   bool is_appending_message = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     was_history_empty = history_.empty();
-    if (message.is_array()) {
-      for (const auto& message : message) {
-        history_.push_back(message);
-        num_messages_added++;
-      }
-    } else {
-      history_.push_back(message);
-      num_messages_added++;
-    }
+    history_.push_back(message);
     is_appending_message = is_appending_message_;
   }
 
   // Removes the messages of this turn from the history, e.g. when the turn is
   // cancelled or its input could not be prefilled.
-  auto remove_turn_from_history = [this, num_messages_added,
-                                   prev_is_appending_message]() {
+  auto remove_turn_from_history = [this, prev_is_appending_message]() {
     absl::MutexLock lock(history_mutex_);
-    for (size_t i = 0; i < num_messages_added && !history_.empty(); ++i) {
+    if (!history_.empty()) {
       history_.pop_back();
     }
     is_appending_message_ = prev_is_appending_message;
@@ -645,7 +630,7 @@ absl::Status Conversation::SendMessageAsync(
       ABSL_RETURN_IF_ERROR(session_->SaveContext(kChannelContentCheckpoint));
     }
     absl::MutexLock lock(history_mutex_);
-    checkpoint_message_index_ = history_.size() - num_messages_added;
+    checkpoint_message_index_ = history_.size() - 1;
     checkpoint_after_user_prefill_ = false;
   }
 
@@ -662,19 +647,9 @@ absl::Status Conversation::SendMessageAsync(
     }
   }
   if (messages_for_conversion.is_array()) {
-    if (message.is_array()) {
-      for (const auto& msg : message) {
-        messages_for_conversion.push_back(msg);
-      }
-    } else {
-      messages_for_conversion.push_back(message);
-    }
+    messages_for_conversion.push_back(message);
   } else {
-    if (message.is_array()) {
-      messages_for_conversion = message;
-    } else {
-      messages_for_conversion = nlohmann::ordered_json::array({message});
-    }
+    messages_for_conversion = nlohmann::ordered_json::array({message});
   }
 
   ABSL_ASSIGN_OR_RETURN(auto session_inputs,
@@ -952,16 +927,11 @@ absl::StatusOr<int> Conversation::GetTokenCount() const {
 
 absl::StatusOr<int> Conversation::CountTokens(
     const Message& message, const OptionalArgs& optional_args) const {
-  absl::MutexLock lock(history_mutex_);  // NOLINT
-  std::vector<Message> messages;
-  if (message.is_array()) {
-    messages.reserve(message.size());
-    for (const auto& msg : message) {
-      messages.push_back(msg);
-    }
-  } else {
-    messages.push_back(message);
+  if (!message.is_object()) {
+    return absl::InvalidArgumentError("Message must be a JSON object.");
   }
+  absl::MutexLock lock(history_mutex_);  // NOLINT
+  std::vector<Message> messages = {message};
 
   // const_cast is needed because GetInputDataVectorForMessages() is non-const,
   // even though constructing the InputData vector does not mutate conversation

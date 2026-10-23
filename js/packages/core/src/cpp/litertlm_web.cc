@@ -226,13 +226,7 @@ static absl::StatusOr<nlohmann::ordered_json> ParseMessageJsonWithBlobs(
   if (blobs_val.isUndefined() || blobs_val.isNull()) {
     return message;
   }
-  if (message.is_array()) {
-    for (auto& msg : message) {
-      ABSL_RETURN_IF_ERROR(AttachBlobsToSingleMessage(msg, blobs_val));
-    }
-  } else {
-    ABSL_RETURN_IF_ERROR(AttachBlobsToSingleMessage(message, blobs_val));
-  }
+  ABSL_RETURN_IF_ERROR(AttachBlobsToSingleMessage(message, blobs_val));
   return message;
 }
 

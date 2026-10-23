@@ -35,10 +35,10 @@
 {%- endif -%}
 
 {%- for message in loop_messages -%}
-    {%- set content = format_content(message['content']) -%}
     {%- if message['role'] == 'user' or message['role'] == 'system' -%}
-        {{- '<|im_start|>' + message['role'] + '\n' + content + '<|im_end|>\n' -}}
+        {{- '<|im_start|>' + message['role'] + '\n' + format_content(message['content']) + '<|im_end|>\n' -}}
     {%- elif message['role'] == 'assistant' -%}
+        {%- set content = format_content(message['content']) -%}
         {{- '<|im_start|>' + message['role'] + '\n' + content -}}
         {%- if message['tool_calls'] -%}
             {%- for tool_call in message['tool_calls'] -%}
@@ -61,7 +61,9 @@
         {%- if loop.first or loop_messages[loop.index0 - 1]['role'] != 'tool' -%}
             {{- '<|im_start|>user' -}}
         {%- endif -%}
-        {{- '\n<tool_response>\n' + content + '\n</tool_response>' -}}
+        {%- for item in message['content'] -%}
+            {{- '\n<tool_response>\n' + format_content([item]) + '\n</tool_response>' -}}
+        {%- endfor -%}
         {%- if loop.last or loop_messages[loop.index0 + 1]['role'] != 'tool' -%}
             {{- '<|im_end|>\n' -}}
         {%- endif -%}

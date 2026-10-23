@@ -139,11 +139,11 @@ class Conversation(interfaces.AbstractConversation):
 
   def _handle_tool_calls(
       self, response_dict: collections.abc.Mapping[str, Any]
-  ) -> list[collections.abc.Mapping[str, Any]] | None:
+  ) -> collections.abc.Mapping[str, Any] | None:
     if "tool_calls" not in response_dict:
       return None
 
-    tool_responses = []
+    tool_content = []
     for tool_call in response_dict.get("tool_calls"):  # pyrefly: ignore[not-iterable]
       if "function" not in tool_call:
         raise ValueError("Missing 'function' in tool_call")
@@ -168,16 +168,19 @@ class Conversation(interfaces.AbstractConversation):
       if self.tool_event_handler:
         result = self.tool_event_handler.process_tool_response(result)  # pyrefly: ignore[bad-argument-type]
 
-      tool_responses.append({
-          "role": "tool",
-          "content": [{
-              "type": "tool_response",
-              "name": name,
-              "response": result,
-          }],
+      tool_content.append({
+          "type": "tool_response",
+          "name": name,
+          "response": result,
       })
 
-    return tool_responses
+    if not tool_content:
+      return None
+
+    return {
+        "role": "tool",
+        "content": tool_content,
+    }
 
   def _resolve_response_format(
       self,
@@ -185,11 +188,6 @@ class Conversation(interfaces.AbstractConversation):
       response_format: interfaces.ResponseFormat | None,
   ) -> interfaces.ResponseFormat | None:
     is_tool_response = (
-        isinstance(current_message, list)
-        and len(current_message) > 0
-        and isinstance(current_message[0], collections.abc.Mapping)
-        and current_message[0].get("role") == "tool"
-    ) or (
         isinstance(current_message, collections.abc.Mapping)
         and current_message.get("role") == "tool"
     )
@@ -206,10 +204,7 @@ class Conversation(interfaces.AbstractConversation):
       suppress_tokens_config: interfaces.SuppressTokensConfig | None = None,
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
-      current_message: (
-          collections.abc.Mapping[str, Any]
-          | list[collections.abc.Mapping[str, Any]]
-      ) | None = None,
+      current_message: collections.abc.Mapping[str, Any] | None = None,
       response_format: interfaces.ResponseFormat | None = None,
   ) -> int | None:
     """Creates a C pointer for ConversationOptionalArgs if needed."""

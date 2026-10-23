@@ -21,8 +21,8 @@ import {BenchmarkInfo} from '../wasm_binding_types.js';
  * Interface representing standard chat interaction methods.
  */
 export interface ChatInterface {
-  sendMessage(message: MessageLike|MessageLike[]): Promise<Message>;
-  sendMessageStreaming(message: MessageLike|MessageLike[]):
+  sendMessage(message: MessageLike): Promise<Message>;
+  sendMessageStreaming(message: MessageLike):
       ReadableStream<Message>;
   cancel(): void;
   getHistory(): Message[]|Promise<Message[]>;

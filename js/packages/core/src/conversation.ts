@@ -39,7 +39,7 @@ export class Conversation implements ChatInterface {
        */
       private readonly visualTokenBudget = 0) {}
 
-  async sendMessage(message: MessageLike|MessageLike[]): Promise<Message> {
+  async sendMessage(message: MessageLike): Promise<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);
     }
@@ -60,7 +60,7 @@ export class Conversation implements ChatInterface {
    * Sends a message to the LLM and returns a ReadableStream that yields
    * message chunks as they are generated.
    */
-  sendMessageStreaming(message: MessageLike|MessageLike[]):
+  sendMessageStreaming(message: MessageLike):
       ReadableStream<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);
@@ -181,19 +181,10 @@ interface SerializedMessage {
   blobs: Uint8Array[];
 }
 
-async function serializeMessage(messageLike: MessageLike|
-                                MessageLike[]): Promise<SerializedMessage> {
+async function serializeMessage(messageLike: MessageLike):
+    Promise<SerializedMessage> {
   const blobs: Uint8Array[] = [];
-  let message: Message|Message[];
-  if (Array.isArray(messageLike)) {
-    const messages: Message[] = [];
-    for (const item of messageLike) {
-      messages.push(await toWireMessage(item, blobs));
-    }
-    message = messages;
-  } else {
-    message = await toWireMessage(messageLike, blobs);
-  }
+  const message = await toWireMessage(messageLike, blobs);
   return {json: JSON.stringify(message), blobs};
 }
 

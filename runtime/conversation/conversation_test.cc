@@ -100,6 +100,21 @@ constexpr absl::string_view kTestJinjaPromptTemplate = R"jinja(
 {%- endfor -%}
 )jinja";
 
+constexpr absl::string_view kTestJinjaToolsPromptTemplate = R"jinja(
+{%- for message in messages -%}
+  {{- '<start_of_turn>' + message.role + '\n' -}}
+  {%- if message.role == 'tool' -%}
+    {%- for item in message.content -%}
+      {{- '<tool_response>' + (item.text if item.text is defined else (item.response | string)) + '<end_of_turn>\n' -}}
+    {%- endfor -%}
+  {%- elif message.content is string -%}
+    {{- message.content + '<end_of_turn>\n' -}}
+  {%- else -%}
+    {{- message.content[0].text + '<end_of_turn>\n' -}}
+  {%- endif -%}
+{%- endfor -%}
+)jinja";
+
 std::string GetTestdataPath(absl::string_view file_path) {
   return absl::StrCat(::testing::SrcDir(), "/", file_path);
 }
@@ -531,15 +546,14 @@ TEST_P(ConversationTest, CountTokens) {
   EXPECT_EQ(current_tokens, 0);
   EXPECT_TRUE(conversation->GetHistory().empty());
 
-  // Message array input
+  // Message array input should fail
   Message array_message = nlohmann::ordered_json::array({
       {{"role", "user"}, {"content", "Hello"}},
       {{"role", "model"}, {"content", "Hi"}},
       {{"role", "user"}, {"content", "How are you?"}},
   });
-  ASSERT_OK_AND_ASSIGN(int array_tokens,
-                       conversation->CountTokens(array_message));
-  EXPECT_GT(array_tokens, tokens);
+  EXPECT_THAT(conversation->CountTokens(array_message),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 
   // Multi-turn history: send first turn and count prospective next turn
   ASSERT_OK(conversation->SendMessage(user_message).status());
@@ -1649,10 +1663,9 @@ TEST_P(ConversationTest, WaitUntilDonePropagatesSessionError) {
       StatusIs(absl::StatusCode::kInternal, HasSubstr("session failed")));
 }
 
-TEST_P(ConversationTest, SendMultipleMessages) {
+TEST_P(ConversationTest, SendMessageArrayFails) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();
-  MockSession* mock_session_ptr = mock_session.get();
   auto mock_engine = CreateMockEngine(std::move(mock_session));
 
   // Create Conversation.
@@ -1667,62 +1680,14 @@ TEST_P(ConversationTest, SendMultipleMessages) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  // We will send two consecutive messages.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
-    [
-      {
-        "role": "user",
-        "content": "Hello world!"
-      },
-      {
-        "role": "user",
-        "content": "How are you?"
-      }
-    ]
-  )json");
+  Message array_message = nlohmann::ordered_json::array({
+      {{"role", "user"}, {"content", "Hello world!"}},
+      {{"role", "user"}, {"content", "How are you?"}},
+  });
 
-  absl::string_view expected_input_text =
-      "<start_of_turn>user\n"
-      "Hello world!<end_of_turn>\n"
-      "<start_of_turn>user\n"
-      "How are you?<end_of_turn>\n";
-  EXPECT_CALL(
-      *mock_session_ptr,
-      RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
-                          testing::Property(&InputText::GetRawTextString,
-                                            expected_input_text))),
-                      testing::_))
-      .WillOnce([](const std::vector<InputData>& contents,
-                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
-                       user_callback) {
-        user_callback(Responses(TaskState::kDone));
-        return nullptr;
-      });
-  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
-      .WillOnce(
-          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
-             const DecodeConfig& decode_config) {
-            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
-            user_callback(Responses(TaskState::kDone));
-            return nullptr;
-          });
-
-  ASSERT_OK_AND_ASSIGN(const Message response,
-                       conversation->SendMessage(user_messages));
-
-  Message assistant_message = nlohmann::ordered_json::parse(R"({
-    "role": "assistant",
-    "content": [
-      {
-        "type": "text",
-        "text": "I am good."
-      }
-    ]
-  })");
-  EXPECT_EQ(response, assistant_message);
-  EXPECT_THAT(conversation->GetHistory(),
-              testing::ElementsAre(user_messages[0], user_messages[1],
-                                   assistant_message));
+  EXPECT_THAT(conversation->SendMessage(array_message),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_TRUE(conversation->GetHistory().empty());
 }
 
 TEST_P(ConversationTest, SendSingleMessageWithChannel) {
@@ -2500,7 +2465,7 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
   ASSERT_OK(conversation->SendMessage(user_message_2));
 }
 
-TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
+TEST_P(ConversationTest, SendMessageWithMultipleToolResponses) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();
   MockSession* mock_session_ptr = mock_session.get();
@@ -2512,59 +2477,35 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
       ConversationConfig::Builder()
           .SetSessionConfig(session_config_)
           .SetEnableConstrainedDecoding(enable_constrained_decoding_)
-          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetOverwritePromptTemplate(
+              PromptTemplate(kTestJinjaToolsPromptTemplate))
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .Build(*mock_engine));
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  // The first user message.
-  Message user_message_1 = nlohmann::ordered_json::parse(R"json(
+  Message tool_message = nlohmann::ordered_json::parse(R"json(
     {
-      "role": "user",
-      "content": "How are you?"
+      "role": "tool",
+      "content": [
+        {
+          "type": "tool_response",
+          "name": "get_weather",
+          "response": "sunny"
+        },
+        {
+          "type": "tool_response",
+          "name": "get_time",
+          "response": "12:00"
+        }
+      ]
     }
   )json");
-  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
-      .WillOnce([](const std::vector<InputData>& contents,
-                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
-                       user_callback) {
-        user_callback(Responses(TaskState::kDone));
-        return nullptr;
-      });
 
-  // The first assistant response.
-  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
-      .WillOnce(
-          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
-             const DecodeConfig& decode_config) {
-            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
-            user_callback(Responses(TaskState::kDone));
-            return nullptr;
-          });
-
-  // Send the first user message to fill the history.
-  ASSERT_OK(conversation->SendMessage(user_message_1));
-  ASSERT_THAT(conversation->GetHistory().size(), testing::Eq(2));
-
-  // We will send two consecutive messages when the history is not empty.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
-    [
-      {
-        "role": "user",
-        "content": "foo"
-      },
-      {
-        "role": "user",
-        "content": "bar"
-      }
-    ]
-  )json");
   absl::string_view expected_input_text =
-      "<start_of_turn>user\n"
-      "foo<end_of_turn>\n"
-      "<start_of_turn>user\n"
-      "bar<end_of_turn>\n";
+      "<start_of_turn>tool\n"
+      "<tool_response>\"sunny\"<end_of_turn>\n"
+      "<tool_response>\"12:00\"<end_of_turn>\n";
   EXPECT_CALL(
       *mock_session_ptr,
       RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
@@ -2581,37 +2522,27 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
       .WillOnce(
           [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
              const DecodeConfig& decode_config) {
-            user_callback(Responses(TaskState::kProcessing, {"baz"}));
+            user_callback(
+                Responses(TaskState::kProcessing, {"Processed tools."}));
             user_callback(Responses(TaskState::kDone));
             return nullptr;
           });
 
-  // Send the user messages.
-  ASSERT_OK(conversation->SendMessage(user_messages));
+  ASSERT_OK_AND_ASSIGN(const Message response,
+                       conversation->SendMessage(tool_message));
 
-  // Check the history.
-  Message assistant_message_1 = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
         "type": "text",
-        "text": "I am good."
+        "text": "Processed tools."
       }
     ]
   })");
-  Message assistant_message_2 = nlohmann::ordered_json::parse(R"({
-    "role": "assistant",
-    "content": [
-      {
-        "type": "text",
-        "text": "baz"
-      }
-    ]
-  })");
+  EXPECT_EQ(response, assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
-              testing::ElementsAre(user_message_1, assistant_message_1,
-                                   user_messages[0], user_messages[1],
-                                   assistant_message_2));
+              testing::ElementsAre(tool_message, assistant_message));
 }
 
 TEST_P(ConversationTest, RunTextScoring) {
@@ -2956,10 +2887,9 @@ Thinking disabled.<end_of_turn>
       testing::ElementsAre(user_message, assistant_message_for_confirm));
 }
 
-TEST_P(ConversationTest, SendMultipleMessagesAsync) {
+TEST_P(ConversationTest, SendMessageAsyncArrayFails) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();
-  MockSession* mock_session_ptr = mock_session.get();
   auto mock_engine = CreateMockEngine(std::move(mock_session));
 
   // Create Conversation.
@@ -2974,65 +2904,15 @@ TEST_P(ConversationTest, SendMultipleMessagesAsync) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  // We will send two consecutive messages.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
-    [
-      {
-        "role": "user",
-        "content": "Hello world!"
-      },
-      {
-        "role": "user",
-        "content": "How are you?"
-      }
-    ]
-  )json");
+  Message array_message = nlohmann::ordered_json::array({
+      {{"role", "user"}, {"content", "Hello world!"}},
+      {{"role", "user"}, {"content", "How are you?"}},
+  });
 
-  absl::string_view expected_input_text =
-      "<start_of_turn>user\n"
-      "Hello world!<end_of_turn>\n"
-      "<start_of_turn>user\n"
-      "How are you?<end_of_turn>\n";
-  EXPECT_CALL(
-      *mock_session_ptr,
-      RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
-                          testing::Property(&InputText::GetRawTextString,
-                                            expected_input_text))),
-                      testing::_))
-      .WillOnce([](const std::vector<InputData>& contents,
-                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
-                       user_callback) {
-        user_callback(Responses(TaskState::kDone));
-        return nullptr;
-      });
-  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
-      .WillOnce(
-          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
-             const DecodeConfig& decode_config) {
-            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
-            user_callback(Responses(TaskState::kDone));
-            return nullptr;
-          });
-
-  Message assistant_message = Message(nlohmann::ordered_json::parse(R"json({
-    "role": "assistant",
-    "content": [
-      {
-        "type": "text",
-        "text": "I am good."
-      }
-    ]
-  })json"));
-  Message assistant_message_for_confirm = assistant_message;
-  absl::Notification done;
-  auto message_callback = CreateTestMessageCallback(assistant_message, done);
-  EXPECT_OK(conversation->SendMessageAsync(user_messages,
-                                           std::move(message_callback)));
-  done.WaitForNotificationWithTimeout(absl::Seconds(10));
-
-  EXPECT_THAT(conversation->GetHistory(),
-              testing::ElementsAre(user_messages[0], user_messages[1],
-                                   assistant_message_for_confirm));
+  EXPECT_THAT(conversation->SendMessageAsync(array_message,
+                                             [](absl::StatusOr<Message>) {}),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_TRUE(conversation->GetHistory().empty());
 }
 
 TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
@@ -3182,7 +3062,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
   ASSERT_TRUE(done_2.WaitForNotificationWithTimeout(absl::Seconds(10)));
 }
 
-TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
+TEST_P(ConversationTest, SendMessageAsyncWithMultipleToolResponses) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();
   MockSession* mock_session_ptr = mock_session.get();
@@ -3194,26 +3074,40 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
       ConversationConfig::Builder()
           .SetSessionConfig(session_config_)
           .SetEnableConstrainedDecoding(enable_constrained_decoding_)
-          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetOverwritePromptTemplate(
+              PromptTemplate(kTestJinjaToolsPromptTemplate))
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .Build(*mock_engine));
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  // The first user message.
-  Message user_message_1 = nlohmann::ordered_json::parse(R"json(
+  Message tool_message = nlohmann::ordered_json::parse(R"json(
     {
-      "role": "user",
-      "content": "How are you?"
+      "role": "tool",
+      "content": [
+        {
+          "type": "tool_response",
+          "name": "get_weather",
+          "response": "sunny"
+        },
+        {
+          "type": "tool_response",
+          "name": "get_time",
+          "response": "12:00"
+        }
+      ]
     }
   )json");
-  absl::string_view expected_input_text1 =
-      "<start_of_turn>user\n"
-      "How are you?<end_of_turn>\n";
+
+  absl::string_view expected_input_text =
+      "<start_of_turn>tool\n"
+      "<tool_response>\"sunny\"<end_of_turn>\n"
+      "<tool_response>\"12:00\"<end_of_turn>\n";
   EXPECT_CALL(
       *mock_session_ptr,
       RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
                           testing::Property(&InputText::GetRawTextString,
-                                            expected_input_text1))),
+                                            expected_input_text))),
                       testing::_))
       .WillOnce([](const std::vector<InputData>& contents,
                    absl::AnyInvocable<void(absl::StatusOr<Responses>)>
@@ -3225,91 +3119,31 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
       .WillOnce(
           [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
              const DecodeConfig& decode_config) {
-            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
+            user_callback(
+                Responses(TaskState::kProcessing, {"Processed tools."}));
             user_callback(Responses(TaskState::kDone));
             return nullptr;
           });
 
-  Message assistant_message_1 = Message(nlohmann::ordered_json::parse(R"json({
+  Message assistant_message = Message(nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
         "type": "text",
-        "text": "I am good."
+        "text": "Processed tools."
       }
     ]
   })json"));
-  Message assistant_message_1_for_confirm = assistant_message_1;
-
-  absl::Notification done_1;
-  EXPECT_OK(conversation->SendMessageAsync(
-      user_message_1, CreateTestMessageCallback(assistant_message_1, done_1)));
-  done_1.WaitForNotificationWithTimeout(absl::Seconds(10));
-  ASSERT_THAT(conversation->GetHistory().size(), testing::Eq(2));
-
-  // We will send two consecutive messages when the history is not empty.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
-    [
-      {
-        "role": "user",
-        "content": "foo"
-      },
-      {
-        "role": "user",
-        "content": "bar"
-      }
-    ]
-  )json");
-
-  absl::string_view expected_input_text2 =
-      "<start_of_turn>user\n"
-      "foo<end_of_turn>\n"
-      "<start_of_turn>user\n"
-      "bar<end_of_turn>\n";
-  EXPECT_CALL(
-      *mock_session_ptr,
-      RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
-                          testing::Property(&InputText::GetRawTextString,
-                                            expected_input_text2))),
-                      testing::_))
-      .WillOnce([](const std::vector<InputData>& contents,
-                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
-                       user_callback) {
-        user_callback(Responses(TaskState::kDone));
-        return nullptr;
-      });
-  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
-      .WillOnce(
-          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
-             const DecodeConfig& decode_config) {
-            user_callback(Responses(TaskState::kProcessing, {"baz"}));
-            user_callback(Responses(TaskState::kDone));
-            return nullptr;
-          });
-
-  Message assistant_message_2 = Message(nlohmann::ordered_json::parse(R"json({
-    "role": "assistant",
-    "content": [
-      {
-        "type": "text",
-        "text": "baz"
-      }
-    ]
-  })json"));
-  Message assistant_message_2_for_confirm = assistant_message_2;
-
-  absl::Notification done_2;
-  auto message_callbacks_2 =
-      CreateTestMessageCallback(assistant_message_2, done_2);
-  EXPECT_OK(conversation->SendMessageAsync(user_messages,
-                                           std::move(message_callbacks_2)));
-  done_2.WaitForNotificationWithTimeout(absl::Seconds(10));
+  Message assistant_message_for_confirm = assistant_message;
+  absl::Notification done;
+  auto message_callback = CreateTestMessageCallback(assistant_message, done);
+  EXPECT_OK(conversation->SendMessageAsync(tool_message,
+                                           std::move(message_callback)));
+  done.WaitForNotificationWithTimeout(absl::Seconds(10));
 
   EXPECT_THAT(
       conversation->GetHistory(),
-      testing::ElementsAre(user_message_1, assistant_message_1_for_confirm,
-                           user_messages[0], user_messages[1],
-                           assistant_message_2_for_confirm));
+      testing::ElementsAre(tool_message, assistant_message_for_confirm));
 }
 
 TEST_P(ConversationTest, SendMessageWithPreface) {
@@ -4904,7 +4738,7 @@ TEST(AppendMessageTest, CancelGroupWithSendMessageAsyncWithPendingMessage) {
   EXPECT_TRUE(conversation->GetHistory().empty());
 }
 
-TEST(AppendMessageTest, CancelProcessDuringSendMessageAsyncWithArray) {
+TEST(AppendMessageTest, CancelProcessDuringSendMessageAsync) {
   // Set up mock Session.
   auto mock_session = std::make_unique<MockSession>();
   MockSession* mock_session_ptr = mock_session.get();
@@ -4943,9 +4777,6 @@ TEST(AppendMessageTest, CancelProcessDuringSendMessageAsyncWithArray) {
       ConversationConfig::Builder()
           .SetSessionConfig(session_config)
           .SetOverwritePromptTemplate(PromptTemplate(template_text))
-          // `RenderSingleTurnTemplate` skips JSON array messages, so a
-          // non-empty preface is needed for `session_inputs` to be non-empty;
-          // otherwise `SendMessageAsync` never calls `RunPrefillAsync`.
           .SetPreface(JsonPreface{
               .messages = {{{"role", "system"},
                             {"content", "You are a helpful assistant."}}}})
@@ -4953,9 +4784,7 @@ TEST(AppendMessageTest, CancelProcessDuringSendMessageAsyncWithArray) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  Message user_messages = nlohmann::ordered_json::array(
-      {{{"role", "user"}, {"content", "Message 1"}},
-       {{"role", "user"}, {"content", "Message 2"}}});
+  Message user_message = {{"role", "user"}, {"content", "Message 1"}};
 
   absl::Notification done;
   absl::Status status;
@@ -4970,7 +4799,7 @@ TEST(AppendMessageTest, CancelProcessDuringSendMessageAsyncWithArray) {
       });
 
   EXPECT_OK(
-      conversation->SendMessageAsync(user_messages,
+      conversation->SendMessageAsync(user_message,
                                      [&](absl::StatusOr<Message> message) {
                                        if (!message.ok()) {
                                          status = message.status();

@@ -376,21 +376,21 @@ while (true) {
     if (message.contains("tool_calls") &&
         message["tool_calls"].is_array() &&
         !message["tool_calls"].empty()) {
-      // This JSON array will hold the tool response messages.
-      nlohmann::ordered_json tool_messages = nlohmann::ordered_json::array();
+      // Construct the tool response message.
+      Message tool_message = {
+          {"role", "tool"},
+          {"content", nlohmann::ordered_json::array()},
+      };
 
       // For each tool call, call the tool and add the response.
       for (const auto& tool_call : message["tool_calls"]) {
-        Message tool_message = {{"role", "tool"},
-                                                {"content", {}}};
         const nlohmann::ordered_json& function = tool_call["function"];
-        tool_message["content"] =
-            tools.CallTool(function["name"], function["arguments"]);
-        tool_messages.push_back(tool_message);
+        tool_message["content"].push_back(
+            tools.CallTool(function["name"], function["arguments"]));
       }
 
       // The next input message is the tool response.
-      input_message = tool_messages;
+      input_message = tool_message;
     } else {
       // If there are no tool calls, print the model's response and exit the
       // tool calling loop.

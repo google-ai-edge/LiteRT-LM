@@ -533,9 +533,7 @@ class Conversation {
 
   // Sends a message to the LLM and returns the complete message.
   // Args:
-  // - `message`: The message to be sent to the LLM. If `message` is an array,
-  //    each element will be treated as a separate message and be prefilled
-  //    before generating the response.
+  // - `message`: The message (a JSON object) to be sent to the LLM.
   // - `optional_args`: The optional arguments for sending the message. See the
   //    definition of `OptionalArgs` for more details.
   // Returns :
@@ -546,9 +544,7 @@ class Conversation {
   // Sends a message to the LLM and process the asynchronous message results via
   // the user_callback.
   // Args:
-  // - `message`: The message to be sent to the LLM. If `message` is an array,
-  //    each element will be treated as a separate message and be prefilled
-  //    before generating the response.
+  // - `message`: The message (a JSON object) to be sent to the LLM.
   // - `user_callback`: The callback to receive the message events. The
   //    user_callback will be invoked in the following conditions:
   //    - On every new message chunk.
@@ -644,8 +640,7 @@ class Conversation {
   // soft tokens. This does not mutate the conversation or the KV cache.
   //
   // Args:
-  // - `message`: The message to count tokens for. Can be a single message
-  //   or an array of messages.
+  // - `message`: The message (a JSON object) to count tokens for.
   // - `optional_args`: Optional arguments for template rendering.
   absl::StatusOr<int> CountTokens(
       const Message& message,
