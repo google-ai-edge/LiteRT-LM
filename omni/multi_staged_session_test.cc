@@ -428,6 +428,56 @@ TEST(MultiStagedSessionTest, CombineOutputErrorsOnMismatchedTypesOrRates) {
   }
 }
 
+TEST(MultiStagedSessionTest, CombineOutputHandlesEndOfOutputTurn) {
+  // 1. [TextOutput, EndOfOutputTurn] -> preserves TextOutput when
+  // EndOfOutputTurn is next.
+  {
+    auto stage = std::make_unique<CannedOutputStage>(std::vector<Output>{
+        TextOutput{.confirmed_text = "hello"},
+        EndOfOutputTurn{},
+    });
+    Stage<Output>* raw_stage = stage.get();
+    std::vector<std::unique_ptr<internal::StageBase>> stages;
+    stages.push_back(std::move(stage));
+    ASSERT_OK_AND_ASSIGN(
+        auto session, MultiStagedSession::Create(std::move(stages), raw_stage));
+    ASSERT_OK_AND_ASSIGN(Output result, session->Flush());
+    ASSERT_TRUE(std::holds_alternative<TextOutput>(result));
+    EXPECT_EQ(std::get<TextOutput>(result).confirmed_text, "hello");
+  }
+
+  // 2. [EndOfOutputTurn, TextOutput] -> replaces EndOfOutputTurn with
+  // subsequent TextOutput.
+  {
+    auto stage = std::make_unique<CannedOutputStage>(std::vector<Output>{
+        EndOfOutputTurn{},
+        TextOutput{.confirmed_text = "world"},
+    });
+    Stage<Output>* raw_stage = stage.get();
+    std::vector<std::unique_ptr<internal::StageBase>> stages;
+    stages.push_back(std::move(stage));
+    ASSERT_OK_AND_ASSIGN(
+        auto session, MultiStagedSession::Create(std::move(stages), raw_stage));
+    ASSERT_OK_AND_ASSIGN(Output result, session->Flush());
+    ASSERT_TRUE(std::holds_alternative<TextOutput>(result));
+    EXPECT_EQ(std::get<TextOutput>(result).confirmed_text, "world");
+  }
+
+  // 3. Only [EndOfOutputTurn] -> Flush() returns EndOfOutputTurn.
+  {
+    auto stage = std::make_unique<CannedOutputStage>(std::vector<Output>{
+        EndOfOutputTurn{},
+    });
+    Stage<Output>* raw_stage = stage.get();
+    std::vector<std::unique_ptr<internal::StageBase>> stages;
+    stages.push_back(std::move(stage));
+    ASSERT_OK_AND_ASSIGN(
+        auto session, MultiStagedSession::Create(std::move(stages), raw_stage));
+    ASSERT_OK_AND_ASSIGN(Output result, session->Flush());
+    EXPECT_TRUE(std::holds_alternative<EndOfOutputTurn>(result));
+  }
+}
+
 class BlockingForeverSource : public SingleThreadedStageWithDeque<std::string> {
  protected:
   bool NeedScheduleInternal() const override { return false; }

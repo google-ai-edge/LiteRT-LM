@@ -35,9 +35,11 @@ using MessageLite = ::google::protobuf::MessageLite;
 class OmniSession {
  public:
   using EndOfInput = ::litert::omni::EndOfInput;
+  using EndOfInputTurn = ::litert::omni::EndOfInputTurn;
   using TextInput = ::litert::omni::TextInput;
   using AudioInputMetadata = ::litert::omni::AudioInputMetadata;
   using AudioInput = ::litert::omni::AudioInput;
+  using ImageInput = ::litert::omni::ImageInput;
   using ImageGenInputMetadata = ::litert::omni::ImageGenInputMetadata;
   using Input = ::litert::omni::Input;
 
@@ -48,6 +50,7 @@ class OmniSession {
   };
 
   using EndOfOutput = ::litert::omni::EndOfOutput;
+  using EndOfOutputTurn = ::litert::omni::EndOfOutputTurn;
   using TextOutput = ::litert::omni::TextOutput;
   using AudioOutput = ::litert::omni::AudioOutput;
   using ImageOutput = ::litert::omni::ImageOutput;

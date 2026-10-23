@@ -158,10 +158,12 @@ absl::StatusOr<MultiStagedSession::Output> MultiStagedSession::Flush() {
 
 absl::Status MultiStagedSession::CombineOutput(Output& accumulated,
                                                Output&& next) {
-  if (std::holds_alternative<EndOfOutput>(next)) {
+  if (std::holds_alternative<EndOfOutput>(next) ||
+      std::holds_alternative<EndOfOutputTurn>(next)) {
     return absl::OkStatus();
   }
-  if (std::holds_alternative<EndOfOutput>(accumulated)) {
+  if (std::holds_alternative<EndOfOutput>(accumulated) ||
+      std::holds_alternative<EndOfOutputTurn>(accumulated)) {
     accumulated = std::move(next);
     return absl::OkStatus();
   }

@@ -22,8 +22,16 @@
 
 namespace litert::omni {
 
+// Default input audio sample rate in Hz across Omni sessions (e.g. ASR,
+// Any2Any).
+constexpr int kDefaultInputSampleRateHz = 16000;
+
 // Sentinel input indicating the end of the input stream.
 struct EndOfInput {};
+
+// Sentinel input indicating the end of a single user input turn in a multi-turn
+// conversational session.
+struct EndOfInputTurn {};
 
 // Text input payload for TTS synthesis or image generation prompts.
 struct TextInput {
@@ -33,13 +41,30 @@ struct TextInput {
 // Audio input metadata for ASR transcription applied to all following
 // AudioInput until another AudioInputMetadata is pushed.
 struct AudioInputMetadata {
-  int sample_rate_hz = 16000;
+  int sample_rate_hz = kDefaultInputSampleRateHz;
   int num_channels = 1;
 };
 
 // Audio input payload for ASR transcription.
 struct AudioInput {
   std::vector<float> pcm_samples;
+};
+
+// Image input payload for multimodal (Any2Any / VLM) sessions.
+// Holds either encoded image bytes (e.g., PNG/JPEG when width == 0 &&
+// height == 0) or decoded interleaved RGB888 pixel bytes (when width > 0 &&
+// height > 0).
+//
+// Unlike `AudioInputMetadata`, which specifies continuous sampling parameters
+// across subsequent `AudioInput` chunks in an audio stream, we do not define a
+// separate `ImageInputMetadata` because each image payload represents a
+// distinct image or video frame that can have its own width, height, and
+// channels.
+struct ImageInput {
+  std::vector<uint8_t> image_bytes;
+  int width = 0;
+  int height = 0;
+  int channels = 3;
 };
 
 // Image generation metadata applied to all following TextInput prompts until
@@ -53,8 +78,9 @@ struct ImageGenInputMetadata {
 
 // Unified input variant for InputSource. Note that `EndOfInput` is the first
 // alternative, so a default-constructed `Input` represents `EndOfInput`.
-using Input = std::variant<EndOfInput, TextInput, AudioInputMetadata,
-                           AudioInput, ImageGenInputMetadata>;
+using Input =
+    std::variant<EndOfInput, EndOfInputTurn, TextInput, AudioInputMetadata,
+                 AudioInput, ImageInput, ImageGenInputMetadata>;
 
 // Sentinel output indicating the end of the output stream.
 // TODO(b/538727793): Define synchronous/streaming `EndOfOutput` semantics.
@@ -62,6 +88,10 @@ using Input = std::variant<EndOfInput, TextInput, AudioInputMetadata,
 // that `EndOfOutput` is the first alternative of `Output`, so a
 // default-constructed `Output` represents `EndOfOutput`.
 struct EndOfOutput {};
+
+// Sentinel output indicating the end of a single conversational output turn in
+// a multi-turn interactive session.
+struct EndOfOutputTurn {};
 
 // Generic text output payload for ASR transcription or text generation.
 struct TextOutput {
@@ -88,7 +118,8 @@ struct ImageOutput {
 };
 
 // Unified output variant for OmniSession and output stages.
-using Output = std::variant<EndOfOutput, TextOutput, AudioOutput, ImageOutput>;
+using Output = std::variant<EndOfOutput, EndOfOutputTurn, TextOutput,
+                            AudioOutput, ImageOutput>;
 
 }  // namespace litert::omni
 
