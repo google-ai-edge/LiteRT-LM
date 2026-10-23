@@ -45,12 +45,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   presubmit:
     name: "Presubmit-Linux-CMake"
     runs-on: "linux-x86-c4-16"
     container:
-      image: ubuntu:24.04
+      image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
     permissions:
       id-token: write
       actions: write
@@ -99,9 +102,10 @@ jobs:
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
+          persist-credentials: false
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
       - name: Generate Source Hash
         id: src-hash
