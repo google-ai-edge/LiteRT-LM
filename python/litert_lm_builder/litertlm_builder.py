@@ -214,11 +214,40 @@ def populate_system_metadata(
 
 @dataclasses.dataclass(frozen=True)
 class ExternalizationSummary:
-  """Summary of an opt-in LiteRT-LM weight externalization pass."""
+  """Summary of an opt-in LiteRT-LM weight externalization pass.
+
+  Attributes:
+    models_inspected: Number of TFLite model sections that were inspected.
+    models_with_external_weights: Number of models with their own
+      `TFLiteWeights` section in the output.
+    newly_externalized_bytes: Payload bytes moved out of TFLite FlatBuffers into
+      `TFLiteWeights` sections by this pass.
+    redirected_buffers: Number of external buffers that now reference an
+      identical payload in another model's `TFLiteWeights` section (0 unless
+      deduplication was requested).
+    deduplicated_bytes: Bytes removed by that deduplication.
+  """
 
   models_inspected: int
   models_with_external_weights: int
   newly_externalized_bytes: int
+  redirected_buffers: int = 0
+  deduplicated_bytes: int = 0
+
+
+# Separates the weight group name from a model type in external buffer group
+# names that reference another model's TFLiteWeights section, e.g.
+# "tflite_weights:tf_lite_prefill_decode".
+_WEIGHT_GROUP_MODEL_TYPE_SEPARATOR = ":"
+
+# Model types that own payloads shared across models when deduplicating
+# external weights. Every runtime keeps these models' weights in host memory
+# (the web streaming loader too), so other models can read shared payloads
+# from them.
+_SHARED_WEIGHT_OWNER_MODEL_TYPES = frozenset({
+    "tf_lite_embedder",
+    "tf_lite_per_layer_embedder",
+})
 
 
 @enum.unique
@@ -1652,6 +1681,8 @@ class LitertLmFileBuilder:
       num_elements_threshold: Minimum number of tensor elements for a weight to
         be externalized.
       weight_group_name: Name of the externalized weights group section.
+      dedupe_shared_weights: Whether to also store payloads that are
+        byte-identical across models only once (implies `externalize_weights`).
 
     Returns:
       An `ExternalizationSummary` when `externalize_weights` is True, or None
@@ -1902,14 +1933,6 @@ def pack(
     output_path: The path where the packed LiteRT-LM file will be saved.
     jinja_prompt_template_path: Optional path to a Jinja file to overwrite
       jinja_prompt_template.
-
-  Returns:
-    The path to the generated LiteRT-LM file.
-  """
-  packed_path, _ = pack_with_summary(
-      toml_path,
-      output_path,
-      jinja_prompt_template_path,
   )
   return packed_path
 

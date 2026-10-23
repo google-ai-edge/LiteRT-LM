@@ -221,6 +221,7 @@ cc_library(
         "//runtime/util:tensor_buffer_util",
         "//schema/core:litertlm_header_schema",
         "@litert//tflite/delegates/xnnpack:xnnpack_delegate_hdrs_only",
+        "@litert//tflite/schema:schema_fbs",
         "@litert//tflite/types:half",
     ],
 )

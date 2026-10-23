@@ -39,6 +39,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/strip.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_any.h"  // from @litert
 #include "litert/c/litert_common.h"  // from @litert
@@ -76,6 +77,7 @@
 #include "runtime/util/tensor_buffer_util.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
+#include "tflite/schema/schema_generated.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -84,6 +86,14 @@ namespace {
 
 // The name of the prefill decode model in the task bundle.
 constexpr char kPrefilDecodeModelNameInTaskBundle[] = "TF_LITE_PREFILL_DECODE";
+// External buffer group name of a model's own TFLiteWeights section. The same
+// name followed by kWeightGroupModelTypeSeparator and a model type (e.g.
+// "tflite_weights:tf_lite_prefill_decode") references that model's
+// TFLiteWeights section instead. This lets a model reuse a payload stored once
+// for several models (such as a token embedding table that is also the tied
+// output projection).
+constexpr absl::string_view kModelWeightGroupName = "tflite_weights";
+constexpr absl::string_view kWeightGroupModelTypeSeparator = ":";
 // Possible input tokens names:
 constexpr std::array<absl::string_view, 2> kInputTokensNames = {"token_ids",
                                                                 "tokens"};
@@ -327,6 +337,27 @@ void FillRingBufferDecodeAttentionMask(litert::ElementType elem_type,
       }
     }
   }
+}
+
+// Returns the names of the external buffer groups declared by a serialized
+// TFLite model, in declaration order. Returns an empty vector when the model
+// has no external buffers (the common case for models with embedded weights).
+std::vector<std::string> GetExternalBufferGroupNames(
+    absl::string_view model_buffer) {
+  std::vector<std::string> names;
+  const tflite::Model* model = tflite::GetModel(model_buffer.data());
+  if (model == nullptr || model->external_buffer_groups() == nullptr) {
+    return names;
+  }
+  for (const tflite::ExternalBufferGroup* group :
+       *model->external_buffer_groups()) {
+    if (group == nullptr || group->name() == nullptr ||
+        group->name()->empty()) {
+      continue;
+    }
+    names.push_back(group->name()->str());
+  }
+  return names;
 }
 
 }  // namespace
@@ -1215,17 +1246,56 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
 absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
     ModelResources& resources, absl::string_view model_type_str) {
   ExternalWeightResources external_weights;
-  auto section_offset = resources.GetWeightsSectionOffset(model_type_str);
-  if (!section_offset.ok()) {
-    if (!absl::IsNotFound(section_offset.status()) &&
-        !absl::IsUnimplemented(section_offset.status())) {
-      return section_offset.status();
+
+  // Determine the external buffer groups the serialized model references. When
+  // the serialized model is not available (e.g. a resource format that does
+  // not expose model buffers), fall back to the model's own weights group.
+  std::vector<std::string> group_names;
+  auto model_buffer = resources.GetTFLiteModelBuffer(model_type_str);
+  if (model_buffer.ok()) {
+    group_names = GetExternalBufferGroupNames(*model_buffer);
+  } else if (absl::IsNotFound(model_buffer.status()) ||
+             absl::IsUnimplemented(model_buffer.status())) {
+    group_names.emplace_back(kModelWeightGroupName);
+  } else {
+    return model_buffer.status();
+  }
+
+  for (const std::string& group_name : group_names) {
+    absl::StatusOr<std::pair<size_t, size_t>> section_offset;
+    absl::string_view other_model_type = group_name;
+    if (group_name == kModelWeightGroupName) {
+      section_offset = resources.GetWeightsSectionOffset(model_type_str);
+    } else if (absl::ConsumePrefix(&other_model_type, kModelWeightGroupName) &&
+               absl::ConsumePrefix(&other_model_type,
+                                   kWeightGroupModelTypeSeparator)) {
+      section_offset = resources.GetWeightsSectionOffset(other_model_type);
+    } else {
+      ABSL_LOG(WARNING) << "Model " << model_type_str
+                        << " references unsupported external buffer group '"
+                        << group_name << "'.";
+      continue;
     }
+    if (!section_offset.ok()) {
+      if (!absl::IsNotFound(section_offset.status()) &&
+          !absl::IsUnimplemented(section_offset.status())) {
+        return section_offset.status();
+      }
+      if (group_name != kModelWeightGroupName) {
+        ABSL_LOG(WARNING) << "Model " << model_type_str
+                          << " references external buffer group '" << group_name
+                          << "' but the model container has no matching"
+                             " TFLiteWeights section.";
+      }
+      continue;
+    }
+    external_weights.sections[group_name] = {
+        section_offset->first, section_offset->second - section_offset->first};
+  }
+  if (external_weights.sections.empty()) {
     return external_weights;
   }
 
-  external_weights.sections["tflite_weights"] = {
-      section_offset->first, section_offset->second - section_offset->first};
   LITERT_ASSIGN_OR_RETURN(auto scoped_file, resources.GetScopedFile());
   LITERT_ASSIGN_OR_RETURN(auto duplicated_scoped_file,
                           scoped_file.get().Duplicate());
@@ -1245,11 +1315,11 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
   if (!external_weights.scoped_file.has_value()) {
     return absl::OkStatus();
   }
-  ABSL_VLOG(1) << "External weights for model type " << model_type_str
-               << ": offset "
-               << external_weights.sections["tflite_weights"].offset
-               << ", length "
-               << external_weights.sections["tflite_weights"].length;
+  for (const auto& [group_name, section] : external_weights.sections) {
+    ABSL_VLOG(1) << "External weights for model type " << model_type_str
+                 << ", group " << group_name << ": offset " << section.offset
+                 << ", length " << section.length;
+  }
   compilation_options.SetExternalWeightScopedFile(*external_weights.scoped_file,
                                                   external_weights.sections);
   return absl::OkStatus();

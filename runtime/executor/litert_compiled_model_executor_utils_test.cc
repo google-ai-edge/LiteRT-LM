@@ -31,11 +31,13 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/vector.h"  // from @flatbuffers
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
@@ -66,6 +68,7 @@
 #include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "tensorflow/compiler/mlir/lite/allocation.h"  // from @org_tensorflow
+#include "tflite/schema/schema_generated.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -1871,10 +1874,17 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 
+ModelAssets CreateDummyModelAssets() {
+  absl::StatusOr<ModelAssets> assets = ModelAssets::Create("dummy_path");
+  if (!assets.ok()) {
+    std::abort();
+  }
+  return *std::move(assets);
+}
+
 class DummyExecutorSettings : public ExecutorSettingsBase {
  public:
-  DummyExecutorSettings()
-      : ExecutorSettingsBase(*ModelAssets::Create("dummy_path")) {}
+  DummyExecutorSettings() : ExecutorSettingsBase(CreateDummyModelAssets()) {}
 };
 
 LiteRtDelegatePrecision GetGpuPrecision(const litert::GpuOptions& gpu_options) {
@@ -2043,8 +2053,25 @@ class FakeExternalWeightModelResources : public ModelResources {
         scoped_file_(std::move(scoped_file)) {}
   ~FakeExternalWeightModelResources() override = default;
 
+  // Serves `model_buffer` from GetTFLiteModelBuffer so that the external
+  // buffer groups declared by the model drive the section lookup.
+  void SetModelBuffer(std::string model_buffer) {
+    model_buffer_ = std::move(model_buffer);
+  }
+
+  // Registers the TFLiteWeights section of another model type. Model types
+  // without a registered section use the constructor's `section_offset`.
+  void SetWeightsSection(proto::LlmMetadata::TfLiteModelType model_type,
+                         std::pair<size_t, size_t> offsets) {
+    weights_sections_[model_type] = offsets;
+  }
+
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
       proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (const auto it = weights_sections_.find(model_type);
+        it != weights_sections_.end()) {
+      return it->second;
+    }
     return section_offset_;
   }
 
@@ -2062,7 +2089,10 @@ class FakeExternalWeightModelResources : public ModelResources {
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       proto::LlmMetadata::TfLiteModelType model_type) override {
-    return absl::UnimplementedError("Unimplemented");
+    if (!model_buffer_.has_value()) {
+      return absl::UnimplementedError("Unimplemented");
+    }
+    return absl::string_view(*model_buffer_);
   }
 
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
@@ -2096,7 +2126,38 @@ class FakeExternalWeightModelResources : public ModelResources {
  private:
   absl::StatusOr<std::pair<size_t, size_t>> section_offset_;
   std::optional<ScopedFile> scoped_file_;
+  std::optional<std::string> model_buffer_;
+  absl::flat_hash_map<proto::LlmMetadata::TfLiteModelType,
+                      std::pair<size_t, size_t>>
+      weights_sections_;
 };
+
+// Serializes a minimal TFLite model that declares the given external buffer
+// groups (and nothing else).
+std::string BuildModelWithExternalBufferGroups(
+    const std::vector<std::string>& group_names) {
+  flatbuffers::FlatBufferBuilder builder;
+  std::vector<flatbuffers::Offset<tflite::ExternalBufferGroup>> groups;
+  groups.reserve(group_names.size());
+  for (const std::string& name : group_names) {
+    groups.push_back(
+        tflite::CreateExternalBufferGroup(builder, builder.CreateString(name)));
+  }
+  flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<tflite::ExternalBufferGroup>>>
+      groups_vector;
+  if (!groups.empty()) {
+    groups_vector = builder.CreateVector(groups);
+  }
+  tflite::ModelBuilder model_builder(builder);
+  model_builder.add_version(3);
+  if (!groups.empty()) {
+    model_builder.add_external_buffer_groups(groups_vector);
+  }
+  tflite::FinishModelBuffer(builder, model_builder.Finish());
+  return std::string(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+                     builder.GetSize());
+}
 
 // Returns the path to the shared test .task model.
 std::string TestModelPath() {
@@ -2164,6 +2225,94 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   const auto& section = external_weights.sections.at("tflite_weights");
   EXPECT_EQ(section.offset, 100);
   EXPECT_EQ(section.length, 150);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_ModelWithoutExternalBuffersIgnoresSections) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+  // A model with embedded weights declares no external buffer groups, so no
+  // section is attached even if the container happens to have one.
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups({}));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_FALSE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.sections.empty());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_MapsOtherModelWeightGroup) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+  // "tflite_weights" resolves to the model's own TFLiteWeights section and
+  // "tflite_weights:<model_type>" to the TFLiteWeights section of that model.
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups(
+      {"tflite_weights", "tflite_weights:tf_lite_embedder"}));
+  resources.SetWeightsSection(proto::LlmMetadata::TF_LITE_EMBEDDER,
+                              {1000, 1600});
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_TRUE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.scoped_file->IsValid());
+  ASSERT_EQ(external_weights.sections.size(), 2);
+  EXPECT_EQ(external_weights.sections.at("tflite_weights").offset, 100);
+  EXPECT_EQ(external_weights.sections.at("tflite_weights").length, 150);
+  const auto& other =
+      external_weights.sections.at("tflite_weights:tf_lite_embedder");
+  EXPECT_EQ(other.offset, 1000);
+  EXPECT_EQ(other.length, 600);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_OtherModelWeightGroupOnly) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  // E.g. an embedder whose only large weight (the embedding table) is stored in
+  // the prefill/decode model's TFLiteWeights section: it has no TFLiteWeights
+  // section of its own.
+  FakeExternalWeightModelResources resources(
+      absl::NotFoundError("No weights section."), std::move(scoped_file));
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups(
+      {"tflite_weights:tf_lite_prefill_decode"}));
+  resources.SetWeightsSection(proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                              {1000, 1600});
+
+  ASSERT_OK_AND_ASSIGN(auto external_weights,
+                       GetExternalWeightResources(
+                           resources, proto::LlmMetadata::TF_LITE_EMBEDDER));
+  ASSERT_TRUE(external_weights.scoped_file.has_value());
+  ASSERT_EQ(external_weights.sections.size(), 1);
+  const auto& other =
+      external_weights.sections.at("tflite_weights:tf_lite_prefill_decode");
+  EXPECT_EQ(other.offset, 1000);
+  EXPECT_EQ(other.length, 600);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_UnsupportedGroupIsSkipped) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+  // A group name the runtime cannot resolve is skipped (the weight loader
+  // reports the missing data when the model is compiled), while the model's
+  // own section is still attached. "tflite_weightsfoo" lacks the ':' separator
+  // and must not be treated as a reference to model type "foo".
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups(
+      {"tflite_weights", "unsupported", "tflite_weightsfoo"}));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_EQ(external_weights.sections.size(), 1);
+  EXPECT_TRUE(external_weights.sections.contains("tflite_weights"));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
