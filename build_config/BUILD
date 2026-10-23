@@ -358,6 +358,25 @@ selects.config_setting_group(
 )
 
 bool_flag(
+    name = "disable_engine_advanced",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "engine_advanced_impl_disabled_by_flag",
+    flag_values = {":disable_engine_advanced": "true"},
+)
+
+selects.config_setting_group(
+    name = "disable_engine_advanced_impl",
+    match_any = [
+        ":engine_advanced_impl_disabled_by_flag",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
     name = "enable_diffusion_executor",
     build_setting_default = False,
     visibility = ["//visibility:public"],
