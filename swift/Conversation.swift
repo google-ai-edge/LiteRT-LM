@@ -90,6 +90,29 @@ public final class Conversation: Sendable {
     }
   }
 
+  /// Clones the conversation, copying its state so the new conversation can be used
+  /// independently.
+  ///
+  /// - Returns: A new `Conversation` instance with the same message history, KV cache state, and
+  ///   configuration.
+  /// - Throws: A `LiteRTLMError` if the conversation is not alive or cloning fails.
+  public func clone() throws -> Conversation {
+    let handle = try checkIsAlive()
+    let clonedHandle = try LiteRTLMError.create(
+      "litert_lm_conversation_clone", { .conversation(.invalidResponse($0)) }
+    ) { out in
+      litert_lm_conversation_clone(handle, out)
+    }
+    return Conversation(
+      handle: clonedHandle,
+      toolManager: self.toolManager,
+      automaticToolCalling: self.automaticToolCalling,
+      engine: self.engine,
+      enableResponseFormat: self.enableResponseFormat,
+      visualTokenBudget: self.visualTokenBudget
+    )
+  }
+
   private func shouldApplyResponseFormat(
     _ responseFormat: ResponseFormat?,
     forMessageDict messageDict: [String: Any]

@@ -552,4 +552,49 @@ class ConversationTests: XCTestCase {
     // and then releases localEngine, triggering Engine.deinit, setting handle = nil before litert_lm_engine_delete without crashing.
     localConversation = nil
   }
+
+  func testCloneConversationSucceeds() async throws {
+    let template = """
+      {{ bos_token }}{% for message in messages %}{{ message.content[0].text }}{% endfor %}
+      """
+    let config = ConversationConfig(
+      samplerConfig: try SamplerConfig(topK: 1, topP: 1.0, temperature: 0.0, seed: 42),
+      enableResponseFormat: true,
+      visualTokenBudget: 10,
+      chatTemplate: template
+    )
+    let conversation = try await self.engine.createConversation(with: config)
+    XCTAssertTrue(conversation.isAlive)
+
+    let firstResponse = try await conversation.sendMessage(Message("Hello"), maxOutputTokens: 2)
+    XCTAssertFalse(firstResponse.contents.isEmpty)
+    let tokenCountAfterFirst = try conversation.getTokenCount()
+    XCTAssertGreaterThan(tokenCountAfterFirst, 0)
+
+    let cloned = try conversation.clone()
+    XCTAssertTrue(cloned.isAlive)
+    XCTAssertEqual(try cloned.getTokenCount(), tokenCountAfterFirst)
+    XCTAssertEqual(
+      try cloned.renderMessageIntoString(Message("world", role: .user)),
+      try conversation.renderMessageIntoString(Message("world", role: .user))
+    )
+
+    let origSecond = try await conversation.sendMessage(Message("world"), maxOutputTokens: 2)
+    let clonedSecond = try await cloned.sendMessage(Message("world"), maxOutputTokens: 2)
+    XCTAssertEqual(origSecond.toString, clonedSecond.toString)
+  }
+
+  func testCloneConversationWorksAfterOriginalDeallocated() async throws {
+    var original: Conversation? = try await self.engine.createConversation()
+    XCTAssertTrue(original?.isAlive == true)
+
+    _ = try await original!.sendMessage(Message("Hello"), maxOutputTokens: 2)
+    let cloned = try original!.clone()
+    XCTAssertTrue(cloned.isAlive)
+
+    original = nil
+
+    let response = try await cloned.sendMessage(Message("world"), maxOutputTokens: 2)
+    XCTAssertFalse(response.contents.isEmpty)
+  }
 }
