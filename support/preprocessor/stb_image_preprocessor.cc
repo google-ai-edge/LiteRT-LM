@@ -239,6 +239,12 @@ absl::StatusOr<InputImage> StbImagePreprocessor::Preprocess(
     return processed_image;
   }
 
+  if (parameter.IsDryRun()) {
+    ABSL_ASSIGN_OR_RETURN(ImageSize resized_size,
+                          GetResizedImageSize(input_image, parameter));
+    return CreateDryRunImage(input_image, resized_size, parameter);
+  }
+
   ABSL_ASSIGN_OR_RETURN(absl::string_view input_image_bytes,
                         input_image.GetRawImageBytes());
 
@@ -341,6 +347,33 @@ absl::StatusOr<DecodedImage> StbImagePreprocessor::Decode(
       decoded_image,
       decoded_image + static_cast<size_t>(width) * height * kDesiredChannels);
   return image;
+}
+
+absl::StatusOr<ImageSize> StbImagePreprocessor::GetResizedImageSize(
+    const InputImage& input_image,
+    const ImagePreprocessParameter& parameter) const {
+  if (input_image.IsTensorBuffer() || input_image.IsTensorBufferMap()) {
+    return absl::UnimplementedError(
+        "Getting the resized image size of a preprocessed image is not "
+        "supported.");
+  }
+  ABSL_ASSIGN_OR_RETURN(absl::string_view input_image_bytes,
+                        input_image.GetRawImageBytes());
+  int original_width = 0;
+  int original_height = 0;
+  int original_channels = 0;
+  if (stbi_info_from_memory(
+          reinterpret_cast<const stbi_uc*>(input_image_bytes.data()),
+          static_cast<int>(input_image_bytes.size()), &original_width,
+          &original_height, &original_channels) == 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to read image header. Reason: ", stbi_failure_reason()));
+  }
+
+  // Mirrors the sizing in PreprocessDecodedPixels(): a patchify config resizes
+  // the image to fit the patch limit while preserving its aspect ratio,
+  // otherwise it is resized to the fixed target dimensions.
+  return ComputeResizedImageSize(original_width, original_height, parameter);
 }
 
 }  // namespace litert::support

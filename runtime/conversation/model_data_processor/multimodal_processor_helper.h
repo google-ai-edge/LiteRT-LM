@@ -77,6 +77,11 @@ struct MultimodalPromptProcessingConfig {
 //   config: The configuration for multimodal prompt processing.
 //   image_params: The parameters for image preprocessing.
 //   visual_token_budget: Optional budget for maximum visual tokens.
+//   dry_run: Whether to only dry run the media preprocessing (see
+//     ImagePreprocessParameter::SetDryRun() and
+//     AudioPreprocessor::PreprocessDryRun()). The resulting InputData carries
+//     enough information to count tokens (see CalculateInputDataTokens()), but
+//     must not be fed to the model.
 //
 // Returns:
 //   A vector of InputData objects representing the preprocessed prompt.
@@ -87,7 +92,8 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
     AudioPreprocessor* audio_preprocessor,
     const MultimodalPromptProcessingConfig& config,
     std::optional<ImagePreprocessParameter> image_params = std::nullopt,
-    std::optional<int> visual_token_budget = std::nullopt);
+    std::optional<int> visual_token_budget = std::nullopt,
+    bool dry_run = false);
 
 }  // namespace litert::lm
 

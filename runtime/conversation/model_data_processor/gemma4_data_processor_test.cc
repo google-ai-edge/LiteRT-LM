@@ -31,6 +31,7 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/test_utils.h"
@@ -186,6 +187,90 @@ TEST_P(Gemma4DataProcessorImageTest, ToInputDataVectorTextAndImage) {
                 ElementsAre(HasInputText(&expected_text1), HasInputImage(2700),
                             HasInputImageEnd(), HasInputText(&expected_text2)));
   }
+}
+
+// Returns the dimensions of the "positions_xy" tensor of the image in
+// `input_data`.
+std::vector<int> GetImagePositionsDimensions(const InputData& input_data) {
+  auto tensor_map =
+      std::get<InputImage>(input_data).GetPreprocessedImageTensorMap();
+  if (!tensor_map.ok()) {
+    ADD_FAILURE() << tensor_map.status();
+    return {};
+  }
+  auto tensor_type = (*tensor_map)->at("positions_xy").TensorType();
+  if (!tensor_type.HasValue()) {
+    ADD_FAILURE() << tensor_type.Error().Message();
+    return {};
+  }
+  const auto& dimensions = tensor_type.Value().Layout().Dimensions();
+  return std::vector<int>(dimensions.begin(), dimensions.end());
+}
+
+TEST_P(Gemma4DataProcessorImageTest, DryRunMatchesPatchGrid) {
+  ASSERT_OK_AND_ASSIGN(auto processor, Gemma4DataProcessor::Create(
+                                           /*Gemma4DataProcessorConfig=*/
+                                           {.max_num_patches = 2520}));
+  const std::string rendered_template_prompt =
+      "<|turn>user\nHere is an image of apples <|image|><turn|>";
+  const nlohmann::ordered_json messages = json::array(
+      {{{"role", "user"},
+        {"content",
+         {{{"type", "text"}, {"text", "Here is an image of apples "}},
+          {{"type", "image"}, {"path", GetImageTestdataPath(GetParam())}}}}}});
+
+  for (const Gemma4DataProcessorArguments& args :
+       {Gemma4DataProcessorArguments{},
+        Gemma4DataProcessorArguments{.visual_token_budget = 100}}) {
+    ASSERT_OK_AND_ASSIGN(
+        const std::vector<InputData> full,
+        processor->ToInputDataVector(rendered_template_prompt, messages, args));
+    ASSERT_OK_AND_ASSIGN(const DataProcessorArguments dry_run_args,
+                         processor->WithDryRun(args));
+    ASSERT_OK_AND_ASSIGN(const std::vector<InputData> dry_run,
+                         processor->ToInputDataVector(rendered_template_prompt,
+                                                      messages, dry_run_args));
+
+    InputText expected_text1(
+        "<|turn>user\nHere is an image of apples <|image>");
+    InputText expected_text2("<turn|>");
+    EXPECT_THAT(dry_run,
+                ElementsAre(HasInputText(&expected_text1), testing::_,
+                            HasInputImageEnd(), HasInputText(&expected_text2)));
+    ASSERT_EQ(full.size(), dry_run.size());
+    // Only the patch positions are computed in a dry run, with the same patch
+    // grid.
+    ASSERT_OK_AND_ASSIGN(
+        const auto* dry_run_map,
+        std::get<InputImage>(dry_run[1]).GetPreprocessedImageTensorMap());
+    EXPECT_FALSE(dry_run_map->contains("images"));
+    EXPECT_EQ(GetImagePositionsDimensions(dry_run[1]),
+              GetImagePositionsDimensions(full[1]));
+  }
+}
+
+TEST_F(Gemma4DataProcessorTest, WithDryRun) {
+  ASSERT_OK_AND_ASSIGN(auto processor, Gemma4DataProcessor::Create());
+
+  // Empty arguments are treated as default Gemma4DataProcessorArguments.
+  ASSERT_OK_AND_ASSIGN(DataProcessorArguments args,
+                       processor->WithDryRun(std::monostate{}));
+  ASSERT_TRUE(std::holds_alternative<Gemma4DataProcessorArguments>(args));
+  EXPECT_TRUE(std::get<Gemma4DataProcessorArguments>(args).dry_run);
+  EXPECT_EQ(std::get<Gemma4DataProcessorArguments>(args).visual_token_budget,
+            std::nullopt);
+
+  // Other arguments are preserved.
+  ASSERT_OK_AND_ASSIGN(args, processor->WithDryRun(Gemma4DataProcessorArguments{
+                                 .visual_token_budget = 100}));
+  ASSERT_TRUE(std::holds_alternative<Gemma4DataProcessorArguments>(args));
+  EXPECT_TRUE(std::get<Gemma4DataProcessorArguments>(args).dry_run);
+  EXPECT_EQ(std::get<Gemma4DataProcessorArguments>(args).visual_token_budget,
+            100);
+
+  // Arguments of another model are rejected, as in ToInputDataVector().
+  EXPECT_THAT(processor->WithDryRun(Gemma3DataProcessorArguments{}),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(Gemma4DataProcessorTest, ToMessage) {

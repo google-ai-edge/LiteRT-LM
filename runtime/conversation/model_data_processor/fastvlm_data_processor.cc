@@ -15,6 +15,7 @@
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,7 +67,8 @@ FastVlmDataProcessor::ToInputDataVectorImpl(
       {1, config_.image_tensor_height, config_.image_tensor_width, 3}));
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
-      /*audio_preprocessor=*/nullptr, multi_config, image_preprocess_parameter);
+      /*audio_preprocessor=*/nullptr, multi_config, image_preprocess_parameter,
+      /*visual_token_budget=*/std::nullopt, args.dry_run);
 }
 
 }  // namespace litert::lm

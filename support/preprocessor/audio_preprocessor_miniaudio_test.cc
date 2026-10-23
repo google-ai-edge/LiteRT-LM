@@ -25,6 +25,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -35,7 +36,6 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "support/preprocessor/audio_preprocessor.h"
@@ -95,7 +95,7 @@ absl::StatusOr<std::string> GetContents(const std::string& path) {
 }
 
 absl::StatusOr<std::vector<float>> GetDecodedAudioData() {
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto decoded_audio_data,
       GetContents(absl::StrCat(::testing::SrcDir(), "/", kDecodedAudioPath)));
   std::vector<float> decoded_audio_vector(
@@ -752,6 +752,100 @@ TEST(AudioPreprocessorMiniAudioTest, InvalidFrameLength) {
   config.SetFrameLength(0);
   EXPECT_THAT(AudioPreprocessorMiniAudio::Create(config),
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(AudioPreprocessorMiniAudioTest,
+     GetPreprocessedAudioDimensionsMatchesPreprocess) {
+  ASSERT_OK_AND_ASSIGN(std::string raw_audio_data, GetRawAudioData());
+  ASSERT_OK_AND_ASSIGN(std::vector<float> pcm_frames, GetDecodedAudioData());
+
+  for (AudioPreprocessorConfig config :
+       {AudioPreprocessorConfig::CreateDefaultUsmConfig(),
+        AudioPreprocessorConfig::CreateDefaultGemma4Config()}) {
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<AudioPreprocessorMiniAudio> preprocessor,
+        AudioPreprocessorMiniAudio::Create(config));
+    std::vector<InputAudio> inputs;
+    inputs.emplace_back(raw_audio_data);
+    inputs.emplace_back(pcm_frames);
+    inputs.emplace_back(std::vector<float>(1000, 0.25f));
+    for (const InputAudio& input : inputs) {
+      preprocessor->Reset();
+      ASSERT_OK_AND_ASSIGN(Dimensions dimensions,
+                           preprocessor->GetPreprocessedAudioDimensions(input));
+      ASSERT_OK_AND_ASSIGN(InputAudio preprocessed,
+                           preprocessor->Preprocess(input));
+      ASSERT_OK_AND_ASSIGN(const TensorBuffer* tensor,
+                           preprocessed.GetPreprocessedAudioTensor());
+      auto tensor_type = tensor->TensorType();
+      ASSERT_TRUE(tensor_type.HasValue());
+      EXPECT_EQ(dimensions, tensor_type->Layout().Dimensions());
+    }
+  }
+}
+
+TEST(AudioPreprocessorMiniAudioTest,
+     GetPreprocessedAudioDimensionsWithSkipMelSpectrogramExtraction) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  config.SetSkipMelSpectrogramExtraction(true);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<AudioPreprocessorMiniAudio> preprocessor,
+                       AudioPreprocessorMiniAudio::Create(config));
+  ASSERT_OK_AND_ASSIGN(std::string raw_audio_data, GetRawAudioData());
+
+  ASSERT_OK_AND_ASSIGN(
+      Dimensions dimensions,
+      preprocessor->GetPreprocessedAudioDimensions(InputAudio(raw_audio_data)));
+  ASSERT_OK_AND_ASSIGN(InputAudio preprocessed,
+                       preprocessor->Preprocess(InputAudio(raw_audio_data)));
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* tensor,
+                       preprocessed.GetPreprocessedAudioTensor());
+  auto tensor_type = tensor->TensorType();
+  ASSERT_TRUE(tensor_type.HasValue());
+  EXPECT_EQ(dimensions, tensor_type->Layout().Dimensions());
+
+  // Too few samples for a single frame when buffering the last frame fails the
+  // same way as Preprocess().
+  config.SetBufferLastFrame(true);
+  ASSERT_OK_AND_ASSIGN(preprocessor,
+                       AudioPreprocessorMiniAudio::Create(config));
+  EXPECT_THAT(preprocessor->GetPreprocessedAudioDimensions(
+                  InputAudio(std::vector<float>(10, 0.1f))),
+              testing::status::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(AudioPreprocessorMiniAudioTest,
+     GetPreprocessedAudioDimensionsInvalidAudio) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<AudioPreprocessorMiniAudio> preprocessor,
+                       AudioPreprocessorMiniAudio::Create(
+                           AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+  EXPECT_THAT(preprocessor->GetPreprocessedAudioDimensions(
+                  InputAudio(std::string("not an audio file"))),
+              testing::status::StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(AudioPreprocessorMiniAudioTest, PreprocessDryRunMatchesPreprocessShape) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<AudioPreprocessorMiniAudio> preprocessor,
+                       AudioPreprocessorMiniAudio::Create(
+                           AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+  ASSERT_OK_AND_ASSIGN(std::string raw_audio_data, GetRawAudioData());
+
+  ASSERT_OK_AND_ASSIGN(InputAudio dry_run, preprocessor->PreprocessDryRun(
+                                               InputAudio(raw_audio_data)));
+  // The dry run does not modify the preprocessor's state, so preprocessing the
+  // same audio afterwards produces a tensor of the same shape.
+  ASSERT_OK_AND_ASSIGN(InputAudio preprocessed,
+                       preprocessor->Preprocess(InputAudio(raw_audio_data)));
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* dry_run_tensor,
+                       dry_run.GetPreprocessedAudioTensor());
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* preprocessed_tensor,
+                       preprocessed.GetPreprocessedAudioTensor());
+  auto dry_run_type = dry_run_tensor->TensorType();
+  auto preprocessed_type = preprocessed_tensor->TensorType();
+  ASSERT_TRUE(dry_run_type.HasValue());
+  ASSERT_TRUE(preprocessed_type.HasValue());
+  EXPECT_EQ(dry_run_type->Layout().Dimensions(),
+            preprocessed_type->Layout().Dimensions());
 }
 
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) &&

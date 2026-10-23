@@ -50,7 +50,6 @@
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
-#include "sentencepiece_model.pb.h"  // from @sentencepiece
 
 namespace litert::lm {
 namespace {
@@ -277,7 +276,8 @@ Gemma3DataProcessor::ToInputDataVectorImpl(
       {1, config_.image_tensor_height, config_.image_tensor_width, 3}));
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
-      audio_preprocessor_.get(), multi_config, image_preprocess_parameter);
+      audio_preprocessor_.get(), multi_config, image_preprocess_parameter,
+      /*visual_token_budget=*/std::nullopt, args.dry_run);
 }
 
 absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(

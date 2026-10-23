@@ -14,6 +14,7 @@
 
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <utility>
@@ -22,10 +23,12 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "kiss_fftr.h"  // from @kissfft
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -36,9 +39,52 @@
 #include "support/preprocessor/mel_filterbank.h"
 #include "support/util/io_types.h"
 #include "miniaudio.h"  // from @miniaudio
-#include "kiss_fftr.h"  // from @kissfft
 
 namespace litert::support {
+namespace {
+
+// Returns the number of mono PCM frames that `audio_bytes` decodes to at
+// `sample_rate_hz`, reading only the audio header/stream metadata.
+absl::StatusOr<int> GetDecodedFrameCount(absl::string_view audio_bytes,
+                                         int num_channels, int sample_rate_hz) {
+  if (num_channels != 1) {
+    return absl::InvalidArgumentError("Only mono audio is supported.");
+  }
+  ma_decoder_config decoder_config =
+      ma_decoder_config_init(ma_format_f32, num_channels, sample_rate_hz);
+  ma_decoder decoder;
+  ma_result decode_result = ma_decoder_init_memory(
+      audio_bytes.data(), audio_bytes.size(), &decoder_config, &decoder);
+  if (decode_result != ma_result::MA_SUCCESS) {
+    ma_decoder_uninit(&decoder);
+    return absl::InternalError(absl::StrCat(
+        "Failed to initialize miniaudio decoder, error code: ", decode_result));
+  }
+
+  ma_uint64 frame_count = 0;
+  ma_result get_count_result =
+      ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
+  if (get_count_result == MA_SUCCESS && decoder.converter.hasResampler &&
+      decoder.pBackend != nullptr) {
+    ma_uint64 internal_frame_count = 0;
+    ma_uint64 expected_frame_count = 0;
+    if (ma_data_source_get_length_in_pcm_frames(
+            decoder.pBackend, &internal_frame_count) == MA_SUCCESS &&
+        ma_data_converter_get_expected_output_frame_count(
+            &decoder.converter, internal_frame_count, &expected_frame_count) ==
+            MA_SUCCESS) {
+      frame_count = std::min(frame_count, expected_frame_count);
+    }
+  }
+  ma_decoder_uninit(&decoder);
+  if (get_count_result != MA_SUCCESS) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to get frame count, error code: ", get_count_result));
+  }
+  return static_cast<int>(frame_count);
+}
+
+}  // namespace
 
 absl::Status AudioPreprocessorMiniAudio::DecodeAudio(
     absl::string_view audio_bytes, int num_channels, int sample_rate_hz,
@@ -213,6 +259,36 @@ absl::StatusOr<InputAudio> AudioPreprocessorMiniAudio::Preprocess(
         mel_spectrograms_tensor.Write<float>(absl::MakeSpan(flat_frames)));
     return InputAudio(std::move(mel_spectrograms_tensor));
   }
+}
+
+absl::StatusOr<Dimensions>
+AudioPreprocessorMiniAudio::GetPreprocessedAudioDimensions(
+    const InputAudio& input_audio) const {
+  if (input_audio.IsTensorBuffer()) {
+    ABSL_ASSIGN_OR_RETURN(const TensorBuffer* audio_tensor,
+                          input_audio.GetPreprocessedAudioTensor());
+    LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type,
+                            audio_tensor->TensorType());
+    const auto& dimensions = tensor_type.Layout().Dimensions();
+    return Dimensions(dimensions.begin(), dimensions.end());
+  }
+
+  int num_samples = 0;
+  if (input_audio.IsPcmFrames()) {
+    ABSL_ASSIGN_OR_RETURN(absl::Span<const float> pcm_frames,
+                          input_audio.GetPcmFrames());
+    num_samples = static_cast<int>(pcm_frames.size());
+  } else {
+    ABSL_ASSIGN_OR_RETURN(absl::string_view raw_audio_bytes,
+                          input_audio.GetRawAudioBytes());
+    ABSL_ASSIGN_OR_RETURN(
+        num_samples,
+        GetDecodedFrameCount(raw_audio_bytes, config_.GetNumChannels(),
+                             config_.GetSampleRateHz()));
+  }
+
+  return GetPreprocessedAudioDimensionsForNumSamples(
+      config_, num_samples, input_queue_.size(), samples_to_next_step_);
 }
 
 }  // namespace litert::support

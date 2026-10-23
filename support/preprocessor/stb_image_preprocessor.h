@@ -48,6 +48,12 @@ class StbImagePreprocessor : public ImagePreprocessor {
   // Decodes the raw image bytes into 8-bit RGB pixels using stb_image.
   absl::StatusOr<DecodedImage> Decode(
       absl::string_view image_bytes) const override;
+
+  // Returns the size Preprocess() resizes the raw image to, reading only the
+  // image header via stb_image.
+  absl::StatusOr<ImageSize> GetResizedImageSize(
+      const InputImage& input_image,
+      const ImagePreprocessParameter& parameter) const override;
 };
 
 }  // namespace litert::support

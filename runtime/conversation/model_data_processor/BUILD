@@ -141,6 +141,7 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components/tool_use:parser_utils_lite",
         "//runtime/engine:io_types",
         "//runtime/util:test_utils",

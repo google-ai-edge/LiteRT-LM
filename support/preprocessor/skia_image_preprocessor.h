@@ -29,6 +29,12 @@ class SkiaImagePreprocessor : public ImagePreprocessor {
   absl::StatusOr<InputImage> Preprocess(
       const InputImage& input_image,
       const ImagePreprocessParameter& parameter) override;
+
+  // Returns the size Preprocess() resizes the raw image to, reading only the
+  // image header (including any orientation metadata) via SkCodec.
+  absl::StatusOr<ImageSize> GetResizedImageSize(
+      const InputImage& input_image,
+      const ImagePreprocessParameter& parameter) const override;
 };
 
 }  // namespace litert::support

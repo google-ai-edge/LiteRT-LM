@@ -730,6 +730,84 @@ TEST(AudioPreprocessorPffftTest, CopyAndResetOperations) {
   ASSERT_OK(assigned_preprocessor.Preprocess(InputAudio(pcm_frames)));
 }
 
+// Returns the dimensions of the preprocessed audio tensor in `audio`.
+std::vector<int> GetAudioTensorDimensions(const InputAudio& audio) {
+  auto tensor = audio.GetPreprocessedAudioTensor();
+  if (!tensor.ok()) {
+    ADD_FAILURE() << tensor.status();
+    return {};
+  }
+  auto tensor_type = (*tensor)->TensorType();
+  EXPECT_TRUE(tensor_type.HasValue());
+  const auto& dimensions = tensor_type.Value().Layout().Dimensions();
+  return std::vector<int>(dimensions.begin(), dimensions.end());
+}
+
+TEST(AudioPreprocessorPffftTest,
+     GetPreprocessedAudioDimensionsMatchesPreprocess) {
+  for (const AudioPreprocessorConfig& config :
+       {AudioPreprocessorConfig::CreateDefaultUsmConfig(),
+        AudioPreprocessorConfig::CreateDefaultGemma4Config()}) {
+    ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                         AudioPreprocessorPffft::Create(config));
+    ASSERT_OK_AND_ASSIGN(std::string raw_audio_data, GetRawAudioData());
+    ASSERT_OK_AND_ASSIGN(std::vector<float> pcm_frames, GetDecodedAudioData());
+    std::vector<InputAudio> inputs;
+    inputs.emplace_back(raw_audio_data);
+    inputs.emplace_back(pcm_frames);
+    inputs.emplace_back(std::vector<float>(1000, 0.25f));
+    for (const InputAudio& input : inputs) {
+      ASSERT_OK_AND_ASSIGN(Dimensions dimensions,
+                           preprocessor->GetPreprocessedAudioDimensions(input));
+      ASSERT_OK_AND_ASSIGN(InputAudio preprocessed,
+                           preprocessor->Preprocess(input));
+      preprocessor->Reset();
+      EXPECT_EQ(std::vector<int>(dimensions.begin(), dimensions.end()),
+                GetAudioTensorDimensions(preprocessed));
+    }
+  }
+}
+
+TEST(AudioPreprocessorPffftTest,
+     GetPreprocessedAudioDimensionsWithSkipMelSpectrogramExtraction) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  config.SetSkipMelSpectrogramExtraction(true);
+  ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                       AudioPreprocessorPffft::Create(config));
+  InputAudio input(std::vector<float>(1000, 0.25f));
+  ASSERT_OK_AND_ASSIGN(Dimensions dimensions,
+                       preprocessor->GetPreprocessedAudioDimensions(input));
+  ASSERT_OK_AND_ASSIGN(InputAudio preprocessed,
+                       preprocessor->Preprocess(input));
+  EXPECT_EQ(std::vector<int>(dimensions.begin(), dimensions.end()),
+            GetAudioTensorDimensions(preprocessed));
+}
+
+TEST(AudioPreprocessorPffftTest,
+     GetPreprocessedAudioDimensionsDoesNotChangeState) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                       AudioPreprocessorPffft::Create(config));
+  InputAudio input(std::vector<float>(1000, 0.25f));
+  ASSERT_OK_AND_ASSIGN(Dimensions first,
+                       preprocessor->GetPreprocessedAudioDimensions(input));
+  ASSERT_OK_AND_ASSIGN(Dimensions second,
+                       preprocessor->GetPreprocessedAudioDimensions(input));
+  EXPECT_EQ(first, second);
+}
+
+TEST(AudioPreprocessorPffftTest, GetPreprocessedAudioDimensionsInvalidWav) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                       AudioPreprocessorPffft::Create(config));
+  EXPECT_THAT(preprocessor->GetPreprocessedAudioDimensions(
+                  InputAudio(std::string("\x01\x02\x03\x04"))),
+              testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) &&
         // !defined(__NT__) && !defined(_WIN64)
 

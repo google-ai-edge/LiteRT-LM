@@ -142,7 +142,8 @@ GenericDataProcessor::ToInputDataVectorImpl(
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
       audio_preprocessor_.get(), config_.multimodal->processing_config,
-      config_.multimodal->image_preprocess_parameter, args.visual_token_budget);
+      config_.multimodal->image_preprocess_parameter, args.visual_token_budget,
+      args.dry_run);
 }
 
 absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(

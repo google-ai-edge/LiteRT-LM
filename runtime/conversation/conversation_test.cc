@@ -603,6 +603,82 @@ TEST_P(ConversationTest, CountTokensWithPreface) {
   }
 }
 
+TEST_P(ConversationTest, CountTokensWithImage) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  // CountTokens() does not prefill the session.
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .Times(0);
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  constexpr int kNumTokensPerImage = 256;
+  EXPECT_CALL(*mock_engine, GetVisionExecutorProperties())
+      .WillRepeatedly(Return(VisionExecutorProperties{.num_tokens_per_image =
+                                                          kNumTokensPerImage}));
+
+  ASSERT_OK_AND_ASSIGN(auto conversation_config,
+                       ConversationConfig::Builder()
+                           .SetSessionConfig(session_config_)
+                           .SetOverwritePromptTemplate(PromptTemplate(
+                               ReadFile(GetTestdataPath(kGemma3TemplatePath))))
+                           .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  Message text_message = {
+      {"role", "user"},
+      {"content", {{{"type", "text"}, {"text", "What is this?"}}}}};
+  Message image_message = {
+      {"role", "user"},
+      {"content",
+       {{{"type", "text"}, {"text", "What is this?"}},
+        {{"type", "image"}, {"path", GetTestdataPath(kTestImageFilePath)}}}}};
+  ASSERT_OK_AND_ASSIGN(int text_tokens,
+                       conversation->CountTokens(text_message));
+  ASSERT_OK_AND_ASSIGN(int image_tokens,
+                       conversation->CountTokens(image_message));
+  // The image consumes kNumTokensPerImage tokens, plus a few tokens for the
+  // delimiters around it.
+  EXPECT_GE(image_tokens - text_tokens, kNumTokensPerImage);
+  EXPECT_LT(image_tokens - text_tokens, kNumTokensPerImage + 16);
+  EXPECT_TRUE(conversation->GetHistory().empty());
+
+  // An invalid image fails to be counted, as it would fail to be sent.
+  Message invalid_image_message = {
+      {"role", "user"},
+      {"content",
+       {{{"type", "text"}, {"text", "What is this?"}},
+        {{"type", "image"}, {"path", GetTestdataPath(kTestTokenizerPath)}}}}};
+  EXPECT_THAT(conversation->CountTokens(invalid_image_message),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_P(ConversationTest,
+       CountTokensVisualTokenBudgetExceedingEngineSettingFails) {
+  ASSERT_OK(engine_settings_);
+  engine_settings_->SetMaxVisionTokensPerImage(200);
+  auto mock_session = CreateMockSession();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate("{{ prompt }}"))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  OptionalArgs optional_args;
+  optional_args.args = Gemma4DataProcessorArguments{.visual_token_budget = 300};
+
+  EXPECT_THAT(
+      conversation->CountTokens(user_message, optional_args),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Visual token budget (300) cannot be larger than the "
+                         "engine's max vision tokens per image (200).")));
+}
+
 TEST_P(ConversationTest, GetTokenCount) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
