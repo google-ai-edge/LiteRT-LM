@@ -515,7 +515,7 @@ def _setup_lib_signatures(lib):
   )
   lib.litert_lm_conversation_config_set_constraint_provider.argtypes = [
       ctypes.c_void_p,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_int,
   ]
   lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache.restype = (
       ctypes.c_int

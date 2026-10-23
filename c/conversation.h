@@ -72,7 +72,10 @@ typedef enum {
 // Represents the type of constraint provider.
 //
 // Added in version 0.1.0.
+// Changed in version 1.0.0: added kLiteRtLmConstraintProviderTypeNone.
 typedef enum {
+  // No provider is set, and the conversation uses its default.
+  kLiteRtLmConstraintProviderTypeNone = 0,
   kLiteRtLmConstraintProviderTypeLlGuidance = 1,
 } LiteRtLmConstraintProviderType;
 
@@ -182,17 +185,20 @@ litert_lm_conversation_config_set_enable_constrained_decoding(
 
 // Sets the constraint provider type for this conversation config.
 // @param config The config to modify.
-// @param provider_type The constraint provider type to use, or NULL to unset.
+// @param provider_type The constraint provider type to use, or
+//   kLiteRtLmConstraintProviderTypeNone to unset it.
 // @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
-//   `config` is NULL or `*provider_type` is not a declared
+//   `config` is NULL or `provider_type` is not a declared
 //   LiteRtLmConstraintProviderType value.
 //
 // Added in version 0.1.0.
-// Changed in version 1.0.0: returns a status code instead of void.
+// Changed in version 1.0.0: returns a status code instead of void, and takes
+// the provider type by value instead of by pointer; pass
+// kLiteRtLmConstraintProviderTypeNone instead of NULL to unset it.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_conversation_config_set_constraint_provider(
     LiteRtLmConversationConfig* config,
-    const LiteRtLmConstraintProviderType* provider_type);
+    LiteRtLmConstraintProviderType provider_type);
 
 // Sets whether to filter channel content from the KV cache.
 // @param config The config to modify.

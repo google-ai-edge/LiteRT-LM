@@ -1870,14 +1870,19 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
   ConversationConfigPtr conversation_config(
       CreateConversationConfig(), &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
-  LiteRtLmConstraintProviderType provider =
-      kLiteRtLmConstraintProviderTypeLlGuidance;
-  litert_lm_conversation_config_set_constraint_provider(
-      conversation_config.get(), &provider);
-  litert_lm_conversation_config_set_constraint_provider(
-      conversation_config.get(), nullptr);
-  litert_lm_conversation_config_set_constraint_provider(
-      conversation_config.get(), &provider);
+  // Setting the provider, unsetting it with kLiteRtLmConstraintProviderTypeNone
+  // and setting it again must leave it set.
+  ASSERT_EQ(
+      litert_lm_conversation_config_set_constraint_provider(
+          conversation_config.get(), kLiteRtLmConstraintProviderTypeLlGuidance),
+      kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_conversation_config_set_constraint_provider(
+                conversation_config.get(), kLiteRtLmConstraintProviderTypeNone),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(
+      litert_lm_conversation_config_set_constraint_provider(
+          conversation_config.get(), kLiteRtLmConstraintProviderTypeLlGuidance),
+      kLiteRtLmStatusOk);
   litert_lm_conversation_config_set_enable_constrained_decoding(
       conversation_config.get(), true);
 
@@ -4110,15 +4115,13 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
            }},
           {"set_constraint_provider",
            [](C* c) {
-             const LiteRtLmConstraintProviderType provider =
-                 kLiteRtLmConstraintProviderTypeLlGuidance;
              return litert_lm_conversation_config_set_constraint_provider(
-                 c, &provider);
+                 c, kLiteRtLmConstraintProviderTypeLlGuidance);
            }},
           {"set_constraint_provider_unset",
            [](C* c) {
              return litert_lm_conversation_config_set_constraint_provider(
-                 c, nullptr);
+                 c, kLiteRtLmConstraintProviderTypeNone);
            }},
           {"set_filter_channel_content_from_kv_cache",
            [](C* c) {
@@ -4204,18 +4207,10 @@ TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
 }
 
 TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
-  ConversationConfigPtr config(CreateConversationConfig(),
-                               &litert_lm_conversation_config_delete);
-  ASSERT_NE(config, nullptr);
-  litert_lm_clear_last_error();
-  // 0 is within the enum's value range but is not a declared enumerator.
-  const auto provider = static_cast<LiteRtLmConstraintProviderType>(0);
-  EXPECT_EQ(litert_lm_conversation_config_set_constraint_provider(config.get(),
-                                                                  &provider),
-            kLiteRtLmStatusInvalidArgument);
-  EXPECT_THAT(litert_lm_get_last_error_message(),
-              testing::HasSubstr("Unknown LiteRtLmConstraintProviderType"));
-
+  // LiteRtLmConstraintProviderType declares every value in its range (0 and 1),
+  // so C++ cannot pass it an undeclared value without undefined behavior.
+  // test_constraint_provider_rejects_unknown_value in python/litert_lm/
+  // engine_test.py passes one through the C ABI instead.
   OptionalArgsPtr args(CreateConversationOptionalArgs(),
                        &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(args, nullptr);
@@ -4226,6 +4221,25 @@ TEST(EngineCStatusTest, ConversationSettersRejectUnknownEnums) {
             kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Unknown LiteRtLmConstraintType"));
+}
+
+TEST(EngineCStatusTest, ConstraintProviderNoneUnsetsProvider) {
+  ConversationConfigPtr config(CreateConversationConfig(),
+                               &litert_lm_conversation_config_delete);
+  ASSERT_NE(config, nullptr);
+  EXPECT_FALSE(config->constraint_provider_type.has_value());
+
+  ASSERT_EQ(litert_lm_conversation_config_set_constraint_provider(
+                config.get(), kLiteRtLmConstraintProviderTypeLlGuidance),
+            kLiteRtLmStatusOk);
+  ASSERT_TRUE(config->constraint_provider_type.has_value());
+  EXPECT_EQ(*config->constraint_provider_type,
+            kLiteRtLmConstraintProviderTypeLlGuidance);
+
+  ASSERT_EQ(litert_lm_conversation_config_set_constraint_provider(
+                config.get(), kLiteRtLmConstraintProviderTypeNone),
+            kLiteRtLmStatusOk);
+  EXPECT_FALSE(config->constraint_provider_type.has_value());
 }
 
 TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {

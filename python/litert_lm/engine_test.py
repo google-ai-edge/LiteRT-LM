@@ -99,6 +99,47 @@ class EngineTest(LiteRtLmTestBase):
       # enumerator. Values outside the range are undefined behavior in C++.
       litert_lm._ffi.set_min_log_severity(6)  # pyrefly: ignore[bad-argument-type]
 
+  def test_constraint_provider_is_passed_by_value(self):
+    lib = litert_lm._ffi._get_lib()
+    config = litert_lm._ffi.create_checked(
+        lib, "litert_lm_conversation_config_create"
+    )
+    try:
+      for provider in litert_lm.LiteRtLmConstraintProviderType:
+        litert_lm._ffi.call_checked(
+            lib,
+            "litert_lm_conversation_config_set_constraint_provider",
+            config,
+            provider.value,
+        )
+    finally:
+      lib.litert_lm_conversation_config_delete(config)
+
+  def test_constraint_provider_rejects_unknown_value(self):
+    lib = litert_lm._ffi._get_lib()
+    config = litert_lm._ffi.create_checked(
+        lib, "litert_lm_conversation_config_create"
+    )
+    try:
+      # A C caller can pass any int, so the library must reject values that
+      # are not declared enumerators. C++ tests can't pass them without
+      # undefined behavior, because every value in the enum's range is
+      # declared.
+      with self.assertRaisesRegex(
+          RuntimeError,
+          r"litert_lm_conversation_config_set_constraint_provider failed with"
+          r" status INVALID_ARGUMENT \(3\): Unknown"
+          r" LiteRtLmConstraintProviderType",
+      ):
+        litert_lm._ffi.call_checked(
+            lib,
+            "litert_lm_conversation_config_set_constraint_provider",
+            config,
+            2,
+        )
+    finally:
+      lib.litert_lm_conversation_config_delete(config)
+
   def test_check_status_unknown_code(self):
     lib = litert_lm._ffi._get_lib()
     litert_lm._ffi.check_status(lib, "some_function", 0)
@@ -1463,6 +1504,11 @@ class EngineTest(LiteRtLmTestBase):
       ):
         self.assertIsNotNone(conv)
         mock_set_constraint_provider.assert_called_once()
+        provider_args, _ = mock_set_constraint_provider.call_args
+        self.assertEqual(
+            provider_args[1],
+            litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE.value,
+        )
         mock_set_enable_constrained.assert_called_once()
         args, _ = mock_set_enable_constrained.call_args
         self.assertTrue(args[1])

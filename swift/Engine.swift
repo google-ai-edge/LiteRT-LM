@@ -328,10 +328,9 @@ public actor Engine {
         "litert_lm_conversation_config_set_prompt_template", conversationConfigError)
     }
     if conversationConfig.enableResponseFormat {
-      var providerType = kLiteRtLmConstraintProviderTypeLlGuidance
       try LiteRTLMError.check(
         litert_lm_conversation_config_set_constraint_provider(
-          cConversationConfig, &providerType),
+          cConversationConfig, kLiteRtLmConstraintProviderTypeLlGuidance),
         "litert_lm_conversation_config_set_constraint_provider", conversationConfigError)
       try LiteRTLMError.check(
         litert_lm_conversation_config_set_enable_constrained_decoding(cConversationConfig, true),

@@ -398,9 +398,7 @@ class Engine(interfaces.AbstractEngine):
               self._lib,
               "litert_lm_conversation_config_set_constraint_provider",
               conv_config,
-              ctypes.byref(
-                  ctypes.c_int(constrained_decoding_config.provider.value)
-              ),
+              constrained_decoding_config.provider.value,
           )
 
       if filter_channel_content_from_kv_cache is not None:

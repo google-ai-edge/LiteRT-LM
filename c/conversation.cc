@@ -14,6 +14,7 @@
 
 #include "c/conversation.h"
 
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -148,12 +149,15 @@ bool IsValidConstraintType(LiteRtLmConstraintType type) {
   return false;
 }
 
-bool IsValidConstraintProviderType(LiteRtLmConstraintProviderType type) {
-  switch (type) {
-    case kLiteRtLmConstraintProviderTypeLlGuidance:
-      return true;
-  }
-  return false;
+// C callers can pass any int as `type`. Reads its raw value instead of loading
+// it as the enum: loading a value outside the enum's range is undefined
+// behavior in C++, and builds that check enum loads trap on it.
+bool IsValidConstraintProviderType(const LiteRtLmConstraintProviderType& type) {
+  static_assert(sizeof(type) == sizeof(int));
+  int value;
+  std::memcpy(&value, &type, sizeof(value));
+  return value == kLiteRtLmConstraintProviderTypeNone ||
+         value == kLiteRtLmConstraintProviderTypeLlGuidance;
 }
 
 }  // namespace
@@ -234,18 +238,18 @@ litert_lm_conversation_config_set_enable_constrained_decoding(
 
 LiteRtLmStatusCode litert_lm_conversation_config_set_constraint_provider(
     LiteRtLmConversationConfig* config,
-    const LiteRtLmConstraintProviderType* provider_type) {
+    LiteRtLmConstraintProviderType provider_type) {
   LITERT_LM_C_RETURN_IF_NULL(config);
-  if (provider_type == nullptr) {
-    config->constraint_provider_type = std::nullopt;
-    return kLiteRtLmStatusOk;
-  }
-  if (!IsValidConstraintProviderType(*provider_type)) {
+  if (!IsValidConstraintProviderType(provider_type)) {
     return litert::lm::c::ReturnError(
         absl::StatusCode::kInvalidArgument,
         "Unknown LiteRtLmConstraintProviderType.");
   }
-  config->constraint_provider_type = *provider_type;
+  if (provider_type == kLiteRtLmConstraintProviderTypeNone) {
+    config->constraint_provider_type = std::nullopt;
+  } else {
+    config->constraint_provider_type = provider_type;
+  }
   return kLiteRtLmStatusOk;
 }
 
