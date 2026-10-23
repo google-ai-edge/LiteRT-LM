@@ -41,6 +41,7 @@
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -58,6 +59,24 @@
 
 namespace litert::lm {
 namespace {
+
+// Returns an InvalidArgument error if `config` holds an invalid value.
+absl::Status ValidateSpeculativeDecodingConfig(
+    const SpeculativeDecodingConfig& config) {
+  if (config.mode.has_value()) {
+    switch (*config.mode) {
+      case SpeculativeDecodingMode::kOff:
+      case SpeculativeDecodingMode::kOn:
+      case SpeculativeDecodingMode::kAdaptive:
+        break;
+      default:
+        return absl::InvalidArgumentError(
+            absl::StrCat("Invalid speculative decoding mode: ",
+                         static_cast<int>(*config.mode)));
+    }
+  }
+  return absl::OkStatus();
+}
 
 // Margin for the default prefill batch size assuming the tokens to indicate the
 // start and end of the input prompt.
@@ -569,6 +588,9 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
         ValidateCacheDir(audio_executor_settings_->GetCacheDir()));
   }
 
+  ABSL_RETURN_IF_ERROR(ValidateSpeculativeDecodingConfig(
+      main_executor_settings_.GetSpeculativeDecodingConfig()));
+
   ABSL_VLOG(5) << "The llm metadata: " << metadata.DebugString();
   ABSL_VLOG(1) << "The validated engine settings: " << *this;
   return absl::OkStatus();
@@ -583,6 +605,17 @@ EngineSettings::EngineSettings(
       vision_executor_settings_(std::move(vision_executor_settings)),
       audio_executor_settings_(std::move(audio_executor_settings)),
       benchmark_params_(benchmark_params) {}
+
+const SpeculativeDecodingConfig& EngineSettings::GetSpeculativeDecodingConfig()
+    const {
+  return main_executor_settings_.GetSpeculativeDecodingConfig();
+}
+
+void EngineSettings::SetSpeculativeDecodingConfig(
+    const SpeculativeDecodingConfig& speculative_decoding_config) {
+  main_executor_settings_.SetSpeculativeDecodingConfig(
+      speculative_decoding_config);
+}
 
 const LlmExecutorSettings& EngineSettings::GetMainExecutorSettings() const {
   return main_executor_settings_;
@@ -851,6 +884,17 @@ absl::Status SessionConfig::MaybeUpdateAndValidate(
   if (registered_traits.has_value()) {
     use_external_sampler_ = registered_traits->use_external_sampler;
   }
+
+  // Fields of the speculative decoding config left unset inherit the engine's
+  // configuration. Validation runs after the inheritance so that it also covers
+  // an engine config that was not validated yet.
+  if (!speculative_decoding_config_.mode.has_value()) {
+    speculative_decoding_config_.mode =
+        engine_settings.GetMainExecutorSettings()
+            .GetEffectiveSpeculativeDecodingMode();
+  }
+  ABSL_RETURN_IF_ERROR(
+      ValidateSpeculativeDecodingConfig(speculative_decoding_config_));
 
   ABSL_VLOG(5) << "The validated session config: " << *this;
   return absl::OkStatus();

@@ -44,9 +44,9 @@ SpeculativeDecodingController::Decide(
     bool constrained) {
   const SpeculativeDecodingMode resolved_mode = mode.value_or(default_mode_);
   switch (resolved_mode) {
-    case SpeculativeDecodingMode::kDisabled:
+    case SpeculativeDecodingMode::kOff:
       return Decision{.speculate = false};
-    case SpeculativeDecodingMode::kAlways:
+    case SpeculativeDecodingMode::kOn:
       if (!drafter_loaded) {
         ABSL_RETURN_IF_ERROR(load_drafter());
       }
@@ -66,7 +66,7 @@ SpeculativeDecodingController::DecideAdaptive(
     bool constrained) {
   if (!drafter_loaded) {
     // Adaptive mode is best effort: a model without a usable MTP drafter
-    // decodes plainly instead of failing every step (kAlways still fails).
+    // decodes plainly instead of failing every step (kOn still fails).
     if (drafter_unavailable_) {
       return Decision{.speculate = false};
     }

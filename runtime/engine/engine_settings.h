@@ -164,6 +164,23 @@ class EngineSettings {
   // Must be non-negative and not exceed the max vision tokens per image.
   void SetMinVisionTokensPerImage(int min_vision_tokens_per_image);
 
+  // Default speculative decoding (MTP) configuration for the sessions of the
+  // engine. Each session can override any field with
+  // `SessionConfig::SetSpeculativeDecodingConfig()`.
+  //
+  // `mode`:
+  // - std::nullopt (default): kOff, unless the deprecated
+  //   `AdvancedSettings::enable_speculative_decoding` is true, which means
+  //   kOn.
+  // - kOff: sessions don't speculate unless they request it.
+  // - kOn / kAdaptive: the MTP drafter is loaded when the engine is created,
+  //   and sessions use this mode unless they request another one.
+  //
+  // The settings are stored in the main executor settings.
+  const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const;
+  void SetSpeculativeDecodingConfig(
+      const SpeculativeDecodingConfig& speculative_decoding_config);
+
  private:
   explicit EngineSettings(
       LlmExecutorSettings executor_settings,
@@ -309,34 +326,34 @@ class SessionConfig {
     max_output_tokens_ = max_output_tokens;
   }
 
-  // Speculative decoding (MTP) configuration for the session.
+  // Speculative decoding (MTP) configuration for the session. Fields left
+  // unset inherit the engine's configuration
+  // (`EngineSettings::GetSpeculativeDecodingConfig()`) when the session is
+  // created; `MaybeUpdateAndValidate()` fills them in.
   //
   // `mode`:
-  // - std::nullopt (default): inherits the engine's speculative decoding
-  //   configuration. If the engine was initialized with speculative decoding,
-  //   backends that support adaptive gating behave like kAdaptive and the
-  //   others speculate on every step; otherwise, no speculation (a drafter
-  //   lazily loaded for another session does not change this).
-  // - kDisabled: never speculate, even if the engine was initialized with
-  //   speculative decoding enabled.
-  // - kAlways: speculate on every decode step.
+  // - std::nullopt (default): inherits the engine's mode (kOff by default).
+  // - kOff: never speculate, even if the engine speculates by default.
+  // - kOn: speculate on every decode step.
   // - kAdaptive: speculate only while it is measured to be faster than plain
   //   decoding. Adaptive gating is best effort:
   //   - Any decoding constraint (e.g. a constrained decoder, a repetition
   //     penalty or a thinking budget) disables the gating for that request and
-  //     speculation stays on, like kAlways, because the constraint state is
+  //     speculation stays on, like kOn, because the constraint state is
   //     not carried across plain and speculative steps.
   //   - If the model has no usable MTP drafter, the session decodes plainly
-  //     instead of failing (kAlways fails).
+  //     instead of failing (kOn fails).
   //   - The NPU executor does not support gating and speculates on every step,
-  //     like kAlways.
+  //     like kOn.
   //
   // Caveats:
-  // - Lazy loading: If the engine was not initialized with speculative
-  //   decoding (e.g. the MTP drafter was not loaded at startup), kAlways and
-  //   kAdaptive lazily load the MTP drafter on the first session request that
-  //   requires it. This may incur a one-time initialization latency and
-  //   requires that the model asset package contains MTP drafter artifacts.
+  // - Lazy loading: If the engine's mode is kOff (the MTP drafter was not
+  //   loaded at startup), kOn and kAdaptive lazily load the MTP drafter on the
+  //   first session request that requires it (CPU/GPU only). This may incur a
+  //   one-time initialization latency and requires that the model asset
+  //   package contains MTP drafter artifacts. Lazy loading is not available
+  //   on the NPU executor (the session decodes plainly) or when the engine
+  //   streams the model weights at creation, which skips the drafter weights.
   // - Batching: Speculative decoding (MTP) only supports a single output head
   //   (batch size 1).
   const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
@@ -414,8 +431,7 @@ class SessionConfig {
   int max_output_tokens_ = std::numeric_limits<int>::max();
 
   // Speculative decoding configuration for the session.
-  // By default, the mode is std::nullopt (inherits the engine's speculative
-  // decoding configuration).
+  // By default, every field is unset (inherits the engine's configuration).
   SpeculativeDecodingConfig speculative_decoding_config_;
 };
 

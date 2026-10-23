@@ -57,6 +57,7 @@
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/model_signature_utils.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/executor/vision/vision_executor_utils.h"
@@ -1028,16 +1029,17 @@ EngineAdvancedImpl::CreateStreamingWeights(
               model_type, *section->data_stream, size));
           ABSL_LOG(INFO) << "Weights read.";
         } else {
-          if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
-            const auto& advanced_settings =
-                engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
-            if (!advanced_settings.has_value() ||
-                !advanced_settings->enable_speculative_decoding) {
-              ABSL_LOG(INFO)
-                  << "Speculative decoding is not enabled. Skipping weights "
-                     "for MTP drafter.";
-              break;
-            }
+          if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER &&
+              engine_settings.GetMainExecutorSettings()
+                      .GetEffectiveSpeculativeDecodingMode() ==
+                  SpeculativeDecodingMode::kOff) {
+            // The weights stream can be consumed only once, so sessions of
+            // this engine can't load the drafter lazily.
+            ABSL_LOG(INFO)
+                << "The engine's speculative decoding mode is off. Skipping "
+                   "weights for MTP drafter; sessions of this engine can't "
+                   "load it lazily.";
+            break;
           }
           ABSL_LOG(INFO)
               << "Storing TFLiteWeights section stream for model type: "
@@ -1170,10 +1172,9 @@ EngineAdvancedImpl::CreateStreamingWeights(
     ABSL_LOG(INFO) << "Main model compiled.";
   }
 
-  const auto& advanced_settings =
-      engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
-  if (advanced_settings.has_value() &&
-      advanced_settings->enable_speculative_decoding &&
+  if (engine_settings.GetMainExecutorSettings()
+              .GetEffectiveSpeculativeDecodingMode() !=
+          SpeculativeDecodingMode::kOff &&
       compiled_drafter_model == nullptr) {
     ABSL_LOG(INFO)
         << "Drafter model was not compiled during streaming. Compiling now...";

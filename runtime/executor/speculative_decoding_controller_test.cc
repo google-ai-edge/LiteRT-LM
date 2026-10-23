@@ -99,7 +99,7 @@ int64_t RunUnprofitableAdaptiveSteps(SpeculativeDecodingController& controller,
   return reported_switches;
 }
 
-TEST(SpeculativeDecodingControllerTest, UnsetModeDefaultsToDisabled) {
+TEST(SpeculativeDecodingControllerTest, UnsetModeDefaultsToOff) {
   SpeculativeDecodingController controller;
   FakeDrafter drafter;
   ASSERT_OK_AND_ASSIGN(const Decision decision,
@@ -111,7 +111,7 @@ TEST(SpeculativeDecodingControllerTest, UnsetModeDefaultsToDisabled) {
 
 TEST(SpeculativeDecodingControllerTest, UnsetModeUsesDefaultMode) {
   SpeculativeDecodingController controller(MtpGatingConfig(),
-                                           SpeculativeDecodingMode::kAlways);
+                                           SpeculativeDecodingMode::kOn);
   FakeDrafter drafter(absl::OkStatus(), /*loaded=*/true);
   ASSERT_OK_AND_ASSIGN(const Decision decision,
                        Decide(controller, std::nullopt, drafter));
@@ -125,11 +125,11 @@ TEST(SpeculativeDecodingControllerTest, UnsetModeUsesDefaultMode) {
 TEST(SpeculativeDecodingControllerTest,
      UnsetModeIgnoresDrafterLoadedForAnotherSession) {
   SpeculativeDecodingController controller(MtpGatingConfig(),
-                                           SpeculativeDecodingMode::kDisabled);
+                                           SpeculativeDecodingMode::kOff);
   FakeDrafter drafter;
   ASSERT_OK_AND_ASSIGN(
       Decision decision,
-      Decide(controller, SpeculativeDecodingMode::kAlways, drafter));
+      Decide(controller, SpeculativeDecodingMode::kOn, drafter));
   EXPECT_TRUE(decision.speculate);
   ASSERT_TRUE(drafter.loaded());
 
@@ -171,24 +171,24 @@ TEST(SpeculativeDecodingControllerTest,
   EXPECT_FALSE(decision.adaptive);
 }
 
-TEST(SpeculativeDecodingControllerTest, DisabledNeverLoadsDrafter) {
+TEST(SpeculativeDecodingControllerTest, OffNeverLoadsDrafter) {
   SpeculativeDecodingController controller;
   FakeDrafter drafter;
   ASSERT_OK_AND_ASSIGN(
       const Decision decision,
-      Decide(controller, SpeculativeDecodingMode::kDisabled, drafter));
+      Decide(controller, SpeculativeDecodingMode::kOff, drafter));
   EXPECT_FALSE(decision.speculate);
   EXPECT_FALSE(decision.adaptive);
   EXPECT_EQ(drafter.load_calls(), 0);
 }
 
-TEST(SpeculativeDecodingControllerTest, AlwaysLoadsDrafterOnce) {
+TEST(SpeculativeDecodingControllerTest, OnLoadsDrafterOnce) {
   SpeculativeDecodingController controller;
   FakeDrafter drafter;
   for (int i = 0; i < 2; ++i) {
     ASSERT_OK_AND_ASSIGN(
         const Decision decision,
-        Decide(controller, SpeculativeDecodingMode::kAlways, drafter));
+        Decide(controller, SpeculativeDecodingMode::kOn, drafter));
     EXPECT_TRUE(decision.speculate);
     EXPECT_FALSE(decision.adaptive);
   }
@@ -196,12 +196,12 @@ TEST(SpeculativeDecodingControllerTest, AlwaysLoadsDrafterOnce) {
   EXPECT_EQ(controller.gating_policy(), nullptr);
 }
 
-TEST(SpeculativeDecodingControllerTest, AlwaysFailsIfDrafterFailsToLoad) {
+TEST(SpeculativeDecodingControllerTest, OnFailsIfDrafterFailsToLoad) {
   SpeculativeDecodingController controller;
   FakeDrafter drafter(absl::InternalError("no drafter"));
-  EXPECT_THAT(Decide(controller, SpeculativeDecodingMode::kAlways, drafter),
+  EXPECT_THAT(Decide(controller, SpeculativeDecodingMode::kOn, drafter),
               StatusIs(absl::StatusCode::kInternal));
-  EXPECT_THAT(Decide(controller, SpeculativeDecodingMode::kAlways, drafter),
+  EXPECT_THAT(Decide(controller, SpeculativeDecodingMode::kOn, drafter),
               StatusIs(absl::StatusCode::kInternal));
   EXPECT_EQ(drafter.load_calls(), 2);
 }

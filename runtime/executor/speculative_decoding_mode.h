@@ -26,21 +26,22 @@ namespace litert::lm {
 // How speculative decoding (MTP) is used during decode.
 enum class SpeculativeDecodingMode {
   // Never speculate.
-  kDisabled = 0,
+  kOff = 0,
   // Speculate on every decode step (loads the drafter lazily if needed).
-  kAlways = 1,
+  kOn = 1,
   // Speculate only while it is measured to be faster than plain decoding
-  // (loads the drafter lazily if needed).
+  // (loads the drafter lazily if needed). Backends that do not support
+  // adaptive gating speculate on every step, like kOn.
   kAdaptive = 2,
 };
 
 inline absl::string_view SpeculativeDecodingModeName(
     SpeculativeDecodingMode mode) {
   switch (mode) {
-    case SpeculativeDecodingMode::kDisabled:
-      return "DISABLED";
-    case SpeculativeDecodingMode::kAlways:
-      return "ALWAYS";
+    case SpeculativeDecodingMode::kOff:
+      return "OFF";
+    case SpeculativeDecodingMode::kOn:
+      return "ON";
     case SpeculativeDecodingMode::kAdaptive:
       return "ADAPTIVE";
   }
@@ -57,12 +58,14 @@ inline std::ostream& operator<<(std::ostream& os,
   return os << SpeculativeDecodingModeName(mode);
 }
 
-// Per-session speculative decoding (MTP) options.
+// Speculative decoding (MTP) options.
+//
+// The engine holds the default configuration (`EngineSettings`), and each
+// session can override it (`SessionConfig`). Every field is optional: a field
+// left unset in the session inherits the engine's value, and a field left
+// unset in the engine uses the runtime default.
 struct SpeculativeDecodingConfig {
-  // How speculative decoding is used. std::nullopt inherits the engine's
-  // configuration: if the MTP drafter was loaded when the engine was created,
-  // backends that support adaptive gating behave like kAdaptive and the others
-  // speculate on every step; otherwise, no speculation.
+  // How speculative decoding is used. Runtime default: kOff.
   std::optional<SpeculativeDecodingMode> mode;
 
   bool operator==(const SpeculativeDecodingConfig&) const = default;

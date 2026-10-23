@@ -844,15 +844,13 @@ TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsSpeculativeDecodingConfig) {
   EXPECT_EQ(params.GetSpeculativeDecodingConfig(), SpeculativeDecodingConfig());
   EXPECT_FALSE(params.GetSpeculativeDecodingConfig().mode.has_value());
 
-  params.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kAlways});
+  params.SetSpeculativeDecodingConfig({.mode = SpeculativeDecodingMode::kOn});
   EXPECT_EQ(params.GetSpeculativeDecodingConfig().mode,
-            SpeculativeDecodingMode::kAlways);
+            SpeculativeDecodingMode::kOn);
 
-  params.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kDisabled});
+  params.SetSpeculativeDecodingConfig({.mode = SpeculativeDecodingMode::kOff});
   EXPECT_EQ(params.GetSpeculativeDecodingConfig().mode,
-            SpeculativeDecodingMode::kDisabled);
+            SpeculativeDecodingMode::kOff);
 
   params.SetSpeculativeDecodingConfig(
       {.mode = SpeculativeDecodingMode::kAdaptive});
@@ -885,10 +883,8 @@ TEST(LlmExecutorIoTypesTest,
 }
 
 TEST(SpeculativeDecodingModeTest, Names) {
-  EXPECT_EQ(SpeculativeDecodingModeName(SpeculativeDecodingMode::kDisabled),
-            "DISABLED");
-  EXPECT_EQ(SpeculativeDecodingModeName(SpeculativeDecodingMode::kAlways),
-            "ALWAYS");
+  EXPECT_EQ(SpeculativeDecodingModeName(SpeculativeDecodingMode::kOff), "OFF");
+  EXPECT_EQ(SpeculativeDecodingModeName(SpeculativeDecodingMode::kOn), "ON");
   EXPECT_EQ(absl::StrCat(SpeculativeDecodingMode::kAdaptive), "ADAPTIVE");
 }
 

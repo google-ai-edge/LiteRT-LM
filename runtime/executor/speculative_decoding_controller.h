@@ -62,13 +62,12 @@ class SpeculativeDecodingController {
   // `gating_config` configures the `MtpGatingPolicy` used in
   // `SpeculativeDecodingMode::kAdaptive`. `default_mode` is used for steps
   // that request no mode; it should reflect the executor's creation-time
-  // configuration (e.g. `kAdaptive` if the drafter was loaded at creation,
-  // `kDisabled` otherwise), so that a drafter lazily loaded for one session
-  // does not change the behavior of sessions that request no mode.
+  // configuration (e.g. the engine's mode if the drafter was loaded at
+  // creation, `kOff` otherwise), so that a drafter lazily loaded for one
+  // session does not change the behavior of steps that request no mode.
   explicit SpeculativeDecodingController(
       MtpGatingConfig gating_config = {},
-      SpeculativeDecodingMode default_mode =
-          SpeculativeDecodingMode::kDisabled);
+      SpeculativeDecodingMode default_mode = SpeculativeDecodingMode::kOff);
 
   // Decides whether the next decode step should speculate.
   //
@@ -84,9 +83,9 @@ class SpeculativeDecodingController {
   // - `constrained`: whether a decoding constraint is active. The constraint
   //   state is not carried across plain and speculative steps, so
   //   `SpeculativeDecodingMode::kAdaptive` does not gate constrained steps and
-  //   speculates like `SpeculativeDecodingMode::kAlways`.
+  //   speculates like `SpeculativeDecodingMode::kOn`.
   //
-  // Returns the error of `load_drafter` in `SpeculativeDecodingMode::kAlways`.
+  // Returns the error of `load_drafter` in `SpeculativeDecodingMode::kOn`.
   // `SpeculativeDecodingMode::kAdaptive` is best effort instead: if the drafter
   // fails to load, it logs a warning and decodes plainly from then on, without
   // retrying.

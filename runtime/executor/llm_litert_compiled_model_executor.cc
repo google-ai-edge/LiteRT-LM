@@ -76,6 +76,7 @@
 #include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/speculative_decoding_controller.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -326,9 +327,8 @@ absl::Status InitializeAuxiliaryExecutorComponents(
         lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup));
   }
   if (mtp_drafter == nullptr && resources != nullptr) {
-    const auto& advanced_settings = executor_settings.GetAdvancedSettings();
-    if (advanced_settings.has_value() &&
-        advanced_settings->enable_speculative_decoding) {
+    if (executor_settings.GetEffectiveSpeculativeDecodingMode() !=
+        SpeculativeDecodingMode::kOff) {
       RET_CHECK_NE(embedding_lookup, nullptr);
       std::optional<std::reference_wrapper<EmbeddingLookupManager>>
           ple_manager_opt;

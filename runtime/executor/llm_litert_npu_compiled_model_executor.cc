@@ -1258,8 +1258,17 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
   // disabled in decode params, or when constrained decoding is requested.
   const std::optional<SpeculativeDecodingMode>& speculative_decoding_mode =
       decode_params.GetSpeculativeDecodingConfig().mode;
+  if (speculative_decoding_type_ != SpeculativeDecodingType::kMTP &&
+      speculative_decoding_mode.has_value() &&
+      *speculative_decoding_mode != SpeculativeDecodingMode::kOff) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "Speculative decoding was requested, but no MTP drafter was loaded "
+           "when the engine was created (the engine's speculative decoding "
+           "mode was off, or the model has no MTP drafter), and the NPU "
+           "executor cannot load it lazily; decoding without speculation.";
+  }
   if (speculative_decoding_type_ != SpeculativeDecodingType::kMTP ||
-      speculative_decoding_mode == SpeculativeDecodingMode::kDisabled ||
+      speculative_decoding_mode == SpeculativeDecodingMode::kOff ||
       decode_params.GetConstrainedDecoder() != nullptr) {
     return DecodeNonSpeculative(decode_params, start);
   }
@@ -3263,8 +3272,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   std::optional<DrafterContext> drafter_context = std::nullopt;
   std::optional<DrafterAuxContext> drafter_aux_context = std::nullopt;
 
-  if (mutable_settings.GetAdvancedSettings().has_value() &&
-      mutable_settings.GetAdvancedSettings()->enable_speculative_decoding) {
+  if (mutable_settings.GetEffectiveSpeculativeDecodingMode() !=
+      SpeculativeDecodingMode::kOff) {
     auto mtp_drafter_model =
         resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_DRAFTER);
     auto mtp_aux_model =

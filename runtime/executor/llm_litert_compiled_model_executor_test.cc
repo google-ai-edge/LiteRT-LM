@@ -1235,17 +1235,17 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Decode with the default (unset) speculative decoding mode succeeds.
   ASSERT_OK(executor->Decode());
 
-  // Decode with SpeculativeDecodingMode::kDisabled succeeds.
+  // Decode with SpeculativeDecodingMode::kOff succeeds.
   ExecutorDecodeParams decode_params_disabled;
   decode_params_disabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kDisabled});
+      {.mode = SpeculativeDecodingMode::kOff});
   ASSERT_OK(executor->Decode(decode_params_disabled));
 
-  // Decode with SpeculativeDecodingMode::kAlways attempts lazy load and fails
+  // Decode with SpeculativeDecodingMode::kOn attempts lazy load and fails
   // when model does not meet MTP requirements (e.g. embedding lookup).
   ExecutorDecodeParams decode_params_enabled;
   decode_params_enabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kAlways});
+      {.mode = SpeculativeDecodingMode::kOn});
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
 }
@@ -1285,7 +1285,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Plain decode.
   ExecutorDecodeParams decode_params_disabled;
   decode_params_disabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kDisabled});
+      {.mode = SpeculativeDecodingMode::kOff});
   executor->set_mtp_primed_for_testing(true);
   ASSERT_OK(executor->Decode(decode_params_disabled));
   EXPECT_FALSE(executor->mtp_primed_for_testing());
@@ -1293,7 +1293,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Failed MTP attempt.
   ExecutorDecodeParams decode_params_enabled;
   decode_params_enabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kAlways});
+      {.mode = SpeculativeDecodingMode::kOn});
   executor->set_mtp_primed_for_testing(true);
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
@@ -1345,7 +1345,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
 
   ExecutorDecodeParams decode_params_disabled;
   decode_params_disabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kDisabled});
+      {.mode = SpeculativeDecodingMode::kOff});
   ASSERT_OK(executor->Decode(decode_params_disabled));
   ASSERT_OK(executor->Decode(decode_params_disabled));
 
@@ -1359,7 +1359,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // A failed MTP attempt (no drafter in this model) records nothing.
   ExecutorDecodeParams decode_params_enabled;
   decode_params_enabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kAlways});
+      {.mode = SpeculativeDecodingMode::kOn});
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
   stats = executor->GetExecutorStats();
@@ -1454,10 +1454,10 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, Decode_SpeculativeDecodingMode) {
   inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   ASSERT_OK(executor->Prefill(inputs));
 
-  // kDisabled never loads the drafter.
+  // kOff never loads the drafter.
   ExecutorDecodeParams disabled;
   disabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kDisabled});
+      {.mode = SpeculativeDecodingMode::kOff});
   ASSERT_OK(executor->Decode(disabled));
 
   // Without a loadable drafter, kAdaptive is best effort: it decodes plainly
@@ -1472,10 +1472,9 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, Decode_SpeculativeDecodingMode) {
   EXPECT_EQ(executor->mtp_gating_policy_for_testing(), nullptr);
   EXPECT_FALSE(executor->mtp_primed_for_testing());
 
-  // kAlways requires the drafter and surfaces the load failure.
+  // kOn requires the drafter and surfaces the load failure.
   ExecutorDecodeParams always;
-  always.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kAlways});
+  always.SetSpeculativeDecodingConfig({.mode = SpeculativeDecodingMode::kOn});
   EXPECT_THAT(executor->Decode(always), StatusIs(absl::StatusCode::kInternal));
 }
 
@@ -1511,7 +1510,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   ASSERT_OK(executor->Decode());
   ExecutorDecodeParams disabled;
   disabled.SetSpeculativeDecodingConfig(
-      {.mode = SpeculativeDecodingMode::kDisabled});
+      {.mode = SpeculativeDecodingMode::kOff});
   ASSERT_OK(executor->Decode(disabled));
 }
 

@@ -735,6 +735,7 @@ cc_library(
     hdrs = ["llm_executor_settings.h"],
     deps = [
         ":executor_settings_base",
+        ":speculative_decoding_mode",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
@@ -754,6 +755,7 @@ cc_test(
     deps = [
         ":executor_settings_base",
         ":llm_executor_settings",
+        ":speculative_decoding_mode",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",

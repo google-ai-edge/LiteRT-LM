@@ -27,10 +27,33 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
 namespace litert::lm {
+namespace {
+
+// Returns the deprecated `AdvancedSettings::enable_speculative_decoding`. This
+// is the only place that reads it, so that the deprecation warning is
+// suppressed once.
+bool LegacyEnableSpeculativeDecoding(const AdvancedSettings& settings) {
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+  return settings.enable_speculative_decoding;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+}
+
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "num_output_candidates: " << config.num_output_candidates << "\n";
@@ -120,8 +143,8 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "gpu_context_low_priority: Not set\n";
   }
-  os << "enable_speculative_decoding: " << settings.enable_speculative_decoding
-     << "\n";
+  os << "enable_speculative_decoding: "
+     << LegacyEnableSpeculativeDecoding(settings) << "\n";
   os << "disable_delegate_clustering: " << settings.disable_delegate_clustering
      << "\n";
   if (settings.hint_kernel_batch_size.has_value()) {
@@ -133,6 +156,19 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "error_on_invalid_sampled_token_id: "
      << settings.error_on_invalid_sampled_token_id << "\n";
   return os;
+}
+
+SpeculativeDecodingMode
+LlmExecutorSettings::GetEffectiveSpeculativeDecodingMode() const {
+  if (speculative_decoding_config_.mode.has_value()) {
+    return *speculative_decoding_config_.mode;
+  }
+  // The deprecated `AdvancedSettings::enable_speculative_decoding` is read only
+  // when the config sets no mode.
+  return advanced_settings_.has_value() &&
+                 LegacyEnableSpeculativeDecoding(*advanced_settings_)
+             ? SpeculativeDecodingMode::kOn
+             : SpeculativeDecodingMode::kOff;
 }
 
 std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
@@ -165,6 +201,8 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
   } else {
     os << "advanced_settings: Not set\n";
   }
+  os << "speculative_decoding_config: " << config.GetSpeculativeDecodingConfig()
+     << "\n";
   return os;
 }
 

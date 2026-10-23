@@ -911,8 +911,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
         session_config.GetSpeculativeDecodingConfig();
     speculative_decoding_config.mode =
-        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kAlways
-                         : litert::lm::SpeculativeDecodingMode::kDisabled;
+        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kOn
+                         : litert::lm::SpeculativeDecodingMode::kOff;
     session_config.SetSpeculativeDecodingConfig(speculative_decoding_config);
   }
 
@@ -1206,8 +1206,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
         session_config.GetSpeculativeDecodingConfig();
     speculative_decoding_config.mode =
-        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kAlways
-                         : litert::lm::SpeculativeDecodingMode::kDisabled;
+        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kOn
+                         : litert::lm::SpeculativeDecodingMode::kOff;
     session_config.SetSpeculativeDecodingConfig(speculative_decoding_config);
   }
   if (max_output_token > 0) {

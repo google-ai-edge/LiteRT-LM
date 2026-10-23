@@ -736,11 +736,11 @@ TEST(EngineCTest, CreateSessionConfigWithEnableSpeculativeDecoding) {
 
   litert_lm_session_config_set_enable_speculative_decoding(config.get(), true);
   EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
-            litert::lm::SpeculativeDecodingMode::kAlways);
+            litert::lm::SpeculativeDecodingMode::kOn);
 
   litert_lm_session_config_set_enable_speculative_decoding(config.get(), false);
   EXPECT_EQ(config->config->GetSpeculativeDecodingConfig().mode,
-            litert::lm::SpeculativeDecodingMode::kDisabled);
+            litert::lm::SpeculativeDecodingMode::kOff);
 }
 
 TEST(EngineCTest, CreateConversationConfig) {

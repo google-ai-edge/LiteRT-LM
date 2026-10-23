@@ -89,6 +89,7 @@ ENGINE_IMPL_BASE_DEPS = [
     "//runtime/executor:llm_litert_mtp_drafter",
     "//runtime/executor:magic_number_configs_helper",
     "//runtime/executor:model_signature_utils",
+    "//runtime/executor:speculative_decoding_mode",
     "//runtime/executor:vision_executor",
     "//runtime/executor:vision_executor_settings",
     "//runtime/executor:vision_executor_utils",

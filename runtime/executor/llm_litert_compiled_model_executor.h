@@ -276,14 +276,16 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         pre_graph_run_callback_(std::move(pre_graph_run_callback)),
         post_graph_run_callback_(std::move(post_graph_run_callback)),
         resources_(resources),
-        // Sessions that request no mode follow the creation-time
+        // Steps that request no mode (sessions always do, see
+        // `SessionConfig::MaybeUpdateAndValidate()`) follow the creation-time
         // configuration, even after a drafter is lazily loaded for another
-        // session: adaptive if the drafter was loaded at creation, plain
-        // decoding otherwise.
+        // session: the engine's mode if the drafter was loaded at creation,
+        // plain decoding otherwise.
         speculative_decoding_controller_(
-            MtpGatingConfig(), mtp_drafter_ != nullptr
-                                   ? SpeculativeDecodingMode::kAdaptive
-                                   : SpeculativeDecodingMode::kDisabled) {
+            MtpGatingConfig(),
+            mtp_drafter_ != nullptr
+                ? executor_settings_.GetEffectiveSpeculativeDecodingMode()
+                : SpeculativeDecodingMode::kOff) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, nullptr, ProcessedTokens());
     auto runtime_config = std::make_unique<RuntimeConfig>();

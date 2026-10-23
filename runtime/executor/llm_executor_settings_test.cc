@@ -26,6 +26,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -262,6 +263,7 @@ model_assets: model_path: )",
 fake_weights_mode: FAKE_WEIGHTS_NONE
 
 advanced_settings: Not set
+speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set}
 )");  // Original output
   EXPECT_EQ(oss.str(), expected_output);
 }
@@ -363,8 +365,41 @@ disable_delegate_clustering: 0
 hint_kernel_batch_size: 10
 error_on_invalid_sampled_token_id: 0
 
+speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set}
 )");  // Original output string.
   EXPECT_EQ(oss.str(), expected_output);
+}
+
+TEST(LlmExecutorConfigTest, EffectiveSpeculativeDecodingMode) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(kPathToModel1));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          std::move(model_assets)));
+  // Unset: off.
+  EXPECT_EQ(settings.GetEffectiveSpeculativeDecodingMode(),
+            SpeculativeDecodingMode::kOff);
+
+  // The deprecated boolean means kOn when the config sets no mode.
+  AdvancedSettings advanced_settings;
+  advanced_settings.enable_speculative_decoding = true;
+  settings.SetAdvancedSettings(advanced_settings);
+  EXPECT_EQ(settings.GetEffectiveSpeculativeDecodingMode(),
+            SpeculativeDecodingMode::kOn);
+
+  // The config's mode wins over the deprecated boolean.
+  settings.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kOff});
+  EXPECT_EQ(settings.GetEffectiveSpeculativeDecodingMode(),
+            SpeculativeDecodingMode::kOff);
+  settings.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kAdaptive});
+  EXPECT_EQ(settings.GetEffectiveSpeculativeDecodingMode(),
+            SpeculativeDecodingMode::kAdaptive);
+
+  std::stringstream oss;
+  oss << settings;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr(
+                             "speculative_decoding_config: "
+                             "SpeculativeDecodingConfig{mode: ADAPTIVE}"));
 }
 
 TEST(LlmExecutorConfigTest, AdvancedSettingsWithErrorOnInvalidSampledTokenId) {

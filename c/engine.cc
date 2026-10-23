@@ -446,9 +446,8 @@ LiteRtLmStatusCode litert_lm_session_config_set_enable_speculative_decoding(
   litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
       config->config->GetSpeculativeDecodingConfig();
   speculative_decoding_config.mode =
-      enable_speculative_decoding
-          ? litert::lm::SpeculativeDecodingMode::kAlways
-          : litert::lm::SpeculativeDecodingMode::kDisabled;
+      enable_speculative_decoding ? litert::lm::SpeculativeDecodingMode::kOn
+                                  : litert::lm::SpeculativeDecodingMode::kOff;
   config->config->SetSpeculativeDecodingConfig(speculative_decoding_config);
   return kLiteRtLmStatusOk;
 }

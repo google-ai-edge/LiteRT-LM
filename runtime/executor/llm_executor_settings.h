@@ -33,6 +33,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 
 namespace litert::lm {
 
@@ -285,8 +286,15 @@ struct AdvancedSettings {
   // (most OSS models), we would set this flag to true to ensure smooth UI.
   std::optional<bool> gpu_context_low_priority;
 
-  // If true, the executor enables speculative decoding.
-  bool enable_speculative_decoding = false;
+  // Deprecated: set the speculative decoding mode with
+  // `EngineSettings::SetSpeculativeDecodingConfig()` (or
+  // `LlmExecutorSettings::SetSpeculativeDecodingConfig()`) instead. Read only
+  // when that config sets no mode: true is equivalent to
+  // `SpeculativeDecodingMode::kOn` and false to
+  // `SpeculativeDecodingMode::kOff`.
+  [[deprecated(
+      "Use EngineSettings::SetSpeculativeDecodingConfig() instead.")]] bool
+      enable_speculative_decoding = false;
 
   // If true, the executor disables delegate clustering. Can be useful for cases
   // where the default model delegate partitioning is not optimal.
@@ -310,41 +318,7 @@ struct AdvancedSettings {
   // to true if they want to ensure the quality of the decoded output.
   bool error_on_invalid_sampled_token_id = false;
 
-  bool operator==(const AdvancedSettings& other) const {
-    return prefill_batch_sizes == other.prefill_batch_sizes &&
-           num_output_candidates == other.num_output_candidates &&
-           configure_magic_numbers == other.configure_magic_numbers &&
-           verify_magic_numbers == other.verify_magic_numbers &&
-           clear_kv_cache_before_prefill ==
-               other.clear_kv_cache_before_prefill &&
-           num_logits_to_print_after_decode ==
-               other.num_logits_to_print_after_decode &&
-           gpu_madvise_original_shared_tensors ==
-               other.gpu_madvise_original_shared_tensors &&
-           gpu_enable_metal_residency_set ==
-               other.gpu_enable_metal_residency_set &&
-           is_benchmark == other.is_benchmark &&
-           enable_profiling == other.enable_profiling &&
-           preferred_device_substr == other.preferred_device_substr &&
-           num_threads_to_upload == other.num_threads_to_upload &&
-           num_threads_to_compile == other.num_threads_to_compile &&
-           convert_weights_on_gpu == other.convert_weights_on_gpu &&
-           wait_for_weights_conversion_complete_in_benchmark ==
-               other.wait_for_weights_conversion_complete_in_benchmark &&
-           optimize_shader_compilation == other.optimize_shader_compilation &&
-           cache_compiled_shaders_only == other.cache_compiled_shaders_only &&
-           share_constant_tensors == other.share_constant_tensors &&
-           sampler_handles_input == other.sampler_handles_input &&
-           allow_src_quantized_fc_conv_ops ==
-               other.allow_src_quantized_fc_conv_ops &&
-           hint_waiting_for_completion == other.hint_waiting_for_completion &&
-           gpu_context_low_priority == other.gpu_context_low_priority &&
-           enable_speculative_decoding == other.enable_speculative_decoding &&
-           disable_delegate_clustering == other.disable_delegate_clustering &&
-           hint_kernel_batch_size == other.hint_kernel_batch_size &&
-           error_on_invalid_sampled_token_id ==
-               other.error_on_invalid_sampled_token_id;
-  }
+  bool operator==(const AdvancedSettings& other) const = default;
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);
 
@@ -413,6 +387,22 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     advanced_settings_ = advanced_settings;
   }
 
+  // Default speculative decoding (MTP) configuration of the engine. See
+  // `EngineSettings::SetSpeculativeDecodingConfig()`.
+  const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
+    return speculative_decoding_config_;
+  }
+  void SetSpeculativeDecodingConfig(
+      const SpeculativeDecodingConfig& speculative_decoding_config) {
+    speculative_decoding_config_ = speculative_decoding_config;
+  }
+
+  // Returns the engine's speculative decoding mode: the mode of
+  // `GetSpeculativeDecodingConfig()` if set, otherwise `kOn` if the deprecated
+  // `AdvancedSettings::enable_speculative_decoding` is true, otherwise `kOff`.
+  // The MTP drafter is loaded at creation unless this is `kOff`.
+  SpeculativeDecodingMode GetEffectiveSpeculativeDecodingMode() const;
+
   absl::Status SetSupportedLoraRanks(const std::vector<uint32_t>& lora_ranks) {
     if (std::holds_alternative<GpuArtisanConfig>(backend_config_)) {
       std::get<GpuArtisanConfig>(backend_config_).supported_lora_ranks =
@@ -462,6 +452,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
 
   // Optional advanced settings.
   std::optional<AdvancedSettings> advanced_settings_;
+
+  // Default speculative decoding configuration of the engine.
+  SpeculativeDecodingConfig speculative_decoding_config_;
 
   std::vector<std::string> selected_signatures_;
 
