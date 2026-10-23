@@ -19,9 +19,9 @@ from absl.testing import absltest
 from absl.testing import parameterized
 
 import litert_lm
-from litert_lm_builder import litertlm_builder
 from litert_lm_cli import config
 from litert_lm_cli import model
+from runtime.proto import llm_metadata_pb2
 
 
 class ModelTest(parameterized.TestCase):
@@ -103,42 +103,42 @@ class ModelTest(parameterized.TestCase):
   @parameterized.named_parameters(
       (
           "artisan_always_gpu",
-          litertlm_builder.TfLiteModelType.ARTISAN_TEXT_DECODER.value,
+          "tf_lite_artisan_text_decoder",
           None,
           "gpu",
           None,
       ),
       (
           "artisan_always_gpu_uppercase",
-          litertlm_builder.TfLiteModelType.ARTISAN_TEXT_DECODER.value.upper(),
+          "TF_LITE_ARTISAN_TEXT_DECODER",
           None,
           "gpu",
           None,
       ),
       (
           "prefill_decode_gpu",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE.value,
+          "tf_lite_prefill_decode",
           "gpu",
           "gpu",
           None,
       ),
       (
           "prefill_decode_gpu_uppercase",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE.value.upper(),
+          "TF_LITE_PREFILL_DECODE",
           "gpu",
           "gpu",
           None,
       ),
       (
           "prefill_decode_cpu",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE.value,
+          "tf_lite_prefill_decode",
           "cpu",
           "cpu",
           None,
       ),
       (
           "prefill_decode_none",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE.value,
+          "tf_lite_prefill_decode",
           None,
           "cpu",
           None,
@@ -146,42 +146,42 @@ class ModelTest(parameterized.TestCase):
       ("other_model_gpu_ignored", "other_model", "gpu", "cpu", None),
       (
           "prefill_decode_multi",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE.value,
+          "tf_lite_prefill_decode",
           "gpu,npu",
           "gpu",
           None,
       ),
       (
           "audio_encoder_hw_cpu",
-          litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+          "tf_lite_audio_encoder_hw",
           "cpu",
           "cpu",
-          {litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value},
+          {llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW},
       ),
       (
           "audio_encoder_hw_gpu",
-          litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+          "tf_lite_audio_encoder_hw",
           "gpu",
           "gpu",
-          {litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value},
+          {llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW},
       ),
       (
           "vision_encoder_cpu",
-          litertlm_builder.TfLiteModelType.VISION_ENCODER.value,
+          "tf_lite_vision_encoder",
           "cpu",
           "cpu",
-          {litertlm_builder.TfLiteModelType.VISION_ENCODER.value},
+          {llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER},
       ),
       (
           "vision_encoder_gpu",
-          litertlm_builder.TfLiteModelType.VISION_ENCODER.value,
+          "tf_lite_vision_encoder",
           "gpu",
           "gpu",
-          {litertlm_builder.TfLiteModelType.VISION_ENCODER.value},
+          {llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER},
       ),
       (
           "audio_encoder_hw_ignored_for_main",
-          litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+          "tf_lite_audio_encoder_hw",
           "gpu",
           "cpu",
           None,
@@ -341,7 +341,9 @@ class ParseBackendWithConfigTest(parameterized.TestCase):
     result = model.parse_backend(
         backend=None,
         model_obj=mock_model,
-        target_model_types={"vision_encoder"},  # Auxiliary type
+        target_model_types={
+            llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER
+        },  # Auxiliary type
         label="vision",
     )
     self.assertIsInstance(result, litert_lm.Backend.CPU)
@@ -354,7 +356,9 @@ class ParseBackendWithConfigTest(parameterized.TestCase):
     result = model.parse_backend(
         backend=None,
         model_obj=mock_model,
-        target_model_types={"audio_encoder_hw"},  # Auxiliary type
+        target_model_types={
+            llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW
+        },  # Auxiliary type
         label="audio",
     )
     self.assertIsInstance(result, litert_lm.Backend.CPU)
@@ -377,7 +381,9 @@ class ParseBackendWithConfigTest(parameterized.TestCase):
     vision_result = model.parse_backend(
         backend=None,
         model_obj=mock_model,
-        target_model_types={"vision_encoder"},
+        target_model_types={
+            llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER
+        },
         label="vision",
     )
     self.assertIsInstance(vision_result, litert_lm.Backend.GPU)
@@ -385,7 +391,9 @@ class ParseBackendWithConfigTest(parameterized.TestCase):
     audio_result = model.parse_backend(
         backend=None,
         model_obj=mock_model,
-        target_model_types={"audio_encoder_hw"},
+        target_model_types={
+            llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW
+        },
         label="audio",
     )
     self.assertIsInstance(audio_result, litert_lm.Backend.CPU)

@@ -24,12 +24,12 @@ import prompt_toolkit
 from prompt_toolkit import key_binding
 
 import litert_lm
-from litert_lm_builder import litertlm_builder
 from litert_lm_cli import cli_helpers
 from litert_lm_cli import common
 from litert_lm_cli import help_formatter
 from litert_lm_cli import huggingface_download
 from litert_lm_cli import model
+from runtime.proto import llm_metadata_pb2
 
 try:
   # pylint: disable=g-import-not-at-top
@@ -256,7 +256,7 @@ def run_interactive(
         vision_backend,
         model_obj=model_obj,
         target_model_types={
-            litertlm_builder.TfLiteModelType.VISION_ENCODER.value,
+            llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
         },
         label="vision",
     )
@@ -264,7 +264,7 @@ def run_interactive(
         audio_backend,
         model_obj=model_obj,
         target_model_types={
-            litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+            llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
         },
         label="audio",
     )

@@ -20,7 +20,6 @@ from . import litertlm_peek
 LitertLmFileBuilder = litertlm_builder.LitertLmFileBuilder
 Metadata = litertlm_builder.Metadata
 DType = litertlm_builder.DType
-TfLiteModelType = litertlm_builder.TfLiteModelType
 Backend = litertlm_builder.Backend
 peek_litertlm_file = litertlm_peek.peek_litertlm_file
 unpack = litertlm_builder.unpack
@@ -32,7 +31,6 @@ __all__ = [
     "LitertLmFileBuilder",
     "Metadata",
     "DType",
-    "TfLiteModelType",
     "Backend",
     "peek_litertlm_file",
     "unpack",

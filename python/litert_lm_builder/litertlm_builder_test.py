@@ -316,10 +316,12 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self.assertIn("Sections (1)", ss)
 
   @parameterized.named_parameters(
-      ("prefill_decode", litertlm_builder.TfLiteModelType.PREFILL_DECODE),
-      ("mtp_drafter", litertlm_builder.TfLiteModelType.MTP_DRAFTER),
+      ("prefill_decode", "prefill_decode", "tf_lite_prefill_decode"),
+      ("mtp_drafter", "mtp_drafter", "tf_lite_mtp_drafter"),
+      ("uppercase", "PREFILL_DECODE", "tf_lite_prefill_decode"),
+      ("wire_string", "tf_lite_mtp_drafter", "tf_lite_mtp_drafter"),
   )
-  def test_add_tflite_model(self, model_type: litertlm_builder.TfLiteModelType):
+  def test_add_tflite_model(self, model_type: str, expected_wire_str: str):
     """Tests that a TFLite model can be added correctly."""
     tflite_path = self._create_dummy_file(
         "model.tflite", b"dummy tflite content"
@@ -341,7 +343,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Sections (1)", ss)
     self.assertIn("Data Type:    TFLiteModel", ss)
-    self.assertIn(f"Key: model_type, Value (String): {model_type.value}", ss)
+    self.assertIn(f"Key: model_type, Value (String): {expected_wire_str}", ss)
     self.assertIn("Key: test_key, Value (String): test_value", ss)
 
   def test_add_tflite_model_with_backend_constraint(self):
@@ -354,7 +356,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self._add_system_metadata(builder)
     builder.add_tflite_model(
         tflite_path,
-        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        "prefill_decode",
         backend_constraint="gpu",
     )
     ss = self._build_and_read_litertlm(builder)
@@ -373,7 +375,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self._add_system_metadata(builder)
     builder.add_tflite_model(
         tflite_path,
-        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        "prefill_decode",
         backend_constraint="cpu, GPU",
     )
     ss = self._build_and_read_litertlm(builder)
@@ -394,7 +396,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, "Invalid backend constraint"):
       builder.add_tflite_model(
           tflite_path,
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+          "prefill_decode",
           backend_constraint="foo, bar",
       )
 
@@ -407,7 +409,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self._add_system_metadata(builder)
     builder.add_tflite_model(
         tflite_path,
-        litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW,
+        "audio_encoder_hw",
         backend_constraint="cpu",
     )
 
@@ -415,9 +417,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Key: backend_constraint, Value (String): npu", ss)
 
-    builder.remove_backend_constraint(
-        litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW
-    )
+    builder.remove_backend_constraint("audio_encoder_hw")
     ss = self._build_and_read_litertlm(builder)
     self.assertNotIn("Key: backend_constraint", ss)
 
@@ -437,7 +437,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self._add_system_metadata(builder)
     builder.add_tflite_model(
         tflite_path,
-        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        "prefill_decode",
         prefer_activation_type="fp16",
     )
     ss = self._build_and_read_litertlm(builder)
@@ -461,7 +461,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     with self.assertRaises(ValueError):
       builder.add_tflite_model(
           tflite_path,
-          litertlm_builder.TfLiteModelType.EMBEDDER,
+          "embedder",
           additional_metadata=additional_metadata,
       )
 
@@ -475,7 +475,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self._add_system_metadata(builder)
     builder.add_tflite_weights(
         tflite_weights_path,
-        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        "prefill_decode",
         additional_metadata=[
             litertlm_builder.Metadata(
                 key="test_key",
@@ -641,12 +641,8 @@ class LitertlmBuilderTest(parameterized.TestCase):
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     builder.add_sentencepiece_tokenizer(sp_path)
-    builder.add_tflite_model(
-        tflite_path, model_type=litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        tflite_path, model_type=litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(tflite_path, model_type="embedder")
+    builder.add_tflite_model(tflite_path, model_type="prefill_decode")
     builder.add_llm_metadata(metadata_path)
     builder.add_executor_metadata(executor_metadata_path)
     ss = self._build_and_read_litertlm(builder)
@@ -753,9 +749,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     tflite_path = self._create_dummy_file("model.tflite", b"dummy content")
-    builder.add_tflite_model(
-        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(tflite_path, "prefill_decode")
     litertlm_path = os.path.join(self.temp_dir, "test.litertlm")
     with litertlm_core.open_file(litertlm_path, "wb") as f:
       builder.build(f)
@@ -784,9 +778,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     tflite_path = self._create_dummy_file("model.tflite", b"dummy content")
-    builder.add_tflite_model(
-        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(tflite_path, "prefill_decode")
     litertlm_path = os.path.join(self.temp_dir, "test_orig.litertlm")
     with litertlm_core.open_file(litertlm_path, "wb") as f:
       builder.build(f)
@@ -812,9 +804,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     tflite_path = self._create_dummy_file("model.tflite", b"dummy content")
-    builder.add_tflite_model(
-        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(tflite_path, "prefill_decode")
     builder.add_llm_metadata(meta_path)
     orig_litertlm_path = os.path.join(self.temp_dir, "orig.litertlm")
     with litertlm_core.open_file(orig_litertlm_path, "wb") as f:
@@ -851,9 +841,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     tflite_path = self._create_dummy_file(
         "model_no_jinja.tflite", b"dummy content"
     )
-    builder.add_tflite_model(
-        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(tflite_path, "prefill_decode")
     builder.add_llm_metadata(meta_path)
     model_path = os.path.join(self.temp_dir, "no_jinja.litertlm")
     with litertlm_core.open_file(model_path, "wb") as f:
@@ -907,79 +895,146 @@ data_path = "{tflite_name}"
       (
           "prefill_decode_lowercase",
           "prefill_decode",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+          "tf_lite_prefill_decode",
       ),
       (
           "prefill_decode_uppercase",
           "PREFILL_DECODE",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+          "tf_lite_prefill_decode",
       ),
       (
           "mtp_drafter",
           "mtp_drafter",
-          litertlm_builder.TfLiteModelType.MTP_DRAFTER,
+          "tf_lite_mtp_drafter",
       ),
       (
           "vision_encoder",
           "vision_encoder",
-          litertlm_builder.TfLiteModelType.VISION_ENCODER,
+          "tf_lite_vision_encoder",
       ),
   )
-  def test_get_enum_from_tf_free_value_without_prefix(
-      self, input_val: str, expected_enum: litertlm_builder.TfLiteModelType
+  def test_add_tflite_model_with_tf_free_string(
+      self, input_val: str, expected_wire_str: str
   ):
-    self.assertEqual(
-        litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(input_val),
-        expected_enum,
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
     )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_tflite_model(tflite_path, input_val)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn(f"Key: model_type, Value (String): {expected_wire_str}", ss)
 
   @parameterized.named_parameters(
       (
           "prefill_decode_with_prefix",
           "tf_lite_prefill_decode",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+          "tf_lite_prefill_decode",
       ),
       (
           "prefill_decode_with_prefix_upper",
           "TF_LITE_PREFILL_DECODE",
-          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+          "tf_lite_prefill_decode",
       ),
       (
           "embedder_with_prefix",
           "tf_lite_embedder",
-          litertlm_builder.TfLiteModelType.EMBEDDER,
+          "tf_lite_embedder",
       ),
       (
           "mtp_drafter_with_prefix",
           "tf_lite_mtp_drafter",
-          litertlm_builder.TfLiteModelType.MTP_DRAFTER,
+          "tf_lite_mtp_drafter",
       ),
   )
-  def test_get_enum_from_tf_free_value_with_prefix(
-      self, input_val: str, expected_enum: litertlm_builder.TfLiteModelType
+  def test_add_tflite_model_with_prefixed_string(
+      self, input_val: str, expected_wire_str: str
   ):
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
     with self.assertLogs(level="WARNING") as cm:
-      result = litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-          input_val
-      )
-    self.assertEqual(result, expected_enum)
+      builder.add_tflite_model(tflite_path, input_val)
     self.assertTrue(
         any(
             f"Input '{input_val}' already starts with 'tf_lite_'." in output
             for output in cm.output
         )
     )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn(f"Key: model_type, Value (String): {expected_wire_str}", ss)
 
-  def test_get_enum_from_tf_free_value_invalid_raises_error(self):
+  def test_legacy_tflite_model_types_are_supported(self):
+    """Tests that every model type of the removed Python enum is supported."""
+    all_model_types = litertlm_builder.get_all_tflite_model_types()
+    for model_type in (
+        "prefill_decode",
+        "embedder",
+        "per_layer_embedder",
+        "aux",
+        "audio_frontend",
+        "audio_encoder_hw",
+        "audio_adapter",
+        "end_of_audio",
+        "vision_encoder",
+        "vision_adapter",
+        "end_of_vision",
+        "artisan_text_decoder",
+        "mtp_drafter",
+        "mtp_aux",
+        "text_encoder",
+    ):
+      with self.subTest(model_type=model_type):
+        self.assertIn(model_type, all_model_types)
+
+  def test_add_tflite_model_with_llm_proto_enum(self):
+    """Tests that an LlmMetadata proto enum value resolves to its wire string."""
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+    llm_metadata_path = self._create_dummy_file(
+        "llm_metadata.pb", llm_metadata_pb2.LlmMetadata().SerializeToString()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_llm_metadata(llm_metadata_path)
+    builder.add_tflite_model(
+        tflite_path, llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
+
+  def test_add_tflite_model_with_unknown_model_type_raises_error(self):
+    """Tests that unknown model type strings are rejected."""
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
     for invalid_val in (
         "nonexistent_model_type",
         "tf_lite_nonexistent_model_type",
     ):
       with self.subTest(invalid_val=invalid_val):
-        with self.assertRaises(ValueError):
-          litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-              invalid_val
-          )
+        with self.assertRaisesRegex(ValueError, "Unknown TfLiteModelType"):
+          builder.add_tflite_model(tflite_path, invalid_val)
+
+  def test_add_tflite_model_with_prefixed_string_logs_warning(self):
+    """Tests that a `tf_lite_`-prefixed model type string logs a warning."""
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    with self.assertLogs(level="WARNING") as cm:
+      builder.add_tflite_model(tflite_path, "TF_LITE_PREFILL_DECODE")
+    self.assertTrue(
+        any(
+            "Input 'TF_LITE_PREFILL_DECODE' already starts with 'tf_lite_'."
+            in output
+            for output in cm.output
+        )
+    )
 
   def test_add_llm_metadata_with_min_runtime_version(self):
     """Tests that min_runtime_version is added to llm metadata."""
@@ -1063,9 +1118,7 @@ pooling_kernel_size = 2
     self.assertFalse(builder.is_llm_model)
 
     dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
     self.assertTrue(builder.is_llm_model)
 
   def test_validate_metadata_llm_missing_fields(self):
@@ -1077,27 +1130,21 @@ pooling_kernel_size = 2
 
     # Missing both supports_thinking and supports_function_calling
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
     builder.add_llm_metadata(meta_path)
     with self.assertRaisesRegex(ValueError, "supports_thinking"):
       builder.validate_metadata()
 
     # Missing supports_function_calling
     builder2 = litertlm_builder.LitertLmFileBuilder()
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder2.add_tflite_model(dummy_tflite, "prefill_decode")
     builder2.add_llm_metadata(meta_path, supports_thinking=True)
     with self.assertRaisesRegex(ValueError, "supports_function_calling"):
       builder2.validate_metadata()
 
     # Valid LLM metadata passes validation
     builder3 = litertlm_builder.LitertLmFileBuilder()
-    builder3.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder3.add_tflite_model(dummy_tflite, "prefill_decode")
     builder3.add_llm_metadata(
         meta_path,
         supports_thinking=False,
@@ -1109,9 +1156,7 @@ pooling_kernel_size = 2
     """Tests validate_metadata raises when an LLM model has no LlmMetadata."""
     dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
     with self.assertRaisesRegex(ValueError, "LlmMetadata"):
       builder.validate_metadata()
 
@@ -1119,9 +1164,7 @@ pooling_kernel_size = 2
     """Tests validate_metadata is a no-op when no LLM model is present."""
     dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder.add_tflite_model(dummy_tflite, "vision_adapter")
     self.assertFalse(builder.is_llm_model)
     builder.validate_metadata()
 
@@ -1131,9 +1174,7 @@ pooling_kernel_size = 2
     self.assertFalse(builder.is_vision_model)
 
     dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder.add_tflite_model(dummy_tflite, "vision_adapter")
     self.assertTrue(builder.is_vision_model)
 
   def test_is_vision_transformer_model(self):
@@ -1142,12 +1183,8 @@ pooling_kernel_size = 2
     self.assertFalse(builder.is_vision_transformer_model)
 
     dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "vision_adapter")
 
     # Gemma3N is not a vision transformer
     meta_gemma3n = llm_metadata_pb2.LlmMetadata()
@@ -1160,12 +1197,8 @@ pooling_kernel_size = 2
 
     # Gemma4 is a vision transformer
     builder2 = litertlm_builder.LitertLmFileBuilder()
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder2.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder2.add_tflite_model(dummy_tflite, "vision_adapter")
     meta_gemma4 = llm_metadata_pb2.LlmMetadata()
     meta_gemma4.llm_model_type.gemma4.SetInParent()
     path_gemma4 = self._create_dummy_file(
@@ -1185,12 +1218,8 @@ pooling_kernel_size = 2
 
     # Missing max_num_patches and pooling_kernel_size
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "vision_adapter")
     builder.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1201,12 +1230,8 @@ pooling_kernel_size = 2
 
     # Missing pooling_kernel_size
     builder2 = litertlm_builder.LitertLmFileBuilder()
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder2.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder2.add_tflite_model(dummy_tflite, "vision_adapter")
     builder2.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1218,12 +1243,8 @@ pooling_kernel_size = 2
 
     # Valid vision transformer metadata passes validation
     builder3 = litertlm_builder.LitertLmFileBuilder()
-    builder3.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder3.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder3.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder3.add_tflite_model(dummy_tflite, "vision_adapter")
     builder3.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1245,27 +1266,17 @@ pooling_kernel_size = 2
 
     # Missing supports_thinking raises
     builder_missing_thinking = litertlm_builder.LitertLmFileBuilder()
-    builder_missing_thinking.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder_missing_thinking.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder_missing_thinking.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder_missing_thinking.add_tflite_model(dummy_tflite, "vision_adapter")
     builder_missing_thinking.add_llm_metadata(meta_path)
     with self.assertRaisesRegex(ValueError, "supports_thinking"):
       builder_missing_thinking.validate_metadata()
 
     # Valid Gemma3N vision model passes without patch parameters
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "vision_adapter")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1297,12 +1308,8 @@ pooling_kernel_size = 2
 
     # GenericModel without patchify passes
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "vision_adapter")
     builder.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1312,12 +1319,8 @@ pooling_kernel_size = 2
 
     # GenericModel with max_num_patches but missing pooling_kernel_size raises
     builder2 = litertlm_builder.LitertLmFileBuilder()
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder2.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder2.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder2.add_tflite_model(dummy_tflite, "vision_adapter")
     builder2.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1329,12 +1332,8 @@ pooling_kernel_size = 2
 
     # GenericModel with both passes
     builder3 = litertlm_builder.LitertLmFileBuilder()
-    builder3.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder3.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
-    )
+    builder3.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder3.add_tflite_model(dummy_tflite, "vision_adapter")
     builder3.add_llm_metadata(
         meta_path,
         supports_thinking=True,
@@ -1348,9 +1347,7 @@ pooling_kernel_size = 2
     """Tests that builder.build(stream, validate_metadata=True) triggers validation."""
     dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
     # validate_metadata=False (default) does not raise
     with io.BytesIO() as buf:
       builder.build(buf)
@@ -1372,11 +1369,11 @@ pooling_kernel_size = 2
     self._add_system_metadata(builder)
     builder.add_sentencepiece_tokenizer(
         sp_prefill,
-        model_type=litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        model_type="prefill_decode",
     )
     builder.add_sentencepiece_tokenizer(
         sp_embedder,
-        model_type=litertlm_builder.TfLiteModelType.EMBEDDER,
+        model_type="embedder",
     )
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Sections (2)", ss)
@@ -1387,7 +1384,7 @@ pooling_kernel_size = 2
     with self.assertRaises(ValueError):
       builder.add_sentencepiece_tokenizer(
           sp_embedder,
-          model_type=litertlm_builder.TfLiteModelType.EMBEDDER,
+          model_type="embedder",
       )
 
     # Adding duplicate via additional_metadata without tf_lite_ prefix fails
@@ -1454,15 +1451,9 @@ pooling_kernel_size = 2
         pooling_kernel_size=3,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_embedding_metadata(meta_path)
     self.assertTrue(builder.is_embedding_vision_transformer_model)
     self.assertTrue(builder.is_vision_transformer_model)
@@ -1478,15 +1469,9 @@ pooling_kernel_size = 2
         pooling_kernel_size=3,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_embedding_metadata(meta_path)
     with self.assertRaisesRegex(ValueError, "max_num_patches"):
       builder.validate_metadata()
@@ -1501,15 +1486,9 @@ pooling_kernel_size = 2
         pooling_kernel_size=None,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_embedding_metadata(meta_path)
     with self.assertRaisesRegex(ValueError, "pooling_kernel_size"):
       builder.validate_metadata()
@@ -1521,15 +1500,9 @@ pooling_kernel_size = 2
         "emb_empty_vision.pb", is_vision=False
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_embedding_metadata(meta_path)
     with self.assertRaisesRegex(ValueError, "max_num_patches"):
       builder.validate_metadata()
@@ -1553,18 +1526,10 @@ pooling_kernel_size = 2
         pooling_kernel_size=3,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_llm_metadata(llm_path)
     builder.add_embedding_metadata(emb_path)
     self.assertFalse(builder.is_llm_vision_transformer_model)
@@ -1582,18 +1547,10 @@ pooling_kernel_size = 2
         "emb_text.pb", is_vision=False
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_llm_metadata(llm_path)
     builder.add_embedding_metadata(emb_path)
     self.assertTrue(builder.is_llm_vision_transformer_model)
@@ -1614,18 +1571,10 @@ pooling_kernel_size = 2
         pooling_kernel_size=3,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_llm_metadata(llm_path)
     builder.add_embedding_metadata(emb_path)
     self.assertTrue(builder.is_llm_vision_transformer_model)
@@ -1645,18 +1594,10 @@ pooling_kernel_size = 2
         pooling_kernel_size=3,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_llm_metadata(llm_path)
     builder.add_embedding_metadata(emb_path)
     with self.assertRaisesRegex(ValueError, "max_num_patches"):
@@ -1678,18 +1619,10 @@ pooling_kernel_size = 2
         pooling_kernel_size=3,
     )
     builder = litertlm_builder.LitertLmFileBuilder()
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
+    builder.add_tflite_model(dummy_tflite, "vision_encoder")
     builder.add_llm_metadata(llm_path)
     builder.add_embedding_metadata(emb_path)
     with self.assertRaisesRegex(ValueError, "max_num_patches"):
@@ -1709,15 +1642,9 @@ pooling_kernel_size = 2
 
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.EMBEDDER
-    )
-    builder.add_tflite_model(
-        dummy_tflite, litertlm_builder.TfLiteModelType.TEXT_ENCODER
-    )
+    builder.add_tflite_model(dummy_tflite, "prefill_decode")
+    builder.add_tflite_model(dummy_tflite, "embedder")
+    builder.add_tflite_model(dummy_tflite, "text_encoder")
     builder.add_sentencepiece_tokenizer(dummy_sp)
     builder.add_llm_metadata(llm_path)
     builder.add_embedding_metadata(emb_path)

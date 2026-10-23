@@ -634,27 +634,6 @@ def _build_any2any_metadata(
   builder.add_any2any_metadata(args.path, additional_metadata=metadata)
 
 
-def _resolve_required_cli_model_type(
-    model_type_str: str,
-) -> litertlm_builder.TfLiteModelType | str:
-  """Resolves a required CLI model_type argument to a TfLiteModelType or wire string."""
-  try:
-    return litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-        model_type_str
-    )
-  except ValueError:
-    return model_type_str
-
-
-def _resolve_optional_cli_model_type(
-    model_type_str: str | None,
-) -> litertlm_builder.TfLiteModelType | str | None:
-  """Resolves an optional CLI model_type argument to a TfLiteModelType or wire string."""
-  if model_type_str is None:
-    return None
-  return _resolve_required_cli_model_type(model_type_str)
-
-
 def _build_tflite_model(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
@@ -663,7 +642,7 @@ def _build_tflite_model(
   metadata = _get_metadata_from_args(args)
   builder.add_tflite_model(
       args.path,
-      _resolve_required_cli_model_type(args.model_type),
+      args.model_type,
       backend_constraint=args.backend_constraint,
       prefer_activation_type=args.prefer_activation_type,
       additional_metadata=metadata,
@@ -678,7 +657,7 @@ def _build_tflite_weights(
   metadata = _get_metadata_from_args(args)
   builder.add_tflite_weights(
       args.path,
-      _resolve_required_cli_model_type(args.model_type),
+      args.model_type,
       additional_metadata=metadata,
   )
 
@@ -689,9 +668,8 @@ def _build_sp_tokenizer(
 ) -> None:
   """Builds sentencepiece tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  model_type = _resolve_optional_cli_model_type(args.model_type)
   builder.add_sentencepiece_tokenizer(
-      args.path, model_type=model_type, additional_metadata=metadata
+      args.path, model_type=args.model_type, additional_metadata=metadata
   )
 
 
@@ -701,9 +679,8 @@ def _build_hf_tokenizer(
 ) -> None:
   """Builds huggingface tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  model_type = _resolve_optional_cli_model_type(args.model_type)
   builder.add_hf_tokenizer(
-      args.path, model_type=model_type, additional_metadata=metadata
+      args.path, model_type=args.model_type, additional_metadata=metadata
   )
 
 

@@ -25,9 +25,9 @@ from typing import Any
 import click
 
 import litert_lm
-from litert_lm_builder import litertlm_builder
 from litert_lm_cli import common
 from litert_lm_cli import model
+from runtime.proto import llm_metadata_pb2
 
 
 class LiteRTLMServer(http.server.HTTPServer):
@@ -164,7 +164,7 @@ def get_or_initialize_server_engine(
       None,
       model_obj=m,
       target_model_types={
-          litertlm_builder.TfLiteModelType.VISION_ENCODER.value,
+          llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
       },
       label="vision",
   )
@@ -172,7 +172,7 @@ def get_or_initialize_server_engine(
       None,
       model_obj=m,
       target_model_types={
-          litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+          llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
       },
       label="audio",
   )
@@ -278,7 +278,7 @@ def get_or_initialize_server_embedding_engine(
       None,
       model_obj=m,
       target_model_types={
-          litertlm_builder.TfLiteModelType.VISION_ENCODER.value,
+          llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
       },
       label="vision",
   )
@@ -286,7 +286,7 @@ def get_or_initialize_server_embedding_engine(
       None,
       model_obj=m,
       target_model_types={
-          litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+          llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
       },
       label="audio",
   )

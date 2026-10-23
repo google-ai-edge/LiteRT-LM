@@ -30,14 +30,14 @@ from typing import Any
 import click
 
 import litert_lm
-from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_peek
 from litert_lm_cli import config
+from runtime.proto import llm_metadata_pb2
 
 # The default model types representing the main text model components.
 _DEFAULT_TARGET_MODEL_TYPES = frozenset({
-    litertlm_builder.TfLiteModelType.ARTISAN_TEXT_DECODER.value,
-    litertlm_builder.TfLiteModelType.PREFILL_DECODE.value,
+    llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER,
+    llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
 })
 
 
@@ -114,16 +114,17 @@ def load_preset(preset: str):
 
 def model_default_backend(
     model_path: str,
-    target_model_types: collections.abc.Container[
-        str
+    target_model_types: collections.abc.Iterable[
+        llm_metadata_pb2.LlmMetadata.TfLiteModelType
     ] = _DEFAULT_TARGET_MODEL_TYPES,
 ) -> str | None:
   """Inspects the .litertlm file metadata to detect the default backend.
 
   Args:
     model_path: The path to the .litertlm model file.
-    target_model_types: The model types to look for. Defaults to main model
-      types (ARTISAN_TEXT_DECODER, PREFILL_DECODE).
+    target_model_types: The `LlmMetadata.TfLiteModelType` enum values to look
+      for. Defaults to main model types (TF_LITE_ARTISAN_TEXT_DECODER,
+      TF_LITE_PREFILL_DECODE).
 
   Returns:
     The default backend name (e.g., 'gpu', 'cpu') or None if not found.
@@ -131,6 +132,13 @@ def model_default_backend(
     present in the model is crucial. It signals the CLI to pass None to the
     Engine, safely disabling them and preventing C++ initialization crashes.
   """
+  target_wire_strings = {
+      llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(t).lower()
+      for t in target_model_types
+  }
+  artisan_wire_string = llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
+      llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER
+  ).lower()
   try:
     with io.StringIO() as dummy_out:
       metadata = litertlm_peek.read_litertlm_header(model_path, dummy_out)
@@ -144,11 +152,8 @@ def model_default_backend(
             model_type = litertlm_peek.get_model_type(section)
             if model_type:
               model_type_lower = model_type.lower()
-              if model_type_lower in target_model_types:
-                if (
-                    model_type_lower
-                    == litertlm_builder.TfLiteModelType.ARTISAN_TEXT_DECODER.value
-                ):
+              if model_type_lower in target_wire_strings:
+                if model_type_lower == artisan_wire_string:
                   return "gpu"
                 if section.ItemsLength() > 0:
                   for j in range(section.ItemsLength()):
@@ -198,8 +203,8 @@ def parse_backend(
     *,
     model_obj: Model,
     cpu_thread_count: int | None = None,
-    target_model_types: collections.abc.Container[
-        str
+    target_model_types: collections.abc.Iterable[
+        llm_metadata_pb2.LlmMetadata.TfLiteModelType
     ] = _DEFAULT_TARGET_MODEL_TYPES,
     label: str | None = None,
     gpu_decode_steps_per_sync: int | None = None,

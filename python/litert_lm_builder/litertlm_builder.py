@@ -27,7 +27,7 @@ builder.add_system_metadata(
 )
 builder.add_tflite_model(
     model_path,
-    litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+    llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
 )
 builder.add_sentencepiece_tokenizer(tokenizer_path)
 builder.add_llm_metadata(llm_metadata_path)
@@ -212,51 +212,6 @@ def populate_system_metadata(
   return system_metadata
 
 
-@enum.unique
-class TfLiteModelType(enum.Enum):
-  """TfLiteModelType enum.
-
-  This enum maps to the model types defined in the LiteRT-LM flatbuffers schema.
-  """
-
-  PREFILL_DECODE = "tf_lite_prefill_decode"
-
-  EMBEDDER = "tf_lite_embedder"
-  PER_LAYER_EMBEDDER = "tf_lite_per_layer_embedder"
-
-  AUX = "tf_lite_aux"
-
-  AUDIO_FRONTEND = "tf_lite_audio_frontend"
-  AUDIO_ENCODER_HW = "tf_lite_audio_encoder_hw"
-  AUDIO_ADAPTER = "tf_lite_audio_adapter"
-  END_OF_AUDIO = "tf_lite_end_of_audio"
-
-  VISION_ENCODER = "tf_lite_vision_encoder"
-  VISION_ADAPTER = "tf_lite_vision_adapter"
-  END_OF_VISION = "tf_lite_end_of_vision"
-  ARTISAN_TEXT_DECODER = "tf_lite_artisan_text_decoder"
-  MTP_DRAFTER = "tf_lite_mtp_drafter"
-  MTP_AUX = "tf_lite_mtp_aux"
-  TEXT_ENCODER = "tf_lite_text_encoder"
-  #     //runtime/proto/llm_metadata.proto,
-  #     //runtime/proto/embedding_metadata.proto,
-  # )
-
-  @classmethod
-  def get_enum_from_tf_free_value(cls, tf_free_value: str) -> "TfLiteModelType":
-    """A helper method to get the enum value from a TF-free or prefixed value."""
-    tf_free_value_lower = tf_free_value.lower()
-    if tf_free_value_lower.startswith("tf_lite_"):
-      # For handling old models. All new models should use the TF-free format.
-      logging.warning(
-          "Input '%s' already starts with 'tf_lite_'.", tf_free_value
-      )
-      value = tf_free_value_lower
-    else:
-      value = "tf_lite_" + tf_free_value_lower
-    return cls(value)
-
-
 @dataclasses.dataclass(frozen=True)
 class ExternalizationSummary:
   """Summary of an opt-in LiteRT-LM weight externalization pass."""
@@ -332,25 +287,37 @@ def _get_model_type(section: _SectionObject) -> str | None:
   return model_type
 
 
-_ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = (
-    set(llm_metadata_pb2.LlmMetadata.TfLiteModelType.keys())
-    | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.keys())
-    | set(speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.keys())
-    | set(text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.keys())
-    | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.keys())
-    | set(any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.keys())
-) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
+# The capability-scoped proto `TfLiteModelType` enums, keyed by the capability
+# names tracked in `LitertLmFileBuilder._capability_types`. These protos are the
+# single source of truth for TFLite model type wire strings.
+_CAPABILITY_TFLITE_MODEL_TYPE_ENUMS = {
+    "llm": llm_metadata_pb2.LlmMetadata.TfLiteModelType,
+    "embedding": embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType,
+    "speech2text": speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType,
+    "text2speech": text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType,
+    "text2image": text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType,
+    "any2any": any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType,
+}
+
+_TFLITE_MODEL_TYPE_PREFIX = "tf_lite_"
+
+_ALL_CAPABILITY_TFLITE_MODEL_TYPES: set[str] = set().union(*(
+    enum_type.keys()
+    for enum_type in _CAPABILITY_TFLITE_MODEL_TYPE_ENUMS.values()
+)) - {"TF_LITE_MODEL_TYPE_UNSPECIFIED"}
+
+
+def _to_tf_free_model_type(wire_str: str) -> str:
+  """Strips the `tf_lite_` prefix from a lowercase TFLite model type string."""
+  return wire_str.removeprefix(_TFLITE_MODEL_TYPE_PREFIX)
+
 
 # Every valid (non-UNSPECIFIED) proto `TfLiteModelType` enum value across the
 # capability metadata protos.
-_ALL_CAPABILITY_TFLITE_MODEL_TYPE_VALUES: set[int] = (
-    set(llm_metadata_pb2.LlmMetadata.TfLiteModelType.values())
-    | set(embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.values())
-    | set(speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.values())
-    | set(text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.values())
-    | set(text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.values())
-    | set(any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.values())
-) - {0}
+_ALL_CAPABILITY_TFLITE_MODEL_TYPE_VALUES: set[int] = set().union(*(
+    enum_type.values()
+    for enum_type in _CAPABILITY_TFLITE_MODEL_TYPE_ENUMS.values()
+)) - {0}
 
 
 def _is_proto_enum_model_type(model_type: Any) -> bool:
@@ -360,77 +327,78 @@ def _is_proto_enum_model_type(model_type: Any) -> bool:
 
 def get_all_tflite_model_types() -> list[str]:
   """Returns all supported TF-free TFLite model type strings across capabilities."""
-  types = {
-      str(model_type.value).lower().replace("tf_lite_", "")
-      for model_type in TfLiteModelType
-  } | {
-      name.lower().replace("tf_lite_", "")
+  return sorted({
+      _to_tf_free_model_type(name.lower())
       for name in _ALL_CAPABILITY_TFLITE_MODEL_TYPES
-  }
-  return sorted(types)
+  })
+
+
+def _resolve_model_type_str(model_type: str) -> str:
+  """Resolves a TF-free or `tf_lite_`-prefixed string to its wire string.
+
+  Args:
+    model_type: The TF-free model type (e.g. "prefill_decode") or the prefixed
+      wire string (e.g. "tf_lite_prefill_decode"), case-insensitive.
+
+  Returns:
+    The lowercase wire string, e.g. "tf_lite_prefill_decode".
+
+  Raises:
+    ValueError: If the model type is not defined by any capability proto.
+  """
+  model_type_lower = model_type.lower()
+  if model_type_lower.startswith(_TFLITE_MODEL_TYPE_PREFIX):
+    # For handling old models. All new models should use the TF-free format.
+    logging.warning("Input '%s' already starts with 'tf_lite_'.", model_type)
+    wire_str = model_type_lower
+  else:
+    wire_str = _TFLITE_MODEL_TYPE_PREFIX + model_type_lower
+  if wire_str.upper() not in _ALL_CAPABILITY_TFLITE_MODEL_TYPES:
+    raise ValueError(f"Unknown TfLiteModelType: {model_type}")
+  return wire_str
 
 
 def _resolve_model_type_wire_string(
-    model_type: TfLiteModelType | int | str,
+    model_type: int | str,
     capability_types: set[str] | None = None,
 ) -> str:
-  """Resolves a model_type enum, int, or string to its lowercase wire string."""
-  if isinstance(model_type, TfLiteModelType):
-    return model_type.value
+  """Resolves a model_type to its lowercase wire string.
+
+  Args:
+    model_type: A TF-free or `tf_lite_`-prefixed string, or a capability-scoped
+      proto `TfLiteModelType` enum value.
+    capability_types: The capability metadata types added to the builder. Used
+      to pick the proto enum when `model_type` is an integer.
+
+  Returns:
+    The lowercase wire string, e.g. "tf_lite_prefill_decode".
+
+  Raises:
+    ValueError: If the model type cannot be resolved.
+  """
   if isinstance(model_type, int) and not isinstance(model_type, bool):
+    if model_type == 0:
+      raise ValueError(
+          "TF_LITE_MODEL_TYPE_UNSPECIFIED (0) is not a valid model_type."
+      )
     if not capability_types:
       raise ValueError(
           "Capability metadata must be added before resolving an integer"
-          " model_type, or pass a string/TfLiteModelType."
+          " model_type, or pass a string model_type."
       )
     if len(capability_types) > 1:
       raise ValueError(
           "Ambiguous integer model_type when multiple capability metadata"
           f" sections ({sorted(capability_types)}) are present; pass a string"
-          " or TfLiteModelType."
-      )
-    if model_type == 0:
-      raise ValueError(
-          "TF_LITE_MODEL_TYPE_UNSPECIFIED (0) is not a valid model_type."
+          " model_type."
       )
     capability_type = next(iter(capability_types))
-    if capability_type == "speech2text":
-      return speech2text_metadata_pb2.Speech2TextMetadata.TfLiteModelType.Name(
-          model_type
-      ).lower()
-    if capability_type == "text2speech":
-      return text2speech_metadata_pb2.Text2SpeechMetadata.TfLiteModelType.Name(
-          model_type
-      ).lower()
-    if capability_type == "text2image":
-      return text2image_metadata_pb2.Text2ImageMetadata.TfLiteModelType.Name(
-          model_type
-      ).lower()
-    if capability_type == "any2any":
-      return any2any_metadata_pb2.Any2AnyMetadata.TfLiteModelType.Name(
-          model_type
-      ).lower()
-    if capability_type == "embedding":
-      return embedding_metadata_pb2.EmbeddingMetadata.TfLiteModelType.Name(
-          model_type
-      ).lower()
-    if capability_type == "llm":
-      return llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
-          model_type
-      ).lower()
-    raise ValueError(f"Unknown capability_type: {capability_type!r}")
+    enum_type = _CAPABILITY_TFLITE_MODEL_TYPE_ENUMS.get(capability_type)
+    if enum_type is None:
+      raise ValueError(f"Unknown capability_type: {capability_type!r}")
+    return enum_type.Name(model_type).lower()
   if isinstance(model_type, str):
-    try:
-      return TfLiteModelType.get_enum_from_tf_free_value(model_type).value
-    except ValueError:
-      wire_str = (
-          model_type.lower()
-          if model_type.lower().startswith("tf_lite_")
-          else "tf_lite_" + model_type.lower()
-      )
-      if wire_str.upper() in _ALL_CAPABILITY_TFLITE_MODEL_TYPES:
-        return wire_str
-      raise ValueError(f"Unknown TfLiteModelType: {model_type}") from None
+    return _resolve_model_type_str(model_type)
   raise ValueError(f"Unsupported model_type type: {type(model_type)}")
 
 
@@ -459,7 +427,9 @@ def _check_and_record_tokenizer(
   Raises:
     ValueError: If a tokenizer was already added for the model type.
   """
-  prefill_decode = TfLiteModelType.PREFILL_DECODE.value
+  prefill_decode = llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
+      llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE
+  ).lower()
   if model_type_key is None or model_type_key == prefill_decode:
     if (
         None in tokenizers_by_model_type
@@ -549,7 +519,7 @@ class LitertLmFileBuilder:
     )
     builder.add_tflite_model(
         model_path,
-        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
     )
     builder.add_sentencepiece_tokenizer(tokenizer_path)
     builder.add_llm_metadata(llm_metadata_path)
@@ -593,12 +563,10 @@ class LitertLmFileBuilder:
         self._capability_types.discard(new_capability)
         raise
 
-  def _model_type_key(
-      self, model_type: TfLiteModelType | int | str
-  ) -> str | _PendingModelType:
+  def _model_type_key(self, model_type: int | str) -> str | _PendingModelType:
     """Resolves a model_type argument to its wire string, or defers it.
 
-    Strings and `TfLiteModelType` values are always resolved immediately. A
+    Strings are always resolved immediately. A
     proto `TfLiteModelType` enum value is resolved immediately when capability
     metadata has already been added; otherwise its resolution is deferred to
     `build`, so model sections can be added before the capability metadata.
@@ -632,12 +600,9 @@ class LitertLmFileBuilder:
         isinstance(model_type, _PendingModelType)
         and len(self._capability_types) == 1
     ):
-      try:
-        return _resolve_model_type_wire_string(
-            model_type.value, self._capability_types
-        )
-      except ValueError:
-        return model_type
+      return _resolve_model_type_wire_string(
+          model_type.value, self._capability_types
+      )
     return model_type
 
   def _section_model_type(
@@ -695,18 +660,26 @@ class LitertLmFileBuilder:
   def _has_tokenizer(self) -> bool:
     return bool(self._tokenizers_by_model_type)
 
+  def _has_section_with_llm_model_type(
+      self, *model_types: llm_metadata_pb2.LlmMetadata.TfLiteModelType
+  ) -> bool:
+    """Returns True if any section has one of the given LLM model types."""
+    wire_strings = {
+        llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(m).lower()
+        for m in model_types
+    }
+    return any(
+        self._section_model_type(s) in wire_strings for s in self._sections
+    )
+
   @property
   def is_llm_model(self) -> bool:
     """Returns True if the builder contains an LLM model or LLM metadata."""
     if self._has_llm_metadata:
       return True
-    return any(
-        self._section_model_type(s)
-        in (
-            TfLiteModelType.PREFILL_DECODE.value,
-            TfLiteModelType.ARTISAN_TEXT_DECODER.value,
-        )
-        for s in self._sections
+    return self._has_section_with_llm_model_type(
+        llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER,
     )
 
   _VISION_TRANSFORMER_MODEL_TYPES = frozenset({"gemma4", "lfm2"})
@@ -718,14 +691,10 @@ class LitertLmFileBuilder:
   @property
   def is_vision_model(self) -> bool:
     """Returns True if the builder contains a vision adapter/encoder model."""
-    return any(
-        self._section_model_type(s)
-        in (
-            TfLiteModelType.VISION_ADAPTER.value,
-            TfLiteModelType.VISION_ENCODER.value,
-            TfLiteModelType.END_OF_VISION.value,
-        )
-        for s in self._sections
+    return self._has_section_with_llm_model_type(
+        llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ADAPTER,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
+        llm_metadata_pb2.LlmMetadata.TF_LITE_END_OF_VISION,
     )
 
   @property
@@ -1324,7 +1293,7 @@ class LitertLmFileBuilder:
   def add_tflite_model(
       self,
       tflite_model_path: str,
-      model_type: TfLiteModelType | int | str,
+      model_type: int | str,
       backend_constraint: Optional[str] = None,
       prefer_activation_type: Optional[str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
@@ -1333,10 +1302,12 @@ class LitertLmFileBuilder:
 
     Args:
       tflite_model_path: The path to the tflite model file.
-      model_type: The type of the tflite model. A capability-scoped proto enum
-        value (e.g. `llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE`) is
-        resolved against the capability metadata; if none has been added yet, it
-        is resolved when `build` is called.
+      model_type: The type of the tflite model: a TF-free string (e.g.
+        "prefill_decode"), a lowercase wire string (e.g.
+        "tf_lite_prefill_decode"), or a capability-scoped proto enum value (e.g.
+        `llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE`). A proto enum
+        value is resolved against the capability metadata; if none has been
+        added yet, it is resolved when `build` is called.
       backend_constraint: The backend constraint for the tflite model.
       prefer_activation_type: The preferred activation type for the tflite
         model. - fp16/float16 for float16 activation. - fp32/float32 for float32
@@ -1401,7 +1372,7 @@ class LitertLmFileBuilder:
   def add_tflite_weights(
       self,
       tflite_weights_path: str,
-      model_type: TfLiteModelType | int | str,
+      model_type: int | str,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds tflite weights to the litertlm file.
@@ -1409,6 +1380,7 @@ class LitertLmFileBuilder:
     Args:
       tflite_weights_path: The path to the tflite weights file.
       model_type: The type of the tflite model these weights correspond to.
+        Accepts the same values as `add_tflite_model`.
       additional_metadata: Additional metadata to add to the tflite weights.
 
     Returns:
@@ -1447,7 +1419,7 @@ class LitertLmFileBuilder:
 
   def _prepare_tokenizer_metadata(
       self,
-      model_type: Optional[TfLiteModelType | int | str],
+      model_type: Optional[int | str],
       additional_metadata: Optional[list[Metadata]],
   ) -> list[Metadata]:
     """Validates tokenizer uniqueness and prepares its metadata."""
@@ -1480,7 +1452,7 @@ class LitertLmFileBuilder:
   def add_sentencepiece_tokenizer(
       self,
       sp_tokenizer_path: str,
-      model_type: Optional[TfLiteModelType | int | str] = None,
+      model_type: Optional[int | str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds a sentencepiece tokenizer to the litertlm file.
@@ -1488,7 +1460,7 @@ class LitertLmFileBuilder:
     Args:
       sp_tokenizer_path: The path to the sentencepiece tokenizer file.
       model_type: The model type this tokenizer corresponds to (e.g.
-        TfLiteModelType.PREFILL_DECODE).
+        "prefill_decode"). Accepts the same values as `add_tflite_model`.
       additional_metadata: Additional metadata to add to the sentencepiece
         tokenizer.
 
@@ -1520,7 +1492,7 @@ class LitertLmFileBuilder:
   def add_hf_tokenizer(
       self,
       hf_tokenizer_path: str,
-      model_type: Optional[TfLiteModelType | int | str] = None,
+      model_type: Optional[int | str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds a hf tokenizer to the litertlm file.
@@ -1528,7 +1500,7 @@ class LitertLmFileBuilder:
     Args:
       hf_tokenizer_path: The path to the hf tokenizer `tokenizer.json` file.
       model_type: The model type this tokenizer corresponds to (e.g.
-        TfLiteModelType.PREFILL_DECODE).
+        "prefill_decode"). Accepts the same values as `add_tflite_model`.
       additional_metadata: Additional metadata to add to the hf tokenizer.
 
     Returns:
@@ -1591,7 +1563,7 @@ class LitertLmFileBuilder:
 
   def set_backend_constraint(
       self,
-      model_type: TfLiteModelType | int | str,
+      model_type: int | str,
       backend_constraint: str | None,
   ) -> LitertLmFileBuilderT:
     """Sets or clears the backend_constraint metadata on matching sections.
@@ -1600,8 +1572,9 @@ class LitertLmFileBuilder:
     where a section previously constrained to CPU can now run elsewhere.
 
     Args:
-      model_type: Target section model type (enum, TF-free string such as
-        'audio_encoder_hw', or a capability-scoped proto enum value).
+      model_type: Target section model type, e.g. a TF-free string such as
+        'audio_encoder_hw', a lowercase wire string such as
+        'tf_lite_audio_encoder_hw', or a capability-scoped proto enum value.
       backend_constraint: New constraint string (e.g. 'npu', 'cpu, gpu'), or
         None to remove the constraint entirely.
 
@@ -1614,11 +1587,7 @@ class LitertLmFileBuilder:
         integer model_type cannot be matched against a string one because no
         capability metadata has been added yet.
     """
-    target_model_type = (
-        model_type.value
-        if isinstance(model_type, TfLiteModelType)
-        else self._model_type_key(model_type)
-    )
+    target_model_type = self._model_type_key(model_type)
     if backend_constraint is not None:
       _validate_backend_constraints(backend_constraint)
 
@@ -1657,7 +1626,7 @@ class LitertLmFileBuilder:
     return self  # pyrefly: ignore[bad-return]
 
   def remove_backend_constraint(
-      self, model_type: TfLiteModelType | int | str
+      self, model_type: int | str
   ) -> LitertLmFileBuilderT:
     """Removes the backend_constraint metadata from matching sections."""
     return self.set_backend_constraint(model_type, None)

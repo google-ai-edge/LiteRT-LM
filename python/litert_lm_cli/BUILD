@@ -55,8 +55,8 @@ pytype_strict_library(
     deps = [
         ":config",
         "//python/litert_lm",
-        "//python/litert_lm_builder:litertlm_builder",
         "//python/litert_lm_builder:litertlm_peek",
+        "//runtime/proto:llm_metadata_py_pb2",
         requirement("click"),
     ],
     imports = [".."],
@@ -141,7 +141,7 @@ py_test(
         ":config",
         ":model",
         "//python/litert_lm",
-        "//python/litert_lm_builder:litertlm_builder",
+        "//runtime/proto:llm_metadata_py_pb2",
         "@absl_py//absl/testing:absltest",
         "@absl_py//absl/testing:parameterized",
     ],

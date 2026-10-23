@@ -84,16 +84,17 @@ from litert_lm_builder import (
     LitertLmFileBuilder,
     Metadata,
     DType,
-    TfLiteModelType,
     Backend,
     peek_litertlm_file
 )
+from litert_lm_builder.runtime.proto import llm_metadata_pb2
 
 def build_demo_model():
     """Builds a .litertlm file programmatically using the Python API."""
     # Paths to your assets
     model_path = "schema/testdata/attention.tflite"
     sp_path = "runtime/components/testdata/sentencepiece.model"
+    llm_metadata_path = "runtime/components/testdata/llm_metadata.pb"
     output_path = "demo_api.litertlm"
 
     # Initialize the core builder object
@@ -102,11 +103,12 @@ def build_demo_model():
     # Add metadata
     builder.add_system_metadata(Metadata(key="Authors", value="ODML Team", dtype=DType.STRING))
     builder.add_system_metadata(Metadata(key="TargetBackend", value=Backend.CPU.name, dtype=DType.STRING))
+    builder.add_llm_metadata(llm_metadata_path=llm_metadata_path)
 
     # Add main TfLite model
     builder.add_tflite_model(
         tflite_model_path=model_path,
-        model_type=TfLiteModelType.PREFILL_DECODE
+        model_type=llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
     )
 
     # Add auxiliary tokens & tokenizers
