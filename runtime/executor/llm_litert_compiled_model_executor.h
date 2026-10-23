@@ -282,7 +282,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         // session: the engine's mode if the drafter was loaded at creation,
         // plain decoding otherwise.
         speculative_decoding_controller_(
-            MtpGatingConfig(),
+            executor_settings_.GetAdvancedSettings()
+                .value_or(AdvancedSettings())
+                .mtp_gating_config.value_or(MtpGatingConfig()),
             mtp_drafter_ != nullptr
                 ? executor_settings_.GetEffectiveSpeculativeDecodingMode()
                 : SpeculativeDecodingMode::kOff) {

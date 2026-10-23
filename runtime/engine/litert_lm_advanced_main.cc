@@ -247,7 +247,9 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--no_repeat_ngram_window_size=<no_repeat_ngram_window_size>] "
            "[--suppress_tokens=<token1,token2,...>] "
            "[--constraint_regex=<constraint_regex>] "
-           "[--enable_speculative_decoding=<true|false>]";
+           "[--speculative_decoding=<on|off|adaptive>] "
+           "[--sampler_top_k=<k>] [--sampler_top_p=<p>] "
+           "[--sampler_temperature=<t>] [--sampler_seed=<seed>]";
     ABSL_LOG(INFO)
         << "To provide data for multimodality, use [image:/path/to/image.jpg] "
            "or [audio:/path/to/audio.wav] in the input prompt. e.g. \"Describe "
@@ -341,8 +343,24 @@ absl::Status MainHelper(int argc, char** argv) {
       GetSuppressTokensConfig(absl::GetFlag(FLAGS_suppress_tokens));
   settings.constraint_regex = absl::GetFlag(FLAGS_constraint_regex);
   settings.use_submodel = absl::GetFlag(FLAGS_use_submodel);
+  ABSL_ASSIGN_OR_RETURN(settings.speculative_decoding_mode,
+                        litert::lm::ParseSpeculativeDecodingFlag(
+                            absl::GetFlag(FLAGS_speculative_decoding)));
   settings.enable_speculative_decoding =
       absl::GetFlag(FLAGS_enable_speculative_decoding);
+  settings.mtp_gating_half_life = absl::GetFlag(FLAGS_mtp_gating_half_life);
+  settings.mtp_gating_deadband = absl::GetFlag(FLAGS_mtp_gating_deadband);
+  settings.mtp_gating_margin = absl::GetFlag(FLAGS_mtp_gating_margin);
+  settings.mtp_gating_probe_interval =
+      absl::GetFlag(FLAGS_mtp_gating_probe_interval);
+  settings.mtp_gating_probe_length =
+      absl::GetFlag(FLAGS_mtp_gating_probe_length);
+  settings.mtp_gating_forced_switch_period =
+      absl::GetFlag(FLAGS_mtp_gating_forced_switch_period);
+  settings.sampler_top_k = absl::GetFlag(FLAGS_sampler_top_k);
+  settings.sampler_top_p = absl::GetFlag(FLAGS_sampler_top_p);
+  settings.sampler_temperature = absl::GetFlag(FLAGS_sampler_temperature);
+  settings.sampler_seed = absl::GetFlag(FLAGS_sampler_seed);
   settings.enable_neon_for_npu_greedy_sampling =
       absl::GetFlag(FLAGS_enable_neon_for_npu_greedy_sampling);
   settings.use_hw_masking_for_npu = absl::GetFlag(FLAGS_use_hw_masking_for_npu);

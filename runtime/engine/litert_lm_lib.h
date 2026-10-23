@@ -41,6 +41,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 
 namespace litert {
 namespace lm {
@@ -146,7 +147,29 @@ struct LiteRtLmSettings {
   SuppressTokensConfig suppress_tokens_config = SuppressTokensConfig::Default();
   std::string constraint_regex = "";
   bool use_submodel = false;
+  // Default speculative decoding mode of the engine, which sessions inherit.
+  // kOn and kAdaptive load the MTP drafter when the engine is created.
+  // std::nullopt uses the runtime default (off).
+  std::optional<SpeculativeDecodingMode> speculative_decoding_mode;
+  // Deprecated: use `speculative_decoding_mode` instead. If true and
+  // `speculative_decoding_mode` is unset, equivalent to kOn.
   bool enable_speculative_decoding = false;
+  // Diagnostic overrides of the adaptive speculative decoding policy.
+  std::optional<double> mtp_gating_half_life;
+  std::optional<double> mtp_gating_deadband;
+  std::optional<double> mtp_gating_margin;
+  std::optional<int> mtp_gating_probe_interval;
+  std::optional<int> mtp_gating_probe_length;
+  std::optional<int> mtp_gating_forced_switch_period;
+  // Session sampler overrides. If any of top-k, top-p or temperature is set,
+  // the session samples with TOP_P sampling; unset fields default to k=40, p=1
+  // and temperature=1. `sampler_seed` requires one of them: without a sampler
+  // type, the session takes the model's default sampler parameters, seed
+  // included.
+  std::optional<int> sampler_top_k;
+  std::optional<double> sampler_top_p;
+  std::optional<double> sampler_temperature;
+  std::optional<int> sampler_seed;
   bool enable_neon_for_npu_greedy_sampling = true;
   bool use_hw_masking_for_npu = true;
   bool use_hw_cache_update_for_npu = true;

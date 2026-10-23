@@ -33,6 +33,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 
 namespace litert::lm {
@@ -317,6 +318,11 @@ struct AdvancedSettings {
   // This feature is by default false. Applications can enable it by setting it
   // to true if they want to ensure the quality of the decoded output.
   bool error_on_invalid_sampled_token_id = false;
+
+  // Diagnostic override of the adaptive speculative decoding policy
+  // configuration, for tuning and benchmarking. If unset, the policy uses the
+  // `MtpGatingConfig` defaults.
+  std::optional<MtpGatingConfig> mtp_gating_config;
 
   bool operator==(const AdvancedSettings& other) const = default;
 };

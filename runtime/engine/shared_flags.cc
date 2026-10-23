@@ -19,6 +19,12 @@
 #include <vector>
 
 #include "absl/flags/flag.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/executor/speculative_decoding_mode.h"
 
 ABSL_FLAG(std::optional<std::string>, vision_backend, std::nullopt,
           "Backend to use for the vision model (cpu, gpu, or npu). If not "
@@ -187,8 +193,49 @@ ABSL_FLAG(std::string, constraint_regex, "",
           "Regular expression to constrain the output generation.");
 ABSL_FLAG(bool, use_submodel, false,
           "Whether the submodel should be used if available.");
+ABSL_FLAG(std::string, speculative_decoding, "",
+          "Default speculative decoding (MTP) mode of the engine: on, off or "
+          "adaptive. on speculates on every decode step; adaptive speculates "
+          "while it is measured to be faster than plain decoding (on every "
+          "step on backends that do not support it). on and adaptive load the "
+          "drafter when the engine is created. Unset uses the runtime default "
+          "(off).");
 ABSL_FLAG(bool, enable_speculative_decoding, false,
-          "Whether to use speculative decoding.");
+          "Deprecated: use --speculative_decoding=on instead. If true and "
+          "--speculative_decoding is unset, equivalent to "
+          "--speculative_decoding=on.");
+ABSL_FLAG(std::optional<double>, mtp_gating_half_life, std::nullopt,
+          "Diagnostic: half-life, in steps, of the cost estimates of the "
+          "adaptive speculative decoding policy.");
+ABSL_FLAG(std::optional<double>, mtp_gating_deadband, std::nullopt,
+          "Diagnostic: relative cost excess tolerated before the adaptive "
+          "speculative decoding policy disables speculation.");
+ABSL_FLAG(std::optional<double>, mtp_gating_margin, std::nullopt,
+          "Diagnostic: relative saving a probe must show before the adaptive "
+          "speculative decoding policy re-enables speculation.");
+ABSL_FLAG(std::optional<int>, mtp_gating_probe_interval, std::nullopt,
+          "Diagnostic: plain steps between probes of the adaptive speculative "
+          "decoding policy while speculation is disabled.");
+ABSL_FLAG(std::optional<int>, mtp_gating_probe_length, std::nullopt,
+          "Diagnostic: speculative steps per probe of the adaptive speculative "
+          "decoding policy.");
+ABSL_FLAG(std::optional<int>, mtp_gating_forced_switch_period, std::nullopt,
+          "Diagnostic: if > 0, the adaptive speculative decoding policy "
+          "ignores its estimates and alternates between speculative and plain "
+          "decoding every this many steps.");
+ABSL_FLAG(std::optional<int>, sampler_top_k, std::nullopt,
+          "If set, samples with top-k/top-p sampling using this k instead of "
+          "the model's default sampler. Defaults to 40 when only "
+          "--sampler_top_p or --sampler_temperature is given.");
+ABSL_FLAG(std::optional<double>, sampler_top_p, std::nullopt,
+          "If set, samples with top-k/top-p sampling using this p instead of "
+          "the model's default sampler (p defaults to 1.0).");
+ABSL_FLAG(std::optional<double>, sampler_temperature, std::nullopt,
+          "If set, samples with top-k/top-p sampling using this temperature "
+          "instead of the model's default sampler (defaults to 1.0).");
+ABSL_FLAG(std::optional<int>, sampler_seed, std::nullopt,
+          "If set, the random seed of the sampler. Requires --sampler_top_k, "
+          "--sampler_top_p or --sampler_temperature.");
 ABSL_FLAG(bool, enable_neon_for_npu_greedy_sampling, true,
           "If true, enable NEON for NPU greedy sampling.");
 ABSL_FLAG(bool, use_hw_masking_for_npu, true,
@@ -212,3 +259,26 @@ ABSL_FLAG(std::string, gpu_use_ir_model, "default",
           "Whether to use the IR model path on the GPU backend. One of "
           "\"enabled\", \"disabled\", or \"default\". \"default\" is currently "
           "disabled.");
+
+namespace litert::lm {
+
+absl::StatusOr<std::optional<SpeculativeDecodingMode>>
+ParseSpeculativeDecodingFlag(absl::string_view value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  if (absl::EqualsIgnoreCase(value, "off")) {
+    return SpeculativeDecodingMode::kOff;
+  }
+  if (absl::EqualsIgnoreCase(value, "on")) {
+    return SpeculativeDecodingMode::kOn;
+  }
+  if (absl::EqualsIgnoreCase(value, "adaptive")) {
+    return SpeculativeDecodingMode::kAdaptive;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Invalid --speculative_decoding: \"", value,
+                   "\". Expected on, off or adaptive."));
+}
+
+}  // namespace litert::lm

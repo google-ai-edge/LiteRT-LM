@@ -15,9 +15,11 @@
 #include "runtime/engine/litert_lm_lib.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>  // NOLINT
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <streambuf>
@@ -36,6 +38,9 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/mtp_gating_policy.h"
+#include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert {
@@ -703,6 +708,154 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_AdvancedSettings) {
   EXPECT_TRUE(advanced->enable_profiling);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_SpeculativeDecoding) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+
+  // By default, the engine's mode is unset (off) and the policy keeps its
+  // defaults.
+  ASSERT_OK_AND_ASSIGN(EngineSettings engine_settings,
+                       CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetSpeculativeDecodingConfig().mode, std::nullopt);
+  EXPECT_EQ(engine_settings.GetMainExecutorSettings()
+                .GetEffectiveSpeculativeDecodingMode(),
+            SpeculativeDecodingMode::kOff);
+  EXPECT_EQ(engine_settings.GetMainExecutorSettings()
+                .GetAdvancedSettings()
+                .value_or(AdvancedSettings())
+                .mtp_gating_config,
+            std::nullopt);
+
+  // The mode is the engine's default.
+  settings.speculative_decoding_mode = SpeculativeDecodingMode::kAdaptive;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kAdaptive);
+
+  // The deprecated boolean means kOn, unless a mode is set.
+  settings.enable_speculative_decoding = true;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kAdaptive);
+  settings.speculative_decoding_mode = std::nullopt;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetSpeculativeDecodingConfig().mode,
+            SpeculativeDecodingMode::kOn);
+
+  settings.mtp_gating_half_life = 8;
+  settings.mtp_gating_forced_switch_period = 16;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  const auto& advanced =
+      engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
+  ASSERT_TRUE(advanced.has_value());
+  // Unset flags keep the policy defaults.
+  MtpGatingConfig expected_config;
+  expected_config.ema_half_life_steps = 8;
+  expected_config.forced_switch_period = 16;
+  EXPECT_EQ(advanced->mtp_gating_config, expected_config);
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettings_InvalidMtpGatingOverride) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.mtp_gating_probe_length = 0;
+  EXPECT_THAT(CreateEngineSettings(settings),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettings_SamplerSeedRequiresSamplerOverride) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  // On its own, the seed would be replaced by the model's default sampler
+  // parameters, so it is rejected rather than silently ignored.
+  settings.sampler_seed = 7;
+  EXPECT_THAT(CreateEngineSettings(settings),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  settings.sampler_top_k = 40;
+  EXPECT_OK(CreateEngineSettings(settings));
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettings_RejectsInvalidSamplerOverrides) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings base;
+  base.model_path = model_path.string();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+
+  for (int top_k : {0, -1}) {
+    LiteRtLmSettings settings = base;
+    settings.sampler_top_k = top_k;
+    EXPECT_THAT(CreateEngineSettings(settings),
+                StatusIs(absl::StatusCode::kInvalidArgument))
+        << top_k;
+  }
+  for (double top_p : {-0.1, 1.1, nan}) {
+    LiteRtLmSettings settings = base;
+    settings.sampler_top_p = top_p;
+    EXPECT_THAT(CreateEngineSettings(settings),
+                StatusIs(absl::StatusCode::kInvalidArgument))
+        << top_p;
+  }
+  for (double temperature : {-0.1, nan, inf}) {
+    LiteRtLmSettings settings = base;
+    settings.sampler_temperature = temperature;
+    EXPECT_THAT(CreateEngineSettings(settings),
+                StatusIs(absl::StatusCode::kInvalidArgument))
+        << temperature;
+  }
+
+  // Boundary values are accepted.
+  LiteRtLmSettings settings = base;
+  settings.sampler_top_k = 1;
+  settings.sampler_top_p = 0.0;
+  settings.sampler_temperature = 0.0;
+  EXPECT_OK(CreateEngineSettings(settings));
+  settings.sampler_top_p = 1.0;
+  EXPECT_OK(CreateEngineSettings(settings));
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettings_SamplerTopKRaisesGpuMaxTopK) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "gpu";
+
+  ASSERT_OK_AND_ASSIGN(EngineSettings engine_settings,
+                       CreateEngineSettings(settings));
+  ASSERT_OK_AND_ASSIGN(
+      GpuConfig gpu_config,
+      engine_settings.GetMainExecutorSettings().GetBackendConfig<GpuConfig>());
+  const uint32_t default_max_top_k = gpu_config.max_top_k;
+
+  // A smaller k keeps the default capacity.
+  settings.sampler_top_k = 1;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  ASSERT_OK_AND_ASSIGN(
+      gpu_config,
+      engine_settings.GetMainExecutorSettings().GetBackendConfig<GpuConfig>());
+  EXPECT_EQ(gpu_config.max_top_k, default_max_top_k);
+
+  settings.sampler_top_k = default_max_top_k + 36;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  ASSERT_OK_AND_ASSIGN(
+      gpu_config,
+      engine_settings.GetMainExecutorSettings().GetBackendConfig<GpuConfig>());
+  EXPECT_EQ(gpu_config.max_top_k, default_max_top_k + 36);
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSettings_BenchmarkParams) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
@@ -730,6 +883,42 @@ TEST(LiteRtLmLibTest, CreateSessionConfig_Default) {
   EXPECT_EQ(config.GetSamplerBackend(), Backend::UNSPECIFIED);
   EXPECT_FALSE(config.VisionModalityEnabled());
   EXPECT_FALSE(config.AudioModalityEnabled());
+}
+
+TEST(LiteRtLmLibTest, CreateSessionConfig_InheritsSpeculativeDecodingMode) {
+  // The mode is the engine's default; the session inherits it.
+  LiteRtLmSettings settings;
+  settings.speculative_decoding_mode = SpeculativeDecodingMode::kAdaptive;
+  EXPECT_EQ(CreateSessionConfig(settings).GetSpeculativeDecodingConfig().mode,
+            std::nullopt);
+}
+
+TEST(LiteRtLmLibTest, CreateSessionConfig_SamplerOverrides) {
+  LiteRtLmSettings settings;
+  EXPECT_EQ(CreateSessionConfig(settings).GetSamplerParams().type(),
+            proto::SamplerParameters::TYPE_UNSPECIFIED);
+
+  settings.sampler_top_k = 40;
+  settings.sampler_temperature = 0.8;
+  settings.sampler_seed = 7;
+  const proto::SamplerParameters params =
+      CreateSessionConfig(settings).GetSamplerParams();
+  EXPECT_EQ(params.type(), proto::SamplerParameters::TOP_P);
+  EXPECT_EQ(params.k(), 40);
+  EXPECT_FLOAT_EQ(params.p(), 1.0f);
+  EXPECT_FLOAT_EQ(params.temperature(), 0.8f);
+  EXPECT_EQ(params.seed(), 7);
+
+  // `--sampler_top_p` / `--sampler_temperature` without `--sampler_top_k`
+  // request stochastic sampling, so top-k must not default to 1 (greedy).
+  LiteRtLmSettings temperature_only;
+  temperature_only.sampler_temperature = 0.8;
+  const proto::SamplerParameters temperature_params =
+      CreateSessionConfig(temperature_only).GetSamplerParams();
+  EXPECT_EQ(temperature_params.type(), proto::SamplerParameters::TOP_P);
+  EXPECT_EQ(temperature_params.k(), 40);
+  EXPECT_FLOAT_EQ(temperature_params.p(), 1.0f);
+  EXPECT_FLOAT_EQ(temperature_params.temperature(), 0.8f);
 }
 
 TEST(LiteRtLmLibTest, RunLiteRtLmWithInferredGemma3ModelType) {

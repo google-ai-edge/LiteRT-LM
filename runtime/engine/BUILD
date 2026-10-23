@@ -209,6 +209,8 @@ cc_library(
         "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/executor:mtp_gating_policy",
+        "//runtime/executor:speculative_decoding_mode",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
@@ -233,8 +235,26 @@ cc_library(
     hdrs = ["shared_flags.h"],
     deps = [
         "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:marshalling",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:speculative_decoding_mode",
     ],
     alwayslink = 1,
+)
+
+cc_test(
+    name = "shared_flags_test",
+    srcs = ["shared_flags_test.cc"],
+    deps = [
+        ":shared_flags",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//runtime/executor:speculative_decoding_mode",
+        "//runtime/util:test_utils",
+    ],
 )
 
 cc_binary(

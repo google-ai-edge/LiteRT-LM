@@ -306,6 +306,7 @@ target_include_directories(runtime_executor_llm_executor_settings
 target_link_libraries(runtime_executor_llm_executor_settings
   PUBLIC
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::MtpGatingPolicy
     LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
     LiteRTLM::Runtime::Util::Logging
     LITERTLM_DEPS

@@ -27,6 +27,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -155,6 +156,11 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   }
   os << "error_on_invalid_sampled_token_id: "
      << settings.error_on_invalid_sampled_token_id << "\n";
+  if (settings.mtp_gating_config.has_value()) {
+    os << "mtp_gating_config: " << *settings.mtp_gating_config << "\n";
+  } else {
+    os << "mtp_gating_config: Not set\n";
+  }
   return os;
 }
 

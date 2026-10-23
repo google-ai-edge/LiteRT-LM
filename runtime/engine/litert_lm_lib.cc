@@ -32,6 +32,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT
@@ -75,6 +76,8 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/mtp_gating_policy.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -149,6 +152,31 @@ std::optional<Backend> GetSamplerBackend(const LiteRtLmSettings& settings) {
     return std::nullopt;
   }
   return *sampler_backend;
+}
+
+// Returns the adaptive speculative decoding policy configuration with the
+// `mtp_gating_*` overrides of `settings` applied to the defaults, or
+// std::nullopt if no override is set.
+std::optional<MtpGatingConfig> GetMtpGatingConfig(
+    const LiteRtLmSettings& settings) {
+  MtpGatingConfig config;
+  bool overridden = false;
+  auto apply = [&overridden](const auto& flag, auto& field) {
+    if (flag.has_value()) {
+      field = *flag;
+      overridden = true;
+    }
+  };
+  apply(settings.mtp_gating_half_life, config.ema_half_life_steps);
+  apply(settings.mtp_gating_deadband, config.deadband);
+  apply(settings.mtp_gating_margin, config.profit_margin);
+  apply(settings.mtp_gating_probe_interval, config.probe_interval);
+  apply(settings.mtp_gating_probe_length, config.probe_length);
+  apply(settings.mtp_gating_forced_switch_period, config.forced_switch_period);
+  if (!overridden) {
+    return std::nullopt;
+  }
+  return config;
 }
 
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
@@ -718,6 +746,18 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       EngineSettings::CreateDefault(std::move(model_assets), backend,
                                     vision_backend, audio_backend));
   backend = engine_settings.GetMainExecutorSettings().GetBackend();
+  // The deprecated `enable_speculative_decoding` means kOn when no mode is set.
+  std::optional<SpeculativeDecodingMode> speculative_decoding_mode =
+      settings.speculative_decoding_mode;
+  if (settings.enable_speculative_decoding) {
+    ABSL_LOG(WARNING) << "--enable_speculative_decoding is deprecated; use "
+                         "--speculative_decoding=on instead.";
+    if (!speculative_decoding_mode.has_value()) {
+      speculative_decoding_mode = SpeculativeDecodingMode::kOn;
+    }
+  }
+  engine_settings.SetSpeculativeDecodingConfig(
+      {.mode = speculative_decoding_mode});
   if (settings.max_num_tokens > 0) {
     engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
         settings.max_num_tokens);
@@ -804,6 +844,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
         auto gpu_settings,
         executor_settings.MutableBackendConfig<litert::lm::GpuConfig>());
     gpu_settings.external_tensor_mode = settings.gpu_external_tensor_mode;
+    if (settings.sampler_top_k.has_value() &&
+        *settings.sampler_top_k > static_cast<int>(gpu_settings.max_top_k)) {
+      gpu_settings.max_top_k = static_cast<uint32_t>(*settings.sampler_top_k);
+    }
     executor_settings.SetBackendConfig(gpu_settings);
   }
   if (backend == Backend::GPU_ARTISAN) {
@@ -819,6 +863,14 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     if (settings.benchmark) {
       gpu_artisan_settings.wait_for_weight_uploads =
           settings.wait_for_weights_conversion_complete_in_benchmark;
+    }
+    // The GPU artisan runner fixes its top-k capacity at creation and rejects
+    // a larger session k, so make room for `--sampler_top_k`.
+    if (settings.sampler_top_k.has_value() &&
+        *settings.sampler_top_k >
+            static_cast<int>(gpu_artisan_settings.max_top_k)) {
+      gpu_artisan_settings.max_top_k =
+          static_cast<uint32_t>(*settings.sampler_top_k);
     }
     executor_settings.SetBackendConfig(gpu_artisan_settings);
   }
@@ -865,8 +917,43 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       .cache_compiled_shaders_only = settings.cache_compiled_shaders_only,
       .share_constant_tensors = settings.share_constant_tensors,
       .sampler_handles_input = settings.sampler_handles_input,
-      .enable_speculative_decoding = settings.enable_speculative_decoding,
+      .mtp_gating_config = GetMtpGatingConfig(settings),
   };
+  if (advanced_settings.mtp_gating_config.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        ValidateMtpGatingConfig(*advanced_settings.mtp_gating_config));
+  }
+  if (settings.sampler_seed.has_value() &&
+      !settings.sampler_top_k.has_value() &&
+      !settings.sampler_top_p.has_value() &&
+      !settings.sampler_temperature.has_value()) {
+    // Without a sampler type, `SessionConfig::MaybeUpdateAndValidate()`
+    // replaces the session sampler parameters, seed included, with the model's
+    // defaults, so the seed would be silently ignored.
+    return absl::InvalidArgumentError(
+        "sampler_seed requires sampler_top_k, sampler_top_p or "
+        "sampler_temperature.");
+  }
+  // The session sampler is updated in place rather than recreated, which skips
+  // the samplers' creation-time checks, so the overrides are validated here.
+  if (settings.sampler_top_k.has_value() && *settings.sampler_top_k < 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "sampler_top_k must be >= 1, but got ", *settings.sampler_top_k, "."));
+  }
+  // Negated comparisons so that NaN is rejected too.
+  if (settings.sampler_top_p.has_value() &&
+      !(*settings.sampler_top_p >= 0.0 && *settings.sampler_top_p <= 1.0)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("sampler_top_p must be in [0, 1], but got ",
+                     *settings.sampler_top_p, "."));
+  }
+  if (settings.sampler_temperature.has_value() &&
+      !(std::isfinite(*settings.sampler_temperature) &&
+        *settings.sampler_temperature >= 0.0)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("sampler_temperature must be finite and >= 0, but got ",
+                     *settings.sampler_temperature, "."));
+  }
   if (settings.conv_type == ConvType::kFloat) {
     advanced_settings.allow_src_quantized_fc_conv_ops = false;
   } else if (settings.conv_type == ConvType::kInt8) {
@@ -948,6 +1035,23 @@ SessionConfig CreateSessionConfig(const LiteRtLmSettings& settings) {
   }
   if (settings.audio_backend.has_value()) {
     session_config.SetAudioModalityEnabled(true);
+  }
+  if (settings.sampler_top_k.has_value() ||
+      settings.sampler_top_p.has_value() ||
+      settings.sampler_temperature.has_value()) {
+    // `--sampler_top_p` / `--sampler_temperature` alone ask for stochastic
+    // sampling, so top-k must not default to 1 (greedy): use a conventional
+    // top-k of 40 unless `--sampler_top_k` is given.
+    constexpr int kDefaultTopK = 40;
+    proto::SamplerParameters& sampler_params =
+        session_config.GetMutableSamplerParams();
+    sampler_params.set_type(proto::SamplerParameters::TOP_P);
+    sampler_params.set_k(settings.sampler_top_k.value_or(kDefaultTopK));
+    sampler_params.set_p(settings.sampler_top_p.value_or(1.0));
+    sampler_params.set_temperature(settings.sampler_temperature.value_or(1.0));
+    if (settings.sampler_seed.has_value()) {
+      sampler_params.set_seed(*settings.sampler_seed);
+    }
   }
   return session_config;
 }
