@@ -148,6 +148,26 @@ jobs:
             gcloud storage cp "$MODEL_PATH/$MODEL_KEY" "$GCS_MODEL_URL"
           fi
 
+      - name: Run bazel test on Linux.
+        continue-on-error: true  # Ignore errors when test fails.
+        run: |
+          bazelisk test \
+            --config=github_actions_bazel_cache \
+            --config=linux_x86_64 \
+            --deleted_packages=swift \
+            --java_runtime_version=remotejdk_17 \
+            --test_output=errors \
+            //runtime/... \
+            //schema/... \
+            //c/...
+
+      - name: Upload bazel test logs
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        with:
+          name: bazel-test-logs-linux
+          path: bazel-testlogs/**/test.log
+
       - name: Run bazel build on Linux.
         run: |
           bazelisk build \
@@ -170,25 +190,6 @@ jobs:
         run: |
           cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.linux_x86_64
           gh release upload "$GH_REF_NAME" litert_lm_main.linux_x86_64 --clobber
-
-      - name: Run bazel test on Linux.
-        continue-on-error: true  # Ignore errors when test fails.
-        run: |
-          bazelisk test \
-            --config=github_actions_bazel_cache \
-            --config=linux_x86_64 \
-            --deleted_packages=swift \
-            --test_output=errors \
-            //runtime/... \
-            //schema/... \
-            //c/...
-
-      - name: Upload bazel test logs
-        if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
-        with:
-          name: bazel-test-logs-linux
-          path: bazel-testlogs/**/test.log
 
       - name: Run bazel build on Linux with dynamic linking.
         run: |
