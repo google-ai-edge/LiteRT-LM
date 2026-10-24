@@ -289,6 +289,8 @@ export declare interface LlmExecutorSettings extends ExecutorSettingsBase {
   [LlmExecutorSettingsBrand]: void;
   getMaxNumTokens(): number;
   setMaxNumTokens(maxNumTokens: number): void;
+  getMaxNumImages(): number;
+  setMaxNumImages(maxNumImages: number): void;
   setBackendConfigCpu(cpuConfig: CpuConfig): void;
   setBackendConfigGpu(gpuConfig: GpuConfig): void;
   setBackendConfigGpuArtisan(gpuArtisanConfig: GpuArtisanConfig): void;

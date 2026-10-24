@@ -221,6 +221,54 @@ describe('ReadableStreamDataStreamWrapper', () => {
             .toContain('overlaps discarded regions: [[2, 10]]');
       });
 
+      it('reads past unfetched data that was discarded', async () => {
+        const data = new Uint8Array(40).fill(0).map((_, i) => i);
+        const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 8);
+        const ptr = 100;
+
+        // Read part of a section, then discard the whole section, including
+        // its unread end, which spans partial and whole slices.
+        const status = await wrapper.readAndDiscard(ptr, 0, 6);
+        expect(status.error).toBeUndefined();
+        expect(wrapper.discard(0, 27).error).toBeUndefined();
+
+        // Read the next section.
+        const status2 = await wrapper.readAndDiscard(ptr, 27, 10);
+        expect(status2.error).toBeUndefined();
+        expect(wasmHeap.heap.subarray(ptr, ptr + 10))
+            .toEqual(data.subarray(27, 37));
+
+        // The discarded data still can't be read.
+        const status3 = await wrapper.readAndPreserve(ptr, 20, 4);
+        expect(status3.error).toBeDefined();
+        expect(status3.error?.message)
+            .toContain('overlaps discarded regions: [[16, 24]]');
+      });
+
+      it('caches undiscarded data when reading past discarded data',
+         async () => {
+           const data = new Uint8Array(30).fill(0).map((_, i) => i);
+           const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 8);
+           const ptr = 100;
+
+           // Discard unfetched data between two regions that are read later.
+           expect(wrapper.discard(4, 14).error).toBeUndefined();
+           const status = await wrapper.readAndPreserve(ptr, 20, 6);
+           expect(status.error).toBeUndefined();
+           expect(wasmHeap.heap.subarray(ptr, ptr + 6))
+               .toEqual(data.subarray(20, 26));
+
+           // Data before and after the discarded region was cached.
+           const status2 = await wrapper.readAndPreserve(ptr, 0, 4);
+           expect(status2.error).toBeUndefined();
+           expect(wasmHeap.heap.subarray(ptr, ptr + 4))
+               .toEqual(data.subarray(0, 4));
+           const status3 = await wrapper.readAndPreserve(ptr, 18, 2);
+           expect(status3.error).toBeUndefined();
+           expect(wasmHeap.heap.subarray(ptr, ptr + 2))
+               .toEqual(data.subarray(18, 20));
+         });
+
       it('does not crash when wasm heap is detached and replaced', async () => {
         const data = new Uint8Array(10).map((_, i) => i);
         const wrapper = createTestWrapper(data, 10);

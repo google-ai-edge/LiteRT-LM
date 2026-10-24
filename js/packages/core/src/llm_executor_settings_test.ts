@@ -52,6 +52,11 @@ describe('LlmExecutorSettings', () => {
     expect(llmExecutorSettings.getMaxNumTokens()).toBe(100);
   });
 
+  it('sets and gets max num images', () => {
+    llmExecutorSettings.setMaxNumImages(7);
+    expect(llmExecutorSettings.getMaxNumImages()).toBe(7);
+  });
+
   it('sets and gets backend config CPU', () => {
     const cpuConfig = {
       kv_increment_size: 1,

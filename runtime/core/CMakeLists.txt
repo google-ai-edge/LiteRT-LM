@@ -172,6 +172,28 @@ target_link_libraries(runtime_core_audio_session_advanced
 
 
 # ==============================================================================
+# Engine Vision Utils
+# ==============================================================================
+add_litertlm_library(runtime_core_engine_vision_utils STATIC
+  engine_vision_utils.cc
+)
+add_library(LiteRTLM::Runtime::Core::EngineVisionUtils ALIAS runtime_core_engine_vision_utils)
+
+target_include_directories(runtime_core_engine_vision_utils
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_core_engine_vision_utils
+  PUBLIC
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Runtime::Engine::Settings
+    LiteRTLM::Runtime::Executor::ModelSignatureUtils
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Engine Advanced Impl
 # ==============================================================================
 add_litertlm_library(runtime_core_engine_advanced_impl STATIC
@@ -188,6 +210,7 @@ target_include_directories(runtime_core_engine_advanced_impl
 target_link_libraries(runtime_core_engine_advanced_impl
   PUBLIC
     LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Core::EngineVisionUtils
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Framework::Threadpool

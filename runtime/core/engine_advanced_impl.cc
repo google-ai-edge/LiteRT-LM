@@ -39,6 +39,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_streaming.h"
 #include "runtime/core/audio_session_advanced.h"
+#include "runtime/core/engine_vision_utils.h"
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -90,102 +91,6 @@
 #endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
 namespace litert::lm {
-namespace {
-
-std::optional<int> GetVisionTokensPerImageFromMetadata(
-    const proto::LlmMetadata* llm_metadata) {
-  if (llm_metadata == nullptr || !llm_metadata->has_llm_model_type()) {
-    return std::nullopt;
-  }
-  const auto& model_type = llm_metadata->llm_model_type();
-  int max_num_patches = 0;
-  int pooling_kernel_size = 1;
-  if (model_type.has_gemma4()) {
-    max_num_patches = model_type.gemma4().max_num_patches();
-    pooling_kernel_size = model_type.gemma4().pooling_kernel_size() > 0
-                              ? model_type.gemma4().pooling_kernel_size()
-                              : 3;
-  } else if (model_type.has_generic_model()) {
-    max_num_patches = model_type.generic_model().max_num_patches();
-    if (model_type.generic_model().pooling_kernel_size() > 0) {
-      pooling_kernel_size = model_type.generic_model().pooling_kernel_size();
-    }
-  } else if (model_type.has_lfm2()) {
-    max_num_patches = model_type.lfm2().max_num_patches();
-    pooling_kernel_size = model_type.lfm2().pooling_kernel_size() > 0
-                              ? model_type.lfm2().pooling_kernel_size()
-                              : 2;
-  }
-  if (max_num_patches <= 0) {
-    return std::nullopt;
-  }
-  const int patch_num_shrink_factor = pooling_kernel_size * pooling_kernel_size;
-  return max_num_patches / patch_num_shrink_factor;
-}
-
-// Selects vision encoder and adapter signatures if max_vision_tokens_per_image
-// is set by user, or falls back to the metadata from the proto if it exists.
-// Does nothing if vision is not enabled in `engine_settings`.
-absl::Status MaybeSelectVisionSignatures(
-    EngineSettings& engine_settings, ModelResources& model_resources,
-    const proto::LlmMetadata* llm_metadata) {
-  if (!engine_settings.GetVisionExecutorSettings().has_value()) {
-    return absl::OkStatus();
-  }
-  std::optional<int> vision_token_limit;
-  if (engine_settings.GetMaxVisionTokensPerImage().has_value()) {
-    const int max_vision_tokens_per_image =
-        *engine_settings.GetMaxVisionTokensPerImage();
-    if (max_vision_tokens_per_image <= 0) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
-                       max_vision_tokens_per_image));
-    }
-    if (GetVisionTokensPerImageFromMetadata(llm_metadata).has_value()) {
-      vision_token_limit = max_vision_tokens_per_image;
-    }
-  } else {
-    vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
-    if (vision_token_limit.has_value() && *vision_token_limit > 0) {
-      engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);
-    }
-  }
-
-  if (!vision_token_limit.has_value() || *vision_token_limit <= 0) {
-    return absl::OkStatus();
-  }
-#ifdef __EMSCRIPTEN__
-  // On web, load a single vision signature by default. Each extra signature
-  // takes hundreds of MB to GBs of heap on GPU, and loading all of them
-  // overflows the 4GB wasm32 address space. Users can still lower the min to
-  // load more signatures.
-  if (!engine_settings.GetMinVisionTokensPerImage().has_value()) {
-    engine_settings.SetMinVisionTokensPerImage(*vision_token_limit);
-  }
-#endif  // __EMSCRIPTEN__
-  const std::optional<int> min_vision_tokens_per_image =
-      engine_settings.GetMinVisionTokensPerImage();
-
-  ABSL_ASSIGN_OR_RETURN(
-      auto vision_sig_info,
-      SelectVisionEncoderSignatures(model_resources, *vision_token_limit,
-                                    min_vision_tokens_per_image));
-  engine_settings.GetMutableVisionExecutorSettings()
-      ->SetEncoderSelectedSignatures(vision_sig_info.signature_names);
-
-  ABSL_ASSIGN_OR_RETURN(
-      auto adapter_sig_info,
-      SelectVisionAdapterSignatures(model_resources, *vision_token_limit,
-                                    min_vision_tokens_per_image));
-  if (adapter_sig_info.has_value()) {
-    engine_settings.GetMutableVisionExecutorSettings()
-        ->SetAdapterSelectedSignatures(adapter_sig_info->signature_names);
-  }
-  return absl::OkStatus();
-}
-
-}  // namespace
-
 namespace {
 
 // Compiles a LiteRt model from the given model type. Used for prefill/decode

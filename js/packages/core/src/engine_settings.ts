@@ -36,6 +36,12 @@ export interface GpuArtisanConfig extends
  */
 export interface LlmExecutorSettings {
   maxNumTokens?: number;
+  /**
+   * Maximum number of images in a conversation (until the context is reset).
+   * Required for vision input with `Backend.GPU_ARTISAN` models, which reserve
+   * space for this many images' embeddings up front.
+   */
+  maxNumImages?: number;
   backendConfig?: Partial<CpuConfig>|Partial<GpuConfig>|
       Partial<GpuArtisanConfig>;
   samplerBackend?: Backend;
@@ -119,6 +125,9 @@ export function fillWasmEngineSettingsFromEngineSettings(
 
     if (mainExecutorSettings.maxNumTokens !== undefined) {
       wasmExecutorSettings.setMaxNumTokens(mainExecutorSettings.maxNumTokens);
+    }
+    if (mainExecutorSettings.maxNumImages !== undefined) {
+      wasmExecutorSettings.setMaxNumImages(mainExecutorSettings.maxNumImages);
     }
     if (mainExecutorSettings.samplerBackend !== undefined) {
       wasmExecutorSettings.setSamplerBackend(
@@ -227,6 +236,7 @@ export function wasmEngineSettingsToEngineSettings(
     audioBackend: wasmEngineSettings.getAudioBackend()?.value,
     mainExecutorSettings: {
       maxNumTokens: wasmExecutorSettings.getMaxNumTokens(),
+      maxNumImages: wasmExecutorSettings.getMaxNumImages(),
       samplerBackend: wasmExecutorSettings.getSamplerBackend().value,
       backendConfig,
       advancedSettings: wasmExecutorSettings.getAdvancedSettings(),

@@ -120,6 +120,23 @@ describe('EngineSettings', () => {
     wasmSettings.delete();
   });
 
+  it('round-trips maxNumImages', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN);
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {
+          model: '/path/to/model',
+          backend: Backend.GPU_ARTISAN,
+          mainExecutorSettings: {maxNumImages: 3},
+        },
+        Backend.GPU_ARTISAN, liteRtLm.liteRtLmWasm);
+    expect(wasmEngineSettingsToEngineSettings(wasmSettings)
+               .mainExecutorSettings.maxNumImages)
+        .toBe(3);
+    wasmSettings.delete();
+  });
+
   it('round-trips multimodal vision settings', async () => {
     const wasmSettings =
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(

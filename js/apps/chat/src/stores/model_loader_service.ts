@@ -27,6 +27,12 @@ const SUPPRESSED_WARNING_PATTERNS = [
 ];
 
 /**
+ * Maximum number of images in a conversation. Artisan models reserve GPU memory
+ * for this many images' embeddings when the model is loaded.
+ */
+const MAX_NUM_IMAGES = 8;
+
+/**
  * Wraps `console.warn` to suppress known noisy WASM runtime warnings in the
  * chat app.
  */
@@ -310,6 +316,10 @@ export class ModelLoaderService {
         model: modelInput,
         mainExecutorSettings: {
           maxNumTokens: settings.contextLength,
+          // Artisan (GPU_ARTISAN) models reserve GPU memory for the embeddings
+          // of this many images per conversation up front, and can't take
+          // images if it's unset.
+          maxNumImages: MAX_NUM_IMAGES,
           backendConfig: {
             num_output_candidates: 1,
             wait_for_weight_uploads: true,

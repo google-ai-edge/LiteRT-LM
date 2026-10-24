@@ -47,8 +47,25 @@ package_group(
     ],
 )
 
+cc_library(
+    name = "engine_vision_utils",
+    srcs = ["engine_vision_utils.cc"],
+    hdrs = ["engine_vision_utils.h"],
+    deps = [
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/strings",
+        "//runtime/components:model_resources",
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:model_signature_utils",
+        "//runtime/proto:llm_metadata_cc_proto",
+    ],
+)
+
 ENGINE_IMPL_BASE_DEPS = [
     ":audio_session_advanced",
+    ":engine_vision_utils",
     ":session_advanced",
     ":cached_session",
     "@com_google_absl//absl/base:core_headers",

@@ -476,6 +476,10 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 &litert::lm::LlmExecutorSettings::GetMaxNumTokens)
       .function("setMaxNumTokens",
                 &litert::lm::LlmExecutorSettings::SetMaxNumTokens)
+      .function("getMaxNumImages",
+                &litert::lm::LlmExecutorSettings::GetMaxNumImages)
+      .function("setMaxNumImages",
+                &litert::lm::LlmExecutorSettings::SetMaxNumImages)
       .function("getBackendConfigCpu",
                 optional_override(
                     [](litert::lm::LlmExecutorSettings& executor_settings) {
