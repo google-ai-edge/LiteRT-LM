@@ -24,13 +24,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "runtime/components/model_resources.h"
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -272,6 +274,63 @@ TEST(ModelResourcesStreamingTest, WeightsCanBeSetAgainAfterRelease) {
   EXPECT_EQ(std::string(reinterpret_cast<const char*>(model_it->second.data()),
                         model_it->second.size()),
             second_data);
+}
+
+// Builds a TFLite flatbuffer that declares the external buffer groups
+// `group_names`.
+std::vector<char> BuildModelWithExternalBufferGroups(
+    const std::vector<std::string>& group_names) {
+  flatbuffers::FlatBufferBuilder fbb;
+  std::vector<flatbuffers::Offset<tflite::ExternalBufferGroup>> groups;
+  for (const std::string& name : group_names) {
+    groups.push_back(
+        tflite::CreateExternalBufferGroup(fbb, fbb.CreateString(name)));
+  }
+  const auto groups_offset = fbb.CreateVector(groups);
+  tflite::ModelBuilder model_builder(fbb);
+  model_builder.add_version(3);
+  model_builder.add_external_buffer_groups(groups_offset);
+  tflite::FinishModelBuffer(fbb, model_builder.Finish());
+  const char* data = reinterpret_cast<const char*>(fbb.GetBufferPointer());
+  return std::vector<char>(data, data + fbb.GetSize());
+}
+
+TEST(ModelResourcesStreamingTest, SetWeightsFromStreamSharesWeights) {
+  ModelResourcesStreaming model_resources;
+  // prefill_decode reads a payload stored once in the embedder's section.
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      BuildModelWithExternalBufferGroups(
+          {"tflite_weights", "tflite_weights:tf_lite_embedder"}));
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_EMBEDDER,
+      BuildModelWithExternalBufferGroups({"tflite_weights"}));
+
+  std::string embedder_data = "shared_embedding_table";
+  MemoryDataStream stream(embedder_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      proto::LlmMetadata::TF_LITE_EMBEDDER, stream, embedder_data.size()));
+
+  const auto* embedder_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_EMBEDDER);
+  ASSERT_NE(embedder_map, nullptr);
+  const auto* prefill_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  ASSERT_NE(prefill_map, nullptr);
+  auto shared_it = prefill_map->find("tflite_weights:tf_lite_embedder");
+  ASSERT_NE(shared_it, prefill_map->end());
+  EXPECT_EQ(shared_it->second.data(),
+            embedder_map->at("tflite_weights").data());
+  EXPECT_EQ(shared_it->second.size(), embedder_data.size());
+  // prefill_decode's own weights are not in host memory.
+  EXPECT_FALSE(prefill_map->contains("tflite_weights"));
+
+  // Releasing the embedder's weights drops the shared span too.
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_EMBEDDER);
+  prefill_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  EXPECT_TRUE(prefill_map == nullptr ||
+              !prefill_map->contains("tflite_weights:tf_lite_embedder"));
 }
 
 }  // namespace
