@@ -465,6 +465,9 @@ build:disable_tf_lite_py --define=disable_tf_lite_py=true
 # Config for GitHub Actions CI to use a GCS bucket as remote cache.
 # WARNING: THIS OPTION WONT WORK IF YOU DO NOT HAVE PROPER AUTHENTICATION AND PERMISSIONS
 build:github_actions_bazel_cache --remote_cache="https://storage.googleapis.com/litert-lm-bazel-cache-us-central1" --google_default_credentials
+# Download all remote cache outputs so local SymlinkActions (e.g. rules_rust .a
+# -> .rlib symlinks) do not point to unmaterialized files when linking locally.
+build:github_actions_bazel_cache --remote_download_all
 
 # BEGIN LITERT REMOTE BUILD EXECUTION OPTIONS
 # WARNING: THESE OPTIONS WONT WORK IF YOU DO NOT HAVE PROPER AUTHENTICATION AND PERMISSIONS
