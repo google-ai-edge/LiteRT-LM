@@ -1889,8 +1889,9 @@ class DummyExecutorSettings : public ExecutorSettingsBase {
 
 LiteRtDelegatePrecision GetGpuPrecision(const litert::GpuOptions& gpu_options) {
   LiteRtDelegatePrecision precision;
-  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPrecision(&precision,
-                                                            gpu_options.Get()),
+  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPrecision(
+                &precision, kLiteRtDelegatePrecisionDefault,
+                gpu_options.Get()),
             kLiteRtStatusOk);
   return precision;
 }
@@ -1909,20 +1910,20 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
 
   bool constant_sharing = false;
-  EXPECT_EQ(LrtGetGpuOptionsConstantTensorsSharing(&constant_sharing,
-                                                   gpu_options.Get()),
+  EXPECT_EQ(LrtGetGpuOptionsConstantTensorsSharing(
+                &constant_sharing, /*default_value=*/false, gpu_options.Get()),
             kLiteRtStatusOk);
   EXPECT_TRUE(constant_sharing);
 
   bool madvise = false;
   EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsMadviseOriginalSharedTensors(
-                &madvise, gpu_options.Get()),
+                &madvise, /*default_value=*/false, gpu_options.Get()),
             kLiteRtStatusOk);
   EXPECT_TRUE(madvise);
 
   bool convert_weights = false;
   EXPECT_EQ(LrtGetGpuAcceleratorRuntimeOptionsConvertWeightsOnGpu(
-                &convert_weights, gpu_options.Get()),
+                &convert_weights, /*default_value=*/false, gpu_options.Get()),
             kLiteRtStatusOk);
   EXPECT_TRUE(convert_weights);
 
@@ -1939,7 +1940,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
 
   bool prefer_texture = false;
   EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPreferTextureWeights(
-                &prefer_texture, gpu_options.Get()),
+                &prefer_texture, /*default_value=*/false, gpu_options.Get()),
             kLiteRtStatusOk);
 #if defined(__APPLE__)
   EXPECT_FALSE(prefer_texture);
