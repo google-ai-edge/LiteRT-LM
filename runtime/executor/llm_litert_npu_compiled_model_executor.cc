@@ -536,7 +536,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
     ::litert::CompiledModel& text_decoder_compiled_model,
-    std::vector<ContextGroup>& context_groups,
+    std::vector<NpuContextGroup>& context_groups,
     ::litert::CompiledModel& compiled_model_auxiliary,
     const InferenceContext& rope_inference_context,
     const InferenceContext& mask_inference_context,
@@ -791,14 +791,14 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
 absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
     ::litert::Environment& env, const litert::Model& mtp_aux_model,
     const DrafterContext& drafter_context,
-    absl::Span<const ContextGroup> context_groups,
+    absl::Span<const NpuContextGroup> context_groups,
     MaskUpdateMethod mtp_mask_update_method) {
   RET_CHECK(!context_groups.empty())
       << "At least one text decoder context group is required.";
   RET_CHECK_EQ(drafter_context.context_bindings.size(), context_groups.size())
       << "The drafter must be created with the same text decoder context "
          "groups.";
-  const NpuModelGeometry* geometry = &context_groups.front().geometry;
+  const NpuGraphLayout* layout = &context_groups.front().layout;
   LITERT_ASSIGN_OR_RETURN(
       auto mtp_aux_compiled_model,
       CompiledModelWrapper::Create(env, mtp_aux_model.Get(),
@@ -926,7 +926,7 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
       auto drafter_mask,
       NpuMask::CreateForDrafter(mtp_mask_update_method, &mtp_aux_compiled_model,
                                 std::move(mask_input_buffers),
-                                std::move(mask_output_buffers), geometry));
+                                std::move(mask_output_buffers), layout));
 
   DrafterAuxContext drafter_aux_context(
       std::move(mtp_aux_compiled_model), std::move(drafter_rope),
@@ -937,16 +937,16 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
 }
 
 absl::Status DrafterAuxContext::BindContextGroup(
-    size_t index, const ContextGroup& context_group,
+    size_t index, const NpuContextGroup& context_group,
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         drafter_input_buffers) {
   RET_CHECK_LT(index, mask_signatures.size())
       << "Drafter context group index out of range.";
   mask_signature = mask_signatures[index];
   // The mask builder reads the cache lengths of the bound context group from
-  // its geometry (e.g. to build the mask on the CPU in kWH mode), so the
-  // signature and the geometry are always switched together.
-  drafter_mask.SetGeometry(&context_group.geometry);
+  // its layout (e.g. to build the mask on the CPU in kWH mode), so the
+  // signature and the layout are always switched together.
+  drafter_mask.SetLayout(&context_group.layout);
   LITERT_RETURN_IF_ERROR(drafter_rope.UpdateOutputBuffers(
       /*text_decoder_prefill_input_buffers=*/{}, drafter_input_buffers,
       /*text_decoder_verify_input_buffers=*/{}));
@@ -958,7 +958,7 @@ absl::Status DrafterAuxContext::BindContextGroup(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
     DrafterContext& drafter_context, DrafterAuxContext& drafter_aux_context,
-    absl::Span<const ContextGroup> context_groups) {
+    absl::Span<const NpuContextGroup> context_groups) {
   // Like the text decoder, warm up every context group so that all drafter
   // signatures are initialized before the first inference.
   for (size_t i = 0; i < context_groups.size(); ++i) {
@@ -1527,12 +1527,12 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::GrowDynamicKVCache(
       max_num_tokens);
   const auto start = absl::Now();
   const int old_capacity = dynamic_kv_cache_capacity_;
-  ContextGroup& old_group = context_groups_[0];
+  NpuContextGroup& old_group = context_groups_[0];
 
   // 1. Resize the text decoder signatures and allocate a fresh context group.
   // The KV quantization parameters do not change with the context size, so the
   // ones collected here are discarded. `BuildContextGroup` also re-resolves the
-  // group's geometry against the newly allocated buffers, so the cache length
+  // group's layout against the newly allocated buffers, so the cache length
   // and per-buffer info the mask and KV cache components read stay in sync with
   // the hardware allocation.
   absl::flat_hash_map<absl::string_view, HWQuantParams> unused_kv_quant_params;
@@ -1574,7 +1574,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::GrowDynamicKVCache(
 
   // 4. Swap in the new group and re-bind all sub-components. The old group is
   // kept alive until re-binding is complete.
-  ContextGroup retired_group = std::move(old_group);
+  NpuContextGroup retired_group = std::move(old_group);
   context_groups_[0] = std::move(built.group);
   active_context_group_index_ = 0;
   LITERT_RETURN_IF_ERROR(RebindActiveContextGroup());
@@ -2519,7 +2519,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   active_context_group_index_ = 0;
   if (!context_groups_.empty()) {
     // Re-bind all sub-components (including the drafter's signature, KV cache
-    // aliases and mask geometry) to the first context group, like
+    // aliases and mask layout) to the first context group, like
     // RestoreContext() does for an empty context.
     LITERT_RETURN_IF_ERROR(RebindActiveContextGroup());
   }
@@ -2620,15 +2620,15 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     // 2. Restore KV cache buffers into the target active context group.
     // The saved buffers are always distinct allocations (they were copied out
     // in GetContext), so they are migrated even when their shape matches the
-    // target buffer. The sequence axis comes from the active group's geometry;
-    // buffers the geometry does not describe fall back to shape inference.
-    const auto& geometry = active_group.geometry;
+    // target buffer. The sequence axis comes from the active group's layout;
+    // buffers the layout does not describe fall back to shape inference.
+    const auto& layout = active_group.layout;
     for (const auto& [name, saved_buffer] : saved_kv_buffers) {
       if (active_group.input_kv_cache_buffers.contains(name)) {
         auto& target_buffer = active_group.input_kv_cache_buffers[name];
         int sequence_axis = -1;
-        if (auto it = geometry.kv_buffer_info.find(name);
-            it != geometry.kv_buffer_info.end()) {
+        if (auto it = layout.kv_cache_buffers.find(name);
+            it != layout.kv_cache_buffers.end()) {
           sequence_axis = it->second.sequence_axis;
         }
         LITERT_RETURN_IF_ERROR(NpuKVCache::CopySingleKVCacheBuffer(
@@ -2652,8 +2652,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::RebindActiveContextGroup() {
   auto& active_group = ActiveContextGroup();
-  main_mask_.SetGeometry(&active_group.geometry);
-  main_cache_.SetGeometry(&active_group.geometry);
+  main_mask_.SetLayout(&active_group.layout);
+  main_cache_.SetLayout(&active_group.layout);
   LITERT_RETURN_IF_ERROR(main_cache_.UpdateKVCacheBuffers(
       active_group.input_kv_cache_buffers,
       active_group.text_decoder_inference_context.prefill_output_buffers,
@@ -2674,7 +2674,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RebindActiveContextGroup() {
   if (drafter_context_.has_value()) {
     // Select the drafter signature of the active context group and re-alias
     // its KV cache buffers, then bind the drafter RoPE/mask builders to that
-    // group (mask signature, geometry) and point their outputs at the
+    // group (mask signature, layout) and point their outputs at the
     // drafter's input buffers for that group.
     LITERT_RETURN_IF_ERROR(drafter_context_->BindContextGroup(
         active_context_group_index_, active_group));
@@ -2848,20 +2848,20 @@ LlmLiteRtNpuCompiledModelExecutor::BuildContextGroup(
   built.group.text_decoder_inference_context = std::move(inference_context);
   built.resolved_context_size = resolved_context_size;
 
-  // Resolve the geometry against the buffers this group actually owns. For
+  // Resolve the layout against the buffers this group actually owns. For
   // dynamic models the hardware buckets the request, so `resolved_context_size`
   // (not the requested size) is the real cache length; static models report 0
   // here and use their nominal `context_size`.
-  const int geometry_cache_length =
+  const int layout_cache_length =
       resolved_context_size > 0 ? resolved_context_size : context_size;
-  built.group.geometry = ResolveModelGeometry(
-      prefill_signatures.size, geometry_cache_length,
+  built.group.layout = NpuGraphLayout::Resolve(
+      prefill_signatures.size, layout_cache_length,
       built.group.input_kv_cache_buffers, executor_metadata);
   return built;
 }
 
 // static
-absl::StatusOr<std::vector<ContextGroup>>
+absl::StatusOr<std::vector<NpuContextGroup>>
 LlmLiteRtNpuCompiledModelExecutor::CreateStaticContextGroups(
     Environment& env, const litert::Model* text_decoder_model,
     CompiledModel& text_decoder_compiled_model,
@@ -2880,7 +2880,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateStaticContextGroups(
                          : std::string(TextDecoderSignatures::kVerify);
   };
 
-  std::vector<ContextGroup> context_groups(
+  std::vector<NpuContextGroup> context_groups(
       sorted_supported_context_sizes.size());
 
   // =========================================================================
@@ -2958,7 +2958,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateDynamicContextGroup(
   // is selected by resizing the signatures' dynamic inputs.
   //
   // Note on local (sliding-window) layers: when no ExecutorMetadata is
-  // available, `ResolveModelGeometry` classifies a KV cache buffer as local
+  // available, `NpuGraphLayout::Resolve` classifies a KV cache buffer as local
   // only if it is physically smaller than the global cache length. That is a
   // statement about the allocation, not about the attention pattern: a layer
   // can use a local mask to restrict what it attends to while still being
@@ -2977,7 +2977,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateDynamicContextGroup(
 
 // static
 absl::Status LlmLiteRtNpuCompiledModelExecutor::ResizeAuxiliaryMaskInputs(
-    CompiledModel& npu_auxiliary_compiled_model, const ContextGroup& group,
+    CompiledModel& npu_auxiliary_compiled_model, const NpuContextGroup& group,
     int context_size) {
   LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
       npu_auxiliary_compiled_model, group.prefill_signatures.mask,
@@ -3118,7 +3118,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     executor_metadata = *executor_metadata_or;
   }
 
-  std::vector<ContextGroup> context_groups;
+  std::vector<NpuContextGroup> context_groups;
 
   if (is_dynamic_model) {
     // Dynamic models have a single set of signatures and choose the KV cache
@@ -3230,7 +3230,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
                       first_prefill_sigs.mask, first_decode_aux_sigs.mask,
                       first_verify_aux_sigs.mask, first_prefill_in,
                       first_decode_in, first_verify_in,
-                      &context_groups[0].geometry));
+                      &context_groups[0].layout));
 
   LITERT_ASSIGN_OR_RETURN(
       auto main_rope,
@@ -3253,7 +3253,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
               .text_decoder_inference_context.decode_output_buffers,
           context_groups[0]
               .text_decoder_inference_context.verify_output_buffers,
-          kv_quant_params, &context_groups[0].geometry, kv_cache_init_value));
+          kv_quant_params, &context_groups[0].layout, kv_cache_init_value));
 
   // Initialize NpuEmbedder (encapsulating all PLE parsing and embedding lookup
   // manager).
@@ -3311,7 +3311,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       main_mask.Context(), main_cache.Context(), mask_update_method,
       cache_update_method));
 
-  NpuModelGeometry initial_geometry = context_groups[0].geometry;
+  NpuGraphLayout initial_layout = context_groups[0].layout;
   return absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
       mutable_settings, env, std::move(npu_auxiliary_context),
       std::move(text_decoder_compiled_model), std::move(context_groups),
@@ -3321,7 +3321,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       std::move(drafter_aux_context), std::move(main_embedder),
       std::move(main_rope), std::move(main_mask), std::move(main_cache),
       text_decoder_model, llm_metadata, executor_metadata, is_dynamic_model,
-      resolved_context_size, std::move(initial_geometry)));
+      resolved_context_size, std::move(initial_layout)));
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::ClearKVCache(

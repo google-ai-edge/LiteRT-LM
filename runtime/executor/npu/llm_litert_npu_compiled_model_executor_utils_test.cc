@@ -598,7 +598,7 @@ TEST_F(ExecutorUtilsTest,
   EXPECT_TRUE(DetectUsesRingbuffer(mixed_buffers, nullptr));
 }
 
-TEST_F(ExecutorUtilsTest, ResolveModelGeometry_Tier3FullMetadata) {
+TEST_F(ExecutorUtilsTest, ResolveGraphLayout_Tier3FullMetadata) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
   proto::ExecutorMetadata metadata;
   auto* llm_meta = metadata.mutable_llm_executor_metadata();
@@ -608,18 +608,18 @@ TEST_F(ExecutorUtilsTest, ResolveModelGeometry_Tier3FullMetadata) {
   sb->set_maximum_sequence_length(1024);
   llm_meta->mutable_attention_mask_settings()->set_sliding_window_size(256);
 
-  NpuModelGeometry geometry =
-      ResolveModelGeometry(128, 1024, buffers, &metadata);
-  EXPECT_EQ(geometry.prefill_chunk_size, 128);
-  EXPECT_EQ(geometry.global_cache_length, 1024);
-  EXPECT_TRUE(geometry.uses_ringbuffer);
-  ASSERT_TRUE(geometry.local_cache_length.has_value());
-  EXPECT_EQ(*geometry.local_cache_length, 256);
-  EXPECT_EQ(geometry.sliding_window_size, 256);
+  NpuGraphLayout layout =
+      NpuGraphLayout::Resolve(128, 1024, buffers, &metadata);
+  EXPECT_EQ(layout.prefill_chunk_size, 128);
+  EXPECT_EQ(layout.global_cache_length, 1024);
+  EXPECT_TRUE(layout.uses_ringbuffer);
+  ASSERT_TRUE(layout.local_cache_length.has_value());
+  EXPECT_EQ(*layout.local_cache_length, 256);
+  EXPECT_EQ(layout.sliding_window_size, 256);
 }
 
 TEST_F(ExecutorUtilsTest,
-       ResolveModelGeometry_Tier2PartialMetadataMissingMaskSettings) {
+       ResolveGraphLayout_Tier2PartialMetadataMissingMaskSettings) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
   proto::ExecutorMetadata metadata;
   auto* llm_meta = metadata.mutable_llm_executor_metadata();
@@ -628,20 +628,19 @@ TEST_F(ExecutorUtilsTest,
   sb->set_minimum_sequence_length(768);
   sb->set_maximum_sequence_length(2048);
 
-  NpuModelGeometry geometry =
-      ResolveModelGeometry(512, 2048, buffers, &metadata);
-  EXPECT_EQ(geometry.prefill_chunk_size, 512);
-  EXPECT_EQ(geometry.global_cache_length, 2048);
-  EXPECT_TRUE(geometry.uses_ringbuffer);
-  ASSERT_TRUE(geometry.local_cache_length.has_value());
-  EXPECT_EQ(*geometry.local_cache_length, 768);
+  NpuGraphLayout layout =
+      NpuGraphLayout::Resolve(512, 2048, buffers, &metadata);
+  EXPECT_EQ(layout.prefill_chunk_size, 512);
+  EXPECT_EQ(layout.global_cache_length, 2048);
+  EXPECT_TRUE(layout.uses_ringbuffer);
+  ASSERT_TRUE(layout.local_cache_length.has_value());
+  EXPECT_EQ(*layout.local_cache_length, 768);
   // Default sliding window to local cache length when attention_mask_settings
   // is omitted
-  EXPECT_EQ(geometry.sliding_window_size, 768);
+  EXPECT_EQ(layout.sliding_window_size, 768);
 }
 
-TEST_F(ExecutorUtilsTest,
-       ResolveModelGeometry_Tier1NoMetadataHeuristicFallback) {
+TEST_F(ExecutorUtilsTest, ResolveGraphLayout_Tier1NoMetadataHeuristicFallback) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
   std::vector<float> data_global(64, 0.0f);
   std::vector<float> data_local(16, 0.0f);
@@ -652,16 +651,16 @@ TEST_F(ExecutorUtilsTest,
                   CreateTensorBufferWithDims(data_local, ElementType::Float32,
                                              {1, 1, 4, 4}));
 
-  NpuModelGeometry geometry = ResolveModelGeometry(256, 16, buffers, nullptr);
-  EXPECT_EQ(geometry.prefill_chunk_size, 256);
-  EXPECT_EQ(geometry.global_cache_length, 16);
-  EXPECT_TRUE(geometry.uses_ringbuffer);
-  ASSERT_TRUE(geometry.local_cache_length.has_value());
-  EXPECT_EQ(*geometry.local_cache_length, 4);
-  EXPECT_EQ(geometry.sliding_window_size, 4);
+  NpuGraphLayout layout = NpuGraphLayout::Resolve(256, 16, buffers, nullptr);
+  EXPECT_EQ(layout.prefill_chunk_size, 256);
+  EXPECT_EQ(layout.global_cache_length, 16);
+  EXPECT_TRUE(layout.uses_ringbuffer);
+  ASSERT_TRUE(layout.local_cache_length.has_value());
+  EXPECT_EQ(*layout.local_cache_length, 4);
+  EXPECT_EQ(layout.sliding_window_size, 4);
 }
 
-TEST_F(ExecutorUtilsTest, ResolveModelGeometry_UniformNoRingbuffer) {
+TEST_F(ExecutorUtilsTest, ResolveGraphLayout_UniformNoRingbuffer) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
   std::vector<float> data(64, 0.0f);
   buffers.emplace(
@@ -671,12 +670,12 @@ TEST_F(ExecutorUtilsTest, ResolveModelGeometry_UniformNoRingbuffer) {
       "kv_cache_k_1",
       CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4}));
 
-  NpuModelGeometry geometry = ResolveModelGeometry(256, 16, buffers, nullptr);
-  EXPECT_EQ(geometry.prefill_chunk_size, 256);
-  EXPECT_EQ(geometry.global_cache_length, 16);
-  EXPECT_FALSE(geometry.uses_ringbuffer);
-  EXPECT_FALSE(geometry.local_cache_length.has_value());
-  EXPECT_EQ(geometry.sliding_window_size, 512);
+  NpuGraphLayout layout = NpuGraphLayout::Resolve(256, 16, buffers, nullptr);
+  EXPECT_EQ(layout.prefill_chunk_size, 256);
+  EXPECT_EQ(layout.global_cache_length, 16);
+  EXPECT_FALSE(layout.uses_ringbuffer);
+  EXPECT_FALSE(layout.local_cache_length.has_value());
+  EXPECT_EQ(layout.sliding_window_size, 512);
 }
 
 // Builds a drafter-like model with one signature per entry of `signatures`
@@ -798,10 +797,10 @@ class DrafterContextTest : public ExecutorUtilsTest {
 
   // A text decoder context group of `context_size` with KV cache buffers
   // matching the drafter model of `BuildDrafterModelBuffer`.
-  ContextGroup MakeContextGroup(int context_size) {
-    ContextGroup group;
+  NpuContextGroup MakeContextGroup(int context_size) {
+    NpuContextGroup group;
     group.context_size = context_size;
-    group.geometry.global_cache_length = context_size;
+    group.layout.global_cache_length = context_size;
     std::vector<float> data(context_size * 4, 0.0f);
     group.input_kv_cache_buffers.emplace(
         "kv_cache_k_0", CreateTensorBufferWithDims(data, ElementType::Float32,
@@ -865,7 +864,7 @@ TEST(IsCompatibleTensorTypeTest, ComparesElementTypeRankAndStaticDimensions) {
 TEST_F(DrafterContextTest, CreateBindsOneDrafterSignaturePerContextGroup) {
   ::litert::Model model = LoadModel(BuildDrafterModelBuffer(
       {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
   groups.push_back(MakeContextGroup(1024));
 
@@ -938,7 +937,7 @@ TEST_F(DrafterContextTest, CreateBindsOneDrafterSignaturePerContextGroup) {
 TEST_F(DrafterContextTest, CreateSingleContextDrafter) {
   ::litert::Model model =
       LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
 
   ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
@@ -955,7 +954,7 @@ TEST_F(DrafterContextTest, CreateSingleContextDrafter) {
 TEST_F(DrafterContextTest, SetInputPosWritesPositionWhenInputExists) {
   ::litert::Model model =
       LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
 
   ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
@@ -971,7 +970,7 @@ TEST_F(DrafterContextTest, SetInputPosIsNoOpWithoutInputPosInput) {
   // externalized RoPE and masks.
   ::litert::Model model = LoadModel(BuildDrafterModelBuffer(
       {{"mtp_drafter", 640}}, /*with_input_pos=*/false));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
 
   ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
@@ -986,7 +985,7 @@ TEST_F(DrafterContextTest, SetInputPosIsNoOpWithoutInputPosInput) {
 TEST_F(DrafterContextTest, CreateRejectsDrafterWithoutSignatureForContextSize) {
   ::litert::Model model =
       LoadModel(BuildDrafterModelBuffer({{"mtp_drafter_cache_640", 640}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
   groups.push_back(MakeContextGroup(1024));
 
@@ -1024,7 +1023,7 @@ TEST_F(DrafterContextTest, CreateRejectsKVCacheShapeMismatch) {
   // cache of a 640 token context group.
   ::litert::Model model =
       LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 4096}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
 
   EXPECT_THAT(DrafterContext::Create(*env_, model, groups),
@@ -1170,13 +1169,12 @@ TEST_F(DrafterContextTest,
       out_buffers["mask_local"],
       compiled_model.CreateOutputBuffer("mask_cache_640", "mask_local"));
 
-  NpuModelGeometry geometry;
-  geometry.global_cache_length = 640;
-  ASSERT_OK_AND_ASSIGN(
-      NpuMask mask,
-      NpuMask::CreateForDrafter(MaskUpdateMethod::kModel, &compiled_model,
-                                std::move(in_buffers), std::move(out_buffers),
-                                &geometry));
+  NpuGraphLayout layout;
+  layout.global_cache_length = 640;
+  ASSERT_OK_AND_ASSIGN(NpuMask mask, NpuMask::CreateForDrafter(
+                                         MaskUpdateMethod::kModel,
+                                         &compiled_model, std::move(in_buffers),
+                                         std::move(out_buffers), &layout));
 
   ASSERT_OK(mask.SetDecodeInput(/*step=*/7, /*token_id=*/11));
   ASSERT_OK(mask.RunDrafter("mask_cache_640"));
@@ -1200,7 +1198,7 @@ TEST_F(DrafterContextTest,
       {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
   ::litert::Model aux_model = LoadModel(BuildMtpAuxModelBuffer(
       {{"mask_cache_640", 640}, {"mask_cache_1024", 1024}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
   groups.push_back(MakeContextGroup(1024));
 
@@ -1238,7 +1236,7 @@ TEST_F(DrafterContextTest,
 
   // Switching to the second context group updates the active mask signature,
   // re-points the mask output at the 1024-token drafter mask input buffer, and
-  // updates the geometry pointer used by kWH mask generation.
+  // updates the layout pointer used by kWH mask generation.
   ASSERT_OK(drafter_context.BindContextGroup(1, groups[1]));
   ASSERT_OK(drafter_aux_context.BindContextGroup(
       1, groups[1], drafter_context.mtp_input_buffers));
@@ -1261,7 +1259,7 @@ TEST_F(DrafterContextTest,
       LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
   ::litert::Model aux_model = LoadModel(
       BuildMtpAuxModelBuffer({{"mask", 640}}, /*with_input_tokens=*/false));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
 
   ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
@@ -1284,7 +1282,7 @@ TEST_F(DrafterContextTest,
        DrafterAuxContextRejectsMismatchedRopeOrMaskOutputs) {
   ::litert::Model drafter_model = LoadModel(BuildDrafterModelBuffer(
       {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
-  std::vector<ContextGroup> groups;
+  std::vector<NpuContextGroup> groups;
   groups.push_back(MakeContextGroup(640));
   groups.push_back(MakeContextGroup(1024));
   ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,

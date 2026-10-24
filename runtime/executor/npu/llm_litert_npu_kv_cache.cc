@@ -134,11 +134,11 @@ absl::Status ClearKVCacheBuffers(
 absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const NpuModelGeometry* geometry,
+    const NpuGraphLayout* layout,
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params) {
-  RET_CHECK(geometry != nullptr) << "geometry must not be null";
-  const auto* info_map = &geometry->kv_buffer_info;
-  bool enable_ringbuffer = geometry->uses_ringbuffer;
+  RET_CHECK(layout != nullptr) << "layout must not be null";
+  const auto* info_map = &layout->kv_cache_buffers;
+  bool enable_ringbuffer = layout->uses_ringbuffer;
 
   static constexpr absl::string_view kInputPos = "input_pos";
   if (!in_buffers.contains(kInputPos)) {
@@ -680,14 +680,14 @@ absl::StatusOr<NpuKVCache> NpuKVCache::CreateForTest(
     KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
     InferenceContext cache_update_context,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    const NpuModelGeometry* geometry, int64_t kv_cache_init_value) {
-  RET_CHECK(geometry != nullptr) << "geometry must not be null";
+    const NpuGraphLayout* layout, int64_t kv_cache_init_value) {
+  RET_CHECK(layout != nullptr) << "layout must not be null";
   if (method == KVCacheUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model is required when using kModel cache update method.");
   }
   return NpuKVCache(method, compiled_model, std::move(cache_update_context),
-                    std::move(kv_quant_params), geometry, kv_cache_init_value);
+                    std::move(kv_quant_params), layout, kv_cache_init_value);
 }
 
 absl::StatusOr<NpuKVCache> NpuKVCache::Create(
@@ -704,8 +704,8 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    const NpuModelGeometry* geometry, int64_t kv_cache_init_value) {
-  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuKVCache";
+    const NpuGraphLayout* layout, int64_t kv_cache_init_value) {
+  RET_CHECK(layout != nullptr) << "layout must not be null for NpuKVCache";
   RET_CHECK(npu_auxiliary_compiled_model != nullptr)
       << "Auxiliary compiled model cannot be null for NpuKVCache";
 
@@ -816,7 +816,7 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
       std::move(verify_input_buffers), std::move(verify_output_buffers));
   return NpuKVCache(method, npu_auxiliary_compiled_model,
                     std::move(cache_update_context), std::move(kv_quant_params),
-                    geometry, kv_cache_init_value);
+                    layout, kv_cache_init_value);
 }
 
 absl::Status NpuKVCache::SetPrefillPositions(
@@ -884,7 +884,7 @@ absl::Status NpuKVCache::RunPrefill(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.prefill_input_buffers,
                            cache_update_context_.prefill_output_buffers,
-                           geometry_, kv_quant_params_);
+                           layout_, kv_quant_params_);
   }
   absl::string_view sig =
       signature.empty() ? kPrefillCacheUpdateBase : signature;
@@ -899,8 +899,8 @@ absl::Status NpuKVCache::RunPrefill(absl::string_view signature) {
 absl::Status NpuKVCache::RunDecode(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.decode_input_buffers,
-                           cache_update_context_.decode_output_buffers,
-                           geometry_, kv_quant_params_);
+                           cache_update_context_.decode_output_buffers, layout_,
+                           kv_quant_params_);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kDecodeCacheUpdate : signature;
@@ -935,8 +935,8 @@ absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step,
   LITERT_RETURN_IF_ERROR(SetVerifyPos(start_step));
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.verify_input_buffers,
-                           cache_update_context_.verify_output_buffers,
-                           geometry_, kv_quant_params_);
+                           cache_update_context_.verify_output_buffers, layout_,
+                           kv_quant_params_);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kVerifyCacheUpdate : signature;
@@ -960,7 +960,7 @@ absl::Status NpuKVCache::CopySingleKVCacheBuffer(
 
   int seq_dim_idx = sequence_axis;
   if (seq_dim_idx < 0) {
-    // No geometry information for this buffer: fall back to inferring the
+    // No layout information for this buffer: fall back to inferring the
     // sequence axis from the shape difference.
     for (int i = 0; i < src_dims.size(); ++i) {
       if (src_dims[i] != dst_dims[i]) {
@@ -1098,13 +1098,13 @@ absl::Status NpuKVCache::CopyKVCache(
     if (dst_it == dst_buffers.end()) {
       continue;
     }
-    // Prefer the sequence axis recorded in the model geometry. Buffers the
-    // geometry does not describe fall back to shape-based inference inside
+    // Prefer the sequence axis recorded in the model layout. Buffers the
+    // layout does not describe fall back to shape-based inference inside
     // CopySingleKVCacheBuffer.
     int sequence_axis = -1;
-    if (geometry_ != nullptr) {
-      if (auto info = geometry_->kv_buffer_info.find(name);
-          info != geometry_->kv_buffer_info.end()) {
+    if (layout_ != nullptr) {
+      if (auto info = layout_->kv_cache_buffers.find(name);
+          info != layout_->kv_cache_buffers.end()) {
         sequence_axis = info->second.sequence_axis;
       }
     }

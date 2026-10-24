@@ -82,10 +82,10 @@ struct MaskSignatures {
 //    After the auxiliary model's mask signatures have been resized to the new
 //    context size, re-create the shape-only context-length inputs so that the
 //    buffers match the resized signatures, then point the mask at the new
-//    group's geometry and rebind its output buffers as in (5):
+//    group's layout and rebind its output buffers as in (5):
 //    mask_.RecreateContextLengthInputBuffers(
 //        prefill_mask_signature, decode_mask_signature, verify_mask_signature);
-//    mask_.SetGeometry(&new_group.geometry);
+//    mask_.SetLayout(&new_group.layout);
 //    mask_.UpdateOutputBuffers(...);
 // =============================================================================
 class NpuMask {
@@ -108,7 +108,7 @@ class NpuMask {
           text_decoder_decode_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           text_decoder_verify_input_buffers,
-      const NpuModelGeometry* geometry);
+      const NpuGraphLayout* layout);
 
   static absl::StatusOr<NpuMask> CreateForDrafter(
       MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
@@ -116,18 +116,18 @@ class NpuMask {
           mask_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
           mask_output_buffers,
-      const NpuModelGeometry* geometry);
+      const NpuGraphLayout* layout);
 
   static absl::StatusOr<NpuMask> CreateForTest(
       MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-      InferenceContext mask_context, const NpuModelGeometry* geometry);
+      InferenceContext mask_context, const NpuGraphLayout* layout);
 
   void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
     compiled_model_ = compiled_model;
   }
 
-  void SetGeometry(const NpuModelGeometry* geometry) { geometry_ = geometry; }
-  const NpuModelGeometry* GetGeometry() const { return geometry_; }
+  void SetLayout(const NpuGraphLayout* layout) { layout_ = layout; }
+  const NpuGraphLayout* GetLayout() const { return layout_; }
 
   // Updates the internal Mask output buffer bindings (e.g. mask_local,
   // mask_global) to point to the newly active context group's text decoder
@@ -180,24 +180,23 @@ class NpuMask {
  private:
   explicit NpuMask(MaskUpdateMethod method,
                    const ::litert::CompiledModel* compiled_model,
-                   InferenceContext mask_context,
-                   const NpuModelGeometry* geometry)
+                   InferenceContext mask_context, const NpuGraphLayout* layout)
       : method_(method),
         compiled_model_(compiled_model),
         mask_context_(std::move(mask_context)),
-        geometry_(geometry) {}
+        layout_(layout) {}
 
   MaskUpdateMethod method_ = MaskUpdateMethod::kModel;
   const ::litert::CompiledModel* compiled_model_ = nullptr;
   InferenceContext mask_context_;
-  const NpuModelGeometry* geometry_ = nullptr;
+  const NpuGraphLayout* layout_ = nullptr;
 };
 
 // Performs manual attention mask update (CPU fallback).
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const NpuModelGeometry& geometry);
+    const NpuGraphLayout& layout);
 
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,

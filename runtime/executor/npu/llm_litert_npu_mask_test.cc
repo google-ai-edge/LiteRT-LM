@@ -85,18 +85,18 @@ class NpuMaskTest : public ::testing::Test {
 
 TEST_F(NpuMaskTest, NpuMaskCreateFailsWhenCompiledModelNullForModelMethod) {
   InferenceContext ctx;
-  NpuModelGeometry geometry;
+  NpuGraphLayout layout;
   auto mask_or = NpuMask::CreateForTest(MaskUpdateMethod::kModel, nullptr,
-                                        std::move(ctx), &geometry);
+                                        std::move(ctx), &layout);
   EXPECT_FALSE(mask_or.ok());
 }
 
 TEST_F(NpuMaskTest, NpuMaskCreateSucceedsForHwMethodWithoutCompiledModel) {
   InferenceContext ctx;
-  NpuModelGeometry geometry;
+  NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
-                                        std::move(ctx), &geometry));
+                                        std::move(ctx), &layout));
   EXPECT_EQ(mask.GetMethod(), MaskUpdateMethod::kWH);
 }
 
@@ -123,10 +123,10 @@ TEST_F(NpuMaskTest, NpuMaskSettersAndAccessors) {
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
                                  {1});
 
-  NpuModelGeometry geometry;
+  NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
-                                        std::move(ctx), &geometry));
+                                        std::move(ctx), &layout));
 
   // Test SetDecodeInput.
   EXPECT_TRUE(mask.SetDecodeInput(42, 101).ok());
@@ -170,11 +170,11 @@ TEST_F(NpuMaskTest, NpuMaskCreateForDrafter) {
   in_bufs[MaskSignatures::kMaskInputTokens] = CreateTensorBufferWithDims(
       std::vector<int32_t>{0}, ElementType::Int32, {1});
 
-  NpuModelGeometry geometry;
+  NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto mask, NpuMask::CreateForDrafter(MaskUpdateMethod::kWH, nullptr,
                                            std::move(in_bufs),
-                                           std::move(out_bufs), &geometry));
+                                           std::move(out_bufs), &layout));
   EXPECT_TRUE(mask.SetDecodeInput(77, 88).ok());
 
   auto step_lock = TensorBufferScopedLock::Create<int32_t>(
@@ -203,10 +203,10 @@ TEST_F(NpuMaskTest, NpuMaskSetPrefillInput) {
       CreateTensorBufferWithDims(std::vector<uint8_t>{0, 0, 0, 0, 0},
                                  ElementType::Bool, {1, 5});
 
-  NpuModelGeometry geometry;
+  NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
-                                        std::move(ctx), &geometry));
+                                        std::move(ctx), &layout));
 
   std::vector<int> tokens = {101, -5, 202};
   EXPECT_TRUE(mask.SetPrefillInput(15, tokens).ok());
@@ -1204,19 +1204,19 @@ TEST_F(NpuMaskTest, HWMaskUpdateRingMaskDuringPrefillChunkAfterWrap) {
 }
 
 // =============================================================================
-// NpuModelGeometry overload coverage.
+// NpuGraphLayout overload coverage.
 //
 // Production code reaches HWMaskUpdate exclusively through the
-// NpuModelGeometry overload, but every other test in this file calls the
-// explicit-parameter overload, so the unpacking in the geometry overload is
+// NpuGraphLayout overload, but every other test in this file calls the
+// explicit-parameter overload, so the unpacking in the layout overload is
 // otherwise unexercised.
 // =============================================================================
 
-// The geometry overload must be a pure repackaging of the explicit parameters.
+// The layout overload must be a pure repackaging of the explicit parameters.
 // Running both against identical inputs and comparing the full mask pins that
 // equivalence, so a future change to the unpacking cannot silently alter
 // behaviour for production callers while leaving every existing test green.
-TEST_F(NpuMaskTest, HWMaskUpdateGeometryOverloadMatchesExplicitParameters) {
+TEST_F(NpuMaskTest, HWMaskUpdateLayoutOverloadMatchesExplicitParameters) {
   constexpr int kLocalCapacity = 256;
   constexpr int kGlobalCapacity = 1024;
   constexpr int kWindow = 256;
@@ -1261,31 +1261,30 @@ TEST_F(NpuMaskTest, HWMaskUpdateGeometryOverloadMatchesExplicitParameters) {
                                 /*uses_ringbuffer=*/true, kGlobalCapacity,
                                 kLocalCapacity));
 
-  NpuModelGeometry geometry;
-  geometry.global_cache_length = kGlobalCapacity;
-  geometry.local_cache_length = kLocalCapacity;
-  geometry.sliding_window_size = kWindow;
-  geometry.uses_ringbuffer = true;
+  NpuGraphLayout layout;
+  layout.global_cache_length = kGlobalCapacity;
+  layout.local_cache_length = kLocalCapacity;
+  layout.sliding_window_size = kWindow;
+  layout.uses_ringbuffer = true;
 
-  absl::flat_hash_map<absl::string_view, TensorBuffer> geometry_in;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> geometry_out;
-  make_buffers(geometry_in, geometry_out);
-  LITERT_ASSERT_OK(HWMaskUpdate(geometry_in, geometry_out, geometry));
+  absl::flat_hash_map<absl::string_view, TensorBuffer> layout_in;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> layout_out;
+  make_buffers(layout_in, layout_out);
+  LITERT_ASSERT_OK(HWMaskUpdate(layout_in, layout_out, layout));
 
-  EXPECT_EQ(read_mask(geometry_out, "mask_local", kSeqQ * seq_k_local),
+  EXPECT_EQ(read_mask(layout_out, "mask_local", kSeqQ * seq_k_local),
             read_mask(explicit_out, "mask_local", kSeqQ * seq_k_local));
-  EXPECT_EQ(read_mask(geometry_out, "mask_global", kSeqQ * seq_k_global),
+  EXPECT_EQ(read_mask(layout_out, "mask_global", kSeqQ * seq_k_global),
             read_mask(explicit_out, "mask_global", kSeqQ * seq_k_global));
 }
 
-// A geometry with no resolved local cache length falls back to the global
+// A layout with no resolved local cache length falls back to the global
 // cache length for the local capacity. This happens whenever
-// ResolveModelGeometry cannot find a local state buffer, and it silently
+// `NpuGraphLayout::Resolve` cannot find a local state buffer, and it silently
 // claims the local ring is as large as the global cache, so the behaviour is
 // worth pinning explicitly rather than leaving it implied by
 // `local_cache_length.value_or(global_cache_length)`.
-TEST_F(NpuMaskTest,
-       HWMaskUpdateGeometryUnsetLocalCacheLengthFallsBackToGlobal) {
+TEST_F(NpuMaskTest, HWMaskUpdateLayoutUnsetLocalCacheLengthFallsBackToGlobal) {
   constexpr int kGlobalCapacity = 512;
   constexpr int kTimeStep = 100;
   constexpr int kSeqQ = 1;
@@ -1309,13 +1308,13 @@ TEST_F(NpuMaskTest,
       CreateTensorBufferWithDims(std::vector<float>(kSeqQ * seq_k, 0.0f),
                                  ElementType::Float32, {1, kSeqQ, seq_k}));
 
-  NpuModelGeometry geometry;
-  geometry.global_cache_length = kGlobalCapacity;
-  geometry.local_cache_length = std::nullopt;
-  geometry.sliding_window_size = kGlobalCapacity;
-  geometry.uses_ringbuffer = true;
+  NpuGraphLayout layout;
+  layout.global_cache_length = kGlobalCapacity;
+  layout.local_cache_length = std::nullopt;
+  layout.sliding_window_size = kGlobalCapacity;
+  layout.uses_ringbuffer = true;
 
-  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, geometry));
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, layout));
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
@@ -1340,7 +1339,7 @@ TEST_F(NpuMaskTest,
 // fires -- so both are asserted explicitly here.
 // =============================================================================
 
-// A model whose geometry says uses_ringbuffer = true but which only binds a
+// A model whose layout says uses_ringbuffer = true but which only binds a
 // single mask buffer (MTP/drafter and global-only signatures both do this).
 //
 // HWMaskUpdate sets `is_interleaved_swa = uses_ringbuffer` without checking
@@ -1352,8 +1351,7 @@ TEST_F(NpuMaskTest,
 // seq_q, so a zero there writes nothing at all and returns OkStatus over
 // whatever the buffer previously held. This test seeds the buffer with a
 // sentinel so that outcome is visible rather than silent.
-TEST_F(NpuMaskTest,
-       HWMaskUpdateGeometryRingbufferWithOnlyGlobalMaskStillWrites) {
+TEST_F(NpuMaskTest, HWMaskUpdateLayoutRingbufferWithOnlyGlobalMaskStillWrites) {
   constexpr int kGlobalCapacity = 1024;
   constexpr int kLocalCapacity = 256;
   constexpr int kTimeStep = 300;
@@ -1373,13 +1371,13 @@ TEST_F(NpuMaskTest,
                           std::vector<float>(kSeqQ * seq_k_global, kSentinel),
                           ElementType::Float32, {1, kSeqQ, seq_k_global}));
 
-  NpuModelGeometry geometry;
-  geometry.global_cache_length = kGlobalCapacity;
-  geometry.local_cache_length = kLocalCapacity;
-  geometry.sliding_window_size = kLocalCapacity;
-  geometry.uses_ringbuffer = true;
+  NpuGraphLayout layout;
+  layout.global_cache_length = kGlobalCapacity;
+  layout.local_cache_length = kLocalCapacity;
+  layout.sliding_window_size = kLocalCapacity;
+  layout.uses_ringbuffer = true;
 
-  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, geometry));
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, layout));
 
   auto global_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
@@ -1400,8 +1398,8 @@ TEST_F(NpuMaskTest,
 // The ring branch of FillMaskSingle iterates `for (k = 0; k < capacity; ++k)`
 // and writes `row[k]` with no clamp against seq_k; only the batch loop below it
 // guards with `if (k >= seq_k) break;`. The capacity it trusts comes from
-// NpuModelGeometry -- UpdateInterleavedSWAMasks substitutes `seq_k - seq_q`
-// only when the supplied capacity is <= 0 -- and geometry.global_cache_length
+// NpuGraphLayout -- UpdateInterleavedSWAMasks substitutes `seq_k - seq_q`
+// only when the supplied capacity is <= 0 -- and layout.global_cache_length
 // is a token budget rather than a tensor dimension, so it can legitimately
 // exceed the mask width. UpdateInterleavedSWAMasks therefore has to reject a
 // capacity that does not fit the bound buffer instead of trusting it.
@@ -1412,7 +1410,7 @@ TEST_F(NpuMaskTest,
 // the sentinel must survive. Note that a sanitizer does NOT catch this: the
 // backing store is a LiteRT managed host buffer, not an instrumented malloc,
 // so the overrun is invisible to ASAN and has to be asserted explicitly.
-TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsCapacityLargerThanMaskTensor) {
+TEST_F(NpuMaskTest, HWMaskUpdateLayoutRejectsCapacityLargerThanMaskTensor) {
   constexpr int kLocalCapacity = 4096;  // Far wider than the mask below.
   constexpr int kGlobalCapacity = 4096;
   // Must be >= kLocalCapacity so FillMaskSingle takes the aging branch. Below
@@ -1444,15 +1442,15 @@ TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsCapacityLargerThanMaskTensor) {
                           std::vector<float>(kSeqQ * seq_k_global, 0.0f),
                           ElementType::Float32, {1, kSeqQ, seq_k_global}));
 
-  NpuModelGeometry geometry;
-  geometry.global_cache_length = kGlobalCapacity;
-  geometry.local_cache_length = kLocalCapacity;
-  geometry.sliding_window_size = kLocalCapacity;
-  geometry.uses_ringbuffer = true;
+  NpuGraphLayout layout;
+  layout.global_cache_length = kGlobalCapacity;
+  layout.local_cache_length = kLocalCapacity;
+  layout.sliding_window_size = kLocalCapacity;
+  layout.uses_ringbuffer = true;
 
   // Either reject the mismatch outright or clamp to the tensor; silently
   // writing past the declared width is not acceptable.
-  EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, geometry).ok());
+  EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, layout).ok());
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
@@ -1468,7 +1466,7 @@ TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsCapacityLargerThanMaskTensor) {
 // A mask whose key dimension is narrower than its query dimension must be
 // rejected rather than turned into a negative capacity.
 //
-// When the geometry supplies no capacity, UpdateInterleavedSWAMasks falls back
+// When the layout supplies no capacity, UpdateInterleavedSWAMasks falls back
 // to `seq_k - seq_q`, which goes negative for such a mask. The width check
 // alone cannot catch that: substituting the fallback reduces
 // `capacity + seq_q <= seq_k` to `seq_k <= seq_k`, which always holds. A
@@ -1479,7 +1477,7 @@ TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsCapacityLargerThanMaskTensor) {
 //
 // Such a mask is malformed, but that is exactly what these checks are for, and
 // the write is upstream of the allocation rather than merely past its end.
-TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsKeyDimNarrowerThanQueryDim) {
+TEST_F(NpuMaskTest, HWMaskUpdateLayoutRejectsKeyDimNarrowerThanQueryDim) {
   constexpr int kSeqQ = 8;
   constexpr int kSeqKLocal = 4;  // Narrower than the query dimension.
   constexpr int kTimeStep = 3;
@@ -1497,12 +1495,12 @@ TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsKeyDimNarrowerThanQueryDim) {
 
   // No local capacity, so UpdateInterleavedSWAMasks takes the seq_k - seq_q
   // fallback.
-  NpuModelGeometry geometry;
-  geometry.local_cache_length = 0;
-  geometry.sliding_window_size = 0;
-  geometry.uses_ringbuffer = true;
+  NpuGraphLayout layout;
+  layout.local_cache_length = 0;
+  layout.sliding_window_size = 0;
+  layout.uses_ringbuffer = true;
 
-  EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, geometry).ok());
+  EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, layout).ok());
 }
 
 }  // namespace

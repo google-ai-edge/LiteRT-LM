@@ -225,40 +225,41 @@ absl::Status Fill(::litert::TensorBuffer& tensor_buffer, uint16_t value);
 absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
     const ::litert::TensorBuffer& buffer);
 
-// Stores metadata describing a KV cache buffer (e.g. sequence axis, ringbuffer
-// capacity).
-struct KVCacheBufferInfo {
-  int sequence_axis = -1;
-  bool is_local = false;
-  int min_sequence_length = 0;
-  int max_sequence_length = 0;
-};
+// Layout parameters of the NPU text decoder graph, resolved from executor
+// metadata or tensor heuristics.
+struct NpuGraphLayout {
+  // Stores metadata describing a KV cache buffer (e.g. sequence axis,
+  // ringbuffer capacity).
+  struct KVCacheBuffer {
+    int sequence_axis = -1;
+    bool is_local = false;
+    int min_sequence_length = 0;
+    int max_sequence_length = 0;
+  };
 
-// Extracts KV cache buffer info from executor metadata, falling back to
-// tensor shape heuristics for any buffers missing metadata.
-absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
-    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        input_kv_cache_buffers,
-    int global_cache_length, const proto::ExecutorMetadata* executor_metadata);
-
-// Model geometry parameters resolved from executor metadata or tensor
-// heuristics.
-struct NpuModelGeometry {
   int prefill_chunk_size = 0;
   int global_cache_length = 0;
   std::optional<int> local_cache_length = std::nullopt;
   int sliding_window_size = 512;
   bool uses_ringbuffer = false;
-  absl::flat_hash_map<std::string, KVCacheBufferInfo> kv_buffer_info;
+  absl::flat_hash_map<std::string, KVCacheBuffer> kv_cache_buffers;
+
+  // Resolves the graph layout giving preference to ExecutorMetadata when
+  // present and falling back to LlmMetadata / tensor shapes.
+  static NpuGraphLayout Resolve(
+      int prefill_chunk_size, int global_cache_length,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          input_kv_cache_buffers,
+      const proto::ExecutorMetadata* executor_metadata = nullptr);
 };
 
-// Resolves model geometry giving preference to ExecutorMetadata when present
-// and falling back to LlmMetadata / tensor shapes.
-NpuModelGeometry ResolveModelGeometry(
-    int prefill_chunk_size, int global_cache_length,
+// Extracts KV cache buffer info from executor metadata, falling back to
+// tensor shape heuristics for any buffers missing metadata.
+absl::flat_hash_map<std::string, NpuGraphLayout::KVCacheBuffer>
+ExtractKVCacheBufferInfoMap(
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         input_kv_cache_buffers,
-    const proto::ExecutorMetadata* executor_metadata = nullptr);
+    int global_cache_length, const proto::ExecutorMetadata* executor_metadata);
 
 // Detect if the model uses ringbuffer KV caches.
 // If executor_metadata is provided and contains state buffers, it checks
@@ -457,7 +458,7 @@ struct ResolvedAuxiliarySignatures {
 
 // Holds model signatures and tensor buffer bindings for a specific context
 // size.
-struct ContextGroup {
+struct NpuContextGroup {
   int context_size = 0;
   ResolvedPrefillSignatures prefill_signatures;
   std::string decode_signature;
@@ -467,7 +468,7 @@ struct ContextGroup {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       input_kv_cache_buffers;
   InferenceContext text_decoder_inference_context;
-  NpuModelGeometry geometry;
+  NpuGraphLayout layout;
 };
 
 ResolvedAuxiliarySignatures BuildResolvedDecodeAuxiliarySignatures(
@@ -556,13 +557,13 @@ struct DrafterContext {
   // group's current KV cache buffers, so this must also be called after the
   // text decoder re-allocated the KV cache of a context group.
   absl::Status BindContextGroup(size_t index,
-                                const ContextGroup& context_group);
+                                const NpuContextGroup& context_group);
 
   // Allocates the MTP drafter buffers for every text decoder context group and
   // creates the DrafterContext bound to the first context group.
   static absl::StatusOr<DrafterContext> Create(
       ::litert::Environment& env, const litert::Model& mtp_drafter_model,
-      absl::Span<const ContextGroup> context_groups);
+      absl::Span<const NpuContextGroup> context_groups);
 };
 
 // Dequantize logits to float32.

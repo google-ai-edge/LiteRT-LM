@@ -706,7 +706,7 @@ bool IsCompatibleTensorType(const ::litert::RankedTensorType& signature_type,
 
 absl::StatusOr<DrafterContext> DrafterContext::Create(
     ::litert::Environment& env, const litert::Model& mtp_drafter_model,
-    absl::Span<const ContextGroup> context_groups) {
+    absl::Span<const NpuContextGroup> context_groups) {
   RET_CHECK(!context_groups.empty())
       << "At least one text decoder context group is required.";
   LITERT_ASSIGN_OR_RETURN(
@@ -724,7 +724,7 @@ absl::StatusOr<DrafterContext> DrafterContext::Create(
       shared_input_buffers;
   std::vector<ContextBinding> context_bindings;
   context_bindings.reserve(context_groups.size());
-  for (const ContextGroup& context_group : context_groups) {
+  for (const NpuContextGroup& context_group : context_groups) {
     ContextBinding binding;
     binding.signature = ResolveMtpDrafterSignature(mtp_drafter_model,
                                                    context_group.context_size);
@@ -822,7 +822,7 @@ absl::Status DrafterContext::SetInputPos(int32_t pos) {
 }
 
 absl::Status DrafterContext::BindContextGroup(
-    size_t index, const ContextGroup& context_group) {
+    size_t index, const NpuContextGroup& context_group) {
   RET_CHECK_LT(index, context_bindings.size())
       << "Drafter context group index out of range.";
   const ContextBinding& binding = context_bindings[index];
@@ -924,16 +924,18 @@ absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
   }
 }
 
-absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
+absl::flat_hash_map<std::string, NpuGraphLayout::KVCacheBuffer>
+ExtractKVCacheBufferInfoMap(
     const absl::flat_hash_map<absl::string_view, TensorBuffer>&
         input_kv_cache_buffers,
     int global_cache_length, const proto::ExecutorMetadata* executor_metadata) {
-  absl::flat_hash_map<std::string, KVCacheBufferInfo> buffer_info_map;
+  absl::flat_hash_map<std::string, NpuGraphLayout::KVCacheBuffer>
+      buffer_info_map;
   if (executor_metadata != nullptr &&
       executor_metadata->has_llm_executor_metadata()) {
     for (const auto& sb :
          executor_metadata->llm_executor_metadata().state_buffers()) {
-      KVCacheBufferInfo info;
+      NpuGraphLayout::KVCacheBuffer info;
       if (sb.has_sequence_axis()) {
         info.sequence_axis = sb.sequence_axis();
       }
@@ -993,7 +995,7 @@ absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
             }
           }
           auto make_slice_info = [&](absl::string_view slice_name) {
-            KVCacheBufferInfo slice_info = info;
+            NpuGraphLayout::KVCacheBuffer slice_info = info;
             auto it = input_kv_cache_buffers.find(slice_name);
             if (it != input_kv_cache_buffers.end()) {
               auto type = it->second.TensorType();
@@ -1063,7 +1065,7 @@ absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
     int hidden_dim_axis = (cache_seq_dim == rank - 1) ? rank - 2 : rank - 1;
     int64_t hidden_dim = dims[hidden_dim_axis];
 
-    KVCacheBufferInfo info;
+    NpuGraphLayout::KVCacheBuffer info;
     info.sequence_axis = cache_seq_dim;
     info.min_sequence_length = cache_seq;
     info.max_sequence_length = global_cache_length;
@@ -1071,7 +1073,7 @@ absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
         (global_cache_length > 0 && cache_seq < global_cache_length);
 
     auto make_slice_info = [&](absl::string_view slice_name) {
-      KVCacheBufferInfo slice_info = info;
+      NpuGraphLayout::KVCacheBuffer slice_info = info;
       auto it = input_kv_cache_buffers.find(slice_name);
       if (it != input_kv_cache_buffers.end()) {
         auto type = it->second.TensorType();
@@ -1128,7 +1130,7 @@ absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
     if (rank < 2) {
       continue;
     }
-    KVCacheBufferInfo info;
+    NpuGraphLayout::KVCacheBuffer info;
     info.sequence_axis = rank - 2;
     buffer_info_map[name_str] = info;
   }
@@ -1136,17 +1138,17 @@ absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
   return buffer_info_map;
 }
 
-NpuModelGeometry ResolveModelGeometry(
+NpuGraphLayout NpuGraphLayout::Resolve(
     int prefill_chunk_size, int global_cache_length,
     const absl::flat_hash_map<absl::string_view, TensorBuffer>&
         input_kv_cache_buffers,
     const proto::ExecutorMetadata* executor_metadata) {
-  NpuModelGeometry geometry;
-  geometry.prefill_chunk_size = prefill_chunk_size;
-  geometry.global_cache_length = global_cache_length;
-  geometry.uses_ringbuffer =
+  NpuGraphLayout layout;
+  layout.prefill_chunk_size = prefill_chunk_size;
+  layout.global_cache_length = global_cache_length;
+  layout.uses_ringbuffer =
       DetectUsesRingbuffer(input_kv_cache_buffers, executor_metadata);
-  geometry.kv_buffer_info = ExtractKVCacheBufferInfoMap(
+  layout.kv_cache_buffers = ExtractKVCacheBufferInfoMap(
       input_kv_cache_buffers, global_cache_length, executor_metadata);
 
   // 1. Try resolving local_cache_length from ExecutorMetadata state buffers.
@@ -1171,10 +1173,10 @@ NpuModelGeometry ResolveModelGeometry(
             int rank = dims.size();
             if (sb.has_sequence_axis() && sb.sequence_axis() >= 0 &&
                 sb.sequence_axis() < rank) {
-              geometry.local_cache_length = dims[sb.sequence_axis()];
+              layout.local_cache_length = dims[sb.sequence_axis()];
               break;
             } else if (rank >= 2) {
-              geometry.local_cache_length =
+              layout.local_cache_length =
                   std::max(dims[rank - 1], dims[rank - 2]);
               break;
             }
@@ -1184,16 +1186,16 @@ NpuModelGeometry ResolveModelGeometry(
         if (sb.has_minimum_sequence_length() &&
             sb.minimum_sequence_length() > 0 &&
             sb.minimum_sequence_length() < global_cache_length) {
-          geometry.local_cache_length = sb.minimum_sequence_length();
+          layout.local_cache_length = sb.minimum_sequence_length();
           break;
         } else if (sb.has_maximum_sequence_length() &&
                    sb.maximum_sequence_length() > 0 &&
                    sb.maximum_sequence_length() < global_cache_length) {
-          geometry.local_cache_length = sb.maximum_sequence_length();
+          layout.local_cache_length = sb.maximum_sequence_length();
           break;
         } else if (sb.has_minimum_sequence_length() &&
                    sb.minimum_sequence_length() > 0) {
-          geometry.local_cache_length = sb.minimum_sequence_length();
+          layout.local_cache_length = sb.minimum_sequence_length();
           break;
         }
       }
@@ -1201,14 +1203,14 @@ NpuModelGeometry ResolveModelGeometry(
   }
 
   // 2. If local_cache_length was not found in metadata, inspect
-  // geometry.kv_buffer_info.
-  if (!geometry.local_cache_length.has_value() && geometry.uses_ringbuffer) {
-    for (const auto& [name, info] : geometry.kv_buffer_info) {
+  // layout.kv_cache_buffers.
+  if (!layout.local_cache_length.has_value() && layout.uses_ringbuffer) {
+    for (const auto& [name, info] : layout.kv_cache_buffers) {
       if (info.is_local && info.min_sequence_length > 0 &&
           info.min_sequence_length < global_cache_length) {
-        if (!geometry.local_cache_length.has_value() ||
-            info.min_sequence_length < *geometry.local_cache_length) {
-          geometry.local_cache_length = info.min_sequence_length;
+        if (!layout.local_cache_length.has_value() ||
+            info.min_sequence_length < *layout.local_cache_length) {
+          layout.local_cache_length = info.min_sequence_length;
         }
       }
     }
@@ -1220,16 +1222,16 @@ NpuModelGeometry ResolveModelGeometry(
     const auto& llm_meta = executor_metadata->llm_executor_metadata();
     if (llm_meta.has_attention_mask_settings() &&
         llm_meta.attention_mask_settings().sliding_window_size() > 0) {
-      geometry.sliding_window_size =
+      layout.sliding_window_size =
           llm_meta.attention_mask_settings().sliding_window_size();
-    } else if (geometry.local_cache_length.has_value()) {
-      geometry.sliding_window_size = *geometry.local_cache_length;
+    } else if (layout.local_cache_length.has_value()) {
+      layout.sliding_window_size = *layout.local_cache_length;
     }
-  } else if (geometry.local_cache_length.has_value()) {
-    geometry.sliding_window_size = *geometry.local_cache_length;
+  } else if (layout.local_cache_length.has_value()) {
+    layout.sliding_window_size = *layout.local_cache_length;
   }
 
-  return geometry;
+  return layout;
 }
 
 bool DetectUsesRingbuffer(

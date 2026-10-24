@@ -48,7 +48,7 @@ absl::Status ClearKVCacheBuffers(
 absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const NpuModelGeometry* geometry,
+    const NpuGraphLayout* layout,
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params =
         {});
 
@@ -114,20 +114,20 @@ class NpuKVCache {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           verify_output_kv_cache_slice_buffers,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-      const NpuModelGeometry* geometry, int64_t kv_cache_init_value = 0);
+      const NpuGraphLayout* layout, int64_t kv_cache_init_value = 0);
 
   static absl::StatusOr<NpuKVCache> CreateForTest(
       KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
       InferenceContext cache_update_context,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-      const NpuModelGeometry* geometry, int64_t kv_cache_init_value = 0);
+      const NpuGraphLayout* layout, int64_t kv_cache_init_value = 0);
 
   void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
     compiled_model_ = compiled_model;
   }
 
-  void SetGeometry(const NpuModelGeometry* geometry) { geometry_ = geometry; }
-  const NpuModelGeometry* GetGeometry() const { return geometry_; }
+  void SetLayout(const NpuGraphLayout* layout) { layout_ = layout; }
+  const NpuGraphLayout* GetLayout() const { return layout_; }
 
   // --- Stage 1: Prefill ---
   absl::Status SetPrefillPositions(absl::Span<const int32_t> seq_positions);
@@ -158,7 +158,7 @@ class NpuKVCache {
   //   cleanly reset to `kv_cache_init_value_` (e.g. quantization zero-point) to
   //   overwrite stale leftover data from adjacent slices.
   // - The sequence axis of each buffer is taken from
-  //   `NpuModelGeometry::kv_buffer_info`. Buffers the geometry does not
+  //   `NpuGraphLayout::kv_cache_buffers`. Buffers the layout does not
   //   describe fall back to inferring the axis from the `src`/`dst` shape
   //   difference (see `CopySingleKVCacheBuffer`).
   absl::Status CopyKVCache(
@@ -183,7 +183,7 @@ class NpuKVCache {
   // Migrates a single KV cache buffer from `src` to `dst`.
   //
   // `sequence_axis` is the axis to migrate along and should come from
-  // `NpuModelGeometry::kv_buffer_info`. Pass -1 when it is unknown, in which
+  // `NpuGraphLayout::kv_cache_buffers`. Pass -1 when it is unknown, in which
   // case it is inferred from the `src`/`dst` shape difference; that inference
   // only works if the buffer was actually resized, so identically shaped
   // buffers are then assumed to alias and are skipped.
@@ -212,19 +212,19 @@ class NpuKVCache {
       KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
       InferenceContext cache_update_context,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-      const NpuModelGeometry* geometry, int64_t kv_cache_init_value = 0)
+      const NpuGraphLayout* layout, int64_t kv_cache_init_value = 0)
       : method_(method),
         compiled_model_(compiled_model),
         cache_update_context_(std::move(cache_update_context)),
         kv_quant_params_(std::move(kv_quant_params)),
-        geometry_(geometry),
+        layout_(layout),
         kv_cache_init_value_(kv_cache_init_value) {}
 
   KVCacheUpdateMethod method_ = KVCacheUpdateMethod::kModel;
   const ::litert::CompiledModel* compiled_model_ = nullptr;
   InferenceContext cache_update_context_;
   absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params_;
-  const NpuModelGeometry* geometry_ = nullptr;
+  const NpuGraphLayout* layout_ = nullptr;
   int64_t kv_cache_init_value_ = 0;
 };
 

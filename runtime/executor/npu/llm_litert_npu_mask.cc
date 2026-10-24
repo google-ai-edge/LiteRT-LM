@@ -262,9 +262,9 @@ absl::Status UpdateInterleavedSWAMasks(
 
   // The fill loops index [0, capacity) for the history slots and
   // [capacity, capacity + seq_q) for the current batch, so the mask has to be
-  // at least capacity + seq_q wide. Capacities arrive from NpuModelGeometry
+  // at least capacity + seq_q wide. Capacities arrive from NpuGraphLayout
   // rather than being derived from the tensor dimensions, so a capacity that
-  // does not fit the bound buffer means the geometry and the graph disagree.
+  // does not fit the bound buffer means the layout and the graph disagree.
   // That is an internal invariant violation, not bad caller input, hence
   // RET_CHECK. Clamping instead would silently produce a mask for a cache that
   // is not the one the model is using.
@@ -569,23 +569,23 @@ absl::Status HWMaskUpdate(
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const NpuModelGeometry& geometry) {
+    const NpuGraphLayout& layout) {
   int64_t local_capacity =
-      geometry.local_cache_length.value_or(geometry.global_cache_length);
-  return HWMaskUpdate(in_buffers, out_buffers, geometry.sliding_window_size,
-                      geometry.uses_ringbuffer, geometry.global_cache_length,
+      layout.local_cache_length.value_or(layout.global_cache_length);
+  return HWMaskUpdate(in_buffers, out_buffers, layout.sliding_window_size,
+                      layout.uses_ringbuffer, layout.global_cache_length,
                       local_capacity);
 }
 
 absl::StatusOr<NpuMask> NpuMask::CreateForTest(
     MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-    InferenceContext mask_context, const NpuModelGeometry* geometry) {
-  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuMask";
+    InferenceContext mask_context, const NpuGraphLayout* layout) {
+  RET_CHECK(layout != nullptr) << "layout must not be null for NpuMask";
   if (method == MaskUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model must be provided when MaskUpdateMethod is kModel.");
   }
-  return NpuMask(method, compiled_model, std::move(mask_context), geometry);
+  return NpuMask(method, compiled_model, std::move(mask_context), layout);
 }
 
 absl::StatusOr<NpuMask> NpuMask::Create(
@@ -599,8 +599,8 @@ absl::StatusOr<NpuMask> NpuMask::Create(
         text_decoder_decode_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         text_decoder_verify_input_buffers,
-    const NpuModelGeometry* geometry) {
-  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuMask";
+    const NpuGraphLayout* layout) {
+  RET_CHECK(layout != nullptr) << "layout must not be null for NpuMask";
   RET_CHECK(npu_auxiliary_compiled_model != nullptr)
       << "Auxiliary compiled model cannot be null for NpuMask";
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -683,7 +683,7 @@ absl::StatusOr<NpuMask> NpuMask::Create(
       std::move(decode_input_buffers), std::move(decode_output_buffers),
       std::move(verify_input_buffers), std::move(verify_output_buffers));
   return NpuMask(method, npu_auxiliary_compiled_model, std::move(mask_context),
-                 geometry);
+                 layout);
 }
 
 absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
@@ -692,8 +692,8 @@ absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
         mask_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         mask_output_buffers,
-    const NpuModelGeometry* geometry) {
-  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuMask";
+    const NpuGraphLayout* layout) {
+  RET_CHECK(layout != nullptr) << "layout must not be null for NpuMask";
   if (method == MaskUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model must be provided when MaskUpdateMethod is kModel.");
@@ -701,7 +701,7 @@ absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
   InferenceContext ctx;
   ctx.decode_input_buffers = std::move(mask_input_buffers);
   ctx.decode_output_buffers = std::move(mask_output_buffers);
-  return NpuMask(method, compiled_model, std::move(ctx), geometry);
+  return NpuMask(method, compiled_model, std::move(ctx), layout);
 }
 
 absl::Status NpuMask::UpdateOutputBuffers(
@@ -774,7 +774,7 @@ absl::Status NpuMask::RecreateContextLengthInputBuffers(
 
 absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
-    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
+    RET_CHECK(layout_ != nullptr) << "layout must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
@@ -782,7 +782,7 @@ absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.prefill_output_buffers),
-        *geometry_);
+        *layout_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
@@ -802,7 +802,7 @@ absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
 
 absl::Status NpuMask::RunDecode(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
-    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
+    RET_CHECK(layout_ != nullptr) << "layout must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
@@ -810,7 +810,7 @@ absl::Status NpuMask::RunDecode(absl::string_view signature) const {
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.decode_output_buffers),
-        *geometry_);
+        *layout_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
@@ -831,7 +831,7 @@ absl::Status NpuMask::RunDecode(absl::string_view signature) const {
 
 absl::Status NpuMask::RunVerify(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
-    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
+    RET_CHECK(layout_ != nullptr) << "layout must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
@@ -839,7 +839,7 @@ absl::Status NpuMask::RunVerify(absl::string_view signature) const {
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.verify_output_buffers),
-        *geometry_);
+        *layout_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
@@ -860,7 +860,7 @@ absl::Status NpuMask::RunVerify(absl::string_view signature) const {
 
 absl::Status NpuMask::RunDrafter(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
-    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
+    RET_CHECK(layout_ != nullptr) << "layout must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
@@ -868,7 +868,7 @@ absl::Status NpuMask::RunDrafter(absl::string_view signature) const {
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.decode_output_buffers),
-        *geometry_);
+        *layout_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
