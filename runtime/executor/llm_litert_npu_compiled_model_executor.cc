@@ -1004,6 +1004,11 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
     lock.emplace(&execution_mutex_);
   }
   ran_decode_ = false;
+  // The prefilled tokens follow the last returned token, so tokens an MTP cycle
+  // accepted beyond it (e.g. after the end-of-turn token) are not part of the
+  // sequence anymore, and the next MTP cycle has to start cold from the
+  // prefill's output.
+  DiscardSpeculativeState();
   auto start = absl::Now();
   LITERT_ASSIGN_OR_RETURN(const auto* text_token_ids,
                           inputs.GetTextTokenIdsPtr());
@@ -1227,6 +1232,16 @@ LlmLiteRtNpuCompiledModelExecutor::PopPendingAcceptedToken(
       absl::ToInt64Microseconds(absl::Now() - start_time);
   latency_stats_.decode_num_tokens++;
   return std::vector<std::vector<int>>{{next_token_id}};
+}
+
+void LlmLiteRtNpuCompiledModelExecutor::DiscardSpeculativeState() {
+  if (!pending_accepted_tokens_.empty()) {
+    NPU_EXECUTOR_LOG(INFO) << "Discarding " << pending_accepted_tokens_.size()
+                           << " accepted but not returned MTP tokens.";
+  }
+  pending_accepted_tokens_.clear();
+  last_verify_activations_.clear();
+  has_valid_verify_activations_ = false;
 }
 
 absl::StatusOr<std::vector<std::vector<int>>>
@@ -2487,6 +2502,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::SetCurrentStep(int new_step) {
   }
 
   current_step_ = new_step;
+  DiscardSpeculativeState();
   return absl::OkStatus();
 };
 
@@ -2525,8 +2541,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   }
   LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(0));
   latency_stats_ = {};
-  last_verify_activations_.clear();
-  pending_accepted_tokens_.clear();
+  DiscardSpeculativeState();
 
   for (auto& group : context_groups_) {
     LITERT_RETURN_IF_ERROR(ClearKVCache(
@@ -2586,6 +2601,7 @@ LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
+  DiscardSpeculativeState();
   current_step_ = context_data->runtime_state().current_step;
   processed_tokens_ = context_data->processed_context().processed_tokens();
   if (context_data->runtime_config().sampler_params.has_value()) {
