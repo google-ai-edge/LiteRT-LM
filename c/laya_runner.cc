@@ -14,7 +14,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <algorithm>
 
 #include "absl/log/absl_log.h"
 #include "absl/types/span.h"
@@ -80,12 +83,16 @@ LiteRtLmLaya* litert_lm_laya_create(const char* main_graph_path,
     return nullptr;
   }
   // Apple Silicon perf cores: measured 222 ms/question at 6 threads vs
-  // 1016 ms at the LiteRT default of 1; 8 threads is not faster.
+  // 1016 ms at the LiteRT default of 1; 8 threads is not faster. Clamp to
+  // the machine so 4-core installs don't oversubscribe.
   compilation_options->SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   auto cpu = compilation_options->GetCpuOptions();
+  unsigned int hw = std::thread::hardware_concurrency();
+  int threads = hw == 0 ? 6 : static_cast<int>(std::min(hw, 6u));
   if (cpu.HasValue()) {
-    if (!cpu->SetNumThreads(6).HasValue()) {
-      ABSL_LOG(ERROR) << "laya_runner: SetNumThreads(6) failed; using default";
+    if (!cpu->SetNumThreads(threads).HasValue()) {
+      ABSL_LOG(ERROR) << "laya_runner: SetNumThreads(" << threads
+                      << ") failed; using default";
     }
   }
 
