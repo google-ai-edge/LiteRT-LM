@@ -549,6 +549,8 @@ cc_binary(
         "experimental.cc",
         "model_info.cc",
     ],
+    # Used only on Linux and Android; see the default branch of `linkopts`.
+    additional_linker_inputs = [":litert_lm_c_api_linux.lds"],
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
     linkopts = select({
@@ -576,6 +578,10 @@ cc_binary(
             "-Wl,-Bsymbolic",
             # Update the rpath
             "-Wl,-rpath,$$ORIGIN",
+            # Export only the public C API symbols, in version node
+            # LITERT_LM_C_API_1.0, to hide internal C++ symbols. -fvisibility
+            # above does not apply to statically linked dependencies.
+            "-Wl,--version-script=$(execpath :litert_lm_c_api_linux.lds)",
         ],
     }),
     linkshared = 1,
