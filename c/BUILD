@@ -121,6 +121,21 @@ TFLITE_EMBED_DEPS = [
     "//support/tokenizer:sentencepiece_tokenizer",
 ]
 
+# Laya zero-shot-classifier runner (see laya_runner.h). Runs the main encoder
+# and act-head graphs through LiteRT on CPU; tokenization and the token-table
+# lookup stay on the host.
+LAYA_DEPS = [
+    "@com_google_absl//absl/log:absl_log",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings:strings",
+    "@com_google_absl//absl/types:span",
+    "@litert//litert/cc:litert_compiled_model",
+    "@litert//litert/cc:litert_environment",
+    "@litert//litert/cc:litert_model",
+    "@litert//litert/cc:litert_options",
+]
+
 ENGINE_COMMON_DEPS = (
     ENGINE_LITE_COMMON_DEPS +
     CONVERSATION_DEPS +
@@ -514,6 +529,7 @@ cc_binary(
         "engine.cc",
         "error_reporter.cc",
         "experimental.cc",
+        "laya_runner.cc",
         "model_info.cc",
         "tflite_embed.cc",
     ],
@@ -542,6 +558,7 @@ cc_binary(
         ":embedding_engine_headers",
         ":engine_headers",
         ":experimental_headers",
+        ":laya_runner_internal",
         ":model_info_headers",
         ":tflite_embed_internal",
         "//runtime/core:engine_impl",
@@ -555,4 +572,11 @@ cc_library(
     hdrs = ["tflite_embed.h"],
     visibility = ["//visibility:public"],
     deps = [":engine_headers"] + TFLITE_EMBED_DEPS,
+)
+
+cc_library(
+    name = "laya_runner_internal",
+    hdrs = ["laya_runner.h"],
+    visibility = ["//visibility:public"],
+    deps = [":engine_headers"] + LAYA_DEPS,
 )
