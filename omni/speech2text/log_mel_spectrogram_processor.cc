@@ -35,6 +35,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/stage.h"
 #include "omni/speech2text/audio_preprocessor.h"
+#include "omni/speech2text/audio_source.h"
 #include "omni/speech2text/utils.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
@@ -111,22 +112,12 @@ std::vector<float> ComputeStd(const std::vector<std::vector<float>>& mel_spec,
   return result;
 }
 
-// Trims >= 2 s (20 x 100 ms blocks) of trailing room noise (< 6e-3 RMS and
-// < 5% of peak block RMS) so normalizing a short utterance in a 5 s window
-// does not include seconds of background silence. When `decode_valid_frames` is
-// non-null and full trimming does not trigger, bounds `decode_valid_frames` to
-// exclude >= 300 ms (3 blocks) of trailing near-zero digital silence (< 5e-4
-// RMS and < 1% of peak block RMS) without altering `valid_frames`.
-int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
-                          int hop_length, int* decode_valid_frames = nullptr) {
-  constexpr int kBlockFrames = 10;
-  constexpr int kMinSilentBlocks = 20;
-  constexpr int kMinDigitalSilentBlocks = 3;
-  if (decode_valid_frames != nullptr) *decode_valid_frames = valid_frames;
-  if (valid_frames < (kMinDigitalSilentBlocks + 1) * kBlockFrames) {
-    return valid_frames;
-  }
+constexpr int kBlockFrames = 10;
+
+std::vector<float> ComputeBlockRms(absl::Span<const float> raw_speech,
+                                   int valid_frames, int hop_length) {
   const int num_blocks = valid_frames / kBlockFrames;
+  if (num_blocks <= 0 || hop_length <= 0) return {};
   const size_t block_samples = static_cast<size_t>(kBlockFrames) * hop_length;
   std::vector<float> block_rms(num_blocks, 0.0f);
   for (int b = 0; b < num_blocks; ++b) {
@@ -137,13 +128,94 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     }
     block_rms[b] = static_cast<float>(std::sqrt(sum_sq / block_samples));
   }
+  return block_rms;
+}
+
+// Returns true if `blocks` has a low, flat energy distribution characteristic
+// of stationary background microphone or room noise (`max_rms <= 8e-4`, or
+// `max_rms <= max_allowed_rms` with `max_rms <= 1.6 * p10_rms` and
+// `max_rms <= 1.35 * median_rms`).
+bool IsStationaryNoiseSpan(absl::Span<const float> blocks,
+                           float max_allowed_rms,
+                           float* out_median_rms = nullptr) {
+  if (blocks.empty()) return false;
+  std::vector<float> sorted(blocks.begin(), blocks.end());
+  std::sort(sorted.begin(), sorted.end());
+  const float max_rms = sorted.back();
+  const float median_rms = sorted[sorted.size() / 2];
+  if (out_median_rms != nullptr) *out_median_rms = median_rms;
+  if (max_rms <= 8e-4f) return true;
+  if (blocks.size() < 3 || max_rms > max_allowed_rms) return false;
+  const float p10_rms = sorted[sorted.size() / 10];
+  return max_rms <= 1.6f * p10_rms && max_rms <= 1.35f * median_rms;
+}
+
+// Trims >= 2 s (20 x 100 ms blocks, or 10 blocks on a warm-start prefix) of
+// trailing room noise so normalizing a short utterance in a 5 s window does
+// not include seconds of background silence. When `decode_valid_frames` is
+// non-null and full trimming does not trigger, bounds `decode_valid_frames` to
+// exclude >= 300 ms (3 blocks) of trailing silence/noise without altering
+// `valid_frames`.
+int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
+                          int hop_length, int* decode_valid_frames = nullptr,
+                          float peak_speech_rms = 0.0f,
+                          bool is_warm_start = false,
+                          int* out_trailing_silent_blocks = nullptr) {
+  constexpr int kMinSilentBlocks = 20;
+  constexpr int kMinWarmStartSilentBlocks = 10;
+  constexpr int kMinCheckSilentBlocks = 7;
+  constexpr int kMinDigitalSilentBlocks = 3;
+  constexpr float kMaxStationaryNoiseRms = 0.025f;
+  if (decode_valid_frames != nullptr) *decode_valid_frames = valid_frames;
+  if (out_trailing_silent_blocks != nullptr) *out_trailing_silent_blocks = 0;
+  if (valid_frames < (kMinDigitalSilentBlocks + 1) * kBlockFrames) {
+    return valid_frames;
+  }
+  const std::vector<float> block_rms =
+      ComputeBlockRms(raw_speech, valid_frames, hop_length);
+  const int num_blocks = static_cast<int>(block_rms.size());
+  if (num_blocks <= kMinDigitalSilentBlocks) return valid_frames;
   const float max_rms = *std::max_element(block_rms.begin(), block_rms.end());
-  const float limit = std::min(6e-3f, 0.05f * max_rms);
+  const float ref_max_rms = std::max(max_rms, peak_speech_rms);
+  float limit = std::min(6e-3f, 0.05f * ref_max_rms);
+  const int min_silent_blocks =
+      is_warm_start ? kMinWarmStartSilentBlocks : kMinSilentBlocks;
+  if (num_blocks > min_silent_blocks) {
+    float tail_median_rms = 0.0f;
+    const float max_allowed_tail_rms =
+        std::min(kMaxStationaryNoiseRms, 0.6f * ref_max_rms);
+    if (IsStationaryNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+                                  num_blocks - min_silent_blocks),
+                              max_allowed_tail_rms, &tail_median_rms)) {
+      limit = std::max(limit,
+                       std::min(max_allowed_tail_rms, 1.45f * tail_median_rms));
+    }
+  }
+  if (out_trailing_silent_blocks != nullptr) {
+    float silent_limit = limit;
+    if (num_blocks > kMinCheckSilentBlocks) {
+      float tail_short_median_rms = 0.0f;
+      const float max_allowed_tail_rms =
+          std::min(kMaxStationaryNoiseRms, 0.6f * ref_max_rms);
+      if (IsStationaryNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+                                    num_blocks - kMinCheckSilentBlocks),
+                                max_allowed_tail_rms, &tail_short_median_rms)) {
+        silent_limit = std::max(
+            silent_limit,
+            std::min(max_allowed_tail_rms, 1.45f * tail_short_median_rms));
+      }
+    }
+    int last_active_for_count = 0;
+    for (int b = 0; b < num_blocks; ++b) {
+      if (block_rms[b] > silent_limit) last_active_for_count = b + 1;
+    }
+    *out_trailing_silent_blocks = num_blocks - last_active_for_count;
+  }
   int last_active = 0;
   for (int b = 0; b < num_blocks; ++b) {
     if (block_rms[b] > limit) last_active = b + 1;
   }
-  if (last_active > 0 && num_blocks - last_active >= kMinSilentBlocks) {
+  if (last_active > 0 && num_blocks - last_active >= min_silent_blocks) {
     valid_frames =
         std::min(valid_frames, std::max(7, last_active + 1) * kBlockFrames);
     raw_speech.resize(static_cast<size_t>(valid_frames) * hop_length);
@@ -151,17 +223,26 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     return valid_frames;
   }
   if (decode_valid_frames != nullptr) {
-    const float digital_limit = std::min(5e-4f, 0.01f * max_rms);
+    float digital_limit = std::min(5e-4f, 0.01f * ref_max_rms);
+    float tail3_median_rms = 0.0f;
+    const float max_allowed_tail_rms =
+        std::min(kMaxStationaryNoiseRms, 0.6f * ref_max_rms);
+    if (IsStationaryNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+                                  num_blocks - kMinDigitalSilentBlocks),
+                              max_allowed_tail_rms, &tail3_median_rms)) {
+      digital_limit =
+          std::max(digital_limit,
+                   std::min(max_allowed_tail_rms, 1.45f * tail3_median_rms));
+    }
     int last_digital = 0;
     for (int b = 0; b < num_blocks; ++b) {
       if (block_rms[b] > digital_limit) last_digital = b + 1;
     }
     if (last_digital > 0 &&
         num_blocks - last_digital >= kMinDigitalSilentBlocks) {
-      *decode_valid_frames =
-          std::min(valid_frames,
-                   std::max(std::max(7, last_digital + 1) * kBlockFrames,
-                            valid_frames - 2 * kBlockFrames));
+      *decode_valid_frames = std::min(
+          valid_frames, std::max(std::max(7, last_digital + 1) * kBlockFrames,
+                                 valid_frames - 2 * kBlockFrames));
     }
   }
   return valid_frames;
@@ -193,32 +274,41 @@ void PutSamplesInCenter(std::vector<float>& raw_speech, int n_fft,
   raw_speech = std::move(padded);
 }
 
-// Returns true if a follow-up chunk (`peak_speech_rms > 0`) contains only
-// low-level background room noise relative to earlier speech in the stream, and
-// updates `peak_speech_rms` with the maximum 100 ms block RMS otherwise.
+// Returns true if a chunk contains only stationary background room noise (or
+// low-level room noise relative to earlier speech in the stream), and updates
+// `peak_speech_rms` with the maximum 100 ms block RMS otherwise.
 bool IsRoomNoiseFollowUpChunk(absl::Span<const float> raw_speech,
                               int valid_frames, int hop_length,
                               float& peak_speech_rms) {
-  constexpr int kBlockFrames = 10;
   constexpr float kTrailingSilenceMaxRms = 6e-3f;
   constexpr float kTrailingSilenceRelativeRms = 0.05f;
-  const int num_blocks = valid_frames / kBlockFrames;
-  if (num_blocks <= 0) return false;
-  const size_t block_samples = static_cast<size_t>(kBlockFrames) * hop_length;
-  float max_block_rms = 0.0f;
-  for (int b = 0; b < num_blocks; ++b) {
-    double sum_sq = 0.0;
-    for (size_t i = 0; i < block_samples; ++i) {
-      const float s = raw_speech[b * block_samples + i];
-      sum_sq += static_cast<double>(s) * s;
-    }
-    const float rms = static_cast<float>(std::sqrt(sum_sq / block_samples));
-    max_block_rms = std::max(max_block_rms, rms);
-  }
+  constexpr float kMaxStationaryNoiseRms = 0.025f;
+  const std::vector<float> block_rms =
+      ComputeBlockRms(raw_speech, valid_frames, hop_length);
+  if (block_rms.empty()) return false;
+  const float max_block_rms =
+      *std::max_element(block_rms.begin(), block_rms.end());
   if (peak_speech_rms > 0.0f &&
       max_block_rms <=
           std::min(kTrailingSilenceMaxRms,
                    kTrailingSilenceRelativeRms * peak_speech_rms)) {
+    return true;
+  }
+  const float allowed_stationary_rms =
+      peak_speech_rms > 0.0f ? std::min(kMaxStationaryNoiseRms,
+                                        std::max(0.02f, 0.6f * peak_speech_rms))
+                             : 0.02f;
+  if ((block_rms.size() >= 5 || max_block_rms <= 8e-4f) &&
+      IsStationaryNoiseSpan(block_rms, allowed_stationary_rms)) {
+    return true;
+  }
+  if (peak_speech_rms > 0.0f && block_rms.size() >= 20 &&
+      max_block_rms <= 0.5f * peak_speech_rms &&
+      IsStationaryNoiseSpan(
+          absl::MakeConstSpan(block_rms).subspan(block_rms.size() >= 45 ? 4
+                                                                        : 2),
+          std::min(kMaxStationaryNoiseRms,
+                   std::max(0.02f, 0.5f * peak_speech_rms)))) {
     return true;
   }
   peak_speech_rms = std::max(peak_speech_rms, max_block_rms);
@@ -358,17 +448,21 @@ absl::StatusOr<std::vector<float>> ExtractMelFeatures(
                         processed_audio.GetPreprocessedAudioTensor());
   LITERT_ASSIGN_OR_RETURN(auto tensor_type, tensor_buffer->TensorType());
   LITERT_ASSIGN_OR_RETURN(auto elements, tensor_type.Layout().NumElements());
-  std::vector<float> log_mel_flat(elements);
-  LITERT_RETURN_IF_ERROR(const_cast<litert::TensorBuffer*>(tensor_buffer)
-                             ->Read<float>(absl::MakeSpan(log_mel_flat)));
-
-  const int num_frames = log_mel_flat.size() / config.n_mels;
+  const int num_frames = static_cast<int>(elements) / config.n_mels;
   const int stat_frames = std::min(valid_frames, num_frames);
   std::vector<std::vector<float>> mel_spec(config.n_mels,
                                            std::vector<float>(num_frames));
-  for (int f = 0; f < num_frames; ++f) {
-    for (int m = 0; m < config.n_mels; ++m) {
-      mel_spec[m][f] = log_mel_flat[f * config.n_mels + m];
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock_and_addr,
+        ::litert::TensorBufferScopedLock::Create<const float>(
+            *const_cast<litert::TensorBuffer*>(tensor_buffer),
+            ::litert::TensorBuffer::LockMode::kRead));
+    const float* log_mel_flat = lock_and_addr.second;
+    for (int f = 0; f < num_frames; ++f) {
+      for (int m = 0; m < config.n_mels; ++m) {
+        mel_spec[m][f] = log_mel_flat[f * config.n_mels + m];
+      }
     }
   }
 
@@ -425,6 +519,18 @@ LogMelSpectrogramProcessor::Create(
       std::move(centered_preprocessor)));
 }
 
+absl::StatusOr<std::unique_ptr<LogMelSpectrogramProcessor>>
+LogMelSpectrogramProcessor::Create(int sample_rate_hz,
+                                   const LogMelSpectrogramConfig& config,
+                                   AudioSource* absl_nonnull audio_source) {
+  ABSL_ASSIGN_OR_RETURN(
+      auto processor,
+      Create(sample_rate_hz, config,
+             static_cast<Stage<std::vector<float>>*>(audio_source)));
+  processor->typed_audio_source_ = audio_source;
+  return processor;
+}
+
 LogMelSpectrogramProcessor::LogMelSpectrogramProcessor(
     int sample_rate_hz, const LogMelSpectrogramConfig& config,
     Stage<std::vector<float>>* absl_nonnull audio_source,
@@ -455,18 +561,22 @@ void LogMelSpectrogramProcessor::ResetInternal() {
   }
   previous_window_.clear();
   peak_speech_rms_ = 0.0f;
+  prev_trailing_silent_blocks_ = 0;
 }
 
 absl::Status LogMelSpectrogramProcessor::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
   ABSL_ASSIGN_OR_RETURN(auto pcm_samples, audio_source_.GetOutput());
-  ABSL_ASSIGN_OR_RETURN(auto output, Process(std::move(pcm_samples)));
+  const bool is_warm_start = IsLastInputWarmStart();
+  ABSL_ASSIGN_OR_RETURN(auto output,
+                        Process(std::move(pcm_samples), is_warm_start));
+  output.is_warm_start = is_warm_start;
   PushOutput(std::move(output));
   return absl::OkStatus();
 }
 
 absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
-    std::vector<float> raw_speech) {
+    std::vector<float> raw_speech, bool is_warm_start) {
   if (!preprocessor_) {
     return absl::InternalError(
         "AudioPreprocessorMiniAudio is not initialized.");
@@ -482,22 +592,31 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
       centered_preprocessor_->Reset();
     }
     previous_window_.clear();
+    if (!is_warm_start) {
+      prev_trailing_silent_blocks_ =
+          static_cast<int>(raw_speech.size() / config_.hop_length) / 10;
+    }
     return PreprocessedAudio{};
   }
 
   int valid_frames = raw_speech.size() / config_.hop_length;
-  if (IsRoomNoiseFollowUpChunk(raw_speech, valid_frames, config_.hop_length,
-                               peak_speech_rms_)) {
+  const bool is_short_chunk =
+      window_samples_ > 0 && raw_speech.size() < window_samples_;
+  float short_chunk_peak_rms = peak_speech_rms_;
+  if (IsRoomNoiseFollowUpChunk(
+          raw_speech, valid_frames, config_.hop_length,
+          is_short_chunk ? short_chunk_peak_rms : peak_speech_rms_)) {
     preprocessor_->Reset();
     if (centered_preprocessor_) {
       centered_preprocessor_->Reset();
     }
     previous_window_.clear();
+    if (!is_warm_start && !is_short_chunk) {
+      prev_trailing_silent_blocks_ = valid_frames / 10;
+    }
     return PreprocessedAudio{};
   }
 
-  const bool is_short_chunk =
-      window_samples_ > 0 && raw_speech.size() < window_samples_;
   if (ShiftsShortChunkBack() && !is_short_chunk) {
     // Keep the most recent full non-silent window so a subsequent short final
     // chunk can be shifted back over it.
@@ -507,6 +626,7 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
 
   bool trimmed_trailing_silence = false;
   int decode_valid_frames = valid_frames;
+  int trailing_silent_blocks = 0;
   // Only trim trailing room noise for kStandard (via ShiftsShortChunkBack())
   // and normalize_mel, where per-utterance statistics are computed over
   // [0, stat_frames) and frames >= stat_frames are zeroed out for encoders
@@ -517,7 +637,22 @@ absl::StatusOr<PreprocessedAudio> LogMelSpectrogramProcessor::Process(
     const int trimmed = TrimTrailingRoomNoise(
         raw_speech, valid_frames, config_.hop_length,
         (is_short_chunk && ShiftsShortChunkBack()) ? &decode_valid_frames
-                                                   : nullptr);
+                                                   : nullptr,
+        peak_speech_rms_, is_warm_start, &trailing_silent_blocks);
+    if (!is_warm_start && !is_short_chunk &&
+        prev_trailing_silent_blocks_ >= 7 && trailing_silent_blocks >= 20 &&
+        trailing_silent_blocks >= prev_trailing_silent_blocks_ + 8) {
+      prev_trailing_silent_blocks_ = trailing_silent_blocks;
+      preprocessor_->Reset();
+      if (centered_preprocessor_) {
+        centered_preprocessor_->Reset();
+      }
+      previous_window_.clear();
+      return PreprocessedAudio{};
+    }
+    if (!is_warm_start && !is_short_chunk) {
+      prev_trailing_silent_blocks_ = trailing_silent_blocks;
+    }
     if (trimmed < valid_frames) {
       valid_frames = trimmed;
       decode_valid_frames = trimmed;

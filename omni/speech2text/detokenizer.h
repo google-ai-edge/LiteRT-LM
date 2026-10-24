@@ -29,6 +29,9 @@ namespace litert::omni::asr {
 struct Word {
   std::string text;
   std::optional<int> timestamp_ms;
+  // True on the end-of-chunk sentinel word when this chunk is a progressive
+  // warm-start prefix emitted before the first full model window.
+  bool is_warm_start = false;
 
   // An empty text indicates an end-of-chunk word.
   bool IsEndOfChunk() const { return text.empty(); }

@@ -61,6 +61,10 @@ class AsrSessionFactory : public OmniSessionFactory {
   }
 
  protected:
+  // Whether `AudioInputSource` should emit progressive partial-window prefixes
+  // before the first full `input_milliseconds` window is accumulated.
+  virtual bool ShouldEnableWarmStart() const { return false; }
+
   // Subclasses override this to call `CreateMultiStagedSession` below with
   // `audio_source` built from `input_source` by this class, and `encoder` and
   // `decoder` instantiated by subclasses.

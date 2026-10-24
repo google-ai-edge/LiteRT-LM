@@ -78,7 +78,10 @@ absl::Status LiteRtSpeechRecognizer::ScheduleInternal() {
     // an end-of-chunk token without running the encoder or decoder so
     // downstream stages (Detokenizer and TextMerger) still advance by one
     // chunk for this schedule step.
-    PushOutput({DecodedToken{.token_id = DecodedToken::kEndOfChunkTokenId}});
+    PushOutput({DecodedToken{
+        .token_id = DecodedToken::kEndOfChunkTokenId,
+        .is_warm_start = preprocessed_audio.is_warm_start,
+    }});
     return absl::OkStatus();
   }
   LITERT_RETURN_IF_ERROR(
@@ -92,6 +95,15 @@ absl::Status LiteRtSpeechRecognizer::ScheduleInternal() {
     ABSL_ASSIGN_OR_RETURN(decoded_tokens,
                           MaybeRetryWithCenteredFeatures(
                               preprocessed_audio, std::move(decoded_tokens)));
+  }
+  if (preprocessed_audio.is_warm_start) {
+    if (!decoded_tokens.empty() &&
+        decoded_tokens.back().token_id == DecodedToken::kEndOfChunkTokenId) {
+      decoded_tokens.back().is_warm_start = true;
+    } else {
+      decoded_tokens.push_back(DecodedToken{
+          .token_id = DecodedToken::kEndOfChunkTokenId, .is_warm_start = true});
+    }
   }
   PushOutput(std::move(decoded_tokens));
   return absl::OkStatus();

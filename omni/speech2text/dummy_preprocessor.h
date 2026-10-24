@@ -21,6 +21,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 #include "omni/speech2text/audio_preprocessor.h"
+#include "omni/speech2text/audio_source.h"
 
 namespace litert::omni::asr {
 
@@ -40,6 +41,9 @@ class DummyPreprocessor : public AudioPreprocessor {
   explicit DummyPreprocessor(
       Stage<std::vector<float>>* absl_nonnull audio_source,
       int pad_to_num_samples = 0);
+
+  explicit DummyPreprocessor(AudioSource* absl_nonnull audio_source,
+                             int pad_to_num_samples = 0);
 
   ~DummyPreprocessor() override = default;
 

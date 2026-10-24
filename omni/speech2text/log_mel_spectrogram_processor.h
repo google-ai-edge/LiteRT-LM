@@ -27,6 +27,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 #include "omni/speech2text/audio_preprocessor.h"
+#include "omni/speech2text/audio_source.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
 
 namespace litert::omni::asr {
@@ -65,6 +66,9 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
   static absl::StatusOr<std::unique_ptr<LogMelSpectrogramProcessor>> Create(
       int sample_rate_hz, const LogMelSpectrogramConfig& config,
       Stage<std::vector<float>>* absl_nonnull audio_source);
+  static absl::StatusOr<std::unique_ptr<LogMelSpectrogramProcessor>> Create(
+      int sample_rate_hz, const LogMelSpectrogramConfig& config,
+      AudioSource* absl_nonnull audio_source);
 
   ~LogMelSpectrogramProcessor() override = default;
 
@@ -93,7 +97,8 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
 
   // Processes raw speech (float vector) into model input features and decode
   // range.
-  absl::StatusOr<PreprocessedAudio> Process(std::vector<float> raw_speech);
+  absl::StatusOr<PreprocessedAudio> Process(std::vector<float> raw_speech,
+                                            bool is_warm_start = false);
 
   std::optional<std::vector<float>> ComputeCenteredFeatures();
 
@@ -101,12 +106,13 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
   const LogMelSpectrogramConfig config_;
   const size_t window_samples_;
   std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nonnull
-      preprocessor_;
+  preprocessor_;
   std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> absl_nullable
   centered_preprocessor_;
   // Last `n_frames * hop_length` samples of the most recent full-size chunk.
   std::vector<float> previous_window_;
   float peak_speech_rms_ = 0.0f;
+  int prev_trailing_silent_blocks_ = 0;
 };
 
 }  // namespace litert::omni::asr

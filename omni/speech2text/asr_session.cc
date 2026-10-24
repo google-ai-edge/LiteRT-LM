@@ -16,16 +16,19 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
@@ -51,7 +54,7 @@
 namespace litert::omni::asr {
 namespace {
 
-constexpr float kDefaultOverlapRatio = 0.4f;
+constexpr float kDefaultOverlapRatio = 0.75f;
 
 lm::proto::Speech2TextSessionConfig ResolveSpeech2TextSessionConfig(
     const MessageLite* absl_nullable session_config) {
@@ -136,7 +139,7 @@ class AudioInputSource : public AudioSource {
   AudioInputSource(
       std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       int sample_rate_hz, int num_channels, int samples_per_interval,
-      int overlap_samples)
+      int overlap_samples, bool enable_warm_start = false)
       : input_source_(std::move(input_source)),
         sample_rate_hz_(sample_rate_hz),
         input_sample_rate_hz_(sample_rate_hz),
@@ -147,12 +150,35 @@ class AudioInputSource : public AudioSource {
                                  static_cast<size_t>(overlap_samples) <
                                      samples_per_interval_
                              ? static_cast<size_t>(overlap_samples)
-                             : 0) {}
+                             : 0),
+        enable_warm_start_(enable_warm_start && overlap_samples_ > 0),
+        next_warm_start_samples_(samples_per_interval_ - overlap_samples_) {}
 
   ~AudioInputSource() override = default;
 
   int GetSampleRateHz() const override { return sample_rate_hz_; }
   int GetNumChannels() const override { return num_channels_; }
+
+  absl::StatusOr<std::vector<float>> GetOutput() override {
+    absl::MutexLock lock(mutex_);
+    if (outputs_.empty()) {
+      return absl::NotFoundError("Deque has no output available.");
+    }
+    std::vector<float> item = std::move(outputs_.front());
+    outputs_.pop_front();
+    if (!warm_start_flags_.empty()) {
+      last_output_was_warm_start_ = warm_start_flags_.front();
+      warm_start_flags_.pop_front();
+    } else {
+      last_output_was_warm_start_ = false;
+    }
+    return item;
+  }
+
+  bool IsLastOutputWarmStart() const override {
+    absl::MutexLock lock(mutex_);
+    return last_output_was_warm_start_;
+  }
 
  protected:
   void ResetInternal() override {
@@ -161,12 +187,20 @@ class AudioInputSource : public AudioSource {
     resampler_.Reset();
     buffer_.clear();
     has_unpushed_samples_ = false;
+    has_pushed_full_interval_ = false;
+    next_warm_start_samples_ = samples_per_interval_ - overlap_samples_;
     is_finished_ = false;
+    {
+      absl::MutexLock lock(mutex_);
+      warm_start_flags_.clear();
+      last_output_was_warm_start_ = false;
+    }
   }
 
   bool NeedScheduleInternal() const override {
     return (!is_finished_ &&
-            (input_source_->NeedSchedule() || input_source_->HasOutput())) ||
+            (input_source_->NeedSchedule() || input_source_->HasOutput() ||
+             ShouldPushWarmStart())) ||
            buffer_.size() >= samples_per_interval_ ||
            (is_finished_ && has_unpushed_samples_);
   }
@@ -186,6 +220,10 @@ class AudioInputSource : public AudioSource {
         return absl::OutOfRangeError("End of audio stream reached.");
       }
       PushRemainder();
+      return absl::OkStatus();
+    }
+    if (ShouldPushWarmStart()) {
+      PushWarmStart();
       return absl::OkStatus();
     }
     return absl::NotFoundError("Not enough audio samples for an interval.");
@@ -287,14 +325,35 @@ class AudioInputSource : public AudioSource {
     return absl::OkStatus();
   }
 
+  bool ShouldPushWarmStart() const {
+    return enable_warm_start_ && !has_pushed_full_interval_ && !is_finished_ &&
+           has_unpushed_samples_ &&
+           buffer_.size() >= next_warm_start_samples_ &&
+           buffer_.size() < samples_per_interval_;
+  }
+
+  void PushChunk(std::vector<float> chunk, bool is_warm_start) {
+    absl::MutexLock lock(mutex_);
+    outputs_.push_back(std::move(chunk));
+    warm_start_flags_.push_back(is_warm_start);
+  }
+
+  void PushWarmStart() {
+    const size_t step = samples_per_interval_ - overlap_samples_;
+    next_warm_start_samples_ = ((buffer_.size() / step) + 1) * step;
+    has_unpushed_samples_ = false;
+    PushChunk(buffer_, /*is_warm_start=*/true);
+  }
+
   void PushNextInterval() {
+    has_pushed_full_interval_ = true;
     const size_t step = samples_per_interval_ - overlap_samples_;
     // Copy remaining content into output first, then swap to reduce data copy.
     std::vector<float> output(buffer_.begin() + step, buffer_.end());
     std::swap(output, buffer_);
     output.resize(samples_per_interval_);
     has_unpushed_samples_ = buffer_.size() > overlap_samples_;
-    PushOutput(std::move(output));
+    PushChunk(std::move(output), /*is_warm_start=*/false);
   }
 
   void PushRemainder() {
@@ -304,7 +363,9 @@ class AudioInputSource : public AudioSource {
     std::vector<float> output;
     std::swap(output, buffer_);
     has_unpushed_samples_ = false;
-    PushOutput(std::move(output));
+    has_pushed_full_interval_ = false;
+    next_warm_start_samples_ = samples_per_interval_ - overlap_samples_;
+    PushChunk(std::move(output), /*is_warm_start=*/false);
   }
 
   std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;
@@ -313,13 +374,19 @@ class AudioInputSource : public AudioSource {
   const int num_channels_;
   const size_t samples_per_interval_;
   const size_t overlap_samples_;
+  const bool enable_warm_start_;
+  size_t next_warm_start_samples_;
   AudioResampler resampler_;
   std::vector<float> buffer_;
   // True when `buffer_` contains samples that have not yet been emitted by
-  // `PushNextInterval()` or `PushRemainder()` (as opposed to only the retained
-  // `overlap_samples_` tail from the previous full interval).
+  // `PushNextInterval()`, `PushWarmStart()`, or `PushRemainder()` (as opposed
+  // to only the retained `overlap_samples_` tail from the previous full
+  // interval).
   bool has_unpushed_samples_ = false;
+  bool has_pushed_full_interval_ = false;
   bool is_finished_ = false;
+  std::deque<bool> warm_start_flags_ ABSL_GUARDED_BY(mutex_);
+  bool last_output_was_warm_start_ ABSL_GUARDED_BY(mutex_) = false;
 };
 
 }  // namespace
@@ -358,9 +425,13 @@ absl::StatusOr<std::unique_ptr<OmniSession>> AsrSessionFactory::Create(
       sample_rate_hz * (metadata_.input_milliseconds() / 1000.0));
   const int overlap_samples =
       static_cast<int>(samples_per_interval * session_config_.overlap_ratio());
-  auto audio_source = CreateAudioInputSource(
+  const bool enable_warm_start =
+      ShouldEnableWarmStart() &&
+      session_config_.text_merger_type() ==
+          lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP;
+  auto audio_source = std::make_unique<AudioInputSource>(
       std::move(input_source), sample_rate_hz, /*num_channels=*/1,
-      samples_per_interval, overlap_samples);
+      samples_per_interval, overlap_samples, enable_warm_start);
   return CreateWithAudioSource(std::move(audio_source));
 }
 

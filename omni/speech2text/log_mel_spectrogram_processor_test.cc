@@ -26,7 +26,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
-#include "omni/base/stage.h"
+#include "omni/speech2text/audio_source.h"
 #include "omni/speech2text/dummy_preprocessor.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -36,15 +36,24 @@ namespace {
 using ::testing::FloatNear;
 
 // Dummy AudioSource for testing stage scheduling.
-class DummyAudioSource
-    : public SingleThreadedStageWithDeque<std::vector<float>> {
+class DummyAudioSource : public AudioSource {
  public:
   DummyAudioSource() = default;
-  void PushChunk(std::vector<float> chunk) { PushOutput(std::move(chunk)); }
+  int GetSampleRateHz() const override { return 16000; }
+  int GetNumChannels() const override { return 1; }
+  bool IsLastOutputWarmStart() const override { return last_was_warm_start_; }
+
+  void PushChunk(std::vector<float> chunk, bool is_warm_start = false) {
+    last_was_warm_start_ = is_warm_start;
+    PushOutput(std::move(chunk));
+  }
 
  protected:
   bool NeedScheduleInternal() const override { return false; }
   absl::Status ScheduleInternal() override { return absl::OkStatus(); }
+
+ private:
+  bool last_was_warm_start_ = false;
 };
 
 TEST(LogMelSpectrogramProcessorTest, ProcessEmptyAudioReturnsEmptyVector) {
@@ -859,9 +868,8 @@ TEST(LogMelSpectrogramProcessorTest,
   ASSERT_OK_AND_ASSIGN(auto normal_result, normal_processor->GetOutput());
 
   DummyAudioSource quiet_source;
-  ASSERT_OK_AND_ASSIGN(
-      auto quiet_processor,
-      LogMelSpectrogramProcessor::Create(16000, config, &quiet_source));
+  ASSERT_OK_AND_ASSIGN(auto quiet_processor, LogMelSpectrogramProcessor::Create(
+                                                 16000, config, &quiet_source));
   quiet_source.PushChunk(quiet_audio);
   ASSERT_OK(quiet_processor->Schedule());
   ASSERT_OK_AND_ASSIGN(auto quiet_result, quiet_processor->GetOutput());
@@ -905,6 +913,159 @@ TEST(LogMelSpectrogramProcessorTest,
   EXPECT_FLOAT_EQ(result.decode_range->valid_fraction, 210.0f / kWindowFrames);
   EXPECT_NE(result.features[210], 0.0f);
   EXPECT_EQ(result.features[kTotalFrames], 0.0f);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     ShortWarmStartChunkDoesNotInflatePeakSpeechRmsForSubsequentFullWindow) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  constexpr int kWarmStartFrames = 125;
+  // Warm-start chunk has loud speech (`peak = 1.0f`), followed by a full
+  // 500-frame window whose speech is quieter (`0.004f` RMS < `0.05 * warm_rms`
+  // and `< 6e-3f`). Because the warm-start chunk is shorter than
+  // `window_samples_`, it must not update `peak_speech_rms_` and cause the
+  // first full window to be dropped as room noise.
+  std::vector<float> warm_start = MakeTestAudio(kWarmStartFrames * kHop);
+  for (float& s : warm_start) {
+    s *= 2.0f;
+  }
+  std::vector<float> full_window = MakeTestAudio(kWindowFrames * kHop);
+  for (float& s : full_window) {
+    s *= 0.008f;
+  }
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       LogMelSpectrogramProcessor::Create(
+                           16000,
+                           LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+                               .n_fft = 512,
+                               .n_mels = kNMels,
+                               .hop_length = kHop,
+                               .n_frames = kWindowFrames},
+                           &source));
+  source.PushChunk(warm_start, /*is_warm_start=*/true);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto warm_result, processor->GetOutput());
+  EXPECT_FALSE(warm_result.features.empty());
+  EXPECT_TRUE(warm_result.is_warm_start);
+
+  source.PushChunk(full_window, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto full_result, processor->GetOutput());
+  EXPECT_FALSE(full_result.features.empty());
+  EXPECT_FALSE(full_result.is_warm_start);
+}
+
+std::vector<float> MakeStationaryRoomNoise(int num_samples, float rms) {
+  std::vector<float> audio(num_samples);
+  // Uniform noise in [-sqrt(3) * rms, +sqrt(3) * rms] has exact RMS = `rms`.
+  const float half_range = std::sqrt(3.0f) * rms;
+  uint32_t state = 67890u;
+  for (int i = 0; i < num_samples; ++i) {
+    state = state * 1664525u + 1013904223u;
+    const float u = static_cast<float>(state >> 8) / 8388608.0f - 1.0f;
+    audio[i] = half_range * u;
+  }
+  return audio;
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     StationaryRoomNoiseChunksAreSkippedBeforeAndAfterSpeech) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+
+  // Initial stationary ambient noise (`rms = 0.0006f` and `rms = 0.010f`)
+  // before any speech (`peak_speech_rms_ == 0.0f`) is gated as room noise on
+  // both warm-start and full windows.
+  source.PushChunk(MakeStationaryRoomNoise(250 * kHop, 0.0006f),
+                   /*is_warm_start=*/true);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto quiet_warm, processor->GetOutput());
+  EXPECT_TRUE(quiet_warm.features.empty());
+  EXPECT_TRUE(quiet_warm.is_warm_start);
+
+  source.PushChunk(MakeStationaryRoomNoise(kWindowFrames * kHop, 0.010f),
+                   /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto stationary_full, processor->GetOutput());
+  EXPECT_TRUE(stationary_full.features.empty());
+
+  // Speech followed by trailing stationary mic noise (`rms = 0.010f` > `6e-3f`)
+  // trims the trailing noise on both a warm-start chunk (`>= 10` silent blocks)
+  // and a full 5-second window (`>= 20` silent blocks).
+  std::vector<float> warm_speech_plus_noise =
+      MakeStationaryRoomNoise(250 * kHop, 0.010f);
+  const std::vector<float> speech_1s = MakeTestAudio(100 * kHop);
+  std::copy(speech_1s.begin(), speech_1s.end(), warm_speech_plus_noise.begin());
+  source.PushChunk(warm_speech_plus_noise, /*is_warm_start=*/true);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto warm_trimmed, processor->GetOutput());
+  EXPECT_FALSE(warm_trimmed.features.empty());
+  ASSERT_TRUE(warm_trimmed.decode_range.has_value());
+  EXPECT_FLOAT_EQ(warm_trimmed.decode_range->valid_fraction,
+                  110.0f / kWindowFrames);
+
+  std::vector<float> full_speech_plus_noise =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.010f);
+  std::copy(speech_1s.begin(), speech_1s.end(), full_speech_plus_noise.begin());
+  source.PushChunk(full_speech_plus_noise, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto full_trimmed, processor->GetOutput());
+  EXPECT_FALSE(full_trimmed.features.empty());
+  ASSERT_TRUE(full_trimmed.decode_range.has_value());
+  EXPECT_FLOAT_EQ(full_trimmed.decode_range->valid_fraction,
+                  110.0f / kWindowFrames);
+
+  // When a full window ends with >= 7 blocks (0.7s+) of trailing stationary
+  // noise (e.g. 1.2s of silence after 3.8s of speech), the immediately
+  // following sliding window whose trailing silence grew by >= 8 blocks to
+  // >= 20 blocks (2.45s of silence after 2.55s of already-decoded speech) is
+  // gated as a silent follow-up chunk so the stream finalizes without redundant
+  // encoder passes.
+  std::vector<float> win_with_12_silent_blocks =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.010f);
+  const std::vector<float> speech_380 = MakeTestAudio(380 * kHop);
+  std::copy(speech_380.begin(), speech_380.end(),
+            win_with_12_silent_blocks.begin());
+  source.PushChunk(win_with_12_silent_blocks, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto first_pause_win, processor->GetOutput());
+  EXPECT_FALSE(first_pause_win.features.empty());
+
+  std::vector<float> win_with_25_silent_blocks =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.010f);
+  const std::vector<float> speech_250 = MakeTestAudio(250 * kHop);
+  std::copy(speech_250.begin(), speech_250.end(),
+            win_with_25_silent_blocks.begin());
+  source.PushChunk(win_with_25_silent_blocks, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto second_pause_win, processor->GetOutput());
+  EXPECT_TRUE(second_pause_win.features.empty());
+
+  // Follow-up window with only 1 block of weak residual tail (`0.03f` RMS <=
+  // `0.25 * peak_speech_rms_`) followed by 49 blocks of `0.010f` stationary
+  // room noise is skipped.
+  std::vector<float> residual_plus_noise =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.010f);
+  for (int i = 0; i < 10 * kHop; ++i) {
+    residual_plus_noise[i] = speech_1s[i] * 0.1f;
+  }
+  source.PushChunk(residual_plus_noise, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto residual_out, processor->GetOutput());
+  EXPECT_TRUE(residual_out.features.empty());
 }
 
 }  // namespace
