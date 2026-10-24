@@ -74,8 +74,11 @@
           "$comment": "Added in version 0.15.0"
         },
         "speculative_decoding": {
-          "type": "boolean",
-          "$comment": "Added in version 0.15.0"
+          "oneOf": [
+            {"type": "string", "enum": ["on", "off", "adaptive"]},
+            {"type": "boolean", "$comment": "Deprecated: true is on, false is off."}
+          ],
+          "$comment": "Added in version 0.15.0; on/off/adaptive added in version 0.19.0"
         },
         "thinking": {
           "type": "boolean",

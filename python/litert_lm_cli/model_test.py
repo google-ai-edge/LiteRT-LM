@@ -404,6 +404,20 @@ class ParseBackendWithConfigTest(parameterized.TestCase):
     self.assertEqual(m1.model_id, "gemma4/2b")
     self.assertEqual(m1.model_path, path)
 
+  @parameterized.named_parameters(
+      ("on", "on", litert_lm.SpeculativeDecodingMode.ON),
+      ("off", "off", litert_lm.SpeculativeDecodingMode.OFF),
+      ("adaptive", "adaptive", litert_lm.SpeculativeDecodingMode.ADAPTIVE),
+  )
+  def test_speculative_decoding_config_from_mode(self, mode, expected):
+    self.assertEqual(
+        model.speculative_decoding_config_from_mode(mode),
+        litert_lm.SpeculativeDecodingConfig(mode=expected),
+    )
+
+  def test_speculative_decoding_config_from_mode_none(self):
+    self.assertIsNone(model.speculative_decoding_config_from_mode(None))
+
   @mock.patch.object(config, "get_model_config")
   def test_resolve_config_option(self, mock_get_model_config):
     mock_model = mock.Mock(spec=model.Model)

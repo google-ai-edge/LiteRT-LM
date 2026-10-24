@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import XCTest
+import CLiteRTLM
 
 @testable import LiteRTLM
 
@@ -57,6 +58,78 @@ class ConversationTests: XCTestCase {
 
     let customConfig = ConversationConfig(chatTemplate: "custom_template")
     XCTAssertEqual(customConfig.chatTemplate, "custom_template")
+  }
+
+  func testConversationConfigSpeculativeDecodingConfig() {
+    let defaultConfig = ConversationConfig()
+    XCTAssertNil(defaultConfig.speculativeDecodingConfig)
+
+    for mode in [SpeculativeDecodingMode.off, .on, .adaptive] {
+      let config = ConversationConfig(
+        speculativeDecodingConfig: SpeculativeDecodingConfig(mode: mode))
+      XCTAssertEqual(config.speculativeDecodingConfig?.mode, mode)
+    }
+  }
+
+  func testSpeculativeDecodingConfigDefaults() {
+    XCTAssertNil(SpeculativeDecodingConfig().mode)
+  }
+
+  func testEngineConfigSpeculativeDecodingConfig() throws {
+    XCTAssertNil(try EngineConfig(modelPath: "model.litertlm").speculativeDecodingConfig)
+    let config = try EngineConfig(
+      modelPath: "model.litertlm",
+      speculativeDecodingConfig: SpeculativeDecodingConfig(mode: .adaptive))
+    XCTAssertEqual(config.speculativeDecodingConfig?.mode, .adaptive)
+  }
+
+  // Marked deprecated so that exercising the deprecated `enableSpeculativeDecoding` API does not
+  // emit deprecation warnings.
+  @available(*, deprecated)
+  func testConversationConfigDeprecatedEnableSpeculativeDecoding() {
+    let enabledConfig = ConversationConfig(enableSpeculativeDecoding: true)
+    XCTAssertEqual(enabledConfig.speculativeDecodingConfig?.mode, .on)
+    XCTAssertEqual(enabledConfig.enableSpeculativeDecoding, true)
+
+    let disabledConfig = ConversationConfig(enableSpeculativeDecoding: false)
+    XCTAssertEqual(disabledConfig.speculativeDecodingConfig?.mode, .off)
+    XCTAssertEqual(disabledConfig.enableSpeculativeDecoding, false)
+
+    let unsetConfig = ConversationConfig(enableSpeculativeDecoding: nil)
+    XCTAssertNil(unsetConfig.speculativeDecodingConfig)
+    XCTAssertNil(unsetConfig.enableSpeculativeDecoding)
+
+    // A mode set in `speculativeDecodingConfig` takes precedence.
+    let overriddenConfig = ConversationConfig(
+      enableSpeculativeDecoding: false,
+      speculativeDecodingConfig: SpeculativeDecodingConfig(mode: .adaptive))
+    XCTAssertEqual(overriddenConfig.speculativeDecodingConfig?.mode, .adaptive)
+    XCTAssertEqual(overriddenConfig.enableSpeculativeDecoding, false)
+
+    // Without a mode in `speculativeDecodingConfig`, the deprecated flag sets it.
+    let mergedConfig = ConversationConfig(
+      enableSpeculativeDecoding: true, speculativeDecodingConfig: SpeculativeDecodingConfig())
+    XCTAssertEqual(mergedConfig.speculativeDecodingConfig?.mode, .on)
+
+    // The non-deprecated initializer does not set the deprecated property.
+    let newApiConfig = ConversationConfig(
+      speculativeDecodingConfig: SpeculativeDecodingConfig(mode: .on))
+    XCTAssertNil(newApiConfig.enableSpeculativeDecoding)
+  }
+
+  func testSpeculativeDecodingModeCValue() {
+    XCTAssertEqual(SpeculativeDecodingMode.off.cValue, kLiteRtLmSpeculativeDecodingModeOff)
+    XCTAssertEqual(SpeculativeDecodingMode.on.cValue, kLiteRtLmSpeculativeDecodingModeOn)
+    XCTAssertEqual(
+      SpeculativeDecodingMode.adaptive.cValue, kLiteRtLmSpeculativeDecodingModeAdaptive)
+  }
+
+  func testCreateConversationWithSpeculativeDecodingOff() async throws {
+    let config = ConversationConfig(
+      speculativeDecodingConfig: SpeculativeDecodingConfig(mode: .off))
+
+    let conversation = try await self.engine.createConversation(with: config)
+    XCTAssertTrue(conversation.isAlive)
   }
 
   func testConversationConfigSystemMessageSerialization() throws {

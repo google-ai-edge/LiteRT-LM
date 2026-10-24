@@ -153,11 +153,24 @@ public actor Engine {
         litert_lm_engine_settings_enable_benchmark(settings),
         "litert_lm_engine_settings_enable_benchmark", settingsError)
     }
-    if let enableSpeculativeDecoding = ExperimentalFlags.enableSpeculativeDecoding {
+    // The engine's default speculative decoding config. The deprecated
+    // `ExperimentalFlags.enableSpeculativeDecoding` is used only when the config sets no mode.
+    var speculativeDecodingConfig = engineConfig.speculativeDecodingConfig
+    if speculativeDecodingConfig?.mode == nil,
+      let enableSpeculativeDecoding = ExperimentalFlags.legacyEnableSpeculativeDecoding
+    {
+      var config = speculativeDecodingConfig ?? SpeculativeDecodingConfig()
+      config.mode = enableSpeculativeDecoding ? .on : .off
+      speculativeDecodingConfig = config
+    }
+    if let speculativeDecodingConfig = speculativeDecodingConfig {
+      let cSpeculativeDecodingConfig = try makeCSpeculativeDecodingConfig(
+        speculativeDecodingConfig, settingsError)
+      defer { litert_lm_speculative_decoding_config_delete(cSpeculativeDecodingConfig) }
       try LiteRTLMError.check(
-        litert_lm_engine_settings_set_enable_speculative_decoding(
-          settings, enableSpeculativeDecoding),
-        "litert_lm_engine_settings_set_enable_speculative_decoding", settingsError)
+        litert_lm_engine_settings_set_speculative_decoding_config(
+          settings, cSpeculativeDecodingConfig),
+        "litert_lm_engine_settings_set_speculative_decoding_config", settingsError)
     }
     if let visualTokenBudget = ExperimentalFlags.visualTokenBudget {
       try LiteRTLMError.check(
@@ -283,13 +296,14 @@ public actor Engine {
       }
     }
 
-    if let enableSpeculativeDecoding =
-      conversationConfig.enableSpeculativeDecoding
-    {
+    if let speculativeDecodingConfig = conversationConfig.speculativeDecodingConfig {
+      let cSpeculativeDecodingConfig = try makeCSpeculativeDecodingConfig(
+        speculativeDecodingConfig, sessionConfigError)
+      defer { litert_lm_speculative_decoding_config_delete(cSpeculativeDecodingConfig) }
       try LiteRTLMError.check(
-        litert_lm_session_config_set_enable_speculative_decoding(
-          cSessionConfig, enableSpeculativeDecoding),
-        "litert_lm_session_config_set_enable_speculative_decoding", sessionConfigError)
+        litert_lm_session_config_set_speculative_decoding_config(
+          cSessionConfig, cSpeculativeDecodingConfig),
+        "litert_lm_session_config_set_speculative_decoding_config", sessionConfigError)
     }
 
     let conversationConfigError: (String) -> LiteRTLMError = {
@@ -424,4 +438,27 @@ public actor Engine {
       litert_lm_engine_delete(handle)
     }
   }
+}
+
+/// Creates a C speculative decoding config holding the fields of `config`. The caller owns the
+/// returned config and must release it with `litert_lm_speculative_decoding_config_delete`.
+private func makeCSpeculativeDecodingConfig(
+  _ config: SpeculativeDecodingConfig, _ makeError: (String) -> LiteRTLMError
+) throws -> OpaquePointer {
+  let cConfig = try LiteRTLMError.create(
+    "litert_lm_speculative_decoding_config_create", makeError
+  ) { out in
+    litert_lm_speculative_decoding_config_create(out)
+  }
+  do {
+    if let mode = config.mode {
+      try LiteRTLMError.check(
+        litert_lm_speculative_decoding_config_set_mode(cConfig, mode.cValue),
+        "litert_lm_speculative_decoding_config_set_mode", makeError)
+    }
+  } catch {
+    litert_lm_speculative_decoding_config_delete(cConfig)
+    throw error
+  }
+  return cConfig
 }

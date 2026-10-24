@@ -126,13 +126,19 @@ public struct ExperimentalFlags {
 
   private static var _enableSpeculativeDecoding: Bool? = nil
 
+  /// The value of the deprecated `enableSpeculativeDecoding`, for the engine to read without a
+  /// deprecation warning.
+  static var legacyEnableSpeculativeDecoding: Bool? { _enableSpeculativeDecoding }
+
   /// Whether to enable speculative decoding.
   ///
-  /// If true, enable speculative decoding; an error will be thrown if the model does not support it.
-  /// If false, disable speculative decoding.
+  /// Deprecated: use `EngineConfig.speculativeDecodingConfig` instead. Read only when that config
+  /// sets no mode: `true` is mode `.on` and `false` is mode `.off`; `nil` leaves the runtime
+  /// default (`.off`).
   ///
   /// Note: This flag is read only when a new [Engine] is created. Changing this value will not
   /// affect any existing [Engine] or [Conversation] instances.
+  @available(*, deprecated, message: "Use EngineConfig.speculativeDecodingConfig instead.")
   public static var enableSpeculativeDecoding: Bool? {
     get { return _enableSpeculativeDecoding }
     set {

@@ -73,7 +73,12 @@ mock_litert_lm.Engine = mock_engine.Engine
 mock_litert_lm.set_min_log_severity = mock_ffi.set_min_log_severity
 
 mock_model_mod = mock.Mock(
-    spec_set=["Model", "parse_backend", "resolve_config_option"]
+    spec_set=[
+        "Model",
+        "parse_backend",
+        "resolve_config_option",
+        "speculative_decoding_config_from_mode",
+    ]
 )
 mock_model_mod.Model = mock.Mock(
     spec_set=[
@@ -98,6 +103,9 @@ mock_model_mod.Model.get_all_models = mock.Mock()
 mock_model_mod.parse_backend = mock.Mock()
 mock_model_mod.resolve_config_option = mock.Mock(
     side_effect=lambda value, model_obj, config_key, label=None: value
+)
+mock_model_mod.speculative_decoding_config_from_mode = mock.Mock(
+    return_value=None
 )
 sys.modules["litert_lm_cli.model"] = (
     mock_model_mod

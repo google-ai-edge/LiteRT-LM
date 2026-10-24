@@ -181,8 +181,8 @@ def get_or_initialize_server_engine(
   )
   cache = model.resolve_config_option(None, m, "cache")
   cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
-  speculative_decoding = model.resolve_config_option(
-      None, m, "speculative_decoding"
+  speculative_decoding = common.normalize_speculative_decoding(
+      model.resolve_config_option(None, m, "speculative_decoding")
   )
   activation_data_type_str = model.resolve_config_option(
       None, m, "activation_data_type"
@@ -233,7 +233,9 @@ def get_or_initialize_server_engine(
       vision_backend=vision_backend,
       audio_backend=audio_backend,
       cache_dir=cache_dir_val,
-      enable_speculative_decoding=speculative_decoding,
+      speculative_decoding_config=model.speculative_decoding_config_from_mode(
+          speculative_decoding
+      ),
       activation_data_type=activation_data_type,
       enable_benchmark=True,
       use_ringbuffers_local_attention=True,

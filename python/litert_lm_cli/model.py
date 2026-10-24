@@ -311,6 +311,26 @@ def parse_backend(
   )
 
 
+def speculative_decoding_config_from_mode(
+    mode: str | None,
+) -> litert_lm.SpeculativeDecodingConfig | None:
+  """Returns the speculative decoding config for a normalized CLI mode.
+
+  Args:
+    mode: "on", "off" or "adaptive", as returned by
+      `common.normalize_speculative_decoding`, or None.
+
+  Returns:
+    A config setting `mode`, or None (inherit the model's default) if `mode` is
+    None.
+  """
+  if mode is None:
+    return None
+  return litert_lm.SpeculativeDecodingConfig(
+      mode=litert_lm.SpeculativeDecodingMode[mode.upper()]
+  )
+
+
 def resolve_config_option(
     value: Any,
     model_obj: Model | None,

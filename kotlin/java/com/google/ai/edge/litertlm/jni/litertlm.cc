@@ -450,6 +450,67 @@ std::optional<bool> GetOptionalBoolean(JNIEnv* env, jobject boolean_obj) {
   return (value == JNI_TRUE);
 }
 
+// Values of the Kotlin `SpeculativeDecodingMode.value`, which match the C API's
+// `LiteRtLmSpeculativeDecodingMode`.
+constexpr int kSpeculativeDecodingModeOff = 0;
+constexpr int kSpeculativeDecodingModeOn = 1;
+constexpr int kSpeculativeDecodingModeAdaptive = 2;
+
+// Converts the optional speculative decoding mode (boxed Integer holding a
+// Kotlin `SpeculativeDecodingMode.value`) to the runtime's mode. Returns false
+// and throws a Java exception if the value is out of range.
+bool GetOptionalSpeculativeDecodingMode(
+    JNIEnv* env, jobject mode_obj,
+    std::optional<litert::lm::SpeculativeDecodingMode>& runtime_mode) {
+  runtime_mode = std::nullopt;
+  std::optional<int> mode = GetOptionalInt(env, mode_obj);
+  if (!mode.has_value()) return true;
+  switch (*mode) {
+    case kSpeculativeDecodingModeOff:
+      runtime_mode = litert::lm::SpeculativeDecodingMode::kOff;
+      return true;
+    case kSpeculativeDecodingModeOn:
+      runtime_mode = litert::lm::SpeculativeDecodingMode::kOn;
+      return true;
+    case kSpeculativeDecodingModeAdaptive:
+      runtime_mode = litert::lm::SpeculativeDecodingMode::kAdaptive;
+      return true;
+    default:
+      ThrowLiteRtLmJniException(
+          env, absl::StrCat("Invalid speculative decoding mode: ", *mode));
+      return false;
+  }
+}
+
+// Sets the speculative decoding mode of `config` (an `EngineSettings` or a
+// `SessionConfig`) from the optional `mode_obj` (boxed Integer holding a Kotlin
+// `SpeculativeDecodingMode.value`) or, when that is null, from the deprecated
+// optional `enable_speculative_decoding_obj` (boxed Boolean; true is on).
+// Leaves `config` unchanged when both are null. Returns false and throws a Java
+// exception if the mode is out of range.
+template <typename ConfigT>
+bool ApplyOptionalSpeculativeDecodingMode(
+    JNIEnv* env, jobject mode_obj, jobject enable_speculative_decoding_obj,
+    ConfigT& config) {
+  std::optional<litert::lm::SpeculativeDecodingMode> runtime_mode;
+  if (!GetOptionalSpeculativeDecodingMode(env, mode_obj, runtime_mode)) {
+    return false;
+  }
+  if (!runtime_mode.has_value()) {
+    std::optional<bool> enable_speculative_decoding =
+        GetOptionalBoolean(env, enable_speculative_decoding_obj);
+    if (!enable_speculative_decoding.has_value()) return true;
+    runtime_mode = *enable_speculative_decoding
+                       ? litert::lm::SpeculativeDecodingMode::kOn
+                       : litert::lm::SpeculativeDecodingMode::kOff;
+  }
+  litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
+      config.GetSpeculativeDecodingConfig();
+  speculative_decoding_config.mode = runtime_mode;
+  config.SetSpeculativeDecodingConfig(speculative_decoding_config);
+  return true;
+}
+
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
     JNIEnv* env, Conversation* conversation, jobject visual_token_budget_obj) {
   std::optional<int> budget = GetOptionalInt(env, visual_token_budget_obj);
@@ -526,7 +587,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jint main_backend_num_threads, jint audio_backend_num_threads,
     jint max_vision_tokens_per_image, jint activation_data_type,
-    jobject enable_ynnpack) {
+    jobject enable_ynnpack, jobject speculative_decoding_mode) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -670,20 +731,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     settings->GetMutableBenchmarkParams();
   }
 
-  if (enable_speculative_decoding != nullptr) {
-    jclass boolean_class = env->FindClass("java/lang/Boolean");
-    jmethodID boolean_value_mid =
-        env->GetMethodID(boolean_class, "booleanValue", "()Z");
-    jboolean is_enabled =
-        env->CallBooleanMethod(enable_speculative_decoding, boolean_value_mid);
-    env->DeleteLocalRef(boolean_class);
-
-    auto advanced_settings =
-        settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
-            litert::lm::AdvancedSettings());
-    advanced_settings.enable_speculative_decoding = (is_enabled == JNI_TRUE);
-    settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
-        advanced_settings);
+  if (!ApplyOptionalSpeculativeDecodingMode(env, speculative_decoding_mode,
+                                            enable_speculative_decoding,
+                                            *settings)) {
+    return 0;
   }
 
   if (max_vision_tokens_per_image > 0) {
@@ -903,17 +954,12 @@ JNI_METHOD(nativeDeleteEngine)(JNIEnv* env, jclass thiz, jlong engine_pointer) {
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
     jstring lora_path_str, jstring audio_lora_path_str,
-    jobject enable_speculative_decoding) {
+    jobject enable_speculative_decoding, jobject speculative_decoding_mode) {
   auto session_config = SessionConfig::CreateDefault();
-  if (auto enable_spec_dec =
-          GetOptionalBoolean(env, enable_speculative_decoding);
-      enable_spec_dec.has_value()) {
-    litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
-        session_config.GetSpeculativeDecodingConfig();
-    speculative_decoding_config.mode =
-        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kOn
-                         : litert::lm::SpeculativeDecodingMode::kOff;
-    session_config.SetSpeculativeDecodingConfig(speculative_decoding_config);
+  if (!ApplyOptionalSpeculativeDecodingMode(env, speculative_decoding_mode,
+                                            enable_speculative_decoding,
+                                            session_config)) {
+    return 0;
   }
 
   if (sampler_config_obj != nullptr) {
@@ -1195,20 +1241,16 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     jstring overwrite_prompt_template, jstring lora_path_str,
     jstring audio_lora_path_str, jboolean prefill_preface_on_init,
     jint max_output_token, jobject thinking_config_obj,
-    jboolean enable_response_format, jobject enable_speculative_decoding) {
+    jboolean enable_response_format, jobject enable_speculative_decoding,
+    jobject speculative_decoding_mode) {
   Engine* engine = reinterpret_cast<Engine*>(engine_pointer);
 
   // Create a native SessionConfig
   auto session_config = SessionConfig::CreateDefault();
-  if (auto enable_spec_dec =
-          GetOptionalBoolean(env, enable_speculative_decoding);
-      enable_spec_dec.has_value()) {
-    litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
-        session_config.GetSpeculativeDecodingConfig();
-    speculative_decoding_config.mode =
-        *enable_spec_dec ? litert::lm::SpeculativeDecodingMode::kOn
-                         : litert::lm::SpeculativeDecodingMode::kOff;
-    session_config.SetSpeculativeDecodingConfig(speculative_decoding_config);
+  if (!ApplyOptionalSpeculativeDecodingMode(env, speculative_decoding_mode,
+                                            enable_speculative_decoding,
+                                            session_config)) {
+    return 0;
   }
   if (max_output_token > 0) {
     session_config.SetMaxOutputTokens(max_output_token);

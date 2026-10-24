@@ -54,6 +54,26 @@ class SamplerType(enum.IntEnum):
   GREEDY = 3
 
 
+class SpeculativeDecodingMode(enum.IntEnum):
+  """How speculative decoding (e.g. MTP) is used during decode.
+
+  The modes match the values of the `--speculative_decoding` flag of the
+  LiteRT-LM CLI (`off`, `on` and `adaptive`). The integer values match
+  `LiteRtLmSpeculativeDecodingMode` in the C API.
+
+  Attributes:
+    OFF: Never speculate.
+    ON: Speculate on every decode step.
+    ADAPTIVE: Speculate only while it is measured to be faster than plain
+      decoding. Backends that do not support adaptive speculation speculate on
+      every decode step, like ON.
+  """
+
+  OFF = 0
+  ON = 1
+  ADAPTIVE = 2
+
+
 class LiteRtLmModality(enum.IntEnum):
   TEXT = 0
   VISION = 1
@@ -267,6 +287,13 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_engine_settings_set_speculative_decoding_config.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_engine_settings_set_speculative_decoding_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
   lib.litert_lm_engine_settings_set_gpu_decode_steps_per_sync.restype = (
       ctypes.c_int
   )
@@ -409,6 +436,25 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_session_config_set_enable_speculative_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
+  ]
+  lib.litert_lm_session_config_set_speculative_decoding_config.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_session_config_set_speculative_decoding_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+
+  # Speculative decoding config
+  lib.litert_lm_speculative_decoding_config_create.restype = ctypes.c_int
+  lib.litert_lm_speculative_decoding_config_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
+  lib.litert_lm_speculative_decoding_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_speculative_decoding_config_set_mode.restype = ctypes.c_int
+  lib.litert_lm_speculative_decoding_config_set_mode.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
   ]
 
   # Session

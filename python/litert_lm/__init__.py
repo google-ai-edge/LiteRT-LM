@@ -24,6 +24,7 @@ from ._ffi import LiteRtLmModelType
 from ._ffi import LiteRtLmNpuBrand
 from ._ffi import LogSeverity
 from ._ffi import set_min_log_severity
+from ._ffi import SpeculativeDecodingMode
 from ._messages import Content
 from ._messages import Contents
 from ._messages import Message
@@ -50,6 +51,7 @@ from .interfaces import RepetitionPenaltyConfig
 from .interfaces import ResponseFormat
 from .interfaces import Responses
 from .interfaces import SamplerConfig
+from .interfaces import SpeculativeDecodingConfig
 from .interfaces import SuppressTokensConfig
 from .interfaces import ThinkingConfig
 from .interfaces import Tool
@@ -101,6 +103,8 @@ __all__ = (
     "Role",
     "SamplerConfig",
     "Session",
+    "SpeculativeDecodingConfig",
+    "SpeculativeDecodingMode",
     "SupportedModalities",
     "SuppressTokensConfig",
     "ThinkingConfig",

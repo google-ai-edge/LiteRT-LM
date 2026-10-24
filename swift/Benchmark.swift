@@ -61,6 +61,9 @@ public struct BenchmarkInfo {
 ///   - maxNumTokens: The maximum number of the sum of input and output tokens, i.e. the size of the
 ///       KV cache, like `EngineConfig.maxNumTokens`. When `nil`, use the default value from the
 ///       model or the engine. Note that the KV cache size affects the prefill and decode speed.
+///   - speculativeDecodingConfig: The speculative decoding configuration of the benchmarked engine
+///       (see `EngineConfig.speculativeDecodingConfig`). `nil` keeps the runtime default (`.off`),
+///       unless the deprecated `ExperimentalFlags.enableSpeculativeDecoding` is set.
 /// - Returns: The benchmark info.
 /// - Throws: A `LiteRTLMError` if the engine fails to initialize or generate benchmark info.
 public func benchmark(
@@ -72,7 +75,8 @@ public func benchmark(
   decodeTokens: Int = 256,
   cacheDir: String? = nil,
   prompt: String = "How are you",
-  maxNumTokens: Int? = nil
+  maxNumTokens: Int? = nil,
+  speculativeDecodingConfig: SpeculativeDecodingConfig? = nil
 ) async throws -> BenchmarkInfo {
   ExperimentalFlags.optIntoExperimentalAPIs()
 
@@ -89,7 +93,8 @@ public func benchmark(
     visionBackend: visionBackend,
     audioBackend: audioBackend,
     maxNumTokens: maxNumTokens,
-    cacheDir: cacheDir
+    cacheDir: cacheDir,
+    speculativeDecodingConfig: speculativeDecodingConfig
   )
   let engine = Engine(engineConfig: engineConfig)
   try await engine.initializeForBenchmark(prefillTokens: prefillTokens, decodeTokens: decodeTokens)

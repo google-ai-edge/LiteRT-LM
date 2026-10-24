@@ -195,9 +195,15 @@ enum class ActivationDataType(val value: Int) {
  *   caching at all.
  * @property activationDataType Optional activation data type override for inference (e.g., FLOAT32,
  *   FLOAT16). When `null`, use the default value from the model or the engine (typically [FLOAT16]
- *   for GPU backends and [FLOAT32] for CPU backends). Note: If the specified activation data type is
- *   not supported by the model or backend, [Engine.initialize] will fail with an exception at
+ *   for GPU backends and [FLOAT32] for CPU backends). Note: If the specified activation data type
+ *   is not supported by the model or backend, [Engine.initialize] will fail with an exception at
  *   initialization time.
+ * @property speculativeDecodingConfig The default speculative decoding (e.g. MTP) configuration of
+ *   the engine's conversations and sessions; each of them can override any field with its own
+ *   `speculativeDecodingConfig`. Fields left `null` use the runtime defaults (mode
+ *   [SpeculativeDecodingMode.OFF]). [SpeculativeDecodingMode.ON] and
+ *   [SpeculativeDecodingMode.ADAPTIVE] load the drafter when the engine is initialized. If set, it
+ *   takes precedence over the deprecated [ExperimentalFlags.enableSpeculativeDecoding].
  */
 data class EngineConfig
 @JvmOverloads
@@ -210,6 +216,7 @@ constructor(
   val maxNumImages: Int? = null,
   val cacheDir: String? = null,
   val activationDataType: ActivationDataType? = null,
+  val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
@@ -248,16 +255,22 @@ constructor(
  * @property thinkingConfig Configuration for thinking/reasoning generation.
  * @property enableResponseFormat Whether to enable response format (constrained decoding). If true,
  *   initializes the constraint provider LLGuidance.
- * @property enableSpeculativeDecoding Whether to enable speculative decoding for this conversation.
+ * @property enableSpeculativeDecoding Deprecated. Use [speculativeDecodingConfig] instead (`true`
+ *   is mode [SpeculativeDecodingMode.ON]; `false` is mode [SpeculativeDecodingMode.OFF]). Whether
+ *   to enable speculative decoding for this conversation.
  *     - If `null` (default): Inherits the engine's speculative decoding setting.
  *     - If `true`: Explicitly enables speculative decoding for this conversation. If the engine was
  *       initialized without speculative decoding enabled, requesting `true` triggers lazy
  *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
  *     - If `false`: Explicitly disables speculative decoding for this conversation even if the
  *       engine was initialized with speculative decoding enabled.
+ *
  * @property chatTemplate An optional Jinja chat template string to override the default template
  *   defined in the model metadata for this conversation. If null, the conversation uses the
  *   template defined in the model metadata.
+ * @property speculativeDecodingConfig The speculative decoding configuration for this conversation,
+ *   which overrides [EngineConfig.speculativeDecodingConfig]. Fields left `null` inherit the
+ *   engine's values. Its mode takes precedence over the deprecated [enableSpeculativeDecoding].
  */
 data class ConversationConfig
 @JvmOverloads
@@ -274,8 +287,10 @@ constructor(
   val maxOutputToken: Int? = null,
   val thinkingConfig: ThinkingConfig? = null,
   val enableResponseFormat: Boolean = false,
+  @Deprecated("Use speculativeDecodingConfig (mode ON or OFF) instead.")
   val enableSpeculativeDecoding: Boolean? = null,
   val chatTemplate: String? = null,
+  val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 ) {
   init {
     require(maxOutputToken == null || maxOutputToken > 0) {
@@ -319,16 +334,58 @@ data class LoraConfig(val loraPath: String? = null, val audioLoraPath: String? =
  * @property samplerConfig Configuration for the sampling process. If `null`, then uses the engine's
  *   default values.
  * @property loraConfig Configuration for LoRA weights.
- * @property enableSpeculativeDecoding Whether to enable speculative decoding for this session.
+ * @property enableSpeculativeDecoding Deprecated. Use [speculativeDecodingConfig] instead (`true`
+ *   is mode [SpeculativeDecodingMode.ON]; `false` is mode [SpeculativeDecodingMode.OFF]). Whether
+ *   to enable speculative decoding for this session.
  *     - If `null` (default): Inherits the engine's speculative decoding setting.
  *     - If `true`: Explicitly enables speculative decoding for this session. If the engine was
  *       initialized without speculative decoding enabled, requesting `true` triggers lazy
  *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
  *     - If `false`: Explicitly disables speculative decoding for this session even if the engine
  *       was initialized with speculative decoding enabled.
+ *
+ * @property speculativeDecodingConfig The speculative decoding configuration for this session,
+ *   which overrides [EngineConfig.speculativeDecodingConfig]. Fields left `null` inherit the
+ *   engine's values. Its mode takes precedence over the deprecated [enableSpeculativeDecoding].
  */
-data class SessionConfig(
+data class SessionConfig
+@JvmOverloads
+constructor(
   val samplerConfig: SamplerConfig? = null,
   val loraConfig: LoraConfig? = null,
+  @Deprecated("Use speculativeDecodingConfig (mode ON or OFF) instead.")
   val enableSpeculativeDecoding: Boolean? = null,
+  val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 )
+
+/**
+ * Speculative decoding (e.g. MTP) configuration.
+ *
+ * Set on [EngineConfig] as the default of the engine's conversations and sessions, and on
+ * [ConversationConfig] or [SessionConfig] as an override. Fields left `null` inherit the engine's
+ * values (on the engine: the runtime defaults).
+ *
+ * @property mode How speculative decoding is used. The runtime default is
+ *   [SpeculativeDecodingMode.OFF].
+ */
+data class SpeculativeDecodingConfig
+@JvmOverloads
+constructor(val mode: SpeculativeDecodingMode? = null)
+
+/**
+ * Speculative decoding (e.g. MTP) mode.
+ *
+ * The modes match the values of the `--speculative_decoding` flag of the LiteRT-LM CLI (`off`, `on`
+ * and `adaptive`). The integer [value]s match `LiteRtLmSpeculativeDecodingMode` in the C API.
+ */
+enum class SpeculativeDecodingMode(val value: Int) {
+  /** Never speculate. */
+  OFF(0),
+  /** Speculate on every decode step. */
+  ON(1),
+  /**
+   * Speculate only while it is measured to be faster than plain decoding. Backends that do not
+   * support adaptive speculation speculate on every decode step, like [ON].
+   */
+  ADAPTIVE(2),
+}

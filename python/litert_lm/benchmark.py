@@ -22,6 +22,9 @@ from ._ffi import _get_lib
 from ._ffi import call_checked
 from ._ffi import create_checked
 from ._ffi import InputDataType
+from .utils import create_c_speculative_decoding_config
+from .utils import merge_speculative_decoding_config
+from .utils import warn_enable_speculative_decoding_deprecated
 
 
 @dataclasses.dataclass
@@ -40,6 +43,12 @@ class Benchmark(interfaces.AbstractBenchmark):
   _lock: threading.RLock = dataclasses.field(
       default_factory=threading.RLock, init=False, repr=False, compare=False
   )
+
+  def __post_init__(self) -> None:
+    # stacklevel=4 skips this method and the dataclass-generated `__init__`.
+    warn_enable_speculative_decoding_deprecated(
+        self.enable_speculative_decoding, stacklevel=4
+    )
 
   def __enter__(self) -> "Benchmark":
     self._in_context = True
@@ -119,13 +128,22 @@ class Benchmark(interfaces.AbstractBenchmark):
               settings,
               self.cache_dir,
           )
-        if self.enable_speculative_decoding is not None:
-          call_checked(
-              lib,
-              "litert_lm_engine_settings_set_enable_speculative_decoding",
-              settings,
-              self.enable_speculative_decoding,
+        speculative_decoding_config = merge_speculative_decoding_config(
+            self.enable_speculative_decoding, self.speculative_decoding_config
+        )
+        if speculative_decoding_config is not None:
+          c_config = create_c_speculative_decoding_config(
+              lib, speculative_decoding_config
           )
+          try:
+            call_checked(
+                lib,
+                "litert_lm_engine_settings_set_speculative_decoding_config",
+                settings,
+                c_config,
+            )
+          finally:
+            lib.litert_lm_speculative_decoding_config_delete(c_config)
         if isinstance(self.backend, interfaces.GPU):
           if self.backend.gpu_decode_steps_per_sync is not None:
             call_checked(

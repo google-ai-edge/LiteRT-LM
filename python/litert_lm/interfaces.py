@@ -31,6 +31,7 @@ from typing import Any
 from ._ffi import ActivationDataType
 from ._ffi import get_checked
 from ._ffi import LiteRtLmConstraintProviderType
+from ._ffi import SpeculativeDecodingMode
 from ._messages import Contents
 from ._messages import Message
 
@@ -382,6 +383,31 @@ class ConstrainedDecodingConfig:
   provider: LiteRtLmConstraintProviderType | None = None
 
 
+@dataclasses.dataclass(frozen=True)
+class SpeculativeDecodingConfig:
+  """Speculative decoding (e.g. MTP) configuration.
+
+  Set on the engine (`speculative_decoding_config`) as the default of its
+  conversations and sessions, and on `create_conversation` / `create_session`
+  as an override. Fields left None inherit the engine's values (on the engine:
+  the runtime defaults).
+
+  Attributes:
+      mode: How speculative decoding is used. The runtime default is
+        `SpeculativeDecodingMode.OFF`.
+  """
+
+  mode: SpeculativeDecodingMode | None = None
+
+  def __post_init__(self):
+    if self.mode is not None and not isinstance(
+        self.mode, SpeculativeDecodingMode
+    ):
+      raise ValueError(
+          f"mode must be a SpeculativeDecodingMode or None, got {self.mode!r}"
+      )
+
+
 @dataclasses.dataclass(kw_only=True)
 class AbstractEngine(abc.ABC):
   """Abstract base class for LiteRT-LM engines.
@@ -397,10 +423,15 @@ class AbstractEngine(abc.ABC):
         the engine's default.
       vision_backend: The hardware backend used for vision encoding.
       audio_backend: The hardware backend used for audio encoding.
-      enable_speculative_decoding: Whether to enable speculative decoding. If
-        None, use the model's default. If True, enable speculative decoding; an
-        error will be thrown if the model does not support it. If False, disable
-        it.
+      enable_speculative_decoding: Deprecated; use `speculative_decoding_config`
+        instead. Passing a value other than None emits a `DeprecationWarning`.
+        Read only when `speculative_decoding_config` sets no mode: True is mode
+        `SpeculativeDecodingMode.ON` and False is `SpeculativeDecodingMode.OFF`.
+      speculative_decoding_config: The default speculative decoding
+        configuration of the engine's conversations and sessions; each of them
+        can override any field. Fields left None use the runtime defaults (mode
+        `SpeculativeDecodingMode.OFF`). Modes ON and ADAPTIVE load the drafter
+        when the engine is created.
       lora_rank_config: Configuration for LoRA ranks.
       bos_token_id: The BOS token id for the model if one is configured.
       eos_token_ids: Stop token sequences configured for the model.
@@ -430,6 +461,7 @@ class AbstractEngine(abc.ABC):
   vision_backend: Backend | None = None
   audio_backend: Backend | None = None
   enable_speculative_decoding: bool | None = None
+  speculative_decoding_config: SpeculativeDecodingConfig | None = None
   lora_rank_config: LoraRankConfig | None = None
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
@@ -467,6 +499,7 @@ class AbstractEngine(abc.ABC):
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
       enable_speculative_decoding: bool | None = None,
+      speculative_decoding_config: SpeculativeDecodingConfig | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -492,15 +525,14 @@ class AbstractEngine(abc.ABC):
           the final response tokens count towards this limit.
         chat_template: The Jinja chat template content to use for formatting. If
           not set, use the default provided by the model or the engine.
-        enable_speculative_decoding: Whether to enable speculative decoding for
-          this conversation. - If None (default): Inherits the engine's
-          speculative decoding setting. - If True: Explicitly enables
-          speculative decoding for this conversation. If the engine was
-          initialized without speculative decoding enabled, requesting True
-          triggers lazy initialization of the speculative decoding drafter (e.g.
-          MTP) on first use. - If False: Explicitly disables speculative
-          decoding for this conversation even if the engine was initialized with
-          speculative decoding enabled.
+        enable_speculative_decoding: Deprecated; use
+          `speculative_decoding_config` instead (True is mode
+          `SpeculativeDecodingMode.ON`; False is `SpeculativeDecodingMode.OFF`).
+          Passing a value other than None emits a `DeprecationWarning`. Ignored
+          if `speculative_decoding_config` sets a mode.
+        speculative_decoding_config: The speculative decoding configuration for
+          this conversation, which overrides the engine's. Fields left None (or
+          a None config, the default) inherit the engine's configuration.
     """
 
   @abc.abstractmethod
@@ -511,6 +543,7 @@ class AbstractEngine(abc.ABC):
       sampler_config: SamplerConfig | None = None,
       lora_config: LoraConfig | None = None,
       enable_speculative_decoding: bool | None = None,
+      speculative_decoding_config: SpeculativeDecodingConfig | None = None,
   ) -> AbstractSession:
     """Creates a new session for this engine.
 
@@ -520,14 +553,14 @@ class AbstractEngine(abc.ABC):
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
         lora_config: Configuration for LoRA adapters.
-        enable_speculative_decoding: Whether to enable speculative decoding for
-          this session. - If None (default): Inherits the engine's speculative
-          decoding setting. - If True: Explicitly enables speculative decoding
-          for this session. If the engine was initialized without speculative
-          decoding enabled, requesting True triggers lazy initialization of the
-          speculative decoding drafter (e.g. MTP) on first use. - If False:
-          Explicitly disables speculative decoding for this session even if the
-          engine was initialized with speculative decoding enabled.
+        enable_speculative_decoding: Deprecated; use
+          `speculative_decoding_config` instead (True is mode
+          `SpeculativeDecodingMode.ON`; False is `SpeculativeDecodingMode.OFF`).
+          Passing a value other than None emits a `DeprecationWarning`. Ignored
+          if `speculative_decoding_config` sets a mode.
+        speculative_decoding_config: The speculative decoding configuration for
+          this session, which overrides the engine's. Fields left None (or a
+          None config, the default) inherit the engine's configuration.
 
     Returns:
         A new session instance for low-level interaction with the model.
@@ -901,10 +934,14 @@ class AbstractBenchmark(abc.ABC):
       max_num_tokens: Maximum number of tokens for the KV cache. If None, use
         the engine/model's default.
       cache_dir: Directory for caching compiled model artifacts.
-      enable_speculative_decoding: Whether to enable speculative decoding. If
-        None, use the model's default. If True, enable speculative decoding; an
-        error will be thrown if the model does not support it. If False, disable
-        it.
+      enable_speculative_decoding: Deprecated; use `speculative_decoding_config`
+        instead. Passing a value other than None to `Benchmark` emits a
+        `DeprecationWarning`. Read only when `speculative_decoding_config` sets
+        no mode: True is mode `SpeculativeDecodingMode.ON` and False is
+        `SpeculativeDecodingMode.OFF`.
+      speculative_decoding_config: The speculative decoding configuration of the
+        benchmarked engine. Fields left None use the runtime defaults (mode
+        `SpeculativeDecodingMode.OFF`).
       bos_token_id: The BOS token id for the model if one is configured.
       eos_token_ids: Stop token sequences configured for the model.
       prompt: The custom prompt string to tokenize and run. If the tokenized
@@ -926,6 +963,7 @@ class AbstractBenchmark(abc.ABC):
   max_num_tokens: int | None = None
   cache_dir: str | None = None
   enable_speculative_decoding: bool | None = None
+  speculative_decoding_config: SpeculativeDecodingConfig | None = None
   prompt: str = "How are you"
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None

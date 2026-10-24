@@ -201,9 +201,12 @@ class ConfigTest(parameterized.TestCase):
           "default.gpu_decode_steps_per_sync: 0 is less than the minimum of 1",
       ),
       (
-          "speculative_decoding_not_bool",
+          "speculative_decoding_invalid",
           '{"default": {"speculative_decoding": "true"}}',
-          "default.speculative_decoding: 'true' is not of type 'boolean'",
+          (
+              "default.speculative_decoding: 'true' is not valid under any of"
+              " the given schemas"
+          ),
       ),
       (
           "thinking_not_bool",
@@ -348,6 +351,17 @@ class ConfigTest(parameterized.TestCase):
               },
           },
       ),
+      (
+          "valid_speculative_modes",
+          {
+              "default": {"speculative_decoding": "adaptive"},
+              "models": {
+                  "m_on": {"speculative_decoding": "on"},
+                  "m_off": {"speculative_decoding": "off"},
+                  "m_bool": {"speculative_decoding": False},
+              },
+          },
+      ),
       ("invalid_default_type", {"default": 123}),
       ("invalid_backend_enum", {"default": {"backend": "tpu"}}),
       ("invalid_thread_count_type", {"default": {"cpu_thread_count": "four"}}),
@@ -362,8 +376,8 @@ class ConfigTest(parameterized.TestCase):
           {"default": {"gpu_decode_steps_per_sync": 0}},
       ),
       (
-          "invalid_speculative_bool",
-          {"default": {"speculative_decoding": "true"}},
+          "invalid_speculative_mode",
+          {"default": {"speculative_decoding": "always"}},
       ),
       (
           "invalid_thinking_bool",

@@ -72,24 +72,65 @@ def parse_bool_opt(unused_ctx, unused_param, value):
   return value
 
 
-def parse_deprecated_speculative_decoding(unused_ctx, unused_param, value):
-  """Click callback for deprecated --enable-speculative-decoding option."""
-  if value is not None and (
-      unused_ctx is None or not unused_ctx.resilient_parsing
+SPECULATIVE_DECODING_MODES = ("on", "off", "adaptive")
+
+
+def normalize_speculative_decoding(value) -> str | None:
+  """Returns the speculative decoding mode of an option or config value.
+
+  Args:
+    value: "on", "off" or "adaptive" (case-insensitive), or, deprecated, a
+      boolean or "true"/"false" (True is "on" and False is "off").
+
+  Returns:
+    "on", "off" or "adaptive", or None if `value` is None.
+
+  Raises:
+    ValueError: If `value` is not a valid speculative decoding mode.
+  """
+  if value is None:
+    return None
+  if isinstance(value, bool):
+    return "on" if value else "off"
+  value_lower = str(value).lower()
+  if value_lower == "true":
+    return "on"
+  if value_lower == "false":
+    return "off"
+  if value_lower in SPECULATIVE_DECODING_MODES:
+    return value_lower
+  raise ValueError(
+      f"Invalid speculative decoding mode: {value!r}. Expected one of"
+      f" {', '.join(SPECULATIVE_DECODING_MODES)}."
+  )
+
+
+def parse_speculative_decoding(ctx, unused_param, value):
+  """Click callback for the --speculative-decoding option.
+
+  Args:
+    ctx: The click context.
+    unused_param: The click parameter.
+    value: "on", "off" or "adaptive", or the deprecated "true"/"false".
+
+  Returns:
+    "on", "off" or "adaptive", or None if not set.
+  """
+  if (
+      value is not None
+      and str(value).lower() in ("true", "false")
+      and (ctx is None or not ctx.resilient_parsing)
   ):
     click.echo(
         click.style(
-            "Warning: '--enable-speculative-decoding' is deprecated and will"
-            " be removed in the future. Please use '--speculative-decoding'"
-            " instead.",
+            "Warning: '--speculative-decoding true/false' is deprecated and"
+            " will be removed in the future. Please use"
+            " '--speculative-decoding on/off' instead.",
             fg="yellow",
         ),
         err=True,
     )
-  return parse_bool_opt(unused_ctx, unused_param, value)
-
-
-parse_speculative_decoding = parse_bool_opt
+  return normalize_speculative_decoding(value)
 
 
 def cache_dir_value_from_cache_mode(cache: str | None) -> str:
@@ -160,31 +201,21 @@ def common_inference_options(f):
           """),
   )(f)
   f = click.option(
-      "--enable-speculative-decoding",
-      type=click.Choice(["true", "false"], case_sensitive=False),
-      default=None,
-      deprecated=True,
-      hidden=True,
-      callback=parse_deprecated_speculative_decoding,
-      help=textwrap.dedent("""\
-          \b
-          Speculative decoding mode ("true", "false"). If not set, use the model's configured value.
-            - true: Force enable speculative decoding. It will throw an error if the model does not support it.
-            - false: Force disable speculative decoding.
-          """),
-  )(f)
-  f = click.option(
       "--speculative-decoding",
       is_flag=False,
-      flag_value="true",
-      type=click.Choice(["true", "false"], case_sensitive=False),
+      flag_value="on",
+      type=click.Choice(
+          [*SPECULATIVE_DECODING_MODES, "true", "false"], case_sensitive=False
+      ),
       default=None,
       callback=parse_speculative_decoding,
       help=textwrap.dedent("""\
           \b
-          Speculative decoding mode ("true", "false"). If not set, use the model's configured value.
-            - true: Force enable speculative decoding. It will throw an error if the model does not support it.
-            - false: Force disable speculative decoding.
+          Speculative decoding mode ("on", "off", "adaptive"). If not set, use the model's configured value (off by default).
+            - on: Speculate on every decode step. It will throw an error if the model does not support it.
+            - off: Never speculate.
+            - adaptive: Speculate only while it is measured to be faster than plain decoding.
+          "true" and "false" are deprecated aliases of "on" and "off".
           """),
   )(f)
 

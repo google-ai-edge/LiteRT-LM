@@ -34,7 +34,10 @@ from .conversation import Conversation
 from .session import Session
 from .utils import _parse_token_union
 from .utils import _sampler_config_to_params
+from .utils import create_c_speculative_decoding_config
+from .utils import merge_speculative_decoding_config
 from .utils import thinking_config_to_params
+from .utils import warn_enable_speculative_decoding_deprecated
 
 
 def _normalize_backend(backend: Any) -> Any:
@@ -76,6 +79,9 @@ class Engine(interfaces.AbstractEngine):
       max_vision_tokens_per_image: int | None = None,
       **kwargs,
   ):
+    warn_enable_speculative_decoding_deprecated(
+        kwargs.get("enable_speculative_decoding")
+    )
     backend = _normalize_backend(backend)
     vision_backend = _normalize_backend(vision_backend)
     audio_backend = _normalize_backend(audio_backend)
@@ -194,13 +200,22 @@ class Engine(interfaces.AbstractEngine):
           settings,
           self.cache_dir,
       )
-    if self.enable_speculative_decoding is not None:
-      call_checked(
-          lib,
-          "litert_lm_engine_settings_set_enable_speculative_decoding",
-          settings,
-          self.enable_speculative_decoding,
+    speculative_decoding_config = merge_speculative_decoding_config(
+        self.enable_speculative_decoding, self.speculative_decoding_config
+    )
+    if speculative_decoding_config is not None:
+      c_config = create_c_speculative_decoding_config(
+          lib, speculative_decoding_config
       )
+      try:
+        call_checked(
+            lib,
+            "litert_lm_engine_settings_set_speculative_decoding_config",
+            settings,
+            c_config,
+        )
+      finally:
+        lib.litert_lm_speculative_decoding_config_delete(c_config)
     if self.activation_data_type is not None:
       call_checked(
           lib,
@@ -298,12 +313,18 @@ class Engine(interfaces.AbstractEngine):
       chat_template: str | None = None,
       enable_speculative_decoding: bool | None = None,
       visual_token_budget: int | None = None,
+      speculative_decoding_config: (
+          interfaces.SpeculativeDecodingConfig | None
+      ) = None,
   ) -> Conversation:
+    warn_enable_speculative_decoding_deprecated(enable_speculative_decoding)
     session_config = self._create_session_config(
         sampler_config=sampler_config,
         max_output_tokens=max_output_tokens,
         lora_config=lora_config,
-        enable_speculative_decoding=enable_speculative_decoding,
+        speculative_decoding_config=merge_speculative_decoding_config(
+            enable_speculative_decoding, speculative_decoding_config
+        ),
     )
 
     try:
@@ -458,13 +479,19 @@ class Engine(interfaces.AbstractEngine):
       max_output_tokens: int | None = None,
       lora_config: interfaces.LoraConfig | None = None,
       enable_speculative_decoding: bool | None = None,
+      speculative_decoding_config: (
+          interfaces.SpeculativeDecodingConfig | None
+      ) = None,
   ) -> Session:
+    warn_enable_speculative_decoding_deprecated(enable_speculative_decoding)
     session_config = self._create_session_config(
         apply_prompt_template=apply_prompt_template,
         sampler_config=sampler_config,
         max_output_tokens=max_output_tokens,
         lora_config=lora_config,
-        enable_speculative_decoding=enable_speculative_decoding,
+        speculative_decoding_config=merge_speculative_decoding_config(
+            enable_speculative_decoding, speculative_decoding_config
+        ),
     )
 
     try:
@@ -486,7 +513,9 @@ class Engine(interfaces.AbstractEngine):
       sampler_config: interfaces.SamplerConfig | None = None,
       max_output_tokens: int | None = None,
       lora_config: interfaces.LoraConfig | None = None,
-      enable_speculative_decoding: bool | None = None,
+      speculative_decoding_config: (
+          interfaces.SpeculativeDecodingConfig | None
+      ) = None,
   ) -> int:
     """Creates a configured LiteRtLmSessionConfig owned by the caller.
 
@@ -496,8 +525,8 @@ class Engine(interfaces.AbstractEngine):
       sampler_config: Sampler configuration, or None for the runtime default.
       max_output_tokens: Maximum number of output tokens, or None.
       lora_config: LoRA configuration, or None.
-      enable_speculative_decoding: Whether to enable speculative decoding, or
-        None to keep the runtime default.
+      speculative_decoding_config: The speculative decoding config, or None to
+        inherit the engine's.
 
     Returns:
       A session config pointer; the caller must delete it with
@@ -511,13 +540,19 @@ class Engine(interfaces.AbstractEngine):
     session_config = create_checked(lib, "litert_lm_session_config_create")
 
     try:
-      if enable_speculative_decoding is not None:
-        call_checked(
-            lib,
-            "litert_lm_session_config_set_enable_speculative_decoding",
-            session_config,
-            enable_speculative_decoding,
+      if speculative_decoding_config is not None:
+        c_config = create_c_speculative_decoding_config(
+            lib, speculative_decoding_config
         )
+        try:
+          call_checked(
+              lib,
+              "litert_lm_session_config_set_speculative_decoding_config",
+              session_config,
+              c_config,
+          )
+        finally:
+          lib.litert_lm_speculative_decoding_config_delete(c_config)
 
       if apply_prompt_template is not None:
         call_checked(

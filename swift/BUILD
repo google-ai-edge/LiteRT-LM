@@ -82,6 +82,7 @@ swift_library(
     deps = [
         ":LiteRT_LM_Swift",
 
+        "//c:engine",
     ],
 )
 

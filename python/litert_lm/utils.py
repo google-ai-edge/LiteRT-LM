@@ -14,6 +14,9 @@
 """Utility functions for LiteRT-LM."""
 
 import ctypes
+import dataclasses
+import warnings
+
 from . import interfaces
 from ._ffi import call_checked
 from ._ffi import create_checked
@@ -134,3 +137,84 @@ def _parse_token_union(lib, union_ptr):
     ):
       return [ids_ptr[i] for i in range(num_ids.value)]
   return None
+
+
+def warn_enable_speculative_decoding_deprecated(
+    enable_speculative_decoding: bool | None, *, stacklevel: int = 3
+) -> None:
+  """Warns if the deprecated `enable_speculative_decoding` is set.
+
+  Args:
+    enable_speculative_decoding: The deprecated flag.
+    stacklevel: Passed to `warnings.warn`. The default of 3 points at the caller
+      of the public method that calls this function directly.
+  """
+  if enable_speculative_decoding is not None:
+    warnings.warn(
+        "enable_speculative_decoding is deprecated. Use"
+        " speculative_decoding_config=SpeculativeDecodingConfig(mode="
+        "SpeculativeDecodingMode.ON) (or OFF) instead.",
+        category=DeprecationWarning,
+        stacklevel=stacklevel,
+    )
+
+
+def merge_speculative_decoding_config(
+    enable_speculative_decoding: bool | None,
+    speculative_decoding_config: interfaces.SpeculativeDecodingConfig | None,
+) -> interfaces.SpeculativeDecodingConfig | None:
+  """Merges the deprecated `enable_speculative_decoding` into the config.
+
+  Args:
+    enable_speculative_decoding: The deprecated flag. Used only when the config
+      sets no mode: True is mode ON and False is mode OFF.
+    speculative_decoding_config: The config; its mode takes precedence.
+
+  Returns:
+    The config to apply, or None to inherit (or use the runtime defaults).
+  """
+  if enable_speculative_decoding is None or (
+      speculative_decoding_config is not None
+      and speculative_decoding_config.mode is not None
+  ):
+    return speculative_decoding_config
+  mode = (
+      interfaces.SpeculativeDecodingMode.ON
+      if enable_speculative_decoding
+      else interfaces.SpeculativeDecodingMode.OFF
+  )
+  if speculative_decoding_config is None:
+    return interfaces.SpeculativeDecodingConfig(mode=mode)
+  return dataclasses.replace(speculative_decoding_config, mode=mode)
+
+
+def create_c_speculative_decoding_config(
+    lib, config: interfaces.SpeculativeDecodingConfig
+) -> int:
+  """Creates a C speculative decoding config holding the fields of `config`.
+
+  Args:
+    lib: The loaded LiteRT-LM C library.
+    config: The speculative decoding config.
+
+  Returns:
+    A config pointer; the caller must delete it with
+    `litert_lm_speculative_decoding_config_delete`.
+
+  Raises:
+    RuntimeError: If the config cannot be created or a field fails to apply.
+      The config is freed in that case.
+  """
+  c_config = create_checked(lib, "litert_lm_speculative_decoding_config_create")
+  try:
+    if config.mode is not None:
+      call_checked(
+          lib,
+          "litert_lm_speculative_decoding_config_set_mode",
+          c_config,
+          int(config.mode),
+      )
+  except BaseException:
+    lib.litert_lm_speculative_decoding_config_delete(c_config)
+    raise
+  return c_config

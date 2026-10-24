@@ -31,7 +31,7 @@ litert-lm run  \
    --from-huggingface-repo=litert-community/gemma-4-E4B-it-litert-lm \
    gemma-4-E4B-it.litertlm \
    --backend=gpu \
-   --enable-speculative-decoding=true \
+   --speculative-decoding=on \
    --prompt="What is the capital of France?"
 ```
 

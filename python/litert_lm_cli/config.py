@@ -57,7 +57,8 @@ class ModelConfig:
   top_k: int | None = None
   seed: int | None = None
   gpu_decode_steps_per_sync: int | None = None
-  speculative_decoding: bool | None = None
+  # "on", "off" or "adaptive"; booleans are deprecated (True is "on").
+  speculative_decoding: bool | str | None = None
   thinking: bool | None = None
   thinking_budget: int | None = None
   activation_data_type: str | None = None
@@ -211,6 +212,22 @@ def _validate_instance(
       if target_schema is not None:
         _validate_instance(instance, target_schema, root_schema, path)
         return
+
+  if "oneOf" in schema:
+    matches = 0
+    for sub_schema in schema["oneOf"]:
+      try:
+        _validate_instance(instance, sub_schema, root_schema, path)
+        matches += 1
+      except _SchemaValidationError:
+        pass
+    if matches != 1:
+      raise _SchemaValidationError(
+          f"{instance!r} is not valid under any of the given schemas"
+          if matches == 0
+          else f"{instance!r} is valid under each of the given schemas",
+          path,
+      )
 
   expected_type = schema.get("type")
   if expected_type:

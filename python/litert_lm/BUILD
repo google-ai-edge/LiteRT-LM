@@ -114,6 +114,7 @@ pytype_strict_library(
     deps = [
         ":_ffi",
         ":interfaces",
+        ":utils",
     ],
 )
 

@@ -40,13 +40,14 @@ class LiteRtLmTestBase(parameterized.TestCase):
         / "litert_lm/runtime/testdata/test_lm.litertlm"
     )
 
-  def _create_engine(self, max_num_tokens=10, enable_benchmark=False):
+  def _create_engine(self, max_num_tokens=10, enable_benchmark=False, **kwargs):
     return litert_lm.Engine(
         self.model_path,
         litert_lm.Backend.CPU(),
         max_num_tokens=max_num_tokens,
         cache_dir=":nocache",
         enable_benchmark=enable_benchmark,
+        **kwargs,
     )
 
   @classmethod
@@ -732,26 +733,55 @@ class EngineTest(LiteRtLmTestBase):
 
   def test_benchmark_class_with_enable_speculative_decoding(self):
     lib = litert_lm._ffi._get_lib()
-    orig_set_spec = (
-        lib.litert_lm_engine_settings_set_enable_speculative_decoding
+    orig_set_mode = lib.litert_lm_speculative_decoding_config_set_mode
+    with mock.patch.object(
+        lib,
+        "litert_lm_speculative_decoding_config_set_mode",
+        autospec=True,
+        side_effect=orig_set_mode,
+    ) as mock_set_mode:
+      with self.assertWarnsRegex(
+          DeprecationWarning, "enable_speculative_decoding is deprecated"
+      ):
+        benchmark = litert_lm.Benchmark(
+            self.model_path,
+            litert_lm.Backend.CPU(),
+            prefill_tokens=10,
+            decode_tokens=10,
+            cache_dir=":nocache",
+            enable_speculative_decoding=False,
+        )
+      benchmark.run()
+
+      # The deprecated flag maps to mode OFF.
+      mock_set_mode.assert_called_once_with(
+          mock.ANY, int(litert_lm.SpeculativeDecodingMode.OFF)
+      )
+
+  def test_benchmark_class_with_speculative_decoding_config(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_set_config = (
+        lib.litert_lm_engine_settings_set_speculative_decoding_config
     )
     with mock.patch.object(
         lib,
-        "litert_lm_engine_settings_set_enable_speculative_decoding",
+        "litert_lm_engine_settings_set_speculative_decoding_config",
         autospec=True,
-        side_effect=orig_set_spec,
-    ) as mock_set_spec:
+        side_effect=orig_set_config,
+    ) as mock_set_config:
       benchmark = litert_lm.Benchmark(
           self.model_path,
           litert_lm.Backend.CPU(),
           prefill_tokens=10,
           decode_tokens=10,
           cache_dir=":nocache",
-          enable_speculative_decoding=False,
+          speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+              mode=litert_lm.SpeculativeDecodingMode.OFF
+          ),
       )
       benchmark.run()
 
-      mock_set_spec.assert_called_once_with(mock.ANY, False)
+      mock_set_config.assert_called_once()
 
   def test_engine_abc_inheritance(self):
     with self._create_engine() as engine:
@@ -891,25 +921,176 @@ class EngineTest(LiteRtLmTestBase):
     ):
       self.assertIsNotNone(conversation)
 
-  def test_create_conversation_with_enable_speculative_decoding(self):
-    with self._create_engine() as engine:
-      with engine.create_conversation(
-          enable_speculative_decoding=True
-      ) as conversation:
-        self.assertIsNotNone(conversation)
+  def _mock_speculative_decoding_set_mode(self):
+    lib = litert_lm._ffi._get_lib()
+    return mock.patch.object(
+        lib,
+        "litert_lm_speculative_decoding_config_set_mode",
+        autospec=True,
+        side_effect=lib.litert_lm_speculative_decoding_config_set_mode,
+    )
 
-      with engine.create_conversation(
-          enable_speculative_decoding=False
-      ) as conversation:
-        self.assertIsNotNone(conversation)
+  def _mock_session_config_set_speculative_decoding_config(self):
+    lib = litert_lm._ffi._get_lib()
+    return mock.patch.object(
+        lib,
+        "litert_lm_session_config_set_speculative_decoding_config",
+        autospec=True,
+        side_effect=lib.litert_lm_session_config_set_speculative_decoding_config,
+    )
+
+  def test_create_conversation_with_enable_speculative_decoding(self):
+    with self._mock_speculative_decoding_set_mode() as mock_set_mode:
+      with self._create_engine() as engine:
+        for enable, mode in (
+            (True, litert_lm.SpeculativeDecodingMode.ON),
+            (False, litert_lm.SpeculativeDecodingMode.OFF),
+        ):
+          mock_set_mode.reset_mock()
+          with self.assertWarnsRegex(
+              DeprecationWarning, "enable_speculative_decoding is deprecated"
+          ):
+            conversation = engine.create_conversation(
+                enable_speculative_decoding=enable
+            )
+          with conversation:
+            self.assertIsNotNone(conversation)
+          mock_set_mode.assert_called_once_with(mock.ANY, int(mode))
 
   def test_create_session_with_enable_speculative_decoding(self):
-    with self._create_engine() as engine:
-      with engine.create_session(enable_speculative_decoding=True) as session:
-        self.assertIsNotNone(session)
+    with self._mock_speculative_decoding_set_mode() as mock_set_mode:
+      with self._create_engine() as engine:
+        for enable, mode in (
+            (True, litert_lm.SpeculativeDecodingMode.ON),
+            (False, litert_lm.SpeculativeDecodingMode.OFF),
+        ):
+          mock_set_mode.reset_mock()
+          with self.assertWarnsRegex(
+              DeprecationWarning, "enable_speculative_decoding is deprecated"
+          ):
+            session = engine.create_session(enable_speculative_decoding=enable)
+          with session:
+            self.assertIsNotNone(session)
+          mock_set_mode.assert_called_once_with(mock.ANY, int(mode))
 
-      with engine.create_session(enable_speculative_decoding=False) as session:
-        self.assertIsNotNone(session)
+  def test_speculative_decoding_config_overrides_enable_speculative_decoding(
+      self,
+  ):
+    with self._mock_speculative_decoding_set_mode() as mock_set_mode:
+      with self._create_engine() as engine:
+        with self.assertWarns(DeprecationWarning):
+          session = engine.create_session(
+              enable_speculative_decoding=False,
+              speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+                  mode=litert_lm.SpeculativeDecodingMode.ADAPTIVE
+              ),
+          )
+        with session:
+          self.assertIsNotNone(session)
+        mock_set_mode.assert_called_once_with(
+            mock.ANY, int(litert_lm.SpeculativeDecodingMode.ADAPTIVE)
+        )
+
+  def test_create_conversation_with_speculative_decoding_config(self):
+    with (
+        self._mock_session_config_set_speculative_decoding_config() as mock_set,
+        self._mock_speculative_decoding_set_mode() as mock_set_mode,
+    ):
+      with self._create_engine() as engine:
+        with engine.create_conversation() as conversation:
+          self.assertIsNotNone(conversation)
+        mock_set.assert_not_called()
+
+        with engine.create_conversation(
+            speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+                mode=litert_lm.SpeculativeDecodingMode.ADAPTIVE
+            )
+        ) as conversation:
+          self.assertIsNotNone(conversation)
+        mock_set.assert_called_once()
+        mock_set_mode.assert_called_once_with(
+            mock.ANY, int(litert_lm.SpeculativeDecodingMode.ADAPTIVE)
+        )
+
+  def test_create_session_with_speculative_decoding_config(self):
+    with (
+        self._mock_session_config_set_speculative_decoding_config() as mock_set,
+        self._mock_speculative_decoding_set_mode() as mock_set_mode,
+    ):
+      with self._create_engine() as engine:
+        with engine.create_session() as session:
+          self.assertIsNotNone(session)
+        mock_set.assert_not_called()
+
+        # A config without a mode still overrides (nothing) and sets no mode.
+        with engine.create_session(
+            speculative_decoding_config=litert_lm.SpeculativeDecodingConfig()
+        ) as session:
+          self.assertIsNotNone(session)
+        mock_set.assert_called_once()
+        mock_set_mode.assert_not_called()
+
+        mock_set.reset_mock()
+        with engine.create_session(
+            speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+                mode=litert_lm.SpeculativeDecodingMode.OFF
+            )
+        ) as session:
+          self.assertIsNotNone(session)
+        mock_set.assert_called_once()
+        mock_set_mode.assert_called_once_with(
+            mock.ANY, int(litert_lm.SpeculativeDecodingMode.OFF)
+        )
+
+  def test_engine_with_speculative_decoding_config(self):
+    lib = litert_lm._ffi._get_lib()
+    with (
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_settings_set_speculative_decoding_config",
+            autospec=True,
+            side_effect=lib.litert_lm_engine_settings_set_speculative_decoding_config,
+        ) as mock_set,
+        self._mock_speculative_decoding_set_mode() as mock_set_mode,
+    ):
+      with self._create_engine() as engine:
+        self.assertIsNone(engine.speculative_decoding_config)
+      mock_set.assert_not_called()
+
+      with self._create_engine(
+          speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+              mode=litert_lm.SpeculativeDecodingMode.OFF
+          )
+      ) as engine:
+        self.assertEqual(
+            engine.speculative_decoding_config.mode,
+            litert_lm.SpeculativeDecodingMode.OFF,
+        )
+      mock_set.assert_called_once()
+      mock_set_mode.assert_called_once_with(
+          mock.ANY, int(litert_lm.SpeculativeDecodingMode.OFF)
+      )
+
+  def test_engine_with_deprecated_enable_speculative_decoding(self):
+    with self._mock_speculative_decoding_set_mode() as mock_set_mode:
+      with self.assertWarnsRegex(
+          DeprecationWarning, "enable_speculative_decoding is deprecated"
+      ):
+        engine = self._create_engine(enable_speculative_decoding=False)
+      with engine:
+        pass
+      mock_set_mode.assert_called_once_with(
+          mock.ANY, int(litert_lm.SpeculativeDecodingMode.OFF)
+      )
+
+  def test_speculative_decoding_config_rejects_invalid_mode(self):
+    with self.assertRaises(ValueError):
+      litert_lm.SpeculativeDecodingConfig(mode=1)  # pyrefly: ignore[bad-argument-type]
+
+  def test_speculative_decoding_mode_values_match_c_api(self):
+    self.assertEqual(int(litert_lm.SpeculativeDecodingMode.OFF), 0)
+    self.assertEqual(int(litert_lm.SpeculativeDecodingMode.ON), 1)
+    self.assertEqual(int(litert_lm.SpeculativeDecodingMode.ADAPTIVE), 2)
 
   def test_create_conversation_with_max_output_tokens_async(self):
     with (

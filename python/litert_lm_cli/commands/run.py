@@ -176,8 +176,7 @@ def run_interactive(
     backend: str | None = None,
     preset: str | None = None,
     prompt: str | None = None,
-    speculative_decoding: bool | None = None,
-    enable_speculative_decoding: bool | None = None,
+    speculative_decoding: str | None = None,
     no_template: bool = False,
     chat_template: str | None = None,
     max_num_tokens: int | None = None,
@@ -200,9 +199,6 @@ def run_interactive(
     enable_ynnpack: bool | None = None,
 ) -> None:
   """Runs the model interactively or with a single prompt."""
-  if speculative_decoding is None:
-    speculative_decoding = enable_speculative_decoding
-
   if not model_obj.exists():
     click.echo(
         click.style(
@@ -216,8 +212,13 @@ def run_interactive(
   state = SessionState()
 
   try:
-    speculative_decoding = model.resolve_config_option(
-        speculative_decoding, model_obj, "speculative_decoding"
+    speculative_decoding = common.normalize_speculative_decoding(
+        model.resolve_config_option(
+            speculative_decoding, model_obj, "speculative_decoding"
+        )
+    )
+    speculative_decoding_config = model.speculative_decoding_config_from_mode(
+        speculative_decoding
     )
     max_num_tokens = model.resolve_config_option(
         max_num_tokens, model_obj, "max_num_tokens"
@@ -300,7 +301,7 @@ def run_interactive(
       engine_cm = litert_lm.Engine(
           model_obj.model_path,
           backend=backend_val,  # pyrefly: ignore[bad-argument-type]
-          enable_speculative_decoding=speculative_decoding,
+          speculative_decoding_config=speculative_decoding_config,
           max_num_tokens=max_num_tokens,
           max_num_images=max_num_images,
           vision_backend=vision_backend_val,
@@ -575,8 +576,7 @@ def run(
     preset: str | None = None,
     backend: str | None = None,
     android: bool = False,
-    speculative_decoding: bool | None = None,
-    enable_speculative_decoding: bool | None = None,
+    speculative_decoding: str | None = None,
     verbose: bool = False,
     no_template: bool = False,
     chat_template: str | None = None,
@@ -611,10 +611,8 @@ def run(
       instructions.
     backend: The backend to use (cpu or gpu).
     android: Run on Android via ADB.
-    speculative_decoding: Speculative decoding mode (True, False, or None for
-      auto).
-    enable_speculative_decoding: Speculative decoding mode (True, False, or None
-      for auto).
+    speculative_decoding: Speculative decoding mode ("on", "off", "adaptive", or
+      None for the model's configured value).
     verbose: Whether to enable verbose logging.
     no_template: Interact with the model directly without applying prompt
       templates or stripping stop tokens.
@@ -645,9 +643,6 @@ def run(
     enable_ynnpack: Whether to delegate supported CPU operations to YNNPACK
       before XNNPACK.
   """
-  if speculative_decoding is None:
-    speculative_decoding = enable_speculative_decoding
-
   if attachment and no_template:
     click.echo(
         click.style(
@@ -728,7 +723,7 @@ def run(
       is_android=android,
       backend=backend,
       preset=preset,
-      enable_speculative_decoding=speculative_decoding,
+      speculative_decoding=speculative_decoding,
       no_template=no_template,
       chat_template=chat_template_content,
       max_num_tokens=max_num_tokens,
