@@ -225,41 +225,6 @@ bool IsRoomNoiseFollowUpChunk(absl::Span<const float> raw_speech,
   return false;
 }
 
-// Shifts a short final chunk `raw_speech` back over `previous_window` to form a
-// full `window_samples`-length window ending at `raw_speech.end()`,
-// deduplicating any overlap prefix already shared with the tail of
-// `previous_window`. Updates `previous_window` to the reconstructed window and
-// returns the fraction of the window that precedes the new samples.
-float ShiftShortChunkBackOverPreviousWindow(std::vector<float>& raw_speech,
-                                            std::vector<float>& previous_window,
-                                            size_t window_samples,
-                                            int hop_length) {
-  const size_t missing = window_samples - raw_speech.size();
-  // Overlapping audio sources (`AudioInputSource`, `FileAudioSource`) prefix
-  // follow-up chunks with the retained overlap samples from the end of
-  // `previous_window`. Identify that exact overlap so shifting a short final
-  // chunk back to a full window splices the contiguous samples preceding
-  // `raw_speech.begin()` rather than duplicating the overlap.
-  size_t overlap = 0;
-  const size_t min_overlap = static_cast<size_t>(hop_length);
-  for (size_t candidate = raw_speech.size(); candidate >= min_overlap;
-       --candidate) {
-    if (std::equal(previous_window.end() - candidate, previous_window.end(),
-                   raw_speech.begin())) {
-      overlap = candidate;
-      break;
-    }
-  }
-  std::vector<float> window;
-  window.reserve(window_samples);
-  window.insert(window.end(), previous_window.end() - overlap - missing,
-                previous_window.end() - overlap);
-  window.insert(window.end(), raw_speech.begin(), raw_speech.end());
-  raw_speech = std::move(window);
-  previous_window = raw_speech;
-  return static_cast<float>(missing) / static_cast<float>(window_samples);
-}
-
 void NormalizeWhisperMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
                                     int stat_frames, int num_frames) {
   float max_val = -std::numeric_limits<float>::infinity();

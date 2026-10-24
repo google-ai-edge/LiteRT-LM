@@ -406,6 +406,10 @@ TEST(LogMelSpectrogramProcessorTest,
   ASSERT_OK(processor.Schedule());
   ASSERT_OK_AND_ASSIGN(auto padded_out, processor.GetOutput());
   ASSERT_EQ(padded_out.features.size(), kWindowSamples);
+  ASSERT_TRUE(padded_out.decode_range.has_value());
+  EXPECT_EQ(padded_out.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(padded_out.decode_range->valid_fraction,
+                  static_cast<float>(kSpeechSamples) / kWindowSamples);
   for (int i = 0; i < kSpeechSamples; ++i) {
     ASSERT_FLOAT_EQ(padded_out.features[i], speech[i]);
   }
@@ -416,6 +420,72 @@ TEST(LogMelSpectrogramProcessorTest,
         has_non_zero_dither || (padded_out.features[i] != 0.0f);
   }
   EXPECT_TRUE(has_non_zero_dither);
+}
+
+TEST(LogMelSpectrogramProcessorTest,
+     DummyPreprocessorShiftsShortFollowUpChunkBackOverPreviousWindow) {
+  constexpr int kWindowSamples = 16000 * 5;
+  constexpr int kOverlapSamples = 16000 * 2;
+  constexpr int kNewSamples = 16000;
+  const std::vector<float> stream = MakeTestAudio(kWindowSamples + kNewSamples);
+  const std::vector<float> first(stream.begin(),
+                                 stream.begin() + kWindowSamples);
+  const std::vector<float> overlapping_tail(
+      stream.begin() + kWindowSamples - kOverlapSamples, stream.end());
+
+  DummyAudioSource source;
+  DummyPreprocessor processor(&source, kWindowSamples);
+
+  source.PushChunk(first);
+  ASSERT_OK(processor.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto first_out, processor.GetOutput());
+  EXPECT_EQ(first_out.features, first);
+  ASSERT_TRUE(first_out.decode_range.has_value());
+  EXPECT_EQ(first_out.decode_range->start_fraction, 0.0f);
+  EXPECT_EQ(first_out.decode_range->valid_fraction, 1.0f);
+
+  source.PushChunk(overlapping_tail);
+  ASSERT_OK(processor.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto shifted_out, processor.GetOutput());
+  EXPECT_EQ(shifted_out.features,
+            std::vector<float>(stream.end() - kWindowSamples, stream.end()));
+  ASSERT_TRUE(shifted_out.decode_range.has_value());
+  EXPECT_FLOAT_EQ(shifted_out.decode_range->start_fraction,
+                  static_cast<float>(kWindowSamples - overlapping_tail.size()) /
+                      static_cast<float>(kWindowSamples));
+  EXPECT_EQ(shifted_out.decode_range->valid_fraction, 1.0f);
+
+  // A silent chunk clears `previous_window_`, so the next short chunk is
+  // padded rather than shifted back over pre-silence audio.
+  source.PushChunk(std::vector<float>(kWindowSamples, 0.0f));
+  ASSERT_OK(processor.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto silent_out, processor.GetOutput());
+  EXPECT_TRUE(silent_out.features.empty());
+
+  source.PushChunk(overlapping_tail);
+  ASSERT_OK(processor.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto after_silence_out, processor.GetOutput());
+  ASSERT_EQ(after_silence_out.features.size(), kWindowSamples);
+  ASSERT_TRUE(after_silence_out.decode_range.has_value());
+  EXPECT_EQ(after_silence_out.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(after_silence_out.decode_range->valid_fraction,
+                  static_cast<float>(overlapping_tail.size()) /
+                      static_cast<float>(kWindowSamples));
+
+  // Reset also clears `previous_window_`.
+  source.PushChunk(first);
+  ASSERT_OK(processor.Schedule());
+  ASSERT_OK(processor.GetOutput().status());
+  processor.Reset();
+
+  source.PushChunk(overlapping_tail);
+  ASSERT_OK(processor.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto after_reset_out, processor.GetOutput());
+  ASSERT_TRUE(after_reset_out.decode_range.has_value());
+  EXPECT_EQ(after_reset_out.decode_range->start_fraction, 0.0f);
+  EXPECT_FLOAT_EQ(after_reset_out.decode_range->valid_fraction,
+                  static_cast<float>(overlapping_tail.size()) /
+                      static_cast<float>(kWindowSamples));
 }
 
 TEST(LogMelSpectrogramProcessorTest,

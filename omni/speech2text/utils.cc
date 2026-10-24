@@ -14,8 +14,10 @@
 
 #include "omni/speech2text/utils.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 #include "absl/types/span.h"  // from @com_google_absl
@@ -58,6 +60,37 @@ bool IsSilentAudio(absl::Span<const float> raw_speech) {
   }
   double rms = std::sqrt(sum_sq / raw_speech.size());
   return rms < kSilenceMaxRms && peak < kSilenceMaxPeak;
+}
+
+float ShiftShortChunkBackOverPreviousWindow(std::vector<float>& raw_speech,
+                                            std::vector<float>& previous_window,
+                                            size_t window_samples,
+                                            int min_overlap_samples) {
+  const size_t missing = window_samples - raw_speech.size();
+  // Overlapping audio sources (`AudioInputSource`, `FileAudioSource`) prefix
+  // follow-up chunks with the retained overlap samples from the end of
+  // `previous_window`. Identify that exact overlap so shifting a short final
+  // chunk back to a full window splices the contiguous samples preceding
+  // `raw_speech.begin()` rather than duplicating the overlap.
+  size_t overlap = 0;
+  const size_t min_overlap =
+      min_overlap_samples > 0 ? static_cast<size_t>(min_overlap_samples) : 1;
+  for (size_t candidate = raw_speech.size(); candidate >= min_overlap;
+       --candidate) {
+    if (std::equal(previous_window.end() - candidate, previous_window.end(),
+                   raw_speech.begin())) {
+      overlap = candidate;
+      break;
+    }
+  }
+  std::vector<float> window;
+  window.reserve(window_samples);
+  window.insert(window.end(), previous_window.end() - overlap - missing,
+                previous_window.end() - overlap);
+  window.insert(window.end(), raw_speech.begin(), raw_speech.end());
+  raw_speech = std::move(window);
+  previous_window = raw_speech;
+  return static_cast<float>(missing) / static_cast<float>(window_samples);
 }
 
 bool TruncateOnTrailingRepetition(

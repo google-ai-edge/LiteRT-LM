@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,8 @@ DummyPreprocessor::DummyPreprocessor(
     : AudioPreprocessor(audio_source),
       pad_to_num_samples_(pad_to_num_samples) {}
 
+void DummyPreprocessor::ResetInternal() { previous_window_.clear(); }
+
 absl::Status DummyPreprocessor::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
   ABSL_ASSIGN_OR_RETURN(auto raw_speech, audio_source_.GetOutput());
@@ -46,27 +49,53 @@ absl::Status DummyPreprocessor::ScheduleInternal() {
   // vector on silent chunks so LiteRtSpeechRecognizer skips encoder/decoder
   // execution.
   if (IsSilentAudio(raw_speech)) {
+    previous_window_.clear();
     PushOutput(PreprocessedAudio{});
     return absl::OkStatus();
   }
 
   const size_t window_samples =
       pad_to_num_samples_ > 0 ? static_cast<size_t>(pad_to_num_samples_) : 0;
-  if (window_samples > 0 && raw_speech.size() < window_samples) {
-    // Pad with low-level dither (~-54 dBFS) so unmasked raw-waveform encoders
-    // do not produce identical constant keys across padded frames.
-    const size_t dither_start = raw_speech.size();
-    raw_speech.resize(window_samples, 0.0f);
-    uint32_t rng = 0x9E3779B9u;
-    for (size_t i = dither_start; i < window_samples; ++i) {
-      rng ^= rng << 13;
-      rng ^= rng >> 17;
-      rng ^= rng << 5;
-      raw_speech[i] = static_cast<float>(static_cast<int32_t>(rng)) *
-                      (3.5e-3f / 2147483648.0f);
+  std::optional<DecodeRange> decode_range;
+  if (window_samples > 0) {
+    if (raw_speech.size() >= window_samples) {
+      previous_window_.assign(raw_speech.end() - window_samples,
+                              raw_speech.end());
+      decode_range =
+          DecodeRange{.start_fraction = 0.0f, .valid_fraction = 1.0f};
+    } else if (previous_window_.size() == window_samples) {
+      // Shift a short follow-up chunk back over `previous_window_` so raw-PCM
+      // encoders without a length mask (such as moonshine-tiny) receive a full
+      // window of real speech rather than a mostly dither-padded window whose
+      // utterance-level normalization distorts the active speech segment.
+      const float start_fraction = ShiftShortChunkBackOverPreviousWindow(
+          raw_speech, previous_window_, window_samples);
+      decode_range =
+          DecodeRange{.start_fraction = start_fraction, .valid_fraction = 1.0f};
+    } else {
+      // Pad standalone short chunks with low-level dither (~-54 dBFS) so
+      // unmasked raw-waveform encoders do not produce identical constant keys
+      // across padded frames.
+      const size_t dither_start = raw_speech.size();
+      const float valid_fraction =
+          static_cast<float>(dither_start) / static_cast<float>(window_samples);
+      raw_speech.resize(window_samples, 0.0f);
+      uint32_t rng = 0x9E3779B9u;
+      for (size_t i = dither_start; i < window_samples; ++i) {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        raw_speech[i] = static_cast<float>(static_cast<int32_t>(rng)) *
+                        (3.5e-3f / 2147483648.0f);
+      }
+      decode_range =
+          DecodeRange{.start_fraction = 0.0f, .valid_fraction = valid_fraction};
     }
   }
-  PushOutput(PreprocessedAudio{.features = std::move(raw_speech)});
+  PushOutput(PreprocessedAudio{
+      .features = std::move(raw_speech),
+      .decode_range = decode_range,
+  });
   return absl::OkStatus();
 }
 

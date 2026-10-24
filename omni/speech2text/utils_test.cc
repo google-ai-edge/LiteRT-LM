@@ -14,6 +14,7 @@
 
 #include "omni/speech2text/utils.h"
 
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -26,6 +27,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::Field;
+using ::testing::FloatNear;
 using ::testing::IsEmpty;
 
 std::vector<SpeechRecognizer::DecodedToken> MakeTokens(
@@ -56,6 +58,28 @@ TEST(UtilsTest, IsSilentAudioReturnsFalseWhenPeakExceedsThreshold) {
   std::vector<float> samples(1600, 0.0f);
   samples[0] = 6e-4f;
   EXPECT_FALSE(IsSilentAudio(samples));
+}
+
+TEST(UtilsTest,
+     ShiftShortChunkBackOverPreviousWindowDeduplicatesSharedOverlapPrefix) {
+  constexpr size_t kWindowSamples = 500;
+  constexpr size_t kOverlapSamples = 200;
+  constexpr size_t kNewSamples = 100;
+  std::vector<float> stream(kWindowSamples + kNewSamples);
+  for (size_t i = 0; i < stream.size(); ++i) {
+    stream[i] = static_cast<float>(i + 1);
+  }
+  std::vector<float> previous_window(stream.begin(),
+                                     stream.begin() + kWindowSamples);
+  std::vector<float> short_chunk(
+      stream.begin() + kWindowSamples - kOverlapSamples, stream.end());
+
+  const float start_fraction = ShiftShortChunkBackOverPreviousWindow(
+      short_chunk, previous_window, kWindowSamples, /*min_overlap_samples=*/50);
+  EXPECT_THAT(start_fraction, FloatNear(200.0f / 500.0f, 1e-6f));
+  EXPECT_EQ(short_chunk,
+            std::vector<float>(stream.end() - kWindowSamples, stream.end()));
+  EXPECT_EQ(previous_window, short_chunk);
 }
 
 TEST(UtilsTest, EmptyTokensReturnsFalse) {

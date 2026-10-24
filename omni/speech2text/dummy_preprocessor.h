@@ -29,6 +29,14 @@ namespace litert::omni::asr {
 // TODO: b/524681030 - Consider a way to pass data without copying.
 class DummyPreprocessor : public AudioPreprocessor {
  public:
+  // Constructs a raw-PCM preprocessor connected to `audio_source`.
+  //
+  // args:
+  //   audio_source: Upstream stage emitting raw PCM audio chunks.
+  //   pad_to_num_samples: Fixed PCM input window size expected by the model (in
+  //     samples). Short follow-up chunks are shifted back over the previous
+  //     full window when available, and standalone short chunks are padded up
+  //     to this length; 0 disables fixed-window shifting and padding.
   explicit DummyPreprocessor(
       Stage<std::vector<float>>* absl_nonnull audio_source,
       int pad_to_num_samples = 0);
@@ -36,13 +44,17 @@ class DummyPreprocessor : public AudioPreprocessor {
   ~DummyPreprocessor() override = default;
 
  protected:
+  void ResetInternal() override;
   absl::Status ScheduleInternal() override;
 
  private:
-  // Fixed PCM input window size expected by the model (in samples). Short final
-  // chunks emitted by the audio source are padded up to this length; 0 disables
-  // padding.
+  // Fixed PCM input window size expected by the model (in samples). Short
+  // follow-up chunks are shifted back over `previous_window_`, and standalone
+  // short chunks are padded up to this length; 0 disables padding.
   const int pad_to_num_samples_;
+  // Last `pad_to_num_samples_` samples of the most recent full-size non-silent
+  // chunk.
+  std::vector<float> previous_window_;
 };
 
 }  // namespace litert::omni::asr
