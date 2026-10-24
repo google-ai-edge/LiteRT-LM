@@ -22,8 +22,6 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 
-#include <cstdlib>
-
 namespace {
 
 constexpr int kLayaError = 1;
@@ -81,21 +79,13 @@ LiteRtLmLaya* litert_lm_laya_create(const char* main_graph_path,
     ABSL_LOG(ERROR) << "laya_runner: options create failed";
     return nullptr;
   }
+  // Apple Silicon perf cores: measured 222 ms/question at 6 threads vs
+  // 1016 ms at the LiteRT default of 1; 8 threads is not faster.
   compilation_options->SetHardwareAccelerators(litert::HwAccelerators::kCpu);
-  // CPU thread count: LITERT_LM_LAYA_THREADS env; default 6 (Apple Silicon
-  // perf cores — measured 222 ms/question vs 1016 ms at the LiteRT default
-  // of 1; 8 threads is not faster).
-  int threads = 6;
-  if (const char* threads_env = std::getenv("LITERT_LM_LAYA_THREADS")) {
-    threads = std::atoi(threads_env);
-  }
-  if (threads > 0) {
-    auto cpu = compilation_options->GetCpuOptions();
-    if (cpu.HasValue() && cpu->SetNumThreads(threads).HasValue()) {
-      ABSL_VLOG(1) << "laya_runner: cpu threads=" << threads;
-    } else {
-      ABSL_LOG(ERROR) << "laya_runner: SetNumThreads(" << threads
-                      << ") failed; using default";
+  auto cpu = compilation_options->GetCpuOptions();
+  if (cpu.HasValue()) {
+    if (!cpu->SetNumThreads(6).HasValue()) {
+      ABSL_LOG(ERROR) << "laya_runner: SetNumThreads(6) failed; using default";
     }
   }
 
