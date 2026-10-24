@@ -53,9 +53,12 @@
 #include "runtime/proto/text2speech_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
+#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 
 namespace litert::omni {
 namespace {
+
+constexpr int kDefaultCpuThreads = 4;
 
 bool FileExists(absl::string_view path) {
   if (path.empty()) {
@@ -192,15 +195,21 @@ absl::Status ConfigureLiteRtOptions(absl::string_view model_name,
   ABSL_ASSIGN_OR_RETURN(
       const ModelCacheConfig cache,
       ResolveModelCache(model_name, settings.model_path, settings.cache_dir));
-  if (settings.num_threads > 0 || !cache.key.empty()) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
-                            options.GetOptions<::litert::CpuOptions>());
-    if (settings.num_threads > 0) {
-      cpu_options.SetNumThreads(settings.num_threads);
-    }
-    ABSL_RETURN_IF_ERROR(
-        ConfigureCpuModelCache(model_name, cache, cpu_options));
-  }
+  LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                          options.GetOptions<::litert::CpuOptions>());
+  const int num_threads =
+      settings.num_threads > 0 ? settings.num_threads : kDefaultCpuThreads;
+  LITERT_RETURN_IF_ERROR(cpu_options.SetNumThreads(num_threads));
+  auto set_flags = cpu_options.GetXNNPackFlags();
+  // Fall back to the delegate defaults (QS8|QU8, ...) when flags were never
+  // set.
+  uint32_t xnn_flags = (set_flags.HasValue() && *set_flags != 0)
+                           ? *set_flags
+                           : TfLiteXNNPackDelegateOptionsDefault().flags;
+  xnn_flags |= TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED |
+               TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS;
+  LITERT_RETURN_IF_ERROR(cpu_options.SetXNNPackFlags(xnn_flags));
+  ABSL_RETURN_IF_ERROR(ConfigureCpuModelCache(model_name, cache, cpu_options));
   if (settings.backend == OmniEngine::Settings::Backend::kGpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kGpu);
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options,

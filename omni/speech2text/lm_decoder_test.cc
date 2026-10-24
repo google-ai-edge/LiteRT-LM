@@ -289,5 +289,36 @@ TEST(LmDecoderTest, DecodeTruncatesTrailingMultiTokenRepetitionLoop) {
                           Field(&SpeechRecognizer::DecodedToken::token_id, 3)));
 }
 
+TEST(LmDecoderTest, DecodeScalesMaxStepsWithPartialDecodeRange) {
+  MockLiteRtLmRunner runner;
+  EXPECT_CALL(runner, Reset()).WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
+
+  // With max_decode_steps = 100 and valid_fraction = 0.2, effective_max_steps
+  // is clamped to ceil(0.2 * 100) = 20 steps.
+  int decode_calls = 0;
+  EXPECT_CALL(runner, Decode(_))
+      .WillRepeatedly([&decode_calls](const lm::ExecutorInputs&) {
+        ++decode_calls;
+        return CreateLogitsBuffer((decode_calls % 7) + 1);
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
+                                         /*decode_stop_token_id=*/9,
+                                         /*decode_skip_until_token_id=*/-1,
+                                         /*max_decode_steps=*/100));
+
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer({1, 10, 16}));
+
+  auto decoded = decoder->Decode(
+      encoder_outputs,
+      LmDecoder::DecodeRange{.start_fraction = 0.0f, .valid_fraction = 0.2f});
+  ASSERT_OK(decoded);
+  EXPECT_EQ(decode_calls, 20);
+  EXPECT_EQ(decoded->size(), 20);
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

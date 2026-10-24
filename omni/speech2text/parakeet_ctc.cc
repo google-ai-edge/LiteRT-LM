@@ -87,6 +87,8 @@ class ParakeetCtcSessionFactory : public AsrSessionFactory {
         compiled_model_(std::move(compiled_model)) {}
 
  protected:
+  bool ShouldEnableWarmStart() const override { return true; }
+
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithAudioSource(
       std::unique_ptr<AudioSource> absl_nonnull audio_source) override {
     auto encoder = std::make_unique<LiteRtRunnerImpl>(compiled_model_.get());

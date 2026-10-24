@@ -96,6 +96,7 @@ cc_library(
     name = "audio_preprocessor",
     hdrs = ["audio_preprocessor.h"],
     deps = [
+        ":audio_source",
         "@com_google_absl//absl/base:nullability",
         "//omni/base:stage",
     ],
@@ -107,6 +108,7 @@ cc_library(
     hdrs = ["log_mel_spectrogram_processor.h"],
     deps = [
         ":audio_preprocessor",
+        ":audio_source",
         ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
@@ -131,6 +133,7 @@ cc_library(
     hdrs = ["dummy_preprocessor.h"],
     deps = [
         ":audio_preprocessor",
+        ":audio_source",
         ":utils",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
@@ -144,12 +147,12 @@ cc_test(
     name = "log_mel_spectrogram_processor_test",
     srcs = ["log_mel_spectrogram_processor_test.cc"],
     deps = [
+        ":audio_source",
         ":dummy_preprocessor",
         ":log_mel_spectrogram_processor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
-        "//omni/base:stage",
         "//support/util:test_utils",
     ],
 )
@@ -589,11 +592,13 @@ cc_library(
         ":text_merger",
         ":timestamp_text_merger",
         ":tokenizer_detokenizer",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_environment",
         "//omni:multi_staged_session",
         "//omni:omni_engine_header",
@@ -631,6 +636,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_options",
         "//omni:multi_staged_session",
@@ -641,6 +647,9 @@ cc_test(
         "//omni/base:stage",
         "//runtime/components:model_resources",
         "//runtime/framework:threadpool",
+        "//runtime/proto:speech2text_metadata_cc_proto",
+        "//runtime/proto:speech2text_session_config_cc_proto",
+        "//support/tokenizer",
         "//support/util:test_utils",
     ],
 )
@@ -686,6 +695,7 @@ cc_library(
         "//runtime/proto:speech2text_metadata_cc_proto",
         "//runtime/proto:speech2text_model_type_cc_proto",
         "//support/tokenizer",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate_hdrs_only",
     ],
     alwayslink = 1,
 )

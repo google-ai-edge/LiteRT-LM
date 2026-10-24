@@ -119,6 +119,7 @@ cc_library(
         "//runtime/proto:text2speech_metadata_cc_proto",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:scoped_file",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate_hdrs_only",
     ],
 )
 

@@ -31,6 +31,10 @@ class AudioSource : public SingleThreadedStageWithDeque<std::vector<float>> {
 
   // Returns the number of audio channels (e.g. 1 for mono).
   virtual int GetNumChannels() const = 0;
+
+  // Returns whether the most recently dequeued output chunk (via `GetOutput()`)
+  // was a progressive warm-start prefix emitted before the first full window.
+  virtual bool IsLastOutputWarmStart() const { return false; }
 };
 
 }  // namespace litert::omni::asr

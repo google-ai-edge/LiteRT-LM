@@ -485,7 +485,7 @@ absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
   auto shared_scoped_file =
       std::make_shared<lm::ScopedFile>(std::move(scoped_file));
   ABSL_ASSIGN_OR_RETURN(auto model_assets,
-                        lm::ModelAssets::Create(shared_scoped_file));
+                        lm::ModelAssets::Create(shared_scoped_file, path));
   // `LiteRtLmRunner` exposes `DecodeLogits()` for CPU-side decoding, so keep
   // `sampler_backend` on CPU to preserve the model's FP32 output logits buffer
   // even when `options.backend == lm::Backend::GPU` uses FP16 precision.
@@ -524,7 +524,7 @@ absl::StatusOr<std::unique_ptr<LiteRtLmEngineRunner>> CreateLmEngineRunner(
   auto shared_scoped_file =
       std::make_shared<lm::ScopedFile>(std::move(scoped_file));
   ABSL_ASSIGN_OR_RETURN(auto model_assets,
-                        lm::ModelAssets::Create(shared_scoped_file));
+                        lm::ModelAssets::Create(shared_scoped_file, path));
   ABSL_ASSIGN_OR_RETURN(auto engine_settings,
                         lm::EngineSettings::CreateDefault(
                             std::move(model_assets), options.backend,

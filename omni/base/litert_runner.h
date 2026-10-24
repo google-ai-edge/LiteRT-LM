@@ -17,6 +17,8 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -67,6 +69,8 @@ class LiteRtRunnerImpl : public LiteRtRunner {
  private:
   std::unique_ptr<CompiledModel> owned_compiled_model_;
   CompiledModel* const absl_nonnull compiled_model_;
+  std::string cached_signature_name_;
+  std::optional<size_t> cached_signature_index_;
 };
 
 // Passthrough implementation of LiteRtRunner that copies input tensors directly

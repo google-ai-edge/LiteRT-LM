@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -57,6 +58,7 @@
 #include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/speech2text_model_type.pb.h"
 #include "support/tokenizer/tokenizer.h"
+#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 
 namespace litert::omni::asr {
 namespace {
@@ -116,12 +118,19 @@ CreateCpuDecoderCompiledModel(
       const ModelCacheConfig cache,
       ResolveModelCache(decoder_cache_name, settings.model_path,
                         settings.cache_dir));
-  if (settings.num_threads > 0 || !cache.key.empty()) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
-                            decoder_options.GetOptions<::litert::CpuOptions>());
-    if (settings.num_threads > 0) {
-      cpu_options.SetNumThreads(settings.num_threads);
-    }
+  LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                          decoder_options.GetOptions<::litert::CpuOptions>());
+  if (settings.num_threads > 0) {
+    LITERT_RETURN_IF_ERROR(cpu_options.SetNumThreads(settings.num_threads));
+  }
+  auto set_flags = cpu_options.GetXNNPackFlags();
+  uint32_t xnn_flags = (set_flags.HasValue() && *set_flags != 0)
+                           ? *set_flags
+                           : TfLiteXNNPackDelegateOptionsDefault().flags;
+  xnn_flags |= TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED |
+               TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS;
+  LITERT_RETURN_IF_ERROR(cpu_options.SetXNNPackFlags(xnn_flags));
+  if (!cache.key.empty()) {
     ABSL_RETURN_IF_ERROR(
         ConfigureCpuModelCache(decoder_cache_name, cache, cpu_options));
   }
@@ -201,6 +210,8 @@ class ParakeetTdtSessionFactory : public AsrSessionFactory {
         decoder_compiled_model_(std::move(decoder_compiled_model)) {}
 
  protected:
+  bool ShouldEnableWarmStart() const override { return true; }
+
   absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithAudioSource(
       std::unique_ptr<AudioSource> absl_nonnull audio_source) override {
     auto encoder = std::make_unique<LiteRtRunnerImpl>(compiled_model_.get());

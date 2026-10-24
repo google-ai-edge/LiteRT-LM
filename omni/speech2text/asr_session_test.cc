@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "omni/base/io_types.h"
@@ -43,6 +44,9 @@
 #include "omni/speech2text/speech_recognizer.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/speech2text_metadata.pb.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
+#include "support/tokenizer/tokenizer.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::asr {
@@ -143,7 +147,8 @@ class FakeAudioPreprocessor : public AudioPreprocessor {
       SetState(State::kIdle);
       return pcm_samples.status();
     }
-    PushOutput({.features = std::move(*pcm_samples)});
+    PushOutput({.features = std::move(*pcm_samples),
+                .is_warm_start = IsLastInputWarmStart()});
     SetState(State::kIdle);
     return absl::OkStatus();
   }
@@ -170,6 +175,11 @@ class FakeSpeechRecognizer : public SpeechRecognizer {
     for (float val : mel_features->features) {
       tokens.push_back({static_cast<int>(val), 100});
     }
+    if (mel_features->is_warm_start) {
+      tokens.push_back(
+          {.token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
+           .is_warm_start = true});
+    }
     PushOutput(std::move(tokens));
     SetState(State::kIdle);
     return absl::OkStatus();
@@ -195,7 +205,12 @@ class FakeDetokenizer : public Detokenizer {
     }
     std::vector<Detokenizer::Word> words;
     for (const auto& tok : *tokens) {
-      words.push_back({"w_" + std::to_string(tok.token_id), tok.timestamp_ms});
+      if (tok.IsEndOfChunk()) {
+        words.push_back({"", tok.timestamp_ms, tok.is_warm_start});
+      } else {
+        words.push_back(
+            {"w_" + std::to_string(tok.token_id), tok.timestamp_ms});
+      }
     }
     PushOutput(std::move(words));
     SetState(State::kIdle);
@@ -450,6 +465,140 @@ TEST_F(AsrSessionTest,
   ASSERT_TRUE(std::holds_alternative<TextOutput>(eos_flush));
   EXPECT_EQ(std::get<TextOutput>(eos_flush).confirmed_text, "w_1 w_2 w_3");
   EXPECT_EQ(std::get<TextOutput>(eos_flush).unconfirmed_text, "");
+}
+
+class FakeTokenizer : public ::litert::support::Tokenizer {  // NOLINT
+ public:
+  ::litert::support::TokenizerType GetTokenizerType()
+      const override {                                        // NOLINT
+    return ::litert::support::TokenizerType::kSentencePiece;  // NOLINT
+  }
+  absl::StatusOr<std::vector<int>> TextToTokenIds(
+      absl::string_view /*text*/) override {
+    return std::vector<int>{1};
+  }
+  absl::StatusOr<int> TokenToId(absl::string_view /*token*/) override {
+    return 1;
+  }
+  absl::StatusOr<std::string> TokenIdsToText(
+      absl::Span<const int> /*token_ids*/,  // NOLINT
+      bool /*skip_special_tokens*/) override {
+    return "tok";
+  }
+  std::vector<std::string> GetTokens() const override { return {"<unk>", "a"}; }
+  int GetVocabSize() const override { return 2; }
+};
+
+class FakeAsrSessionFactory : public AsrSessionFactory {
+ public:
+  FakeAsrSessionFactory(
+      const OmniEngine::Settings& settings,
+      const MessageLite* absl_nullable session_config,
+      const MessageLite* absl_nullable metadata, ::litert::Environment env,
+      std::shared_ptr<lm::ModelResources> absl_nullable model_resources,
+      std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer,
+      bool enable_warm_start = false)
+      : AsrSessionFactory(settings, session_config, metadata, std::move(env),
+                          std::move(model_resources), std::move(tokenizer)),
+        enable_warm_start_(enable_warm_start) {}
+
+ protected:
+  bool ShouldEnableWarmStart() const override { return enable_warm_start_; }
+
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithAudioSource(
+      std::unique_ptr<AudioSource> absl_nonnull audio_source) override {
+    return BuildFakeAsrSession(std::move(audio_source));
+  }
+
+ private:
+  bool enable_warm_start_ = false;
+};
+
+TEST_F(AsrSessionTest, WarmStartEmitsProgressivePrefixesBeforeFullInterval) {
+  auto env = ::litert::Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  OmniEngine::Settings settings{.num_threads = 2};
+  lm::proto::Speech2TextMetadata metadata;
+  metadata.set_sample_rate_hz(8000);
+  metadata.set_input_milliseconds(1);  // 8 samples per interval
+  lm::proto::Speech2TextSessionConfig session_config;
+  session_config.set_overlap_ratio(0.75f);  // overlap = 6, step = 2 samples
+  session_config.set_text_merger_type(
+      lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_TIMESTAMP);
+
+  FakeAsrSessionFactory factory(
+      settings, &session_config, &metadata, std::move(*env),
+      /*model_resources=*/nullptr, std::make_unique<FakeTokenizer>(),
+      /*enable_warm_start=*/true);
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input = input_source.get();
+  ASSERT_OK_AND_ASSIGN(auto session, factory.Create(std::move(input_source)));
+
+  // 1 sample (< step of 2) -> not enough for first warm-start prefix yet.
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {1.0f}}));
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+
+  // 2 samples -> first warm-start prefix [1, 2]
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {2.0f}}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output ws1, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(ws1));
+  EXPECT_EQ(std::get<TextOutput>(ws1).unconfirmed_text, "w_1 w_2");
+
+  // 2 more samples (total 4) -> second warm-start prefix [1, 2, 3, 4]
+  ASSERT_OK(raw_input->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {3.0f, 4.0f}}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output ws2, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(ws2));
+
+  // If Finish() is called right after a warm-start emission with no new
+  // samples, no redundant remainder chunk is emitted.
+  raw_input->Finish();
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kOutOfRange));
+
+  // Resetting restores the initial warm-start step threshold (2 samples).
+  session->Reset();
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {5.0f}}));
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+  ASSERT_OK(
+      raw_input->PushInput(OmniSession::AudioInput{.pcm_samples = {6.0f}}));
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output ws_reset, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(ws_reset));
+  EXPECT_EQ(std::get<TextOutput>(ws_reset).unconfirmed_text, "w_5 w_6");
+}
+
+TEST_F(AsrSessionTest, WarmStartIsDisabledForLevenshteinTextMerger) {
+  auto env = ::litert::Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  OmniEngine::Settings settings{.num_threads = 2};
+  lm::proto::Speech2TextMetadata metadata;
+  metadata.set_sample_rate_hz(8000);
+  metadata.set_input_milliseconds(1);  // 8 samples per interval
+  lm::proto::Speech2TextSessionConfig session_config;
+  session_config.set_overlap_ratio(0.75f);
+  session_config.set_text_merger_type(
+      lm::proto::Speech2TextSessionConfig::TEXT_MERGER_TYPE_LEVENSHTEIN);
+
+  FakeAsrSessionFactory factory(
+      settings, &session_config, &metadata, std::move(*env),
+      /*model_resources=*/nullptr, std::make_unique<FakeTokenizer>(),
+      /*enable_warm_start=*/true);
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input = input_source.get();
+  ASSERT_OK_AND_ASSIGN(auto session, factory.Create(std::move(input_source)));
+
+  // With Levenshtein merger, warm-start is gated off even when the factory
+  // opts in via ShouldEnableWarmStart().
+  ASSERT_OK(raw_input->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
+  EXPECT_THAT(session->ProcessNext(), StatusIs(absl::StatusCode::kNotFound));
+
+  raw_input->Finish();
+  ASSERT_OK_AND_ASSIGN(OmniSession::Output out, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<TextOutput>(out));
+  EXPECT_EQ(std::get<TextOutput>(out).unconfirmed_text, "w_1 w_2");
 }
 
 }  // namespace

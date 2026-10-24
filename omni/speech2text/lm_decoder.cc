@@ -15,9 +15,9 @@
 #include "omni/speech2text/lm_decoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -98,7 +98,7 @@ LmDecoder::LmDecoder(LiteRtLmRunner* absl_nonnull lm_runner,
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
     std::vector<::litert::TensorBuffer>& encoder_outputs,
-    std::optional<DecodeRange> /*decode_range*/) {
+    std::optional<DecodeRange> decode_range) {
   if (encoder_outputs.empty()) {
     return absl::InvalidArgumentError("Encoder outputs cannot be empty.");
   }
@@ -108,6 +108,19 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
   ABSL_ASSIGN_OR_RETURN(auto prefill_inputs,
                         CreateExecutorInputsWithAudio(encoder_outputs[0]));
   ABSL_RETURN_IF_ERROR(lm_runner_.Prefill(prefill_inputs));
+
+  int effective_max_steps = max_decode_steps_;
+  if (decode_range.has_value() && decode_range->valid_fraction > 0.0f &&
+      decode_range->valid_fraction < 1.0f) {
+    const float start_fraction = std::clamp(decode_range->start_fraction, 0.0f,
+                                            decode_range->valid_fraction);
+    const float active_fraction = decode_range->valid_fraction - start_fraction;
+    const int skip_header_budget = decode_skip_until_token_id_ >= 0 ? 8 : 0;
+    effective_max_steps = std::clamp(
+        skip_header_budget +
+            static_cast<int>(std::ceil(active_fraction * max_decode_steps_)),
+        std::min(16, max_decode_steps_), max_decode_steps_);
+  }
 
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
   // LlmLiteRtCompiledModelExecutorBase::Prefill processes all prompt tokens
@@ -122,7 +135,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
   LITERT_ASSIGN_OR_RETURN(auto token_buf,
                           support::CreateTensorBuffer<int32_t>({1, 1}));
 
-  for (int step = 0; step < max_decode_steps_; ++step) {
+  for (int step = 0; step < effective_max_steps; ++step) {
     LITERT_RETURN_IF_ERROR(
         token_buf.Write<int32_t>(absl::MakeConstSpan(&current_token, 1)));
     ABSL_ASSIGN_OR_RETURN(auto decode_inputs,
@@ -135,12 +148,13 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
       return absl::InternalError("Logits buffer contains 0 elements.");
     }
 
-    std::vector<float> logits(num_logits);
-    LITERT_RETURN_IF_ERROR(logits_buf.Read<float>(absl::MakeSpan(logits)));
-
-    auto max_it = std::max_element(logits.begin(), logits.end());
-    const int token_id =
-        static_cast<int>(std::distance(logits.begin(), max_it));
+    LITERT_ASSIGN_OR_RETURN(
+        auto logits_lock_and_addr,
+        ::litert::TensorBufferScopedLock::Create<const float>(
+            logits_buf, ::litert::TensorBuffer::LockMode::kRead));
+    const float* logits_ptr = logits_lock_and_addr.second;
+    const float* max_it = std::max_element(logits_ptr, logits_ptr + num_logits);
+    const int token_id = static_cast<int>(max_it - logits_ptr);
 
     if (stop_tokens_.contains(token_id)) {
       break;

@@ -226,10 +226,12 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
   std::vector<int> token_ids;
   token_ids.reserve(tokens.size());
   std::optional<int> end_of_chunk_timestamp_ms = std::nullopt;
+  bool is_warm_start_chunk = false;
   bool has_token_timestamps = false;
   for (const auto& tok : tokens) {
     if (tok.IsEndOfChunk()) {
       end_of_chunk_timestamp_ms = tok.timestamp_ms;
+      is_warm_start_chunk = tok.is_warm_start;
       break;
     }
     if (tok.timestamp_ms.has_value()) {
@@ -260,8 +262,10 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
         absl::StrSplit(text, ' ', absl::SkipEmpty());
     const std::vector<std::string> raw_words = SplitCjkCharacters(space_words);
 
-    words.reserve(raw_words.size() +
-                  (end_of_chunk_timestamp_ms.has_value() ? 1 : 0));
+    words.reserve(
+        raw_words.size() +
+        ((end_of_chunk_timestamp_ms.has_value() || is_warm_start_chunk) ? 1
+                                                                        : 0));
 
     const size_t num_words = raw_words.size();
     const size_t num_tokens = token_ids.size();
@@ -313,10 +317,10 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
     }
   }
 
-  if (end_of_chunk_timestamp_ms.has_value()) {
-    words.push_back(
-        Detokenizer::Word{.text = "",  // end-of-chunk
-                          .timestamp_ms = end_of_chunk_timestamp_ms});
+  if (end_of_chunk_timestamp_ms.has_value() || is_warm_start_chunk) {
+    words.push_back(Detokenizer::Word{.text = "",  // end-of-chunk
+                                      .timestamp_ms = end_of_chunk_timestamp_ms,
+                                      .is_warm_start = is_warm_start_chunk});
   }
 
   ABSL_VLOG(2) << "Words(size=" << words.size()

@@ -28,6 +28,9 @@ namespace litert::omni::asr {
 struct DecodedToken {
   int token_id;
   std::optional<int> timestamp_ms;
+  // True on the end-of-chunk sentinel token when this chunk is a progressive
+  // warm-start prefix emitted before the first full model window.
+  bool is_warm_start = false;
 
   static constexpr int kEndOfChunkTokenId = -1;
 

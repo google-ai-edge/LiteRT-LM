@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_TIMESTAMP_TEXT_MERGER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_TIMESTAMP_TEXT_MERGER_H_
 
+#include <algorithm>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -47,7 +49,8 @@ class TimestampTextMerger : public TextMerger {
   // Returns cached unconfirmed words.
   // It's only used for testing. Not thread-safe.
   absl::Span<const std::string> unconfirmed_words_for_testing() const {
-    return prev_words_;
+    return absl::MakeConstSpan(prev_words_)
+        .subspan(std::min(confirmed_prefix_size_, prev_words_.size()));
   }
   // Returns the absolute start of the next chunk in timestamp units.
   // It's only used for testing. Not thread-safe.
@@ -91,6 +94,20 @@ class TimestampTextMerger : public TextMerger {
   // Duration of the most recent non-empty chunk, used to advance
   // `stream_timestamp_offset_ms_` across silent chunks that carry no sentinel.
   int last_chunk_end_ms_ = 0;
+  // Whether `prev_words_` currently holds a progressive warm-start prefix that
+  // should be replaced rather than merged by the next chunk.
+  bool prev_is_warm_start_ = false;
+  // Number of consecutive non-warm-start empty chunks observed since the last
+  // chunk with spoken words.
+  int consecutive_empty_chunks_ = 0;
+  // Number of leading words in `prev_words_` that have already been emitted in
+  // `confirmed_text` (while remaining in `prev_words_` for overlap alignment on
+  // the next window).
+  size_t confirmed_prefix_size_ = 0;
+  // Upper timestamp bound of words already finalized during a live silence
+  // pause, used to avoid re-emitting pre-pause words that remain in the left
+  // overlap prefix of a subsequent window.
+  int confirmed_until_ms_ = -1;
 };
 
 }  // namespace litert::omni::asr
