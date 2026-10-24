@@ -390,7 +390,6 @@ cc_library(
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",  # buildcleaner: keep
-        "@litert//litert/c/internal:litert_external_litert_buffer_context",  # buildcleaner: keep
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
