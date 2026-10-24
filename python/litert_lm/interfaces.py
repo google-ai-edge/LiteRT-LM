@@ -855,14 +855,14 @@ def create_benchmark_info(lib: Any, info_ptr: Any) -> BenchmarkInfo:
   num_prefill_turns = get_checked(
       lib,
       "litert_lm_benchmark_info_get_num_prefill_turns",
-      ctypes.c_int,
+      ctypes.c_size_t,
       info_ptr,
   )
   if num_prefill_turns > 0:
     last_prefill_count = get_checked(
         lib,
         "litert_lm_benchmark_info_get_prefill_token_count_at",
-        ctypes.c_int,
+        ctypes.c_size_t,
         info_ptr,
         num_prefill_turns - 1,
     )
@@ -880,14 +880,14 @@ def create_benchmark_info(lib: Any, info_ptr: Any) -> BenchmarkInfo:
   num_decode_turns = get_checked(
       lib,
       "litert_lm_benchmark_info_get_num_decode_turns",
-      ctypes.c_int,
+      ctypes.c_size_t,
       info_ptr,
   )
   if num_decode_turns > 0:
     last_decode_count = get_checked(
         lib,
         "litert_lm_benchmark_info_get_decode_token_count_at",
-        ctypes.c_int,
+        ctypes.c_size_t,
         info_ptr,
         num_decode_turns - 1,
     )

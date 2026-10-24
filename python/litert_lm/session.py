@@ -193,7 +193,10 @@ class Session(interfaces.AbstractSession):
     try:
       lib = self._lib
       num = get_checked(
-          lib, "litert_lm_responses_get_num_candidates", ctypes.c_int, resp_ptr
+          lib,
+          "litert_lm_responses_get_num_candidates",
+          ctypes.c_size_t,
+          resp_ptr,
       )
       texts = []
       scores = []
@@ -226,7 +229,7 @@ class Session(interfaces.AbstractSession):
               get_checked(
                   lib,
                   "litert_lm_responses_get_token_length_at",
-                  ctypes.c_int,
+                  ctypes.c_size_t,
                   resp_ptr,
                   i,
               )
@@ -241,7 +244,7 @@ class Session(interfaces.AbstractSession):
           num_scores = get_checked(
               lib,
               "litert_lm_responses_get_num_token_scores_at",
-              ctypes.c_int,
+              ctypes.c_size_t,
               resp_ptr,
               i,
           )

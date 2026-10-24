@@ -14,6 +14,7 @@
 
 #include "c/conversation.h"
 
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -24,6 +25,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "c/conversation_internal.h"
 #include "c/engine.h"
@@ -768,7 +770,7 @@ LiteRtLmStatusCode litert_lm_conversation_get_benchmark_info(
 }
 
 LiteRtLmStatusCode litert_lm_conversation_get_token_count(
-    LiteRtLmConversation* conversation, int* out_count) {
+    LiteRtLmConversation* conversation, size_t* out_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_count);
   if (!conversation || !conversation->conversation) {
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
@@ -779,7 +781,12 @@ LiteRtLmStatusCode litert_lm_conversation_get_token_count(
     ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
     return litert::lm::c::ToCStatus(token_count.status());
   }
-  *out_count = *token_count;
+  if (*token_count < 0) {
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInternal,
+        absl::StrFormat("Negative token count: %d.", *token_count));
+  }
+  *out_count = static_cast<size_t>(*token_count);
   return kLiteRtLmStatusOk;
 }
 

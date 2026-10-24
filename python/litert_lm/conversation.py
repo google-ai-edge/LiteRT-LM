@@ -632,7 +632,7 @@ class Conversation(interfaces.AbstractConversation):
     return get_checked(
         self._lib,
         "litert_lm_conversation_get_token_count",
-        ctypes.c_int,
+        ctypes.c_size_t,
         self._ptr,
     )
 

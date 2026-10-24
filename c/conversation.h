@@ -702,9 +702,10 @@ LiteRtLmStatusCode litert_lm_conversation_get_benchmark_info(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code instead of a negative value
 // on failure; the count is returned through out_count.
+// Changed in version 1.0.0: `*out_count` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_conversation_get_token_count(
-    LiteRtLmConversation* conversation, int* out_count);
+    LiteRtLmConversation* conversation, size_t* out_count);
 
 #ifdef __cplusplus
 }  // extern "C"

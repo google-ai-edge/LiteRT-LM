@@ -91,8 +91,8 @@ def _get_lengths(lib: Any, func_name: str, handle: int) -> list[int] | None:
 
   Args:
     lib: The loaded C library instance.
-    func_name: Name of a C API function with the signature `int f(handle,
-      int32_t* lengths, int32_t max_size, int32_t* out_count)`.
+    func_name: Name of a C API function with the signature `LiteRtLmStatusCode
+      f(handle, int32_t* lengths, size_t max_size, size_t* out_count)`.
     handle: The loaded file handle.
 
   Returns:
@@ -103,13 +103,13 @@ def _get_lengths(lib: Any, func_name: str, handle: int) -> list[int] | None:
     RuntimeError: If the C API call fails for another reason.
   """
   count = _ffi.get_optional_checked(
-      lib, func_name, ctypes.c_int32, handle, None, 0
+      lib, func_name, ctypes.c_size_t, handle, None, 0
   )
   if count is None:
     return None
   lengths = (ctypes.c_int32 * count)()
   written = _ffi.get_checked(
-      lib, func_name, ctypes.c_int32, handle, lengths, count
+      lib, func_name, ctypes.c_size_t, handle, lengths, count
   )
   return list(lengths[: min(count, written)])
 
@@ -421,7 +421,7 @@ class ModelInfo:
     count = _ffi.get_checked(
         self._lib,
         "litert_lm_loaded_file_modality_supported_backends",
-        ctypes.c_int32,
+        ctypes.c_size_t,
         self._handle,
         int(modality),
         None,
@@ -433,7 +433,7 @@ class ModelInfo:
     written = _ffi.get_checked(
         self._lib,
         "litert_lm_loaded_file_modality_supported_backends",
-        ctypes.c_int32,
+        ctypes.c_size_t,
         self._handle,
         int(modality),
         backends_arr,

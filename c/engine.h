@@ -1509,9 +1509,11 @@ void litert_lm_responses_delete(LiteRtLmResponses* responses);
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_num_candidates.
+// Changed in version 1.0.0: `*out_num_candidates` is a size_t
+// instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_get_num_candidates(
-    const LiteRtLmResponses* responses, int* out_num_candidates);
+    const LiteRtLmResponses* responses, size_t* out_num_candidates);
 
 // Returns the response text at a given index.
 //
@@ -1529,9 +1531,10 @@ LiteRtLmStatusCode litert_lm_responses_get_num_candidates(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the text is returned
 // through out_text.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_get_response_text_at(
-    const LiteRtLmResponses* responses, int index, const char** out_text);
+    const LiteRtLmResponses* responses, size_t index, const char** out_text);
 
 // Returns whether the response contains a score at the given index.
 //
@@ -1547,9 +1550,10 @@ LiteRtLmStatusCode litert_lm_responses_get_response_text_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the result is returned
 // through out_has_score.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_has_score_at(
-    const LiteRtLmResponses* responses, int index, bool* out_has_score);
+    const LiteRtLmResponses* responses, size_t index, bool* out_has_score);
 
 // Returns the score at a given index.
 //
@@ -1565,9 +1569,10 @@ LiteRtLmStatusCode litert_lm_responses_has_score_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the score is returned
 // through out_score.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_get_score_at(
-    const LiteRtLmResponses* responses, int index, float* out_score);
+    const LiteRtLmResponses* responses, size_t index, float* out_score);
 
 // Returns whether the response contains a token length at the given index.
 //
@@ -1583,9 +1588,11 @@ LiteRtLmStatusCode litert_lm_responses_get_score_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the result is returned
 // through out_has_token_length.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_has_token_length_at(
-    const LiteRtLmResponses* responses, int index, bool* out_has_token_length);
+    const LiteRtLmResponses* responses, size_t index,
+    bool* out_has_token_length);
 
 // Returns the token length at a given index.
 //
@@ -1602,9 +1609,11 @@ LiteRtLmStatusCode litert_lm_responses_has_token_length_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the token length is
 // returned through out_token_length.
+// Changed in version 1.0.0: `index` and `*out_token_length` are
+// size_t instead of int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_get_token_length_at(
-    const LiteRtLmResponses* responses, int index, int* out_token_length);
+    const LiteRtLmResponses* responses, size_t index, size_t* out_token_length);
 
 // Returns whether the response contains token scores at the given index.
 //
@@ -1620,9 +1629,11 @@ LiteRtLmStatusCode litert_lm_responses_get_token_length_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the result is returned
 // through out_has_token_scores.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_has_token_scores_at(
-    const LiteRtLmResponses* responses, int index, bool* out_has_token_scores);
+    const LiteRtLmResponses* responses, size_t index,
+    bool* out_has_token_scores);
 
 // Returns the number of tokens for which scores are present at a given index.
 //
@@ -1639,9 +1650,12 @@ LiteRtLmStatusCode litert_lm_responses_has_token_scores_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_num_token_scores.
+// Changed in version 1.0.0: `index` and `*out_num_token_scores`
+// are size_t instead of int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_get_num_token_scores_at(
-    const LiteRtLmResponses* responses, int index, int* out_num_token_scores);
+    const LiteRtLmResponses* responses, size_t index,
+    size_t* out_num_token_scores);
 
 // Returns the token scores at a given index.
 //
@@ -1661,9 +1675,10 @@ LiteRtLmStatusCode litert_lm_responses_get_num_token_scores_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the array is returned
 // through out_token_scores.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_responses_get_token_scores_at(
-    const LiteRtLmResponses* responses, int index,
+    const LiteRtLmResponses* responses, size_t index,
     const float** out_token_scores);
 
 // Retrieves the benchmark information from the session.
@@ -1740,9 +1755,11 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_total_init_time_in_second(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_num_turns.
+// Changed in version 1.0.0: `*out_num_turns` is a size_t instead of
+// an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_benchmark_info_get_num_prefill_turns(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_num_turns);
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t* out_num_turns);
 
 // Returns the number of decode turns.
 //
@@ -1756,9 +1773,11 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_num_prefill_turns(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_num_turns.
+// Changed in version 1.0.0: `*out_num_turns` is a size_t instead of
+// an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_benchmark_info_get_num_decode_turns(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_num_turns);
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t* out_num_turns);
 
 // Returns the prefill token count at a given turn index.
 //
@@ -1774,10 +1793,12 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_num_decode_turns(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_token_count.
+// Changed in version 1.0.0: `index` and `*out_token_count` are
+// size_t instead of int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_token_count_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
-    int* out_token_count);
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
+    size_t* out_token_count);
 
 // Returns the decode token count at a given turn index.
 //
@@ -1793,10 +1814,12 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_token_count_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_token_count.
+// Changed in version 1.0.0: `index` and `*out_token_count` are
+// size_t instead of int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_token_count_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
-    int* out_token_count);
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
+    size_t* out_token_count);
 
 // Returns the prefill tokens per second at a given turn index.
 //
@@ -1812,9 +1835,10 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_token_count_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the value is returned
 // through out_tokens_per_sec.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
     double* out_tokens_per_sec);
 
 // Returns the decode tokens per second at a given turn index.
@@ -1831,9 +1855,10 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the value is returned
 // through out_tokens_per_sec.
+// Changed in version 1.0.0: `index` is a size_t instead of an int.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
     double* out_tokens_per_sec);
 
 // Returns the max number of tokens, i.e. the KV cache size, that the engine

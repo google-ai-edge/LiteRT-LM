@@ -15,6 +15,7 @@
 #include "c/model_info.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -108,40 +109,40 @@ TEST(ModelInfoCTest, InspectLoadedFile) {
 
   // Verify modality-specific backends for text (default to CPU, GPU).
   LiteRtLmBackendType text_backends[3];
-  int32_t text_backend_count = -1;
+  size_t text_backend_count = 99;
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
                 file.get(), kLiteRtLmModalityText, text_backends, 3,
                 &text_backend_count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(text_backend_count, 2);
+  EXPECT_EQ(text_backend_count, 2u);
   EXPECT_EQ(text_backends[0], kLiteRtLmBackendTypeCpu);
   EXPECT_EQ(text_backends[1], kLiteRtLmBackendTypeGpu);
 
   // Count-only query.
-  int32_t count_only = -1;
+  size_t count_only = 99;
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
                 file.get(), kLiteRtLmModalityText, nullptr, 0, &count_only),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(count_only, 2);
+  EXPECT_EQ(count_only, 2u);
 
   // A buffer smaller than the count receives a prefix; the full count is
   // still reported.
   LiteRtLmBackendType one_backend[1];
-  int32_t partial_count = -1;
+  size_t partial_count = 99;
   EXPECT_EQ(
       litert_lm_loaded_file_modality_supported_backends(
           file.get(), kLiteRtLmModalityText, one_backend, 1, &partial_count),
       kLiteRtLmStatusOk);
-  EXPECT_EQ(partial_count, 2);
+  EXPECT_EQ(partial_count, 2u);
   EXPECT_EQ(one_backend[0], kLiteRtLmBackendTypeCpu);
 
   // Verify modality-specific backends for vision (not present -> OK, 0).
-  int32_t vision_backend_count = -1;
+  size_t vision_backend_count = 99;
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
                 file.get(), kLiteRtLmModalityVision, nullptr, 0,
                 &vision_backend_count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(vision_backend_count, 0);
+  EXPECT_EQ(vision_backend_count, 0u);
 
   LiteRtLmNpuBrand brand = kLiteRtLmNpuBrandQualcomm;
   EXPECT_EQ(litert_lm_loaded_file_modality_npu_brand(
@@ -207,10 +208,11 @@ TEST(ModelInfoCTest, LlmModelReportsAbsentOptionalValuesAsNotFound) {
               kLiteRtLmStatusNotFound, "embedding dimension");
   EXPECT_EQ(int_value, 42);
 
+  size_t count = 42;
   ExpectError(litert_lm_loaded_file_embedding_signature_selection(
-                  file.get(), nullptr, 0, &int_value),
+                  file.get(), nullptr, 0, &count),
               kLiteRtLmStatusNotFound, "embedding signature lengths");
-  EXPECT_EQ(int_value, 42);
+  EXPECT_EQ(count, 42u);
 
   ExpectError(
       litert_lm_loaded_file_max_vision_token_budget(file.get(), &int_value),
@@ -218,9 +220,9 @@ TEST(ModelInfoCTest, LlmModelReportsAbsentOptionalValuesAsNotFound) {
   EXPECT_EQ(int_value, 42);
 
   ExpectError(litert_lm_loaded_file_vision_signature_selection(
-                  file.get(), nullptr, 0, &int_value),
+                  file.get(), nullptr, 0, &count),
               kLiteRtLmStatusNotFound, "vision signature selection");
-  EXPECT_EQ(int_value, 42);
+  EXPECT_EQ(count, 42u);
 }
 
 TEST(ModelInfoCTest, GetMaxContextTokens) {
@@ -272,28 +274,20 @@ TEST(ModelInfoCTest, InspectMultimodalCapabilities) {
   EXPECT_TRUE(vision);
 
   // 1. Get count only.
-  int32_t count = -1;
+  size_t count = 99;
   EXPECT_EQ(litert_lm_loaded_file_vision_signature_selection(
                 file.get(), nullptr, 0, &count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(count, 1);
+  EXPECT_EQ(count, 1u);
 
   // 2. Fetch values.
   int32_t lengths[1] = {0};
-  count = -1;
+  count = 99;
   EXPECT_EQ(litert_lm_loaded_file_vision_signature_selection(
                 file.get(), lengths, 1, &count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(count, 1);
+  EXPECT_EQ(count, 1u);
   EXPECT_EQ(lengths[0], 5);
-
-  // 3. A negative capacity is rejected and nothing is written.
-  count = 42;
-  litert_lm_clear_last_error();
-  ExpectError(litert_lm_loaded_file_vision_signature_selection(
-                  file.get(), lengths, -1, &count),
-              kLiteRtLmStatusInvalidArgument, "max_size must not be negative");
-  EXPECT_EQ(count, 42);
 }
 
 TEST(ModelInfoCTest, NullLoadedFileReturnsInvalidArgument) {
@@ -337,18 +331,20 @@ TEST(ModelInfoCTest, NullLoadedFileReturnsInvalidArgument) {
   ExpectError(
       litert_lm_loaded_file_max_vision_token_budget(nullptr, &int_value),
       kLiteRtLmStatusInvalidArgument, kMessage);
+  size_t count = 42;
   ExpectError(litert_lm_loaded_file_vision_signature_selection(nullptr, nullptr,
-                                                               0, &int_value),
+                                                               0, &count),
               kLiteRtLmStatusInvalidArgument, kMessage);
   ExpectError(litert_lm_loaded_file_modality_supported_backends(
-                  nullptr, kLiteRtLmModalityText, nullptr, 0, &int_value),
+                  nullptr, kLiteRtLmModalityText, nullptr, 0, &count),
               kLiteRtLmStatusInvalidArgument, kMessage);
   ExpectError(litert_lm_loaded_file_embedding_dimension(nullptr, &int_value),
               kLiteRtLmStatusInvalidArgument, kMessage);
   ExpectError(litert_lm_loaded_file_embedding_signature_selection(
-                  nullptr, nullptr, 0, &int_value),
+                  nullptr, nullptr, 0, &count),
               kLiteRtLmStatusInvalidArgument, kMessage);
   EXPECT_EQ(int_value, 42);
+  EXPECT_EQ(count, 42u);
 
   ExpectError(litert_lm_loaded_file_max_context_tokens(nullptr, &uint_value),
               kLiteRtLmStatusInvalidArgument, kMessage);
@@ -434,17 +430,6 @@ TEST(ModelInfoCTest, NullOutParameterReturnsInvalidArgument) {
               kLiteRtLmStatusInvalidArgument, "out_count must not be NULL");
 }
 
-TEST(ModelInfoCTest, NegativeMaxSizeReturnsInvalidArgument) {
-  LoadedFilePtr file = LoadTestFile("test_lm.litertlm");
-  ASSERT_NE(file, nullptr);
-  int32_t count = 42;
-  litert_lm_clear_last_error();
-  ExpectError(litert_lm_loaded_file_modality_supported_backends(
-                  file.get(), kLiteRtLmModalityText, nullptr, -1, &count),
-              kLiteRtLmStatusInvalidArgument, "max_size must not be negative");
-  EXPECT_EQ(count, 42);
-}
-
 TEST(ModelInfoCTest, InspectAudioCapabilities) {
   LoadedFilePtr file = LoadTestFile("dummy_audio_only.litertlm");
   ASSERT_NE(file, nullptr);
@@ -456,11 +441,11 @@ TEST(ModelInfoCTest, InspectAudioCapabilities) {
   EXPECT_TRUE(audio);
 
   LiteRtLmBackendType audio_backends[3];
-  int32_t count = -1;
+  size_t count = 99;
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
                 file.get(), kLiteRtLmModalityAudio, audio_backends, 3, &count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(count, 2);
+  EXPECT_EQ(count, 2u);
   EXPECT_EQ(audio_backends[0], kLiteRtLmBackendTypeCpu);
   EXPECT_EQ(audio_backends[1], kLiteRtLmBackendTypeGpu);
 }
@@ -505,10 +490,12 @@ TEST(ModelInfoCTest, InspectEmbeddingCapabilities) {
   ExpectError(
       litert_lm_loaded_file_max_vision_token_budget(file.get(), &int_value),
       kLiteRtLmStatusNotFound, "max vision token budget");
+  size_t count = 42;
   ExpectError(litert_lm_loaded_file_vision_signature_selection(
-                  file.get(), nullptr, 0, &int_value),
+                  file.get(), nullptr, 0, &count),
               kLiteRtLmStatusNotFound, "vision signature selection");
   EXPECT_EQ(int_value, 42);
+  EXPECT_EQ(count, 42u);
 
   // An embedding model has no default sampler parameters.
   LiteRtLmSamplerType sampler_type = kLiteRtLmSamplerTypeGreedy;
@@ -533,33 +520,27 @@ TEST(ModelInfoCTest, InspectEmbeddingCapabilities) {
   EXPECT_FALSE(thinking);
 
   LiteRtLmBackendType text_backends[3];
-  int32_t text_count = -1;
+  size_t text_count = 99;
   EXPECT_EQ(
       litert_lm_loaded_file_modality_supported_backends(
           file.get(), kLiteRtLmModalityText, text_backends, 3, &text_count),
       kLiteRtLmStatusOk);
-  EXPECT_EQ(text_count, 2);
+  EXPECT_EQ(text_count, 2u);
   EXPECT_EQ(text_backends[0], kLiteRtLmBackendTypeCpu);
   EXPECT_EQ(text_backends[1], kLiteRtLmBackendTypeGpu);
 
-  int32_t sig_count = -1;
+  size_t sig_count = 99;
   EXPECT_EQ(litert_lm_loaded_file_embedding_signature_selection(
                 file.get(), nullptr, 0, &sig_count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(sig_count, 1);
+  EXPECT_EQ(sig_count, 1u);
   int32_t lengths[1] = {0};
-  sig_count = -1;
+  sig_count = 99;
   EXPECT_EQ(litert_lm_loaded_file_embedding_signature_selection(
                 file.get(), lengths, 1, &sig_count),
             kLiteRtLmStatusOk);
-  EXPECT_EQ(sig_count, 1);
+  EXPECT_EQ(sig_count, 1u);
   EXPECT_EQ(lengths[0], 128);
-
-  sig_count = 42;
-  ExpectError(litert_lm_loaded_file_embedding_signature_selection(
-                  file.get(), lengths, -1, &sig_count),
-              kLiteRtLmStatusInvalidArgument, "max_size must not be negative");
-  EXPECT_EQ(sig_count, 42);
 }
 
 }  // namespace

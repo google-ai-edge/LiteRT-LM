@@ -17,8 +17,10 @@
 #include <fcntl.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1511,8 +1513,9 @@ TEST(EngineCTest, GenerateContent) {
                          &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()),
-            1);
+  EXPECT_EQ(
+      GetOk<size_t>(litert_lm_responses_get_num_candidates, responses.get()),
+      1);
   const char* response_text = GetOk<const char*>(
       litert_lm_responses_get_response_text_at, responses.get(), 0);
   ASSERT_NE(response_text, nullptr);
@@ -1556,7 +1559,8 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
     ASSERT_NE(responses, nullptr);
 
     EXPECT_EQ(
-        GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()), 1);
+        GetOk<size_t>(litert_lm_responses_get_num_candidates, responses.get()),
+        1);
     const char* response_text = GetOk<const char*>(
         litert_lm_responses_get_response_text_at, responses.get(), 0);
     ASSERT_NE(response_text, nullptr);
@@ -1585,7 +1589,8 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
     ASSERT_NE(responses, nullptr);
 
     EXPECT_EQ(
-        GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()), 1);
+        GetOk<size_t>(litert_lm_responses_get_num_candidates, responses.get()),
+        1);
     const char* response_text = GetOk<const char*>(
         litert_lm_responses_get_response_text_at, responses.get(), 0);
     ASSERT_NE(response_text, nullptr);
@@ -2438,26 +2443,26 @@ TEST(EngineCTest, Benchmark) {
       GetOk<double>(litert_lm_benchmark_info_get_total_init_time_in_second,
                     benchmark_info.get()),
       0.0);
-  int num_prefill_turns = GetOk<int>(
+  const size_t num_prefill_turns = GetOk<size_t>(
       litert_lm_benchmark_info_get_num_prefill_turns, benchmark_info.get());
-  EXPECT_GT(num_prefill_turns, 0);
-  for (int i = 0; i < num_prefill_turns; ++i) {
-    EXPECT_GT(GetOk<int>(litert_lm_benchmark_info_get_prefill_token_count_at,
-                         benchmark_info.get(), i),
-              0);
+  EXPECT_GT(num_prefill_turns, 0u);
+  for (size_t i = 0; i < num_prefill_turns; ++i) {
+    EXPECT_GT(GetOk<size_t>(litert_lm_benchmark_info_get_prefill_token_count_at,
+                            benchmark_info.get(), i),
+              0u);
 
     EXPECT_GT(
         GetOk<double>(litert_lm_benchmark_info_get_prefill_tokens_per_sec_at,
                       benchmark_info.get(), i),
         0.0);
   }
-  int num_decode_turns = GetOk<int>(
+  const size_t num_decode_turns = GetOk<size_t>(
       litert_lm_benchmark_info_get_num_decode_turns, benchmark_info.get());
-  EXPECT_GT(num_decode_turns, 0);
-  for (int i = 0; i < num_decode_turns; ++i) {
-    EXPECT_GT(GetOk<int>(litert_lm_benchmark_info_get_decode_token_count_at,
-                         benchmark_info.get(), i),
-              0);
+  EXPECT_GT(num_decode_turns, 0u);
+  for (size_t i = 0; i < num_decode_turns; ++i) {
+    EXPECT_GT(GetOk<size_t>(litert_lm_benchmark_info_get_decode_token_count_at,
+                            benchmark_info.get(), i),
+              0u);
 
     EXPECT_GT(
         GetOk<double>(litert_lm_benchmark_info_get_decode_tokens_per_sec_at,
@@ -2476,7 +2481,7 @@ TEST(EngineCTest, Benchmark) {
     EXPECT_EQ(status, kLiteRtLmStatusOutOfRange);
     EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   };
-  int token_count = -7;
+  size_t token_count = 77;
   double tokens_per_sec = -7.0;
   litert_lm_clear_last_error();
   expect_out_of_range(
@@ -2496,8 +2501,10 @@ TEST(EngineCTest, Benchmark) {
   litert_lm_clear_last_error();
   expect_out_of_range("decode_tokens_per_sec_at",
                       litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-                          benchmark_info.get(), -1, &tokens_per_sec));
-  EXPECT_EQ(token_count, -7);
+                          benchmark_info.get(),
+                          // Doesn't fit in BenchmarkInfo's int index.
+                          std::numeric_limits<size_t>::max(), &tokens_per_sec));
+  EXPECT_EQ(token_count, 77u);
   EXPECT_EQ(tokens_per_sec, -7.0);
 }
 
@@ -2562,8 +2569,9 @@ TEST(EngineCTest, RunPrefillAndDecode) {
   ResponsesPtr responses(RunDecode(session.get()), &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()),
-            1);
+  EXPECT_EQ(
+      GetOk<size_t>(litert_lm_responses_get_num_candidates, responses.get()),
+      1);
   const char* response_text = GetOk<const char*>(
       litert_lm_responses_get_response_text_at, responses.get(), 0);
   ASSERT_NE(response_text, nullptr);
@@ -2604,8 +2612,9 @@ TEST(EngineCTest, TextScoringBasic) {
                          &litert_lm_responses_delete);
   ASSERT_NE(responses, nullptr);
 
-  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, responses.get()),
-            1);
+  EXPECT_EQ(
+      GetOk<size_t>(litert_lm_responses_get_num_candidates, responses.get()),
+      1);
 }
 
 TEST(EngineCTest, TextScoringVerifyScores) {
@@ -2685,9 +2694,9 @@ TEST(EngineCTest, TextScoringVerifyTokenLengths) {
 
   EXPECT_TRUE(
       GetOk<bool>(litert_lm_responses_has_token_length_at, responses.get(), 0));
-  EXPECT_GT(
-      GetOk<int>(litert_lm_responses_get_token_length_at, responses.get(), 0),
-      0);
+  EXPECT_GT(GetOk<size_t>(litert_lm_responses_get_token_length_at,
+                          responses.get(), 0),
+            0);
 }
 
 TEST(EngineCTest, ConversationOptionalArgsTest) {
@@ -3428,10 +3437,10 @@ TEST(EngineCStatusTest, SetMinLogLevelReturnsStatus) {
 
 TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
   litert_lm_clear_last_error();
-  int num_candidates = -7;
+  size_t num_candidates = 77;
   EXPECT_EQ(litert_lm_responses_get_num_candidates(nullptr, &num_candidates),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(num_candidates, -7);
+  EXPECT_EQ(num_candidates, 77u);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("responses must not be NULL"));
 
@@ -3444,10 +3453,10 @@ TEST(EngineCErrorTest, GettersWithNullHandleSetError) {
               testing::HasSubstr("result must not be NULL"));
 
   litert_lm_clear_last_error();
-  int num_turns = -7;
+  size_t num_turns = 77;
   EXPECT_EQ(litert_lm_benchmark_info_get_num_decode_turns(nullptr, &num_turns),
             kLiteRtLmStatusInvalidArgument);
-  EXPECT_EQ(num_turns, -7);
+  EXPECT_EQ(num_turns, 77u);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("benchmark_info must not be NULL"));
 
@@ -3656,7 +3665,7 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
       {
           {"responses_get_num_candidates",
            [&] {
-             return litert_lm_responses_get_num_candidates(nullptr, &out_int);
+             return litert_lm_responses_get_num_candidates(nullptr, &out_size);
            }},
           {"responses_get_response_text_at",
            [&] {
@@ -3679,7 +3688,7 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
           {"responses_get_token_length_at",
            [&] {
              return litert_lm_responses_get_token_length_at(nullptr, 0,
-                                                            &out_int);
+                                                            &out_size);
            }},
           {"responses_has_token_scores_at",
            [&] {
@@ -3689,7 +3698,7 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
           {"responses_get_num_token_scores_at",
            [&] {
              return litert_lm_responses_get_num_token_scores_at(nullptr, 0,
-                                                                &out_int);
+                                                                &out_size);
            }},
           {"responses_get_token_scores_at",
            [&] {
@@ -3709,22 +3718,22 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
           {"benchmark_info_get_num_prefill_turns",
            [&] {
              return litert_lm_benchmark_info_get_num_prefill_turns(nullptr,
-                                                                   &out_int);
+                                                                   &out_size);
            }},
           {"benchmark_info_get_num_decode_turns",
            [&] {
              return litert_lm_benchmark_info_get_num_decode_turns(nullptr,
-                                                                  &out_int);
+                                                                  &out_size);
            }},
           {"benchmark_info_get_prefill_token_count_at",
            [&] {
              return litert_lm_benchmark_info_get_prefill_token_count_at(
-                 nullptr, 0, &out_int);
+                 nullptr, 0, &out_size);
            }},
           {"benchmark_info_get_decode_token_count_at",
            [&] {
              return litert_lm_benchmark_info_get_decode_token_count_at(
-                 nullptr, 0, &out_int);
+                 nullptr, 0, &out_size);
            }},
           {"benchmark_info_get_prefill_tokens_per_sec_at",
            [&] {
@@ -3803,7 +3812,8 @@ LiteRtLmResponses MakeTwoCandidateResponses() {
 
 TEST(EngineCErrorTest, ResponsesAccessorsReturnValuesAtValidIndex) {
   const LiteRtLmResponses responses = MakeTwoCandidateResponses();
-  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, &responses), 2);
+  EXPECT_EQ(GetOk<size_t>(litert_lm_responses_get_num_candidates, &responses),
+            2);
   EXPECT_STREQ(GetOk<const char*>(litert_lm_responses_get_response_text_at,
                                   &responses, 0),
                "first");
@@ -3818,14 +3828,14 @@ TEST(EngineCErrorTest, ResponsesAccessorsReturnValuesAtValidIndex) {
       GetOk<bool>(litert_lm_responses_has_token_length_at, &responses, 0));
   EXPECT_FALSE(
       GetOk<bool>(litert_lm_responses_has_token_length_at, &responses, 1));
-  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_token_length_at, &responses, 0),
-            3);
+  EXPECT_EQ(
+      GetOk<size_t>(litert_lm_responses_get_token_length_at, &responses, 0), 3);
   EXPECT_TRUE(
       GetOk<bool>(litert_lm_responses_has_token_scores_at, &responses, 0));
   EXPECT_FALSE(
       GetOk<bool>(litert_lm_responses_has_token_scores_at, &responses, 1));
   ASSERT_EQ(
-      GetOk<int>(litert_lm_responses_get_num_token_scores_at, &responses, 0),
+      GetOk<size_t>(litert_lm_responses_get_num_token_scores_at, &responses, 0),
       2);
   const float* token_scores = GetOk<const float*>(
       litert_lm_responses_get_token_scores_at, &responses, 0);
@@ -3836,10 +3846,10 @@ TEST(EngineCErrorTest, ResponsesAccessorsReturnValuesAtValidIndex) {
 
 TEST(EngineCErrorTest, ResponsesAccessorsWithIndexOutOfRangeReturnOutOfRange) {
   const LiteRtLmResponses responses = MakeTwoCandidateResponses();
-  for (const int index : {-1, 2}) {
+  for (const size_t index : {size_t{2}, std::numeric_limits<size_t>::max()}) {
     SCOPED_TRACE(index);
     bool out_bool = true;
-    int out_int = -7;
+    size_t out_int = 77;
     float out_float = -7.0f;
     const char* out_text = "sentinel";
     const float* out_floats = &out_float;
@@ -3888,7 +3898,7 @@ TEST(EngineCErrorTest, ResponsesAccessorsWithIndexOutOfRangeReturnOutOfRange) {
         },
         kLiteRtLmStatusOutOfRange, "out of range");
     EXPECT_TRUE(out_bool);
-    EXPECT_EQ(out_int, -7);
+    EXPECT_EQ(out_int, 77u);
     EXPECT_EQ(out_float, -7.0f);
     EXPECT_EQ(out_text, nullptr);
     EXPECT_EQ(out_floats, nullptr);
@@ -3897,7 +3907,7 @@ TEST(EngineCErrorTest, ResponsesAccessorsWithIndexOutOfRangeReturnOutOfRange) {
 
 TEST(EngineCErrorTest, ResponsesAccessorsWithAbsentValueReturnNotFound) {
   const LiteRtLmResponses responses = MakeTwoCandidateResponses();
-  int out_int = -7;
+  size_t out_int = 77;
   float out_float = -7.0f;
   const float* out_floats = &out_float;
   ExpectAllReturn(
@@ -3923,14 +3933,14 @@ TEST(EngineCErrorTest, ResponsesAccessorsWithAbsentValueReturnNotFound) {
            }},
       },
       kLiteRtLmStatusNotFound, "at response index 1");
-  EXPECT_EQ(out_int, -7);
+  EXPECT_EQ(out_int, 77u);
   EXPECT_EQ(out_float, -7.0f);
   EXPECT_EQ(out_floats, nullptr);
 
   // Scoring-only responses have candidates but no response texts.
   const LiteRtLmResponses scores_only{litert::lm::Responses(
       litert::lm::TaskState::kDone, /*response_texts=*/{}, {0.1f, 0.2f})};
-  EXPECT_EQ(GetOk<int>(litert_lm_responses_get_num_candidates, &scores_only),
+  EXPECT_EQ(GetOk<size_t>(litert_lm_responses_get_num_candidates, &scores_only),
             2);
   const char* out_text = "sentinel";
   ExpectAllReturn({{"responses_get_response_text_at",
@@ -4661,12 +4671,12 @@ TEST(EngineCErrorTest, ConversationFunctionsWithNullHandleResetOutParam) {
 
   // Scalar out-parameters are not written on failure.
   litert_lm_clear_last_error();
-  int count = 42;
+  size_t count = 42;
   const int status = litert_lm_conversation_get_token_count(nullptr, &count);
   EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               testing::HasSubstr("Invalid conversation"));
-  EXPECT_EQ(count, 42);
+  EXPECT_EQ(count, 42u);
 }
 
 TEST(EngineCErrorTest, JsonResponseGetStringReturnsOwnedString) {
@@ -4700,14 +4710,13 @@ TEST(EngineCStatusTest, ConversationResultProducers) {
 
   // Token count succeeds and is delivered through the out-parameter.
   litert_lm_clear_last_error();
-  int count = -1;
+  size_t count = 0;
   const int count_status =
       litert_lm_conversation_get_token_count(conversation.get(), &count);
   if (count_status == kLiteRtLmStatusUnimplemented) {
     GTEST_SKIP() << "Token count is not supported by this engine.";
   }
   ASSERT_EQ(count_status, kLiteRtLmStatusOk);
-  EXPECT_GE(count, 0);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   const char* message_json =

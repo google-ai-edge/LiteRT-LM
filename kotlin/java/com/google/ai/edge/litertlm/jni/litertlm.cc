@@ -546,21 +546,21 @@ T GetModelInfoValue(T fallback, Fn&& fn) {
 template <typename Fn>
 jintArray GetModelInfoIntArray(JNIEnv* env, LiteRtLmLoadedFile* model_info,
                                Fn&& fn) {
-  int32_t count = 0;
+  size_t count = 0;
   if (fn(model_info, nullptr, 0, &count) != kLiteRtLmStatusOk) {
     return nullptr;
   }
   std::vector<int32_t> lengths(count);
-  int32_t written = 0;
+  size_t written = 0;
   if (fn(model_info, lengths.data(), count, &written) != kLiteRtLmStatusOk) {
     return nullptr;
   }
-  count = std::min(count, written);
-  jintArray result = env->NewIntArray(count);
+  const jsize size = static_cast<jsize>(std::min(count, written));
+  jintArray result = env->NewIntArray(size);
   if (result == nullptr) {
     return nullptr;
   }
-  env->SetIntArrayRegion(result, 0, count,
+  env->SetIntArrayRegion(result, 0, size,
                          reinterpret_cast<const jint*>(lengths.data()));
   return result;
 }
@@ -1860,29 +1860,30 @@ LITERTLM_JNIEXPORT jintArray JNICALL JNI_METHOD(
                                      jlong model_info_pointer, jint modality) {
   auto* model_info = reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer);
   const auto c_modality = static_cast<LiteRtLmModality>(modality);
-  int32_t count = GetModelInfoValue(int32_t{0}, [&](int32_t* out) {
+  size_t count = GetModelInfoValue(size_t{0}, [&](size_t* out) {
     return litert_lm_loaded_file_modality_supported_backends(
         model_info, c_modality, nullptr, 0, out);
   });
-  if (count <= 0) {
+  if (count == 0) {
     return nullptr;
   }
   std::vector<LiteRtLmBackendType> backends(count);
-  int32_t written = GetModelInfoValue(int32_t{0}, [&](int32_t* out) {
+  size_t written = GetModelInfoValue(size_t{0}, [&](size_t* out) {
     return litert_lm_loaded_file_modality_supported_backends(
         model_info, c_modality, backends.data(), count, out);
   });
   count = std::min(count, written);
-  if (count <= 0) {
+  if (count == 0) {
     return nullptr;
   }
-  jintArray result = env->NewIntArray(count);
+  const jsize size = static_cast<jsize>(count);
+  jintArray result = env->NewIntArray(size);
   if (result == nullptr) return nullptr;
   std::vector<jint> j_backends(count);
-  for (int i = 0; i < count; ++i) {
+  for (size_t i = 0; i < count; ++i) {
     j_backends[i] = static_cast<jint>(backends[i]);
   }
-  env->SetIntArrayRegion(result, 0, count, j_backends.data());
+  env->SetIntArrayRegion(result, 0, size, j_backends.data());
   return result;
 }
 

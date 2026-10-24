@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #if defined(_WIN32)
 #include <io.h>
@@ -195,9 +196,9 @@ size_t NumCandidates(const litert::lm::Responses& responses) {
 // Returns an OutOfRange error if `index` is not a valid candidate index of
 // `responses`.
 absl::Status CheckCandidateIndex(const litert::lm::Responses& responses,
-                                 int index) {
+                                 size_t index) {
   const size_t num_candidates = NumCandidates(responses);
-  if (index < 0 || static_cast<size_t>(index) >= num_candidates) {
+  if (index >= num_candidates) {
     return absl::OutOfRangeError(
         absl::StrFormat("Response index %d is out of range; the responses "
                         "have %d candidate(s).",
@@ -209,15 +210,26 @@ absl::Status CheckCandidateIndex(const litert::lm::Responses& responses,
 // Returns true if `values` holds an element at the already range-checked
 // candidate `index`.
 template <typename Container>
-bool HasValueAt(const Container& values, int index) {
-  return static_cast<size_t>(index) < values.size();
+bool HasValueAt(const Container& values, size_t index) {
+  return index < values.size();
 }
 
 // Returns a NotFound error naming `what` at candidate `index`.
-LiteRtLmStatusCode ReturnNotFoundAt(absl::string_view what, int index) {
+LiteRtLmStatusCode ReturnNotFoundAt(absl::string_view what, size_t index) {
   return litert::lm::c::ReturnError(
       absl::StatusCode::kNotFound,
       absl::StrFormat("No %s available at response index %d.", what, index));
+}
+
+// Returns the C++ turn index for the C API turn `index`, or an OutOfRange
+// error if it does not fit in the int that BenchmarkInfo takes. Smaller
+// indices are range-checked by BenchmarkInfo itself.
+absl::StatusOr<int> ToTurnIndex(size_t index) {
+  if (index > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    return absl::OutOfRangeError(
+        absl::StrFormat("Turn index %d is out of range.", index));
+  }
+  return static_cast<int>(index);
 }
 
 }  // namespace
@@ -1375,15 +1387,15 @@ void litert_lm_responses_delete(LiteRtLmResponses* responses) {
 }
 
 LiteRtLmStatusCode litert_lm_responses_get_num_candidates(
-    const LiteRtLmResponses* responses, int* out_num_candidates) {
+    const LiteRtLmResponses* responses, size_t* out_num_candidates) {
   LITERT_LM_C_RETURN_IF_NULL(out_num_candidates);
   LITERT_LM_C_RETURN_IF_NULL(responses);
-  *out_num_candidates = static_cast<int>(NumCandidates(responses->responses));
+  *out_num_candidates = (NumCandidates(responses->responses));
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_responses_get_response_text_at(
-    const LiteRtLmResponses* responses, int index, const char** out_text) {
+    const LiteRtLmResponses* responses, size_t index, const char** out_text) {
   LITERT_LM_C_RETURN_IF_NULL(out_text);
   *out_text = nullptr;
   LITERT_LM_C_RETURN_IF_NULL(responses);
@@ -1398,7 +1410,7 @@ LiteRtLmStatusCode litert_lm_responses_get_response_text_at(
 }
 
 LiteRtLmStatusCode litert_lm_responses_has_score_at(
-    const LiteRtLmResponses* responses, int index, bool* out_has_score) {
+    const LiteRtLmResponses* responses, size_t index, bool* out_has_score) {
   LITERT_LM_C_RETURN_IF_NULL(out_has_score);
   LITERT_LM_C_RETURN_IF_NULL(responses);
   LITERT_LM_C_RETURN_IF_ERROR(CheckCandidateIndex(responses->responses, index));
@@ -1407,7 +1419,7 @@ LiteRtLmStatusCode litert_lm_responses_has_score_at(
 }
 
 LiteRtLmStatusCode litert_lm_responses_get_score_at(
-    const LiteRtLmResponses* responses, int index, float* out_score) {
+    const LiteRtLmResponses* responses, size_t index, float* out_score) {
   LITERT_LM_C_RETURN_IF_NULL(out_score);
   LITERT_LM_C_RETURN_IF_NULL(responses);
   LITERT_LM_C_RETURN_IF_ERROR(CheckCandidateIndex(responses->responses, index));
@@ -1420,7 +1432,8 @@ LiteRtLmStatusCode litert_lm_responses_get_score_at(
 }
 
 LiteRtLmStatusCode litert_lm_responses_has_token_length_at(
-    const LiteRtLmResponses* responses, int index, bool* out_has_token_length) {
+    const LiteRtLmResponses* responses, size_t index,
+    bool* out_has_token_length) {
   LITERT_LM_C_RETURN_IF_NULL(out_has_token_length);
   LITERT_LM_C_RETURN_IF_NULL(responses);
   LITERT_LM_C_RETURN_IF_ERROR(CheckCandidateIndex(responses->responses, index));
@@ -1431,7 +1444,8 @@ LiteRtLmStatusCode litert_lm_responses_has_token_length_at(
 }
 
 LiteRtLmStatusCode litert_lm_responses_get_token_length_at(
-    const LiteRtLmResponses* responses, int index, int* out_token_length) {
+    const LiteRtLmResponses* responses, size_t index,
+    size_t* out_token_length) {
   LITERT_LM_C_RETURN_IF_NULL(out_token_length);
   LITERT_LM_C_RETURN_IF_NULL(responses);
   LITERT_LM_C_RETURN_IF_ERROR(CheckCandidateIndex(responses->responses, index));
@@ -1439,12 +1453,13 @@ LiteRtLmStatusCode litert_lm_responses_get_token_length_at(
   if (!token_lengths.has_value() || !HasValueAt(*token_lengths, index)) {
     return ReturnNotFoundAt("token length", index);
   }
-  *out_token_length = static_cast<int>((*token_lengths)[index]);
+  *out_token_length = static_cast<size_t>((*token_lengths)[index]);
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_responses_has_token_scores_at(
-    const LiteRtLmResponses* responses, int index, bool* out_has_token_scores) {
+    const LiteRtLmResponses* responses, size_t index,
+    bool* out_has_token_scores) {
   LITERT_LM_C_RETURN_IF_NULL(out_has_token_scores);
   LITERT_LM_C_RETURN_IF_NULL(responses);
   LITERT_LM_C_RETURN_IF_ERROR(CheckCandidateIndex(responses->responses, index));
@@ -1455,7 +1470,8 @@ LiteRtLmStatusCode litert_lm_responses_has_token_scores_at(
 }
 
 LiteRtLmStatusCode litert_lm_responses_get_num_token_scores_at(
-    const LiteRtLmResponses* responses, int index, int* out_num_token_scores) {
+    const LiteRtLmResponses* responses, size_t index,
+    size_t* out_num_token_scores) {
   LITERT_LM_C_RETURN_IF_NULL(out_num_token_scores);
   LITERT_LM_C_RETURN_IF_NULL(responses);
   LITERT_LM_C_RETURN_IF_ERROR(CheckCandidateIndex(responses->responses, index));
@@ -1463,12 +1479,12 @@ LiteRtLmStatusCode litert_lm_responses_get_num_token_scores_at(
   if (!token_scores.has_value() || !HasValueAt(*token_scores, index)) {
     return ReturnNotFoundAt("token scores", index);
   }
-  *out_num_token_scores = static_cast<int>((*token_scores)[index].size());
+  *out_num_token_scores = (*token_scores)[index].size();
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_responses_get_token_scores_at(
-    const LiteRtLmResponses* responses, int index,
+    const LiteRtLmResponses* responses, size_t index,
     const float** out_token_scores) {
   LITERT_LM_C_RETURN_IF_NULL(out_token_scores);
   *out_token_scores = nullptr;
@@ -1525,70 +1541,74 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_total_init_time_in_second(
 }
 
 LiteRtLmStatusCode litert_lm_benchmark_info_get_num_prefill_turns(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_num_turns) {
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t* out_num_turns) {
   LITERT_LM_C_RETURN_IF_NULL(out_num_turns);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
-  *out_num_turns =
-      static_cast<int>(benchmark_info->benchmark_info.GetTotalPrefillTurns());
+  *out_num_turns = static_cast<size_t>(
+      benchmark_info->benchmark_info.GetTotalPrefillTurns());
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_benchmark_info_get_num_decode_turns(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int* out_num_turns) {
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t* out_num_turns) {
   LITERT_LM_C_RETURN_IF_NULL(out_num_turns);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
   *out_num_turns =
-      static_cast<int>(benchmark_info->benchmark_info.GetTotalDecodeTurns());
+      static_cast<size_t>(benchmark_info->benchmark_info.GetTotalDecodeTurns());
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_token_count_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
-    int* out_token_count) {
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
+    size_t* out_token_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_token_count);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
+  LITERT_LM_C_ASSIGN_OR_RETURN(const int turn_index, ToTurnIndex(index));
   LITERT_LM_C_ASSIGN_OR_RETURN(
       const litert::lm::BenchmarkTurnData turn,
-      benchmark_info->benchmark_info.GetPrefillTurn(index));
-  *out_token_count = static_cast<int>(turn.num_tokens);
+      benchmark_info->benchmark_info.GetPrefillTurn(turn_index));
+  *out_token_count = static_cast<size_t>(turn.num_tokens);
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_token_count_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
-    int* out_token_count) {
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
+    size_t* out_token_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_token_count);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
+  LITERT_LM_C_ASSIGN_OR_RETURN(const int turn_index, ToTurnIndex(index));
   LITERT_LM_C_ASSIGN_OR_RETURN(
       const litert::lm::BenchmarkTurnData turn,
-      benchmark_info->benchmark_info.GetDecodeTurn(index));
-  *out_token_count = static_cast<int>(turn.num_tokens);
+      benchmark_info->benchmark_info.GetDecodeTurn(turn_index));
+  *out_token_count = static_cast<size_t>(turn.num_tokens);
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
     double* out_tokens_per_sec) {
   LITERT_LM_C_RETURN_IF_NULL(out_tokens_per_sec);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
+  LITERT_LM_C_ASSIGN_OR_RETURN(const int turn_index, ToTurnIndex(index));
   // Validates `index`; GetPrefillTokensPerSec() silently returns 0 otherwise.
   LITERT_LM_C_RETURN_IF_ERROR(
-      benchmark_info->benchmark_info.GetPrefillTurn(index).status());
+      benchmark_info->benchmark_info.GetPrefillTurn(turn_index).status());
   *out_tokens_per_sec =
-      benchmark_info->benchmark_info.GetPrefillTokensPerSec(index);
+      benchmark_info->benchmark_info.GetPrefillTokensPerSec(turn_index);
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-    const LiteRtLmBenchmarkInfo* benchmark_info, int index,
+    const LiteRtLmBenchmarkInfo* benchmark_info, size_t index,
     double* out_tokens_per_sec) {
   LITERT_LM_C_RETURN_IF_NULL(out_tokens_per_sec);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
+  LITERT_LM_C_ASSIGN_OR_RETURN(const int turn_index, ToTurnIndex(index));
   // Validates `index`; GetDecodeTokensPerSec() silently returns 0 otherwise.
   LITERT_LM_C_RETURN_IF_ERROR(
-      benchmark_info->benchmark_info.GetDecodeTurn(index).status());
+      benchmark_info->benchmark_info.GetDecodeTurn(turn_index).status());
   *out_tokens_per_sec =
-      benchmark_info->benchmark_info.GetDecodeTokensPerSec(index);
+      benchmark_info->benchmark_info.GetDecodeTokensPerSec(turn_index);
   return kLiteRtLmStatusOk;
 }
 

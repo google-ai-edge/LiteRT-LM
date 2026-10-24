@@ -624,7 +624,7 @@ public final class Conversation: Sendable {
   public func getTokenCount() throws -> Int {
     let handle = try checkIsAlive()
     let tokenCount = try LiteRTLMError.get(
-      Int32(0), "litert_lm_conversation_get_token_count",
+      0, "litert_lm_conversation_get_token_count",
       { .conversation(.invalidResponse($0)) }
     ) { litert_lm_conversation_get_token_count(handle, $0) }
     return Int(tokenCount)
@@ -654,10 +654,10 @@ public final class Conversation: Sendable {
     defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
 
     let numPrefillTurns = try LiteRTLMError.get(
-      Int32(0), "litert_lm_benchmark_info_get_num_prefill_turns", makeError
+      0, "litert_lm_benchmark_info_get_num_prefill_turns", makeError
     ) { litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr, $0) }
     let numDecodeTurns = try LiteRTLMError.get(
-      Int32(0), "litert_lm_benchmark_info_get_num_decode_turns", makeError
+      0, "litert_lm_benchmark_info_get_num_decode_turns", makeError
     ) { litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr, $0) }
 
     let initTimeInSecond = try LiteRTLMError.get(
@@ -672,7 +672,7 @@ public final class Conversation: Sendable {
     if numPrefillTurns > 0 {
       lastPrefillTokenCount = try Int(
         LiteRTLMError.get(
-          Int32(0), "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
+          0, "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
         ) {
           litert_lm_benchmark_info_get_prefill_token_count_at(
             benchmarkInfoPtr, numPrefillTurns - 1, $0)
@@ -690,7 +690,7 @@ public final class Conversation: Sendable {
     if numDecodeTurns > 0 {
       lastDecodeTokenCount = try Int(
         LiteRTLMError.get(
-          Int32(0), "litert_lm_benchmark_info_get_decode_token_count_at", makeError
+          0, "litert_lm_benchmark_info_get_decode_token_count_at", makeError
         ) {
           litert_lm_benchmark_info_get_decode_token_count_at(
             benchmarkInfoPtr, numDecodeTurns - 1, $0)

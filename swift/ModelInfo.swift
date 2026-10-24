@@ -98,22 +98,22 @@ private func modelInfoValue<T>(
 private func fetchIntArray(
   handle: OpaquePointer,
   cFunction: (
-    OpaquePointer?, UnsafeMutablePointer<Int32>?, Int32, UnsafeMutablePointer<Int32>?
+    OpaquePointer?, UnsafeMutablePointer<Int32>?, Int, UnsafeMutablePointer<Int>?
   ) -> LiteRtLmStatusCode
 ) -> [Int]? {
-  var count: Int32 = 0
+  var count = 0
   guard cFunction(handle, nil, 0, &count) == kLiteRtLmStatusOk else {
     return nil
   }
   if count == 0 {
     return []
   }
-  var values = [Int32](repeating: 0, count: Int(count))
-  var written: Int32 = 0
+  var values = [Int32](repeating: 0, count: count)
+  var written = 0
   guard cFunction(handle, &values, count, &written) == kLiteRtLmStatusOk, written > 0 else {
     return []
   }
-  return values[0..<min(Int(written), values.count)].map { Int($0) }
+  return values[0..<min(written, values.count)].map { Int($0) }
 }
 
 /// Capabilities specific to Large Language Models (LLM).
@@ -426,19 +426,19 @@ public class ModelInfo {
   /// Returns the list of supported backends for a given modality, ordered by
   /// priority (first is default).
   public func supportedBackends(for modality: Modality) -> [BackendType] {
-    let count = modelInfoValue(Int32(0)) {
+    let count = modelInfoValue(0) {
       litert_lm_loaded_file_modality_supported_backends(handle, modality.cValue, nil, 0, $0)
     }
     guard count > 0 else { return [] }
     var cBackends = [LiteRtLmBackendType](
-      repeating: LiteRtLmBackendType(0), count: Int(count)
+      repeating: LiteRtLmBackendType(0), count: count
     )
-    let written = modelInfoValue(Int32(0)) {
+    let written = modelInfoValue(0) {
       litert_lm_loaded_file_modality_supported_backends(
         handle, modality.cValue, &cBackends, count, $0)
     }
     guard written > 0 else { return [] }
-    let validCount = min(Int(written), cBackends.count)
+    let validCount = min(written, cBackends.count)
     return cBackends[0..<validCount].compactMap { cType in
       switch cType {
       case kLiteRtLmBackendTypeCpu: return .cpu

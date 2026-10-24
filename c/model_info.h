@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_C_MODEL_INFO_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #if defined(__APPLE__)
@@ -284,13 +285,12 @@ LiteRtLmStatusCode litert_lm_loaded_file_is_dynamic_context(
 // @param loaded_file The loaded file to inspect.
 // @param lengths Buffer that receives up to `max_size` lengths on success, or
 //   NULL to query only the count. Not written on failure.
-// @param max_size The capacity of `lengths`, in elements. Must not be
-//   negative.
+// @param max_size The capacity of `lengths`, in elements.
 // @param out_count On success, receives the total number of supported lengths,
 //   which may exceed `max_size`; not written on failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
-//   `loaded_file` or `out_count` is NULL, or `max_size` is negative;
+//   `loaded_file` or `out_count` is NULL;
 //   kLiteRtLmStatusNotFound if the model does not support vision or does not
 //   define vision signature lengths.
 //
@@ -298,10 +298,12 @@ LiteRtLmStatusCode litert_lm_loaded_file_is_dynamic_context(
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_count, and undefined lengths are reported as
 // kLiteRtLmStatusNotFound instead of -1.
+// Changed in version 1.0.0: `max_size` and `*out_count` are size_t
+// instead of int32_t.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_loaded_file_vision_signature_selection(
-    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size,
-    int32_t* out_count);
+    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, size_t max_size,
+    size_t* out_count);
 
 // Hardware backend type.
 //
@@ -322,23 +324,24 @@ typedef enum LiteRtLmBackendType {
 // @param modality The modality to query.
 // @param backends Buffer that receives up to `max_size` backends on success,
 //   or NULL to query only the count. Not written on failure.
-// @param max_size The capacity of `backends`, in elements. Must not be
-//   negative.
+// @param max_size The capacity of `backends`, in elements.
 // @param out_count On success, receives the total number of supported
 //   backends, which may exceed `max_size`; 0 if the modality is not supported.
 //   Not written on failure.
 // @return kLiteRtLmStatusOk on success (including an unsupported modality), or
 //   another LiteRtLmStatusCode on failure (see error_reporter.h).
 //   kLiteRtLmStatusInvalidArgument if `loaded_file` or `out_count` is NULL,
-//   `modality` is not a valid LiteRtLmModality, or `max_size` is negative.
+//   or `modality` is not a valid LiteRtLmModality.
 //
 // Added in version 0.2.0.
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_count.
+// Changed in version 1.0.0: `max_size` and `*out_count` are size_t
+// instead of int32_t.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_loaded_file_modality_supported_backends(
     const LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
-    LiteRtLmBackendType* backends, int32_t max_size, int32_t* out_count);
+    LiteRtLmBackendType* backends, size_t max_size, size_t* out_count);
 
 // NPU brand options.
 //
@@ -464,13 +467,12 @@ LiteRtLmStatusCode litert_lm_loaded_file_embedding_dimension(
 // @param loaded_file The loaded file to inspect.
 // @param lengths Buffer that receives up to `max_size` lengths on success, or
 //   NULL to query only the count. Not written on failure.
-// @param max_size The capacity of `lengths`, in elements. Must not be
-//   negative.
+// @param max_size The capacity of `lengths`, in elements.
 // @param out_count On success, receives the total number of supported lengths,
 //   which may exceed `max_size`; not written on failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
-//   `loaded_file` or `out_count` is NULL, or `max_size` is negative;
+//   `loaded_file` or `out_count` is NULL;
 //   kLiteRtLmStatusNotFound if the model is not an embedding model or does not
 //   define signature lengths.
 //
@@ -478,10 +480,12 @@ LiteRtLmStatusCode litert_lm_loaded_file_embedding_dimension(
 // Changed in version 1.0.0: returns a status code; the count is returned
 // through out_count, and undefined lengths are reported as
 // kLiteRtLmStatusNotFound instead of -1.
+// Changed in version 1.0.0: `max_size` and `*out_count` are size_t
+// instead of int32_t.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_loaded_file_embedding_signature_selection(
-    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size,
-    int32_t* out_count);
+    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, size_t max_size,
+    size_t* out_count);
 
 #ifdef __cplusplus
 }  // extern "C"

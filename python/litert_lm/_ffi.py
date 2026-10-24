@@ -750,7 +750,7 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_get_token_count.restype = ctypes.c_int
   lib.litert_lm_conversation_get_token_count.argtypes = [
       ctypes.c_void_p,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.POINTER(ctypes.c_size_t),
   ]
 
   # Conversation Optional Args
@@ -771,54 +771,54 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_responses_get_num_candidates.restype = ctypes.c_int
   lib.litert_lm_responses_get_num_candidates.argtypes = [
       ctypes.c_void_p,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_responses_get_response_text_at.restype = ctypes.c_int
   lib.litert_lm_responses_get_response_text_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_char_p),
   ]
   lib.litert_lm_responses_has_score_at.restype = ctypes.c_int
   lib.litert_lm_responses_has_score_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_bool),
   ]
   lib.litert_lm_responses_get_score_at.restype = ctypes.c_int
   lib.litert_lm_responses_get_score_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_float),
   ]
   lib.litert_lm_responses_has_token_length_at.restype = ctypes.c_int
   lib.litert_lm_responses_has_token_length_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_bool),
   ]
   lib.litert_lm_responses_get_token_length_at.restype = ctypes.c_int
   lib.litert_lm_responses_get_token_length_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_responses_has_token_scores_at.restype = ctypes.c_int
   lib.litert_lm_responses_has_token_scores_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_bool),
   ]
   lib.litert_lm_responses_get_num_token_scores_at.restype = ctypes.c_int
   lib.litert_lm_responses_get_num_token_scores_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_responses_get_token_scores_at.restype = ctypes.c_int
   lib.litert_lm_responses_get_token_scores_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),
   ]
 
@@ -857,31 +857,31 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_benchmark_info_get_num_prefill_turns.restype = ctypes.c_int
   lib.litert_lm_benchmark_info_get_num_prefill_turns.argtypes = [
       ctypes.c_void_p,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_benchmark_info_get_num_decode_turns.restype = ctypes.c_int
   lib.litert_lm_benchmark_info_get_num_decode_turns.argtypes = [
       ctypes.c_void_p,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_benchmark_info_get_prefill_token_count_at.restype = ctypes.c_int
   lib.litert_lm_benchmark_info_get_prefill_token_count_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_benchmark_info_get_decode_token_count_at.restype = ctypes.c_int
   lib.litert_lm_benchmark_info_get_decode_token_count_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
-      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_benchmark_info_get_prefill_tokens_per_sec_at.restype = (
       ctypes.c_int
   )
   lib.litert_lm_benchmark_info_get_prefill_tokens_per_sec_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_double),
   ]
   lib.litert_lm_benchmark_info_get_decode_tokens_per_sec_at.restype = (
@@ -889,7 +889,7 @@ def _setup_lib_signatures(lib):
   )
   lib.litert_lm_benchmark_info_get_decode_tokens_per_sec_at.argtypes = [
       ctypes.c_void_p,
-      ctypes.c_int,
+      ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_double),
   ]
 
@@ -1256,8 +1256,8 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_loaded_file_vision_signature_selection.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int32),
-      ctypes.c_int32,
-      ctypes.POINTER(ctypes.c_int32),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
 
   lib.litert_lm_loaded_file_max_context_tokens.restype = ctypes.c_int
@@ -1277,8 +1277,8 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_int,
       ctypes.POINTER(ctypes.c_int),
-      ctypes.c_int32,
-      ctypes.POINTER(ctypes.c_int32),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
   lib.litert_lm_loaded_file_model_type.restype = ctypes.c_int
   lib.litert_lm_loaded_file_model_type.argtypes = [
@@ -1294,8 +1294,8 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_loaded_file_embedding_signature_selection.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int32),
-      ctypes.c_int32,
-      ctypes.POINTER(ctypes.c_int32),
+      ctypes.c_size_t,
+      ctypes.POINTER(ctypes.c_size_t),
   ]
 
   lib.litert_lm_loaded_file_modality_npu_brand.restype = ctypes.c_int

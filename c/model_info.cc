@@ -15,6 +15,7 @@
 #include "c/model_info.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -113,13 +114,6 @@ absl::Status ValidateModality(LiteRtLmModality modality) {
 }
 
 // Returns an InvalidArgument error if `max_size` is negative.
-absl::Status ValidateMaxSize(int32_t max_size) {
-  if (max_size < 0) {
-    return absl::InvalidArgumentError(
-        absl::StrFormat("max_size must not be negative, got %d.", max_size));
-  }
-  return absl::OkStatus();
-}
 
 // Points `*params` at the model's default sampler parameters. Returns a
 // NotFound error if the model has no LLM capability.
@@ -135,15 +129,15 @@ absl::Status GetDefaultSamplerParams(const LiteRtLmLoadedFile* loaded_file,
 
 // Copies up to `max_size` entries of `values` into `lengths` (if non-NULL) and
 // returns the total number of entries.
-int32_t CopyLengths(const std::vector<int>& values, int32_t* lengths,
-                    int32_t max_size) {
+size_t CopyLengths(const std::vector<int>& values, int32_t* lengths,
+                   size_t max_size) {
   if (lengths != nullptr) {
-    int32_t count = std::min(max_size, static_cast<int32_t>(values.size()));
-    for (int32_t i = 0; i < count; ++i) {
+    const size_t count = std::min(max_size, values.size());
+    for (size_t i = 0; i < count; ++i) {
       lengths[i] = values[i];
     }
   }
-  return static_cast<int32_t>(values.size());
+  return values.size();
 }
 
 bool CheckModality(
@@ -325,11 +319,10 @@ LiteRtLmStatusCode litert_lm_loaded_file_is_dynamic_context(
 }
 
 LiteRtLmStatusCode litert_lm_loaded_file_vision_signature_selection(
-    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size,
-    int32_t* out_count) {
+    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, size_t max_size,
+    size_t* out_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_count);
   LITERT_LM_C_RETURN_IF_NULL(loaded_file);
-  LITERT_LM_C_RETURN_IF_ERROR(ValidateMaxSize(max_size));
   const std::vector<int>* values = nullptr;
   if (loaded_file->info.llm_capability.has_value() &&
       loaded_file->info.llm_capability->vision_signature_selection
@@ -352,11 +345,10 @@ LiteRtLmStatusCode litert_lm_loaded_file_vision_signature_selection(
 
 LiteRtLmStatusCode litert_lm_loaded_file_modality_supported_backends(
     const LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
-    LiteRtLmBackendType* backends, int32_t max_size, int32_t* out_count) {
+    LiteRtLmBackendType* backends, size_t max_size, size_t* out_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_count);
   LITERT_LM_C_RETURN_IF_NULL(loaded_file);
   LITERT_LM_C_RETURN_IF_ERROR(ValidateModality(modality));
-  LITERT_LM_C_RETURN_IF_ERROR(ValidateMaxSize(max_size));
   const auto* modality_backends = GetSupportedBackends(loaded_file, modality);
   if (modality_backends == nullptr) {
     *out_count = 0;
@@ -364,12 +356,12 @@ LiteRtLmStatusCode litert_lm_loaded_file_modality_supported_backends(
   }
   const auto& preferred = modality_backends->preferred_backends;
   if (backends != nullptr) {
-    int32_t count = std::min(max_size, static_cast<int32_t>(preferred.size()));
-    for (int32_t i = 0; i < count; ++i) {
+    const size_t count = std::min(max_size, preferred.size());
+    for (size_t i = 0; i < count; ++i) {
       backends[i] = static_cast<LiteRtLmBackendType>(preferred[i]);
     }
   }
-  *out_count = static_cast<int32_t>(preferred.size());
+  *out_count = preferred.size();
   return kLiteRtLmStatusOk;
 }
 
@@ -446,11 +438,10 @@ LiteRtLmStatusCode litert_lm_loaded_file_embedding_dimension(
 }
 
 LiteRtLmStatusCode litert_lm_loaded_file_embedding_signature_selection(
-    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size,
-    int32_t* out_count) {
+    const LiteRtLmLoadedFile* loaded_file, int32_t* lengths, size_t max_size,
+    size_t* out_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_count);
   LITERT_LM_C_RETURN_IF_NULL(loaded_file);
-  LITERT_LM_C_RETURN_IF_ERROR(ValidateMaxSize(max_size));
   if (!loaded_file->info.embedding_capability.has_value() ||
       !loaded_file->info.embedding_capability->supported_signature_lengths
            .has_value()) {
