@@ -30,7 +30,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gate:
+    name: "Check PR State"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check if PR is still open
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "synchronize" ]; then
+            sleep 5
+            PR_STATE=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json state -q .state)
+            if [ "$PR_STATE" != "OPEN" ]; then
+              echo "PR #$PR_NUMBER is $PR_STATE (Copybara merge). Skipping presubmit."
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+
   presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
     name: "Presubmit-Android"
     runs-on: "linux-x86-c4-16"
     container:
