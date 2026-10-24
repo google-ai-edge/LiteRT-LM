@@ -202,6 +202,66 @@ cc_test(
 )
 
 cc_library(
+    name = "sequenced",
+    hdrs = ["sequenced.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+    ],
+)
+
+cc_library(
+    name = "fan_out_stage",
+    hdrs = [
+        "fan_out_stage.h",
+    ],
+    deps = [
+        ":sequenced",
+        ":stage",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "fan_in_stage",
+    hdrs = [
+        "fan_in_stage.h",
+    ],
+    deps = [
+        ":sequenced",
+        ":stage",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_test(
+    name = "fan_out_fan_in_test",
+    srcs = ["fan_out_fan_in_test.cc"],
+    deps = [
+        ":fan_in_stage",
+        ":fan_out_stage",
+        ":sequenced",
+        ":stage",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "async_stage_scheduler",
     hdrs = ["async_stage_scheduler.h"],
     deps = [
