@@ -38,7 +38,6 @@
 // sourcing LoRA.
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/lora_data.h"
 #include "runtime/util/lora_util.h"
@@ -47,11 +46,6 @@
 namespace litert::lm {
 
 namespace {
-
-// Names of the signature runners, used to get the signature runners from the
-// interpreter.
-// TODO: b/450616365 - Consolidate constant definitions.
-constexpr char kDecodeSignatureRunner[] = "decode";
 
 // Input of GPU models exported with runtime-BMM LoRA. It holds the channel
 // range of the LoRA BMM ops (see ml_drift::LlmRuntimeParams) and is not a LoRA
