@@ -664,6 +664,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
               pending_input_token,
               prefill_input_buffers[signatures_.input_tokens]));
         } else {
+          // A pending token made by a rollback carries only its id.
+          ABSL_RETURN_IF_ERROR(LookupMissingEmbeddings(pending_input_token));
           ABSL_RETURN_IF_ERROR(FillInputBufferWithToken(
               pending_input_token,
               prefill_input_buffers[signatures_.input_embeddings.value()]));
@@ -921,6 +923,35 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtCompiledModelExecutorBase::LookupMissingEmbeddings(
+    const std::vector<std::shared_ptr<TokenData>>& token) {
+  for (const auto& t : token) {
+    // If the token has no embedding, we will look up the embedding for the
+    // token here. This reduces the complexity for internal or external
+    // sampling, and covers pending tokens made by a rollback.
+    if (signatures_.input_embeddings.has_value() &&
+        t->mutable_embedding().empty()) {
+      if (embedding_lookup_ == nullptr) {
+        return absl::FailedPreconditionError(
+            "Decode requires embedding_lookup_ when input_embeddings are used, "
+            "but embedding_lookup_ is null.");
+      }
+      ABSL_RETURN_IF_ERROR(
+          embedding_lookup_->LookupDecode(t->id(), t->mutable_embedding()));
+      if (signatures_.input_per_layer_embeddings.has_value()) {
+        if (per_layer_embedding_lookup_ == nullptr) {
+          return absl::FailedPreconditionError(
+              "Decode requires per_layer_embedding_lookup_ when required by "
+              "signature, but per_layer_embedding_lookup_ is null.");
+        }
+        ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupDecode(
+            t->id(), t->mutable_per_layer_embedding()));
+      }
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::StatusOr<ProcessedTokens::StepAndToken>
 LlmLiteRtCompiledModelExecutorBase::GetTokenToDecode(
     const ExecutorInputs& inputs) {
@@ -982,33 +1013,10 @@ LlmLiteRtCompiledModelExecutorBase::GetTokenToDecode(
 
   // Here we must have a pending input token to decode that's either coming from
   // the previous prefill or decode, or we just added one from the inputs.
-  for (const auto& token : llm_context_->processed_context()
-                               .processed_tokens()
-                               .GetNextUnprocessedToken()
-                               .token) {
-    // If the token has no embedding, we will look up the embedding for the
-    // token here. This reduces the complexity for internal or external
-    // sampling.
-    if (signatures_.input_embeddings.has_value() &&
-        token->mutable_embedding().empty()) {
-      if (embedding_lookup_ == nullptr) {
-        return absl::FailedPreconditionError(
-            "Decode requires embedding_lookup_ when input_embeddings are used, "
-            "but embedding_lookup_ is null.");
-      }
-      ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupDecode(
-          token->id(), token->mutable_embedding()));
-      if (signatures_.input_per_layer_embeddings.has_value()) {
-        if (per_layer_embedding_lookup_ == nullptr) {
-          return absl::FailedPreconditionError(
-              "Decode requires per_layer_embedding_lookup_ when required by "
-              "signature, but per_layer_embedding_lookup_ is null.");
-        }
-        ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupDecode(
-            token->id(), token->mutable_per_layer_embedding()));
-      }
-    }
-  }
+  ABSL_RETURN_IF_ERROR(LookupMissingEmbeddings(llm_context_->processed_context()
+                                                   .processed_tokens()
+                                                   .GetNextUnprocessedToken()
+                                                   .token));
   return llm_context_->processed_context()
       .processed_tokens()
       .GetNextUnprocessedToken();
