@@ -22,9 +22,9 @@ macro(generate_litertlm_aggregate)
         add_library(LiteRTLM::Aggregate INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::Aggregate PROPERTIES
             INTERFACE_LINK_LIBRARIES
-                "${_litertlm_lib_paths} ${_cxxbridge_paths} ${_litert_lib_paths} ${_tflite_lib_paths} ${_tokenizers_lib_paths} ${_sentencepiece_lib_paths} ${_re2_lib_paths} ${_flatbuffers_lib_paths} ${_protobuf_lib_paths} ${_absl_lib_paths}"
+                "${_litertlm_lib_paths} ${_cxxbridge_paths} ${_litert_lib_paths} ${_tflite_lib_paths} ${_tokenizers_lib_paths} ${_sentencepiece_lib_paths} ${_re2_lib_paths} ${_oniguruma_lib_paths} ${_flatbuffers_lib_paths} ${_protobuf_lib_paths} ${_absl_lib_paths}"
             INTERFACE_LINK_LIBRARIES_CORE
-                "${_tokenizers_lib_paths} ${_sentencepiece_lib_paths} ${_re2_lib_paths} ${_flatbuffers_lib_paths} ${_protobuf_lib_paths} ${_absl_lib_paths}"
+                "${_tokenizers_lib_paths} ${_sentencepiece_lib_paths} ${_re2_lib_paths} ${_oniguruma_lib_paths} ${_flatbuffers_lib_paths} ${_protobuf_lib_paths} ${_absl_lib_paths}"
             INTERFACE_LINK_LIBRARIES_ODML
                 "${_litertlm_lib_paths} ${_cxxbridge_paths} ${_llguidance_lib_paths} ${_litert_lib_paths} ${_tflite_lib_paths}"
         )

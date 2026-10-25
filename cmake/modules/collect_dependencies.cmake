@@ -19,6 +19,7 @@ list(APPEND LITERTLM_INCLUDE_PATHS
   "${LITERTLM_GTEST_INCLUDE_DIR}"
   "${LITERTLM_PROTOBUF_INCLUDE_DIR}"
   "${LITERTLM_RE2_INCLUDE_DIR}"
+  "${LITERTLM_ONIGURUMA_INCLUDE_DIR}"
   "${LITERTLM_SENTENCEPIECE_INCLUDE_PATHS}"
   "${LITERTLM_TOKENIZERS_INCLUDE_DIR}"
   "${LITERTLM_TFLITE_INCLUDE_DIR}"
@@ -38,6 +39,7 @@ add_dependencies(LITERTLM_DEPS
     tflite_external
     opencl_headers_external
     re2_external
+    oniguruma_external
     litertlm_cxx_bridge
     tokenizers-cpp_external
     sentencepiece_external
@@ -64,6 +66,7 @@ target_link_libraries(LITERTLM_DEPS INTERFACE
     LiteRTLM::tokenizers::tokenizers
     LiteRTLM::sentencepiece::shim
     LiteRTLM::re2::shim
+    LiteRTLM::oniguruma::shim
     LiteRTLM::flatbuffers::shim
     LiteRTLM::protobuf::shim
     LiteRTLM::absl::shim

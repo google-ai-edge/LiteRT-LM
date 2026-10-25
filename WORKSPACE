@@ -590,6 +590,16 @@ http_archive(
     url = "https://github.com/mlc-ai/tokenizers-cpp/archive/refs/tags/v0.1.1.tar.gz",
 )
 
+# Regular expression engine of the HuggingFace tokenizers port in
+# //support/tokenizer/tokenizers (tokenizers::SysRegex).
+http_archive(
+    name = "oniguruma",
+    build_file = "@//third_party/oniguruma:oniguruma.BUILD",
+    sha256 = "2a5cfc5ae259e4e97f86b68dfffc152cdaffe94e2060b770cb827238d769fc05",
+    strip_prefix = "onig-6.9.10",
+    url = "https://github.com/kkos/oniguruma/releases/download/v6.9.10/onig-6.9.10.tar.gz",
+)
+
 http_archive(
     name = "absl_py",
     sha256 = "8a3d0830e4eb4f66c4fa907c06edf6ce1c719ced811a12e26d9d3162f8471758",
