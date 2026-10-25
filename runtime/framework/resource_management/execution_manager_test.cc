@@ -1708,6 +1708,36 @@ TEST_P(ExecutionManagerTest, SetCurrentStep) {
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST_P(ExecutionManagerTest, SetCurrentStepRestoresLastPrefillToken) {
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor());
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  // Prefill tokens 1, 2, 3.
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, task_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), nullptr));
+  EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+  EXPECT_EQ(session_info->last_prefill_token_id, 3);
+
+  // Decode and scoring feed the last prefill token first, so rewinding to step
+  // 2 must make it the token at step 1, not the last token prefilled.
+  EXPECT_OK(execution_manager_->SetCurrentStep(*session_info, 2));
+  EXPECT_EQ(session_info->last_prefill_token_id, 2);
+
+  EXPECT_OK(execution_manager_->SetCurrentStep(*session_info, 1));
+  EXPECT_EQ(session_info->last_prefill_token_id, 1);
+}
+
 TEST_P(ExecutionManagerTest, DestructorWaitsForActiveTasks) {
   if (GetParam() == ExecutionManagerType::kSerial) {
     GTEST_SKIP() << "Skipping for SerialExecutionManager as it is synchronous";
