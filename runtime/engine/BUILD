@@ -236,6 +236,8 @@ cc_library(
         "//conditions:default": [],
     }) + select({
         "//conditions:default": [],
+    }) + select({
+        "//conditions:default": [],
     }),
 )
 
@@ -318,6 +320,8 @@ cc_binary(
         "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
     ] + select({
+        "//conditions:default": [],
+    }) + select({
         "//conditions:default": [],
     }),
 )
