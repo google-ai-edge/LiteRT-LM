@@ -14,16 +14,19 @@
 
 #include "runtime/components/top_p_cpu_sampler.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -446,6 +449,258 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_ExactLogProbsViaCreate) {
   EXPECT_THAT(*scores, ElementsAre(FloatNear(-0.44018677f, 1e-5)));
 }
 
+// Top-k distribution output (SampleToIdAndTopKBuffer).
+
+// A flat distribution over `kFlatVocab` tokens, repeated for `sequence_size`
+// positions, so that every random value maps to a distinct bucket and
+// differences in randomness show up in the sampled ids.
+constexpr int kFlatVocab = 16;
+
+// Samples `sequence_size` ids from flat logits with `sampler`.
+std::vector<int> SampleFlat(TopPSampler& sampler, int sequence_size) {
+  std::vector<float> logits(sequence_size * kFlatVocab, 0.0f);
+  auto logits_tensor =
+      CopyToTensorBuffer<float>(logits, {1, sequence_size, kFlatVocab});
+  EXPECT_TRUE(logits_tensor.HasValue());
+  std::vector<int> ids_vector(sequence_size);
+  auto ids_tensor = CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector),
+                                            {1, sequence_size});
+  EXPECT_TRUE(ids_tensor.HasValue());
+  EXPECT_OK(sampler.SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                             /*scores_tensor=*/nullptr));
+  auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  EXPECT_TRUE(ids.HasValue());
+  return std::vector<int>(ids->begin(), ids->end());
+}
+
+absl::StatusOr<std::unique_ptr<TopPSampler>> CreateFlatSampler(
+    int sequence_size, int generator_seed) {
+  return TopPSampler::Create(
+      /*k=*/kFlatVocab, /*p=*/1.0f, /*temperature=*/1.0f,
+      /*batch_size=*/1, sequence_size, generator_seed);
+}
+
+struct TopKOutput {
+  std::vector<int> sampled_ids;
+  std::vector<float> probs;
+  std::vector<int> ids;
+};
+
+absl::StatusOr<TopKOutput> SampleTopK(TopPSampler& sampler,
+                                      const std::vector<float>& logits,
+                                      int sequence_size, int vocab_size,
+                                      int out_k) {
+  auto logits_tensor =
+      CopyToTensorBuffer<float>(logits, {1, sequence_size, vocab_size});
+  auto ids_tensor = CopyToTensorBuffer<int>(std::vector<int>(sequence_size),
+                                            {1, sequence_size});
+  auto probs_tensor = CopyToTensorBuffer<float>(
+      std::vector<float>(sequence_size * out_k), {1, sequence_size, out_k});
+  auto topk_ids_tensor = CopyToTensorBuffer<int>(
+      std::vector<int>(sequence_size * out_k), {1, sequence_size, out_k});
+  if (!logits_tensor || !ids_tensor || !probs_tensor || !topk_ids_tensor) {
+    return absl::InternalError("Failed to create tensors.");
+  }
+  absl::Status status = sampler.SampleToIdAndTopKBuffer(
+      *logits_tensor, *ids_tensor, *probs_tensor, *topk_ids_tensor);
+  if (!status.ok()) return status;
+  auto sampled_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  auto probs = CopyFromTensorBuffer<float>(*probs_tensor);
+  auto ids = CopyFromTensorBuffer<int>(*topk_ids_tensor);
+  if (!sampled_ids || !probs || !ids) {
+    return absl::InternalError("Failed to read tensors.");
+  }
+  return TopKOutput{std::vector<int>(sampled_ids->begin(), sampled_ids->end()),
+                    std::vector<float>(probs->begin(), probs->end()),
+                    std::vector<int>(ids->begin(), ids->end())};
+}
+
+TEST(TopPSamplerTest, TopK_MatchesReferenceSoftmaxAndPads) {
+  constexpr int kVocab = 6;
+  constexpr int kSeq = 2;
+  constexpr int kK = 4;
+  constexpr int kOutK = 5;
+  constexpr float kTemperature = 0.7f;
+  const std::vector<float> logits = {1.0f, 3.0f,  -2.0f, 2.5f, 0.5f, 4.0f,
+                                     0.0f, -1.0f, 5.0f,  1.5f, 2.0f, 0.2f};
+  auto sampler = TopPSampler::Create(kK, /*p=*/0.9f, kTemperature,
+                                     /*batch_size=*/1, kSeq, /*seed=*/3);
+  ASSERT_OK(sampler);
+  auto out = SampleTopK(**sampler, logits, kSeq, kVocab, kOutK);
+  ASSERT_OK(out);
+
+  for (int s = 0; s < kSeq; ++s) {
+    // Reference: the top-k by logit, softmax of logits / temperature.
+    std::vector<int> order(kVocab);
+    for (int v = 0; v < kVocab; ++v) order[v] = v;
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+      return logits[s * kVocab + a] > logits[s * kVocab + b];
+    });
+    double sum = 0.0;
+    for (int i = 0; i < kK; ++i) {
+      sum += std::exp(
+          (logits[s * kVocab + order[i]] - logits[s * kVocab + order[0]]) /
+          kTemperature);
+    }
+    float total = 0.0f;
+    for (int i = 0; i < kK; ++i) {
+      const float expected = std::exp((logits[s * kVocab + order[i]] -
+                                       logits[s * kVocab + order[0]]) /
+                                      kTemperature) /
+                             sum;
+      EXPECT_EQ(out->ids[s * kOutK + i], order[i]) << "s=" << s << " i=" << i;
+      EXPECT_THAT(out->probs[s * kOutK + i], FloatNear(expected, 1e-6));
+      if (i > 0) {
+        EXPECT_GE(out->probs[s * kOutK + i - 1], out->probs[s * kOutK + i]);
+      }
+      total += out->probs[s * kOutK + i];
+    }
+    EXPECT_THAT(total, FloatNear(1.0f, 1e-5));
+    // Padding past k.
+    EXPECT_EQ(out->probs[s * kOutK + kK], 0.0f);
+    EXPECT_EQ(out->ids[s * kOutK + kK], -1);
+    // The sampled token is in the top-k.
+    EXPECT_NE(std::find(order.begin(), order.begin() + kK, out->sampled_ids[s]),
+              order.begin() + kK);
+  }
+}
+
+TEST(TopPSamplerTest, TopK_GreedyIsOneHotAtArgmax) {
+  const std::vector<float> logits = {0.1f, 2.0f, -1.0f, 1.9f};
+  auto sampler = TopPSampler::Create(/*k=*/1, /*p=*/1.0f, /*temperature=*/1.0f,
+                                     /*batch_size=*/1, /*sequence_size=*/1,
+                                     /*seed=*/1);
+  ASSERT_OK(sampler);
+  auto out = SampleTopK(**sampler, logits, /*sequence_size=*/1,
+                        /*vocab_size=*/4, /*out_k=*/2);
+  ASSERT_OK(out);
+  EXPECT_THAT(out->sampled_ids, ElementsAre(1));
+  EXPECT_THAT(out->ids, ElementsAre(1, -1));
+  EXPECT_THAT(out->probs, ElementsAre(1.0f, 0.0f));
+}
+
+TEST(TopPSamplerTest, TopK_SampledIdsMatchScoreBufferPath) {
+  // The top-k output consumes the random generator exactly like
+  // SampleToIdAndScoreBuffer(), so both paths sample the same ids.
+  constexpr int kSeq = 3;
+  ASSERT_OK_AND_ASSIGN(auto with_topk,
+                       CreateFlatSampler(kSeq, /*generator_seed=*/11));
+  ASSERT_OK_AND_ASSIGN(auto without_topk,
+                       CreateFlatSampler(kSeq, /*generator_seed=*/11));
+  const std::vector<float> logits(kSeq * kFlatVocab, 0.0f);
+  for (int i = 0; i < 16; ++i) {
+    auto out = SampleTopK(*with_topk, logits, kSeq, kFlatVocab,
+                          /*out_k=*/kFlatVocab);
+    ASSERT_OK(out);
+    EXPECT_EQ(out->sampled_ids, SampleFlat(*without_topk, kSeq)) << "i=" << i;
+  }
+}
+
+TEST(TopPSamplerTest, TopK_RejectsTooSmallBuffersWithoutConsumingRandomness) {
+  constexpr int kSeq = 1;
+  ASSERT_OK_AND_ASSIGN(auto sampler,
+                       CreateFlatSampler(kSeq, /*generator_seed=*/4));
+  ASSERT_OK_AND_ASSIGN(auto reference,
+                       CreateFlatSampler(kSeq, /*generator_seed=*/4));
+  const std::vector<float> logits(kSeq * kFlatVocab, 0.0f);
+  auto out = SampleTopK(*sampler, logits, kSeq, kFlatVocab,
+                        /*out_k=*/kFlatVocab - 1);
+  EXPECT_EQ(out.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(SampleFlat(*sampler, kSeq), SampleFlat(*reference, kSeq));
+}
+
+TEST(TopPSamplerTest, TopK_ZeroTemperatureIsOneHot) {
+  // Temperature 0 is clamped to epsilon, so all the mass goes to the argmax
+  // even though k > 1.
+  const std::vector<float> logits = {0.1f, 2.0f, -1.0f, 1.9f};
+  auto sampler = TopPSampler::Create(/*k=*/3, /*p=*/1.0f, /*temperature=*/0.0f,
+                                     /*batch_size=*/1, /*sequence_size=*/1,
+                                     /*seed=*/1);
+  ASSERT_OK(sampler);
+  auto out = SampleTopK(**sampler, logits, /*sequence_size=*/1,
+                        /*vocab_size=*/4, /*out_k=*/3);
+  ASSERT_OK(out);
+  EXPECT_THAT(out->sampled_ids, ElementsAre(1));
+  // The other two tokens both have probability 0, so they are ordered by id.
+  EXPECT_THAT(out->ids, ElementsAre(1, 0, 3));
+  EXPECT_THAT(out->probs, ElementsAre(1.0f, 0.0f, 0.0f));
+}
+
+TEST(TopPSamplerTest, TopK_Float16LogitsMatchFloat32Logits) {
+  // Logits that are exact in float16, so both paths see the same values.
+  constexpr int kVocab = 6;
+  constexpr int kSeq = 2;
+  constexpr int kOutK = 4;
+  const std::vector<float> logits = {1.0f, 3.0f,  -2.0f, 2.5f, 0.5f, 4.0f,
+                                     0.0f, -1.0f, 5.0f,  1.5f, 2.0f, 0.25f};
+  auto fp32_sampler =
+      TopPSampler::Create(/*k=*/3, /*p=*/0.9f, /*temperature=*/0.7f,
+                          /*batch_size=*/1, kSeq, /*seed=*/2);
+  auto fp16_sampler =
+      TopPSampler::Create(/*k=*/3, /*p=*/0.9f, /*temperature=*/0.7f,
+                          /*batch_size=*/1, kSeq, /*seed=*/2);
+  ASSERT_OK(fp32_sampler);
+  ASSERT_OK(fp16_sampler);
+  auto expected = SampleTopK(**fp32_sampler, logits, kSeq, kVocab, kOutK);
+  ASSERT_OK(expected);
+
+  auto logits_tensor = CopyFp16ToTensorBuffer(logits, {1, kSeq, kVocab});
+  auto ids_tensor = CopyToTensorBuffer<int>(std::vector<int>(kSeq), {1, kSeq});
+  auto probs_tensor = CopyToTensorBuffer<float>(
+      std::vector<float>(kSeq * kOutK), {1, kSeq, kOutK});
+  auto topk_ids_tensor =
+      CopyToTensorBuffer<int>(std::vector<int>(kSeq * kOutK), {1, kSeq, kOutK});
+  ASSERT_TRUE(logits_tensor && ids_tensor && probs_tensor && topk_ids_tensor);
+  ASSERT_OK((*fp16_sampler)
+                ->SampleToIdAndTopKBuffer(*logits_tensor, *ids_tensor,
+                                          *probs_tensor, *topk_ids_tensor));
+  auto sampled_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  auto probs = CopyFromTensorBuffer<float>(*probs_tensor);
+  auto ids = CopyFromTensorBuffer<int>(*topk_ids_tensor);
+  ASSERT_TRUE(sampled_ids && probs && ids);
+  EXPECT_EQ(std::vector<int>(sampled_ids->begin(), sampled_ids->end()),
+            expected->sampled_ids);
+  EXPECT_EQ(std::vector<float>(probs->begin(), probs->end()), expected->probs);
+  EXPECT_EQ(std::vector<int>(ids->begin(), ids->end()), expected->ids);
+}
+
+TEST(TopPSamplerTest, TopK_BatchSize2) {
+  constexpr int kBatch = 2;
+  constexpr int kVocab = 4;
+  constexpr int kOutK = 3;
+  // Batch 0: ids 3, 1 have the top-2 logits 3, 2. Batch 1: ids 0, 2 have the
+  // top-2 logits 5, 4.
+  const std::vector<float> logits = {0.0f, 2.0f,  1.0f, 3.0f,
+                                     5.0f, -1.0f, 4.0f, 0.0f};
+  auto sampler =
+      TopPSampler::Create(/*k=*/2, /*p=*/1.0f, /*temperature=*/1.0f, kBatch,
+                          /*sequence_size=*/1, /*seed=*/6);
+  ASSERT_OK(sampler);
+  auto logits_tensor = CopyToTensorBuffer<float>(logits, {kBatch, 1, kVocab});
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(std::vector<int>(kBatch), {kBatch, 1});
+  auto probs_tensor = CopyToTensorBuffer<float>(
+      std::vector<float>(kBatch * kOutK), {kBatch, 1, kOutK});
+  auto topk_ids_tensor = CopyToTensorBuffer<int>(
+      std::vector<int>(kBatch * kOutK), {kBatch, 1, kOutK});
+  ASSERT_TRUE(logits_tensor && ids_tensor && probs_tensor && topk_ids_tensor);
+  ASSERT_OK((*sampler)->SampleToIdAndTopKBuffer(
+      *logits_tensor, *ids_tensor, *probs_tensor, *topk_ids_tensor));
+
+  auto sampled_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  auto probs = CopyFromTensorBuffer<float>(*probs_tensor);
+  auto ids = CopyFromTensorBuffer<int>(*topk_ids_tensor);
+  ASSERT_TRUE(sampled_ids && probs && ids);
+  EXPECT_THAT(*ids, ElementsAre(3, 1, -1, 0, 2, -1));
+  // Both batches have a logit gap of 1 between their top-2 tokens.
+  const float top = 1.0f / (1.0f + std::exp(-1.0f));
+  EXPECT_THAT(
+      *probs,
+      ElementsAre(FloatNear(top, 1e-6), FloatNear(1 - top, 1e-6), 0.0f,
+                  FloatNear(top, 1e-6), FloatNear(1 - top, 1e-6), 0.0f));
+  EXPECT_THAT((*sampled_ids)[0], ::testing::AnyOf(3, 1));
+  EXPECT_THAT((*sampled_ids)[1], ::testing::AnyOf(0, 2));
+}
+
 }  // namespace
 }  // namespace litert::lm
-

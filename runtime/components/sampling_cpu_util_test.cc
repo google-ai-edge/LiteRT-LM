@@ -14,6 +14,8 @@
 
 #include "runtime/components/sampling_cpu_util.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <random>
@@ -21,6 +23,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -372,6 +375,209 @@ TEST(SamplingCpuUtilTest, BenchmarkTopKTokenIds) {
   duration = end - start;
   std::printf("[BENCHMARK] TopK=1025 (full-sort) execution took: %.3f ms\n\n",
               absl::ToDoubleMilliseconds(duration) / kIterations);
+}
+
+TEST(SamplingCpuUtilTest, ComputeTopKDistribution_SortedSoftmaxOverTopK) {
+  // Two positions with vocab 5, k = 3, temperature 0.5.
+  const std::vector<float> logits = {0.0f, 2.0f, 1.0f, 3.0f,  -1.0f,
+                                     1.0f, 1.0f, 0.0f, -2.0f, 0.5f};
+  std::vector<float> probs;
+  std::vector<int> ids;
+  ASSERT_TRUE(ComputeTopKDistribution(logits, /*k=*/3, /*temperature=*/0.5f,
+                                      /*batch_size=*/1, /*sequence_size=*/2,
+                                      probs, ids)
+                  .ok());
+  ASSERT_EQ(probs.size(), 6);
+  // Position 0: top-3 ids 3, 1, 2 with logits 3, 2, 1.
+  EXPECT_THAT(std::vector<int>(ids.begin(), ids.begin() + 3),
+              ElementsAre(3, 1, 2));
+  const double z0 = 1.0 + std::exp(-2.0) + std::exp(-4.0);
+  EXPECT_NEAR(probs[0], 1.0 / z0, 1e-6);
+  EXPECT_NEAR(probs[1], std::exp(-2.0) / z0, 1e-6);
+  EXPECT_NEAR(probs[2], std::exp(-4.0) / z0, 1e-6);
+  // Position 1: ids 0 and 1 tie; ties are ordered by ascending id.
+  EXPECT_THAT(std::vector<int>(ids.begin() + 3, ids.end()),
+              ElementsAre(0, 1, 4));
+  EXPECT_NEAR(probs[3], probs[4], 1e-7);
+  EXPECT_NEAR(probs[3] + probs[4] + probs[5], 1.0, 1e-6);
+}
+
+TEST(SamplingCpuUtilTest, ComputeTopKDistribution_ClampsKAndSortsLargeK) {
+  // k > 1024 takes the partial-sort path of TopKTokenIds(), whose output is
+  // not sorted; the distribution must still be sorted.
+  constexpr int kVocab = 1100;
+  std::vector<float> logits(kVocab);
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<float> dist(-3.0f, 3.0f);
+  for (float& logit : logits) logit = dist(rng);
+  std::vector<float> probs;
+  std::vector<int> ids;
+  ASSERT_TRUE(ComputeTopKDistribution(logits, /*k=*/5000, /*temperature=*/1.0f,
+                                      /*batch_size=*/1, /*sequence_size=*/1,
+                                      probs, ids)
+                  .ok());
+  ASSERT_EQ(probs.size(), kVocab);
+  double total = 0.0;
+  for (int i = 0; i < kVocab; ++i) {
+    total += probs[i];
+    if (i > 0) {
+      EXPECT_GE(probs[i - 1], probs[i]) << i;
+      // Near-equal logits can round to equal probabilities.
+      EXPECT_GE(logits[ids[i - 1]], logits[ids[i]] - 1e-5f) << i;
+    }
+  }
+  EXPECT_NEAR(total, 1.0, 1e-4);
+}
+
+TEST(SamplingCpuUtilTest, ComputeTopKDistribution_InvalidArguments) {
+  std::vector<float> probs;
+  std::vector<int> ids;
+  const std::vector<float> logits = {0.0f, 1.0f, 2.0f};
+  EXPECT_EQ(
+      ComputeTopKDistribution(logits, /*k=*/0, 1.0f, 1, 1, probs, ids).code(),
+      absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(
+      ComputeTopKDistribution(logits, /*k=*/1, 1.0f, 1, 2, probs, ids).code(),
+      absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(ComputeTopKDistribution({}, /*k=*/1, 1.0f, 1, 1, probs, ids).code(),
+            absl::StatusCode::kInvalidArgument);
+}
+
+// Logits of shape [2, 2, 4], with k = 3 and temperature 1. The top-3 logits of
+// the four (batch, position) rows, in descending order, are:
+//   - row 0: ids 3, 1, 2 with logits 3, 2, 1.
+//   - row 1: ids 0, 2, 3 with logits 5, 4, 0.
+//   - row 2: ids 0, 1, 2 with logits 1, 1, 0 (ids 0 and 1 tie).
+//   - row 3: ids 2, 3, 1 with logits 2, 1, 0.
+constexpr int kDistBatch = 2;
+constexpr int kDistSeq = 2;
+constexpr int kDistK = 3;
+std::vector<float> DistLogits() {
+  return {0.0f, 2.0f, 1.0f, 3.0f,  5.0f,  -1.0f, 4.0f, 0.0f,
+          1.0f, 1.0f, 0.0f, -2.0f, -3.0f, 0.0f,  2.0f, 1.0f};
+}
+
+TEST(SamplingCpuUtilTest, ComputeTopKDistribution_BatchSize2SequenceLength2) {
+  std::vector<float> probs;
+  std::vector<int> ids;
+  ASSERT_TRUE(ComputeTopKDistribution(DistLogits(), kDistK,
+                                      /*temperature=*/1.0f, kDistBatch,
+                                      kDistSeq, probs, ids)
+                  .ok());
+  EXPECT_THAT(ids, ElementsAre(3, 1, 2, 0, 2, 3, 0, 1, 2, 2, 3, 1));
+  // Expected unnormalized probabilities exp(logit - max logit) of each row.
+  const std::vector<double> unnormalized = {1.0,
+                                            std::exp(-1.0),
+                                            std::exp(-2.0),
+                                            1.0,
+                                            std::exp(-1.0),
+                                            std::exp(-5.0),
+                                            1.0,
+                                            1.0,
+                                            std::exp(-1.0),
+                                            1.0,
+                                            std::exp(-1.0),
+                                            std::exp(-2.0)};
+  ASSERT_EQ(probs.size(), unnormalized.size());
+  for (int row = 0; row < kDistBatch * kDistSeq; ++row) {
+    double z = 0.0;
+    for (int i = 0; i < kDistK; ++i) z += unnormalized[row * kDistK + i];
+    for (int i = 0; i < kDistK; ++i) {
+      EXPECT_NEAR(probs[row * kDistK + i], unnormalized[row * kDistK + i] / z,
+                  1e-6)
+          << "row=" << row << " i=" << i;
+    }
+  }
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSampling_OutputsTopKDistribution) {
+  constexpr float kTopP = 0.9f;
+  auto rng = std::make_shared<std::default_random_engine>(5);
+  std::vector<std::vector<float>> sampled_scores;
+  TopKDistribution distribution;
+  ASSERT_OK_AND_ASSIGN(
+      auto sampled_ids,
+      TopKTopPSampling(DistLogits(), kDistK, kTopP, /*temperature=*/1.0f, rng,
+                       kDistBatch, kDistSeq, sampled_scores, &distribution));
+
+  // The distribution is the same as the one ComputeTopKDistribution() returns.
+  std::vector<float> expected_probs;
+  std::vector<int> expected_ids;
+  ASSERT_TRUE(ComputeTopKDistribution(DistLogits(), kDistK,
+                                      /*temperature=*/1.0f, kDistBatch,
+                                      kDistSeq, expected_probs, expected_ids)
+                  .ok());
+  EXPECT_EQ(distribution.k, kDistK);
+  EXPECT_EQ(distribution.ids, expected_ids);
+  EXPECT_EQ(distribution.probs, expected_probs);
+
+  // Each sampled token is in the top-p prefix of its row of the distribution,
+  // and its score is its probability.
+  for (int b = 0; b < kDistBatch; ++b) {
+    for (int s = 0; s < kDistSeq; ++s) {
+      const int row = b * kDistSeq + s;
+      double mass = 0.0;
+      int prefix_size = 0;
+      while (prefix_size < kDistK && mass < kTopP) {
+        mass += distribution.probs[row * kDistK + prefix_size];
+        ++prefix_size;
+      }
+      const auto prefix_begin = distribution.ids.begin() + row * kDistK;
+      const auto it = std::find(prefix_begin, prefix_begin + prefix_size,
+                                sampled_ids[b][s]);
+      ASSERT_NE(it, prefix_begin + prefix_size) << "b=" << b << " s=" << s;
+      EXPECT_EQ(sampled_scores[b][s],
+                distribution.probs[it - distribution.ids.begin()]);
+    }
+  }
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSampling_DistributionDoesNotChangeSampling) {
+  auto rng_with = std::make_shared<std::default_random_engine>(9);
+  auto rng_without = std::make_shared<std::default_random_engine>(9);
+  for (int i = 0; i < 16; ++i) {
+    std::vector<std::vector<float>> scores_with;
+    std::vector<std::vector<float>> scores_without;
+    TopKDistribution distribution;
+    ASSERT_OK_AND_ASSIGN(
+        auto ids_with,
+        TopKTopPSampling(DistLogits(), kDistK, /*p=*/0.95f,
+                         /*temperature=*/1.0f, rng_with, kDistBatch, kDistSeq,
+                         scores_with, &distribution));
+    ASSERT_OK_AND_ASSIGN(
+        auto ids_without,
+        TopKTopPSampling(DistLogits(), kDistK, /*p=*/0.95f,
+                         /*temperature=*/1.0f, rng_without, kDistBatch,
+                         kDistSeq, scores_without));
+    EXPECT_EQ(ids_with, ids_without) << "i=" << i;
+    EXPECT_EQ(scores_with, scores_without) << "i=" << i;
+  }
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSampling_TopPCutBreaksTiesByTokenId) {
+  // The top-k tokens all have the same probability, and k > 1024 takes the
+  // nth_element path of TopKTokenIds(), which returns them in no particular
+  // order. With p below a single token's probability, the top-p cut keeps
+  // only the first token of the sorted distribution: the smallest id.
+  constexpr int kVocab = 1100;
+  constexpr int kK = 1050;
+  std::vector<float> logits(kVocab, 0.0f);
+  std::fill(logits.begin(), logits.begin() + kK, 1.0f);
+  auto rng = std::make_shared<std::default_random_engine>(3);
+  for (int i = 0; i < 8; ++i) {
+    std::vector<std::vector<float>> sampled_scores;
+    TopKDistribution distribution;
+    ASSERT_OK_AND_ASSIGN(
+        auto sampled_ids,
+        TopKTopPSampling(logits, kK, /*p=*/1e-4f, /*temperature=*/1.0f, rng,
+                         /*batch_size=*/1,
+                         /*sequence_size=*/1, sampled_scores, &distribution));
+    EXPECT_THAT(sampled_ids, ElementsAre(ElementsAre(0))) << "i=" << i;
+    ASSERT_EQ(distribution.ids.size(), kK);
+    for (int j = 0; j < kK; ++j) {
+      ASSERT_EQ(distribution.ids[j], j);
+    }
+  }
 }
 
 }  // namespace

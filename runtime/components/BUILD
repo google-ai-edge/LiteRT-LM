@@ -64,6 +64,7 @@ cc_library(
     deps = [
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -102,6 +103,7 @@ cc_test(
     deps = [
         ":sampling_cpu_util",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
     ],
@@ -170,14 +172,44 @@ cc_test(
 )
 
 cc_library(
+    name = "top_k_distribution_buffer",
+    srcs = ["top_k_distribution_buffer.cc"],
+    hdrs = ["top_k_distribution_buffer.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "top_k_distribution_buffer_test",
+    srcs = ["top_k_distribution_buffer_test.cc"],
+    deps = [
+        ":top_k_distribution_buffer",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "//runtime/util:convert_tensor_buffer",
+    ],
+)
+
+cc_library(
     name = "top_p_cpu_sampler",
     srcs = ["top_p_cpu_sampler.cc"],
     hdrs = ["top_p_cpu_sampler.h"],
     deps = [
         ":sampler",
         ":sampling_cpu_util",
+        ":top_k_distribution_buffer",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
@@ -198,6 +230,7 @@ cc_test(
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_expected",
