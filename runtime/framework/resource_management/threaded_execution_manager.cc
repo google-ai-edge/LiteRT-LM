@@ -1313,7 +1313,16 @@ absl::Status ThreadedExecutionManager::SetCurrentStep(
     return absl::InvalidArgumentError(absl::StrCat(
         "Target step is greater than the current step: ", current_step));
   }
-  return llm_executor->SetCurrentStep(target_step);
+  ABSL_RETURN_IF_ERROR(llm_executor->SetCurrentStep(target_step));
+  // Decode and scoring feed the last prefill token first, so after a rewind it
+  // must be the token at the new step, not the last one prefilled.
+  ABSL_ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
+                        llm_executor->GetProcessedTokens());
+  std::vector<int> token = processed_tokens->GetTokenAtStep(target_step - 1);
+  if (!token.empty() && token[0] >= 0) {
+    const_cast<SessionInfo&>(session_info).last_prefill_token_id = token[0];
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<ProcessedContext>>
