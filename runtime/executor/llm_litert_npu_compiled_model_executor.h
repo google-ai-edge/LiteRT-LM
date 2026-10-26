@@ -374,6 +374,15 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::StatusOr<std::vector<std::vector<int>>> PopPendingAcceptedToken(
       absl::Time start_time);
 
+  // Discards the state an MTP cycle carries over to the next decode step: the
+  // accepted tokens not returned yet and the verifier activations seeding the
+  // next drafter run. Must be called whenever the next decode step does not
+  // continue the last MTP cycle (new input is prefilled, the context is reset,
+  // restored or rolled back), so that the next MTP cycle starts cold. Otherwise
+  // the next decode step would return tokens accepted before the new input,
+  // e.g. the end-of-turn token of the previous turn.
+  void DiscardSpeculativeState();
+
   // Run the drafter loop for MTP, returning the draft tokens.
   absl::StatusOr<std::vector<int>> RunDrafterLoop(int start_step,
                                                   int current_token_id);
