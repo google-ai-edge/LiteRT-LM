@@ -36,6 +36,10 @@ class ReadableStreamDataStream : public DataStream {
     return std::make_shared<ReadableStreamDataStream>(js_stream_wrapper);
   }
 
+  // Closes the JS stream wrapper, releasing its cache and cancelling any
+  // in-progress download.
+  ~ReadableStreamDataStream() override;
+
   absl::Status ReadAndDiscard(void* buffer, uint64_t offset,
                               uint64_t size) override;
   absl::Status ReadAndPreserve(void* buffer, uint64_t offset,

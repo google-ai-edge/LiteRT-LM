@@ -57,6 +57,9 @@ export async function createStreamingModelAssets(
   const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
   cleanup.add(() => {
     dataStream.delete();
+    // C++ also closes the wrapper when it's done with the stream, but it may
+    // still be holding a reference here.
+    streamWrapper.close();
   });
   const modelAssets = wasm.ModelAssets.createStreaming(dataStream);
   const cleanupModelAssets = cleanup.add(() => {
