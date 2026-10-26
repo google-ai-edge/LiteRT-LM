@@ -88,72 +88,21 @@ AcceleratorMemoryUsage MakeUsage(
   return usage;
 }
 
-TEST(GetProcessAcceleratorMemoryUsageTest, MatchesPlatformSupport) {
-#if defined(__ANDROID__)
-  // Backed by the process's DMA-BUF usage, which is always readable.
-  ASSERT_TRUE(GetProcessAcceleratorMemoryUsage().has_value());
-#else
-  // No implementation is wired up yet, so the default must report
-  // "unsupported" rather than a misleading zero.
-  EXPECT_FALSE(GetProcessAcceleratorMemoryUsage().has_value());
-#endif
-}
-
-TEST(AcceleratorMemoryUsageFromDmaBufTest, EmptySummaryIsZero) {
-  const AcceleratorMemoryUsage usage =
-      AcceleratorMemoryUsageFromDmaBuf(DmaBufSummary());
-  EXPECT_EQ(usage.total_bytes, 0);
-  EXPECT_THAT(usage.breakdown, IsEmpty());
-  EXPECT_THAT(usage.allocations, IsEmpty());
-}
-
-TEST(AcceleratorMemoryUsageFromDmaBufTest,
-     BreaksDownByExporterAndListsBuffers) {
-  DmaBufSummary dmabuf;
-  dmabuf.total_bytes = 17 * kMb;
-  // Largest first, as produced by GetProcessDmaBufUsage().
-  dmabuf.entries = {
-      {.inode = 1,
-       .size_bytes = 10 * kMb,
-       .name = "weights",
-       .exp_name = "system-uncached"},
-      {.inode = 2, .size_bytes = 4 * kMb, .name = "ahwb", .exp_name = "system"},
-      {.inode = 3,
-       .size_bytes = 2 * kMb,
-       .name = "kv_cache",
-       .exp_name = "system-uncached"},
-      {.inode = 4,
-       .size_bytes = 1 * kMb,
-       .name = "scratch",
-       .exp_name = "qcom,dsp"},
-  };
-
-  const AcceleratorMemoryUsage usage = AcceleratorMemoryUsageFromDmaBuf(dmabuf);
-
-  EXPECT_EQ(usage.total_bytes, 17 * kMb);
-  // Per-exporter totals, largest first, summing to the total.
-  EXPECT_THAT(usage.breakdown,
-              ElementsAre(Pair("system-uncached", 12 * kMb),
-                          Pair("system", 4 * kMb), Pair("qcom,dsp", 1 * kMb)));
-  // One allocation per buffer, in the original order, labelled by name and
-  // inode so individual buffers can be told apart.
-  EXPECT_THAT(usage.allocations,
-              ElementsAre(Pair("weights (Inode 1)", 10 * kMb),
-                          Pair("ahwb (Inode 2)", 4 * kMb),
-                          Pair("kv_cache (Inode 3)", 2 * kMb),
-                          Pair("scratch (Inode 4)", 1 * kMb)));
-}
-
-TEST(AcceleratorMemoryUsageFromDmaBufTest, EqualExportersAreOrderedByName) {
-  DmaBufSummary dmabuf;
-  dmabuf.total_bytes = 2 * kMb;
-  dmabuf.entries = {
-      {.inode = 1, .size_bytes = kMb, .name = "b", .exp_name = "zeta"},
-      {.inode = 2, .size_bytes = kMb, .name = "a", .exp_name = "alpha"},
-  };
-
-  EXPECT_THAT(AcceleratorMemoryUsageFromDmaBuf(dmabuf).breakdown,
-              ElementsAre(Pair("alpha", kMb), Pair("zeta", kMb)));
+// Whether tracking is supported depends on the platform and is checked by the
+// per-platform tests; what every platform must satisfy is the contract on the
+// shape of the result.
+TEST(GetProcessAcceleratorMemoryUsageTest, BreakdownSumsToTotalWhenSupported) {
+  const std::optional<AcceleratorMemoryUsage> usage =
+      GetProcessAcceleratorMemoryUsage();
+  if (!usage.has_value()) {
+    GTEST_SKIP() << "Accelerator memory tracking is unsupported here.";
+  }
+  if (usage->breakdown.empty()) {
+    GTEST_SKIP() << "This platform offers no breakdown.";
+  }
+  uint64_t breakdown_total = 0;
+  for (const auto& [_, bytes] : usage->breakdown) breakdown_total += bytes;
+  EXPECT_EQ(breakdown_total, usage->total_bytes);
 }
 
 TEST(AcceleratorMemoryBytesToMbTest, ConvertsMebibytes) {

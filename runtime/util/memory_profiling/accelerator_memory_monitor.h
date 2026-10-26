@@ -48,36 +48,24 @@ struct AcceleratorMemoryUsage {
   std::vector<std::pair<std::string, uint64_t>> allocations;
 };
 
+// -----------------------------------------------------------------------------
+// Platform contract
+//
+// The functions in this section are implemented once per operating system, in
+// accelerator_memory_<os>.cc; the build picks the file for the target OS and
+// accelerator_memory_unsupported.cc covers every other OS. Each platform file
+// documents at its top what it measures and what it cannot see. Nothing else
+// in this header or in accelerator_memory_monitor.cc is platform-specific.
+// -----------------------------------------------------------------------------
+
 // Returns the accelerator memory currently used by this process, or
 // std::nullopt when accelerator memory tracking is not supported on this
 // platform.
-//
-// Android: the process's DMA-BUF usage read from /proc/self/fdinfo, broken
-// down by exporter (the dma-buf heap name, e.g. "system-uncached"). This only
-// covers dma-buf heap backed buffers such as AHardwareBuffers, not memory the
-// GPU driver allocates from its own pool, so it is a lower bound.
 std::optional<AcceleratorMemoryUsage> GetProcessAcceleratorMemoryUsage();
 
-// Summary of the DMA-BUF buffers held by the current process, as read from
-// /proc/self/fdinfo on Android.
-struct DmaBufSummary {
-  uint64_t total_bytes = 0;
-  struct Entry {
-    uint64_t inode = 0;
-    uint64_t size_bytes = 0;
-    std::string name;
-    std::string exp_name;
-  };
-  // Ordered largest first.
-  std::vector<Entry> entries;
-};
-
-// Converts a DMA-BUF summary into an AcceleratorMemoryUsage: the breakdown is
-// the total per exporter (largest first) and the allocations are the
-// individual buffers in the order of `dmabuf.entries`. Used by the Android
-// implementation of GetProcessAcceleratorMemoryUsage(); exposed for testing.
-AcceleratorMemoryUsage AcceleratorMemoryUsageFromDmaBuf(
-    const DmaBufSummary& dmabuf);
+// -----------------------------------------------------------------------------
+// Platform-neutral helpers
+// -----------------------------------------------------------------------------
 
 // Converts bytes to mebibytes.
 float AcceleratorMemoryBytesToMb(uint64_t bytes);
