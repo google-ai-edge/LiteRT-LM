@@ -222,6 +222,11 @@ class ModelResourcesStreaming : public ModelResources {
   // The 64-byte alignment satisfies LiteRT/XNNPACK host tensor memory alignment
   // requirements (`LITERT_HOST_MEMORY_BUFFER_ALIGNMENT`).
   //
+  // The buffer is also mapped for every other model whose flatbuffer (set
+  // with `SetModelBuffer`) references this model's section through the
+  // external buffer group `"tflite_weights:<model_type_str>"`, so models of a
+  // deduplicated model file can share weights stored once.
+  //
   // args:
   //   model_type_str: The model type wire string (e.g. "tf_lite_embedder").
   //   stream: The stream to read the weights from.
@@ -307,7 +312,8 @@ class ModelResourcesStreaming : public ModelResources {
 
   // Releases the host memory holding the external weights of the model type
   // wire string `model_type_str`, and the spans over it returned by
-  // `GetWeightInMemoryMap`. Does nothing if no weights are stored for it.
+  // `GetWeightInMemoryMap`, including those mapped for other models that share
+  // these weights. Does nothing if no weights are stored for it.
   //
   // Only call this once you know the weights will not be read again.
   //

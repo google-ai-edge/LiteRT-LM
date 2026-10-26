@@ -32,6 +32,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "flatbuffers/verifier.h"  // from @flatbuffers
 #include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -41,8 +42,36 @@
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/scoped_file.h"
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
+namespace {
+
+// Returns the names of the external buffer groups declared by the serialized
+// TFLite model in `buffer`, or an empty vector if it declares none or is not a
+// valid TFLite model.
+std::vector<std::string> GetExternalBufferGroupNames(
+    const std::vector<char>& buffer) {
+  std::vector<std::string> names;
+  flatbuffers::Verifier verifier(
+      reinterpret_cast<const uint8_t*>(buffer.data()), buffer.size());
+  if (!tflite::VerifyModelBuffer(verifier)) {
+    return names;
+  }
+  const tflite::Model* model = tflite::GetModel(buffer.data());
+  if (model->external_buffer_groups() == nullptr) {
+    return names;
+  }
+  for (const tflite::ExternalBufferGroup* group :
+       *model->external_buffer_groups()) {
+    if (group != nullptr && group->name() != nullptr) {
+      names.push_back(group->name()->str());
+    }
+  }
+  return names;
+}
+
+}  // namespace
 
 absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
     proto::LlmMetadata::TfLiteModelType model_type) {
@@ -246,7 +275,24 @@ absl::Status ModelResourcesStreaming::SetWeightsFromStream(
   }
   auto span = absl::MakeConstSpan(
       reinterpret_cast<const std::byte*>(aligned_ptr), size);
-  weights_in_memory_per_model_[key]["tflite_weights"] = span;
+  weights_in_memory_per_model_[key][kModelWeightGroupName] = span;
+
+  // Expose the weights to the other models that reference this model's
+  // section (e.g. prefill/decode reading a tied embedding table stored once in
+  // the embedder's section of a deduplicated model file). On web, this lets
+  // their WebGPU upload read the shared weights from host memory.
+  const std::string shared_group_name =
+      absl::StrCat(kModelWeightGroupName, kWeightGroupModelTypeSeparator, key);
+  for (const auto& [model_key, buffer] : model_buffers_) {
+    if (model_key == key) {
+      continue;
+    }
+    for (const std::string& group_name : GetExternalBufferGroupNames(buffer)) {
+      if (absl::AsciiStrToLower(group_name) == shared_group_name) {
+        weights_in_memory_per_model_[model_key][group_name] = span;
+      }
+    }
+  }
   return absl::OkStatus();
 }
 
@@ -263,8 +309,16 @@ absl::Status ModelResourcesStreaming::SetAudioWeightsFromStream(
 void ModelResourcesStreaming::ReleaseWeights(absl::string_view model_type_str) {
   const std::string key = absl::AsciiStrToLower(model_type_str);
   // Drop the spans before the storage they point into, so that no dangling
-  // span is observable at any point.
+  // span is observable at any point. This includes the spans other models
+  // hold over this model's weights.
   weights_in_memory_per_model_.erase(key);
+  const std::string shared_group_name =
+      absl::StrCat(kModelWeightGroupName, kWeightGroupModelTypeSeparator, key);
+  for (auto& [model_key, weight_map] : weights_in_memory_per_model_) {
+    absl::erase_if(weight_map, [&shared_group_name](const auto& entry) {
+      return absl::AsciiStrToLower(entry.first) == shared_group_name;
+    });
+  }
   weights_storage_.erase(key);
 }
 

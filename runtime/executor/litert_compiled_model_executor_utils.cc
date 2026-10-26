@@ -86,14 +86,6 @@ namespace {
 
 // The name of the prefill decode model in the task bundle.
 constexpr char kPrefilDecodeModelNameInTaskBundle[] = "TF_LITE_PREFILL_DECODE";
-// External buffer group name of a model's own TFLiteWeights section. The same
-// name followed by kWeightGroupModelTypeSeparator and a model type (e.g.
-// "tflite_weights:tf_lite_prefill_decode") references that model's
-// TFLiteWeights section instead. This lets a model reuse a payload stored once
-// for several models (such as a token embedding table that is also the tied
-// output projection).
-constexpr absl::string_view kModelWeightGroupName = "tflite_weights";
-constexpr absl::string_view kWeightGroupModelTypeSeparator = ":";
 // Possible input tokens names:
 constexpr std::array<absl::string_view, 2> kInputTokensNames = {"token_ids",
                                                                 "tokens"};

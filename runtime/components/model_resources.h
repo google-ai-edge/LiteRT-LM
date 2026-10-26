@@ -110,6 +110,15 @@ struct FileRegion {
   size_t size;
 };
 
+// External buffer group name of a model's own TFLiteWeights section. The same
+// name followed by kWeightGroupModelTypeSeparator and a model type wire string
+// (e.g. "tflite_weights:tf_lite_embedder") references that model's
+// TFLiteWeights section instead. This lets a model reuse a payload stored once
+// for several models (such as a token embedding table that is also the tied
+// output projection).
+constexpr absl::string_view kModelWeightGroupName = "tflite_weights";
+constexpr absl::string_view kWeightGroupModelTypeSeparator = ":";
+
 // ModelResources is an interface that manages all the loaded model resources
 // that need to be hold to avoid the model being destroyed. It provides a way
 // to load the models in a lazy way.

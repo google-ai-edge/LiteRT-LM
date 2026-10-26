@@ -144,6 +144,15 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
         UpdateCompilationOptions(executor_settings, compilation_options));
   }
 
+  // Weights already in host memory, e.g. a token embedding table that a
+  // deduplicated model file stores once in the embedder's section. The weight
+  // loader uploads these from host memory and streams the rest.
+  if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
+      weight_map != nullptr) {
+    LITERT_RETURN_IF_ERROR(
+        compilation_options.SetWeightInMemoryMap(weight_map));
+  }
+
   std::unique_ptr<CompiledModel> compiled_model;
   {
 #ifdef __EMSCRIPTEN__
