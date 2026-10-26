@@ -15,8 +15,6 @@
 name: "ML-CI-Android-CMake"
 on:
   push:
-    branches:
-      - main
     tags:
       - v*.*.*
   pull_request:
