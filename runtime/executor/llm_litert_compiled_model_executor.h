@@ -406,6 +406,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // When output_batch_size_ == 1, It doesn't do anything.
   absl::Status PrepareFirstDecode();
 
+  // Looks up the embeddings of tokens that carry only their id.
+  absl::Status LookupMissingEmbeddings(
+      const std::vector<std::shared_ptr<TokenData>>& token);
+
   // Gets the token to decode. If there is id provided in the inputs, it will be
   // returned as the token to decode. Otherwise, the next unprocessed token will
   // be returned.
