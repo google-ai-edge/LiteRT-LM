@@ -786,7 +786,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     jint decode_tokens, jstring cache_dir, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jobject enable_speculative_decoding, jobject enable_ynnpack,
-    jint max_num_tokens) {
+    jint max_num_tokens, jobject speculative_decoding_mode) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -904,18 +904,11 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
         audio_npu_native_library_dir_str);
   }
 
-  auto advanced_settings =
-      settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
-          litert::lm::AdvancedSettings());
-  if (enable_speculative_decoding != nullptr) {
-    jmethodID boolean_value_mid = env->GetMethodID(
-        env->FindClass("java/lang/Boolean"), "booleanValue", "()Z");
-    jboolean is_enabled =
-        env->CallBooleanMethod(enable_speculative_decoding, boolean_value_mid);
-    advanced_settings.enable_speculative_decoding = (is_enabled == JNI_TRUE);
+  if (!ApplyOptionalSpeculativeDecodingMode(env, speculative_decoding_mode,
+                                            enable_speculative_decoding,
+                                            *settings)) {
+    return 0;
   }
-  settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
-      advanced_settings);
 
   if (std::optional<bool> enable_ynnpack_opt =
           GetOptionalBoolean(env, enable_ynnpack);

@@ -92,10 +92,13 @@ internal object LiteRtLmJni {
    * @param mainNpuNativeLibraryDir The directory for the main backend NPU libraries.
    * @param visionNpuNativeLibraryDir The directory for the vision backend NPU libraries.
    * @param audioNpuNativeLibraryDir The directory for the audio backend NPU libraries.
-   * @param enableSpeculativeDecoding Whether to enable speculative decoding.
+   * @param enableSpeculativeDecoding Deprecated: whether to enable speculative decoding. Ignored
+   *   when [speculativeDecodingMode] is set.
    * @param enableYnnpack Whether to enable YNNPACK. When null, use the engine's default.
    * @param maxNumTokens The maximum number of tokens to be processed by the engine. When
    *   non-positive, use the engine's default.
+   * @param speculativeDecodingMode The [SpeculativeDecodingMode.value] of the engine's default
+   *   speculative decoding config, or null to leave unset.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateBenchmark(
@@ -112,6 +115,7 @@ internal object LiteRtLmJni {
     enableSpeculativeDecoding: Boolean?,
     enableYnnpack: Boolean? = null,
     maxNumTokens: Int = -1,
+    speculativeDecodingMode: Int? = null,
   ): Long
 
   /**

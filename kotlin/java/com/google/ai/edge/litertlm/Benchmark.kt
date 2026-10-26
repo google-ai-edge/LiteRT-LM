@@ -91,6 +91,9 @@ data class BenchmarkInfo(
  *   the KV cache, like [EngineConfig.maxNumTokens]. When `null`, use the default value from the
  *   model or the engine. Note that the KV cache size affects the prefill and decode speed. The
  *   value that the engine actually used is returned in [BenchmarkInfo.maxNumTokens].
+ * @param speculativeDecodingConfig The speculative decoding configuration of the benchmarked engine
+ *   (see [EngineConfig.speculativeDecodingConfig]). `null` keeps the runtime default (off), unless
+ *   the deprecated [ExperimentalFlags.enableSpeculativeDecoding] is set.
  * @return The benchmark info.
  */
 @ExperimentalApi
@@ -106,6 +109,7 @@ fun benchmark(
   repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
   loraConfig: LoraConfig? = null,
   maxNumTokens: Int? = null,
+  speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 ): BenchmarkInfo {
   require(maxNumTokens == null || maxNumTokens > 0) {
     "maxNumTokens must be positive, but got $maxNumTokens."
@@ -127,6 +131,7 @@ fun benchmark(
       ExperimentalFlags.enableSpeculativeDecoding,
       ExperimentalFlags.enableYnnpack,
       maxNumTokens ?: -1,
+      speculativeDecodingConfig?.mode?.value,
     )
 
   try {
