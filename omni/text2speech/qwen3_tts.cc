@@ -80,6 +80,21 @@ void PopulateQwen3TtsConfigFromProto(const lm::proto::Qwen3Tts& proto,
   if (proto.has_max_frames() && proto.max_frames() > 0) {
     config.max_frames = proto.max_frames();
   }
+  if (proto.has_seed()) {
+    config.seed = proto.seed();
+  }
+  if (proto.has_do_sample()) {
+    config.do_sample = proto.do_sample();
+  }
+  if (proto.has_temperature() && proto.temperature() > 0.0f) {
+    config.temperature = proto.temperature();
+  }
+  if (proto.has_top_k() && proto.top_k() >= 0) {
+    config.top_k = proto.top_k();
+  }
+  if (proto.has_repetition_penalty() && proto.repetition_penalty() > 0.0f) {
+    config.repetition_penalty = proto.repetition_penalty();
+  }
 }
 
 class Qwen3TtsSessionFactory : public TtsSessionFactory {
