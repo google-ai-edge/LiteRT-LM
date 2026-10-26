@@ -235,6 +235,7 @@ cc_test(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
@@ -243,6 +244,7 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
         "@litert//litert/test:matchers",
+        "//runtime/proto:executor_metadata_cc_proto",
     ],
 )
 

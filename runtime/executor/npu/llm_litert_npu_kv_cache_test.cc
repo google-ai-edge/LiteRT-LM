@@ -14,9 +14,13 @@
 
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <numeric>
 #include <optional>
+#include <ostream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,6 +28,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -33,6 +38,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/proto/executor_metadata.pb.h"
 
 namespace litert::lm {
 namespace {
@@ -1454,6 +1460,466 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdate_WithKVCacheBufferInfo_LocalAndGlobal) {
     EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers, &layout).ok());
   }
 }
+
+// =============================================================================
+// Sliding window models with ring buffer KV caches.
+//
+// These tests use the exact KV cache shapes of the Gemma 4 12B and 26B A4B NPU
+// models. Both keep the sliding window layers in a 1024-slot ring buffer (8 KV
+// heads of dimension 256) and the global layers in a cache that spans the whole
+// context (1 or 2 KV heads of dimension 512). The KV caches are f16, K caches
+// are [1, heads, seq, dim] and V caches are [1, heads, dim, seq].
+//   - Gemma 4 12B: 128-token prefill chunks, a 16383-token global cache and no
+//     ExecutorMetadata, so the layout is inferred from the tensor shapes.
+//   - Gemma 4 26B A4B: 1024-token prefill chunks, i.e. as long as the ring
+//     buffer, a 32768-token global cache and ExecutorMetadata.
+//
+// Each model is reduced to one sliding window layer (0) and one global layer
+// (5). The layout is resolved the way the executor resolves it: from the KV
+// caches only (without the slices), with the global cache length as
+// `global_cache_length`. The cache updates go through `NpuKVCache`, which the
+// executor drives the same way.
+// =============================================================================
+
+struct SlidingWindowModel {
+  absl::string_view name;
+  int prefill_chunk_size;
+  // Length of the sliding window layers' ring buffer KV cache.
+  int ring_buffer_size;
+  // Length of the global layers' KV cache.
+  int global_cache_length;
+  int num_local_heads;
+  int local_head_dim;
+  int num_global_heads;
+  int global_head_dim;
+  bool has_executor_metadata;
+};
+
+constexpr SlidingWindowModel kSlidingWindowModels[] = {
+    {.name = "Gemma4_12B",
+     .prefill_chunk_size = 128,
+     .ring_buffer_size = 1024,
+     .global_cache_length = 16383,
+     .num_local_heads = 8,
+     .local_head_dim = 256,
+     .num_global_heads = 1,
+     .global_head_dim = 512,
+     .has_executor_metadata = false},
+    {.name = "Gemma4_26B_A4B",
+     .prefill_chunk_size = 1024,
+     .ring_buffer_size = 1024,
+     .global_cache_length = 32768,
+     .num_local_heads = 8,
+     .local_head_dim = 256,
+     .num_global_heads = 2,
+     .global_head_dim = 512,
+     .has_executor_metadata = true},
+};
+
+void PrintTo(const SlidingWindowModel& model, std::ostream* os) {
+  *os << model.name;
+}
+
+// One of the four KV caches of the reduced model, together with its slice.
+struct KVTensor {
+  absl::string_view cache_name;
+  absl::string_view slice_name;
+  bool is_ring_buffer;
+  // V tensors have the sequence on the last axis: [1, heads, dim, seq].
+  bool is_value;
+  int num_heads;
+  int head_dim;
+  int cache_length;
+  // Makes the values stored in each of the four tensors distinct.
+  int id;
+};
+
+std::vector<KVTensor> KVTensors(const SlidingWindowModel& model) {
+  return {
+      {.cache_name = "kv_cache_k_0",
+       .slice_name = "kv_slice_k_0",
+       .is_ring_buffer = true,
+       .is_value = false,
+       .num_heads = model.num_local_heads,
+       .head_dim = model.local_head_dim,
+       .cache_length = model.ring_buffer_size,
+       .id = 0},
+      {.cache_name = "kv_cache_v_0",
+       .slice_name = "kv_slice_v_0",
+       .is_ring_buffer = true,
+       .is_value = true,
+       .num_heads = model.num_local_heads,
+       .head_dim = model.local_head_dim,
+       .cache_length = model.ring_buffer_size,
+       .id = 1},
+      {.cache_name = "kv_cache_k_5",
+       .slice_name = "kv_slice_k_5",
+       .is_ring_buffer = false,
+       .is_value = false,
+       .num_heads = model.num_global_heads,
+       .head_dim = model.global_head_dim,
+       .cache_length = model.global_cache_length,
+       .id = 2},
+      {.cache_name = "kv_cache_v_5",
+       .slice_name = "kv_slice_v_5",
+       .is_ring_buffer = false,
+       .is_value = true,
+       .num_heads = model.num_global_heads,
+       .head_dim = model.global_head_dim,
+       .cache_length = model.global_cache_length,
+       .id = 3},
+  };
+}
+
+// Returns the shape of `tensor` for `seq_len` tokens.
+std::vector<int32_t> Dims(const KVTensor& tensor, int seq_len) {
+  if (tensor.is_value) {
+    return {1, tensor.num_heads, tensor.head_dim, seq_len};
+  }
+  return {1, tensor.num_heads, seq_len, tensor.head_dim};
+}
+
+// Returns the index of an element of `tensor` with room for `seq_len` tokens.
+int64_t ElementIndex(const KVTensor& tensor, int seq_len, int head, int seq,
+                     int channel) {
+  if (tensor.is_value) {
+    return (int64_t{head} * tensor.head_dim + channel) * seq_len + seq;
+  }
+  return (int64_t{head} * seq_len + seq) * tensor.head_dim + channel;
+}
+
+// Returns the f16 bit pattern that `tensor` holds for the token at `position`,
+// in `head` and `channel`. The pattern is never 0, which marks a slot that was
+// never written, and it changes with every argument, so that a value that lands
+// in the wrong slot, head, channel or tensor is detected.
+uint16_t KVValue(const KVTensor& tensor, int position, int head, int channel) {
+  uint32_t x = static_cast<uint32_t>(position) * 0x9E3779B1u;
+  x ^= static_cast<uint32_t>(head + 1) * 0x85EBCA77u;
+  x ^= static_cast<uint32_t>(channel + 1) * 0xC2B2AE3Du;
+  x ^= static_cast<uint32_t>(tensor.id + 1) * 0x27D4EB2Fu;
+  x ^= x >> 15;
+  x *= 0x2C1B3C6Du;
+  x ^= x >> 12;
+  return static_cast<uint16_t>(x % 0xFFFFu + 1);
+}
+
+// Positions of the padding tokens of a partially filled prefill slice, which
+// must never reach the KV caches.
+constexpr int kPaddingPosition = 1 << 24;
+
+// The token position that each KV cache slot is expected to hold, or -1 for a
+// slot that was never written.
+class ExpectedKVCache {
+ public:
+  ExpectedKVCache(int ring_buffer_size, int global_cache_length)
+      : ring_buffer_slots_(ring_buffer_size, -1),
+        global_slots_(global_cache_length, -1) {}
+
+  void Write(int position) {
+    ring_buffer_slots_[position % ring_buffer_slots_.size()] = position;
+    global_slots_[position] = position;
+  }
+
+  const std::vector<int>& Slots(const KVTensor& tensor) const {
+    return tensor.is_ring_buffer ? ring_buffer_slots_ : global_slots_;
+  }
+
+ private:
+  std::vector<int> ring_buffer_slots_;
+  std::vector<int> global_slots_;
+};
+
+// Returns ExecutorMetadata like the 26B A4B model's: one state buffer per KV
+// cache, with its sequence axis and its (ring buffer or global) cache length.
+proto::ExecutorMetadata CreateExecutorMetadata(
+    const SlidingWindowModel& model) {
+  proto::ExecutorMetadata metadata;
+  proto::LlmExecutorMetadata& llm_metadata =
+      *metadata.mutable_llm_executor_metadata();
+  llm_metadata.set_max_history_size(model.global_cache_length);
+  for (const KVTensor& tensor : KVTensors(model)) {
+    proto::StateBuffer& state_buffer = *llm_metadata.add_state_buffers();
+    const std::string name(tensor.cache_name);
+    state_buffer.set_prefill_input_name(name);
+    state_buffer.set_prefill_output_name(name);
+    state_buffer.set_decode_input_name(name);
+    state_buffer.set_decode_output_name(name);
+    if (tensor.is_ring_buffer) {
+      state_buffer.set_type(tensor.is_value
+                                ? proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE
+                                : proto::StateBuffer::TYPE_LOCAL_KEY_CACHE);
+      state_buffer.set_minimum_sequence_length(tensor.cache_length);
+    } else {
+      state_buffer.set_type(tensor.is_value
+                                ? proto::StateBuffer::TYPE_GLOBAL_VALUE_CACHE
+                                : proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE);
+    }
+    state_buffer.set_sequence_axis(tensor.is_value ? 3 : 2);
+    state_buffer.set_maximum_sequence_length(tensor.cache_length);
+  }
+  return metadata;
+}
+
+class SlidingWindowModelKVCacheTest
+    : public NpuKVCacheTest,
+      public ::testing::WithParamInterface<SlidingWindowModel> {
+ protected:
+  void SetUp() override {
+    NpuKVCacheTest::SetUp();
+    const SlidingWindowModel& model = GetParam();
+    for (const KVTensor& tensor : KVTensors(model)) {
+      kv_caches_.emplace(tensor.cache_name,
+                         CreateF16Buffer(Dims(tensor, tensor.cache_length)));
+    }
+    if (model.has_executor_metadata) {
+      executor_metadata_ = CreateExecutorMetadata(model);
+    }
+    // Like the executor, resolve the layout from the KV caches, which do not
+    // include the slices, with the length of the longest KV cache as the
+    // global cache length.
+    layout_ = NpuGraphLayout::Resolve(
+        model.prefill_chunk_size, model.global_cache_length, kv_caches_,
+        model.has_executor_metadata ? &executor_metadata_ : nullptr);
+  }
+
+  // Returns a zero-initialized f16 buffer.
+  TensorBuffer CreateF16Buffer(const std::vector<int32_t>& dims) {
+    int64_t num_elements = 1;
+    for (int32_t dim : dims) {
+      num_elements *= dim;
+    }
+    return CreateTensorBufferWithDims(std::vector<uint16_t>(num_elements, 0),
+                                      ElementType::Float16, dims);
+  }
+
+  // Fills `slice`, which has room for `slice_length` tokens, with the values of
+  // the `num_tokens` tokens from `start_position` on, followed by padding.
+  void FillSlice(TensorBuffer& slice, const KVTensor& tensor, int slice_length,
+                 int start_position, int num_tokens) {
+    auto lock = TensorBufferScopedLock::Create<uint16_t>(
+        slice, TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(lock.HasValue());
+    uint16_t* data = lock->second;
+    for (int head = 0; head < tensor.num_heads; ++head) {
+      for (int i = 0; i < slice_length; ++i) {
+        const int position =
+            i < num_tokens ? start_position + i : kPaddingPosition + i;
+        for (int channel = 0; channel < tensor.head_dim; ++channel) {
+          data[ElementIndex(tensor, slice_length, head, i, channel)] =
+              KVValue(tensor, position, head, channel);
+        }
+      }
+    }
+  }
+
+  // Expects that every slot of the ring buffers and the slots
+  // [`global_begin`, `global_end`) of the global caches hold the values of the
+  // tokens in `expected`, and stops the test otherwise.
+  void ExpectKVCachesHold(const ExpectedKVCache& expected, int global_begin,
+                          int global_end) {
+    for (const KVTensor& tensor : KVTensors(GetParam())) {
+      if (tensor.is_ring_buffer) {
+        ExpectKVCacheHolds(tensor, expected.Slots(tensor), 0,
+                           tensor.cache_length);
+      } else {
+        ExpectKVCacheHolds(tensor, expected.Slots(tensor), global_begin,
+                           std::min(global_end, tensor.cache_length));
+      }
+    }
+    ASSERT_FALSE(HasFailure());
+  }
+
+  void ExpectKVCacheHolds(const KVTensor& tensor,
+                          const std::vector<int>& slot_positions,
+                          int begin_slot, int end_slot) {
+    auto lock = TensorBufferScopedLock::Create<uint16_t>(
+        kv_caches_.at(tensor.cache_name), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    const uint16_t* data = lock->second;
+    int64_t num_mismatches = 0;
+    std::string first_mismatch;
+    for (int head = 0; head < tensor.num_heads; ++head) {
+      for (int slot = begin_slot; slot < end_slot; ++slot) {
+        const int position = slot_positions[slot];
+        for (int channel = 0; channel < tensor.head_dim; ++channel) {
+          const uint16_t expected =
+              position < 0 ? 0 : KVValue(tensor, position, head, channel);
+          const uint16_t actual = data[ElementIndex(tensor, tensor.cache_length,
+                                                    head, slot, channel)];
+          if (actual != expected && num_mismatches++ == 0) {
+            first_mismatch =
+                absl::StrCat("head ", head, ", slot ", slot, ", channel ",
+                             channel, " (expected position ", position, ")");
+          }
+        }
+      }
+    }
+    EXPECT_EQ(num_mismatches, 0)
+        << tensor.cache_name << ": first mismatch at " << first_mismatch;
+  }
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> kv_caches_;
+  proto::ExecutorMetadata executor_metadata_;
+  NpuGraphLayout layout_;
+};
+
+TEST_P(SlidingWindowModelKVCacheTest, ResolvesLayoutFromKVCaches) {
+  const SlidingWindowModel& model = GetParam();
+  EXPECT_TRUE(layout_.uses_ringbuffer);
+  EXPECT_EQ(layout_.global_cache_length, model.global_cache_length);
+  ASSERT_TRUE(layout_.local_cache_length.has_value());
+  EXPECT_EQ(*layout_.local_cache_length, model.ring_buffer_size);
+  EXPECT_EQ(layout_.sliding_window_size, model.ring_buffer_size);
+
+  for (const KVTensor& tensor : KVTensors(model)) {
+    // The slices are not among the buffers that the layout is resolved from,
+    // so they get the sequence axis of their KV cache.
+    for (absl::string_view name : {tensor.cache_name, tensor.slice_name}) {
+      SCOPED_TRACE(name);
+      auto it = layout_.kv_cache_buffers.find(name);
+      ASSERT_TRUE(it != layout_.kv_cache_buffers.end());
+      EXPECT_EQ(it->second.sequence_axis, tensor.is_value ? 3 : 2);
+      EXPECT_EQ(it->second.is_local, tensor.is_ring_buffer);
+    }
+  }
+}
+
+// Runs a conversation through the cache updates: a first turn that fills only
+// part of a prefill chunk, full chunks through two wrap-arounds of the ring
+// buffer (for the 26B A4B model, each of them overwrites the whole ring
+// buffer), a full chunk that starts 24 slots before the end of the ring buffer,
+// decode steps across the end of the ring buffer, a short follow-up turn, and a
+// decode step at the last position of the global cache. After every step, every
+// slot of the ring buffers holds its latest token and the global caches hold
+// every token at its position, and nothing else: neither the padding of a
+// partial prefill chunk nor values in the wrong place.
+TEST_P(SlidingWindowModelKVCacheTest, PrefillAndDecodeWrapAroundRingBuffer) {
+  const SlidingWindowModel& model = GetParam();
+  const int chunk = model.prefill_chunk_size;
+  const int ring = model.ring_buffer_size;
+
+  // Set up the cache update buffers like `NpuKVCache::Create` does: prefill and
+  // decode share the KV caches, and each has its own slices (the outputs of the
+  // text decoder), input positions and valid mask.
+  absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_slices;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_slices;
+  InferenceContext context;
+  for (const KVTensor& tensor : KVTensors(model)) {
+    prefill_slices.emplace(tensor.slice_name,
+                           CreateF16Buffer(Dims(tensor, chunk)));
+    decode_slices.emplace(tensor.slice_name, CreateF16Buffer(Dims(tensor, 1)));
+    TensorBuffer& kv_cache = kv_caches_.at(tensor.cache_name);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.prefill_input_buffers[tensor.cache_name], kv_cache.Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.prefill_output_buffers[tensor.cache_name],
+        kv_cache.Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(context.decode_input_buffers[tensor.cache_name],
+                                kv_cache.Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.decode_output_buffers[tensor.cache_name], kv_cache.Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.prefill_input_buffers[tensor.slice_name],
+        prefill_slices.at(tensor.slice_name).Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.decode_input_buffers[tensor.slice_name],
+        decode_slices.at(tensor.slice_name).Duplicate());
+  }
+  context.prefill_input_buffers[CacheUpdateSignatures::kInputPos] =
+      CreateTensorBufferWithDims(std::vector<int32_t>(chunk, 0),
+                                 ElementType::Int32, {chunk});
+  context.prefill_input_buffers[CacheUpdateSignatures::kInputValidMask] =
+      CreateTensorBufferWithDims(std::vector<uint8_t>(chunk, 0),
+                                 ElementType::Bool, {1, chunk});
+  context.decode_input_buffers[CacheUpdateSignatures::kInputPos] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  context.decode_input_buffers[CacheUpdateSignatures::kInputValidMask] =
+      CreateTensorBufferWithDims(std::vector<uint8_t>{0}, ElementType::Bool,
+                                 {1, 1});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      NpuKVCache kv_cache_update,
+      NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH,
+                                /*compiled_model=*/nullptr, std::move(context),
+                                /*kv_quant_params=*/{}, &layout_));
+
+  ExpectedKVCache expected(ring, model.global_cache_length);
+  int position = 0;
+  auto prefill = [&](int num_tokens) {
+    SCOPED_TRACE(absl::StrCat("Prefill of ", num_tokens, " tokens at position ",
+                              position));
+    for (const KVTensor& tensor : KVTensors(model)) {
+      ASSERT_NO_FATAL_FAILURE(FillSlice(prefill_slices.at(tensor.slice_name),
+                                        tensor, chunk, position, num_tokens));
+    }
+    std::vector<int32_t> positions(num_tokens);
+    std::iota(positions.begin(), positions.end(), position);
+    LITERT_ASSERT_OK(kv_cache_update.SetPrefillPositions(positions));
+    LITERT_ASSERT_OK(kv_cache_update.RunPrefill());
+    for (int i = 0; i < num_tokens; ++i) {
+      expected.Write(position + i);
+    }
+    // Also check where the padding of the chunk would land.
+    ASSERT_NO_FATAL_FAILURE(
+        ExpectKVCachesHold(expected, position, position + chunk));
+    position += num_tokens;
+  };
+  auto prefill_until = [&](int end_position) {
+    while (position < end_position) {
+      ASSERT_NO_FATAL_FAILURE(
+          prefill(std::min(chunk, end_position - position)));
+    }
+  };
+  auto decode = [&]() {
+    SCOPED_TRACE(absl::StrCat("Decode at position ", position));
+    for (const KVTensor& tensor : KVTensors(model)) {
+      ASSERT_NO_FATAL_FAILURE(FillSlice(decode_slices.at(tensor.slice_name),
+                                        tensor, /*slice_length=*/1, position,
+                                        /*num_tokens=*/1));
+    }
+    LITERT_ASSERT_OK(kv_cache_update.SetDecodePosition(position));
+    LITERT_ASSERT_OK(kv_cache_update.RunDecode());
+    expected.Write(position);
+    ASSERT_NO_FATAL_FAILURE(
+        ExpectKVCachesHold(expected, position, position + 1));
+    ++position;
+  };
+  // Returns the first position of the next pass over the ring buffer.
+  auto next_ring_buffer_pass = [&]() { return (position / ring + 1) * ring; };
+
+  // A first turn that fills only part of a prefill chunk.
+  ASSERT_NO_FATAL_FAILURE(prefill(37));
+  ASSERT_NO_FATAL_FAILURE(decode());
+  ASSERT_NO_FATAL_FAILURE(decode());
+  // Full prefill chunks through two wrap-arounds of the ring buffer.
+  while (position < 2 * ring + 39) {
+    ASSERT_NO_FATAL_FAILURE(prefill(chunk));
+  }
+  // A full prefill chunk that starts 24 slots before the end of the ring
+  // buffer.
+  ASSERT_NO_FATAL_FAILURE(prefill_until(next_ring_buffer_pass() - 24));
+  ASSERT_NO_FATAL_FAILURE(prefill(chunk));
+  // Decode steps across the end of the ring buffer.
+  ASSERT_NO_FATAL_FAILURE(prefill_until(next_ring_buffer_pass() - 3));
+  for (int i = 0; i < 6; ++i) {
+    ASSERT_NO_FATAL_FAILURE(decode());
+  }
+  // A short follow-up turn.
+  ASSERT_NO_FATAL_FAILURE(prefill(5));
+  // The last position of the global cache.
+  position = model.global_cache_length - 1;
+  ASSERT_NO_FATAL_FAILURE(decode());
+  // Nothing outside the written positions changed in the global caches.
+  ASSERT_NO_FATAL_FAILURE(
+      ExpectKVCachesHold(expected, 0, model.global_cache_length));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SlidingWindowModels, SlidingWindowModelKVCacheTest,
+    ::testing::ValuesIn(kSlidingWindowModels),
+    [](const ::testing::TestParamInfo<SlidingWindowModel>& info) {
+      return std::string(info.param.name);
+    });
 
 }  // namespace
 }  // namespace litert::lm
