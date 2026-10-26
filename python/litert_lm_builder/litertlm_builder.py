@@ -1926,6 +1926,7 @@ def pack(
     output_path: str,
     jinja_prompt_template_path: str | None = None,
 ) -> str:
+  # pyformat: disable
   """Packs a TOML configuration and its referenced files into a LiteRT-LM file.
 
   Args:
@@ -1933,6 +1934,15 @@ def pack(
     output_path: The path where the packed LiteRT-LM file will be saved.
     jinja_prompt_template_path: Optional path to a Jinja file to overwrite
       jinja_prompt_template.
+
+  Returns:
+    The path to the generated LiteRT-LM file.
+  """
+  # pyformat: enable
+  packed_path, _ = pack_with_summary(
+      toml_path,
+      output_path,
+      jinja_prompt_template_path,
   )
   return packed_path
 
