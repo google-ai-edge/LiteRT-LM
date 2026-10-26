@@ -14,13 +14,10 @@
  * limitations under the License.
  */
 
-// taze: BigInt from //third_party/javascript/node_modules/typescript:es2020.bigint
+// Tests for behavior specific to ReadableStreamDataStreamWrapper. Behavior
+// shared with BlobDataStreamWrapper is tested in data_stream_wrappers_test.ts.
 
-import {
-  ReadableStreamDataStreamResult,
-  ReadableStreamDataStreamWrapper,
-  ReadableStreamDataStreamWrapperInterface,
-} from './readable_stream_data_stream_wrapper';
+import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
 
 describe('ReadableStreamDataStreamWrapper', () => {
   let wasmHeap: {heap: Uint8Array};
@@ -95,83 +92,6 @@ describe('ReadableStreamDataStreamWrapper', () => {
         return createWrapper(data, bytesPerSlice, {...options, disableByob});
       }
 
-      it('readAndPreserve across slice boundaries', async () => {
-        const data = new Uint8Array(20).fill(0).map((_, i) => i);
-        const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 8);
-        const ptr = 100;
-
-        // Read 12 bytes starting at offset 4 (spans slice 0 and 1)
-        const status = await wrapper.readAndPreserve(ptr, 4, 12);
-        expect(status.error).toBeUndefined();
-        expect(wasmHeap.heap.subarray(ptr, ptr + 12))
-            .toEqual(data.subarray(4, 16));
-      });
-
-      it('readAndDiscard across slice boundaries', async () => {
-        const data = new Uint8Array(20).fill(0).map((_, i) => i);
-        const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 8);
-        const ptr = 100;
-
-        const status = await wrapper.readAndDiscard(ptr, 4, 12);
-        expect(status.error).toBeUndefined();
-        expect(wasmHeap.heap.subarray(ptr, ptr + 12))
-            .toEqual(data.subarray(4, 16));
-
-        // Subsequent read of already discarded data should fail
-        const status2 = await wrapper.readAndPreserve(ptr + 20, 4, 4);
-        expect(status2.error).toBeDefined();
-        expect(status2.error?.message)
-            .toContain('overlaps discarded regions: [[4, 16]]');
-      });
-
-      it('discards non-contiguous regions then the whole range', async () => {
-        const data = new Uint8Array(20).fill(0).map((_, i) => i);
-        const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 20);
-
-        // Discard [0, 5], [10, 15], then [0, 20]
-        wrapper.discard(0, 5);
-        wrapper.discard(10, 5);
-        wrapper.discard(0, 20);
-
-        // This checks if the slice is fully discarded.
-        // If we try to read, it should throw because it's discarded.
-        const status = await wrapper.readAndPreserve(0, 0, 5);
-        expect(status.error).toBeDefined();
-        expect(status.error?.message)
-            .toContain('overlaps discarded regions: [[0, 20]]');
-      });
-
-      it('handles unaligned EOF correctly', async () => {
-        const data = new Uint8Array(12).fill(7);
-        const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 8);
-        const ptr = 0;
-
-        // First slice is full (8 bytes), second is partial (4 bytes)
-        const status = await wrapper.readAndPreserve(ptr, 0, 12);
-        expect(status.error).toBeUndefined();
-        expect(wasmHeap.heap.subarray(0, 12)).toEqual(data);
-      });
-
-      it('fails on early EOF', async () => {
-        const data = new Uint8Array(10).fill(1);
-        const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 20);
-
-        // Request 15 bytes but only 10 available
-        const status = await wrapper.readAndPreserve(0, 0, 15);
-        expect(status.error).toBeDefined();
-        expect(status.error?.message).toContain('Expected 5 more bytes');
-      });
-
-      it('fails when BigInt exceeds MAX_SAFE_INTEGER', async () => {
-        const data = new Uint8Array(10);
-        const wrapper = createTestWrapper(data, 10);
-        const largeValue = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
-
-        const status = await wrapper.readAndPreserve(0, largeValue, 1n);
-        expect(status.error).toBeDefined();
-        expect(status.error?.message).toContain('too large');
-      });
-
       it('fails on stream error', async () => {
         const data = new Uint8Array(10);
         const wrapper = createTestWrapper(data, 10, {shouldError: true});
@@ -179,59 +99,6 @@ describe('ReadableStreamDataStreamWrapper', () => {
         const status = await wrapper.readAndPreserve(0, 0, 5);
         expect(status.error).toBeDefined();
         expect(status.error?.message).toContain('Simulated stream error');
-      });
-
-      it('handles zero-length read correctly', async () => {
-        const data = new Uint8Array(10).fill(5);
-        const wrapper = createTestWrapper(data, 10);
-
-        const status = await wrapper.readAndPreserve(0, 0, 0);
-        expect(status.error).toBeUndefined();
-      });
-
-      it('fails on overlapping discards', async () => {
-        const data = new Uint8Array(10).fill(1);
-        const wrapper = createTestWrapper(data, 10);
-
-        // Discard [0, 2], then [4, 6], then [2, 4]. [0, 6] should be merged.
-        wrapper.discard(0, 2);
-        wrapper.discard(4, 2);
-        wrapper.discard(2, 2);
-
-        // Then discard [6, 10]. The whole slice [0, 10] should be discarded.
-        wrapper.discard(6, 4);
-
-        const status = await wrapper.readAndPreserve(0, 0, 1);
-        expect(status.error).toBeDefined();
-        expect(status.error?.message)
-            .toContain('overlaps discarded regions: [[0, 10]]');
-      });
-
-      it('fails on overlapping reads', async () => {
-        const data = new Uint8Array(100).fill(1);
-        const wrapper = createTestWrapper(data, 50);
-
-        // Start a read but don't await immediately
-        const p1 = wrapper.readAndPreserve(0, 0, 10);
-        const p2 = wrapper.readAndPreserve(20, 0, 10);
-
-        const [res1, res2] = await Promise.all([p1, p2]);
-
-        // One of them (likely second) should fail because the reader is locked
-        // or because they are both trying to pull from the same stream/reader.
-        expect(res1.error || res2.error).toBeDefined();
-      });
-
-      it('can discard an already partially discarded region', async () => {
-        const data = new Uint8Array(10).fill(1);
-        const wrapper = createTestWrapper(data, 10);
-        wrapper.discard(2, 5);
-        const status = wrapper.discard(3, 7);
-        expect(status.error).toBeUndefined();
-        const status2 = await wrapper.readAndPreserve(0, 6, 4);
-        expect(status2.error).toBeDefined();
-        expect(status2.error?.message)
-            .toContain('overlaps discarded regions: [[2, 10]]');
       });
 
       it('caches undiscarded data when reading past discarded data',
@@ -258,50 +125,6 @@ describe('ReadableStreamDataStreamWrapper', () => {
                .toEqual(data.subarray(18, 20));
          });
 
-      it('does not crash when wasm heap is detached and replaced', async () => {
-        const data = new Uint8Array(10).map((_, i) => i);
-        const wrapper = createTestWrapper(data, 10);
-        const status = await wrapper.readAndPreserve(0, 0, 5);
-        expect(status.error).toBeUndefined();
-
-        // Detach and replace the wasm heap.
-        // This happens when Emscripten resizes the heap.
-        const newHeapBuffer = (wasmHeap.heap.buffer as unknown as {
-                                transfer(): ArrayBuffer
-                              }).transfer();
-        wasmHeap.heap = new Uint8Array(newHeapBuffer);
-
-        const status2 = await wrapper.readAndPreserve(5, 5, 5);
-        expect(status2.error).toBeUndefined();
-        expect(wasmHeap.heap.subarray(0, 10)).toEqual(data);
-      });
-
-      it('implements ReadableStreamDataStreamWrapperInterface with valid BigInt args', async () => {
-        const data = new Uint8Array(20).fill(0).map((_, i) => i);
-        const wrapper: ReadableStreamDataStreamWrapperInterface =
-            createTestWrapper(data, /* bytesPerSlice= */ 8);
-        const ptr = 100;
-
-        // readAndPreserve with valid BigInt
-        const preserveStatus: ReadableStreamDataStreamResult =
-            await wrapper.readAndPreserve(ptr, 4n, 12n);
-        expect(preserveStatus.error).toBeUndefined();
-        expect(wasmHeap.heap.subarray(ptr, ptr + 12))
-            .toEqual(data.subarray(4, 16));
-
-        // discard with valid BigInt
-        const discardStatus: ReadableStreamDataStreamResult =
-            wrapper.discard(0n, 4n);
-        expect(discardStatus.error).toBeUndefined();
-
-        // readAndDiscard with valid BigInt
-        const readDiscardStatus: ReadableStreamDataStreamResult =
-            await wrapper.readAndDiscard(ptr + 20, 16n, 4n);
-        expect(readDiscardStatus.error).toBeUndefined();
-        expect(wasmHeap.heap.subarray(ptr + 20, ptr + 24))
-            .toEqual(data.subarray(16, 20));
-      });
-
       it('readAndDiscard fails gracefully on stream error', async () => {
         const data = new Uint8Array(10);
         const wrapper = createTestWrapper(data, 10, {shouldError: true});
@@ -309,37 +132,6 @@ describe('ReadableStreamDataStreamWrapper', () => {
         const status = await wrapper.readAndDiscard(0, 0, 5);
         expect(status.error).toBeDefined();
         expect(status.error?.message).toContain('Simulated stream error');
-      });
-
-      it('readAndDiscard fails when BigInt exceeds MAX_SAFE_INTEGER', async () => {
-        const data = new Uint8Array(10);
-        const wrapper = createTestWrapper(data, 10);
-        const largeValue = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
-
-        const status = await wrapper.readAndDiscard(0, largeValue, 1n);
-        expect(status.error).toBeDefined();
-        expect(status.error?.message).toContain('too large');
-      });
-
-      it('discard fails gracefully when BigInt exceeds MAX_SAFE_INTEGER', () => {
-        const data = new Uint8Array(10);
-        const wrapper = createTestWrapper(data, 10);
-        const largeValue = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
-
-        const status = wrapper.discard(largeValue, 1n);
-        expect(status.error).toBeDefined();
-        expect(status.error?.message).toContain('too large');
-      });
-
-      it('discard handles zero and negative count gracefully', () => {
-        const data = new Uint8Array(10);
-        const wrapper = createTestWrapper(data, 10);
-
-        const statusZero = wrapper.discard(0, 0);
-        expect(statusZero.error).toBeUndefined();
-
-        const statusNegative = wrapper.discard(0, -5);
-        expect(statusNegative.error).toBeUndefined();
       });
 
       it('reads past a region discarded before it was read', async () => {

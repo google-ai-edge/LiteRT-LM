@@ -74,7 +74,7 @@ const BYOB_SCRATCH_BYTES = 4 * 1024 * 1024;
 const MAX_FREE_BUFFERS = 2;
 
 /** A set of half-open [start, end) ranges, kept sorted and merged. */
-class RangeSet {
+export class RangeSet {
   // Sorted, disjoint and non-adjacent, so both starts and ends are strictly
   // increasing.
   private readonly ranges: Array<[number, number]> = [];
@@ -454,12 +454,8 @@ export class ReadableStreamDataStreamWrapper implements
   }
 
   private checkNotDiscarded(start: number, end: number): void {
-    const regions = this.discarded.overlapping(start, end);
-    if (regions.length > 0) {
-      throw new Error(`Read of [${start}, ${end}) overlaps discarded regions: [${
-          regions.map(([rStart, rEnd]) => `[${rStart}, ${rEnd}]`)
-              .join(', ')}]`);
-    }
+    const error = getDiscardedReadError(this.discarded, start, end);
+    if (error) throw error;
   }
 
   /** Splits [start, end) at slice boundaries. */
@@ -491,4 +487,16 @@ export function toNumber(val: number|bigint): number {
 /** Converts a caught value to an Error, which C++ expects. */
 export function toError(e: unknown): Error {
   return e instanceof Error ? e : new Error(String(e));
+}
+
+/**
+ * Returns an error for a read of [start, end) if it overlaps `discarded`, or
+ * undefined if it doesn't.
+ */
+export function getDiscardedReadError(
+    discarded: RangeSet, start: number, end: number): Error|undefined {
+  const regions = discarded.overlapping(start, end);
+  if (regions.length === 0) return undefined;
+  return new Error(`Read of [${start}, ${end}) overlaps discarded regions: [${
+      regions.map(([rStart, rEnd]) => `[${rStart}, ${rEnd}]`).join(', ')}]`);
 }

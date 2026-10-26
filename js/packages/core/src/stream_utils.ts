@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {BlobDataStreamWrapper} from './blob_data_stream_wrapper.js';
 import {Cleanup} from './cleanup.js';
 import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
 import {LiteRtLmWasm, ModelAssets} from './wasm_binding_types.js';
@@ -47,13 +48,14 @@ export async function modelToStream(
  * `ReadableStreamDataStream` and `ModelAssets`.
  */
 export async function createStreamingModelAssets(
-    model: string | Blob | ReadableStream<Uint8Array>,
+    model: string|Blob|ReadableStream<Uint8Array>,
     wasm: LiteRtLmWasm,
     cleanup: Cleanup,
-): Promise<{modelAssets: ModelAssets; cleanupModelAssets: () => void}> {
-  const modelStream = await modelToStream(model);
-  const streamWrapper =
-      new ReadableStreamDataStreamWrapper(modelStream, () => wasm.HEAPU8);
+    ): Promise<{modelAssets: ModelAssets; cleanupModelAssets: () => void}> {
+  const streamWrapper = model instanceof Blob ?
+      new BlobDataStreamWrapper(model, () => wasm.HEAPU8) :
+      new ReadableStreamDataStreamWrapper(
+          await modelToStream(model), () => wasm.HEAPU8);
   const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
   cleanup.add(() => {
     dataStream.delete();
@@ -67,4 +69,3 @@ export async function createStreamingModelAssets(
   });
   return {modelAssets, cleanupModelAssets};
 }
-

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {BlobDataStreamWrapper} from './blob_data_stream_wrapper.js';
 import {Cleanup} from './cleanup.js';
 import {createStreamingModelAssets, modelToStream} from './stream_utils.js';
 import {LiteRtLmWasm, ModelAssets, ReadableStreamDataStream} from './wasm_binding_types.js';
@@ -60,6 +61,9 @@ describe('stream_utils', () => {
     const {modelAssets, cleanupModelAssets} =
         await createStreamingModelAssets(blob, mockWasm, cleanup);
     expect(modelAssets).toBe(mockModelAssets);
+    // A Blob is read with random access instead of as a stream.
+    expect(mockWasm.ReadableStreamDataStream.create)
+        .toHaveBeenCalledWith(jasmine.any(BlobDataStreamWrapper));
     expect(mockWasm.ModelAssets.createStreaming)
         .toHaveBeenCalledWith(mockDataStream);
 

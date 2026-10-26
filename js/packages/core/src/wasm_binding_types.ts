@@ -16,7 +16,7 @@
 
 import {WasmModule} from '@litertjs/wasm-utils';
 
-import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
+import {ReadableStreamDataStreamWrapper, ReadableStreamDataStreamWrapperInterface} from './readable_stream_data_stream_wrapper.js';
 
 export {ReadableStreamDataStreamWrapper};
 
@@ -517,7 +517,8 @@ export declare interface BenchmarkInfo {
 
 declare interface ReadableStreamDataStreamConstructor {
   new(...args: never[]): ReadableStreamDataStream;
-  create(stream: ReadableStreamDataStreamWrapper): ReadableStreamDataStream;
+  create(stream: ReadableStreamDataStreamWrapperInterface):
+      ReadableStreamDataStream;
 }
 
 declare const ReadableStreamDataStreamBrand: unique symbol;
