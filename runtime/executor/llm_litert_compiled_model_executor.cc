@@ -307,6 +307,38 @@ GetPerLayerEmbeddingsFromInputs(const ExecutorInputs& inputs) {
   return absl::NotFoundError("No per-layer embeddings found in inputs.");
 }
 
+// Populates `out_embedding` for the last token of a prefill batch
+// (`ids.back()`). Uses `lookup` when available; otherwise slices the final
+// token's embedding from the caller-supplied `inputs` tensor buffer of shape
+// [1, num_tokens, dim].
+absl::Status PopulateLastTokenEmbedding(
+    int token_id, size_t num_tokens, EmbeddingLookupManager* lookup,
+    const ExecutorInputs* inputs,
+    absl::StatusOr<std::pair<const TensorBuffer*, int>> (*get_from_inputs)(
+        const ExecutorInputs&),
+    std::vector<float>& out_embedding) {
+  if (lookup != nullptr) {
+    return lookup->LookupPrefill(token_id, out_embedding);
+  }
+  if (inputs == nullptr) {
+    return absl::InvalidArgumentError(
+        "Prefill requires inputs when embedding lookup is null.");
+  }
+  LITERT_ASSIGN_OR_RETURN(auto emb_and_token, get_from_inputs(*inputs));
+  if (emb_and_token.first == nullptr) {
+    return absl::InvalidArgumentError(
+        "Prefill requires embeddings in inputs when embedding lookup is null.");
+  }
+  if (num_tokens > 0) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto emb_span, ReferTensorBufferAsSpan<float>(*emb_and_token.first));
+    absl::Span<const float> last_tok_emb =
+        GetSpanForChunk(emb_span, num_tokens, num_tokens - 1);
+    out_embedding.assign(last_tok_emb.begin(), last_tok_emb.end());
+  }
+  return absl::OkStatus();
+}
+
 absl::Status InitializeAuxiliaryExecutorComponents(
     ::litert::Environment& lrt_env,
     const LlmExecutorSettings& executor_settings, CompiledModel& compiled_model,
@@ -510,6 +542,35 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::FillInputBufferWithToken(
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtCompiledModelExecutorBase::LookupPendingTokenEmbeddings(
+    TokenData& token) {
+  if (!signatures_.input_tokens.empty()) {
+    return absl::OkStatus();
+  }
+  // `FillInputBufferWithToken` writes the token ID into the embedding buffer
+  // when the embedding is empty, so fail instead of feeding it to the model.
+  if (token.embedding().empty()) {
+    if (embedding_lookup_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Pending input token requires embedding_lookup_ when "
+          "input_embeddings are used, but embedding_lookup_ is null.");
+    }
+    ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
+        token.id(), token.mutable_embedding()));
+  }
+  if (signatures_.input_per_layer_embeddings.has_value() &&
+      token.per_layer_embedding().empty()) {
+    if (per_layer_embedding_lookup_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Pending input token requires per_layer_embedding_lookup_ when "
+          "required by signature, but per_layer_embedding_lookup_ is null.");
+    }
+    ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
+        token.id(), token.mutable_per_layer_embedding()));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::RollBackProcessedTokens() {
   int current_step = llm_context_->runtime_state().current_step;
   ProcessedTokens& processed_tokens =
@@ -524,10 +585,13 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RollBackProcessedTokens() {
     ABSL_RETURN_IF_ERROR(processed_tokens.RollBackToStep(current_step - 1));
     if (!token_at_step.empty()) {
       RET_CHECK_EQ(token_at_step.size(), 1);
-      // Multimodal input cannot become a pending input token.
-      if (token_at_step.at(0) > 0) {
-        ABSL_RETURN_IF_ERROR(processed_tokens.AddPendingInputToken(
-            {std::make_shared<TokenData>(token_at_step.at(0))}));
+      // Multimodal input (negative sentinel token IDs) cannot become a pending
+      // input token.
+      if (token_at_step.at(0) >= 0) {
+        auto pending_token = std::make_shared<TokenData>(token_at_step.at(0));
+        ABSL_RETURN_IF_ERROR(LookupPendingTokenEmbeddings(*pending_token));
+        ABSL_RETURN_IF_ERROR(
+            processed_tokens.AddPendingInputToken({std::move(pending_token)}));
       } else {
         processed_tokens.AddProcessedTokens({token_at_step.at(0)});
       }
@@ -664,6 +728,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
               pending_input_token,
               prefill_input_buffers[signatures_.input_tokens]));
         } else {
+          ABSL_RETURN_IF_ERROR(
+              LookupPendingTokenEmbeddings(*pending_input_token[0]));
           ABSL_RETURN_IF_ERROR(FillInputBufferWithToken(
               pending_input_token,
               prefill_input_buffers[signatures_.input_embeddings.value()]));
@@ -801,47 +867,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     }
 
     // Add the last token of the current input as a pending input token, to be
-    // used in the next prefill or decode.
+    // used in the next prefill or decode. Look up or slice its embeddings now
+    // so multimodal embeddings are consumed in the correct order.
     auto last_input_token = std::make_shared<TokenData>(ids.back());
     if (!use_token_as_lookup) {
-      if (embedding_lookup_ != nullptr) {
-        // Look up the embeddings for the last token so they can be used in the
-        // next prefill or decode. This has to be done now in the case of
-        // multi-modal prefill so the embeddings are used in the correct order.
-        ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-            last_input_token->id(), last_input_token->mutable_embedding()));
-        if (use_per_layer_embedding) {
-          if (per_layer_embedding_lookup_ != nullptr) {
-            ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
-                last_input_token->id(),
-                last_input_token->mutable_per_layer_embedding()));
-          }
-        }
-      } else if (inputs == nullptr) {
-        return absl::InvalidArgumentError(
-            "Prefill requires inputs when embedding_lookup_ is null.");
-      } else {
-        LITERT_ASSIGN_OR_RETURN(auto embeddings,
-                                GetEmbeddingsFromInputs(*inputs));
-        if (embeddings.first == nullptr) {
-          return absl::InvalidArgumentError(
-              "Prefill requires embeddings in inputs when embedding_lookup_ "
-              "is null.");
-        }
-        LITERT_ASSIGN_OR_RETURN(
-            auto in_lock,
-            TensorBufferScopedLock::Create<const float>(
-                *embeddings.first, TensorBuffer::LockMode::kRead));
-        LITERT_ASSIGN_OR_RETURN(auto in_size, embeddings.first->Size());
-        size_t num_floats = in_size / sizeof(float);
-        size_t num_tokens = ids.size();
-        if (num_tokens > 0) {
-          size_t hidden_dim = num_floats / num_tokens;
-          const float* last_tok_emb =
-              in_lock.second + (num_tokens - 1) * hidden_dim;
-          last_input_token->mutable_embedding().assign(
-              last_tok_emb, last_tok_emb + hidden_dim);
-        }
+      ABSL_RETURN_IF_ERROR(PopulateLastTokenEmbedding(
+          last_input_token->id(), ids.size(), embedding_lookup_.get(), inputs,
+          GetEmbeddingsFromInputs, last_input_token->mutable_embedding()));
+      if (use_per_layer_embedding) {
+        ABSL_RETURN_IF_ERROR(PopulateLastTokenEmbedding(
+            last_input_token->id(), ids.size(),
+            per_layer_embedding_lookup_.get(), inputs,
+            GetPerLayerEmbeddingsFromInputs,
+            last_input_token->mutable_per_layer_embedding()));
       }
     }
     // Add the last input token to the pending input token list.
@@ -2364,14 +2402,7 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::PrefillInternal(
   // return early by storing the token as a pending input token.
   if (!has_pending_input_token && prefill_length == 0) {
     auto pending_token = std::make_shared<TokenData>(ids[0]);
-    if (embedding_lookup_ != nullptr) {
-      ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-          pending_token->id(), pending_token->mutable_embedding()));
-      if (per_layer_embedding_lookup_ != nullptr) {
-        ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
-            pending_token->id(), pending_token->mutable_per_layer_embedding()));
-      }
-    }
+    ABSL_RETURN_IF_ERROR(LookupPendingTokenEmbeddings(*pending_token));
     ABSL_RETURN_IF_ERROR(llm_context_->processed_context()
                              .processed_tokens()
                              .AddPendingInputToken({std::move(pending_token)}));

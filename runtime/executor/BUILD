@@ -478,6 +478,7 @@ cc_test(
         "//runtime/components:sampler",
         "//runtime/components/constrained_decoding:constrained_decoder",
         "//runtime/components/constrained_decoding:fake_constraint",
+        "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:convert_tensor_buffer",

@@ -323,6 +323,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Rolls back the processed tokens to the current step.
   absl::Status RollBackProcessedTokens();
 
+  // Populates `token`'s embedding and per-layer embedding via `LookupPrefill`
+  // when the model takes embeddings as input and `token`'s embeddings are
+  // empty. Existing embeddings are kept. No-op for models that take token IDs.
+  // Returns FailedPrecondition if an embedding is missing and the matching
+  // lookup is null.
+  absl::Status LookupPendingTokenEmbeddings(TokenData& token);
+
   // Swaps the input tensors before Sampling when the sampler handles input.
   // Current input_pos and mask tensors in decode_input_buffers_ are swapped
   // with decode_prev_input_pos_, decode_prev_mask_, and decode_prev_param_,

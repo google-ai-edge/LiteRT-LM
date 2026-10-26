@@ -33,12 +33,14 @@
 #endif  // defined(ASSERT_OK)
 
 #if !defined(ABSL_ASSERT_OK_AND_ASSIGN)
+// DECL may be wrapped in parentheses so that it can contain commas, e.g. a
+// structured binding: ASSERT_OK_AND_ASSIGN((auto [a, b]), MakePair());
 #define ABSL_ASSERT_OK_AND_ASSIGN(DECL, EXPR) \
   _ASSERT_OK_AND_ASSIGN_IMPL(_CONCAT_NAME(_statusor_, __LINE__), DECL, EXPR)
 #define _ASSERT_OK_AND_ASSIGN_IMPL(TMP_VAR, DECL, EXPR) \
   auto&& TMP_VAR = (EXPR);                              \
   ASSERT_TRUE(TMP_VAR.ok()) << TMP_VAR.status();        \
-  DECL = std::move(*TMP_VAR)
+  _LITERT_STRIP_PARENS(DECL) = std::move(*TMP_VAR)
 #endif  // !defined(ABSL_ASSERT_OK_AND_ASSIGN)
 
 #if !defined(ASSERT_OK_AND_ASSIGN)
