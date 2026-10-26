@@ -13,6 +13,38 @@
 # limitations under the License.
 
 # ==============================================================================
+# Host Memory
+# ==============================================================================
+# Exactly one host_memory_<os>.cc implements the platform contract for the
+# target OS. Keep this in sync with the select() in BUILD.
+if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(HOST_MEMORY_SRCS host_memory_linux.cc)
+elseif(WIN32)
+  set(HOST_MEMORY_SRCS host_memory_windows.cc)
+elseif(APPLE)
+  set(HOST_MEMORY_SRCS host_memory_apple.cc)
+else()
+  set(HOST_MEMORY_SRCS host_memory_unsupported.cc)
+endif()
+
+add_litertlm_library(runtime_util_memory_profiling_host_memory STATIC
+  ${HOST_MEMORY_SRCS}
+)
+add_library(LiteRTLM::Runtime::Util::MemoryProfiling::HostMemory
+  ALIAS runtime_util_memory_profiling_host_memory)
+
+target_include_directories(runtime_util_memory_profiling_host_memory
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_util_memory_profiling_host_memory
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Accelerator Memory Monitor
 # ==============================================================================
 # accelerator_memory_monitor.cc is platform-neutral; exactly one
@@ -59,5 +91,6 @@ add_library(runtime_util_memory_profiling_libs INTERFACE)
 add_library(LiteRTLM::Runtime::Util::MemoryProfiling ALIAS runtime_util_memory_profiling_libs)
 
 target_link_libraries(runtime_util_memory_profiling_libs INTERFACE
+  LiteRTLM::Runtime::Util::MemoryProfiling::HostMemory
   LiteRTLM::Runtime::Util::MemoryProfiling::AcceleratorMemoryMonitor
 )
