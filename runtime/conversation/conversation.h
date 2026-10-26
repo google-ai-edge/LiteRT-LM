@@ -207,6 +207,11 @@ class ConversationConfig {
     // Sets whether to filter channel content from the KV cache. This is useful
     // when the model responds with "channel" content, e.g. thinking/reasoning
     // tokens, that should not be persisted in the KV cache.
+    //
+    // It is ignored, i.e. channel content is not filtered, when the engine
+    // benchmarks a fixed number of prefill tokens
+    // (`BenchmarkParams.num_prefill_tokens > 0`), so that the prompt stays the
+    // last prefill turn of the benchmark.
     Builder& SetFilterChannelContentFromKvCache(
         bool filter_channel_content_from_kv_cache) {
       filter_channel_content_from_kv_cache_ =

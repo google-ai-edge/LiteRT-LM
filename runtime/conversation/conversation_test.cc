@@ -377,6 +377,45 @@ TEST(ConversationConfigTest, FilterChannelContentFromKvCache) {
   EXPECT_TRUE(config.filter_channel_content_from_kv_cache());
 }
 
+TEST(ConversationConfigTest, FilterChannelContentFromKvCacheInBenchmark) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(10);
+  // A benchmark that prefills the given prompt as is.
+  engine_settings.GetMutableBenchmarkParams().set_num_prefill_tokens(0);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       ConversationConfig::Builder()
+                           .SetFilterChannelContentFromKvCache(true)
+                           .Build(*engine));
+  EXPECT_TRUE(config.filter_channel_content_from_kv_cache());
+}
+
+TEST(ConversationConfigTest,
+     NoFilterChannelContentFromKvCacheInBenchmarkWithPrefillTokens) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(10);
+  // A benchmark that resizes every prefill to 8 tokens.
+  engine_settings.GetMutableBenchmarkParams().set_num_prefill_tokens(8);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       ConversationConfig::Builder()
+                           .SetFilterChannelContentFromKvCache(true)
+                           .Build(*engine));
+  EXPECT_FALSE(config.filter_channel_content_from_kv_cache());
+}
+
 TEST(ConversationConfigTest, OverwritePromptTemplate) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
@@ -3466,6 +3505,73 @@ TEST_P(ConversationTest, GetBenchmarkInfo) {
                        conversation->GetBenchmarkInfo());
   EXPECT_EQ(benchmark_info_2.GetTotalPrefillTurns(),
             prefill_preface_on_init_ ? 3 : 2);
+}
+
+TEST_P(ConversationTest, GetBenchmarkInfoWithChannelContent) {
+  // The prompt ends with an open channel, so that the whole reply is channel
+  // content.
+  constexpr absl::string_view kPromptTemplateWithOpenChannel = R"jinja(
+{%- for message in messages -%}
+  {{- '<start_of_turn>' + message.role + '\n' -}}
+  {%- if message.content is string -%}
+    {{- message.content -}}
+  {%- else -%}
+    {%- for item in message.content -%}
+      {{- item.text -}}
+    {%- endfor -%}
+  {%- endif -%}
+  {{- '<end_of_turn>\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  {{- '<start_of_turn>assistant\n<|channel>thought\n' -}}
+{%- endif -%}
+)jinja";
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(32);
+  proto::BenchmarkParams& benchmark_params =
+      engine_settings.GetMutableBenchmarkParams();
+  benchmark_params.set_num_prefill_tokens(8);
+  benchmark_params.set_num_decode_tokens(4);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(
+              PromptTemplate(kPromptTemplateWithOpenChannel))
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .SetFilterChannelContentFromKvCache(true)
+          .SetChannels({litert::lm::Channel{
+              .channel_name = "thought",
+              .start = "<|channel>thought\n",
+              .end = "<channel|>",
+          }})
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+  ASSERT_OK_AND_ASSIGN(const Message message,
+                       conversation->SendMessage(Message{
+                           {"role", "user"}, {"content", "Hello world!"}}));
+  EXPECT_TRUE(message.contains("channels"));
+
+  // The prompt is the only prefill turn: the reply isn't prefilled again
+  // without its channel content, which would be resized to 8 tokens too.
+  ASSERT_OK_AND_ASSIGN(const BenchmarkInfo benchmark_info,
+                       conversation->GetBenchmarkInfo());
+  ASSERT_EQ(benchmark_info.GetTotalPrefillTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData prefill_turn,
+                       benchmark_info.GetPrefillTurn(0));
+  EXPECT_EQ(prefill_turn.num_tokens, 8);
+  ASSERT_EQ(benchmark_info.GetTotalDecodeTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData decode_turn,
+                       benchmark_info.GetDecodeTurn(0));
+  EXPECT_EQ(decode_turn.num_tokens, 4);
 }
 
 TEST_P(ConversationTest, CancelGroupWithSendMessageAsync) {
