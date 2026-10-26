@@ -96,6 +96,50 @@ foreach(_mod IN LISTS _downloader_modules)
     endif()
 endforeach()
 
+# --- Eigen (use mirror.tensorflow.org archive instead of GitLab git clone) ---
+set(EIGEN_CMAKE "${LITERTLM_TFLITE_SRC_DIR}/tools/cmake/modules/eigen.cmake")
+set(EIGEN_WORKSPACE_BZL "${LITERTLM_TENSORFLOW_SRC_DIR}/third_party/xla/third_party/eigen3/workspace.bzl")
+if(EXISTS "${EIGEN_CMAKE}" AND EXISTS "${EIGEN_WORKSPACE_BZL}")
+    file(READ "${EIGEN_CMAKE}" EIGEN_CMAKE_CONTENT)
+    if(NOT EIGEN_CMAKE_CONTENT MATCHES "URL ")
+        file(READ "${EIGEN_WORKSPACE_BZL}" EIGEN_BZL_CONTENT)
+        string(REGEX MATCH "EIGEN_COMMIT = \"([0-9a-f]+)\"" _ "${EIGEN_BZL_CONTENT}")
+        set(EIGEN_COMMIT "${CMAKE_MATCH_1}")
+        string(REGEX MATCH "EIGEN_SHA256 = \"([0-9a-f]+)\"" _ "${EIGEN_BZL_CONTENT}")
+        set(EIGEN_SHA256 "${CMAKE_MATCH_1}")
+        if(EIGEN_COMMIT AND EIGEN_SHA256)
+            message(STATUS "[LiteRTLM] Patching eigen.cmake to use mirror.tensorflow.org archive (${EIGEN_COMMIT})...")
+            string(REPLACE
+                "GIT_TAG ${EIGEN_COMMIT}"
+                "GIT_TAG ${EIGEN_COMMIT}\n  URL https://storage.googleapis.com/mirror.tensorflow.org/gitlab.com/libeigen/eigen/-/archive/${EIGEN_COMMIT}/eigen-${EIGEN_COMMIT}.tar.gz\n  URL_HASH SHA256=${EIGEN_SHA256}"
+                EIGEN_CMAKE_CONTENT "${EIGEN_CMAKE_CONTENT}")
+            file(WRITE "${EIGEN_CMAKE}" "${EIGEN_CMAKE_CONTENT}")
+        endif()
+    endif()
+endif()
+
+# --- ml_dtypes (use mirror.tensorflow.org archive to avoid cloning its GitLab Eigen submodule) ---
+set(ML_DTYPES_CMAKE "${LITERTLM_TFLITE_SRC_DIR}/tools/cmake/modules/ml_dtypes.cmake")
+set(ML_DTYPES_WORKSPACE_BZL "${LITERTLM_TENSORFLOW_SRC_DIR}/third_party/xla/third_party/py/ml_dtypes/workspace.bzl")
+if(EXISTS "${ML_DTYPES_CMAKE}" AND EXISTS "${ML_DTYPES_WORKSPACE_BZL}")
+    file(READ "${ML_DTYPES_CMAKE}" ML_DTYPES_CMAKE_CONTENT)
+    if(NOT ML_DTYPES_CMAKE_CONTENT MATCHES "URL ")
+        file(READ "${ML_DTYPES_WORKSPACE_BZL}" ML_DTYPES_BZL_CONTENT)
+        string(REGEX MATCH "ML_DTYPES_COMMIT = \"([0-9a-f]+)\"" _ "${ML_DTYPES_BZL_CONTENT}")
+        set(ML_DTYPES_COMMIT "${CMAKE_MATCH_1}")
+        string(REGEX MATCH "ML_DTYPES_SHA256 = \"([0-9a-f]+)\"" _ "${ML_DTYPES_BZL_CONTENT}")
+        set(ML_DTYPES_SHA256 "${CMAKE_MATCH_1}")
+        if(ML_DTYPES_COMMIT AND ML_DTYPES_SHA256)
+            message(STATUS "[LiteRTLM] Patching ml_dtypes.cmake to use mirror.tensorflow.org archive (${ML_DTYPES_COMMIT})...")
+            string(REPLACE
+                "GIT_TAG ${ML_DTYPES_COMMIT}"
+                "GIT_TAG ${ML_DTYPES_COMMIT}\n  URL https://storage.googleapis.com/mirror.tensorflow.org/github.com/jax-ml/ml_dtypes/archive/${ML_DTYPES_COMMIT}/ml_dtypes-${ML_DTYPES_COMMIT}.tar.gz\n  URL_HASH SHA256=${ML_DTYPES_SHA256}"
+                ML_DTYPES_CMAKE_CONTENT "${ML_DTYPES_CMAKE_CONTENT}")
+            file(WRITE "${ML_DTYPES_CMAKE}" "${ML_DTYPES_CMAKE_CONTENT}")
+        endif()
+    endif()
+endif()
+
 # --- XNNPACK ---
 message(STATUS "[LiteRTLM] Patching XNNPACK...")
 if(EXISTS "${LITERTLM_XNNPACK_MOD_FILE}")
