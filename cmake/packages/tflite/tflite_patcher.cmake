@@ -96,6 +96,52 @@ foreach(_mod IN LISTS _downloader_modules)
     endif()
 endforeach()
 
+# --- Eigen / ml_dtypes ---
+# Download Eigen and ml_dtypes from the TensorFlow mirror archives pinned in
+# tflite.cmake instead of cloning gitlab.com. A module is patched only if it
+# doesn't already declare a URL (newer TFLite revisions do) and its GIT_TAG
+# matches the archive's commit. Otherwise it keeps its upstream download, so a
+# LITERTLM_TFLITE_TAG bump can't silently build against a stale archive.
+function(litertlm_use_mirror_archive MODULE_PATH ARCHIVE_URL ARCHIVE_URL_HASH)
+    if(NOT EXISTS "${MODULE_PATH}" OR "${ARCHIVE_URL}" STREQUAL "")
+        return()
+    endif()
+    file(READ "${MODULE_PATH}" CONTENT)
+    if(CONTENT MATCHES "\n[ \t]*URL[ \t]")
+        message(STATUS "[LiteRTLM] ${MODULE_PATH} already declares a URL; not patching")
+        return()
+    endif()
+    if(NOT CONTENT MATCHES "\n([ \t]*)GIT_TAG[ \t]+([0-9a-f]+)[^\n]*")
+        message(WARNING "[LiteRTLM] No GIT_TAG found in ${MODULE_PATH}; keeping the git clone")
+        return()
+    endif()
+    set(_git_tag_line "${CMAKE_MATCH_0}")
+    set(_indent "${CMAKE_MATCH_1}")
+    set(_commit "${CMAKE_MATCH_2}")
+    string(FIND "${ARCHIVE_URL}" "/${_commit}/" _commit_pos)
+    if(_commit_pos EQUAL -1)
+        message(WARNING
+            "[LiteRTLM] ${MODULE_PATH} pins ${_commit}, which doesn't match "
+            "${ARCHIVE_URL}. Keeping the git clone; update the archive pins in "
+            "tflite.cmake.")
+        return()
+    endif()
+    message(STATUS "[LiteRTLM] Downloading ${_commit} from ${ARCHIVE_URL}")
+    string(REPLACE "${_git_tag_line}"
+        "${_git_tag_line}\n${_indent}URL ${ARCHIVE_URL}\n${_indent}URL_HASH ${ARCHIVE_URL_HASH}"
+        CONTENT "${CONTENT}")
+    file(WRITE "${MODULE_PATH}" "${CONTENT}")
+endfunction()
+
+litertlm_use_mirror_archive(
+    "${LITERTLM_TFLITE_SRC_DIR}/tools/cmake/modules/eigen.cmake"
+    "${LITERTLM_TFLITE_EIGEN_URL}"
+    "${LITERTLM_TFLITE_EIGEN_URL_HASH}")
+litertlm_use_mirror_archive(
+    "${LITERTLM_TFLITE_SRC_DIR}/tools/cmake/modules/ml_dtypes.cmake"
+    "${LITERTLM_TFLITE_ML_DTYPES_URL}"
+    "${LITERTLM_TFLITE_ML_DTYPES_URL_HASH}")
+
 # --- XNNPACK ---
 message(STATUS "[LiteRTLM] Patching XNNPACK...")
 if(EXISTS "${LITERTLM_XNNPACK_MOD_FILE}")

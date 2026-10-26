@@ -19,7 +19,29 @@ setup_external_install_structure("${LITERTLM_TFLITE_INSTALL_PREFIX}")
 
 set(LITERTLM_TFLITE_TAG "fadb2ca7b5c17ba3b9380f32487cef62eebcf2c9" CACHE STRING "TFLite git tag")
 
-if(NOT EXISTS "${LITERTLM_LITERTLM_TFLITE_STATIC_LIB}")
+# TFLite's CMake build fetches Eigen by cloning gitlab.com, which is frequently
+# rate limited on CI ("GitLab is currently unable to handle this request due to
+# load"). ml_dtypes is cloned with its Eigen submodule, also from gitlab.com.
+# Download pinned archives from the TensorFlow mirror instead.
+# tflite_patcher.cmake adds these as the URL / URL_HASH of
+# tensorflow/lite/tools/cmake/modules/{eigen,ml_dtypes}.cmake, but only if the
+# module doesn't already declare a URL and its GIT_TAG matches the archive's
+# commit. Otherwise the module is left unchanged, so bumping
+# LITERTLM_TFLITE_TAG can't silently build against stale archives.
+set(LITERTLM_TFLITE_EIGEN_URL
+    "https://storage.googleapis.com/mirror.tensorflow.org/gitlab.com/libeigen/eigen/-/archive/ea13a98decd497a8c5588fb5de71b57bcf10d864/eigen-ea13a98decd497a8c5588fb5de71b57bcf10d864.tar.gz"
+    CACHE STRING "Eigen archive URL used by the TFLite build")
+set(LITERTLM_TFLITE_EIGEN_URL_HASH
+    "SHA256=35c6126e246585d9cf6600b65471582c2701aae64b784a6fd19168a90cfc841e"
+    CACHE STRING "Eigen archive hash used by the TFLite build")
+set(LITERTLM_TFLITE_ML_DTYPES_URL
+    "https://storage.googleapis.com/mirror.tensorflow.org/github.com/jax-ml/ml_dtypes/archive/00d98cd92ade342fef589c0470379abb27baebe9/ml_dtypes-00d98cd92ade342fef589c0470379abb27baebe9.tar.gz"
+    CACHE STRING "ml_dtypes archive URL used by the TFLite build")
+set(LITERTLM_TFLITE_ML_DTYPES_URL_HASH
+    "SHA256=f6e5880666661351e6cd084ac4178ddc4dabcde7e9a73722981c0d1500cf5937"
+    CACHE STRING "ml_dtypes archive hash used by the TFLite build")
+
+if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
     message(STATUS "TFLite not found. Configuring external build...")
 
     ExternalProject_Add(
@@ -62,6 +84,10 @@ if(NOT EXISTS "${LITERTLM_LITERTLM_TFLITE_STATIC_LIB}")
             "-DLITERTLM_TENSORFLOW_SRC_DIR=${LITERTLM_TENSORFLOW_SRC_DIR}"
             "-DLITERTLM_FLATC_EXECUTABLE=${LITERTLM_FLATC_EXECUTABLE}"
             "-DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}"
+            "-DLITERTLM_TFLITE_EIGEN_URL=${LITERTLM_TFLITE_EIGEN_URL}"
+            "-DLITERTLM_TFLITE_EIGEN_URL_HASH=${LITERTLM_TFLITE_EIGEN_URL_HASH}"
+            "-DLITERTLM_TFLITE_ML_DTYPES_URL=${LITERTLM_TFLITE_ML_DTYPES_URL}"
+            "-DLITERTLM_TFLITE_ML_DTYPES_URL_HASH=${LITERTLM_TFLITE_ML_DTYPES_URL_HASH}"
             -P "${LITERTLM_CMAKE_PACKAGES_DIR}/tflite/tflite_patcher.cmake"
         CMAKE_ARGS
             ${LITERTLM_TOOLCHAIN_FILE}
