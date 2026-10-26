@@ -177,5 +177,134 @@ TEST(ConversationLiteTest,
   ASSERT_FALSE(assistant_message["content"].empty());
 }
 
+TEST(ConversationLiteTest,
+     ConversationSendMessageEndToEndSucceedsInLiteTarget) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings,
+                       EngineSettings::CreateDefault(model_assets,
+                                                     Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(32);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::CreateDefault(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  ASSERT_OK_AND_ASSIGN(
+      Message response1,
+      conversation->SendMessage({{"role", "user"}, {"content", "Hello!"}},
+                                OptionalArgs{.max_output_tokens = 3}));
+  EXPECT_EQ(response1["role"], "assistant");
+  ASSERT_TRUE(response1["content"].is_array());
+  ASSERT_FALSE(response1["content"].empty());
+
+  ASSERT_OK_AND_ASSIGN(
+      Message response2,
+      conversation->SendMessage({{"role", "user"}, {"content", "Follow up"}},
+                                OptionalArgs{.max_output_tokens = 3}));
+  EXPECT_EQ(response2["role"], "assistant");
+  EXPECT_EQ(conversation->GetHistory().size(), 4);
+}
+
+TEST(ConversationLiteTest,
+     FallbackPromptTemplateRendersGemma3AndMultimodalMessages) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings,
+                       EngineSettings::CreateDefault(model_assets,
+                                                     Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(15);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  JsonPreface preface{
+      .messages = nlohmann::ordered_json::array(
+          {{{"role", "system"}, {"content", "You are a translator."}}})};
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetPreface(preface)
+          .SetOverwriteProcessorConfig(Gemma3DataProcessorConfig())
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  ASSERT_OK_AND_ASSIGN(std::string rendered_preface,
+                       conversation->RenderPrefaceIntoString(OptionalArgs()));
+  EXPECT_EQ(rendered_preface,
+            "<start_of_turn>system\nYou are a translator.<end_of_turn>\n");
+
+  Message multimodal_message = {
+      {"role", "user"},
+      {"content", nlohmann::ordered_json::array(
+                      {{{"type", "text"}, {"text", "Translate: "}},
+                       {{"type", "audio"}, {"blob", "dummy_audio"}},
+                       {{"type", "image"}, {"blob", "dummy_image"}}})}};
+  ASSERT_OK_AND_ASSIGN(std::string rendered_turn,
+                       conversation->RenderMessageIntoString(multimodal_message,
+                                                             OptionalArgs()));
+  EXPECT_EQ(rendered_turn,
+            "<start_of_turn>system\nYou are a translator.<end_of_turn>\n"
+            "<start_of_turn>user\nTranslate: "
+            "<start_of_audio><start_of_image><end_of_turn>\n"
+            "<start_of_turn>model\n");
+}
+
+TEST(ConversationLiteTest,
+     FallbackPromptTemplateRendersGemma4AndCustomPromptTemplates) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings,
+                       EngineSettings::CreateDefault(model_assets,
+                                                     Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(15);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto gemma4_config,
+      ConversationConfig::Builder()
+          .SetOverwriteProcessorConfig(Gemma4DataProcessorConfig())
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto gemma4_conversation,
+                       Conversation::Create(*engine, gemma4_config));
+  ASSERT_OK_AND_ASSIGN(
+      std::string gemma4_rendered,
+      gemma4_conversation->RenderMessageIntoString(
+          {{"role", "user"},
+           {"content",
+            nlohmann::ordered_json::array(
+                {{{"type", "text"}, {"text", "Transcribe: "}},
+                 {{"type", "audio"}, {"blob", "dummy_audio"}}})}},
+          OptionalArgs()));
+  EXPECT_EQ(gemma4_rendered,
+            "<|turn>user\nTranscribe: <start_of_audio><turn|>\n<|turn>model\n");
+
+  SessionConfig custom_session_config = SessionConfig::CreateDefault();
+  custom_session_config.GetMutablePromptTemplates().mutable_user()->set_prefix(
+      "<u_start>");
+  custom_session_config.GetMutablePromptTemplates().mutable_user()->set_suffix(
+      "<u_end>");
+  custom_session_config.GetMutablePromptTemplates().mutable_model()->set_prefix(
+      "<m_start>");
+  custom_session_config.GetMutablePromptTemplates().mutable_model()->set_suffix(
+      "<m_end>");
+  ASSERT_OK_AND_ASSIGN(auto custom_config,
+                       ConversationConfig::Builder()
+                           .SetSessionConfig(custom_session_config)
+                           .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto custom_conversation,
+                       Conversation::Create(*engine, custom_config));
+  ASSERT_OK_AND_ASSIGN(
+      std::string custom_rendered,
+      custom_conversation->RenderMessageIntoString(
+          {{"role", "user"}, {"content", "Ping"}}, OptionalArgs()));
+  EXPECT_EQ(custom_rendered, "<u_start>Ping<u_end><m_start>");
+}
+
 }  // namespace
 }  // namespace litert::lm
