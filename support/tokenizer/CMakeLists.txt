@@ -35,6 +35,8 @@ target_link_libraries(support_tokenizer_sentencepiece_tokenizer
 # ==============================================================================
 # HuggingFace Tokenizers
 # ==============================================================================
+add_subdirectory(tokenizers)
+
 add_litertlm_library(support_tokenizer_huggingface_tokenizer STATIC
   huggingface_tokenizer.cc
 )
@@ -48,6 +50,7 @@ target_include_directories(support_tokenizer_huggingface_tokenizer
 
 target_link_libraries(support_tokenizer_huggingface_tokenizer
   PUBLIC
+    LiteRTLM::Support::Tokenizer::Tokenizers
     LITERTLM_DEPS
 )
 
