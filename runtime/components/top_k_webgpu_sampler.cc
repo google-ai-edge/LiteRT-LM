@@ -25,6 +25,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -50,10 +51,12 @@
 #include "ml_drift/webgpu/spatial_tensor.h"  // from @ml_drift
 #include "ml_drift/webgpu/webgpu_headers.h"  // from @ml_drift
 #include "litert/cc/internal/litert_handle.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 
@@ -214,6 +217,131 @@ absl::StatusOr<std::unique_ptr<WebGpuEnv>> CreateWebGpuEnvFromLiteRtEnv(
   return wgpu_env;
 }
 
+// Constructs a local TensorDescriptor from LiteRT's C-API-backed TensorBuffer
+// metadata instead of calling shared_tensor->GetDescriptor() across the
+// shared library boundary:
+// - Different C++ standard libraries across the .so/.dll boundary:
+//   Prebuilt libLiteRtWebGpuAccelerator.so/.dll in prebuilt/ is compiled
+//   using Clang with LLVM libc++ (std::__u statically linked), whereas in OSS
+//   Linux/Windows dynamic-link builds
+//   (--define=litert_runtime_link_mode=dynamic) top_k_webgpu_sampler.cc is
+//   compiled by the host toolchain with GNU libstdc++ (on Linux) or MSVC STL
+//   (on Windows).
+// - 24-byte offset shift inside TensorDescriptor:
+//   TensorDescriptor inherits from GPUObjectDescriptor, whose first member is
+//   `std::map<std::string, std::string, std::less<>> state_vars_`.
+//   `sizeof(std::map<...>)` is 24 bytes in libc++, but 48 bytes in libstdc++.
+//   Because `SpatialTensor::GetDescriptor()` (`return descriptor_;`) is inlined
+//   into the caller, calling `shared_tensor->GetDescriptor()` from an OSS
+//   libstdc++ binary reads `data_type_`, `storage_type_`, `layout_`, and
+//   `shape_` shifted by 24 bytes (reading zeros/garbage and producing an
+//   invalid descriptor).
+//
+// The rank-to-BHWC, ElementType-to-DataType, and
+// BufferType-to-TensorStorageType conversion logic below is adapted from
+// `litert::ml_drift::CreateTensorDescriptor` in
+// `litert/ml_drift/delegate/buffer_handler_utils.cc` (which is not exported to
+// the open-source `@litert` repository).
+TensorDescriptor GetTensorDescriptor(const TensorBuffer* tensor_buffer) {
+  if (!tensor_buffer) {
+    return TensorDescriptor();
+  }
+  auto tensor_type_status = tensor_buffer->TensorType();
+  if (!tensor_type_status.HasValue()) {
+    return TensorDescriptor();
+  }
+  auto buffer_type_status = tensor_buffer->BufferType();
+  if (!buffer_type_status.HasValue()) {
+    return TensorDescriptor();
+  }
+  const auto& tensor_type = *tensor_type_status;
+  const auto buffer_type = *buffer_type_status;
+
+  auto dims = tensor_type.Layout().Dimensions();
+  BHWC shape;
+  switch (dims.size()) {
+    case 0:
+      shape = BHWC(1, 1, 1, 1);
+      break;
+    case 1:
+      shape = BHWC(dims[0] == 0 ? 1 : dims[0], 1, 1, 1);
+      break;
+    case 2:
+      shape = BHWC(dims[0], 1, 1, dims[1]);
+      break;
+    case 3:
+      shape = BHWC(dims[0], 1, dims[1], dims[2]);
+      break;
+    case 4:
+      shape = BHWC(dims[0], dims[1], dims[2], dims[3]);
+      break;
+    default:
+      ABSL_LOG(ERROR) << "Unsupported tensor rank: " << dims.size();
+      return TensorDescriptor();
+  }
+
+  DataType data_type;
+  switch (tensor_type.ElementType()) {
+    case litert::ElementType::Float32:
+      data_type = litert::IsGpuFloat16Memory(buffer_type) ? DataType::kFloat16
+                                                          : DataType::kFloat32;
+      break;
+    case litert::ElementType::Bool:
+      data_type = DataType::kBool;
+      break;
+    case litert::ElementType::Int32:
+      data_type = DataType::kInt32;
+      break;
+    case litert::ElementType::Float16:
+      data_type = DataType::kFloat16;
+      break;
+    case litert::ElementType::Int8:
+      data_type = DataType::kInt8;
+      break;
+    case litert::ElementType::UInt8:
+      data_type = DataType::kUint8;
+      break;
+    case litert::ElementType::UInt32:
+      data_type = DataType::kUint32;
+      break;
+    case litert::ElementType::Int64:
+      data_type = DataType::kInt64;
+      break;
+    case litert::ElementType::UInt64:
+      data_type = DataType::kUint64;
+      break;
+    case litert::ElementType::Int16:
+      data_type = DataType::kInt16;
+      break;
+    case litert::ElementType::UInt16:
+      data_type = DataType::kUint16;
+      break;
+    default:
+      ABSL_LOG(ERROR) << "Unsupported element type: "
+                      << static_cast<int>(tensor_type.ElementType());
+      return TensorDescriptor();
+  }
+
+  ml_drift::TensorStorageType storage_type;
+  if (litert::IsGpuBuffer(buffer_type)) {
+    storage_type = ml_drift::TensorStorageType::kBuffer;
+  } else if (litert::IsGpuTexture(buffer_type)) {
+    storage_type = ml_drift::TensorStorageType::kTexture2D;
+  } else if (litert::IsGpuImageBuffer(buffer_type)) {
+    storage_type = ml_drift::TensorStorageType::kImageBuffer;
+  } else {
+    ABSL_LOG(ERROR) << "Unsupported buffer type: "
+                    << static_cast<int>(buffer_type);
+    return TensorDescriptor();
+  }
+
+  if (shape.b == 1) {
+    return ml_drift::CreateHwcTensorDescriptor(
+        data_type, storage_type, ml_drift::HWC(shape.h, shape.w, shape.c));
+  }
+  return ml_drift::CreateBhwcTensorDescriptor(data_type, storage_type, shape);
+}
+
 // Binds a tensor to the inference context for the given ID.
 // shared_tensors is used to hold any tensors that need to be kept alive for the
 // duration of the inference.
@@ -222,37 +350,26 @@ absl::Status BindTensor(const TensorBuffer& tensor_buffer, ml_drift::ValueId id,
                         std::vector<SpatialTensor>& shared_tensors) {
   LITERT_ASSIGN_OR_RETURN(auto wgpu_buffer, tensor_buffer.GetWebGpuBuffer());
   auto* shared_tensor = reinterpret_cast<SpatialTensor*>(wgpu_buffer);
-#if (defined(__APPLE__) || defined(__ANDROID__)) && \
-    LITERT_SAMPLER_LINKED_DYNAMICALLY
-  // On MacOS, runtime typeinfo may be different in each shared lib. Build a
-  // logits tensor here with underlying WebGPU buffer to match typeinfos.
+#ifdef LITERT_SAMPLER_LINKED_DYNAMICALLY
+  // When linked dynamically against prebuilt accelerator shared libraries,
+  // SpatialTensor vtables, Abseil ABI, and STL layout (e.g. std::map in
+  // GPUObjectDescriptor) may differ across the shared library boundary.
+  // Re-wrap the raw WebGPU handle and LiteRT tensor descriptor into a local
+  // SpatialTensor.
+  TensorDescriptor desc = GetTensorDescriptor(&tensor_buffer);
   shared_tensors.push_back(SpatialTensor());
   auto& shared_tensor_copy = shared_tensors.back();
   if (shared_tensor->GetBufferHandle()) {
     ABSL_RETURN_IF_ERROR(CreateSharedTensor(shared_tensor->GetBufferHandle(),
-                                            shared_tensor->GetDescriptor(),
-                                            &shared_tensor_copy));
+                                            desc, &shared_tensor_copy));
   } else {
     ABSL_RETURN_IF_ERROR(CreateSharedTensor(
         shared_tensor->GetTextureHandle(),
-        shared_tensor->GetTextureViewHandle(), shared_tensor->GetDescriptor(),
-        &shared_tensor_copy));
+        shared_tensor->GetTextureViewHandle(), desc, &shared_tensor_copy));
   }
   shared_tensor = &shared_tensor_copy;
-#endif  // (defined(__APPLE__) || defined(__ANDROID__)) &&
-        // LITERT_SAMPLER_LINKED_DYNAMICALLY
+#endif  // LITERT_SAMPLER_LINKED_DYNAMICALLY
   return inference_context.SetTensor(id, shared_tensor);
-}
-
-TensorDescriptor GetTensorDescriptor(const TensorBuffer* tensor_buffer) {
-  if (!tensor_buffer) {
-    return TensorDescriptor();
-  }
-  auto wgpu_buffer = tensor_buffer->GetWebGpuBuffer();
-  if (!wgpu_buffer) {
-    return TensorDescriptor();
-  }
-  return reinterpret_cast<SpatialTensor*>(*wgpu_buffer)->GetDescriptor();
 }
 
 size_t GetMappableBufferSize(const TensorDescriptor& tensor_desc) {
@@ -630,6 +747,8 @@ absl::Status TopKWebGpuSampler::SetInferenceFuncAndInputTensors(
   }
 
   shared_tensors_.clear();
+  // Reserve capacity upfront so shared_tensors_ never reallocates, ensuring
+  // that raw pointers passed to SetTensor remain stable.
   shared_tensors_.reserve(input_handling_ids_.size());
   ABSL_RETURN_IF_ERROR(
       input_handling_->SetTensor(input_handling_ids_[0], tokens_ids_.get()));
@@ -656,6 +775,7 @@ absl::Status TopKWebGpuSampler::SetInferenceFuncAndInputTensors(
     ABSL_RETURN_IF_ERROR(BindTensor(*param_tensor, input_handling_ids_[idx + 1],
                                     *input_handling_, shared_tensors_));
   }
+  RET_CHECK_LE(shared_tensors_.size(), shared_tensors_.capacity());
   run_inference_func_ = run_inference_func;
   run_inference_arg_ = arg;
 
