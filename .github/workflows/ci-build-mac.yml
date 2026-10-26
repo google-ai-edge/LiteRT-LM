@@ -35,7 +35,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gate:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/check-pr-state.yml
+
   presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
     name: "Presubmit-Mac"
     runs-on: macos-latest
     permissions:
@@ -51,7 +58,7 @@ jobs:
                          (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
     steps:
       - name: Checkout code.
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
 
@@ -80,7 +87,7 @@ jobs:
       - name: Restore bazel cache if cache is not being refreshed.
         id: bazel-cache
         if: env.REFRESH_CACHE != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
@@ -206,7 +213,7 @@ jobs:
           STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
 
       - name: Save bazel cache if it's new or being refreshed.
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: env.REFRESH_CACHE == 'true'
         with:
           path: ~/.cache/bazel

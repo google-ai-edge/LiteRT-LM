@@ -30,7 +30,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gate:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/check-pr-state.yml
+
   presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
     name: "Presubmit-Linux"
     runs-on: "linux-x86-c4-16"
     container:
