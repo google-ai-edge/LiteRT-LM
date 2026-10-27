@@ -14,6 +14,7 @@
 
 #include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
 #include <string>
@@ -118,7 +119,7 @@ class LlgFcToolCallsTest : public testing::Test {
 
   static const LlGuidanceConfig& GetConfig() {
     static const auto* const config = new LlGuidanceConfig{
-        .eos_id = 1,
+        .eos_ids = {1, 50, 106},
         .special_tokens = {"<eos>", "<|tool_call>", "<tool_call|>",
                            "<|tool_response>", "<tool_response|>", "<|\"|>"}};
     return *config;
@@ -141,6 +142,11 @@ class LlgFcToolCallsTest : public testing::Test {
     return options;
   }
 
+  // <|tool_response> (50) is a stop token too, but the grammar consumes it as
+  // fc_resp, so it is covered separately by
+  // ToolResponseStartIsBothEosAndFcResp.
+  static constexpr uint32_t kTurnEndTokenIds[] = {1, 106};  // <eos>, <turn|>
+
   absl::StatusOr<bool> AcceptsInternal(Constraint& constraint,
                                        absl::string_view text) {
     ABSL_ASSIGN_OR_RETURN(TokenIds ids, tokenizer_->TextToTokenIds(text));
@@ -155,7 +161,16 @@ class LlgFcToolCallsTest : public testing::Test {
       ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
     }
     ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
-    return final_bitmap->Get(*GetConfig().eos_id);
+    // llguidance allows every EOS token exactly when the grammar accepts, so
+    // the turn-ending tokens must agree. A split decision means one of them
+    // is being matched as text.
+    const bool accepts = final_bitmap->Get(kTurnEndTokenIds[0]);
+    for (uint32_t id : kTurnEndTokenIds) {
+      EXPECT_EQ(final_bitmap->Get(id), accepts)
+          << "stop token " << id << " disagrees with " << kTurnEndTokenIds[0]
+          << " after \"" << absl::Utf8SafeCEscape(text) << "\"";
+    }
+    return accepts;
   }
 
   void AssertAccepts(Constraint& constraint, absl::string_view text) {
@@ -216,6 +231,14 @@ TEST_F(LlgFcToolCallsTest, TextOnly) {
   AssertAccepts(*constraint, "Some html tags <div>some text</div>");
   AssertRejects(*constraint,
                 "Something <|tool_call>call:get_weather{}<tool_call|>");
+}
+
+TEST_F(LlgFcToolCallsTest, TextOnlyRejectsEmptyAnswer) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextOnly));
+  AssertRejects(*constraint, "");
+  AssertAccepts(*constraint, "A");
 }
 
 TEST_F(LlgFcToolCallsTest, TextAndOrFunctionCalls) {

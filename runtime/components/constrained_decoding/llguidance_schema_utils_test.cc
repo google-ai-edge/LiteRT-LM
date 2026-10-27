@@ -174,7 +174,7 @@ class SimpleTokenizer : public Tokenizer {
 class LlguidanceSchemaUtilsTest : public testing::Test {
  protected:
   SimpleTokenizer tokenizer_;
-  LlGuidanceConfig config_{.eos_id = 1};
+  LlGuidanceConfig config_{.eos_ids = {1}};
 
   LlgConstraintsOptions GetDefaultFcOptions(LlgConstraintMode mode) {
     LlgConstraintsOptions options;
@@ -213,7 +213,7 @@ class LlguidanceSchemaUtilsTest : public testing::Test {
       ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
     }
     ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
-    return final_bitmap->Get(*config_.eos_id);
+    return final_bitmap->Get(config_.eos_ids[0]);
   }
 
   void AssertAccepts(Constraint& constraint, absl::string_view text) {

@@ -408,7 +408,7 @@ TEST(ThinkingBudgetConstraintTest, TestSkipThinkingWithLlgConstraint) {
         return TokenIds{};
       });
   LlGuidanceConfig config;
-  config.eos_id = kEos;
+  config.eos_ids = {kEos};
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
                        LlgConstraintProvider::Create(tokenizer, config));
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> grammar,

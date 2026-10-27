@@ -37,7 +37,9 @@ using TokenIds = ::litert::support::TokenIds;
 
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::Return;
+using ::testing::status::StatusIs;
 
 class MockTokenizer : public Tokenizer {
  public:
@@ -58,7 +60,7 @@ class LlgConstraintProviderTest : public ::testing::Test {
 
 TEST_F(LlgConstraintProviderTest, CreateSuccess) {
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
 
   EXPECT_CALL(tokenizer_, GetTokens())
       .WillOnce(Return(std::vector<std::string>{"<pad>", "<eos>", "a", "b"}));
@@ -76,7 +78,7 @@ TEST_F(LlgConstraintProviderTest, CreateFailsWithoutEosId) {
 
 TEST_F(LlgConstraintProviderTest, CreateConstraintProviderSuccess) {
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
 
   EXPECT_CALL(tokenizer_, GetTokens())
       .WillOnce(Return(std::vector<std::string>{"<pad>", "<eos>", "a", "b"}));
@@ -87,7 +89,7 @@ TEST_F(LlgConstraintProviderTest, CreateConstraintProviderSuccess) {
 
 TEST_F(LlgConstraintProviderTest, CreateConstraintSuccess) {
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
 
   EXPECT_CALL(tokenizer_, GetTokens())
       .WillOnce(Return(std::vector<std::string>{"<pad>", "<eos>", "a", "b"}));
@@ -99,6 +101,30 @@ TEST_F(LlgConstraintProviderTest, CreateConstraintSuccess) {
   auto constraint = provider->CreateConstraint(LlGuidanceConstraintArg{
       .constraint_type = LlgConstraintType::kRegex, .constraint_string = "a+"});
   EXPECT_TRUE(constraint.ok());
+}
+
+TEST_F(LlgConstraintProviderTest, CreateFailsWithOutOfRangeEosId) {
+  LlGuidanceConfig config;
+  config.eos_ids = {1, 4};
+
+  EXPECT_CALL(tokenizer_, GetTokens())
+      .WillOnce(Return(std::vector<std::string>{"<pad>", "<eos>", "a", "b"}));
+
+  EXPECT_THAT(LlgConstraintProvider::Create(tokenizer_, config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(AddStopTokensAsEosIdsTest, AddsSingleTokenStopSequencesOnce) {
+  LlGuidanceConfig config;
+  AddStopTokensAsEosIds({{106}, {1, 2}, {50}, {106}, {-1}, {1}}, config);
+  EXPECT_THAT(config.eos_ids, ElementsAre(106, 50, 1));
+}
+
+TEST(AddStopTokensAsEosIdsTest, KeepsConfiguredEosIdsFirst) {
+  LlGuidanceConfig config;
+  config.eos_ids = {1};
+  AddStopTokensAsEosIds({{1}, {106}, {50}}, config);
+  EXPECT_THAT(config.eos_ids, ElementsAre(1, 106, 50));
 }
 
 }  // namespace

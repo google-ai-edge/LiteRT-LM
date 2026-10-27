@@ -357,7 +357,7 @@ TEST_F(CompositeConstraintParamTest,
       });
 
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
   ASSERT_OK_AND_ASSIGN(auto provider,
                        LlgConstraintProvider::Create(tokenizer, config));
 

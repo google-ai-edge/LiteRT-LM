@@ -54,7 +54,7 @@ class MockTokenizer : public Tokenizer {
 TEST(ConstraintProviderNoopTest, LlgConstraintProviderNoopReturnsError) {
   MockTokenizer tokenizer;
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
   EXPECT_THAT(LlgConstraintProvider::Create(tokenizer, config),
               StatusIs(absl::StatusCode::kUnimplemented));
 }

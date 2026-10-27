@@ -179,10 +179,12 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options) {
   std::string escaped_fence =
       absl::StrReplaceAll(options.code_fence_start, {{"\n", "\\n"}});
+  // The answer needs at least one character, so the model can't end the turn
+  // without answering.
   return absl::StrFormat(
       R"(
 FORBIDDEN_CALL : /(.|\n)*%s(.|\n)*/
-SAFE_TEXT : /(.|\n)*/ & ~FORBIDDEN_CALL
+SAFE_TEXT : /(.|\n)+/ & ~FORBIDDEN_CALL
 start : SAFE_TEXT
 )",
       escaped_fence);

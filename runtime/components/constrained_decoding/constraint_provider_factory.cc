@@ -40,18 +40,13 @@ absl::StatusOr<std::unique_ptr<ConstraintProvider>> CreateConstraintProvider(
                  constraint_provider_config)) {
     auto llg_guidance_config =
         std::get<LlGuidanceConfig>(constraint_provider_config);
-    if (!llg_guidance_config.eos_id.has_value()) {
-      // If eos_id is not provided in the config, use the first valid stop token
-      // as the eos_id.
-      for (const auto& stop_sequence : stop_token_ids) {
-        if (stop_sequence.size() == 1) {
-          llg_guidance_config.eos_id = stop_sequence[0];
-          break;
-        }
-      }
-      if (!llg_guidance_config.eos_id.has_value()) {
+    if (llg_guidance_config.eos_ids.empty()) {
+      // If no EOS tokens are provided in the config, use the single-token stop
+      // sequences.
+      AddStopTokensAsEosIds(stop_token_ids, llg_guidance_config);
+      if (llg_guidance_config.eos_ids.empty()) {
         return absl::InvalidArgumentError(
-            "LlGuidanceConfig::eos_id wasn't set and no valid stop token was "
+            "LlGuidanceConfig::eos_ids wasn't set and no valid stop token was "
             "found in SessionConfig.");
       }
     }

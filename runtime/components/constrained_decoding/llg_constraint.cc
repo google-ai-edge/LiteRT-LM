@@ -39,13 +39,15 @@ namespace {
 
 std::vector<bool> SampleMaskToVector(const uint32_t* sample_mask,
                                      size_t vocab_size, bool is_stop,
-                                     int eos_token_id) {
+                                     absl::Span<const int> eos_token_ids) {
   if (sample_mask == nullptr) {
     if (is_stop) {
       // If stopped, only allow EOS.
       std::vector<bool> mask_vector(vocab_size, false);
-      if (eos_token_id >= 0 && eos_token_id < vocab_size) {
-        mask_vector[eos_token_id] = true;
+      for (int eos_token_id : eos_token_ids) {
+        if (eos_token_id >= 0 && eos_token_id < vocab_size) {
+          mask_vector[eos_token_id] = true;
+        }
       }
       return mask_vector;
     } else {
@@ -63,11 +65,9 @@ std::vector<bool> SampleMaskToVector(const uint32_t* sample_mask,
 }
 
 // Returns the mask for a stopped constraint, which only allows EOS.
-std::unique_ptr<LogitMask> StoppedMask(int vocab_size, int eos_token_id) {
-  if (eos_token_id >= 0 && eos_token_id < vocab_size) {
-    return BitmapLogitMask::CreateSingleAllowedToken(vocab_size, eos_token_id);
-  }
-  return BitmapLogitMask::CreateAllDisallowed(vocab_size);
+std::unique_ptr<LogitMask> StoppedMask(int vocab_size,
+                                       absl::Span<const int> eos_token_ids) {
+  return BitmapLogitMask::CreateFromAllowedTokens(vocab_size, eos_token_ids);
 }
 
 // llguidance reports a constraint in an error state as stopped, so this must be
@@ -132,7 +132,7 @@ absl::StatusOr<std::unique_ptr<LogitMask>> LlgConstraint::ComputeMask(
   ABSL_RETURN_IF_ERROR(CheckNoError(llg_state.llg_constraint()));
   if (llg_is_stopped(llg_state.llg_constraint())) {
     llg_state.set_mask_computed(true);
-    return StoppedMask(vocab_size_, eos_token_id_);
+    return StoppedMask(vocab_size_, eos_token_ids_);
   }
 
   LlgMaskResult mask_res;
@@ -145,7 +145,7 @@ absl::StatusOr<std::unique_ptr<LogitMask>> LlgConstraint::ComputeMask(
 
   if (mask_res.sample_mask == nullptr) {
     if (mask_res.is_stop) {
-      return StoppedMask(vocab_size_, eos_token_id_);
+      return StoppedMask(vocab_size_, eos_token_ids_);
     } else {
       return BitmapLogitMask::CreateAllAllowed(vocab_size_);
     }
@@ -164,7 +164,7 @@ absl::StatusOr<std::unique_ptr<Bitmap>> LlgConstraint::ComputeBitmap(
   if (llg_is_stopped(llg_state.llg_constraint())) {
     llg_state.set_mask_computed(true);
     std::vector<bool> mask_vector = SampleMaskToVector(
-        /*sample_mask=*/nullptr, vocab_size_, /*is_stop=*/true, eos_token_id_);
+        /*sample_mask=*/nullptr, vocab_size_, /*is_stop=*/true, eos_token_ids_);
     return std::make_unique<LlgBitmap>(std::move(mask_vector));
   }
 
@@ -177,7 +177,7 @@ absl::StatusOr<std::unique_ptr<Bitmap>> LlgConstraint::ComputeBitmap(
   llg_state.set_mask_computed(true);
 
   std::vector<bool> mask_vector = SampleMaskToVector(
-      mask_res.sample_mask, vocab_size_, mask_res.is_stop, eos_token_id_);
+      mask_res.sample_mask, vocab_size_, mask_res.is_stop, eos_token_ids_);
   return std::make_unique<LlgBitmap>(std::move(mask_vector));
 }
 

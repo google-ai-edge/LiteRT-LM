@@ -130,7 +130,7 @@ TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
   options.code_fence_start = "```";
 
   std::string block = GetTextOnlyBlock(options);
-  EXPECT_THAT(block, testing::HasSubstr("SAFE_TEXT"));
+  EXPECT_THAT(block, testing::HasSubstr("SAFE_TEXT : /(.|\\n)+/"));
 }
 
 TEST(LlgToolCallUtilsTest, SanitizeLarkRuleName) {

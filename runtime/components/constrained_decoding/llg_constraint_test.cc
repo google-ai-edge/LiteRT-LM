@@ -59,7 +59,7 @@ class LlgConstraintTest : public ::testing::Test {
  protected:
   absl::StatusOr<std::unique_ptr<ConstraintProvider>> CreateProvider() {
     LlGuidanceConfig config;
-    config.eos_id = 1;
+    config.eos_ids = {1};
 
     EXPECT_CALL(tokenizer_, GetTokens())
         .WillOnce(
@@ -412,7 +412,7 @@ TEST_F(LlgConstraintTest, ComputeMaskAndBitmapAreIdempotentAfterStop) {
 TEST_F(LlgConstraintTest,
        SpeculativeDecodingDraftRejectionOnJsonSchemaPreservesGrammar) {
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
 
   // Token IDs:
   // 0: <pad>, 1: <eos>, 2: {, 3: }, 4: ", 5: :, 6: ,,
@@ -523,6 +523,100 @@ TEST_F(LlgConstraintTest,
   EXPECT_TRUE(constraint->IsEnded(*verified_state));
   EXPECT_TRUE(static_cast<BitmapLogitMask*>(final_mask.get())->IsAllowed(1));
   EXPECT_FALSE(static_cast<BitmapLogitMask*>(final_mask.get())->IsAllowed(3));
+}
+
+// Creates a provider for a vocabulary with two EOS tokens, "<eos>" and "<end>",
+// neither of which is listed as a special token.
+absl::StatusOr<std::unique_ptr<ConstraintProvider>> CreateTwoEosProvider(
+    MockTokenizer& tokenizer) {
+  EXPECT_CALL(tokenizer, GetTokens())
+      .WillOnce(Return(
+          std::vector<std::string>{"<pad>", "<eos>", "a", "b", "<end>"}));
+  EXPECT_CALL(tokenizer, TextToTokenIds(::testing::_))
+      .WillRepeatedly([](absl::string_view text) {
+        if (text == "a") return TokenIds{2};
+        if (text == "b") return TokenIds{3};
+        return TokenIds{};
+      });
+  LlGuidanceConfig config;
+  config.eos_ids = {1, 4};
+  return LlgConstraintProvider::Create(tokenizer, config);
+}
+
+TEST(LlgConstraintMultipleEosTest, AnyEosTokenEndsTheOutput) {
+  MockTokenizer tokenizer;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       CreateTwoEosProvider(tokenizer));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "a+"}));
+
+  std::unique_ptr<Constraint::State> state = constraint->Start();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> start_bitmap,
+                       constraint->ComputeBitmap(*state));
+  EXPECT_FALSE(start_bitmap->Get(1));  // '<eos>'
+  EXPECT_FALSE(start_bitmap->Get(4));  // '<end>'
+
+  ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, 2));  // 'a'
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> bitmap,
+                       constraint->ComputeBitmap(*state));
+  EXPECT_TRUE(bitmap->Get(1));  // '<eos>'
+  EXPECT_TRUE(bitmap->Get(4));  // '<end>'
+
+  ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, 4));  // '<end>'
+  // llguidance applies the stop when it computes the next mask.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> end_bitmap,
+                       constraint->ComputeBitmap(*state));
+  EXPECT_TRUE(constraint->IsEnded(*state));
+  EXPECT_FALSE(end_bitmap->Get(2));  // 'a'
+}
+
+TEST(LlgConstraintMultipleEosTest, EosTokensAreNotText) {
+  MockTokenizer tokenizer;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       CreateTwoEosProvider(tokenizer));
+  // Text, then 'b'. As plain text, "<eos>" and "<end>" would match the text.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "[^b]*b"}));
+
+  std::unique_ptr<Constraint::State> state = constraint->Start();
+  ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, 2));  // 'a'
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> bitmap,
+                       constraint->ComputeBitmap(*state));
+  EXPECT_TRUE(bitmap->Get(2));   // 'a'
+  EXPECT_TRUE(bitmap->Get(3));   // 'b'
+  EXPECT_FALSE(bitmap->Get(1));  // '<eos>'
+  EXPECT_FALSE(bitmap->Get(4));  // '<end>'
+}
+
+TEST(LlgConstraintMultipleEosTest, EndedConstraintAllowsEveryEosToken) {
+  MockTokenizer tokenizer;
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       CreateTwoEosProvider(tokenizer));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "a"}));
+
+  std::unique_ptr<Constraint::State> state = constraint->Start();
+  ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, 2));  // 'a'
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask,
+                       constraint->ComputeMask(*state));
+  EXPECT_TRUE(constraint->IsEnded(*state));
+  auto* bitmap_mask = static_cast<BitmapLogitMask*>(mask.get());
+  EXPECT_TRUE(bitmap_mask->IsAllowed(1));   // '<eos>'
+  EXPECT_TRUE(bitmap_mask->IsAllowed(4));   // '<end>'
+  EXPECT_FALSE(bitmap_mask->IsAllowed(2));  // 'a'
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Bitmap> bitmap,
+                       constraint->ComputeBitmap(*state));
+  EXPECT_TRUE(bitmap->Get(1));   // '<eos>'
+  EXPECT_TRUE(bitmap->Get(4));   // '<end>'
+  EXPECT_FALSE(bitmap->Get(2));  // 'a'
 }
 
 }  // namespace

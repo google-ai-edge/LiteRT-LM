@@ -63,35 +63,49 @@ namespace {
 absl::StatusOr<std::unique_ptr<ConstraintProvider>>
 LlgConstraintProvider::Create(const Tokenizer& tokenizer,
                               LlGuidanceConfig llg_config) {
-  if (!llg_config.eos_id.has_value()) {
-    return absl::InvalidArgumentError("LlGuidanceConfig::eos_id must be set.");
+  if (llg_config.eos_ids.empty()) {
+    return absl::InvalidArgumentError(
+        "LlGuidanceConfig::eos_ids must not be empty.");
   }
 
   std::vector<std::string> tokens = tokenizer.GetTokens();
 
   absl::flat_hash_set<absl::string_view> special_tokens_set(
       llg_config.special_tokens.begin(), llg_config.special_tokens.end());
+  std::vector<bool> is_special(tokens.size());
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    is_special[i] = special_tokens_set.contains(tokens[i]);
+  }
+  // EOS tokens are special too, so that the constraint can't match them as
+  // text. Otherwise text could contain an EOS token, which ends generation
+  // before the constraint allows the output to end.
+  for (uint32_t eos_id : llg_config.eos_ids) {
+    if (eos_id >= tokens.size()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("EOS token ID ", eos_id, " is out of range for a ",
+                       tokens.size(), "-token vocabulary."));
+    }
+    is_special[eos_id] = true;
+  }
 
   std::vector<uint32_t> token_lens;
   std::vector<uint8_t> token_bytes;
   size_t total_size = 0;
 
   token_lens.reserve(tokens.size());
-  for (const auto& token : tokens) {
-    bool is_special = special_tokens_set.contains(token);
-    token_lens.push_back(token.size() + (is_special ? 1 : 0));
-    total_size += token.size() + (is_special ? 1 : 0);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    token_lens.push_back(tokens[i].size() + (is_special[i] ? 1 : 0));
+    total_size += token_lens.back();
   }
 
   token_bytes.reserve(total_size);
-  for (const auto& token : tokens) {
-    bool is_special = special_tokens_set.contains(token);
-    if (is_special) {
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    if (is_special[i]) {
       // Special tokens need to be prefixed with 0xFF.
       // https://github.com/guidance-ai/llguidance/blob/main/docs/special_tokens.md
       token_bytes.push_back(0xFF);
     }
-    token_bytes.insert(token_bytes.end(), token.begin(), token.end());
+    token_bytes.insert(token_bytes.end(), tokens[i].begin(), tokens[i].end());
   }
 
   auto tokenize_fn = [](const void* user_data, const uint8_t* bytes,
@@ -114,19 +128,26 @@ LlgConstraintProvider::Create(const Tokenizer& tokenizer,
     return token_ids->size();
   };
 
-  LlgTokenizerInit tok_init = {
+  // llguidance takes the first EOS token separately from the others.
+  const uint32_t* extra_eos_ids =
+      llg_config.eos_ids.size() > 1 ? llg_config.eos_ids.data() + 1 : nullptr;
+  LlgTokenizerInitV2 tok_init = {
+      .struct_size = sizeof(LlgTokenizerInitV2),
       .vocab_size = static_cast<uint32_t>(tokens.size()),
-      .tok_eos = *llg_config.eos_id,
+      .tok_eos = llg_config.eos_ids[0],
       .token_lens = token_lens.data(),
       .token_bytes = token_bytes.data(),
       .tokenize_assumes_string = false,
       .tokenize_fn = tokenize_fn,
       .tokenize_user_data = &tokenizer,
+      .tok_eos_extra = extra_eos_ids,
+      .tok_eos_extra_count =
+          static_cast<uint32_t>(llg_config.eos_ids.size() - 1),
   };
 
   char error_buf[128];
   LlgTokenizer* llg_tokenizer =
-      llg_new_tokenizer(&tok_init, error_buf, sizeof(error_buf));
+      llg_new_tokenizer_v2(&tok_init, error_buf, sizeof(error_buf));
   if (llg_tokenizer == nullptr) {
     return absl::InternalError(error_buf);
   }
@@ -159,9 +180,9 @@ LlgConstraintProvider::CreateConstraint(ConstraintArg constraint_arg) const {
         "Failed to create LLGuidance constraint: ", error_message));
   }
 
-  return std::make_unique<LlgConstraint>(llg_constraint,
-                                         static_cast<int>(token_lens_.size()),
-                                         *llg_config_.eos_id);
+  return std::make_unique<LlgConstraint>(
+      llg_constraint, static_cast<int>(token_lens_.size()),
+      std::vector<int>(llg_config_.eos_ids.begin(), llg_config_.eos_ids.end()));
 }
 
 }  // namespace litert::lm

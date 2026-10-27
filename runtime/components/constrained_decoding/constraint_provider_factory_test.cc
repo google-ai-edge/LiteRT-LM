@@ -66,7 +66,7 @@ TEST_F(ConstraintProviderFactoryTest, CreateExternalConstraintProvider) {
 
 TEST_F(ConstraintProviderFactoryTest, CreateLlgConstraintProvider) {
   LlGuidanceConfig config;
-  config.eos_id = 1;
+  config.eos_ids = {1};
   std::vector<std::vector<int>> stop_token_ids;
 
   EXPECT_CALL(tokenizer_, GetTokens())
@@ -79,7 +79,7 @@ TEST_F(ConstraintProviderFactoryTest, CreateLlgConstraintProvider) {
 
 TEST_F(ConstraintProviderFactoryTest, CreateLlgConstraintProviderInferEosId) {
   LlGuidanceConfig config;
-  // eos_id is missing, but stop_token_ids has a valid token
+  // eos_ids is empty, but stop_token_ids has a valid token
   std::vector<std::vector<int>> stop_token_ids = {{2}};
 
   EXPECT_CALL(tokenizer_, GetTokens())
@@ -92,7 +92,7 @@ TEST_F(ConstraintProviderFactoryTest, CreateLlgConstraintProviderInferEosId) {
 
 TEST_F(ConstraintProviderFactoryTest, CreateLlgConstraintProviderMissingEosId) {
   LlGuidanceConfig config;
-  // eos_id is missing, and stop_token_ids is empty
+  // eos_ids is empty, and so is stop_token_ids
   std::vector<std::vector<int>> stop_token_ids;
 
   auto provider = CreateConstraintProvider(config, tokenizer_, stop_token_ids);

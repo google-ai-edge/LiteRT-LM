@@ -241,7 +241,14 @@ auto response = conversation->SendMessage(
 A variant configuration passed to `ConversationConfig`.
 
 -   `LlGuidanceConfig`: Configures LLGuidance.
-    -   `eos_id`: Optional override for the End-of-Sequence token ID.
+    -   `eos_ids`: Optional list of token IDs that end generation. If empty,
+        defaults to all single-token stop sequences configured in
+        [`SessionConfig::GetStopTokenIds()`][SessionConfig] (populated from the
+        model's [`LlmMetadataProto.stop_tokens`][LlmMetadataProto] or set via
+        [`SessionConfig::SetStopTokenIds()`][SessionConfig]). Multi-token stop
+        sequences are ignored because LLGuidance EOS tokens must be single IDs.
+        If no single-token stop sequences are found, initialization returns
+        `absl::InvalidArgumentError`.
 -   `ExternalConstraintConfig`: Empty struct (marker) to enable external
     constraints.
 
@@ -255,3 +262,6 @@ A variant argument passed via `OptionalArgs` to `SendMessage`.
 -   `ExternalConstraintArg`:
     -   `constraint`: `std::unique_ptr<Constraint>`. Ownership is transferred to
         the conversation object for that request.
+
+[SessionConfig]: https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/engine/engine_settings.h "litert::lm::SessionConfig"
+[LlmMetadataProto]: https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/proto/llm_metadata.proto "litert.lm.proto.LlmMetadata"

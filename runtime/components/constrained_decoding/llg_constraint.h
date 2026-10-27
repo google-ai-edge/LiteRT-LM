@@ -101,12 +101,13 @@ class LlgConstraint : public Constraint {
     mutable bool mask_computed_ = false;
   };
 
-  // LlgConstraint takes ownership of llg_constraint.
+  // LlgConstraint takes ownership of llg_constraint. Once the constraint has
+  // ended, only `eos_token_ids` are allowed.
   explicit LlgConstraint(::LlgConstraint* llg_constraint, int vocab_size,
-                         int eos_token_id)
+                         std::vector<int> eos_token_ids)
       : llg_constraint_owner_(llg_constraint),
         vocab_size_(vocab_size),
-        eos_token_id_(eos_token_id) {}
+        eos_token_ids_(std::move(eos_token_ids)) {}
 
   // Gets the start state of the constraint.
   std::unique_ptr<State> Start() const override;
@@ -136,7 +137,7 @@ class LlgConstraint : public Constraint {
 
   LlgConstraintOwner llg_constraint_owner_;
   int vocab_size_;
-  int eos_token_id_;
+  std::vector<int> eos_token_ids_;
 };
 
 }  // namespace litert::lm

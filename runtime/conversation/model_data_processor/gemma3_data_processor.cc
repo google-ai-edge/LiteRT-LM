@@ -165,16 +165,11 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
           "Tokenizer must not be null when constrained decoding is enabled.");
     }
     LlGuidanceConfig llg_config;
-    for (const auto& stop_tokens : stop_token_ids) {
-      if (stop_tokens.size() == 1) {
-        llg_config.eos_id = stop_tokens[0];
-        break;
-      }
-    }
-    if (!llg_config.eos_id.has_value()) {
+    AddStopTokensAsEosIds(stop_token_ids, llg_config);
+    if (llg_config.eos_ids.empty()) {
       auto eos_id = const_cast<Tokenizer*>(tokenizer)->TokenToId("<eos>");
       if (eos_id.ok()) {
-        llg_config.eos_id = *eos_id;
+        llg_config.eos_ids.push_back(*eos_id);
       }
     }
     llg_config.special_tokens = {
