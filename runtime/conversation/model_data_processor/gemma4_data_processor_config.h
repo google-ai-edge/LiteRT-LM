@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace litert::lm {
 
@@ -79,11 +80,11 @@ struct Gemma4DataProcessorConfig {
   // The constraint mode when constrained decoding is enabled. Default is
   // kTextAndOr.
   ConstraintMode constraint_mode = ConstraintMode::kTextAndOr;
-  // If set, constrains tool calling strictly to this specific function name.
+  // If non-empty, restricts tool calling strictly to these function names.
   // Requires LLGuidance tool call constraints
   // (--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1); otherwise
   // CreateConstraint() returns FailedPreconditionError.
-  std::optional<std::string> forced_function_name = std::nullopt;
+  std::vector<std::string> allowed_function_names = {};
 };
 
 // Arguments for Gemma4DataProcessor.

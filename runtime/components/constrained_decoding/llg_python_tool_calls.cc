@@ -121,18 +121,20 @@ NULL: "None"
 %ignore /[ \t]+/ )";
 }
 
-// `python_start` is the Lark expression that opens a tool call block.
+// `python_start` is the Lark expression that opens a tool call block. If
+// `require_call` is true, the block must contain at least one call.
 std::string GetPythonFunctionBlock(
     const std::vector<std::string>& tool_call_cases,
-    absl::string_view python_start) {
+    absl::string_view python_start, bool require_call) {
   return absl::StrFormat(
       R"(python_block
-python_block: python_start (python_call)* python_end
+python_block: python_start (python_call)%s python_end
 python_start: %s
 python_end: "\n```"
 python_call: (%s) "\n"?
 )",
-      python_start, absl::StrJoin(tool_call_cases, " | "));
+      require_call ? "+" : "*", python_start,
+      absl::StrJoin(tool_call_cases, " | "));
 }
 
 // Returns the terminals and the `function_block` rule for the modes that mix
@@ -158,7 +160,8 @@ TEXT_CONTENT: /(.|\n)+/ & ~FORBIDDEN_CALL
 function_block: %s
 )",
       escaped_fence, escaped_fence,
-      GetPythonFunctionBlock(tool_call_cases, "TEXT_AND_FENCE"));
+      GetPythonFunctionBlock(tool_call_cases, "TEXT_AND_FENCE",
+                             /*require_call=*/false));
 }
 
 }  // namespace
@@ -189,16 +192,21 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
     AppendToolRules(tool, tool_name, python_config, tool_blocks);
   }
 
+  const std::vector<std::string>& allowed_names =
+      options.allowed_function_names;
+
   std::vector<std::string> tool_call_cases;
-  if (options.forced_function_name.has_value()) {
-    const std::string& forced_name = *options.forced_function_name;
-    if (!absl::c_linear_search(tool_names, forced_name)) {
-      return absl::InvalidArgumentError(absl::StrFormat(
-          "Forced function '%s' not found in provided tools.", forced_name));
+  if (!allowed_names.empty()) {
+    for (const auto& allowed_name : allowed_names) {
+      if (!absl::c_linear_search(tool_names, allowed_name)) {
+        return absl::InvalidArgumentError(absl::StrFormat(
+            "Allowed function '%s' not found in provided tools.",
+            allowed_name));
+      }
+      tool_call_cases.push_back(
+          absl::StrFormat(R"raw("%s" "(" %s-args ")")raw", allowed_name,
+                          SanitizeLarkRuleName(allowed_name)));
     }
-    tool_call_cases.push_back(
-        absl::StrFormat(R"raw("%s" "(" %s-args ")")raw", forced_name,
-                        SanitizeLarkRuleName(forced_name)));
   } else {
     tool_call_cases.reserve(tool_names.size());
     for (const auto& tool_name : tool_names) {
@@ -209,8 +217,9 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
   }
 
   std::string python_grammar = GetPythonGrammar(options);
-  std::string function_block =
-      GetPythonFunctionBlock(tool_call_cases, R"("```tool_code\n")");
+  constexpr absl::string_view kPythonStart = R"("```tool_code\n")";
+  std::string function_block = GetPythonFunctionBlock(
+      tool_call_cases, kPythonStart, /*require_call=*/false);
   std::string text_only_block = GetTextOnlyBlock(options);
 
   std::string start_rule;
@@ -223,17 +232,11 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
         return absl::InvalidArgumentError(
             "No tools provided for FunctionCallsOnly mode.");
       }
-      if (options.forced_function_name.has_value()) {
-        // The forced function must be called. FST doesn't support forcing a
-        // function, so there is no FST behavior to match here.
-        start_rule = absl::StrCat("start: ", function_block, "\n");
-      } else {
-        // Like FST's FUNCTION_CALL_ONLY mode, the model may also end its turn
-        // without a call, e.g. once it has the tool responses it needs.
-        start_rule = absl::StrCat("start: function_block_opt\n",
-                                  "function_block_opt: function_block |\n",
-                                  "function_block: ", function_block, "\n");
-      }
+      // Like FST's FUNCTION_CALL_ONLY mode, the model may also end its turn
+      // without a call, e.g. once it has the tool responses it needs.
+      start_rule = absl::StrCat("start: function_block_opt\n",
+                                "function_block_opt: function_block |\n",
+                                "function_block: ", function_block, "\n");
       break;
     }
     case LlgConstraintMode::kTextAndOrFunctionCalls: {
@@ -250,9 +253,13 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
         return absl::InvalidArgumentError(
             "No tools provided for FunctionCallsRequired mode.");
       }
-      start_rule = absl::StrCat("start: function_block+ TEXT_CONTENT?",
-                                GetTextAndFunctionBlockRules(
-                                    tool_call_cases, options.code_fence_start));
+      // As in the FC format, a function call is required immediately
+      // (call-first, no text preamble), and the block can't be empty.
+      start_rule =
+          absl::StrCat("start: function_block\n", "function_block: ",
+                       GetPythonFunctionBlock(tool_call_cases, kPythonStart,
+                                              /*require_call=*/true),
+                       "\n");
       break;
     }
   }

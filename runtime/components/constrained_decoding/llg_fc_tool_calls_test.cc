@@ -1121,7 +1121,7 @@ TEST_F(LlgFcToolCallsTest, CaseSensitiveToolNamesCoexist) {
       R"(<|tool_call>call:get_Weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
 }
 
-TEST_F(LlgFcToolCallsTest, ForcedFunctionRestrictsToNamedTool) {
+TEST_F(LlgFcToolCallsTest, AllowedFunctionsWithFunctionCallsOnlyMode) {
   nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
     "name": "get_weather",
     "parameters": {
@@ -1146,17 +1146,17 @@ TEST_F(LlgFcToolCallsTest, ForcedFunctionRestrictsToNamedTool) {
 
   LlgConstraintsOptions options =
       GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
-  options.forced_function_name = "get_weather";
+  options.allowed_function_names = {"get_weather"};
 
   auto constraint = CreateConstraint(tools, options);
   ASSERT_NE(constraint, nullptr);
 
-  // Forced function is accepted.
+  // Allowed function is accepted.
   AssertAccepts(
       *constraint,
       R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
 
-  // Non-forced function is rejected.
+  // Non-allowed function is rejected.
   AssertRejects(
       *constraint,
       R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
@@ -1165,23 +1165,7 @@ TEST_F(LlgFcToolCallsTest, ForcedFunctionRestrictsToNamedTool) {
   AssertRejects(*constraint, "Just plain text.");
 }
 
-TEST_F(LlgFcToolCallsTest, ForcedFunctionNotFoundReturnsError) {
-  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
-    "name": "get_weather"
-  })json");
-  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
-
-  LlgConstraintsOptions options =
-      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
-  options.forced_function_name = "non_existent_tool";
-
-  auto result = CreateLarkGrammarForFcToolCalls(tools, options);
-  EXPECT_THAT(result.status(),
-              StatusIs(absl::StatusCode::kInvalidArgument,
-                       testing::HasSubstr("not found in provided tools")));
-}
-
-TEST_F(LlgFcToolCallsTest, ForcedFunctionWithTextAndOrMode) {
+TEST_F(LlgFcToolCallsTest, AllowedFunctionsWithTextAndOrMode) {
   nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
     "name": "get_weather",
     "parameters": {
@@ -1206,18 +1190,18 @@ TEST_F(LlgFcToolCallsTest, ForcedFunctionWithTextAndOrMode) {
 
   LlgConstraintsOptions options =
       GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
-  options.forced_function_name = "get_weather";
+  options.allowed_function_names = {"get_weather"};
 
   auto constraint = CreateConstraint(tools, options);
   ASSERT_NE(constraint, nullptr);
 
   // Plain text accepted in TextAndOr mode
   AssertAccepts(*constraint, "Just talking without tool.");
-  // Non-forced tool rejected
+  // Non-allowed tool rejected
   AssertRejects(
       *constraint,
       R"(<|tool_call>call:find_movies{genre:<|"|>Comedy<|"|>}<tool_call|><|tool_response>)");
-  // Forced tool accepted with prefix text
+  // Allowed tool accepted with prefix text
   AssertAccepts(
       *constraint,
       R"(I'll look up the weather:<|tool_call>call:get_weather{location:<|"|>London<|"|>}<tool_call|><|tool_response>)");
@@ -1258,15 +1242,120 @@ TEST_F(LlgFcToolCallsTest, FunctionCallsRequired) {
       *constraint,
       R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
 
-  // Tool call preceded by text is accepted.
-  AssertAccepts(
+  // Tool call preceded by text is rejected in call-first mode.
+  AssertRejects(
       *constraint,
       R"(Let me check the weather:<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+}
 
-  // Multiple tool calls with prefix text are accepted.
+TEST_F(LlgFcToolCallsTest, AllowedFunctionNamesRestrictsChoices) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tool3 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timezone": { "type": "string" }
+      },
+      "required": ["timezone"]
+    }
+  })json");
+  nlohmann::ordered_json tools =
+      nlohmann::ordered_json::array({tool1, tool2, tool3});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {"get_weather", "get_time"};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Both allowed functions are accepted.
   AssertAccepts(
       *constraint,
-      R"(Checking both:<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_time{timezone:<|"|>UTC<|"|>}<tool_call|><|tool_response>)");
+
+  // Disallowed function and empty turn are rejected.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(*constraint, "");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionNamesEmptyAllowsAll) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionNotFoundReturnsError) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {"non_existent_tool"};
+
+  auto result = CreateLarkGrammarForFcToolCalls(tools, options);
+  EXPECT_THAT(result.status(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       testing::HasSubstr("not found in provided tools")));
 }
 
 TEST_F(LlgFcToolCallsTest, FunctionCallsRequiredEmptyToolsReturnsError) {
@@ -1306,32 +1395,6 @@ TEST_F(LlgFcToolCallsTest, FunctionCallsOnlyCanEndTurnWithoutCall) {
   // call, e.g. after the tool responses. Otherwise it is forced to call tools
   // until the context is full.
   AssertAccepts(*constraint, "");
-  AssertRejects(*constraint, "Harvested plot 1.");
-}
-
-TEST_F(LlgFcToolCallsTest, FunctionCallsOnlyWithForcedFunctionRequiresCall) {
-  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
-    "name": "harvestPlots",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "plots": {"type": "array", "items": {"type": "integer"}}
-      },
-      "required": ["plots"]
-    }
-  })json");
-  LlgConstraintsOptions options =
-      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
-  options.forced_function_name = "harvestPlots";
-  auto constraint =
-      CreateConstraint(nlohmann::ordered_json::array({tool}), options);
-  ASSERT_NE(constraint, nullptr);
-
-  AssertAccepts(
-      *constraint,
-      R"(<|tool_call>call:harvestPlots{plots:[1]}<tool_call|><|tool_response>)");
-  // A forced function must be called, so the turn can't end without a call.
-  AssertRejects(*constraint, "");
   AssertRejects(*constraint, "Harvested plot 1.");
 }
 

@@ -15,8 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_
 
-#include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
@@ -31,16 +31,14 @@ enum class FuncallFormat {
 };
 
 // Supported constraint modes.
-// TODO(b/577134629): Consider replacing this enum with separate settings for
-// text and for function calls, each allowed, disallowed or required.
 enum class LlgConstraintMode {
   kTextAndOrFunctionCalls,  // Optional text + optional function calls ("auto").
   kFunctionCallsOnly,       // Only function calls are allowed (no text). Like
                             // FST's FUNCTION_CALL_ONLY mode, the turn may also
-                            // end without a call, unless a function is forced.
+                            // end without a call.
   kTextOnly,                // Only text is allowed (no function calls, "none").
-  kFunctionCallsRequired,   // Optional text + at least one required function
-                            // call ("required").
+  kFunctionCallsRequired,   // Like kFunctionCallsOnly, but at least one
+                            // function call is required ("required").
 };
 
 // Options for formatting constraints.
@@ -54,10 +52,10 @@ struct LlgConstraintsOptions {
   std::string close_quote;
   std::string function_response_start;
 
-  // If set, constrains tool calling strictly to this specific function name.
-  // TODO(b/577134629): Consider a list of names, so that a call can be
-  // required from any of several functions without allowing text.
-  std::optional<std::string> forced_function_name = std::nullopt;
+  // If non-empty, tool calls can only use these functions, which must be in
+  // the provided tools. If empty, all provided tools are available. Applies to
+  // every mode that allows tool calls; kTextOnly ignores it.
+  std::vector<std::string> allowed_function_names;
 };
 
 // Converts tools to a Lark grammar string.

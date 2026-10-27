@@ -218,10 +218,11 @@ Gemma4DataProcessor::CreateConstraint(
   }
 
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
-  if (config_.forced_function_name.has_value()) {
+  if (!config_.allowed_function_names.empty()) {
     return absl::FailedPreconditionError(
-        "forced_function_name requires LLGuidance tool call constraints. Build "
-        "with --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable them.");
+        "allowed_function_names requires LLGuidance tool call constraints. "
+        "Build with --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable "
+        "them.");
   }
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatFcStyle,
@@ -256,7 +257,7 @@ Gemma4DataProcessor::CreateConstraint(
   options.open_quote = config_.open_quote;
   options.close_quote = config_.close_quote;
   options.function_response_start = config_.function_response_start;
-  options.forced_function_name = config_.forced_function_name;
+  options.allowed_function_names = config_.allowed_function_names;
 
   switch (config_.constraint_mode) {
     case Gemma4DataProcessorConfig::ConstraintMode::kFunctionCallOnly:
