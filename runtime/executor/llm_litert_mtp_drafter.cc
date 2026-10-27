@@ -49,6 +49,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
@@ -588,10 +589,8 @@ LlmLiteRtMtpDrafter::RunDraftingLoop(
     if (constraint != nullptr && current_draft_state != nullptr) {
       ABSL_ASSIGN_OR_RETURN(
           auto next_state,
-          constraint->ComputeNext(*current_draft_state, sampled_draft_id));
-      if (constraint->IsEnded(*next_state)) {
-        next_state = constraint->Start();
-      }
+          AdvanceConstraintState(*constraint, *current_draft_state,
+                                 sampled_draft_id));
       result.draft_constraint_states.push_back(std::move(next_state));
       current_draft_state = result.draft_constraint_states.back().get();
     }
@@ -748,12 +747,9 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   } else if (constraint != constraint_ || activations.has_value() ||
              constraint_state_ == nullptr) {
     constraint_ = constraint;
-    constraint_state_ = constraint_->Start();
-    ABSL_ASSIGN_OR_RETURN(constraint_state_, constraint_->ComputeNext(
-                                                 *constraint_state_, token_id));
-    if (constraint_->IsEnded(*constraint_state_)) {
-      constraint_state_ = constraint_->Start();
-    }
+    ABSL_ASSIGN_OR_RETURN(
+        constraint_state_,
+        AdvanceConstraintState(*constraint_, *constraint_->Start(), token_id));
   }
 
   const absl::Time draft_start = absl::Now();
@@ -792,12 +788,9 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
           drafting_result.draft_constraint_states[num_correct_tokens - 1]);
     }
     if (bonus_token >= 0 && constraint_state_ != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(
-          constraint_state_,
-          constraint_->ComputeNext(*constraint_state_, bonus_token));
-      if (constraint_->IsEnded(*constraint_state_)) {
-        constraint_state_ = constraint_->Start();
-      }
+      ABSL_ASSIGN_OR_RETURN(constraint_state_,
+                            AdvanceConstraintState(
+                                *constraint_, *constraint_state_, bonus_token));
     }
   }
 

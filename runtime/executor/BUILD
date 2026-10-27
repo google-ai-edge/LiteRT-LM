@@ -1472,6 +1472,7 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/components:sampler",
         "//runtime/components:sampler_factory",
+        "//runtime/components/constrained_decoding:constrained_decoder",
         "//runtime/components/constrained_decoding:constraint",
         "//runtime/components/constrained_decoding:litert_logit_mask_runner",
         "//runtime/components/constrained_decoding:logit_mask",

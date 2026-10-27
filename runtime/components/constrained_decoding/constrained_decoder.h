@@ -108,6 +108,27 @@ class ConstrainedDecoder {
   // Same as above, but takes a span of token ids instead of a tensor buffer.
   absl::Status UpdateState(absl::Span<int> next_token_ids);
 
+  // Returns the current constraint state of sequence `index`.
+  //
+  // This is the state last set with `SetState()` (or the start state if it was
+  // never called), advanced by every token of that sequence passed to
+  // `UpdateState()` since then. The pointer is owned by the decoder and stays
+  // valid until the next `UpdateState()` or `SetState()` call.
+  //
+  // @return An error if `index` is not in [0, batch_size).
+  absl::StatusOr<const Constraint::State*> GetState(int index) const;
+
+  // Replaces the constraint state of sequence `index` with `state`.
+  //
+  // Use this when the caller advanced the sequence by several tokens itself,
+  // e.g. by applying `AdvanceConstraintState()` to `GetState(index)` once per
+  // token. Later `UpdateState()` calls continue from `state`, and any pointer
+  // previously returned by `GetState(index)` becomes invalid.
+  //
+  // @return An error if `index` is not in [0, batch_size) or `state` is null,
+  // in which case the current state is left unchanged.
+  absl::Status SetState(int index, std::unique_ptr<Constraint::State> state);
+
   // Returns a pointer to the constraint.
   Constraint* GetConstraint() const { return constraint_; }
 
@@ -124,6 +145,22 @@ class ConstrainedDecoder {
 
   std::unique_ptr<LiteRtLogitMaskRunner> litert_logit_mask_runner_;
 };
+
+// Returns the constraint state that follows `state` after `token_id`.
+//
+// This is `constraint.ComputeNext(state, token_id)`, except that an ended state
+// is replaced with `constraint.Start()`, so that the constraint applies again
+// to the tokens that follow. `state` is not modified.
+//
+// `ConstrainedDecoder::UpdateState()` and the speculative decoding components
+// (e.g. the MTP drafter) all advance states with this function, so that a
+// state they compute ahead for a drafted token matches the state the decoder
+// reaches by decoding that token.
+//
+// @return An error if `ComputeNext()` fails, e.g. if the constraint rejects
+// `token_id`.
+absl::StatusOr<std::unique_ptr<Constraint::State>> AdvanceConstraintState(
+    const Constraint& constraint, const Constraint::State& state, int token_id);
 
 }  // namespace litert::lm
 

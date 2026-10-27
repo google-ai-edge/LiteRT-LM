@@ -26,6 +26,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -35,7 +36,9 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/constraint_provider.h"
+#include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/components/constrained_decoding/fst_constraint_config.h"
 #include "runtime/components/constrained_decoding/fst_constraint_provider.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -370,6 +373,133 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsOnHostMemorySucceedsWithoutAccel) {
     } else {
       EXPECT_LT(masked_logits_span[i], kDisallowedLogitThreshold);
     }
+  }
+}
+
+constexpr int kFakeVocabSize = 32;
+
+// Returns the position of `state` in the token sequence of a `FakeConstraint`.
+int FakeStateIndex(const Constraint::State& state) {
+  return static_cast<const FakeConstraint::FakeState&>(state).index();
+}
+
+TEST(ConstrainedDecoderStateTest, GetStateStartsAtStartState) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       ConstrainedDecoder::CreateForHost(&constraint));
+
+  ASSERT_OK_AND_ASSIGN(const Constraint::State* state, decoder->GetState(0));
+  EXPECT_EQ(FakeStateIndex(*state), 0);
+}
+
+TEST(ConstrainedDecoderStateTest, GetStateReflectsUpdateState) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       ConstrainedDecoder::CreateForHost(&constraint));
+
+  std::vector<int> token = {10};
+  ASSERT_OK(decoder->UpdateState(absl::MakeSpan(token)));
+  ASSERT_OK_AND_ASSIGN(const Constraint::State* state, decoder->GetState(0));
+  EXPECT_EQ(FakeStateIndex(*state), 1);
+
+  // The second token ends the constraint, which restarts it.
+  token = {20};
+  ASSERT_OK(decoder->UpdateState(absl::MakeSpan(token)));
+  ASSERT_OK_AND_ASSIGN(state, decoder->GetState(0));
+  EXPECT_EQ(FakeStateIndex(*state), 0);
+}
+
+TEST(ConstrainedDecoderStateTest, GetStateRejectsOutOfRangeIndex) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  ASSERT_OK_AND_ASSIGN(auto decoder, ConstrainedDecoder::CreateForHost(
+                                         &constraint, /*batch_size=*/2));
+
+  EXPECT_OK(decoder->GetState(1));
+  EXPECT_THAT(decoder->GetState(-1), StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_THAT(decoder->GetState(2), StatusIs(absl::StatusCode::kOutOfRange));
+}
+
+TEST(ConstrainedDecoderStateTest, SetStateReplacesStateOfOneSequence) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  ASSERT_OK_AND_ASSIGN(auto decoder, ConstrainedDecoder::CreateForHost(
+                                         &constraint, /*batch_size=*/2));
+
+  ASSERT_OK(
+      decoder->SetState(1, std::make_unique<FakeConstraint::FakeState>(1)));
+  ASSERT_OK_AND_ASSIGN(const Constraint::State* state, decoder->GetState(0));
+  EXPECT_EQ(FakeStateIndex(*state), 0);
+  ASSERT_OK_AND_ASSIGN(state, decoder->GetState(1));
+  EXPECT_EQ(FakeStateIndex(*state), 1);
+
+  // `UpdateState()` continues from the state that was set.
+  std::vector<int> tokens = {10, 20};
+  ASSERT_OK(decoder->UpdateState(absl::MakeSpan(tokens)));
+  ASSERT_OK_AND_ASSIGN(state, decoder->GetState(0));
+  EXPECT_EQ(FakeStateIndex(*state), 1);
+  ASSERT_OK_AND_ASSIGN(state, decoder->GetState(1));
+  EXPECT_EQ(FakeStateIndex(*state), 0);
+}
+
+TEST(ConstrainedDecoderStateTest, SetStateRejectsInvalidArguments) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       ConstrainedDecoder::CreateForHost(&constraint));
+
+  EXPECT_THAT(
+      decoder->SetState(1, std::make_unique<FakeConstraint::FakeState>(1)),
+      StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_THAT(decoder->SetState(0, nullptr),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  // The state is unchanged after the failed calls.
+  ASSERT_OK_AND_ASSIGN(const Constraint::State* state, decoder->GetState(0));
+  EXPECT_EQ(FakeStateIndex(*state), 0);
+}
+
+TEST(AdvanceConstraintStateTest, ReturnsNextStateWithoutModifyingInput) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  std::unique_ptr<Constraint::State> start = constraint.Start();
+
+  ASSERT_OK_AND_ASSIGN(auto next,
+                       AdvanceConstraintState(constraint, *start, 10));
+
+  EXPECT_EQ(FakeStateIndex(*next), 1);
+  EXPECT_EQ(FakeStateIndex(*start), 0);
+}
+
+TEST(AdvanceConstraintStateTest, RestartsWhenConstraintEnds) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  const FakeConstraint::FakeState last_token_state(1);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto next, AdvanceConstraintState(constraint, last_token_state, 20));
+
+  EXPECT_EQ(FakeStateIndex(*next), 0);
+}
+
+TEST(AdvanceConstraintStateTest, PropagatesComputeNextErrors) {
+  FakeConstraint constraint({10, 20}, kFakeVocabSize);
+  // `FakeConstraint::ComputeNext()` rejects states past the end of its
+  // sequence.
+  const FakeConstraint::FakeState ended_state(2);
+
+  EXPECT_THAT(AdvanceConstraintState(constraint, ended_state, 10),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(AdvanceConstraintStateTest, MatchesUpdateState) {
+  FakeConstraint constraint({10, 20, 30}, kFakeVocabSize);
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       ConstrainedDecoder::CreateForHost(&constraint));
+  std::unique_ptr<Constraint::State> state = constraint.Start();
+
+  for (int token : {10, 20, 30, 10, 20}) {
+    std::vector<int> step_token = {token};
+    ASSERT_OK(decoder->UpdateState(absl::MakeSpan(step_token)));
+    ASSERT_OK_AND_ASSIGN(state,
+                         AdvanceConstraintState(constraint, *state, token));
+    ASSERT_OK_AND_ASSIGN(const Constraint::State* decoder_state,
+                         decoder->GetState(0));
+    EXPECT_EQ(FakeStateIndex(*decoder_state), FakeStateIndex(*state));
   }
 }
 

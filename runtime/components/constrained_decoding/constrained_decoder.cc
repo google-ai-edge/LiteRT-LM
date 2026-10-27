@@ -24,6 +24,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -111,14 +112,44 @@ absl::Status ConstrainedDecoder::UpdateState(absl::Span<int> next_token_ids) {
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int i = 0; i < batch_size_; ++i) {
     auto& constraint_state = constraint_states_[i];
-    ABSL_ASSIGN_OR_RETURN(
-        constraint_state,
-        constraint_->ComputeNext(*constraint_state, next_token_ids[i]));
-    if (constraint_->IsEnded(*constraint_state)) {
-      constraint_state = constraint_->Start();
-    }
+    ABSL_ASSIGN_OR_RETURN(constraint_state, AdvanceConstraintState(
+                                                *constraint_, *constraint_state,
+                                                next_token_ids[i]));
   }
   return absl::OkStatus();
+}
+
+absl::StatusOr<const Constraint::State*> ConstrainedDecoder::GetState(
+    int index) const {
+  if (index < 0 || index >= batch_size_) {
+    return absl::OutOfRangeError(absl::StrCat(
+        "Sequence index ", index, " is out of range [0, ", batch_size_, ")."));
+  }
+  return constraint_states_[index].get();
+}
+
+absl::Status ConstrainedDecoder::SetState(
+    int index, std::unique_ptr<Constraint::State> state) {
+  if (index < 0 || index >= batch_size_) {
+    return absl::OutOfRangeError(absl::StrCat(
+        "Sequence index ", index, " is out of range [0, ", batch_size_, ")."));
+  }
+  if (state == nullptr) {
+    return absl::InvalidArgumentError("Constraint state must not be null.");
+  }
+  constraint_states_[index] = std::move(state);
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<Constraint::State>> AdvanceConstraintState(
+    const Constraint& constraint, const Constraint::State& state,
+    int token_id) {
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Constraint::State> next_state,
+                        constraint.ComputeNext(state, token_id));
+  if (constraint.IsEnded(*next_state)) {
+    return constraint.Start();
+  }
+  return next_state;
 }
 
 }  // namespace litert::lm
