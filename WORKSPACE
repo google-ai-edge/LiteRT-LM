@@ -11,6 +11,10 @@ TENSORFLOW_REF = "4f8e6d470a7f2864a7b2af990d3ffcfc47f05c99"
 
 TENSORFLOW_SHA256 = "d712b298674539d836c4751772d523c0e3da88af6ebac33ff13300e788a8d4ff"
 
+ML_DRIFT_COMMIT = "76492bb9412030ec93cc5b607df26ab5cf787490"
+
+ML_DRIFT_SHA256 = "74f4234ae7b5cde17406f108c2ee760a63b58159e4f5b53691c87f1e13a338b1"
+
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 # Declared before `rules_shell_dependencies()` and `apple_rules_dependencies()`
@@ -515,10 +519,6 @@ http_archive(
     strip_prefix = "SafeInt-72f0745e26091af6d1186fd91426377f16688ba7",
     url = "https://github.com/dcleblanc/SafeInt/archive/72f0745e26091af6d1186fd91426377f16688ba7.tar.gz",
 )
-
-ML_DRIFT_COMMIT = "1b18771f44c0be3d972847b31a80f6dc3d6964b5"
-
-ML_DRIFT_SHA256 = "0a7384901754a4ee84220561bcf5447fde4363cbc8a42c94743f183d178feb30"
 
 http_archive(
     name = "ml_drift",

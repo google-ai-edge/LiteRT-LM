@@ -100,7 +100,7 @@ if(NOT TARGET mldrift_serialization_gen)
   FetchContent_Declare(
       ml_drift
       GIT_REPOSITORY https://github.com/google-ai-edge/ml-drift.git
-      GIT_TAG 1b18771f44c0be3d972847b31a80f6dc3d6964b5
+      GIT_TAG 76492bb9412030ec93cc5b607df26ab5cf787490
   )
   FetchContent_GetProperties(ml_drift)
   if(NOT ml_drift_POPULATED)
