@@ -32,7 +32,12 @@ import click
 import litert_lm
 from litert_lm_builder import litertlm_peek
 from litert_lm_cli import config
-from runtime.proto import llm_metadata_pb2
+try:
+  # PyPI: litert-lm-builder bundles the protos under its own package.
+  from litert_lm_builder.runtime.proto import llm_metadata_pb2
+except ImportError:
+  # Bazel: the protos are importable from the workspace root.
+  from runtime.proto import llm_metadata_pb2
 
 # The default model types representing the main text model components.
 _DEFAULT_TARGET_MODEL_TYPES = frozenset({

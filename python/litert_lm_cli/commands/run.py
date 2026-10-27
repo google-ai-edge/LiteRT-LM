@@ -29,7 +29,12 @@ from litert_lm_cli import common
 from litert_lm_cli import help_formatter
 from litert_lm_cli import huggingface_download
 from litert_lm_cli import model
-from runtime.proto import llm_metadata_pb2
+try:
+  # PyPI: litert-lm-builder bundles the protos under its own package.
+  from litert_lm_builder.runtime.proto import llm_metadata_pb2
+except ImportError:
+  # Bazel: the protos are importable from the workspace root.
+  from runtime.proto import llm_metadata_pb2
 
 try:
   # pylint: disable=g-import-not-at-top

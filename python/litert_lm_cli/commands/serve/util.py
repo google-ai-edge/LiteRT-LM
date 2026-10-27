@@ -27,7 +27,12 @@ import click
 import litert_lm
 from litert_lm_cli import common
 from litert_lm_cli import model
-from runtime.proto import llm_metadata_pb2
+try:
+  # PyPI: litert-lm-builder bundles the protos under its own package.
+  from litert_lm_builder.runtime.proto import llm_metadata_pb2
+except ImportError:
+  # Bazel: the protos are importable from the workspace root.
+  from runtime.proto import llm_metadata_pb2
 
 
 class LiteRTLMServer(http.server.HTTPServer):
