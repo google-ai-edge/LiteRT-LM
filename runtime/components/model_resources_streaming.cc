@@ -296,16 +296,6 @@ absl::Status ModelResourcesStreaming::SetWeightsFromStream(
   return absl::OkStatus();
 }
 
-absl::Status ModelResourcesStreaming::SetVisionWeightsFromStream(
-    absl::string_view model_type_str, DataStream& stream, size_t size) {
-  return SetWeightsFromStream(model_type_str, stream, size);
-}
-
-absl::Status ModelResourcesStreaming::SetAudioWeightsFromStream(
-    absl::string_view model_type_str, DataStream& stream, size_t size) {
-  return SetWeightsFromStream(model_type_str, stream, size);
-}
-
 void ModelResourcesStreaming::ReleaseWeights(absl::string_view model_type_str) {
   const std::string key = absl::AsciiStrToLower(model_type_str);
   // Drop the spans before the storage they point into, so that no dangling

@@ -792,17 +792,15 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
             proto::EmbeddingMetadata::TF_LITE_PER_LAYER_EMBEDDER) {
           size_t size =
               section_metadata->end_offset() - section_metadata->begin_offset();
-          ABSL_RETURN_IF_ERROR(
-              streaming_resources->SetPerLayerWeightsFromStream(
-                  *section->data_stream, size));
+          ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
+              model_type, *section->data_stream, size));
         } else if (model_type == proto::EmbeddingMetadata::TF_LITE_EMBEDDER) {
           size_t size =
               section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_LOG(INFO) << "Reading embedder weights (" << size
                          << " bytes) into host memory...";
-          ABSL_RETURN_IF_ERROR(
-              streaming_resources->SetEmbedderWeightsFromStream(
-                  *section->data_stream, size));
+          ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
+              model_type, *section->data_stream, size));
           ABSL_LOG(INFO) << "Embedder weights read.";
           if (owned_env == nullptr) {
             ABSL_ASSIGN_OR_RETURN(
