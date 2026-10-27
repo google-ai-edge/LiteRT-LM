@@ -122,6 +122,63 @@ TEST(EmbeddingEngineSettingsTest, VisionTokensPerImageGetterAndSetter) {
   EXPECT_EQ(settings.GetVisionTokensPerImage(), 70);
 }
 
+TEST(EmbeddingEngineSettingsTest, MinVisionTokensPerImageGetterAndSetter) {
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create("test_multimodal_embedding.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+
+  EXPECT_EQ(settings.GetMinVisionTokensPerImage(), std::nullopt);
+  settings.SetMinVisionTokensPerImage(70);
+  EXPECT_EQ(settings.GetMinVisionTokensPerImage(), 70);
+  settings.SetMinVisionTokensPerImage(std::nullopt);
+  EXPECT_EQ(settings.GetMinVisionTokensPerImage(), std::nullopt);
+}
+
+TEST(EmbeddingEngineSettingsTest, ValidateAcceptsMinVisionTokensPerImage) {
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create("test_multimodal_embedding.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetMinVisionTokensPerImage(140);
+  settings.SetVisionTokensPerImage(280);
+
+  EXPECT_OK(settings.Validate());
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ValidateRejectsNegativeMinVisionTokensPerImage) {
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create("test_multimodal_embedding.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetMinVisionTokensPerImage(-1);
+
+  EXPECT_THAT(settings.Validate().message(),
+              HasSubstr("min_vision_tokens_per_image must be non-negative"));
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ValidateRejectsMinVisionTokensGreaterThanVisionTokens) {
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create("test_multimodal_embedding.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetMinVisionTokensPerImage(280);
+  settings.SetVisionTokensPerImage(140);
+
+  EXPECT_THAT(settings.Validate().message(),
+              HasSubstr("cannot be greater than vision_tokens_per_image"));
+}
+
 TEST(EmbeddingEngineSettingsTest, ResolveDefaultsUserSettingTakesPrecedence) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_embedding_model.tflite"));

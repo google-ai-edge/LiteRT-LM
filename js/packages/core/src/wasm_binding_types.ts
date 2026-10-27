@@ -611,6 +611,8 @@ export declare interface EmbeddingEngineSettings extends Deletable {
   setMinInputLength(minInputLength?: number): void;
   getVisionTokensPerImage(): number | undefined;
   setVisionTokensPerImage(visionTokensPerImage?: number): void;
+  getMinVisionTokensPerImage(): number | undefined;
+  setMinVisionTokensPerImage(minVisionTokensPerImage?: number): void;
   getMutableMainExecutorSettings(): EmbeddingExecutorSettings;
 }
 

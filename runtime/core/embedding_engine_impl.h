@@ -74,6 +74,10 @@ struct LazyMultimodalLoadingConfig {
   // compiled.
   std::optional<int> vision_tokens_per_image;
 
+  // Smallest vision signature capacity to load when the encoder is compiled,
+  // or std::nullopt for no minimum.
+  std::optional<int> min_vision_tokens_per_image;
+
   // Number of image patches corresponding to `vision_tokens_per_image`.
   int vision_max_num_patches = 0;
 };

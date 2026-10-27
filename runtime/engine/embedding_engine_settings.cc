@@ -103,6 +103,15 @@ void EmbeddingEngineSettings::SetVisionTokensPerImage(
   vision_tokens_per_image_ = vision_tokens_per_image;
 }
 
+std::optional<int> EmbeddingEngineSettings::GetMinVisionTokensPerImage() const {
+  return min_vision_tokens_per_image_;
+}
+
+void EmbeddingEngineSettings::SetMinVisionTokensPerImage(
+    std::optional<int> min_vision_tokens_per_image) {
+  min_vision_tokens_per_image_ = min_vision_tokens_per_image;
+}
+
 bool EmbeddingEngineSettings::GetLazyLoadMultimodalEncoders() const {
   return lazy_load_multimodal_encoders_;
 }
@@ -261,6 +270,27 @@ absl::Status ValidateInputLengths(std::optional<int> min_input_length,
   return absl::OkStatus();
 }
 
+absl::Status ValidateMinVisionTokensPerImage(
+    std::optional<int> min_vision_tokens_per_image,
+    std::optional<int> vision_tokens_per_image) {
+  if (!min_vision_tokens_per_image.has_value()) {
+    return absl::OkStatus();
+  }
+  if (*min_vision_tokens_per_image < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("min_vision_tokens_per_image must be non-negative, got: ",
+                     *min_vision_tokens_per_image));
+  }
+  if (vision_tokens_per_image.has_value() &&
+      *min_vision_tokens_per_image > *vision_tokens_per_image) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "min_vision_tokens_per_image (", *min_vision_tokens_per_image,
+        ") cannot be greater than vision_tokens_per_image (",
+        *vision_tokens_per_image, ")"));
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 absl::Status EmbeddingEngineSettings::ResolveDefaults(
@@ -325,6 +355,8 @@ absl::Status EmbeddingEngineSettings::Validate(
 
   LITERT_RETURN_IF_ERROR(
       ValidateInputLengths(min_input_length_, max_input_length_));
+  LITERT_RETURN_IF_ERROR(ValidateMinVisionTokensPerImage(
+      min_vision_tokens_per_image_, vision_tokens_per_image_));
 
   return absl::OkStatus();
 }

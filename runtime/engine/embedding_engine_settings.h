@@ -54,11 +54,21 @@ class EmbeddingEngineSettings {
   std::optional<int> GetMinInputLength() const;
   void SetMinInputLength(std::optional<int> min_input_length);
 
-  // Desired number of vision tokens generated per image. If set,
-  // EmbeddingEngine will automatically select the smallest vision encoder
-  // (and adapter) signatures and configure patch metadata accordingly.
+  // Desired maximum number of vision tokens generated per image. If set,
+  // EmbeddingEngine will automatically select vision encoder (and adapter)
+  // signatures with capacity up to this length and the smallest signature that
+  // fits it, and configure patch metadata accordingly. If not set, it defaults
+  // to the value derived from the model's metadata (if any).
   std::optional<int> GetVisionTokensPerImage() const;
   void SetVisionTokensPerImage(std::optional<int> vision_tokens_per_image);
+
+  // Smallest vision signature capacity to load, or std::nullopt for no
+  // minimum. Smaller signatures are skipped to save memory. On web, the engine
+  // defaults this to the vision tokens per image, so only one signature is
+  // loaded. Must be non-negative and not exceed the vision tokens per image.
+  std::optional<int> GetMinVisionTokensPerImage() const;
+  void SetMinVisionTokensPerImage(
+      std::optional<int> min_vision_tokens_per_image);
 
   // Whether the vision and audio encoders bundled in the model are compiled
   // on demand instead of at engine creation time.
@@ -122,9 +132,9 @@ class EmbeddingEngineSettings {
           std::nullopt);
 
   // Validates the engine settings to ensure cache directories, backend
-  // constraints, and input length bounds are valid. Returns an error if
-  // validation fails. Call after ResolveDefaults, so that bounds inherited from
-  // the model's metadata are validated too.
+  // constraints, input length bounds and vision token bounds are valid. Returns
+  // an error if validation fails. Call after ResolveDefaults, so that bounds
+  // inherited from the model's metadata are validated too.
   absl::Status Validate(
       const std::optional<std::string>& text_backend_constraint = std::nullopt,
       const std::optional<std::string>& vision_backend_constraint =
@@ -147,6 +157,7 @@ class EmbeddingEngineSettings {
   std::optional<int> max_input_length_;
   std::optional<int> min_input_length_;
   std::optional<int> vision_tokens_per_image_;
+  std::optional<int> min_vision_tokens_per_image_;
   bool lazy_load_multimodal_encoders_ = false;
 };
 

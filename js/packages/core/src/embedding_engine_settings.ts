@@ -55,7 +55,20 @@ export interface EmbeddingEngineSettings {
    * run on a tighter graph instead of being padded up to `maxInputLength`.
    */
   minInputLength?: number;
+  /**
+   * Maximum number of vision tokens per image. Only used when vision is
+   * enabled. If unset, the model's default is used.
+   */
   visionTokensPerImage?: number;
+  /**
+   * Smallest vision signature, in tokens per image, to prepare. Defaults to
+   * `visionTokensPerImage`, which prepares exactly one vision signature.
+   *
+   * Lowering this prepares additional smaller signatures so that small images
+   * run on a tighter graph instead of being padded, but each extra signature
+   * costs a lot of memory and can exceed the 4GB wasm32 limit.
+   */
+  minVisionTokensPerImage?: number;
   mainExecutorSettings?: EmbeddingExecutorSettings;
 }
 
@@ -83,6 +96,11 @@ export function fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
   wasmSettings.setMinInputLength(settings.minInputLength ?? maxInputLength);
   if (settings.visionTokensPerImage !== undefined) {
     wasmSettings.setVisionTokensPerImage(settings.visionTokensPerImage);
+  }
+  // When unset, the engine defaults this to the vision tokens per image, which
+  // may come from the model's metadata.
+  if (settings.minVisionTokensPerImage !== undefined) {
+    wasmSettings.setMinVisionTokensPerImage(settings.minVisionTokensPerImage);
   }
 
   if (settings.mainExecutorSettings) {

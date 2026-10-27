@@ -945,6 +945,12 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .function("setVisionTokensPerImage",
                 &litert::lm::EmbeddingEngineSettings::SetVisionTokensPerImage)
       .function(
+          "getMinVisionTokensPerImage",
+          &litert::lm::EmbeddingEngineSettings::GetMinVisionTokensPerImage)
+      .function(
+          "setMinVisionTokensPerImage",
+          &litert::lm::EmbeddingEngineSettings::SetMinVisionTokensPerImage)
+      .function(
           "getMutableMainExecutorSettings",
           &litert::lm::EmbeddingEngineSettings::GetMutableMainExecutorSettings,
           emscripten::return_value_policy::reference());

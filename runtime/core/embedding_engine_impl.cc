@@ -275,21 +275,25 @@ absl::StatusOr<uint64_t> GetNumTokens(const ExecutorInputs& executor_inputs) {
 
 // Selects the vision encoder and adapter signatures that produce
 // `vision_tokens_per_image` soft tokens per image, records them in
-// `vision_executor_settings` and returns the selection. `max_num_patches` is
-// the number of image patches matching `vision_tokens_per_image`, and is only
+// `vision_executor_settings` and returns the selection. Signatures smaller than
+// `min_vision_tokens_per_image` (if set) are skipped. `max_num_patches` is the
+// number of image patches matching `vision_tokens_per_image`, and is only
 // reported back in the returned info.
 absl::StatusOr<SelectedVisionSignatureInfo> SelectAndApplyVisionSignatures(
-    ModelResources& resources, int vision_tokens_per_image, int max_num_patches,
+    ModelResources& resources, int vision_tokens_per_image,
+    std::optional<int> min_vision_tokens_per_image, int max_num_patches,
     VisionExecutorSettings& vision_executor_settings) {
   LITERT_ASSIGN_OR_RETURN(
       auto vision_sig_info,
-      SelectVisionEncoderSignatures(resources, vision_tokens_per_image));
+      SelectVisionEncoderSignatures(resources, vision_tokens_per_image,
+                                    min_vision_tokens_per_image));
   vision_executor_settings.SetEncoderSelectedSignatures(
       vision_sig_info.signature_names);
 
   LITERT_ASSIGN_OR_RETURN(
       auto adapter_sig_info,
-      SelectVisionAdapterSignatures(resources, vision_tokens_per_image));
+      SelectVisionAdapterSignatures(resources, vision_tokens_per_image,
+                                    min_vision_tokens_per_image));
   if (adapter_sig_info.has_value()) {
     vision_executor_settings.SetAdapterSelectedSignatures(
         adapter_sig_info->signature_names);
@@ -308,6 +312,33 @@ absl::StatusOr<SelectedVisionSignatureInfo> SelectAndApplyVisionSignatures(
   }
   selected_vision_info.max_num_patches = max_num_patches;
   return selected_vision_info;
+}
+
+// Resolves the smallest vision signature capacity to load, given the resolved
+// `vision_tokens_per_image`, and stores it in `settings`. On web, it defaults
+// to `vision_tokens_per_image`, so that a single vision signature is loaded.
+// Returns an error if it exceeds `vision_tokens_per_image`, which may come
+// from the model's metadata rather than the caller.
+absl::Status ResolveMinVisionTokensPerImage(EmbeddingEngineSettings& settings,
+                                            int vision_tokens_per_image) {
+#ifdef __EMSCRIPTEN__
+  // Each extra signature takes hundreds of MB to GBs of heap on GPU, and
+  // loading all of them can overflow the 4GB wasm32 address space. Users can
+  // still lower the min to load more signatures.
+  if (!settings.GetMinVisionTokensPerImage().has_value()) {
+    settings.SetMinVisionTokensPerImage(vision_tokens_per_image);
+  }
+#endif  // __EMSCRIPTEN__
+  const std::optional<int> min_vision_tokens_per_image =
+      settings.GetMinVisionTokensPerImage();
+  if (min_vision_tokens_per_image.has_value() &&
+      *min_vision_tokens_per_image > vision_tokens_per_image) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "min_vision_tokens_per_image (", *min_vision_tokens_per_image,
+        ") cannot be greater than vision_tokens_per_image (",
+        vision_tokens_per_image, ")"));
+  }
+  return absl::OkStatus();
 }
 
 // Resolves defaults and validates `settings` against the model, pulling the
@@ -450,6 +481,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
           absl::StrCat("vision_tokens_per_image must be positive, got: ",
                        vision_tokens_per_image));
     }
+    LITERT_RETURN_IF_ERROR(
+        ResolveMinVisionTokensPerImage(settings, vision_tokens_per_image));
 
     // Configure vision patch metadata.
     int pooling_kernel_size = 1;
@@ -485,7 +518,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       LITERT_ASSIGN_OR_RETURN(
           selected_vision_signature_info,
           SelectAndApplyVisionSignatures(
-              *resources, vision_tokens_per_image, vision_max_num_patches,
+              *resources, vision_tokens_per_image,
+              settings.GetMinVisionTokensPerImage(), vision_max_num_patches,
               *settings.GetMutableVisionExecutorSettings()));
     } else if (!lazy_load_multimodal_encoders) {
       // The value may come from the model metadata rather than the caller, so
@@ -573,6 +607,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
         .vision_executor_settings = settings.GetVisionExecutorSettings(),
         .audio_executor_settings = settings.GetAudioExecutorSettings(),
         .vision_tokens_per_image = settings.GetVisionTokensPerImage(),
+        .min_vision_tokens_per_image = settings.GetMinVisionTokensPerImage(),
         .vision_max_num_patches = vision_max_num_patches,
     };
   }
@@ -953,6 +988,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           absl::StrCat("vision_tokens_per_image must be positive, got: ",
                        vision_tokens_per_image));
     }
+    LITERT_RETURN_IF_ERROR(
+        ResolveMinVisionTokensPerImage(settings, vision_tokens_per_image));
 
     int pooling_kernel_size = 1;
     if (settings.GetEmbeddingMetadata().has_value() &&
@@ -991,7 +1028,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
       LITERT_ASSIGN_OR_RETURN(
           selected_vision_signature_info,
           SelectAndApplyVisionSignatures(
-              *streaming_resources, vision_tokens_per_image, max_num_patches,
+              *streaming_resources, vision_tokens_per_image,
+              settings.GetMinVisionTokensPerImage(), max_num_patches,
               *settings.GetMutableVisionExecutorSettings()));
     } else {
       // The value may come from the model metadata rather than the caller, so
@@ -1230,7 +1268,8 @@ absl::Status EmbeddingEngineImpl::EnsureVisionExecutorLoaded() {
         selected_vision_signature_info_,
         SelectAndApplyVisionSignatures(
             resources, *config.vision_tokens_per_image,
-            config.vision_max_num_patches, *config.vision_executor_settings));
+            config.min_vision_tokens_per_image, config.vision_max_num_patches,
+            *config.vision_executor_settings));
   }
   LITERT_ASSIGN_OR_RETURN(
       vision_executor_,

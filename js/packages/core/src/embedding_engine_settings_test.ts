@@ -77,4 +77,32 @@ describe('EmbeddingEngineSettings', () => {
       wasmSettings.delete();
     });
   });
+
+  describe('vision token bounds', () => {
+    function fill(settings: Partial<EmbeddingEngineSettings>):
+        Wasm.EmbeddingEngineSettings {
+      const wasmSettings =
+          liteRtLm.liteRtLmWasm.EmbeddingEngineSettings.createDefault(
+              modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+      fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
+          wasmSettings, {...settings, model: '/path/to/model'});
+      return wasmSettings;
+    }
+
+    it('leaves both bounds unset by default', () => {
+      // The engine resolves them from the model's metadata at creation.
+      const wasmSettings = fill({});
+      expect(wasmSettings.getVisionTokensPerImage()).toBeUndefined();
+      expect(wasmSettings.getMinVisionTokensPerImage()).toBeUndefined();
+      wasmSettings.delete();
+    });
+
+    it('passes explicit vision token bounds through', () => {
+      const wasmSettings =
+          fill({visionTokensPerImage: 280, minVisionTokensPerImage: 140});
+      expect(wasmSettings.getVisionTokensPerImage()).toBe(280);
+      expect(wasmSettings.getMinVisionTokensPerImage()).toBe(140);
+      wasmSettings.delete();
+    });
+  });
 });

@@ -76,8 +76,8 @@ namespace litert::lm {
 namespace {
 
 using ::litert::Environment;
-using ::litert::support::ImagePreprocessParameter;
 using ::litert::support::ImagePreprocessor;
+using ::litert::support::ImagePreprocessParameter;
 using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::Contains;
@@ -3247,6 +3247,132 @@ TEST(EmbeddingEngineImplTest,
                                   std::move(tokenizer), std::move(settings)),
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("exceeds maximum available signature length")));
+}
+
+// Creates an engine on a vision encoder with 70, 140 and 280 token signatures,
+// and returns the lengths of the selected vision signatures.
+absl::StatusOr<std::vector<int>> CreateAndGetSelectedVisionSignatureLengths(
+    int vision_tokens_per_image, std::optional<int> min_vision_tokens_per_image,
+    bool lazy_load_multimodal_encoders = false) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  LITERT_ASSIGN_OR_RETURN(auto model_assets, ModelAssets::Create(model_path));
+  LITERT_ASSIGN_OR_RETURN(auto real_resources,
+                          CreateTestModelResources(model_path));
+  LITERT_ASSIGN_OR_RETURN(auto env, CreateTestEnvironment());
+
+  auto vision_buffer = BuildDummyVisionModelBuffer(
+      {"vision_70", "vision_140", "vision_280"}, {70, 140, 280},
+      /*feature_dim=*/64);
+  LITERT_ASSIGN_OR_RETURN(
+      auto vision_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                                 vision_buffer.size())));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/std::nullopt, /*vision_model=*/&vision_model);
+
+  LITERT_ASSIGN_OR_RETURN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                             model_assets, Backend::CPU,
+                                             Backend::CPU, std::nullopt));
+  settings.SetVisionTokensPerImage(vision_tokens_per_image);
+  settings.SetMinVisionTokensPerImage(min_vision_tokens_per_image);
+  settings.SetLazyLoadMultimodalEncoders(lazy_load_multimodal_encoders);
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto engine, EmbeddingEngineImpl::Create(
+                       std::move(resources), std::move(env),
+                       std::make_unique<MockTokenizer>(), std::move(settings)));
+  if (lazy_load_multimodal_encoders) {
+    // The vision signatures are selected when the first image is processed.
+    std::vector<InputData> image_contents;
+    image_contents.push_back(InputImage("dummy"));
+    (void)engine->ComputeEmbedding(image_contents, EmbeddingOptions());
+  }
+  if (!engine->GetSelectedVisionSignatureInfo().has_value()) {
+    return absl::NotFoundError("No vision signatures were selected.");
+  }
+  return engine->GetSelectedVisionSignatureInfo()->signature_lengths;
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithoutMinVisionTokensLoadsAllSmallerVisionSignatures) {
+  ASSERT_OK_AND_ASSIGN(std::vector<int> signature_lengths,
+                       CreateAndGetSelectedVisionSignatureLengths(
+                           /*vision_tokens_per_image=*/280,
+                           /*min_vision_tokens_per_image=*/std::nullopt));
+  EXPECT_THAT(signature_lengths, ElementsAre(70, 140, 280));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithMinVisionTokensSkipsSmallerVisionSignatures) {
+  ASSERT_OK_AND_ASSIGN(std::vector<int> signature_lengths,
+                       CreateAndGetSelectedVisionSignatureLengths(
+                           /*vision_tokens_per_image=*/280,
+                           /*min_vision_tokens_per_image=*/140));
+  EXPECT_THAT(signature_lengths, ElementsAre(140, 280));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithMinVisionTokensEqualToVisionTokensLoadsSingleSignature) {
+  ASSERT_OK_AND_ASSIGN(std::vector<int> signature_lengths,
+                       CreateAndGetSelectedVisionSignatureLengths(
+                           /*vision_tokens_per_image=*/140,
+                           /*min_vision_tokens_per_image=*/140));
+  EXPECT_THAT(signature_lengths, ElementsAre(140));
+}
+
+TEST(EmbeddingEngineImplTest,
+     LazyLoadMultimodalEncodersAppliesMinVisionTokensOnFirstImage) {
+  ASSERT_OK_AND_ASSIGN(std::vector<int> signature_lengths,
+                       CreateAndGetSelectedVisionSignatureLengths(
+                           /*vision_tokens_per_image=*/280,
+                           /*min_vision_tokens_per_image=*/140,
+                           /*lazy_load_multimodal_encoders=*/true));
+  EXPECT_THAT(signature_lengths, ElementsAre(140, 280));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithMinVisionTokensGreaterThanVisionTokensReturnsError) {
+  EXPECT_THAT(CreateAndGetSelectedVisionSignatureLengths(
+                  /*vision_tokens_per_image=*/140,
+                  /*min_vision_tokens_per_image=*/280),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("cannot be greater than "
+                                 "vision_tokens_per_image")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithMinVisionTokensGreaterThanMetadataVisionTokensReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  // 630 patches with a 3x3 pooling kernel gives 70 vision tokens per image.
+  proto::EmbeddingMetadata metadata;
+  auto* gemma_v2 =
+      metadata.mutable_embedding_model_type()->mutable_embedding_gemma_v2();
+  gemma_v2->set_max_num_patches(630);
+  gemma_v2->set_pooling_kernel_size(3);
+  settings.GetMutableEmbeddingMetadata() = metadata;
+  settings.SetMinVisionTokensPerImage(140);
+
+  EXPECT_THAT(
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("min_vision_tokens_per_image (140) cannot be greater "
+                         "than vision_tokens_per_image (70)")));
 }
 }  // namespace
 }  // namespace litert::lm
