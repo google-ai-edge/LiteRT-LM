@@ -325,6 +325,10 @@ class ServeTest(parameterized.TestCase):
     server = mock.MagicMock(spec=util.LiteRTLMServer)
     server.litert_lm_engine = None
     server.model_id = None
+    server.engine_cache_key = None
+
+    mock_model_mod.parse_backend.reset_mock()
+    mock_model_mod.resolve_config_option.reset_mock()
 
     # First call creates the engine.
     engine1 = util.get_or_initialize_server_engine(
@@ -334,13 +338,86 @@ class ServeTest(parameterized.TestCase):
     mock_litert_lm.Engine.assert_called_once()  # pyrefly: ignore[missing-attribute]
     self.assertEqual(server.litert_lm_engine, mock_engine_instance)
     self.assertEqual(server.model_id, "test-model")
+    self.assertEqual(server.engine_cache_key, ("test-model", None, None))
+    parse_backend_calls = mock_model_mod.parse_backend.call_count
+    resolve_config_calls = mock_model_mod.resolve_config_option.call_count
+    self.assertGreater(parse_backend_calls, 0)
+    self.assertGreater(resolve_config_calls, 0)
 
-    # Second call with same ID - returns cached engine.
+    # Second call with same ID - returns cached engine without repeating backend
+    # parsing or config resolution.
     engine2 = util.get_or_initialize_server_engine(
         server, model_id="test-model"
     )
     self.assertEqual(engine2, mock_engine_instance)
     self.assertEqual(mock_litert_lm.Engine.call_count, 1)  # pyrefly: ignore[missing-attribute]
+    self.assertEqual(
+        mock_model_mod.parse_backend.call_count, parse_backend_calls
+    )
+    self.assertEqual(
+        mock_model_mod.resolve_config_option.call_count, resolve_config_calls
+    )
+
+  def test_get_engine_secondary_cache_matching_resolved_options(self):
+    mock_model = mock.Mock(spec_set=["exists", "model_path"])
+    mock_model.exists.return_value = True
+    mock_model.model_path = "/path/to/model"
+    mock_model_mod.Model.from_model_id.return_value = mock_model
+
+    mock_engine_instance = mock.MagicMock(spec=interfaces.AbstractEngine)
+    mock_engine_instance.__enter__.return_value = mock_engine_instance
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    mock_backend_cpu = mock.Mock()
+
+    def mock_parse_backend(
+        backend, model_obj=None, target_model_types=None, label=None
+    ):
+      del backend, model_obj, target_model_types
+      if label in ("vision", "audio"):
+        return None
+      return mock_backend_cpu
+
+    mock_model_mod.parse_backend.side_effect = mock_parse_backend
+
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
+    server.litert_lm_engine = None
+    server.model_id = None
+    server.engine_cache_key = None
+
+    # First call: backend=None
+    engine1 = util.get_or_initialize_server_engine(
+        server, model_id="test-model", backend=None
+    )
+    self.assertEqual(engine1, mock_engine_instance)
+    self.assertEqual(server.engine_cache_key, ("test-model", None, None))
+    self.assertEqual(mock_litert_lm.Engine.call_count, 1)  # pyrefly: ignore[missing-attribute]
+
+    mock_model_mod.parse_backend.reset_mock()
+    mock_model_mod.resolve_config_option.reset_mock()
+
+    # Second call: explicit backend="cpu" which resolves to mock_backend_cpu.
+    # Fast path misses because ("test-model", "cpu", None) !=
+    # ("test-model", None, None).
+    # Secondary cache check matches server.backend == resolved_backend.
+    # It updates server.engine_cache_key and returns existing engine without
+    # resolving auxiliary backends (vision/audio) or re-initializing Engine.
+    engine2 = util.get_or_initialize_server_engine(
+        server, model_id="test-model", backend="cpu"
+    )
+    self.assertEqual(engine2, mock_engine_instance)
+    self.assertEqual(mock_litert_lm.Engine.call_count, 1)  # pyrefly: ignore[missing-attribute]
+    self.assertEqual(server.engine_cache_key, ("test-model", "cpu", None))
+    # Primary backend was parsed once, but vision/audio were not parsed.
+    self.assertEqual(mock_model_mod.parse_backend.call_count, 1)
+
+    # Third call with backend="cpu" hits fast path (0 parse_backend calls).
+    mock_model_mod.parse_backend.reset_mock()
+    engine3 = util.get_or_initialize_server_engine(
+        server, model_id="test-model", backend="cpu"
+    )
+    self.assertEqual(engine3, mock_engine_instance)
+    mock_model_mod.parse_backend.assert_not_called()
 
   def test_get_engine_switching_reinitializes(self):
     mock_model_a = mock.Mock(spec_set=["exists", "model_path"])
@@ -383,6 +460,7 @@ class ServeTest(parameterized.TestCase):
     server.backend = None
     server.max_num_tokens = None
     server.activation_data_type = None
+    server.engine_cache_key = None
 
     # Initialize with model A.
     engine1 = util.get_or_initialize_server_engine(server, model_id="A")
@@ -1507,16 +1585,49 @@ class ServeTest(parameterized.TestCase):
     handler.send_error.assert_not_called()
 
   def test_get_or_initialize_server_embedding_engine(self):
-    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
-    mock_m.exists.return_value = True
-    mock_m.model_path = "/path/to/embedding-model"
-    mock_m.model_id = "embedding-model"
+    mock_m1 = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m1.exists.return_value = True
+    mock_m1.model_path = "/path/to/embedding-model"
+    mock_m1.model_id = "embedding-model"
 
-    mock_model_mod.Model.from_model_id.return_value = mock_m
+    mock_m2 = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m2.exists.return_value = True
+    mock_m2.model_path = "/path/to/embedding-model-2"
+    mock_m2.model_id = "embedding-model-2"
 
-    mock_emb_engine_instance = mock.MagicMock()
+    def from_model_id_side_effect(model_id):
+      if model_id == "embedding-model":
+        return mock_m1
+      if model_id == "embedding-model-2":
+        return mock_m2
+      m = mock.Mock(spec_set=["exists"])
+      m.exists.return_value = False
+      return m
+
+    mock_model_mod.Model.from_model_id.side_effect = from_model_id_side_effect
+
+    mock_backend = mock.Mock()
+
+    def mock_parse_backend(
+        backend, model_obj=None, target_model_types=None, label=None
+    ):
+      del backend, model_obj, target_model_types
+      if label in ("vision", "audio"):
+        return None
+      return mock_backend
+
+    mock_model_mod.parse_backend.side_effect = mock_parse_backend
+
+    mock_emb_engine_1 = mock.MagicMock()
+    mock_emb_engine_2 = mock.MagicMock()
+
+    def emb_engine_side_effect(model_path, **unused_kwargs):
+      if "embedding-model-2" in model_path:
+        return mock_emb_engine_2
+      return mock_emb_engine_1
+
     with mock.patch.object(
-        mock_litert_lm, "EmbeddingEngine", return_value=mock_emb_engine_instance
+        mock_litert_lm, "EmbeddingEngine", side_effect=emb_engine_side_effect
     ) as mock_emb_engine_cls:
       server = mock.MagicMock(spec=util.LiteRTLMServer)
       server.litert_lm_embedding_engine = None
@@ -1524,20 +1635,61 @@ class ServeTest(parameterized.TestCase):
       server.embedding_backend = None
       server.embedding_vision_backend = None
       server.embedding_audio_backend = None
+      server.embedding_engine_cache_key = None
 
-      # First call initializes engine
+      mock_model_mod.resolve_config_option.reset_mock()
+
+      # 1. First call initializes engine
       engine1 = util.get_or_initialize_server_embedding_engine(
           server, model_id="embedding-model"
       )
-      self.assertEqual(engine1, mock_emb_engine_instance)
-      mock_emb_engine_cls.assert_called_once()
+      self.assertEqual(engine1, mock_emb_engine_1)
+      self.assertEqual(mock_emb_engine_cls.call_count, 1)
+      self.assertEqual(
+          server.embedding_engine_cache_key, ("embedding-model", None)
+      )
+      parse_backend_calls = mock_model_mod.parse_backend.call_count
+      resolve_config_calls = mock_model_mod.resolve_config_option.call_count
+      self.assertGreater(parse_backend_calls, 0)
+      self.assertGreater(resolve_config_calls, 0)
 
-      # Second call returns cached engine
+      # 2. Second call returns cached engine via fast path
+      mock_model_mod.parse_backend.reset_mock()
+      mock_model_mod.resolve_config_option.reset_mock()
       engine2 = util.get_or_initialize_server_embedding_engine(
           server, model_id="embedding-model"
       )
-      self.assertEqual(engine2, mock_emb_engine_instance)
+      self.assertEqual(engine2, mock_emb_engine_1)
       self.assertEqual(mock_emb_engine_cls.call_count, 1)
+      mock_model_mod.parse_backend.assert_not_called()
+      mock_model_mod.resolve_config_option.assert_not_called()
+
+      # 3. Third call: explicit backend="cpu" matches resolved backend.
+      # Covers secondary cache hit and updates embedding_engine_cache_key.
+      engine3 = util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model", backend="cpu"
+      )
+      self.assertEqual(engine3, mock_emb_engine_1)
+      self.assertEqual(mock_emb_engine_cls.call_count, 1)
+      self.assertEqual(
+          server.embedding_engine_cache_key, ("embedding-model", "cpu")
+      )
+      # Primary backend was resolved once, vision/audio were not resolved
+      self.assertEqual(mock_model_mod.parse_backend.call_count, 1)
+
+      # 4. Fourth call: switching to "embedding-model-2" re-initializes.
+      # Covers server.litert_lm_embedding_engine.close() and
+      # embedding_engine_cache_key = None.
+      engine4 = util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model-2"
+      )
+      self.assertEqual(engine4, mock_emb_engine_2)
+      self.assertEqual(mock_emb_engine_cls.call_count, 2)
+      mock_emb_engine_1.close.assert_called_once()
+      self.assertEqual(
+          server.embedding_engine_cache_key, ("embedding-model-2", None)
+      )
+      self.assertEqual(server.embedding_model_id, "embedding-model-2")
 
   def test_openai_models_listing_and_errors(self):
     m1 = mock.Mock(spec_set=["model_id", "model_path"])

@@ -14,6 +14,7 @@
 """Tests for the LiteRT-LM CLI configuration manager."""
 
 import os
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -53,6 +54,16 @@ class ConfigTest(parameterized.TestCase):
   def test_get_config_no_file(self):
     # No file exists in the temp dir
     self.assertEqual(config.load_config(), config.AppConfig())
+
+  def test_load_config_no_file_caching(self):
+    # When config.json does not exist, default AppConfig is cached in
+    # _CACHED_CONFIG.
+    cfg1 = config.load_config()
+    self.assertEqual(cfg1, config.AppConfig())
+    with mock.patch.object(os.path, "exists") as mock_exists:
+      cfg2 = config.load_config()
+      mock_exists.assert_not_called()
+      self.assertIs(cfg1, cfg2)
 
   def test_get_config_valid(self):
     self._write_config(
@@ -451,14 +462,6 @@ class ConfigTest(parameterized.TestCase):
         os.path.join(self.temp_dir.full_path, "config.json"),
     )
 
-  def test_load_config_with_custom_path_arg(self):
-    custom_path = os.path.join(self.temp_dir.full_path, "custom.json")
-    with open(custom_path, "w", encoding="utf-8") as f:
-      f.write('{"default": {"backend": "npu"}}')
-
-    app_cfg = config.load_config(custom_path)
-    self.assertEqual(app_cfg.default.backend, "npu")
-
   def test_load_config_with_set_config_path(self):
     custom_path = os.path.join(self.temp_dir.full_path, "custom.json")
     with open(custom_path, "w", encoding="utf-8") as f:
@@ -479,11 +482,8 @@ class ConfigTest(parameterized.TestCase):
     self.assertIn("Failed to parse my_custom.json", str(ctx.exception))
 
   def test_load_config_empty_file(self):
-    empty_path = os.path.join(self.temp_dir.full_path, "empty.json")
-    with open(empty_path, "w", encoding="utf-8") as f:
-      f.write("")
-
-    app_cfg = config.load_config(empty_path)
+    self._write_config("")
+    app_cfg = config.load_config()
     self.assertEqual(app_cfg, config.AppConfig())
 
   def test_load_config_dev_null(self):

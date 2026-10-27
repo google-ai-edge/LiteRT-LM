@@ -49,6 +49,8 @@ class LiteRTLMServer(http.server.HTTPServer):
     audio_backend: The hardware backend used for audio encoding, or None.
     activation_data_type: The activation data type used for model execution, or
       None.
+    engine_cache_key: The cache key tuple (model_id, backend, max_num_tokens)
+      for the currently loaded engine, or None.
     litert_lm_conversation: The currently cached conversation instance, or None.
     conversation_cache_key: The cache key tuple for the cached conversation, or
       None.
@@ -62,6 +64,8 @@ class LiteRTLMServer(http.server.HTTPServer):
       encoding, or None.
     embedding_audio_backend: The hardware backend used for embedding audio
       encoding, or None.
+    embedding_engine_cache_key: The cache key tuple (model_id, backend) for the
+      currently loaded embedding engine, or None.
     allowed_origins: Allowed CORS origins.
     address_family: Socket address family (e.g. AF_INET or AF_INET6).
   """
@@ -84,6 +88,7 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
     self.activation_data_type: litert_lm.ActivationDataType | None = None
+    self.engine_cache_key: tuple[str, str | None, int | None] | None = None
     self.litert_lm_conversation: litert_lm.AbstractConversation | None = None
     self.conversation_cache_key: tuple[Any, ...] | None = None
     self.litert_lm_embedding_engine: litert_lm.EmbeddingEngine | None = None
@@ -91,6 +96,7 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.embedding_backend: litert_lm.Backend | None = None
     self.embedding_vision_backend: litert_lm.Backend | None = None
     self.embedding_audio_backend: litert_lm.Backend | None = None
+    self.embedding_engine_cache_key: tuple[str, str | None] | None = None
 
   def close_conversation(self) -> None:
     """Closes and resets the currently cached conversation, if any."""
@@ -159,43 +165,21 @@ def get_or_initialize_server_engine(
   Raises:
     FileNotFoundError: If the model package path does not exist.
   """
+  cache_key = (model_id, backend, max_num_tokens)
+  if (
+      server.litert_lm_engine is not None
+      and server.engine_cache_key == cache_key
+  ):
+    return server.litert_lm_engine
+
   m = model.Model.from_model_reference(model_id)
 
   if not m.exists():
     raise FileNotFoundError(f"Model {model_id} not found")
 
   resolved_backend = model.parse_backend(backend, model_obj=m)
-  vision_backend = model.parse_backend(
-      None,
-      model_obj=m,
-      target_model_types={
-          llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
-      },
-      label="vision",
-  )
-  audio_backend = model.parse_backend(
-      None,
-      model_obj=m,
-      target_model_types={
-          llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
-      },
-      label="audio",
-  )
   resolved_max_num_tokens = model.resolve_config_option(
       max_num_tokens, m, "max_num_tokens"
-  )
-  cache = model.resolve_config_option(None, m, "cache")
-  cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
-  speculative_decoding = common.normalize_speculative_decoding(
-      model.resolve_config_option(None, m, "speculative_decoding")
-  )
-  activation_data_type_str = model.resolve_config_option(
-      None, m, "activation_data_type"
-  )
-  activation_data_type = (
-      litert_lm.ActivationDataType.from_str(activation_data_type_str)
-      if activation_data_type_str
-      else None
   )
 
   if server.litert_lm_engine is not None:
@@ -203,10 +187,8 @@ def get_or_initialize_server_engine(
         server.model_id == model_id
         and server.backend == resolved_backend
         and server.max_num_tokens == resolved_max_num_tokens
-        and server.vision_backend == vision_backend
-        and server.audio_backend == audio_backend
-        and server.activation_data_type == activation_data_type
     ):
+      server.engine_cache_key = cache_key
       return server.litert_lm_engine
 
     click.echo(
@@ -227,6 +209,37 @@ def get_or_initialize_server_engine(
     server.vision_backend = None
     server.audio_backend = None
     server.activation_data_type = None
+    server.engine_cache_key = None
+
+  vision_backend = model.parse_backend(
+      None,
+      model_obj=m,
+      target_model_types={
+          llm_metadata_pb2.LlmMetadata.TF_LITE_VISION_ENCODER,
+      },
+      label="vision",
+  )
+  audio_backend = model.parse_backend(
+      None,
+      model_obj=m,
+      target_model_types={
+          llm_metadata_pb2.LlmMetadata.TF_LITE_AUDIO_ENCODER_HW,
+      },
+      label="audio",
+  )
+  cache = model.resolve_config_option(None, m, "cache")
+  cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
+  speculative_decoding = common.normalize_speculative_decoding(
+      model.resolve_config_option(None, m, "speculative_decoding")
+  )
+  activation_data_type_str = model.resolve_config_option(
+      None, m, "activation_data_type"
+  )
+  activation_data_type = (
+      litert_lm.ActivationDataType.from_str(activation_data_type_str)
+      if activation_data_type_str
+      else None
+  )
 
   click.echo(
       click.style(f"Initializing engine for model: {m.model_path}", fg="cyan")
@@ -253,6 +266,7 @@ def get_or_initialize_server_engine(
   server.vision_backend = vision_backend
   server.audio_backend = audio_backend
   server.activation_data_type = activation_data_type
+  server.engine_cache_key = cache_key
   return engine
 
 
@@ -275,12 +289,43 @@ def get_or_initialize_server_embedding_engine(
   Raises:
     FileNotFoundError: If the model package path does not exist.
   """
+  cache_key = (model_id, backend)
+  if (
+      server.litert_lm_embedding_engine is not None
+      and server.embedding_engine_cache_key == cache_key
+  ):
+    return server.litert_lm_embedding_engine
+
   m = model.Model.from_model_reference(model_id)
 
   if not m.exists():
     raise FileNotFoundError(f"Model {model_id} not found")
 
   resolved_backend = model.parse_backend(backend, model_obj=m)
+
+  if server.litert_lm_embedding_engine is not None:
+    if (
+        server.embedding_model_id == model_id
+        and server.embedding_backend == resolved_backend
+    ):
+      server.embedding_engine_cache_key = cache_key
+      return server.litert_lm_embedding_engine
+
+    click.echo(
+        click.style(
+            f"Re-initializing embedding engine (model: {model_id}, backend:"
+            f" {resolved_backend})",
+            fg="yellow",
+        )
+    )
+    server.litert_lm_embedding_engine.close()
+    server.litert_lm_embedding_engine = None
+    server.embedding_model_id = None
+    server.embedding_backend = None
+    server.embedding_vision_backend = None
+    server.embedding_audio_backend = None
+    server.embedding_engine_cache_key = None
+
   vision_backend = model.parse_backend(
       None,
       model_obj=m,
@@ -300,29 +345,6 @@ def get_or_initialize_server_embedding_engine(
   cache = model.resolve_config_option(None, m, "cache")
   cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
 
-  if server.litert_lm_embedding_engine is not None:
-    if (
-        server.embedding_model_id == model_id
-        and server.embedding_backend == resolved_backend
-        and server.embedding_vision_backend == vision_backend
-        and server.embedding_audio_backend == audio_backend
-    ):
-      return server.litert_lm_embedding_engine
-
-    click.echo(
-        click.style(
-            f"Re-initializing embedding engine (model: {model_id}, backend:"
-            f" {resolved_backend})",
-            fg="yellow",
-        )
-    )
-    server.litert_lm_embedding_engine.close()
-    server.litert_lm_embedding_engine = None
-    server.embedding_model_id = None
-    server.embedding_backend = None
-    server.embedding_vision_backend = None
-    server.embedding_audio_backend = None
-
   click.echo(
       click.style(
           f"Initializing embedding engine for model: {m.model_path}", fg="cyan"
@@ -340,6 +362,7 @@ def get_or_initialize_server_embedding_engine(
   server.embedding_backend = resolved_backend
   server.embedding_vision_backend = vision_backend
   server.embedding_audio_backend = audio_backend
+  server.embedding_engine_cache_key = cache_key
   return engine
 
 

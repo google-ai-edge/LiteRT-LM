@@ -316,19 +316,16 @@ def _validate_schema(
     ) from e
 
 
-def load_config(config_path: str | None = None) -> AppConfig:
+def load_config() -> AppConfig:
   """Loads and validates the configuration file."""
   global _CACHED_CONFIG
-  if config_path is None and _CACHED_CONFIG is not None:
+  if _CACHED_CONFIG is not None:
     return _CACHED_CONFIG
 
-  resolved_path = (
-      os.path.abspath(os.path.expanduser(config_path))
-      if config_path is not None
-      else get_config_path()
-  )
+  resolved_path = get_config_path()
   if not os.path.exists(resolved_path):
-    return AppConfig()
+    _CACHED_CONFIG = AppConfig()
+    return _CACHED_CONFIG
 
   config_name = os.path.basename(resolved_path)
   try:
@@ -358,8 +355,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
     for model_id, model_data in config_data[KEY_MODELS].items():
       app_config.models[model_id] = _parse_model_config(model_data)
 
-  if config_path is None:
-    _CACHED_CONFIG = app_config
+  _CACHED_CONFIG = app_config
   return app_config
 
 
