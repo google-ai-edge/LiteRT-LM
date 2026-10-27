@@ -843,6 +843,7 @@ TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
     ":webgpu_dawn_shared_lib",
     "@com_google_absl//absl/base:nullability",
     "@com_google_absl//absl/cleanup",
+    "@com_google_absl//absl/log:absl_log",
     "@com_google_absl//absl/memory",
     "@com_google_absl//absl/status",
     "@com_google_absl//absl/status:statusor",
@@ -867,14 +868,16 @@ TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
     "@ml_drift//ml_drift/webgpu:instance",
     "@ml_drift//ml_drift/webgpu:spatial_tensor",
     "@ml_drift//ml_drift/webgpu:webgpu_headers",
-    "//runtime/executor:executor_settings_base",
-    "//runtime/proto:sampler_params_cc_proto",
-    "//runtime/util:litert_status_util",
+    "@litert//litert/cc:litert_element_type",
     "@litert//litert/cc:litert_environment_api",
     "@litert//litert/cc:litert_environment_options",
     "@litert//litert/cc:litert_macros",
     "@litert//litert/cc:litert_tensor_buffer",
+    "@litert//litert/cc:litert_tensor_buffer_types",
     "@litert//litert/cc/internal:litert_handle",
+    "//runtime/executor:executor_settings_base",
+    "//runtime/proto:sampler_params_cc_proto",
+    "//runtime/util:litert_status_util",
 ]
 
 cc_library(
