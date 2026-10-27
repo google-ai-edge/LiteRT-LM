@@ -54,6 +54,8 @@ internal object LiteRtLmJni {
    * @param enableYnnpack Whether to enable YNNPACK. When null, use the engine's default.
    * @param speculativeDecodingMode The [SpeculativeDecodingMode.value] of the engine's default
    *   speculative decoding config, or null to leave unset.
+   * @param speculativeLenience The lenience of the engine's default speculative decoding config, or
+   *   null to leave unset.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -75,6 +77,7 @@ internal object LiteRtLmJni {
     activationDataType: Int = -1,
     enableYnnpack: Boolean? = null,
     speculativeDecodingMode: Int? = null,
+    speculativeLenience: Float? = null,
   ): Long
 
   /**
@@ -99,6 +102,8 @@ internal object LiteRtLmJni {
    *   non-positive, use the engine's default.
    * @param speculativeDecodingMode The [SpeculativeDecodingMode.value] of the engine's default
    *   speculative decoding config, or null to leave unset.
+   * @param speculativeLenience The lenience of the engine's default speculative decoding config, or
+   *   null to leave unset.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateBenchmark(
@@ -116,6 +121,7 @@ internal object LiteRtLmJni {
     enableYnnpack: Boolean? = null,
     maxNumTokens: Int = -1,
     speculativeDecodingMode: Int? = null,
+    speculativeLenience: Float? = null,
   ): Long
 
   /**
@@ -136,6 +142,8 @@ internal object LiteRtLmJni {
    *   when [speculativeDecodingMode] is set.
    * @param speculativeDecodingMode The [SpeculativeDecodingMode.value] of the session's speculative
    *   decoding config, or null to inherit the engine's.
+   * @param speculativeLenience The lenience of the session's speculative decoding config, or null
+   *   to inherit the engine's.
    * @return A pointer to the native session instance.
    */
   external fun nativeCreateSession(
@@ -145,6 +153,7 @@ internal object LiteRtLmJni {
     audioLoraPath: String?,
     enableSpeculativeDecoding: Boolean?,
     speculativeDecodingMode: Int?,
+    speculativeLenience: Float?,
   ): Long
 
   /**
@@ -260,6 +269,8 @@ internal object LiteRtLmJni {
    *   when [speculativeDecodingMode] is set.
    * @param speculativeDecodingMode The [SpeculativeDecodingMode.value] of the conversation's
    *   speculative decoding config, or null to inherit the engine's.
+   * @param speculativeLenience The lenience of the conversation's speculative decoding config, or
+   *   null to inherit the engine's.
    * @return A pointer to the native conversation instance.
    */
   external fun nativeCreateConversation(
@@ -280,6 +291,7 @@ internal object LiteRtLmJni {
     enableResponseFormat: Boolean,
     enableSpeculativeDecoding: Boolean?,
     speculativeDecodingMode: Int?,
+    speculativeLenience: Float?,
   ): Long
 
   /**

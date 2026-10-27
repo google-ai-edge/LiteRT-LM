@@ -73,6 +73,31 @@ class ConversationTests: XCTestCase {
 
   func testSpeculativeDecodingConfigDefaults() {
     XCTAssertNil(SpeculativeDecodingConfig().mode)
+    XCTAssertNil(SpeculativeDecodingConfig().lenience)
+  }
+
+  func testSpeculativeDecodingConfigLenience() {
+    let config = SpeculativeDecodingConfig(mode: .on, lenience: 0.25)
+    XCTAssertEqual(config.mode, .on)
+    XCTAssertEqual(config.lenience, 0.25)
+  }
+
+  func testCreateConversationWithSpeculativeLenience() async throws {
+    let config = ConversationConfig(
+      speculativeDecodingConfig: SpeculativeDecodingConfig(lenience: 0.5))
+    let conversation = try await self.engine.createConversation(with: config)
+    XCTAssertTrue(conversation.isAlive)
+  }
+
+  func testCreateConversationRejectsInvalidSpeculativeLenience() async throws {
+    let config = ConversationConfig(
+      speculativeDecodingConfig: SpeculativeDecodingConfig(lenience: 1.5))
+    do {
+      _ = try await self.engine.createConversation(with: config)
+      XCTFail("Expected an error for lenience outside [0, 1].")
+    } catch LiteRTLMError.engine(.failedToCreateSessionConfig) {
+      // Expected.
+    }
   }
 
   func testEngineConfigSpeculativeDecodingConfig() throws {

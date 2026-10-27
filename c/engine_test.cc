@@ -717,6 +717,59 @@ TEST(EngineCTest, SpeculativeDecodingConfigLifecycle) {
   litert_lm_speculative_decoding_config_delete(config);
 }
 
+TEST(EngineCTest, SpeculativeDecodingConfigLenience) {
+  LiteRtLmSpeculativeDecodingConfig* config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(&config),
+            kLiteRtLmStatusOk);
+  EXPECT_FALSE(config->config.lenience.has_value());
+
+  for (const float lenience : {0.0f, 0.25f, 1.0f}) {
+    EXPECT_EQ(
+        litert_lm_speculative_decoding_config_set_lenience(config, lenience),
+        kLiteRtLmStatusOk);
+    EXPECT_EQ(config->config.lenience, lenience);
+  }
+
+  // Invalid values leave the config unchanged.
+  for (const float lenience :
+       {-0.1f, 1.1f, std::numeric_limits<float>::quiet_NaN()}) {
+    litert_lm_clear_last_error();
+    EXPECT_EQ(
+        litert_lm_speculative_decoding_config_set_lenience(config, lenience),
+        kLiteRtLmStatusInvalidArgument)
+        << lenience;
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Speculative lenience must be in [0, 1]"));
+    EXPECT_EQ(config->config.lenience, 1.0f);
+  }
+  EXPECT_EQ(litert_lm_speculative_decoding_config_set_lenience(nullptr, 0.5f),
+            kLiteRtLmStatusInvalidArgument);
+
+  // The engine and session setters copy the lenience.
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  ASSERT_EQ(litert_lm_engine_settings_set_speculative_decoding_config(
+                settings.get(), config),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(settings->settings->GetSpeculativeDecodingConfig().lenience, 1.0f);
+
+  SessionConfigPtr session_config(CreateSessionConfig(),
+                                  &litert_lm_session_config_delete);
+  ASSERT_NE(session_config, nullptr);
+  ASSERT_EQ(litert_lm_session_config_set_speculative_decoding_config(
+                session_config.get(), config),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(session_config->config->GetSpeculativeDecodingConfig().lenience,
+            1.0f);
+
+  litert_lm_speculative_decoding_config_delete(config);
+}
+
 TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(

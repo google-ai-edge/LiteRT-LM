@@ -1083,6 +1083,35 @@ class EngineTest(LiteRtLmTestBase):
           mock.ANY, int(litert_lm.SpeculativeDecodingMode.OFF)
       )
 
+  def test_speculative_decoding_config_lenience(self):
+    lib = litert_lm._ffi._get_lib()
+    with mock.patch.object(
+        lib,
+        "litert_lm_speculative_decoding_config_set_lenience",
+        autospec=True,
+        side_effect=lib.litert_lm_speculative_decoding_config_set_lenience,
+    ) as mock_set_lenience:
+      with self._create_engine(
+          speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+              lenience=0.5
+          )
+      ) as engine:
+        mock_set_lenience.assert_called_once_with(mock.ANY, 0.5)
+        mock_set_lenience.reset_mock()
+        with engine.create_session(
+            speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+                lenience=0.25
+            )
+        ) as session:
+          self.assertIsNotNone(session)
+        mock_set_lenience.assert_called_once_with(mock.ANY, 0.25)
+
+  def test_speculative_decoding_config_rejects_invalid_lenience(self):
+    for lenience in (-0.1, 1.1, float("nan")):
+      with self.subTest(lenience=lenience):
+        with self.assertRaises(ValueError):
+          litert_lm.SpeculativeDecodingConfig(lenience=lenience)
+
   def test_speculative_decoding_config_rejects_invalid_mode(self):
     with self.assertRaises(ValueError):
       litert_lm.SpeculativeDecodingConfig(mode=1)  # pyrefly: ignore[bad-argument-type]

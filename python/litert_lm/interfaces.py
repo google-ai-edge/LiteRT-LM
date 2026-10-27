@@ -395,9 +395,21 @@ class SpeculativeDecodingConfig:
   Attributes:
       mode: How speculative decoding is used. The runtime default is
         `SpeculativeDecodingMode.OFF`.
+      lenience: The lenience factor c in [0, 1] of the speculative decoding
+        acceptance test. WARNING: any c > 0 gives up the quality guarantee of
+        speculative decoding. With c = 0 (the runtime default), speculative
+        decoding is lossless: emitted tokens follow the sampling distribution p,
+        the same as without speculative decoding. With c > 0, a drafted token
+        that differs from the verifier's sample is still accepted with
+        probability c, so emitted tokens follow (1 - c) * p + c * delta(draft)
+        and can differ from what the model itself would produce. Only set c > 0
+        if lower output quality is an acceptable price for speed; c = 1 accepts
+        every drafted token. The NPU backend does not support lenience and stays
+        exact.
   """
 
   mode: SpeculativeDecodingMode | None = None
+  lenience: float | None = None
 
   def __post_init__(self):
     if self.mode is not None and not isinstance(
@@ -405,6 +417,10 @@ class SpeculativeDecodingConfig:
     ):
       raise ValueError(
           f"mode must be a SpeculativeDecodingMode or None, got {self.mode!r}"
+      )
+    if self.lenience is not None and not 0.0 <= self.lenience <= 1.0:
+      raise ValueError(
+          f"lenience must be in [0, 1] or None, got {self.lenience!r}"
       )
 
 

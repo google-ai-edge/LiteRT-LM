@@ -97,6 +97,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           engineConfig.activationDataType?.value ?: -1,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.enableYnnpack,
           engineConfig.speculativeDecodingConfig?.mode?.value,
+          engineConfig.speculativeDecodingConfig?.lenience,
         )
     }
   }
@@ -176,6 +177,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           conversationConfig.enableResponseFormat,
           conversationConfig.enableSpeculativeDecoding,
           conversationConfig.speculativeDecodingConfig?.mode?.value,
+          conversationConfig.speculativeDecodingConfig?.lenience,
         ),
         toolManager,
         conversationConfig.automaticToolCalling,
@@ -206,6 +208,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           sessionConfig.loraConfig?.audioLoraPath,
           sessionConfig.enableSpeculativeDecoding,
           sessionConfig.speculativeDecodingConfig?.mode?.value,
+          sessionConfig.speculativeDecodingConfig?.lenience,
         )
       )
     }

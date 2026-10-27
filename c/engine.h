@@ -454,6 +454,33 @@ LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_mode(
     LiteRtLmSpeculativeDecodingConfig* config,
     LiteRtLmSpeculativeDecodingMode mode);
 
+// Sets the lenience factor c in [0, 1] of the speculative decoding acceptance
+// test.
+//
+// WARNING: Any c > 0 gives up the quality guarantee of speculative decoding.
+// With c = 0 (the default), speculative decoding is lossless: emitted tokens
+// follow the session's sampling distribution p, the same as without
+// speculative decoding. With c > 0, a drafted token that differs from the
+// verifier's sample is still accepted with probability c, so emitted tokens
+// follow (1 - c) * p + c * delta(draft) and can differ from what the model
+// itself would produce. Only set c > 0 if lower output quality is an
+// acceptable price for speed; c = 1 accepts every drafted token.
+//
+// If unset, the session inherits the engine's lenience, and the engine's
+// lenience defaults to 0. The NPU backend does not support lenience: it logs a
+// warning and stays exact.
+//
+// @param config The config to modify.
+// @param lenience The lenience factor, in [0, 1].
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL or `lenience` is outside [0, 1] or NaN. An invalid
+//   `lenience` leaves the config unchanged.
+//
+// Added in version 1.0.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_lenience(
+    LiteRtLmSpeculativeDecodingConfig* config, float lenience);
+
 // Sets the speculative decoding config of this session, which overrides the
 // engine's config (see
 // `litert_lm_engine_settings_set_speculative_decoding_config`). Fields left

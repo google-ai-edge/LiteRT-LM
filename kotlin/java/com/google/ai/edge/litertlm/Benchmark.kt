@@ -132,6 +132,7 @@ fun benchmark(
       ExperimentalFlags.enableYnnpack,
       maxNumTokens ?: -1,
       speculativeDecodingConfig?.mode?.value,
+      speculativeDecodingConfig?.lenience,
     )
 
   try {
@@ -157,6 +158,7 @@ fun benchmark(
         false, // enableResponseFormat
         null, // enableSpeculativeDecoding
         null, // speculativeDecodingMode
+        null, // speculativeLenience
       )
 
     Conversation(conversationHandle).use { conversation ->

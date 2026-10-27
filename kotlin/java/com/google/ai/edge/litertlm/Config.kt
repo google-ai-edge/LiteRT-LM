@@ -367,10 +367,24 @@ constructor(
  *
  * @property mode How speculative decoding is used. The runtime default is
  *   [SpeculativeDecodingMode.OFF].
+ * @property lenience The lenience factor c in [0, 1] of the speculative decoding acceptance test.
+ *   **Any c > 0 gives up the quality guarantee of speculative decoding.** With c = 0 (the runtime
+ *   default), speculative decoding is lossless: emitted tokens follow the sampling distribution p,
+ *   the same as without speculative decoding. With c > 0, a drafted token that differs from the
+ *   verifier's sample is still accepted with probability c, so emitted tokens follow (1 - c) * p +
+ *   c * delta(draft) and can differ from what the model itself would produce. Only set c > 0 if
+ *   lower output quality is an acceptable price for speed; c = 1 accepts every drafted token. The
+ *   NPU backend does not support lenience and stays exact.
  */
 data class SpeculativeDecodingConfig
 @JvmOverloads
-constructor(val mode: SpeculativeDecodingMode? = null)
+constructor(val mode: SpeculativeDecodingMode? = null, val lenience: Float? = null) {
+  init {
+    require(lenience == null || (lenience >= 0f && lenience <= 1f)) {
+      "lenience must be in [0, 1] or null, but got $lenience."
+    }
+  }
+}
 
 /**
  * Speculative decoding (e.g. MTP) mode.

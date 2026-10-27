@@ -496,6 +496,18 @@ LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_mode(
   return kLiteRtLmStatusInvalidArgument;
 }
 
+LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_lenience(
+    LiteRtLmSpeculativeDecodingConfig* config, float lenience) {
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  if (!(lenience >= 0.0f && lenience <= 1.0f)) {
+    litert::lm::c::SetLastError(absl::InvalidArgumentError(absl::StrFormat(
+        "Speculative lenience must be in [0, 1], but got: %f", lenience)));
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  config->config.lenience = lenience;
+  return kLiteRtLmStatusOk;
+}
+
 LiteRtLmStatusCode litert_lm_session_config_set_speculative_decoding_config(
     LiteRtLmSessionConfig* config,
     const LiteRtLmSpeculativeDecodingConfig* speculative_decoding_config) {

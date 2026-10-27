@@ -235,11 +235,28 @@ public struct SpeculativeDecodingConfig: Equatable, Hashable, Sendable {
   /// How speculative decoding is used. The runtime default is `.off`.
   public var mode: SpeculativeDecodingMode?
 
+  /// The lenience factor c in [0, 1] of the speculative decoding acceptance test.
+  ///
+  /// - Warning: Any c > 0 gives up the quality guarantee of speculative decoding. With c = 0 (the
+  ///   runtime default), speculative decoding is lossless: emitted tokens follow the sampling
+  ///   distribution p, the same as without speculative decoding. With c > 0, a drafted token that
+  ///   differs from the verifier's sample is still accepted with probability c, so emitted tokens
+  ///   follow (1 - c) * p + c * delta(draft) and can differ from what the model itself would
+  ///   produce. Only set c > 0 if lower output quality is an acceptable price for speed; c = 1
+  ///   accepts every drafted token.
+  ///
+  /// The NPU backend does not support lenience and stays exact. Values outside [0, 1] are rejected
+  /// when the config is applied (engine initialization or conversation creation).
+  public var lenience: Float?
+
   /// - Parameters:
   ///   - mode: How speculative decoding is used. If `nil`, inherits the engine's mode (on the
   ///     engine: `.off`).
-  public init(mode: SpeculativeDecodingMode? = nil) {
+  ///   - lenience: The lenience factor in [0, 1]. If `nil`, inherits the engine's lenience (on
+  ///     the engine: 0).
+  public init(mode: SpeculativeDecodingMode? = nil, lenience: Float? = nil) {
     self.mode = mode
+    self.lenience = lenience
   }
 }
 

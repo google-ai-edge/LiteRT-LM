@@ -456,6 +456,11 @@ private func makeCSpeculativeDecodingConfig(
         litert_lm_speculative_decoding_config_set_mode(cConfig, mode.cValue),
         "litert_lm_speculative_decoding_config_set_mode", makeError)
     }
+    if let lenience = config.lenience {
+      try LiteRTLMError.check(
+        litert_lm_speculative_decoding_config_set_lenience(cConfig, lenience),
+        "litert_lm_speculative_decoding_config_set_lenience", makeError)
+    }
   } catch {
     litert_lm_speculative_decoding_config_delete(cConfig)
     throw error

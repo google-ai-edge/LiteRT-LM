@@ -456,6 +456,11 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_speculative_decoding_config_set_lenience.restype = ctypes.c_int
+  lib.litert_lm_speculative_decoding_config_set_lenience.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_float,
+  ]
 
   # Session
   lib.litert_lm_engine_create_session.restype = ctypes.c_int

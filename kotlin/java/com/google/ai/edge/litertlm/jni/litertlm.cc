@@ -440,6 +440,16 @@ std::optional<int> GetOptionalInt(JNIEnv* env, jobject integer_obj) {
   return value;
 }
 
+std::optional<float> GetOptionalFloat(JNIEnv* env, jobject float_obj) {
+  if (float_obj == nullptr) return std::nullopt;
+  jclass float_class = env->FindClass("java/lang/Float");
+  jmethodID float_value_mid =
+      env->GetMethodID(float_class, "floatValue", "()F");
+  jfloat value = env->CallFloatMethod(float_obj, float_value_mid);
+  env->DeleteLocalRef(float_class);
+  return value;
+}
+
 std::optional<bool> GetOptionalBoolean(JNIEnv* env, jobject boolean_obj) {
   if (boolean_obj == nullptr) return std::nullopt;
   jclass boolean_class = env->FindClass("java/lang/Boolean");
@@ -509,6 +519,20 @@ bool ApplyOptionalSpeculativeDecodingMode(
   speculative_decoding_config.mode = runtime_mode;
   config.SetSpeculativeDecodingConfig(speculative_decoding_config);
   return true;
+}
+
+// Sets the speculative decoding lenience of `config` (an `EngineSettings` or a
+// `SessionConfig`) from the optional `lenience_obj` (boxed Float). Leaves
+// `config` unchanged when it is null. The runtime validates the value.
+template <typename ConfigT>
+void ApplyOptionalSpeculativeLenience(JNIEnv* env, jobject lenience_obj,
+                                      ConfigT& config) {
+  std::optional<float> lenience = GetOptionalFloat(env, lenience_obj);
+  if (!lenience.has_value()) return;
+  litert::lm::SpeculativeDecodingConfig speculative_decoding_config =
+      config.GetSpeculativeDecodingConfig();
+  speculative_decoding_config.lenience = *lenience;
+  config.SetSpeculativeDecodingConfig(speculative_decoding_config);
 }
 
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
@@ -587,7 +611,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jint main_backend_num_threads, jint audio_backend_num_threads,
     jint max_vision_tokens_per_image, jint activation_data_type,
-    jobject enable_ynnpack, jobject speculative_decoding_mode) {
+    jobject enable_ynnpack, jobject speculative_decoding_mode,
+    jobject speculative_lenience) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -736,6 +761,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
                                             *settings)) {
     return 0;
   }
+  ApplyOptionalSpeculativeLenience(env, speculative_lenience, *settings);
 
   if (max_vision_tokens_per_image > 0) {
     settings->SetMaxVisionTokensPerImage(max_vision_tokens_per_image);
@@ -786,7 +812,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     jint decode_tokens, jstring cache_dir, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jobject enable_speculative_decoding, jobject enable_ynnpack,
-    jint max_num_tokens, jobject speculative_decoding_mode) {
+    jint max_num_tokens, jobject speculative_decoding_mode,
+    jobject speculative_lenience) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -909,6 +936,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
                                             *settings)) {
     return 0;
   }
+  ApplyOptionalSpeculativeLenience(env, speculative_lenience, *settings);
 
   if (std::optional<bool> enable_ynnpack_opt =
           GetOptionalBoolean(env, enable_ynnpack);
@@ -947,13 +975,15 @@ JNI_METHOD(nativeDeleteEngine)(JNIEnv* env, jclass thiz, jlong engine_pointer) {
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
     jstring lora_path_str, jstring audio_lora_path_str,
-    jobject enable_speculative_decoding, jobject speculative_decoding_mode) {
+    jobject enable_speculative_decoding, jobject speculative_decoding_mode,
+    jobject speculative_lenience) {
   auto session_config = SessionConfig::CreateDefault();
   if (!ApplyOptionalSpeculativeDecodingMode(env, speculative_decoding_mode,
                                             enable_speculative_decoding,
                                             session_config)) {
     return 0;
   }
+  ApplyOptionalSpeculativeLenience(env, speculative_lenience, session_config);
 
   if (sampler_config_obj != nullptr) {
     session_config.GetMutableSamplerParams() =
@@ -1235,7 +1265,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     jstring audio_lora_path_str, jboolean prefill_preface_on_init,
     jint max_output_token, jobject thinking_config_obj,
     jboolean enable_response_format, jobject enable_speculative_decoding,
-    jobject speculative_decoding_mode) {
+    jobject speculative_decoding_mode, jobject speculative_lenience) {
   Engine* engine = reinterpret_cast<Engine*>(engine_pointer);
 
   // Create a native SessionConfig
@@ -1245,6 +1275,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
                                             session_config)) {
     return 0;
   }
+  ApplyOptionalSpeculativeLenience(env, speculative_lenience, session_config);
   if (max_output_token > 0) {
     session_config.SetMaxOutputTokens(max_output_token);
   }

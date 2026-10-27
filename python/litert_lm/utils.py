@@ -214,6 +214,14 @@ def create_c_speculative_decoding_config(
           c_config,
           int(config.mode),
       )
+    if config.lenience is not None:
+      call_checked(
+          lib,
+          "litert_lm_speculative_decoding_config_set_lenience",
+          c_config,
+          config.lenience,
+      )
+
   except BaseException:
     lib.litert_lm_speculative_decoding_config_delete(c_config)
     raise
