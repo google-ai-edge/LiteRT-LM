@@ -299,8 +299,66 @@ selects.config_setting_group(
     ],
 )
 
+selects.config_setting_group(
+    name = "dynamic_android",
+    match_all = [
+        "@platforms//os:android",
+        "@litert//litert:litert_runtime_link_mode_dynamic",
+    ],
+)
+
+selects.config_setting_group(
+    name = "dynamic_macos_metal",
+    match_all = [
+        ":macos_metal",
+        "@litert//litert:litert_runtime_link_mode_dynamic",
+    ],
+)
+
+selects.config_setting_group(
+    name = "dynamic_macos",
+    match_all = [
+        "@platforms//os:macos",
+        "@litert//litert:litert_runtime_link_mode_dynamic",
+    ],
+)
+
+selects.config_setting_group(
+    name = "dynamic_linux",
+    match_all = [
+        "@platforms//os:linux",
+        "@litert//litert:litert_runtime_link_mode_dynamic",
+    ],
+)
+
+selects.config_setting_group(
+    name = "dynamic_windows",
+    match_all = [
+        "@platforms//os:windows",
+        "@litert//litert:litert_runtime_link_mode_dynamic",
+    ],
+)
+
 cc_library(
     name = "default_static_gpu_accelerator",
+    data = select({
+        ":dynamic_android": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator_so",
+        ],
+        ":dynamic_macos_metal": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator_dylib",
+        ],
+        ":dynamic_macos": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_dylib",
+        ],
+        ":dynamic_windows": [
+            "@litert//litert/runtime/accelerators/gpu:libLiteRtWebGpuAccelerator",
+        ],
+        ":dynamic_linux": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_so",
+        ],
+        "//conditions:default": [],
+    }),
     deps = select({
         # If CAPI is linked dynamically, need to link the accelerator dynamically as well.
         "@litert//litert:litert_runtime_link_mode_dynamic": [],

@@ -505,6 +505,10 @@ http_archive(
         "sed -i -e 's|name = \"dawn_json_generator\",|name = \"dawn_json_generator\", legacy_create_init = 0,|g' third_party/dawn/dawn.BUILD",
         "sed -i -e 's|\"\\:dawn_native\",|\":dawn_native\", \"@//runtime/components:webgpu_dawn_shared_lib\",|g' third_party/dawn/dawn.BUILD",
         "sed -i -e 's|name = \"generate_build_identifier_py\",|name = \"generate_build_identifier_py\", legacy_create_init = 0,|g' ml_drift_delegate/delegate/serialization_weight_cache/BUILD",
+        # Make litert_friends public in OSS so external @litert_lm can access accelerator libraries.
+        "sed -i -e '/def litert_friends():/,/return \\[\\]/s|return \\[\\]|return [\"public\"]|' litert/build_common/special_rule.bzl",
+        # Allow Windows targets to access libLiteRtWebGpuAccelerator and ml_drift_webgpu_accelerator_dll.
+        "sed -i -e 's|visibility = \\[\"//visibility:private\"\\]|visibility = [\"//visibility:public\"]|g' litert/runtime/accelerators/gpu/BUILD",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,

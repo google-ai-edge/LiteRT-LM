@@ -73,15 +73,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
       ),
   )
 
-  parser.addoption(
-      "--prebuilt",
-      action="store_true",
-      default=False,
-      help=(
-          "If set, uses the prebuilt directory for dynamic libraries."
-      ),
-  )
-
 
 @pytest.fixture(scope="session", name="model_path")
 def fixture_model_path(request: pytest.FixtureRequest) -> str:
@@ -96,12 +87,6 @@ def fixture_model_path(request: pytest.FixtureRequest) -> str:
 def fixture_backend(request: pytest.FixtureRequest) -> str:
   """Extracts the backend configuration from the CLI."""
   return request.config.getoption("--backend")
-
-
-@pytest.fixture(scope="session", name="prebuilt_dir")
-def fixture_prebuilt_dir(request: pytest.FixtureRequest) -> str:
-  """Extracts the prebuilt directory from the CLI."""
-  return request.config.getoption("--prebuilt")
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -147,43 +132,60 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
   metafunc.parametrize("engine_binary", [binary_path])
 
 
-def _get_dynamic_lib_dirs(
-    engine_binary: str, request: pytest.FixtureRequest
-) -> list[str]:
+def _get_dynamic_lib_dirs(engine_binary: str) -> list[str]:
   """Returns a list of directories containing dynamic libraries."""
-  prebuilt_dir = request.config.getoption("--prebuilt")
+  lib_dirs = set()
+
+  if sys.platform == "win32":
+    ext = ".dll"
+    prebuilt_subdir = "windows_x86_64"
+  elif sys.platform == "darwin":
+    ext = ".dylib"
+    prebuilt_subdir = "macos_arm64"
+  else:
+    ext = ".so"
+    prebuilt_subdir = "linux_x86_64"
 
   repo_root = os.path.abspath(
       os.path.join(os.path.dirname(__file__), "..", "..")
   )
-  lib_dirs = set()
+  prebuilt_path = os.path.join(repo_root, "prebuilt", prebuilt_subdir)
+  if os.path.exists(prebuilt_path):
+    lib_dirs.add(prebuilt_path)
 
-  if prebuilt_dir:
-    lib_dirs.add(os.path.dirname(os.path.join(repo_root, "prebuilt")))
+  path_parts = os.path.normpath(engine_binary).split(os.sep)
+  if "bazel-bin" in path_parts:
+    bazel_bin_idx = path_parts.index("bazel-bin")
+    bazel_bin_root = os.sep.join(path_parts[: bazel_bin_idx + 1])
 
-  else:
-    if sys.platform == "win32":
-      ext = ".dll"
-    elif sys.platform == "darwin":
-      ext = ".dylib"
-    else:
-      ext = ".so"
+    if os.path.exists(bazel_bin_root):
+      for item in os.listdir(bazel_bin_root):
+        if item.startswith("_solib_"):
+          lib_dirs.add(os.path.join(bazel_bin_root, item))
 
-    path_parts = os.path.normpath(engine_binary).split(os.sep)
-    if "bazel-bin" in path_parts:
-      bazel_bin_idx = path_parts.index("bazel-bin")
-      bazel_bin_root = os.sep.join(path_parts[:bazel_bin_idx + 1])
+      litert_c_dir = os.path.join(
+          bazel_bin_root, "external", "litert", "litert", "c"
+      )
+      if os.path.exists(litert_c_dir):
+        lib_dirs.add(litert_c_dir)
 
-      if os.path.exists(bazel_bin_root):
-        for item in os.listdir(bazel_bin_root):
-          if item.startswith("_solib_"):
-            lib_dirs.add(os.path.join(bazel_bin_root, item))
+      litert_gpu_dir = os.path.join(
+          bazel_bin_root,
+          "external",
+          "litert",
+          "litert",
+          "runtime",
+          "accelerators",
+          "gpu",
+      )
+      if os.path.exists(litert_gpu_dir):
+        lib_dirs.add(litert_gpu_dir)
 
-    runfiles_dir = engine_binary + ".runfiles"
-    if os.path.exists(runfiles_dir):
-      for root, _, files in os.walk(runfiles_dir):
-        if any(f.endswith(ext) for f in files):
-          lib_dirs.add(root)
+  runfiles_dir = engine_binary + ".runfiles"
+  if os.path.exists(runfiles_dir):
+    for root, _, files in os.walk(runfiles_dir):
+      if any(f.endswith(ext) for f in files):
+        lib_dirs.add(root)
 
   return list(lib_dirs)
 
@@ -213,7 +215,7 @@ def run_engine(
     env = os.environ.copy()
 
     if is_dynamic:
-      discovered_dirs = _get_dynamic_lib_dirs(engine_binary, request)
+      discovered_dirs = _get_dynamic_lib_dirs(engine_binary)
       print(f"\n[DEBUG] Found dynamic libraries in: {discovered_dirs}\n")
       lib_paths = os.pathsep.join(discovered_dirs)
 

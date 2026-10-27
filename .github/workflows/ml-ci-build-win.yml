@@ -246,5 +246,5 @@ jobs:
       - name: Run pytest for dynamic linking
         # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
         run: python -m pytest tools/pytest/ -v `
-          --backend=cpu --dynamic --prebuilt `
+          --backend=cpu --dynamic `
           --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel

@@ -238,8 +238,6 @@ load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
 # be resolved via $ORIGIN / @loader_path at runtime.
 _PREBUILT_LIBS = [
     "libGemmaModelConstraintProvider",
-    "libLiteRtWebGpuAccelerator",
-    "libLiteRt",
     "libwebgpu_dawn",
 ]
 
