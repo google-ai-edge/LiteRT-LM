@@ -271,3 +271,6 @@ channels {
   start: "<|channel>thought\n"
   end: "<channel|>"
 }
+
+min_runtime_version: "0.19.0"
+

@@ -255,6 +255,11 @@ message LlmMetadata {
   // overridden via the API when initializing the engine. If not set (or 0),
   // the engine uses its own default.
 
+  // This number is the default value which the engine will use for this model.
+  // The model can usually support higher context length, but a smaller default
+  // is usually chosen to balance performance and resource requirements for
+  // common use cases. Clients can adjust the value via the API.
+
   int32 max_num_tokens = 5;
 
   // LLM model type.

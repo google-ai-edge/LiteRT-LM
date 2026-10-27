@@ -869,6 +869,56 @@ TEST(ModelInfoFileTest, GetModelInfo_ArtisanModelType_NpuOnly) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
 }
 
+TEST(ModelInfoFileTest, GetModelInfo_ArtisanGpuModel_DynamicContext) {
+  proto::LlmMetadata llm_metadata;
+  // Not prime: artisan GPU models are dynamic regardless of the value.
+  llm_metadata.set_max_num_tokens(8192);
+
+  std::string file_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {{"tf_lite_artisan_text_decoder", "gpu_artisan", "main_payload"}},
+      &llm_metadata);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 8192);
+  EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+}
+
+TEST(ModelInfoFileTest,
+     GetModelInfo_ArtisanGpuModelWithoutMaxNumTokens_DynamicContext) {
+  std::string file_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {{"tf_lite_artisan_text_decoder", "gpu_artisan", "main_payload"}});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 0);
+  EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+}
+
+TEST(ModelInfoFileTest, GetModelInfo_ArtisanNpuModel_NotDynamicContext) {
+  proto::LlmMetadata llm_metadata;
+  llm_metadata.set_max_num_tokens(8192);
+
+  std::string file_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {{"tf_lite_artisan_text_decoder", "google_tensor_artisan",
+        "main_payload"}},
+      &llm_metadata);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 8192);
+  EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+}
+
 TEST(ModelInfoFileTest, GetModelInfo_BackendConstraintPreference) {
   // "gpu,cpu" should default to GPU
   {
