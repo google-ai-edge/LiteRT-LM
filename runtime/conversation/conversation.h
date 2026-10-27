@@ -37,6 +37,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -460,6 +461,13 @@ struct OptionalArgs {
   // The constraint to be used for constrained decoding.
   std::optional<ConstraintArg> decoding_constraint = std::nullopt;
 
+  // Whether the model may, must, or must not call the tools for this message,
+  // and which of them it may call. It only applies to this message, and only
+  // when constrained decoding is enabled and the preface has tools. Without
+  // it, the model's default tool call constraint is used.
+  // `decoding_constraint` takes precedence over it.
+  std::optional<ToolChoice> tool_choice = std::nullopt;
+
   // The arguments for the model data processor. Most of the time, the users
   // don't need to provide this argument.
   std::optional<DataProcessorArguments> args = std::nullopt;
@@ -756,6 +764,7 @@ class Conversation {
       std::optional<NoRepeatNgramConfig> no_repeat_ngram_config = std::nullopt,
       std::optional<SuppressTokensConfig> suppress_tokens_config = std::nullopt,
       std::optional<ConstraintArg> decoding_constraint = std::nullopt,
+      std::optional<ToolChoice> tool_choice = std::nullopt,
       std::optional<int> max_output_tokens = std::nullopt,
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       std::optional<absl::string_view> open_channel_name = std::nullopt);
@@ -833,6 +842,10 @@ class Conversation {
   // The constraint is currently created from the tools defined in the preface,
   // if any.
   std::unique_ptr<Constraint> constraint_;
+  // The constraint for the current message's tool choice, if any. It is kept
+  // apart from `constraint_`, so the next message without a tool choice uses
+  // the default constraint again.
+  std::unique_ptr<Constraint> tool_choice_constraint_;
   const ConversationConfig config_;
   std::unique_ptr<ConstraintProvider> constraint_provider_ = nullptr;
   mutable absl::Mutex history_mutex_;

@@ -29,6 +29,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
@@ -39,6 +40,12 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 #include "support/tokenizer/tokenizer.h"
+
+#if !defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "runtime/components/constrained_decoding/bitmap.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#endif  // !LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
 
 namespace litert::lm {
 namespace {

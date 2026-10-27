@@ -452,6 +452,7 @@ target_link_libraries(runtime_components_constrained_decoding_llguidance_schema_
     LiteRTLM::Runtime::Util
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolChoiceInterface
   )
 
 
@@ -528,6 +529,16 @@ add_library(LiteRTLM::Runtime::Components::LogitsProcessor::SuppressTokensConfig
   ALIAS runtime_components_constrained_decoding_suppress_tokens_config)
 
 target_include_directories(runtime_components_constrained_decoding_suppress_tokens_config
+  INTERFACE
+    ${PKG_ROOT}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+add_litertlm_library(runtime_components_constrained_decoding_tool_choice INTERFACE)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolChoiceInterface
+  ALIAS runtime_components_constrained_decoding_tool_choice)
+
+target_include_directories(runtime_components_constrained_decoding_tool_choice
   INTERFACE
     ${PKG_ROOT}
     ${LITERTLM_INCLUDE_PATHS}
@@ -671,5 +682,6 @@ target_link_libraries(runtime_components_constrained_decoding_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding::SuppressTokensConstraint
   LiteRTLM::Runtime::Components::ConstrainedDecoding::NoRepeatNgramConstraint
   LiteRTLM::Runtime::Components::ConstrainedDecoding::RepetitionPenaltyConstraint
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolChoiceInterface
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolUtils
 )
