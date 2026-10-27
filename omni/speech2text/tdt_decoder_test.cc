@@ -1449,6 +1449,68 @@ TEST(TdtDecoderTest,
   ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
   ASSERT_EQ(tokens.size(), 1);
   EXPECT_TRUE(tokens[0].IsEndOfChunk());
+
+  // Case 5: An initial false-start prefix at t=2 is cleared by a mid-chunk
+  // dead-zone reset (`cleared_false_start_prefix == true`), and a second forced
+  // <sos> at t=32 emits 2 tokens (`<= kMaxPrematureSosTokens`) before stalling
+  // in a second >= 16-frame dead zone through the end of the chunk (t=34..54).
+  // `TrimAbortiveMidChunkSosReset` clears the post-reset forced false start.
+  init_all_blank();
+  set_slot(active_logits, /*frame=*/2, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/32, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/33, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/3, /*non_blank_logit=*/10.0f, /*duration=*/1);
+
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 1);
+  EXPECT_TRUE(tokens[0].IsEndOfChunk());
+
+  // Case 6: When the post-reset forced <sos> segment ends < 16 frames before
+  // `effective_max_time_index` (t=40..41, leaving 14 < 16 blank frames), it has
+  // not stalled in a second dead zone and is preserved.
+  init_all_blank();
+  set_slot(active_logits, /*frame=*/2, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/40, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/41, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/3, /*non_blank_logit=*/10.0f, /*duration=*/1);
+
+  ASSERT_OK_AND_ASSIGN(tokens, decoder->Decode(encoder_outputs));
+  ASSERT_EQ(tokens.size(), 3);
+  EXPECT_EQ(tokens[0].token_id, 2);
+  EXPECT_EQ(tokens[0].timestamp_ms, 40);
+  EXPECT_EQ(tokens[1].token_id, 3);
+  EXPECT_EQ(tokens[1].timestamp_ms, 41);
+  EXPECT_TRUE(tokens[2].IsEndOfChunk());
+
+  // Case 7: On a shifted-back final chunk (`first_reported_time_index == 20`),
+  // pre-reset tokens at t=2 occurred before `first_reported_time_index` so
+  // `decoded_tokens` was already empty (`cleared_false_start_prefix == false`,
+  // `sos_tokens_start == 0`). A low-confidence trailing word after the reset
+  // (t=32..33) is preserved rather than erased.
+  init_all_blank();
+  set_slot(active_logits, /*frame=*/2, /*slot=*/0, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/1, /*non_blank_logit=*/10.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/32, /*slot=*/0, /*blank_logit=*/10.0f,
+           /*non_blank_id=*/2, /*non_blank_logit=*/8.0f, /*duration=*/1);
+  set_slot(active_logits, /*frame=*/33, /*slot=*/1, /*blank_logit=*/0.0f,
+           /*non_blank_id=*/3, /*non_blank_logit=*/10.0f, /*duration=*/1);
+
+  ASSERT_OK_AND_ASSIGN(
+      tokens,
+      decoder->Decode(encoder_outputs,
+                      PreprocessedAudio::DecodeRange{
+                          .start_fraction = 20.0f / 55.0f,
+                          .valid_fraction = 1.0f}));
+  ASSERT_EQ(tokens.size(), 3);
+  EXPECT_EQ(tokens[0].token_id, 2);
+  EXPECT_EQ(tokens[0].timestamp_ms, 12);
+  EXPECT_EQ(tokens[1].token_id, 3);
+  EXPECT_EQ(tokens[1].timestamp_ms, 13);
+  EXPECT_TRUE(tokens[2].IsEndOfChunk());
 }
 
 }  // namespace

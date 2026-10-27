@@ -175,6 +175,9 @@ struct DecodeState {
   bool has_emitted_in_chunk = false;
   // Whether the once-per-chunk mid-chunk dead-zone `<sos>` reset has fired.
   bool did_mid_chunk_sos_reset = false;
+  // Whether `MaybeResetAfterMidChunkDeadZone` cleared an earlier false-start
+  // prefix from `decoded_tokens`.
+  bool cleared_false_start_prefix = false;
   // Whether the previous encoder frame rolled back a zero-duration burst.
   bool prev_frame_had_burst = false;
   // Cached output logits buffer from the most recent `RunDecodeStep` call,
@@ -539,6 +542,7 @@ absl::Status MaybeResetAfterMidChunkDeadZone(
   if (state.last_emitted_time_index <= kDeadZoneClearPrefixMaxFrame ||
       (state.sos_was_forced &&
        state.tokens_since_sos <= kMaxPrematureSosTokens)) {
+    state.cleared_false_start_prefix = !state.decoded_tokens.empty();
     state.decoded_tokens.clear();
     state.frame_tokens_start = 0;
   }
@@ -549,18 +553,37 @@ absl::Status MaybeResetAfterMidChunkDeadZone(
   return absl::OkStatus();
 }
 
-// Trims short (`<= kAbortiveResetMaxTokens` tokens or spanning
-// `<= kAbortiveResetMaxFrameSpan` frames) or late (`>
-// kAbortiveResetMaxStartDelayFrames` frames after `reset_origin_time_index`)
-// post-reset token fragments when a mid-chunk `<sos>` reset kept earlier prefix
-// tokens (`sos_tokens_start > 0`). In 5-second overlapping streaming windows,
-// genuine speech starting after a late pause near the end of the chunk is
-// decoded with full right context by the next overlapping chunk, whereas short
-// or late post-reset tails in the current chunk are typically truncated
-// boundary artifacts.
+// Trims abortive post-reset token fragments after a mid-chunk <sos> reset
+// (state.did_mid_chunk_sos_reset == true):
+// 1. Earlier false-start prefix was cleared (state.cleared_false_start_prefix):
+//    - Condition: A forced <sos> emitted <=kMaxPrematureSosTokens tokens and
+//      then stalled in a >=kDeadZoneMinBlankFrames dead zone.
+//    - Rationale: A forced <sos> that immediately stalls in another long blank
+//      dead zone is a repeated noise false start rather than speech.
+//    - Action: Clears state.decoded_tokens.
+// 2. Earlier valid prefix tokens were kept (state.sos_tokens_start > 0):
+//    - Condition: The post-reset tail is too short (<=kAbortiveResetMaxTokens
+//      tokens or <=kAbortiveResetMaxFrameSpan frames) or starts too late
+//      (> reset_origin_time_index + kAbortiveResetMaxStartDelayFrames).
+//    - Rationale: Short or late post-reset tails near the chunk boundary are
+//      truncated artifacts; real speech after a late pause is decoded with full
+//      right context by the next overlapping window.
+//    - Action: Truncates state.decoded_tokens to state.sos_tokens_start.
 void TrimAbortiveMidChunkSosReset(DecodeState& state) {
-  if (!state.did_mid_chunk_sos_reset || state.sos_tokens_start == 0 ||
+  if (!state.did_mid_chunk_sos_reset ||
       state.decoded_tokens.size() <= state.sos_tokens_start) {
+    return;
+  }
+  if (state.cleared_false_start_prefix) {
+    if (state.sos_was_forced &&
+        state.tokens_since_sos <= kMaxPrematureSosTokens &&
+        state.effective_max_time_index >=
+            state.last_emitted_time_index + kDeadZoneMinBlankFrames) {
+      state.decoded_tokens.clear();
+    }
+    return;
+  }
+  if (state.sos_tokens_start == 0) {
     return;
   }
   const size_t post_reset_count =

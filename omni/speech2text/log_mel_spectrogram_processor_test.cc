@@ -1068,5 +1068,183 @@ TEST(LogMelSpectrogramProcessorTest,
   EXPECT_TRUE(residual_out.features.empty());
 }
 
+TEST(LogMelSpectrogramProcessorTest,
+     DriftingOrTransientRoomNoiseIsSkippedWhileUltraQuietSpeechIsKept) {
+  constexpr int kHop = 160;
+  constexpr int kNMels = 80;
+  constexpr int kWindowFrames = 500;
+  const LogMelSpectrogramProcessor::LogMelSpectrogramConfig config{
+      .n_fft = 512,
+      .n_mels = kNMels,
+      .hop_length = kHop,
+      .n_frames = kWindowFrames};
+
+  DummyAudioSource source;
+  ASSERT_OK_AND_ASSIGN(auto processor, LogMelSpectrogramProcessor::Create(
+                                           16000, config, &source));
+
+  // 1. Slowly drifting low-level ambient room noise (`~0.0012` to `0.0028` RMS
+  // with no deep inter-syllable silence) is gated as stationary noise.
+  std::vector<float> drifting_noise =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0012f);
+  for (int b = 0; b < 50; ++b) {
+    const float scale = 1.0f + 1.2f * (static_cast<float>(b) / 49.0f);
+    for (int i = b * 10 * kHop; i < (b + 1) * 10 * kHop; ++i) {
+      drifting_noise[i] *= scale;
+    }
+  }
+  source.PushChunk(drifting_noise, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto drifting_out, processor->GetOutput());
+  EXPECT_TRUE(drifting_out.features.empty());
+
+  // 2. Stationary low-level room noise (`0.0018` RMS) with an isolated
+  // single-block transient tap (`0.0045` RMS) is also gated.
+  std::vector<float> transient_noise =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0018f);
+  for (int i = 20 * 10 * kHop; i < 21 * kHop * 10; ++i) {
+    transient_noise[i] *= 2.5f;
+  }
+  source.PushChunk(transient_noise, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto transient_out, processor->GetOutput());
+  EXPECT_TRUE(transient_out.features.empty());
+
+  // 3. An ultra-quiet room floor (`0.0001` RMS) with an isolated single-block
+  // tap (`0.0004` RMS), 2 adjacent tap blocks, or 3 non-adjacent taps is gated
+  // rather than mistaken for ultra-quiet speech crest.
+  std::vector<float> ultra_quiet_one_tap =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0001f);
+  for (int i = 20 * 10 * kHop; i < 21 * 10 * kHop; ++i) {
+    ultra_quiet_one_tap[i] *= 4.0f;
+  }
+  source.PushChunk(ultra_quiet_one_tap, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto uq_one_tap_out, processor->GetOutput());
+  EXPECT_TRUE(uq_one_tap_out.features.empty());
+
+  std::vector<float> ultra_quiet_two_adj =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0001f);
+  for (int i = 20 * 10 * kHop; i < 22 * 10 * kHop; ++i) {
+    ultra_quiet_two_adj[i] *= 4.0f;
+  }
+  source.PushChunk(ultra_quiet_two_adj, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto uq_two_adj_out, processor->GetOutput());
+  EXPECT_TRUE(uq_two_adj_out.features.empty());
+
+  std::vector<float> ultra_quiet_three_isolated =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0001f);
+  for (int b : {10, 25, 40}) {
+    for (int i = b * 10 * kHop; i < (b + 1) * 10 * kHop; ++i) {
+      ultra_quiet_three_isolated[i] *= 4.0f;
+    }
+  }
+  source.PushChunk(ultra_quiet_three_isolated, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto uq_three_iso_out, processor->GetOutput());
+  EXPECT_TRUE(uq_three_iso_out.features.empty());
+
+  // 4. Digital silence (1 s, so `p10_rms == 0`) followed by a two-stage
+  // ultra-quiet noise floor (`0.0002` RMS for 3 s then `0.0005` RMS for 1 s,
+  // e.g. mute-to-unmute) is gated by `p10_rms < kUltraQuietMinFloorRms`.
+  std::vector<float> mute_to_unmute_noise =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0002f);
+  std::fill(mute_to_unmute_noise.begin(),
+            mute_to_unmute_noise.begin() + 100 * kHop, 0.0f);
+  for (int i = 400 * kHop; i < kWindowFrames * kHop; ++i) {
+    mute_to_unmute_noise[i] *= 2.5f;
+  }
+  source.PushChunk(mute_to_unmute_noise, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto mute_unmute_out, processor->GetOutput());
+  EXPECT_TRUE(mute_unmute_out.features.empty());
+
+  // 5. A 400 ms (4 contiguous blocks) quiet word (`~0.0029` RMS) on a `0.0012`
+  // RMS background floor is not mistaken for an isolated transient click/tap or
+  // slow drift.
+  std::vector<float> short_quiet_word =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0012f);
+  for (int i = 20 * 10 * kHop; i < 24 * 10 * kHop; ++i) {
+    short_quiet_word[i] *= 2.4f;
+  }
+  source.PushChunk(short_quiet_word, /*is_warm_start=*/false);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto short_word_out, processor->GetOutput());
+  EXPECT_FALSE(short_word_out.features.empty());
+
+  // 6. Multi-second low-SNR continuous quiet speech (35 syllabic speech blocks
+  // modulating between `0.0020` and `0.0034` RMS over 15 background floor
+  // blocks at `0.0015` RMS) is preserved rather than dropped as drift noise.
+  DummyAudioSource low_snr_source;
+  ASSERT_OK_AND_ASSIGN(
+      auto low_snr_processor,
+      LogMelSpectrogramProcessor::Create(16000, config, &low_snr_source));
+  std::vector<float> low_snr_speech =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0015f);
+  for (int b = 15; b < 50; ++b) {
+    const float target_rms = (b % 2 == 0) ? 0.0033f : 0.0021f;
+    const float scale = target_rms / 0.0015f;
+    for (int i = b * 10 * kHop; i < (b + 1) * 10 * kHop; ++i) {
+      low_snr_speech[i] *= scale;
+    }
+  }
+  low_snr_source.PushChunk(low_snr_speech, /*is_warm_start=*/false);
+  ASSERT_OK(low_snr_processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto low_snr_out, low_snr_processor->GetOutput());
+  EXPECT_FALSE(low_snr_out.features.empty());
+
+  // Smoothly varying chunks that exceed `kDriftMaxToMinRatio * min_rms` (e.g.
+  // a silent onset before sustained voice) or `kMaxDriftNoiseRms` are also
+  // preserved.
+  DummyAudioSource onset_source;
+  ASSERT_OK_AND_ASSIGN(
+      auto onset_processor,
+      LogMelSpectrogramProcessor::Create(16000, config, &onset_source));
+  std::vector<float> speech_after_silence =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0022f);
+  for (int i = 0; i < 10 * 10 * kHop; ++i) {
+    speech_after_silence[i] *= (0.0005f / 0.0022f);
+  }
+  onset_source.PushChunk(speech_after_silence, /*is_warm_start=*/false);
+  ASSERT_OK(onset_processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto onset_out, onset_processor->GetOutput());
+  EXPECT_FALSE(onset_out.features.empty());
+
+  DummyAudioSource louder_source;
+  ASSERT_OK_AND_ASSIGN(
+      auto louder_processor,
+      LogMelSpectrogramProcessor::Create(16000, config, &louder_source));
+  std::vector<float> louder_drifting =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0025f);
+  for (int b = 0; b < 50; ++b) {
+    const float scale = 1.0f + 1.2f * (static_cast<float>(b) / 49.0f);
+    for (int i = b * 10 * kHop; i < (b + 1) * 10 * kHop; ++i) {
+      louder_drifting[i] *= scale;
+    }
+  }
+  louder_source.PushChunk(louder_drifting, /*is_warm_start=*/false);
+  ASSERT_OK(louder_processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto louder_out, louder_processor->GetOutput());
+  EXPECT_FALSE(louder_out.features.empty());
+
+  // 7. Ultra-quiet speech (`max_rms <= 8e-4f`) over a continuous floor that
+  // exhibits a multi-block speech crest (`max_rms > 3.0 * p10_rms` and
+  // `max_rms > 1.6 * median_rms`) is preserved rather than gated.
+  DummyAudioSource quiet_source;
+  ASSERT_OK_AND_ASSIGN(auto quiet_processor, LogMelSpectrogramProcessor::Create(
+                                                 16000, config, &quiet_source));
+  std::vector<float> ultra_quiet_speech =
+      MakeStationaryRoomNoise(kWindowFrames * kHop, 0.0001f);
+  const std::vector<float> speech_2s = MakeTestAudio(200 * kHop);
+  for (size_t i = 0; i < speech_2s.size(); ++i) {
+    ultra_quiet_speech[i] = speech_2s[i] * 0.0018f;
+  }
+  quiet_source.PushChunk(ultra_quiet_speech, /*is_warm_start=*/false);
+  ASSERT_OK(quiet_processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto quiet_speech_out, quiet_processor->GetOutput());
+  EXPECT_FALSE(quiet_speech_out.features.empty());
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

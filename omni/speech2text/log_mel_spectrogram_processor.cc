@@ -52,6 +52,32 @@ constexpr float kLn10 = 2.302585092994046f;
 constexpr float kMinStandardNormPeak = 0.02f;
 constexpr float kTargetStandardNormPeak = 0.1f;
 
+// Number of 10 ms STFT frames per 100 ms RMS evaluation block.
+constexpr int kBlockFrames = 10;
+
+// Max-to-percentile ratios for steady stationary background noise.
+constexpr float kStationaryMaxToP10Ratio = 1.6f;
+constexpr float kStationaryMaxToMedianRatio = 1.35f;
+
+// Thresholds for gating ultra-quiet noise (`max_rms <= kUltraQuietMaxRms`)
+// while preserving multi-block ultra-quiet speech with a clear crest over a
+// positive floor.
+constexpr float kUltraQuietMaxRms = 8e-4f;
+constexpr float kUltraQuietMinFloorRms = 2e-5f;
+constexpr float kUltraQuietSpeechToP10Ratio = 3.0f;
+constexpr float kUltraQuietSpeechToMedianRatio = 1.6f;
+
+// Thresholds for stationary noise with 1-2 isolated transient clicks/taps.
+constexpr size_t kMinBlocksForExtendedNoiseChecks = 10;
+constexpr size_t kMaxTransientOutlierBlocks = 2;
+constexpr float kMaxTransientNoiseRms = 6e-3f;
+
+// Thresholds for low-energy ambient noise with slow level drift.
+constexpr float kMaxDriftNoiseRms = 3.5e-3f;
+constexpr float kDriftMaxToMinRatio = 3.0f;
+constexpr float kDriftMaxToMedianRatio = 1.7f;
+constexpr float kDriftMaxMeanStepToRangeRatio = 0.12f;
+
 int GetSmallestPowerOfTwoGreaterOrEqualTo(int n) {
   if (n > 0 && (n & (n - 1)) == 0) {
     return n;
@@ -112,8 +138,6 @@ std::vector<float> ComputeStd(const std::vector<std::vector<float>>& mel_spec,
   return result;
 }
 
-constexpr int kBlockFrames = 10;
-
 std::vector<float> ComputeBlockRms(absl::Span<const float> raw_speech,
                                    int valid_frames, int hop_length) {
   const int num_blocks = valid_frames / kBlockFrames;
@@ -131,23 +155,133 @@ std::vector<float> ComputeBlockRms(absl::Span<const float> raw_speech,
   return block_rms;
 }
 
-// Returns true if `blocks` has a low, flat energy distribution characteristic
-// of stationary background microphone or room noise (`max_rms <= 8e-4`, or
-// `max_rms <= max_allowed_rms` with `max_rms <= 1.6 * p10_rms` and
-// `max_rms <= 1.35 * median_rms`).
-bool IsStationaryNoiseSpan(absl::Span<const float> blocks,
-                           float max_allowed_rms,
-                           float* out_median_rms = nullptr) {
-  if (blocks.empty()) return false;
+struct OutlierStats {
+  size_t count = 0;
+  bool has_adjacent = false;
+};
+
+// Counts blocks exceeding the stationary noise ceiling (`min(1.6 * p10_rms,
+// 1.35 * median_rms)`) and whether any two outlier blocks are adjacent.
+OutlierStats CountOutlierBlocks(absl::Span<const float> blocks, float p10_rms,
+                                float median_rms) {
+  const float outlier_limit =
+      std::min(kStationaryMaxToP10Ratio * p10_rms,
+               kStationaryMaxToMedianRatio * median_rms);
+  OutlierStats stats;
+  bool prev_was_outlier = false;
+  for (const float b : blocks) {
+    const bool is_outlier = b > outlier_limit;
+    if (is_outlier) {
+      ++stats.count;
+      if (prev_was_outlier) stats.has_adjacent = true;
+    }
+    prev_was_outlier = is_outlier;
+  }
+  return stats;
+}
+
+// Classification of a 100 ms block-RMS span as active audio/speech vs.
+// background microphone or room noise.
+enum class NoiseSpanKind {
+  // Active audio or speech that does not match any noise pattern below.
+  kNotNoise,
+  // Ultra-quiet floor (`max_rms <= kUltraQuietMaxRms`):
+  // - Condition: Lacks a continuous positive floor (`p10_rms >= 2e-5`) or a
+  //   multi-block speech crest (`max_rms > 3.0 * p10_rms`, `max_rms > 1.6 *
+  //   median_rms`, and `> 2` outlier blocks with adjacent outliers).
+  // - Rationale: Gates near-digital silence, mute-to-unmute steps, and
+  //   single-block taps on an ultra-quiet floor while preserving ultra-quiet
+  //   speech.
+  kUltraQuiet,
+  // Stationary noise (`blocks.size() >= 3` and `max_rms <= max_allowed_rms`):
+  // - Condition: `max_rms <= 1.6 * p10_rms` and `max_rms <= 1.35 *
+  //   median_rms`.
+  // - Rationale: Steady room tone has a flat RMS distribution across blocks.
+  kStationary,
+  // Transient tap (`blocks.size() >= 10` and
+  // `max_rms <= kMaxTransientNoiseRms`):
+  // - Condition: At most 2 non-adjacent blocks exceed the stationary ceiling.
+  // - Rationale: Ignores single-block mic taps without gating multi-block
+  //   spoken words.
+  kTransientTap,
+  // Slow drift (`blocks.size() >= 10` and `max_rms <= kMaxDriftNoiseRms`):
+  // - Condition: Bounded spread (`max_rms <= 3.0 * min_rms` and `1.7 *
+  //   median_rms`) with small block-to-block steps (`mean_abs_delta <= 0.12 *
+  //   (max_rms - min_rms)`).
+  // - Rationale: HVAC or AGC drift varies smoothly, unlike syllabic speech.
+  kSlowDrift,
+};
+
+NoiseSpanKind ClassifyNoiseSpan(absl::Span<const float> blocks,
+                                float max_allowed_rms,
+                                float* out_median_rms = nullptr) {
+  if (blocks.empty()) return NoiseSpanKind::kNotNoise;
   std::vector<float> sorted(blocks.begin(), blocks.end());
   std::sort(sorted.begin(), sorted.end());
+  const float min_rms = sorted.front();
   const float max_rms = sorted.back();
   const float median_rms = sorted[sorted.size() / 2];
   if (out_median_rms != nullptr) *out_median_rms = median_rms;
-  if (max_rms <= 8e-4f) return true;
-  if (blocks.size() < 3 || max_rms > max_allowed_rms) return false;
   const float p10_rms = sorted[sorted.size() / 10];
-  return max_rms <= 1.6f * p10_rms && max_rms <= 1.35f * median_rms;
+  if (max_rms <= kUltraQuietMaxRms) {
+    if (p10_rms < kUltraQuietMinFloorRms ||
+        max_rms <= kUltraQuietSpeechToP10Ratio * p10_rms ||
+        max_rms <= kUltraQuietSpeechToMedianRatio * median_rms) {
+      return NoiseSpanKind::kUltraQuiet;
+    }
+    const OutlierStats outliers =
+        CountOutlierBlocks(blocks, p10_rms, median_rms);
+    return (outliers.count > kMaxTransientOutlierBlocks &&
+            outliers.has_adjacent)
+               ? NoiseSpanKind::kNotNoise
+               : NoiseSpanKind::kUltraQuiet;
+  }
+  if (blocks.size() < 3 || max_rms > max_allowed_rms) {
+    return NoiseSpanKind::kNotNoise;
+  }
+  if (max_rms <= kStationaryMaxToP10Ratio * p10_rms &&
+      max_rms <= kStationaryMaxToMedianRatio * median_rms) {
+    return NoiseSpanKind::kStationary;
+  }
+  if (blocks.size() >= kMinBlocksForExtendedNoiseChecks) {
+    // Stationary noise with at most 2 isolated (non-adjacent) single-block
+    // transient clicks/taps above the stationary ceiling.
+    if (max_rms <= kMaxTransientNoiseRms) {
+      const OutlierStats outliers =
+          CountOutlierBlocks(blocks, p10_rms, median_rms);
+      if (outliers.count <= kMaxTransientOutlierBlocks &&
+          !outliers.has_adjacent) {
+        return NoiseSpanKind::kTransientTap;
+      }
+    }
+    // Low-energy ambient noise with slow level drift across the window, which
+    // lacks both the deep inter-syllable silences (`max_rms > 3.0 * min_rms`)
+    // and the rapid block-to-block envelope modulation
+    // (`mean_abs_delta > 0.12 * (max_rms - min_rms)`) of quiet speech.
+    if (max_rms <= kMaxDriftNoiseRms &&
+        max_rms <= kDriftMaxToMinRatio * min_rms &&
+        max_rms <= kDriftMaxToMedianRatio * median_rms) {
+      float sum_abs_delta = 0.0f;
+      for (size_t i = 1; i < blocks.size(); ++i) {
+        sum_abs_delta += std::abs(blocks[i] - blocks[i - 1]);
+      }
+      const float mean_abs_delta =
+          sum_abs_delta / static_cast<float>(blocks.size() - 1);
+      if (mean_abs_delta <=
+          kDriftMaxMeanStepToRangeRatio * (max_rms - min_rms)) {
+        return NoiseSpanKind::kSlowDrift;
+      }
+    }
+  }
+  return NoiseSpanKind::kNotNoise;
+}
+
+bool IsStationaryTailNoise(absl::Span<const float> blocks,
+                           float max_allowed_rms, float* out_median_rms) {
+  const NoiseSpanKind kind =
+      ClassifyNoiseSpan(blocks, max_allowed_rms, out_median_rms);
+  return kind == NoiseSpanKind::kUltraQuiet ||
+         kind == NoiseSpanKind::kStationary;
 }
 
 // Trims >= 2 s (20 x 100 ms blocks, or 10 blocks on a warm-start prefix) of
@@ -184,7 +318,7 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     float tail_median_rms = 0.0f;
     const float max_allowed_tail_rms =
         std::min(kMaxStationaryNoiseRms, 0.6f * ref_max_rms);
-    if (IsStationaryNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+    if (IsStationaryTailNoise(absl::MakeConstSpan(block_rms).subspan(
                                   num_blocks - min_silent_blocks),
                               max_allowed_tail_rms, &tail_median_rms)) {
       limit = std::max(limit,
@@ -197,7 +331,7 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
       float tail_short_median_rms = 0.0f;
       const float max_allowed_tail_rms =
           std::min(kMaxStationaryNoiseRms, 0.6f * ref_max_rms);
-      if (IsStationaryNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+      if (IsStationaryTailNoise(absl::MakeConstSpan(block_rms).subspan(
                                     num_blocks - kMinCheckSilentBlocks),
                                 max_allowed_tail_rms, &tail_short_median_rms)) {
         silent_limit = std::max(
@@ -227,7 +361,7 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
     float tail3_median_rms = 0.0f;
     const float max_allowed_tail_rms =
         std::min(kMaxStationaryNoiseRms, 0.6f * ref_max_rms);
-    if (IsStationaryNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+    if (IsStationaryTailNoise(absl::MakeConstSpan(block_rms).subspan(
                                   num_blocks - kMinDigitalSilentBlocks),
                               max_allowed_tail_rms, &tail3_median_rms)) {
       digital_limit =
@@ -298,17 +432,18 @@ bool IsRoomNoiseFollowUpChunk(absl::Span<const float> raw_speech,
       peak_speech_rms > 0.0f ? std::min(kMaxStationaryNoiseRms,
                                         std::max(0.02f, 0.6f * peak_speech_rms))
                              : 0.02f;
-  if ((block_rms.size() >= 5 || max_block_rms <= 8e-4f) &&
-      IsStationaryNoiseSpan(block_rms, allowed_stationary_rms)) {
+  if ((block_rms.size() >= 5 || max_block_rms <= kUltraQuietMaxRms) &&
+      ClassifyNoiseSpan(block_rms, allowed_stationary_rms) !=
+          NoiseSpanKind::kNotNoise) {
     return true;
   }
   if (peak_speech_rms > 0.0f && block_rms.size() >= 20 &&
       max_block_rms <= 0.5f * peak_speech_rms &&
-      IsStationaryNoiseSpan(
-          absl::MakeConstSpan(block_rms).subspan(block_rms.size() >= 45 ? 4
-                                                                        : 2),
-          std::min(kMaxStationaryNoiseRms,
-                   std::max(0.02f, 0.5f * peak_speech_rms)))) {
+      ClassifyNoiseSpan(absl::MakeConstSpan(block_rms).subspan(
+                            block_rms.size() >= 45 ? 4 : 2),
+                        std::min(kMaxStationaryNoiseRms,
+                                 std::max(0.02f, 0.5f * peak_speech_rms))) !=
+          NoiseSpanKind::kNotNoise) {
     return true;
   }
   peak_speech_rms = std::max(peak_speech_rms, max_block_rms);
