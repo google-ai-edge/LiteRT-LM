@@ -191,6 +191,7 @@ class MockSession : public SessionInterface {
               (override));
   MOCK_METHOD(absl::Status, RestoreContext, (absl::string_view label),
               (override));
+  MOCK_METHOD(absl::StatusOr<int>, GetCurrentStep, (), (const, override));
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
 };
 
@@ -2342,7 +2343,10 @@ TEST_P(ConversationTest,
     testing::InSequence seq;
 
     // Because the prompt template opens a channel in add_generation_prompt,
-    // the checkpoint is saved before prefilling the user message.
+    // the checkpoint is saved before prefilling the user message after waiting
+    // for any in-flight tasks.
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
     EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
 
@@ -2390,6 +2394,9 @@ TEST_P(ConversationTest,
           user_callback(Responses(TaskState::kDone));
           return nullptr;
         });
+
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
   }
 
   Message user_message = {{"role", "user"}, {"content", "How are you?"}};
@@ -2714,6 +2721,70 @@ TEST_P(ConversationTest, SendMessageAsync) {
   done.WaitForNotificationWithTimeout(absl::Seconds(10));
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, expected_message_for_confirm));
+}
+
+// Regression test: clients (e.g. inference metrics trackers) call
+// GetBenchmarkInfo() on the first streamed token and GetTokenCount() /
+// GetBenchmarkInfo() on the completion sentinel, from inside the
+// SendMessageAsync callback. Those callbacks run while the decode task is still
+// registered as active in the execution manager, so these getters must never
+// wait for the session to become idle or they self-deadlock.
+TEST_P(ConversationTest,
+       SendMessageAsyncGettersInsideCallbackDoNotDeadlock) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(10);
+  engine_settings.GetMutableBenchmarkParams();  // Enables benchmark info.
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
+
+  absl::Notification done;
+  int num_streamed_messages = 0;
+  absl::Status getter_status = absl::OkStatus();
+  auto record_error = [&](const absl::Status& status) {
+    if (!status.ok() && getter_status.ok()) getter_status = status;
+  };
+  EXPECT_OK(conversation->SendMessageAsync(
+      user_message, [&](absl::StatusOr<Message> message) {
+        record_error(message.status());
+        if (!message.ok()) {
+          done.Notify();
+          return;
+        }
+        if (message->is_null()) {
+          // Turn completion (`onDone`): query final diagnostics.
+          record_error(conversation->GetTokenCount().status());
+          record_error(conversation->GetBenchmarkInfo().status());
+          done.Notify();
+          return;
+        }
+        // Streamed token (`onNewToken`): query the prefill benchmark (TTFT).
+        // Note: GetTokenCount() is intentionally not called here because it
+        // acquires the executor lock held by `Tasks::Decode` on this thread.
+        ++num_streamed_messages;
+        record_error(conversation->GetBenchmarkInfo().status());
+      }));
+  // The pre-fix behavior blocked here for Engine::kDefaultTimeout (10 min).
+  ASSERT_TRUE(done.WaitForNotificationWithTimeout(absl::Seconds(60)))
+      << "SendMessageAsync callback did not complete: getters deadlocked.";
+  EXPECT_OK(getter_status);
+  EXPECT_GT(num_streamed_messages, 0);
+  EXPECT_OK(engine->WaitUntilDone(absl::Seconds(100)));
+  ASSERT_OK_AND_ASSIGN(int token_count, conversation->GetTokenCount());
+  EXPECT_GT(token_count, 0);
 }
 
 TEST_P(ConversationTest, SendSingleMessageAsync) {
@@ -3053,8 +3124,9 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
           return nullptr;
         });
 
-    // Expect eager rewind to checkpoint and prefill of the stripped assistant
-    // message before the turn completes.
+    // Expect rewind to checkpoint and async prefill of the stripped assistant
+    // message to be scheduled in the background without blocking turn
+    // completion.
     EXPECT_CALL(*mock_session_ptr,
                 RewindToCheckpoint("channel_content_checkpoint"))
         .WillOnce(Return(absl::OkStatus()));
@@ -3069,7 +3141,10 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
         .WillOnce([](const std::vector<InputData>& contents,
                      absl::AnyInvocable<void(absl::StatusOr<Responses>)>
                          user_callback) {
-          user_callback(Responses(TaskState::kDone));
+          // Do not invoke user_callback(Responses(TaskState::kDone)) here,
+          // verifying that SendMessageAsync still emits the completion
+          // Message() sentinel immediately without waiting for the background
+          // refill task to finish.
           return nullptr;
         });
   }
@@ -3136,6 +3211,101 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
   EXPECT_OK(conversation->SendMessageAsync(user_message_2,
                                            std::move(message_callback_2)));
   ASSERT_TRUE(done_2.WaitForNotificationWithTimeout(absl::Seconds(10)));
+
+  // Verify GetTokenCount and GetBenchmarkInfo query the session directly
+  // without waiting for in-flight tasks (such as the background KV-cache
+  // refill). Waiting here would self-deadlock when these getters are invoked
+  // from inside a SendMessageAsync callback.
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone()).Times(0);
+    EXPECT_CALL(*mock_session_ptr, GetCurrentStep()).WillOnce(Return(42));
+    EXPECT_CALL(*mock_session_ptr, GetBenchmarkInfo())
+        .WillOnce(Return(BenchmarkInfo(proto::BenchmarkParams())));
+  }
+  ASSERT_OK_AND_ASSIGN(int token_count, conversation->GetTokenCount());
+  EXPECT_EQ(token_count, 42);
+  EXPECT_OK(conversation->GetBenchmarkInfo());
+}
+
+// Verifies that if scheduling the post-decode KV-cache refill task fails
+// synchronously during channel content filtering, SendMessageAsync reports the
+// error status to the user callback and suppresses the trailing null
+// completion sentinel.
+TEST_P(ConversationTest,
+       SendMessageAsyncWithChannelContentFilteringRefillError) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .SetFilterChannelContentFromKvCache(true)
+          .SetChannels({litert::lm::Channel{
+              .channel_name = "thought",
+              .start = "<|channel>thought\n",
+              .end = "<channel|>",
+          }})
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  {
+    testing::InSequence seq;
+
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce([](const std::vector<InputData>& contents,
+                     absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback) {
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+
+    EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+
+    EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+        .WillOnce([](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback,
+                     const DecodeConfig& decode_config) {
+          user_callback(
+              Responses(TaskState::kProcessing,
+                        {"<|channel>thought\nhmm<channel|>I am good."}));
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+
+    EXPECT_CALL(*mock_session_ptr,
+                RewindToCheckpoint("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+
+    // Simulate synchronous failure when scheduling the background refill task.
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce(Return(absl::InternalError("Refill queue failed")));
+  }
+
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
+  absl::Status received_error;
+  bool received_null_completion = false;
+  auto message_callback = [&](absl::StatusOr<Message> message) {
+    if (!message.ok()) {
+      received_error = message.status();
+      return;
+    }
+    if (message->is_null()) {
+      received_null_completion = true;
+    }
+  };
+  EXPECT_OK(conversation->SendMessageAsync(user_message,
+                                           std::move(message_callback)));
+  EXPECT_THAT(received_error,
+              StatusIs(absl::StatusCode::kInternal, "Refill queue failed"));
+  EXPECT_FALSE(received_null_completion);
 }
 
 TEST_P(ConversationTest, SendMessageAsyncWithMultipleToolResponses) {

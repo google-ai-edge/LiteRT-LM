@@ -416,7 +416,13 @@ absl::Status SessionAdvanced::GenerateContentStream(
 }
 
 absl::StatusOr<BenchmarkInfo> SessionAdvanced::GetBenchmarkInfo() {
-  absl::MutexLock lock(mutex_);
+  // Intentionally does not acquire `mutex_`: `session_info_` is an immutable
+  // pointer and `mutex_` does not guard `benchmark_info` contents. More
+  // importantly, this method is called from streaming callbacks that run on
+  // the execution thread while it holds the executor lock, whereas
+  // `SaveCheckpoint`/`RewindToStep`/`RestoreContext` acquire the executor lock
+  // while holding `mutex_`. Taking `mutex_` here creates a lock-order inversion
+  // that can deadlock.
   if (session_info_->benchmark_info.has_value()) {
     return session_info_->benchmark_info.value();
   }

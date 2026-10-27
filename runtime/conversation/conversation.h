@@ -632,7 +632,11 @@ class Conversation {
   const ConversationConfig& GetConfig() const { return config_; }
 
   // Returns the number of tokens in the conversation KV Cache (prefill +
-  // decode).
+  // decode). This call does not wait for in-flight session tasks and is safe
+  // to call from within `SendMessageAsync` callbacks. Note that when channel
+  // content filtering is enabled, a background KV-cache refill may still be
+  // running after the turn completes; call `WaitUntilDone()` first (from a
+  // non-callback thread) to observe the settled token count.
   absl::StatusOr<int> GetTokenCount() const;
 
   // Returns the number of tokens the given message would consume if added
@@ -647,7 +651,10 @@ class Conversation {
       const OptionalArgs& optional_args = OptionalArgs()) const;
 
   // Returns the benchmark info for the conversation. Under the hood, this
-  // method triggers the benchmark info collection from the Session. Returns:
+  // method triggers the benchmark info collection from the Session. This call
+  // does not block on in-flight tasks and is safe to call from within
+  // `SendMessageAsync` callbacks (e.g. on the first token to read TTFT).
+  // Returns:
   // - The benchmark info for the conversation.
   absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo();
 

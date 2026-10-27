@@ -161,8 +161,9 @@ class SessionAdvanced : public SessionInterface {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
       const DecodeConfig& decode_config) override ABSL_LOCKS_EXCLUDED(mutex_);
 
-  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override
-      ABSL_LOCKS_EXCLUDED(mutex_);
+  // Does not acquire `mutex_`, so it is safe to call from streaming callbacks
+  // that run while the execution thread holds the executor lock.
+  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override;
 
   absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() override;
 
