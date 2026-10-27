@@ -436,5 +436,139 @@ TEST(SeededRandomEngineTest, ReseedsWhenSeedChanges) {
   EXPECT_EQ((*seven_again)(), reference_seven());
 }
 
+TEST(LlmLiteRtMtpDrafterTest, LenienceRandomEngineRestartsWithVerifierStream) {
+  auto first_gen = std::make_shared<std::default_random_engine>(7);
+  LenienceRandomEngine lenience;
+  lenience.Update(/*seed=*/7, first_gen);
+  const uint64_t first_draw = lenience.engine()();
+  const uint64_t second_draw = lenience.engine()();
+
+  // The same seed and generator continue the stream.
+  lenience.Update(/*seed=*/7, first_gen);
+  const uint64_t third_draw = lenience.engine()();
+  EXPECT_NE(third_draw, first_draw);
+
+  // A new generator with the same seed (e.g. a new session) restarts it.
+  auto second_gen = std::make_shared<std::default_random_engine>(7);
+  lenience.Update(/*seed=*/7, second_gen);
+  EXPECT_EQ(lenience.engine()(), first_draw);
+  EXPECT_EQ(lenience.engine()(), second_draw);
+
+  // So does a seed change, and going back to the old seed.
+  lenience.Update(/*seed=*/8, second_gen);
+  EXPECT_NE(lenience.engine()(), first_draw);
+  lenience.Update(/*seed=*/7, second_gen);
+  EXPECT_EQ(lenience.engine()(), first_draw);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, LenienceRandomEngineDefaultsToSeedZero) {
+  LenienceRandomEngine never_updated;
+  LenienceRandomEngine seed_zero;
+  seed_zero.Update(/*seed=*/0, std::make_shared<std::default_random_engine>(0));
+  EXPECT_EQ(never_updated.engine()(), seed_zero.engine()());
+}
+
+// Lenient acceptance: r = (1 - c) * p + c * delta(draft).
+
+TEST(LlmLiteRtMtpDrafterTest, LenienceZeroMatchesExactAcceptance) {
+  std::mt19937_64 rng(42);
+  std::uniform_int_distribution<int> token(0, 3);
+  for (int trial = 0; trial < 1000; ++trial) {
+    std::vector<int> drafted(4);
+    std::vector<int> verifier_ids(5);
+    for (int& t : drafted) t = token(rng);
+    for (int& t : verifier_ids) t = token(rng);
+    int uniform_calls = 0;
+    const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
+        verifier_ids, drafted, /*lenience=*/0.0f, [&](int) {
+          ++uniform_calls;
+          return 0.0;
+        });
+    EXPECT_EQ(result.accepted, CountAcceptedPrefix(verifier_ids, drafted));
+    EXPECT_EQ(result.lenient_accepted, 0);
+    EXPECT_EQ(uniform_calls, 0);
+  }
+}
+
+TEST(LlmLiteRtMtpDrafterTest, LenienceOneAcceptsEverything) {
+  const std::vector<int> drafted = {10, 20, 30};
+  const std::vector<int> verifier_ids = {11, 21, 30, 99};
+  const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
+      verifier_ids, drafted, /*lenience=*/1.0f, [](int) { return 0.999999; });
+  EXPECT_EQ(result.accepted, 3);
+  EXPECT_EQ(result.lenient_accepted, 2);
+  EXPECT_EQ(verifier_ids[result.accepted], 99);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, LenienceUsesUniformOnlyOnMismatch) {
+  const std::vector<int> drafted = {10, 20, 30};
+  const std::vector<int> verifier_ids = {10, 25, 31, 99};
+  std::vector<int> positions;
+  const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
+      verifier_ids, drafted, /*lenience=*/0.5f, [&](int i) {
+        positions.push_back(i);
+        return i == 1 ? 0.1 : 0.9;  // Accept position 1, reject position 2.
+      });
+  EXPECT_EQ(result.accepted, 2);
+  EXPECT_EQ(result.lenient_accepted, 1);
+  EXPECT_EQ(verifier_ids[result.accepted], 31);
+  EXPECT_EQ(positions, (std::vector<int>{1, 2}));
+}
+
+TEST(LlmLiteRtMtpDrafterTest, AcceptanceIsMonotoneInLenience) {
+  // With shared randomness, raising c can only extend the accepted prefix.
+  std::mt19937_64 rng(7);
+  std::uniform_int_distribution<int> token(0, 2);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const std::vector<float> lenience = {0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f};
+  for (int trial = 0; trial < 2000; ++trial) {
+    std::vector<int> drafted(5);
+    std::vector<int> verifier_ids(6);
+    std::vector<double> uniforms(5);
+    for (int& t : drafted) t = token(rng);
+    for (int& t : verifier_ids) t = token(rng);
+    for (double& u : uniforms) u = unit(rng);
+    int previous = -1;
+    for (const float c : lenience) {
+      const int accepted =
+          CountAcceptedPrefixWithLenience(verifier_ids, drafted, c, [&](int i) {
+            return uniforms[i];
+          }).accepted;
+      EXPECT_GE(accepted, previous);
+      previous = accepted;
+    }
+  }
+}
+
+TEST(LlmLiteRtMtpDrafterTest, LenientAcceptanceSamplesFromMixture) {
+  // The first emitted token must follow r = (1 - c) * p + c * delta(draft).
+  constexpr int64_t kTrials = 200000;
+  constexpr int kStart = 0;
+  constexpr float kLenience = 0.3f;
+  std::mt19937_64 rng(2468);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const Distribution& p = kTarget[kStart];
+  std::discrete_distribution<int> verifier(p.begin(), p.end());
+  const std::vector<int> drafted = {kDraft[kStart]};
+  std::vector<int64_t> counts(kVocab, 0);
+  for (int64_t t = 0; t < kTrials; ++t) {
+    // The bonus position is irrelevant for the first token.
+    const std::vector<int> verifier_ids = {verifier(rng), 0};
+    const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
+        verifier_ids, drafted, kLenience, [&](int) { return unit(rng); });
+    ++counts[result.accepted == 1 ? drafted[0] : verifier_ids[0]];
+  }
+  std::vector<double> expected(kVocab);
+  for (int v = 0; v < kVocab; ++v) {
+    expected[v] = (1.0 - kLenience) * p[v] + (v == drafted[0] ? kLenience : 0);
+  }
+  // Critical value of the chi-squared distribution with 4 degrees of freedom
+  // at p = 0.001.
+  EXPECT_LT(ChiSquared(counts, expected, kTrials), 18.47);
+  // And it is distinguishable from the unmodified target.
+  const std::vector<double> target(p.begin(), p.end());
+  EXPECT_GT(ChiSquared(counts, target, kTrials), 18.47);
+}
+
 }  // namespace
 }  // namespace litert::lm

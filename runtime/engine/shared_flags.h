@@ -90,6 +90,7 @@ ABSL_DECLARE_FLAG(std::optional<double>, mtp_gating_margin);
 ABSL_DECLARE_FLAG(std::optional<int>, mtp_gating_probe_interval);
 ABSL_DECLARE_FLAG(std::optional<int>, mtp_gating_probe_length);
 ABSL_DECLARE_FLAG(std::optional<int>, mtp_gating_forced_switch_period);
+ABSL_DECLARE_FLAG(std::optional<double>, speculative_lenience);
 ABSL_DECLARE_FLAG(std::optional<int>, sampler_top_k);
 ABSL_DECLARE_FLAG(std::optional<double>, sampler_top_p);
 ABSL_DECLARE_FLAG(std::optional<double>, sampler_temperature);

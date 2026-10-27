@@ -856,6 +856,25 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_SamplerTopKRaisesGpuMaxTopK) {
   EXPECT_EQ(gpu_config.max_top_k, default_max_top_k + 36);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_InvalidSpeculativeLenience) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  for (const float lenience :
+       {-0.1f, 1.1f, std::numeric_limits<float>::quiet_NaN()}) {
+    settings.speculative_lenience = lenience;
+    EXPECT_THAT(CreateEngineSettings(settings),
+                StatusIs(absl::StatusCode::kInvalidArgument))
+        << lenience;
+  }
+  for (const float lenience : {0.0f, 0.5f, 1.0f}) {
+    settings.speculative_lenience = lenience;
+    EXPECT_OK(CreateEngineSettings(settings)) << lenience;
+  }
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSettings_BenchmarkParams) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
@@ -891,6 +910,26 @@ TEST(LiteRtLmLibTest, CreateSessionConfig_InheritsSpeculativeDecodingMode) {
   settings.speculative_decoding_mode = SpeculativeDecodingMode::kAdaptive;
   EXPECT_EQ(CreateSessionConfig(settings).GetSpeculativeDecodingConfig().mode,
             std::nullopt);
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettings_SpeculativeLenience) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  ASSERT_OK_AND_ASSIGN(EngineSettings engine_settings,
+                       CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetSpeculativeDecodingConfig().lenience,
+            std::nullopt);
+
+  // The lenience is the engine's default; the session inherits it.
+  settings.speculative_lenience = 0.25f;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetSpeculativeDecodingConfig().lenience, 0.25f);
+  EXPECT_EQ(
+      CreateSessionConfig(settings).GetSpeculativeDecodingConfig().lenience,
+      std::nullopt);
 }
 
 TEST(LiteRtLmLibTest, CreateSessionConfig_SamplerOverrides) {

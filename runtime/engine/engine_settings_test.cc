@@ -15,6 +15,7 @@
 #include "runtime/engine/engine_settings.h"
 
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -1514,10 +1515,9 @@ TEST(SessionConfigTest, SetAndGetSpeculativeDecodingConfig) {
   {
     std::stringstream oss;
     oss << session_config;
-    EXPECT_THAT(
-        oss.str(),
-        ContainsRegex("  SpeculativeDecodingConfig: "
-                      "SpeculativeDecodingConfig\\{mode: Not set\\}\n"));
+    EXPECT_THAT(oss.str(), ContainsRegex("  SpeculativeDecodingConfig: "
+                                         "SpeculativeDecodingConfig\\{mode: "
+                                         "Not set, lenience: Not set\\}\n"));
   }
 
   session_config.SetSpeculativeDecodingConfig(
@@ -1527,14 +1527,60 @@ TEST(SessionConfigTest, SetAndGetSpeculativeDecodingConfig) {
   {
     std::stringstream oss;
     oss << session_config;
-    EXPECT_THAT(
-        oss.str(),
-        ContainsRegex("  SpeculativeDecodingConfig: "
-                      "SpeculativeDecodingConfig\\{mode: ADAPTIVE\\}\n"));
+    EXPECT_THAT(oss.str(), ContainsRegex("  SpeculativeDecodingConfig: "
+                                         "SpeculativeDecodingConfig\\{mode: "
+                                         "ADAPTIVE, lenience: Not set\\}\n"));
   }
 
   session_config.SetSpeculativeDecodingConfig({});
   EXPECT_FALSE(session_config.GetSpeculativeDecodingConfig().mode.has_value());
+}
+
+TEST(SessionConfigTest, SetAndGetSpeculativeLenience) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_FALSE(
+      session_config.GetSpeculativeDecodingConfig().lenience.has_value());
+
+  session_config.SetSpeculativeDecodingConfig({.lenience = 0.25f});
+  EXPECT_EQ(session_config.GetSpeculativeDecodingConfig().lenience, 0.25f);
+  {
+    std::stringstream oss;
+    oss << session_config;
+    EXPECT_THAT(oss.str(), ContainsRegex("  SpeculativeDecodingConfig: "
+                                         "SpeculativeDecodingConfig\\{mode: "
+                                         "Not set, lenience: 0.25\\}\n"));
+  }
+
+  session_config.SetSpeculativeDecodingConfig({});
+  EXPECT_FALSE(
+      session_config.GetSpeculativeDecodingConfig().lenience.has_value());
+}
+
+TEST(SessionConfigTest, MaybeUpdateAndValidateChecksSpeculativeLenience) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  ASSERT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+
+  for (const float valid : {0.0f, 0.5f, 1.0f}) {
+    SessionConfig session_config = SessionConfig::CreateDefault();
+    session_config.SetSpeculativeDecodingConfig({.lenience = valid});
+    EXPECT_OK(session_config.MaybeUpdateAndValidate(*settings));
+  }
+  for (const float invalid :
+       {-0.1f, 1.5f, std::numeric_limits<float>::quiet_NaN()}) {
+    SessionConfig session_config = SessionConfig::CreateDefault();
+    session_config.SetSpeculativeDecodingConfig({.lenience = invalid});
+    EXPECT_THAT(session_config.MaybeUpdateAndValidate(*settings),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
 }
 
 TEST(SessionConfigTest,

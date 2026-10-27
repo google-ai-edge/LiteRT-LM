@@ -68,6 +68,18 @@ struct SpeculativeDecodingConfig {
   // How speculative decoding is used. Runtime default: kOff.
   std::optional<SpeculativeDecodingMode> mode;
 
+  // Lenience factor c in [0, 1] of the speculative decoding acceptance test.
+  // - std::nullopt or 0 (default): exact; emitted tokens follow the session's
+  //   sampling distribution p.
+  // - c > 0: a drafted token is also accepted with probability c when the
+  //   verifier disagrees with it, so emitted tokens follow
+  //   (1 - c) * p + c * delta(draft). This trades output quality for speed;
+  //   c = 1 accepts every drafted token.
+  // Only applies to speculative decode steps; the adaptive gating policy never
+  // changes it. The NPU executor does not support lenience: it logs a warning
+  // and stays exact.
+  std::optional<float> lenience;
+
   bool operator==(const SpeculativeDecodingConfig&) const = default;
 };
 
@@ -77,6 +89,9 @@ void AbslStringify(Sink& sink, const SpeculativeDecodingConfig& config) {
   sink.Append(config.mode.has_value()
                   ? SpeculativeDecodingModeName(*config.mode)
                   : "Not set");
+  sink.Append(", lenience: ");
+  sink.Append(config.lenience.has_value() ? absl::StrCat(*config.lenience)
+                                          : "Not set");
   sink.Append("}");
 }
 

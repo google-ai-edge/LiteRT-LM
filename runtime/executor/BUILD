@@ -1443,6 +1443,7 @@ cc_library(
         ":llm_executor_settings_utils",
         ":state_interface",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",

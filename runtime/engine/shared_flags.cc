@@ -223,6 +223,12 @@ ABSL_FLAG(std::optional<int>, mtp_gating_forced_switch_period, std::nullopt,
           "Diagnostic: if > 0, the adaptive speculative decoding policy "
           "ignores its estimates and alternates between speculative and plain "
           "decoding every this many steps.");
+ABSL_FLAG(std::optional<double>, speculative_lenience, std::nullopt,
+          "Lenience factor c in [0, 1] of the speculative decoding acceptance "
+          "test. With c > 0, drafted tokens are also accepted with probability "
+          "c when the verifier disagrees, so tokens follow "
+          "(1 - c) * p + c * draft instead of the sampling distribution p. "
+          "Trades output quality for speed. Unset or 0: exact.");
 ABSL_FLAG(std::optional<int>, sampler_top_k, std::nullopt,
           "If set, samples with top-k/top-p sampling using this k instead of "
           "the model's default sampler. Defaults to 40 when only "

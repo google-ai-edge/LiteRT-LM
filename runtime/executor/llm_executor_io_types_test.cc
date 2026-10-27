@@ -867,18 +867,32 @@ TEST(LlmExecutorIoTypesTest,
   {
     std::stringstream ss;
     ss << params;
-    EXPECT_THAT(ss.str(), ::testing::HasSubstr("SpeculativeDecodingConfig: "
-                                               "SpeculativeDecodingConfig{"
-                                               "mode: Not set}"));
+    EXPECT_THAT(ss.str(),
+                ::testing::HasSubstr("SpeculativeDecodingConfig: "
+                                     "SpeculativeDecodingConfig{"
+                                     "mode: Not set, lenience: Not set}"));
   }
   params.SetSpeculativeDecodingConfig(
       {.mode = SpeculativeDecodingMode::kAdaptive});
   {
     std::stringstream ss;
     ss << params;
-    EXPECT_THAT(ss.str(), ::testing::HasSubstr("SpeculativeDecodingConfig: "
-                                               "SpeculativeDecodingConfig{"
-                                               "mode: ADAPTIVE}"));
+    EXPECT_THAT(ss.str(),
+                ::testing::HasSubstr("SpeculativeDecodingConfig: "
+                                     "SpeculativeDecodingConfig{"
+                                     "mode: ADAPTIVE, lenience: Not set}"));
+  }
+}
+
+TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsSpeculativeLenience) {
+  ExecutorDecodeParams params;
+  EXPECT_FALSE(params.GetSpeculativeDecodingConfig().lenience.has_value());
+  params.SetSpeculativeDecodingConfig({.lenience = 0.5f});
+  EXPECT_EQ(params.GetSpeculativeDecodingConfig().lenience, 0.5f);
+  {
+    std::stringstream ss;
+    ss << params;
+    EXPECT_THAT(ss.str(), ::testing::HasSubstr("lenience: 0.5}"));
   }
 }
 

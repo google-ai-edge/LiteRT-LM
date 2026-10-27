@@ -75,6 +75,11 @@ absl::Status ValidateSpeculativeDecodingConfig(
                          static_cast<int>(*config.mode)));
     }
   }
+  if (config.lenience.has_value() &&
+      !(*config.lenience >= 0.0f && *config.lenience <= 1.0f)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Speculative lenience must be in [0, 1], but got: ", *config.lenience));
+  }
   return absl::OkStatus();
 }
 
@@ -862,7 +867,6 @@ absl::Status SessionConfig::MaybeUpdateAndValidate(
         "Number of output candidates need to be at least 1, but got: ",
         num_output_candidates_));
   }
-
   const Backend main_backend =
       engine_settings.GetMainExecutorSettings().GetBackend();
   const auto registered_traits =
@@ -892,6 +896,10 @@ absl::Status SessionConfig::MaybeUpdateAndValidate(
     speculative_decoding_config_.mode =
         engine_settings.GetMainExecutorSettings()
             .GetEffectiveSpeculativeDecodingMode();
+  }
+  if (!speculative_decoding_config_.lenience.has_value()) {
+    speculative_decoding_config_.lenience =
+        engine_settings.GetSpeculativeDecodingConfig().lenience;
   }
   ABSL_RETURN_IF_ERROR(
       ValidateSpeculativeDecodingConfig(speculative_decoding_config_));

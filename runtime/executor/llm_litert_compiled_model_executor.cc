@@ -1405,6 +1405,11 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     // was a successful MTP round.
     const bool drafter_is_primed =
         llm_context_->runtime_state().ran_decode && was_mtp_primed;
+
+    const float lenience =
+        decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f);
+    ABSL_RETURN_IF_ERROR(mtp_drafter_->SetLenience(lenience));
+
     // MTP keeps an internal state of the last time it was called and will
     // use those projected activations to kick off the next draft steps. As
     // such, we need to do a single decode step on the first decode call after
@@ -1481,6 +1486,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
         round_stats.drafted_tokens, round_stats.accepted_tokens,
         round_stats.emitted_tokens, round_stats.drafting_time,
         round_stats.verify_time, step_elapsed - priming_time);
+    executor_stats_.AccumulateMtpLenientAccepted(
+        round_stats.lenient_accepted_tokens);
   }
 
   if (speculation.adaptive) {

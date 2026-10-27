@@ -757,7 +757,8 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     }
   }
   engine_settings.SetSpeculativeDecodingConfig(
-      {.mode = speculative_decoding_mode});
+      {.mode = speculative_decoding_mode,
+       .lenience = settings.speculative_lenience});
   if (settings.max_num_tokens > 0) {
     engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
         settings.max_num_tokens);
@@ -922,6 +923,13 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
   if (advanced_settings.mtp_gating_config.has_value()) {
     ABSL_RETURN_IF_ERROR(
         ValidateMtpGatingConfig(*advanced_settings.mtp_gating_config));
+  }
+  if (settings.speculative_lenience.has_value() &&
+      !(*settings.speculative_lenience >= 0.0f &&
+        *settings.speculative_lenience <= 1.0f)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid speculative_lenience: ", *settings.speculative_lenience,
+        ". Expected a value in [0, 1]."));
   }
   if (settings.sampler_seed.has_value() &&
       !settings.sampler_top_k.has_value() &&

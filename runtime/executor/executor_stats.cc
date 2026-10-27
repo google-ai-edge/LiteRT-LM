@@ -139,6 +139,12 @@ void ExecutorStats::AccumulateLogitsStep(absl::Duration step_time) {
   Accumulate(kLogitsStepTimeLatency, step_time);
 }
 
+void ExecutorStats::AccumulateMtpLenientAccepted(
+    int64_t lenient_accepted_tokens) {
+  if (lenient_accepted_tokens <= 0) return;
+  Accumulate(kMtpLenientAcceptedTokensMetric, lenient_accepted_tokens);
+}
+
 std::ostream& operator<<(std::ostream& os, const ExecutorStats& stats) {
   if (stats.latencies.empty() && stats.metrics.empty() &&
       stats.substats.empty()) {

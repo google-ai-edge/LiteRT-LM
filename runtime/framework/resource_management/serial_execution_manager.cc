@@ -119,9 +119,9 @@ SerialExecutionManager::Create(
                               std::move(audio_executor_settings), litert_env,
                               std::move(audio_executor),
                               std::move(vision_executor)));
-  return absl::WrapUnique(new SerialExecutionManager(
-      tokenizer, std::move(resource_manager), litert_env,
-      std::move(runtime_debugger)));
+  return absl::WrapUnique(
+      new SerialExecutionManager(tokenizer, std::move(resource_manager),
+                                 litert_env, std::move(runtime_debugger)));
 }
 
 absl::Status SerialExecutionManager::WaitUntilDone(TaskId task_id,

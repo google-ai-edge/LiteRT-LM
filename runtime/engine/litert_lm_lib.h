@@ -161,6 +161,8 @@ struct LiteRtLmSettings {
   std::optional<int> mtp_gating_probe_interval;
   std::optional<int> mtp_gating_probe_length;
   std::optional<int> mtp_gating_forced_switch_period;
+  // Lenience factor of the speculative acceptance test.
+  std::optional<float> speculative_lenience;
   // Session sampler overrides. If any of top-k, top-p or temperature is set,
   // the session samples with TOP_P sampling; unset fields default to k=40, p=1
   // and temperature=1. `sampler_seed` requires one of them: without a sampler

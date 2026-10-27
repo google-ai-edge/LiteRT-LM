@@ -643,6 +643,24 @@ TEST(BenchmarkInfoTest, SpeculativeDecodingBlockPrintsModeSwitches) {
                         "    Mode switches:     3\n"));
 }
 
+TEST(BenchmarkInfoTest, SpeculativeDecodingBlockPrintsLenientAccepted) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3,
+                           /*drafting_time=*/absl::Milliseconds(6),
+                           /*verify_time=*/absl::Milliseconds(14),
+                           /*round_time=*/absl::Milliseconds(20));
+  stats.AccumulateMtpLenientAccepted(1);
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(),
+              HasSubstr("    Lenient accepts:   1 (50.0% of accepted)\n"));
+}
+
 TEST(BenchmarkInfoTest, SpeculativeDecodingBlockOmittedWhenNoMtpRounds) {
   BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
   ExecutorStats stats;

@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -49,6 +50,55 @@
 #include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
+
+// Result of lenient prefix acceptance.
+struct LenientAcceptResult {
+  // Number of accepted draft tokens. The bonus token is
+  // `verifier_ids[accepted]`.
+  int accepted = 0;
+  // Of `accepted`, how many were accepted only because of lenience (i.e. the
+  // verifier sample disagreed with the draft).
+  int lenient_accepted = 0;
+};
+
+// Lenient acceptance for greedy (one-hot) drafts with sampled verification.
+//
+// `verifier_ids[i]` is a sample y_i ~ p_i from the (processed) verifier
+// distribution at draft position i, and `drafted[i]` is the greedy draft x_i.
+// At each position the draft is accepted if y_i == x_i; otherwise it is still
+// accepted with probability `lenience` (using an independent uniform
+// `uniform(i)` in [0, 1)); else y_i is emitted and acceptance stops.
+//
+// This samples exactly from r_i = (1 - c) * p_i + c * delta(x_i):
+//   P(accept) = p(x) + (1 - p(x)) * c = (1 - c) * p(x) + c = r(x),
+// and on rejection the emitted token is y_i conditioned on y_i != x_i, i.e.
+// p_i with x_i removed and renormalized, which is the residual
+// norm(max(0, p - r)) of r. `lenience == 0` is identical to
+// `CountAcceptedPrefix` and never calls `uniform`; `lenience >= 1` accepts
+// every draft token.
+//
+// `uniform` is only called at positions where y_i != x_i.
+inline LenientAcceptResult CountAcceptedPrefixWithLenience(
+    absl::Span<const int> verifier_ids, absl::Span<const int> drafted,
+    float lenience, absl::FunctionRef<double(int)> uniform) {
+  const int limit =
+      static_cast<int>(std::min(verifier_ids.size(), drafted.size()));
+  LenientAcceptResult result;
+  while (result.accepted < limit) {
+    const int i = result.accepted;
+    if (verifier_ids[i] == drafted[i]) {
+      ++result.accepted;
+      continue;
+    }
+    if (lenience > 0.0f && uniform(i) < static_cast<double>(lenience)) {
+      ++result.accepted;
+      ++result.lenient_accepted;
+      continue;
+    }
+    break;
+  }
+  return result;
+}
 
 // Returns the number of accepted draft tokens (longest matching prefix between
 // `verifier_ids` and `drafted`). The bonus token is `verifier_ids[result]`.
@@ -84,13 +134,60 @@ class SeededRandomEngine {
   int32_t seed_ = 0;
 };
 
+// Owns the random number generator of the lenient acceptance test. It is a
+// different engine than the verifier's, seeded with a salted seed, so that
+// lenience doesn't perturb the sampled tokens. It restarts together with the
+// verifier's stream, i.e. when the seed changes or the verifier is handed a
+// different generator (e.g. a new session's), so that lenient runs with the
+// same seed are reproducible. Repeated updates with the same seed and generator
+// continue its stream.
+class LenienceRandomEngine {
+ public:
+  void Update(int32_t seed,
+              const std::shared_ptr<std::default_random_engine>& verifier_gen) {
+    if (seed != seed_ || verifier_gen != verifier_gen_.lock()) {
+      engine_.seed(SaltedSeed(seed));
+      seed_ = seed;
+      verifier_gen_ = verifier_gen;
+    }
+  }
+
+  std::mt19937_64& engine() { return engine_; }
+
+ private:
+  static uint64_t SaltedSeed(int32_t seed) {
+    constexpr uint64_t kLenienceSeedSalt = 0x4c454e49;  // "LENI"
+    return static_cast<uint64_t>(static_cast<uint32_t>(seed)) ^
+           kLenienceSeedSalt;
+  }
+
+  std::mt19937_64 engine_{SaltedSeed(0)};
+  int32_t seed_ = 0;
+  // Not owned: only used to detect a new verifier generator. An expired
+  // pointer never compares equal to a live one.
+  std::weak_ptr<std::default_random_engine> verifier_gen_;
+};
+
 // Statistics of the last successful `LlmLiteRtMtpDrafter::Draft()` call.
 struct MtpRoundStats {
-  int drafted_tokens = 0;        // Number of draft steps (γ).
-  int accepted_tokens = 0;       // Accepted drafted tokens.
-  int emitted_tokens = 0;        // accepted + 1 bonus
-  absl::Duration drafting_time;  // RunDraftingLoop wall time
-  absl::Duration verify_time;    // PrepareVerifier* + RunVerification wall time
+  // Number of draft steps (γ).
+  int drafted_tokens = 0;
+
+  // Number of drafted tokens accepted by the verifier.
+  int accepted_tokens = 0;
+
+  // Number of tokens emitted: `accepted_tokens` plus the bonus token.
+  int emitted_tokens = 0;
+
+  // Of `accepted_tokens`, the drafts accepted only because of lenience (see
+  // `LlmLiteRtMtpDrafter::SetLenience()`).
+  int lenient_accepted_tokens = 0;
+
+  // Wall time of `RunDraftingLoop()`.
+  absl::Duration drafting_time;
+
+  // Wall time of `PrepareVerifier*()` and `RunVerification()`.
+  absl::Duration verify_time;
 };
 
 class LlmLiteRtMtpDrafter {
@@ -152,6 +249,13 @@ class LlmLiteRtMtpDrafter {
   absl::Status UpdateVerifierSamplerConfig(
       const proto::SamplerParameters& sampler_params,
       std::shared_ptr<std::default_random_engine> rand_gen);
+
+  // Sets the lenience factor c in [0, 1] of the acceptance test. With c > 0,
+  // a draft token that the verifier's sample disagrees with is still accepted
+  // with probability c. c = 0 (the default) is exact.
+  // This is a quality/speed trade-off chosen by the caller.
+  absl::Status SetLenience(float lenience);
+  float lenience() const { return lenience_; }
 
   const MtpRoundStats& last_round_stats() const { return last_round_stats_; }
 
@@ -279,6 +383,12 @@ class LlmLiteRtMtpDrafter {
   int verifier_sampler_max_top_k_ = 1;
   // The verifier's generator when no shared generator is supplied.
   SeededRandomEngine verifier_own_rand_gen_;
+
+  // The lenience factor of the acceptance test.
+  float lenience_ = 0.0f;
+  // Random number generator of the lenient acceptance test, updated by
+  // `UpdateVerifierSamplerConfig()`.
+  LenienceRandomEngine lenience_rng_;
 
   // The names of the key/value cache input tensors for the MTP drafter model.
   std::vector<std::string> kv_cache_input_names_;

@@ -1292,6 +1292,12 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
         << "Adaptive speculative decoding is not supported by the NPU "
            "executor; speculative decoding is always on.";
   }
+  if (decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f) >
+      0.0f) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "Speculative lenience is not supported by the NPU executor; "
+           "speculative decoding is exact.";
+  }
 
   // Speculative MTP cycle.
   auto start_get_token = absl::Now();

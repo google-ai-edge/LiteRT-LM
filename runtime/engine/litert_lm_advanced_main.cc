@@ -248,6 +248,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--suppress_tokens=<token1,token2,...>] "
            "[--constraint_regex=<constraint_regex>] "
            "[--speculative_decoding=<on|off|adaptive>] "
+           "[--speculative_lenience=<c in [0, 1]>] "
            "[--sampler_top_k=<k>] [--sampler_top_p=<p>] "
            "[--sampler_temperature=<t>] [--sampler_seed=<seed>]";
     ABSL_LOG(INFO)
@@ -357,6 +358,11 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_mtp_gating_probe_length);
   settings.mtp_gating_forced_switch_period =
       absl::GetFlag(FLAGS_mtp_gating_forced_switch_period);
+  if (const std::optional<double> lenience =
+          absl::GetFlag(FLAGS_speculative_lenience);
+      lenience.has_value()) {
+    settings.speculative_lenience = static_cast<float>(*lenience);
+  }
   settings.sampler_top_k = absl::GetFlag(FLAGS_sampler_top_k);
   settings.sampler_top_p = absl::GetFlag(FLAGS_sampler_top_p);
   settings.sampler_temperature = absl::GetFlag(FLAGS_sampler_temperature);

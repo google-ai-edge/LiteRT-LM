@@ -533,6 +533,15 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
         PrintSummaryLine(os, "Mode switches",
                          absl::StrCat(stats.mtp_mode_switches()));
       }
+      if (stats.GetMetric(kMtpLenientAcceptedTokensMetric).has_value()) {
+        const int64_t lenient = stats.mtp_lenient_accepted_tokens();
+        PrintSummaryLine(
+            os, "Lenient accepts",
+            absl::StrFormat(
+                "%d (%.1f%% of accepted)", lenient,
+                accepted > 0 ? 100.0 * static_cast<double>(lenient) / accepted
+                             : 0.0));
+      }
     }
     // Logits-only decodes (external sampling, scoring) exclude sampling, so
     // they are reported separately from plain steps.

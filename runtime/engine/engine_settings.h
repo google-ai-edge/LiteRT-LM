@@ -356,6 +356,10 @@ class SessionConfig {
   //   streams the model weights at creation, which skips the drafter weights.
   // - Batching: Speculative decoding (MTP) only supports a single output head
   //   (batch size 1).
+  //
+  // `lenience`: see `SpeculativeDecodingConfig::lenience`. std::nullopt
+  // inherits the engine's lenience (exact by default). Validated in
+  // `MaybeUpdateAndValidate()`.
   const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
     return speculative_decoding_config_;
   }

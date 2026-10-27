@@ -51,6 +51,10 @@ inline constexpr absl::string_view kLogitsStepsMetric = "logits_steps";
 // decided by the gating policy. Re-enables forced by policy resets (a new
 // conversation or a sampler change) are not counted.
 inline constexpr absl::string_view kMtpModeSwitchesMetric = "mtp_mode_switches";
+// Number of draft tokens accepted only because of a nonzero speculative
+// lenience (included in `kMtpNumAcceptedTokensMetric`).
+inline constexpr absl::string_view kMtpLenientAcceptedTokensMetric =
+    "mtp_lenient_accepted_tokens";
 
 // Speculative decoding / LLM decode latency names.
 inline constexpr absl::string_view kMtpDraftingTimeLatency =
@@ -106,6 +110,10 @@ struct ExecutorStats {
                           absl::Duration round_time);
   void AccumulatePlainStep(absl::Duration step_time);
   void AccumulateLogitsStep(absl::Duration step_time);
+  // Accumulates the draft tokens of one MTP round that were accepted only
+  // because of lenience. No-op if `lenient_accepted_tokens <= 0`, so the
+  // metric is only present once a draft token was leniently accepted.
+  void AccumulateMtpLenientAccepted(int64_t lenient_accepted_tokens);
 
   int64_t mtp_rounds() const { return GetMetricAsInt64(kMtpRoundsMetric); }
   int64_t mtp_num_draft_tokens() const {
@@ -136,6 +144,9 @@ struct ExecutorStats {
   }
   absl::Duration logits_step_time() const {
     return GetLatencyOrZero(kLogitsStepTimeLatency);
+  }
+  int64_t mtp_lenient_accepted_tokens() const {
+    return GetMetricAsInt64(kMtpLenientAcceptedTokensMetric);
   }
 };
 

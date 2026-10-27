@@ -452,11 +452,23 @@ absl::Status LlmLiteRtMtpDrafter::UpdateVerifierSamplerConfig(
     // hand it a generator for the seed explicitly.
     rand_gen = verifier_own_rand_gen_.Get(sampler_params.seed());
   }
+  // This is called on every sampler re-sync (e.g. each session switch); the
+  // lenience stream restarts only when the verifier's stream does.
+  lenience_rng_.Update(sampler_params.seed(), rand_gen);
   return UpdateOrRecreateSampler(
       verifier_sampler_, verifier_sampler_max_top_k_, sampler_backend_,
       /*batch_size=*/1, sampler_params, std::move(rand_gen), std::cref(env_),
       /*sequence_size=*/num_draft_steps_ + 1, vocab_size_,
       verifier_logits_data_type_);
+}
+
+absl::Status LlmLiteRtMtpDrafter::SetLenience(float lenience) {
+  if (!(lenience >= 0.0f && lenience <= 1.0f)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Speculative lenience must be in [0, 1], got ", lenience));
+  }
+  lenience_ = lenience;
+  return absl::OkStatus();
 }
 
 absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
@@ -763,8 +775,11 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
 
   RET_CHECK_EQ(verifier_id_vector.size(),
                drafting_result.drafted_tokens.size() + 1);
-  int num_correct_tokens =
-      CountAcceptedPrefix(verifier_id_vector, drafting_result.drafted_tokens);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  const LenientAcceptResult accept_result = CountAcceptedPrefixWithLenience(
+      verifier_id_vector, drafting_result.drafted_tokens, lenience_,
+      [&](int /*i*/) -> double { return unit(lenience_rng_.engine()); });
+  int num_correct_tokens = accept_result.accepted;
   int bonus_token = verifier_id_vector[num_correct_tokens];
   last_verified_token_id_idx_ = num_correct_tokens;
 
@@ -801,6 +816,7 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
       .drafted_tokens = num_draft_steps_,
       .accepted_tokens = num_correct_tokens,
       .emitted_tokens = num_correct_tokens + 1,
+      .lenient_accepted_tokens = accept_result.lenient_accepted,
       .drafting_time = drafting_time,
       .verify_time = verify_time,
   };

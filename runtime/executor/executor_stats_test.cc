@@ -192,5 +192,17 @@ TEST(ExecutorStatsTest, AccumulateMtpRoundAndPlainStep) {
   EXPECT_DOUBLE_EQ(stats.GetMetricAsDouble("missing", -2.5), -2.5);
 }
 
+TEST(ExecutorStatsTest, AccumulateMtpLenientAccepted) {
+  ExecutorStats stats;
+  stats.AccumulateMtpLenientAccepted(0);
+  // Zero is not recorded, so the metric only appears once a draft token was
+  // leniently accepted.
+  EXPECT_FALSE(stats.GetMetric(kMtpLenientAcceptedTokensMetric).has_value());
+  stats.AccumulateMtpLenientAccepted(2);
+  stats.AccumulateMtpLenientAccepted(0);
+  stats.AccumulateMtpLenientAccepted(3);
+  EXPECT_EQ(stats.mtp_lenient_accepted_tokens(), 5);
+}
+
 }  // namespace
 }  // namespace litert::lm

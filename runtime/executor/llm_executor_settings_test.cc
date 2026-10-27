@@ -265,7 +265,7 @@ model_assets: model_path: )",
 fake_weights_mode: FAKE_WEIGHTS_NONE
 
 advanced_settings: Not set
-speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set}
+speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set, lenience: Not set}
 )");  // Original output
   EXPECT_EQ(oss.str(), expected_output);
 }
@@ -368,7 +368,7 @@ hint_kernel_batch_size: 10
 error_on_invalid_sampled_token_id: 0
 mtp_gating_config: Not set
 
-speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set}
+speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set, lenience: Not set}
 )");  // Original output string.
   EXPECT_EQ(oss.str(), expected_output);
 }
@@ -400,9 +400,11 @@ TEST(LlmExecutorConfigTest, EffectiveSpeculativeDecodingMode) {
 
   std::stringstream oss;
   oss << settings;
-  EXPECT_THAT(oss.str(), ::testing::HasSubstr(
-                             "speculative_decoding_config: "
-                             "SpeculativeDecodingConfig{mode: ADAPTIVE}"));
+  EXPECT_THAT(
+      oss.str(),
+      ::testing::HasSubstr(
+          "speculative_decoding_config: "
+          "SpeculativeDecodingConfig{mode: ADAPTIVE, lenience: Not set}"));
 }
 
 TEST(LlmExecutorConfigTest, AdvancedSettingsWithErrorOnInvalidSampledTokenId) {
