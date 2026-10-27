@@ -23,6 +23,11 @@
       "import": "./dist/testing/index.js",
       "default": "./dist/testing/index.js"
     },
+    "./model-cache": {
+      "types": "./dist/model-cache/index.d.ts",
+      "import": "./dist/model-cache/index.js",
+      "default": "./dist/model-cache/index.js"
+    },
     "./package.json": "./package.json"
   },
   "author": "",
