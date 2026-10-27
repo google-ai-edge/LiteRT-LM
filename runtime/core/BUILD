@@ -712,6 +712,7 @@ cc_test(
         "//runtime/engine:io_types",
         "//runtime/executor:executor_stats",
         "//runtime/executor:fake_llm_executor",
+        "//runtime/executor:llm_executor",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:speculative_decoding_mode",
         "//runtime/framework:threadpool",

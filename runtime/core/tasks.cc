@@ -349,12 +349,16 @@ class DecodeOneStep {
       is_first_step_ = false;
       ABSL_ASSIGN_OR_RETURN(bool all_done, stop_token_detector_.AllDone());
       if (all_done) {
-        if (step != sequence_length - 1) {
-          // we are done before all the tokens are processed, so we need to
-          // rollback the processed tokens in executor.
-          int diff = sequence_length - step;
+        // A multi-token step (e.g. a speculative decoding round) can emit
+        // tokens after the one that completes the stop sequence. Roll back
+        // only those, so that the executor ends up as after single-token
+        // steps: the stop token is the pending input token.
+        const int num_tokens_after_stop =
+            static_cast<int>(sequence_length - 1 - step);
+        if (num_tokens_after_stop > 0) {
           ABSL_ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
-          ABSL_RETURN_IF_ERROR(executor_.SetCurrentStep(current_step - diff));
+          ABSL_RETURN_IF_ERROR(
+              executor_.SetCurrentStep(current_step - num_tokens_after_stop));
         }
         return true;
       }

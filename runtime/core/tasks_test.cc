@@ -42,6 +42,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
+#include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/framework/threadpool.h"
@@ -58,6 +59,7 @@ using ::litert::support::SentencePieceTokenizer;
 using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::status::StatusIs;
 
 constexpr char kTestdataDir[] =
@@ -616,6 +618,141 @@ TEST_F(TasksTest, DecodeWithTwoStopTokens) {
   // not included in the response.
   EXPECT_EQ(responses.GetTexts().size(), 1);
   EXPECT_EQ(responses.GetTexts()[0], "How's it going");
+}
+
+// A fake executor whose `Decode()` emits several tokens per call, as a
+// speculative decoding round does. `decode_steps[i]` holds the tokens of the
+// i-th call, and the current step advances by their number.
+class MultiTokenFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  MultiTokenFakeLlmExecutor(int vocab_size,
+                            const std::vector<std::vector<int>>& prefill_tokens,
+                            std::vector<std::vector<int>> decode_steps)
+      : FakeLlmExecutor(vocab_size, prefill_tokens,
+                        /*decode_tokens_set=*/{{0}}),
+        decode_steps_(std::move(decode_steps)) {}
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
+    if (num_decode_calls_ >= decode_steps_.size()) {
+      return absl::InvalidArgumentError("Unexpected decode call.");
+    }
+    const std::vector<int>& tokens = decode_steps_[num_decode_calls_++];
+    ABSL_ASSIGN_OR_RETURN(int current_step, GetCurrentStep());
+    ABSL_RETURN_IF_ERROR(FakeLlmExecutor::SetCurrentStep(
+        current_step + static_cast<int>(tokens.size())));
+    return std::vector<std::vector<int>>{tokens};
+  }
+
+ private:
+  std::vector<std::vector<int>> decode_steps_;
+  int num_decode_calls_ = 0;
+};
+
+// Prefills `prefill_token_ids`, then decodes one candidate until
+// `stop_token_detector` stops.
+absl::StatusOr<Responses> PrefillAndDecode(
+    LlmExecutor& executor, Tokenizer& tokenizer,
+    const std::vector<int>& prefill_token_ids,
+    const StopTokenDetector& stop_token_detector) {
+  std::optional<BenchmarkInfo> benchmark_info;
+  ABSL_ASSIGN_OR_RETURN(auto token_ids_buffer,
+                        tokenizer.TokenIdsToTensorBuffer(prefill_token_ids));
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+  ABSL_RETURN_IF_ERROR(Tasks::Prefill(executor, inputs,
+                                      /*wait_for_completion=*/false,
+                                      benchmark_info)
+                           .status());
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+  return Tasks::Decode(
+      executor, tokenizer, stop_token_detector, /*num_output_candidates=*/1,
+      benchmark_info, /*sampler=*/std::nullopt,
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+      /*decoded_ids=*/std::nullopt, callback, /*cancelled=*/nullptr);
+}
+
+TEST_F(TasksTest, DecodeMultiTokenStepsLeaveStopTokenPending) {
+  const std::vector<int> prefill_token_ids = {2,   90,  547, 58,
+                                              735, 210, 466, 2294};
+  struct TestCase {
+    std::string name;
+    std::vector<int> stop_sequence;
+    std::vector<std::vector<int>> decode_steps;
+    std::vector<int> expected_token_ids;
+    // Decoded tokens left in the context, up to and including the stop
+    // sequence: the same as if every token was decoded in its own step.
+    int expected_num_decoded_tokens;
+  };
+  const std::vector<TestCase> test_cases = {
+      {"StopInMiddleOfStep",
+       {2294},
+       {{224, 24, 8}, {66, 2294, 246, 18}},
+       {224, 24, 8, 66},
+       5},
+      {"StopAtStartOfStep", {2294}, {{224}, {2294, 24, 8}}, {224}, 2},
+      {"StopAtEndOfStep", {2294}, {{224, 24}, {8, 2294}}, {224, 24, 8}, 4},
+      {"StopSequenceAcrossSteps",
+       {2295, 2294},
+       {{224, 2295}, {2294, 18, 246}},
+       {224},
+       3},
+  };
+  for (const TestCase& test_case : test_cases) {
+    SCOPED_TRACE(test_case.name);
+    MultiTokenFakeLlmExecutor executor(tokenizer_->GetVocabSize(),
+                                       {prefill_token_ids},
+                                       test_case.decode_steps);
+    StopTokenDetector stop_token_detector(/*batch_size=*/1);
+    ASSERT_OK(
+        stop_token_detector.AddStopTokenSequence(test_case.stop_sequence));
+
+    ASSERT_OK_AND_ASSIGN(
+        Responses responses,
+        PrefillAndDecode(executor, *tokenizer_, prefill_token_ids,
+                         stop_token_detector));
+
+    EXPECT_EQ(responses.GetTaskState(), TaskState::kDone);
+    ASSERT_EQ(responses.GetTokenIds().size(), 1);
+    EXPECT_THAT(responses.GetTokenIds()[0],
+                ElementsAreArray(test_case.expected_token_ids));
+    ASSERT_OK_AND_ASSIGN(int current_step, executor.GetCurrentStep());
+    EXPECT_EQ(current_step,
+              prefill_token_ids.size() + test_case.expected_num_decoded_tokens);
+  }
+}
+
+TEST_F(TasksTest, DecodeMultiTokenStepEndsLikeSingleTokenSteps) {
+  const std::vector<int> prefill_token_ids = {2,   90,  547, 58,
+                                              735, 210, 466, 2294};
+  StopTokenDetector stop_token_detector(/*batch_size=*/1);
+  ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+  MultiTokenFakeLlmExecutor multi_token_executor(
+      tokenizer_->GetVocabSize(), {prefill_token_ids},
+      {{224, 24, 8}, {66, 2294, 246, 18}});
+  FakeLlmExecutor single_token_executor(tokenizer_->GetVocabSize(),
+                                        {prefill_token_ids},
+                                        {{224}, {24}, {8}, {66}, {2294}});
+
+  ASSERT_OK_AND_ASSIGN(
+      Responses multi_token_responses,
+      PrefillAndDecode(multi_token_executor, *tokenizer_, prefill_token_ids,
+                       stop_token_detector));
+  ASSERT_OK_AND_ASSIGN(
+      Responses single_token_responses,
+      PrefillAndDecode(single_token_executor, *tokenizer_, prefill_token_ids,
+                       stop_token_detector));
+
+  EXPECT_EQ(multi_token_responses.GetTokenIds(),
+            single_token_responses.GetTokenIds());
+  EXPECT_EQ(multi_token_responses.GetTexts(),
+            single_token_responses.GetTexts());
+  ASSERT_OK_AND_ASSIGN(int multi_token_step,
+                       multi_token_executor.GetCurrentStep());
+  ASSERT_OK_AND_ASSIGN(int single_token_step,
+                       single_token_executor.GetCurrentStep());
+  EXPECT_EQ(multi_token_step, single_token_step);
 }
 
 TEST_F(TasksTest, DecodeReachMaxNumTokens) {
