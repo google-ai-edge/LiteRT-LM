@@ -228,6 +228,77 @@ class ModelTest(parameterized.TestCase):
       )
     self.assertEqual(result, expected_backend)
 
+  @parameterized.named_parameters(
+      (
+          "artisan_gpu_artisan",
+          "tf_lite_artisan_text_decoder",
+          "GPU_ARTISAN",
+          True,
+      ),
+      ("artisan_no_constraint", "tf_lite_artisan_text_decoder", None, True),
+      (
+          "artisan_uppercase_type",
+          "TF_LITE_ARTISAN_TEXT_DECODER",
+          "gpu_artisan",
+          True,
+      ),
+      (
+          "artisan_google_tensor",
+          "tf_lite_artisan_text_decoder",
+          "google_tensor_artisan",
+          False,
+      ),
+      ("prefill_decode_gpu", "tf_lite_prefill_decode", "gpu", False),
+  )
+  @mock.patch.object(model, "litertlm_peek")
+  def test_is_gpu_artisan_model(
+      self, model_type, backend_constraint, expected, mock_peek
+  ):
+    mock_metadata = mock.Mock()
+    mock_peek.read_litertlm_header.return_value = mock_metadata
+    mock_section_metadata = mock.Mock()
+    mock_metadata.SectionMetadata.return_value = mock_section_metadata
+    mock_section = mock.Mock()
+    mock_section_metadata.ObjectsLength.return_value = 1
+    mock_section_metadata.Objects.return_value = mock_section
+    mock_peek.get_model_type.return_value = model_type
+    if backend_constraint is not None:
+      mock_section.ItemsLength.return_value = 1
+      mock_section.Items.return_value = mock.Mock()
+      mock_peek.kvp_to_dict.return_value = {
+          "key": "backend_constraint",
+          "value": backend_constraint,
+          "value_type": "String",
+      }
+    else:
+      mock_section.ItemsLength.return_value = 0
+
+    self.assertEqual(model.is_gpu_artisan_model("dummy_path"), expected)
+
+  @mock.patch.object(model, "litertlm_peek")
+  def test_is_gpu_artisan_model_unreadable_header(self, mock_peek):
+    mock_peek.read_litertlm_header.side_effect = OSError("unreadable")
+
+    self.assertFalse(model.is_gpu_artisan_model("dummy_path"))
+
+  @parameterized.named_parameters(
+      ("explicit_true_non_artisan", True, False, True),
+      ("explicit_false_artisan", False, True, False),
+      ("unset_artisan", None, True, True),
+      ("unset_non_artisan", None, False, None),
+  )
+  @mock.patch.object(model, "is_gpu_artisan_model")
+  def test_resolve_ringbuffers_local_attention(
+      self, value, is_artisan, expected, mock_is_gpu_artisan_model
+  ):
+    mock_is_gpu_artisan_model.return_value = is_artisan
+    mock_model = mock.Mock(spec=model.Model)
+    mock_model.model_path = "dummy_path"
+
+    self.assertEqual(
+        model.resolve_ringbuffers_local_attention(value, mock_model), expected
+    )
+
 
 class ParseBackendWithConfigTest(parameterized.TestCase):
 

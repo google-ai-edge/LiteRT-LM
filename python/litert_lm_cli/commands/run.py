@@ -303,6 +303,9 @@ def run_interactive(
           cache_dir=cache_dir_val,
       )
     else:
+      ringbuffers_local_attention = model.resolve_ringbuffers_local_attention(
+          ringbuffers_local_attention, model_obj
+      )
       engine_cm = litert_lm.Engine(
           model_obj.model_path,
           backend=backend_val,  # pyrefly: ignore[bad-argument-type]

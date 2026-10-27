@@ -26,7 +26,6 @@ sampler_params {
   p: 0.95
   temperature: 1.0
 }
-max_num_tokens: 262147
 llm_model_type {
   gemma4: {
     start_of_image_token {

@@ -411,6 +411,7 @@ struct DiscoveredSections {
   StreamSection npu_aux;
   std::vector<StreamSection> vision_sections;
   bool has_speculative_decoding = false;
+  bool has_artisan_text_decoder = false;
 
   ModalityMetadata text;
   ModalityMetadata vision;
@@ -764,6 +765,9 @@ absl::StatusOr<DiscoveredSections> DiscoverSections(
         record_modality(sections.text);
         sections.main_tflite = sec;
         found_main_tflite = true;
+        if (model_type == "tf_lite_artisan_text_decoder") {
+          sections.has_artisan_text_decoder = true;
+        }
         break;
       case SectionKind::kTextEncoder:
         record_modality(sections.text);
@@ -1426,6 +1430,14 @@ absl::StatusOr<ModelInfo> GetModelInfoImpl(
 
     ABSL_RETURN_IF_ERROR(InferContextTokensFallbackIfMissing(
         reader, sections.main_tflite, llm_cap));
+
+    // Artisan GPU text decoders size their KV cache from the max_num_tokens
+    // requested at runtime, so their context size is always configurable and
+    // the metadata max_num_tokens is only the default.
+    if (sections.has_artisan_text_decoder &&
+        llm_cap.text_supported_backends.gpu) {
+      llm_cap.is_dynamic_context = true;
+    }
 
     info.llm_capability = std::move(llm_cap);
   }

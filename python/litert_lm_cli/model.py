@@ -185,6 +185,51 @@ def model_default_backend(
   return None
 
 
+# TODO: Try to unify with logic in `model_default_backend`.
+def is_gpu_artisan_model(model_path: str) -> bool:
+  """Returns whether the .litertlm file has an artisan GPU text decoder.
+
+  Args:
+    model_path: The path to the .litertlm model file.
+
+  Returns:
+    True if the file has a TF_LITE_ARTISAN_TEXT_DECODER section whose backend
+    constraint is empty or allows the GPU. False otherwise, including when the
+    metadata can't be read.
+  """
+  artisan_wire_string = llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
+      llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER
+  ).lower()
+  try:
+    with io.StringIO() as dummy_out:
+      metadata = litertlm_peek.read_litertlm_header(model_path, dummy_out)
+      section_metadata = metadata.SectionMetadata() if metadata else None
+      if not section_metadata:
+        return False
+      for i in range(section_metadata.ObjectsLength()):
+        section = section_metadata.Objects(i)
+        if not section:
+          continue
+        model_type = litertlm_peek.get_model_type(section)
+        if not model_type or model_type.lower() != artisan_wire_string:
+          continue
+        for j in range(section.ItemsLength()):
+          item = section.Items(j)
+          if item is None:
+            continue
+          item_dict = litertlm_peek.kvp_to_dict(item)
+          constraint = item_dict.get("value")
+          if item_dict.get("key") == "backend_constraint" and constraint:
+            return any(
+                b.strip().lower().startswith("gpu")
+                for b in str(constraint).split(",")
+            )
+        return True
+  except Exception:  # pylint: disable=broad-exception-caught
+    return False
+  return False
+
+
 def _create_backend_obj(
     backend_name: str | None,
     cpu_thread_count: int | None = None,
@@ -374,6 +419,36 @@ def resolve_config_option(
     )
     return config_val
 
+  return None
+
+
+def resolve_ringbuffers_local_attention(
+    value: bool | None, model_obj: Model
+) -> bool | None:
+  """Resolves whether to use ringbuffers for the local attention KV cache.
+
+  Ringbuffers default to on for artisan GPU models, which otherwise allocate
+  their local attention KV caches for the full context length.
+
+  Args:
+    value: Explicit value passed by CLI/user (if any).
+    model_obj: Model instance.
+
+  Returns:
+    The explicit value if set, True for artisan GPU models, otherwise None (use
+    the engine's default).
+  """
+  if value is not None:
+    return value
+  if is_gpu_artisan_model(model_obj.model_path):
+    click.echo(
+        click.style(
+            "Using ringbuffers for local attention (default for artisan GPU"
+            " models).",
+            fg="bright_black",
+        )
+    )
+    return True
   return None
 
 
