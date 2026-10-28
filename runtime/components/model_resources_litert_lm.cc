@@ -66,6 +66,20 @@ absl::StatusOr<litert::Model> CreateModelFromFileSection(ScopedFile& model_file,
                      end_offset, ")"));
   }
 
+#if defined(_WIN32) && defined(LITERT_DYNAMIC_RUNTIME)
+  // On Windows the file descriptor below is a C runtime descriptor that only
+  // exists in this module's CRT. With the dynamic LiteRT runtime,
+  // LiteRtCreateModelFromFd runs in libLiteRt.dll, which links its own CRT with
+  // a separate descriptor table, so using the fd there fail-fasts the process
+  // with 0xC0000409. Fall back to buffer-backed loading instead.
+  // See https://github.com/google-ai-edge/LiteRT-LM/issues/4023.
+  // TODO: Load file-backed models on Windows by passing an OS file HANDLE (or
+  // the file path) to LiteRT instead of a CRT file descriptor.
+  static_cast<void>(model_file);
+  return absl::UnimplementedError(
+      "File-backed LiteRT model loading is unsupported with the dynamically "
+      "linked LiteRT runtime on Windows.");
+#else   // !(defined(_WIN32) && defined(LITERT_DYNAMIC_RUNTIME))
   LITERT_ASSIGN_OR_RETURN(auto dup_file, model_file.Duplicate());
   LITERT_ASSIGN_OR_RETURN(int fd, dup_file.Release());
   auto model_or =
@@ -77,6 +91,7 @@ absl::StatusOr<litert::Model> CreateModelFromFileSection(ScopedFile& model_file,
 #endif
   LITERT_ASSIGN_OR_RETURN(auto model, model_or);
   return model;
+#endif  // defined(_WIN32) && defined(LITERT_DYNAMIC_RUNTIME)
 }
 
 }  // namespace

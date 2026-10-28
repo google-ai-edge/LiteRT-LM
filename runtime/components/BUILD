@@ -332,6 +332,20 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "model_resources_litert_lm_test",
+    srcs = ["model_resources_litert_lm_test.cc"],
+    data = ["//runtime/testdata"],
+    deps = [
+        ":model_resources_litert_lm",
+        "@com_google_googletest//:gtest_main",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+    ],
+)
+
 cc_library(
     name = "model_resources",
     srcs = ["model_resources.cc"],
