@@ -81,6 +81,16 @@ cc_library(
 )
 
 cc_library(
+    name = "decision_engine",
+    hdrs = ["decision_engine.h"],
+    deps = [
+        ":engine_settings",
+        ":io_types",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "engine_factory",
     hdrs = ["engine_factory.h"],
     deps = [

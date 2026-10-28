@@ -199,6 +199,25 @@ target_link_libraries(runtime_engine_embedding_engine_interface
 )
 
 # ==============================================================================
+# Decision Engine
+# ==============================================================================
+add_litertlm_library(runtime_engine_decision_engine INTERFACE)
+add_library(LiteRTLM::Runtime::Engine::DecisionEngine ALIAS runtime_engine_decision_engine)
+
+target_include_directories(runtime_engine_decision_engine
+  INTERFACE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_engine_decision_engine
+  INTERFACE
+    LiteRTLM::Runtime::Engine::Settings
+    LiteRTLM::Runtime::Engine::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_engine_libs INTERFACE)
@@ -207,6 +226,7 @@ add_library(LiteRTLM::Runtime::Engine ALIAS runtime_engine_libs)
 target_link_libraries(runtime_engine_libs INTERFACE
   LiteRTLM::Runtime::Engine::Interface
   LiteRTLM::Runtime::Engine::EmbeddingEngineInterface
+  LiteRTLM::Runtime::Engine::DecisionEngine
   LiteRTLM::Runtime::Engine::CpuAffinityUtils
   LiteRTLM::Runtime::Engine::Defaults
   LiteRTLM::Runtime::Engine::Settings
