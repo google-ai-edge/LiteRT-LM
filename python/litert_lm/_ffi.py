@@ -776,6 +776,13 @@ def _setup_lib_signatures(lib):
       ctypes.c_int,
       c_string_p,
   ]
+  lib.litert_lm_conversation_optional_args_set_tool_choice.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_conversation_optional_args_set_tool_choice.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
 
   # interfaces.Responses
   lib.litert_lm_responses_delete.argtypes = [ctypes.c_void_p]

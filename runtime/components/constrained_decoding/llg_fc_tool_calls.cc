@@ -173,7 +173,12 @@ absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
 
   std::string json_grammar = GetFcGrammar(options);
   std::string function_block = GetFcFunctionBlock(tool_call_cases, options);
-  std::string text_only_block = GetTextOnlyBlock(options);
+  std::vector<std::string> call_prefixes;
+  call_prefixes.reserve(tool_names.size());
+  for (const auto& tool_name : tool_names) {
+    call_prefixes.push_back(absl::StrCat("call:", tool_name));
+  }
+  std::string text_only_block = GetTextOnlyBlock(options, call_prefixes);
 
   std::string start_rule;
   switch (options.constraint_mode) {
@@ -200,14 +205,13 @@ function_block: %s
       if (tool_call_cases.empty()) {
         return text_only_block;
       }
-      start_rule = absl::StrFormat(
-          R"(
-start: TEXT_CONTENT? function_block_opt
-TEXT_CONTENT: /(.|\n)+/
+      start_rule = absl::StrCat(
+          GetStartRule(options, "TEXT_CONTENT? function_block_opt"),
+          absl::StrFormat(R"(TEXT_CONTENT: /(.|\n)+/
 function_block_opt: function_block |
 function_block: %s
 )",
-          function_block);
+                          function_block));
       break;
     }
     case LlgConstraintMode::kFunctionCallsRequired: {

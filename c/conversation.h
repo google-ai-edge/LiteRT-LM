@@ -20,9 +20,11 @@
 #include <stdint.h>
 
 #if defined(__APPLE__)
+#include "api_export.h"      // NOLINT
 #include "engine.h"          // NOLINT
 #include "error_reporter.h"  // NOLINT
 #else
+#include "c/api_export.h"
 #include "c/engine.h"
 #include "c/error_reporter.h"
 #endif
@@ -453,6 +455,27 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmConstraintType constraint_type, const char* constraint_string);
+
+// Sets the tool choice for one message. It is only used when constrained
+// decoding is enabled and the conversation has tools. Without it, the model's
+// default tool call constraint is used.
+// @param optional_args The optional args to modify.
+// @param tool_choice_json The OpenAI Chat Completions tool choice as JSON: a
+//   string ("auto", "none" or "required"), a forced function
+//   ({"type": "function", "function": {"name": "..."}}), or allowed tools
+//   ({"type": "allowed_tools", "allowed_tools": {"mode": "auto" or
+//   "required", "tools": [{"type": "function", "function": {"name": "..."}},
+//   ...]}}). For example, pass "\"none\"" for "none". If NULL, clears any
+//   previously set tool choice.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `optional_args` is NULL, or `tool_choice_json` is not valid JSON or not one
+//   of the tool choices above. The previous tool choice is kept on failure.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_tool_choice(
+    LiteRtLmConversationOptionalArgs* optional_args,
+    const char* tool_choice_json);
 
 // Creates a LiteRT LM Conversation.
 //

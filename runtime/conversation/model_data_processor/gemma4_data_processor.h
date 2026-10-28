@@ -31,6 +31,7 @@
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -61,7 +62,13 @@ class Gemma4DataProcessor
   }
 
   absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
-      const nlohmann::ordered_json& tools) const override;
+      const nlohmann::ordered_json& tools,
+      std::optional<ToolChoice> tool_choice) const override;
+
+  absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
+      const nlohmann::ordered_json& tools) const override {
+    return CreateConstraint(tools, std::nullopt);
+  }
 
   // Returns the start of tool call blocks.
   absl::string_view CodeFenceStart() const override;

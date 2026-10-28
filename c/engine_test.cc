@@ -25,6 +25,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -33,12 +34,14 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
 #include "c/engine_internal.h"
 #include "c/error_reporter.h"
 #include "c/experimental.h"
 #include "c/experimental_internal.h"  // IWYU pragma: keep
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
@@ -2013,6 +2016,73 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
   ASSERT_GE(response_json["content"].size(), 1);
   std::string text = response_json["content"][0]["text"];
   EXPECT_EQ(text, "aiedge");
+}
+
+TEST(EngineCTest, ConversationSendMessageWithUnsupportedToolChoiceFails) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation with tools and constrained decoding enabled.
+  ConversationConfigPtr conversation_config(
+      CreateConversationConfig(), &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  ASSERT_EQ(litert_lm_conversation_config_set_tools(conversation_config.get(),
+                                                    R"([{
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "parameters": {
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+            "required": ["location"]
+          }
+        }
+      }])"),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_conversation_config_set_enable_constrained_decoding(
+                conversation_config.get(), true),
+            kLiteRtLmStatusOk);
+  ConversationPtr conversation(
+      CreateConversation(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // 3. Send a message that must call a function that isn't one of the tools.
+  // The FST constraints reject it because they only support "auto", and the
+  // LLGuidance constraints because the function is unknown.
+  OptionalArgsPtr optional_args(CreateConversationOptionalArgs(),
+                                &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(optional_args, nullptr);
+  ASSERT_EQ(
+      litert_lm_conversation_optional_args_set_tool_choice(
+          optional_args.get(),
+          R"({"type": "function", "function": {"name": "unknown_function"}})"),
+      kLiteRtLmStatusOk);
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+  LiteRtLmJsonResponse* response = nullptr;
+  litert_lm_clear_last_error();
+  EXPECT_NE(litert_lm_conversation_send_message(
+                conversation.get(), message_json, /*extra_context=*/nullptr,
+                optional_args.get(), &response),
+            kLiteRtLmStatusOk);
+  JsonResponsePtr response_ptr(response, &litert_lm_json_response_delete);
+  EXPECT_EQ(response, nullptr);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              testing::AnyOf(testing::HasSubstr("tool_choice"),
+                             testing::HasSubstr("unknown_function")));
 }
 
 TEST(EngineCTest, ConversationCloneNull) {
@@ -4308,6 +4378,11 @@ TEST(EngineCStatusTest, ConversationOptionalArgsSettersReturnStatus) {
              return litert_lm_conversation_optional_args_set_constraint(
                  a, kLiteRtLmConstraintTypeRegex, "a+");
            }},
+          {"set_tool_choice",
+           [](A* a) {
+             return litert_lm_conversation_optional_args_set_tool_choice(
+                 a, "\"auto\"");
+           }},
       });
 }
 
@@ -4345,6 +4420,94 @@ TEST(EngineCStatusTest, ConstraintProviderNoneUnsetsProvider) {
                 config.get(), kLiteRtLmConstraintProviderTypeNone),
             kLiteRtLmStatusOk);
   EXPECT_FALSE(config->constraint_provider_type.has_value());
+}
+
+TEST(EngineCStatusTest, OptionalArgsSetToolChoice) {
+  using ::litert::lm::ToolChoice;
+  OptionalArgsPtr args(CreateConversationOptionalArgs(),
+                       &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(args, nullptr);
+  EXPECT_FALSE(args->tool_choice.has_value());
+
+  ASSERT_EQ(litert_lm_conversation_optional_args_set_tool_choice(args.get(),
+                                                                 "\"none\""),
+            kLiteRtLmStatusOk);
+  ASSERT_TRUE(args->tool_choice.has_value());
+  EXPECT_TRUE(
+      std::holds_alternative<ToolChoice::None>(args->tool_choice->choice));
+
+  ASSERT_EQ(
+      litert_lm_conversation_optional_args_set_tool_choice(
+          args.get(),
+          R"({"type": "allowed_tools", "allowed_tools": {"mode": "auto", )"
+          R"("tools": [)"
+          R"({"type": "function", "function": {"name": "get_weather"}}, )"
+          R"({"type": "function", "function": {"name": "get_time"}}]}})"),
+      kLiteRtLmStatusOk);
+  ASSERT_TRUE(args->tool_choice.has_value());
+  const auto* allowed_tools =
+      std::get_if<ToolChoice::AllowedTools>(&args->tool_choice->choice);
+  ASSERT_NE(allowed_tools, nullptr);
+  EXPECT_THAT(allowed_tools->names, ElementsAre("get_weather", "get_time"));
+  EXPECT_FALSE(allowed_tools->required);
+
+  ASSERT_EQ(
+      litert_lm_conversation_optional_args_set_tool_choice(
+          args.get(),
+          R"({"type": "allowed_tools", "allowed_tools": {"mode": "required", )"
+          R"("tools": [)"
+          R"({"type": "function", "function": {"name": "get_weather"}}]}})"),
+      kLiteRtLmStatusOk);
+  ASSERT_TRUE(args->tool_choice.has_value());
+  allowed_tools =
+      std::get_if<ToolChoice::AllowedTools>(&args->tool_choice->choice);
+  ASSERT_NE(allowed_tools, nullptr);
+  EXPECT_THAT(allowed_tools->names, ElementsAre("get_weather"));
+  EXPECT_TRUE(allowed_tools->required);
+
+  ASSERT_EQ(litert_lm_conversation_optional_args_set_tool_choice(
+                args.get(),
+                R"({"type": "function", "function": {"name": "get_weather"}})"),
+            kLiteRtLmStatusOk);
+  ASSERT_TRUE(args->tool_choice.has_value());
+  const auto* forced_function =
+      std::get_if<ToolChoice::ForcedFunction>(&args->tool_choice->choice);
+  ASSERT_NE(forced_function, nullptr);
+  EXPECT_EQ(forced_function->name, "get_weather");
+
+  // Invalid values are rejected and keep the previous tool choice.
+  for (const char* invalid_tool_choice : {
+           "none",
+           "\"sometimes\"",
+           "1",
+           R"({"type": "function"})",
+           R"({"type": "function", "function": {"name": ""}})",
+           R"({"type": "allowed_tools"})",
+           R"({"type": "allowed_tools", "allowed_tools": {"mode": "auto", )"
+           R"("tools": []}})",
+           R"({"type": "allowed_tools", "allowed_tools": {"mode": "none", )"
+           R"("tools": [{"type": "function", "function": {"name": "f"}}]}})",
+           R"({"type": "allowed_tools", "allowed_tools": {"mode": "auto", )"
+           R"("tools": [{"type": "function"}]}})",
+       }) {
+    SCOPED_TRACE(invalid_tool_choice);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(litert_lm_conversation_optional_args_set_tool_choice(
+                  args.get(), invalid_tool_choice),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
+    ASSERT_TRUE(args->tool_choice.has_value());
+    forced_function =
+        std::get_if<ToolChoice::ForcedFunction>(&args->tool_choice->choice);
+    ASSERT_NE(forced_function, nullptr);
+    EXPECT_EQ(forced_function->name, "get_weather");
+  }
+
+  // NULL clears the tool choice.
+  ASSERT_EQ(
+      litert_lm_conversation_optional_args_set_tool_choice(args.get(), nullptr),
+      kLiteRtLmStatusOk);
+  EXPECT_FALSE(args->tool_choice.has_value());
 }
 
 TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {

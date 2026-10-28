@@ -78,7 +78,19 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
                      const ToolFormatConfig& config,
                      std::vector<std::string>& tool_blocks);
 
-std::string GetTextOnlyBlock(const LlgConstraintsOptions& options);
+// Returns the `start` rule, which matches `body`. If `options` has channel
+// tokens, the model may also open one channel (e.g. the thought channel)
+// before `body`.
+std::string GetStartRule(const LlgConstraintsOptions& options,
+                         absl::string_view body);
+
+// Returns the grammar for text-only answers, i.e. the "none" tool choice. The
+// answer can't contain the code fence or any of `call_prefixes`, which are the
+// strings that start a call to each tool in the function call format (e.g.
+// `call:get_weather` or `get_weather(`). It can't be empty, even after a
+// channel.
+std::string GetTextOnlyBlock(const LlgConstraintsOptions& options,
+                             const std::vector<std::string>& call_prefixes);
 
 std::string GetRuleForType(const std::string& type,
                            const std::string& fallback_rule);

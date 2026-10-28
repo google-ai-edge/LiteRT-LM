@@ -35,6 +35,7 @@
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/constrained_decoding/llg_constraint_provider.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "support/tokenizer/tokenizer.h"
@@ -46,6 +47,8 @@ using TokenizerType = ::litert::support::TokenizerType;
 using TokenIds = ::litert::support::TokenIds;
 
 namespace {
+
+using ::testing::status::StatusIs;
 
 struct TokenDef {
   std::string text;
@@ -348,6 +351,81 @@ TEST_F(LlguidanceSchemaUtilsTest, WrappedToolsObject) {
                 R"(```tool_code
 get_weather(location="Mountain View")
 ```)");
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceAuto) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kFunctionCallsOnly;
+  ASSERT_OK(ApplyToolChoiceToOptions({.choice = ToolChoice::Auto{}}, options));
+  EXPECT_EQ(options.constraint_mode,
+            LlgConstraintMode::kTextAndOrFunctionCalls);
+  EXPECT_THAT(options.allowed_function_names, testing::IsEmpty());
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceNone) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(ApplyToolChoiceToOptions({.choice = ToolChoice::None{}}, options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kTextOnly);
+  EXPECT_THAT(options.allowed_function_names, testing::IsEmpty());
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceRequired) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(
+      ApplyToolChoiceToOptions({.choice = ToolChoice::Required{}}, options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kFunctionCallsRequired);
+  EXPECT_THAT(options.allowed_function_names, testing::IsEmpty());
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceForcedFunction) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(ApplyToolChoiceToOptions(
+      {.choice = ToolChoice::ForcedFunction{.name = "get_weather"}}, options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kFunctionCallsRequired);
+  EXPECT_THAT(options.allowed_function_names,
+              testing::ElementsAre("get_weather"));
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceForcedFunctionWithoutName) {
+  LlgConstraintsOptions options;
+  EXPECT_THAT(ApplyToolChoiceToOptions({.choice = ToolChoice::ForcedFunction{}},
+                                       options),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceAllowedTools) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kFunctionCallsOnly;
+  ASSERT_OK(ApplyToolChoiceToOptions(
+      {.choice =
+           ToolChoice::AllowedTools{.names = {"get_weather", "get_stock"}}},
+      options));
+  EXPECT_EQ(options.constraint_mode,
+            LlgConstraintMode::kTextAndOrFunctionCalls);
+  EXPECT_THAT(options.allowed_function_names,
+              testing::ElementsAre("get_weather", "get_stock"));
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceAllowedToolsRequired) {
+  LlgConstraintsOptions options;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+  ASSERT_OK(ApplyToolChoiceToOptions(
+      {.choice = ToolChoice::AllowedTools{.names = {"get_weather"},
+                                          .required = true}},
+      options));
+  EXPECT_EQ(options.constraint_mode, LlgConstraintMode::kFunctionCallsRequired);
+  EXPECT_THAT(options.allowed_function_names,
+              testing::ElementsAre("get_weather"));
+}
+
+TEST_F(LlguidanceSchemaUtilsTest, ApplyToolChoiceAllowedToolsWithoutNames) {
+  LlgConstraintsOptions options;
+  EXPECT_THAT(
+      ApplyToolChoiceToOptions({.choice = ToolChoice::AllowedTools{}}, options),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

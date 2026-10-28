@@ -220,7 +220,12 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
   constexpr absl::string_view kPythonStart = R"("```tool_code\n")";
   std::string function_block = GetPythonFunctionBlock(
       tool_call_cases, kPythonStart, /*require_call=*/false);
-  std::string text_only_block = GetTextOnlyBlock(options);
+  std::vector<std::string> call_prefixes;
+  call_prefixes.reserve(tool_names.size());
+  for (const auto& tool_name : tool_names) {
+    call_prefixes.push_back(absl::StrCat(tool_name, "("));
+  }
+  std::string text_only_block = GetTextOnlyBlock(options, call_prefixes);
 
   std::string start_rule;
   switch (options.constraint_mode) {
@@ -243,9 +248,10 @@ absl::StatusOr<std::string> CreateLarkGrammarForPythonToolCalls(
       if (tool_call_cases.empty()) {
         return text_only_block;
       }
-      start_rule = absl::StrCat("start: function_block* TEXT_CONTENT?",
-                                GetTextAndFunctionBlockRules(
-                                    tool_call_cases, options.code_fence_start));
+      start_rule =
+          absl::StrCat(GetStartRule(options, "function_block* TEXT_CONTENT?"),
+                       GetTextAndFunctionBlockRules(tool_call_cases,
+                                                    options.code_fence_start));
       break;
     }
     case LlgConstraintMode::kFunctionCallsRequired: {

@@ -206,6 +206,7 @@ class Conversation(interfaces.AbstractConversation):
       thinking_config: interfaces.ThinkingConfig | None = None,
       current_message: collections.abc.Mapping[str, Any] | None = None,
       response_format: interfaces.ResponseFormat | None = None,
+      tool_choice: str | collections.abc.Mapping[str, Any] | None = None,
   ) -> int | None:
     """Creates a C pointer for ConversationOptionalArgs if needed."""
     if (
@@ -215,6 +216,7 @@ class Conversation(interfaces.AbstractConversation):
         and max_output_tokens is None
         and thinking_config is None
         and not response_format
+        and tool_choice is None
         and self._visual_token_budget is None
     ):
       return None
@@ -356,6 +358,21 @@ class Conversation(interfaces.AbstractConversation):
             c_type,
             response_format.schema_or_pattern,
         )
+      if tool_choice is not None:
+        if isinstance(tool_choice, str):
+          tool_choice_json = json.dumps(tool_choice)
+        elif isinstance(tool_choice, collections.abc.Mapping):
+          tool_choice_json = json.dumps(dict(tool_choice))
+        else:
+          raise ValueError(
+              f"tool_choice must be a str or Mapping, got {type(tool_choice)}"
+          )
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_optional_args_set_tool_choice",
+            optional_args_ptr,
+            tool_choice_json,
+        )
       return optional_args_ptr
     except Exception as e:
       self._lib.litert_lm_conversation_optional_args_delete(optional_args_ptr)
@@ -378,6 +395,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       response_format: interfaces.ResponseFormat | None = None,
+      tool_choice: str | collections.abc.Mapping[str, Any] | None = None,
   ) -> Message:
     """See base class."""
     if response_format:
@@ -411,6 +429,7 @@ class Conversation(interfaces.AbstractConversation):
           thinking_config=thinking_config,
           current_message=current_message,
           response_format=active_response_format,
+          tool_choice=tool_choice,
       )
       try:
         resp_ptr = create_checked(
@@ -445,6 +464,9 @@ class Conversation(interfaces.AbstractConversation):
         return Message.from_json(response_dict)
 
       current_message = tool_responses
+      # The tool choice only applies to the caller's message, not to the tool
+      # responses sent back automatically.
+      tool_choice = None
 
   def send_message_async(
       self,
@@ -458,6 +480,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       response_format: interfaces.ResponseFormat | None = None,
+      tool_choice: str | collections.abc.Mapping[str, Any] | None = None,
   ) -> collections.abc.Iterator[Message]:
     """See base class."""
     if response_format:
@@ -525,6 +548,7 @@ class Conversation(interfaces.AbstractConversation):
           thinking_config=thinking_config,
           current_message=current_message,
           response_format=active_response_format,
+          tool_choice=tool_choice,
       )
       try:
         res = self._lib.litert_lm_conversation_send_message_stream(
@@ -589,6 +613,9 @@ class Conversation(interfaces.AbstractConversation):
       if not tool_responses:
         break
       current_message = tool_responses
+      # The tool choice only applies to the caller's message, not to the tool
+      # responses sent back automatically.
+      tool_choice = None
 
   def render_message_to_string(
       self,
