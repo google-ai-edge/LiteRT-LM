@@ -47,7 +47,7 @@
 //
 // Added in version 1.0.0.
 #define LITERT_LM_C_API_VERSION_MAJOR 1
-#define LITERT_LM_C_API_VERSION_MINOR 0
+#define LITERT_LM_C_API_VERSION_MINOR 1
 #define LITERT_LM_C_API_VERSION_PATCH 0
 
 #ifdef __cplusplus
@@ -1008,6 +1008,26 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_cache_dir(
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEngineSettings* settings, const char* lib_dir);
+
+// Restricts the main executor to the given model signatures, for example
+// {"prefill_1024", "decode"}. Only the selected signatures are compiled for
+// the backend and used for inference. To run complete token generation, keep
+// at least one prefill signature and "decode" in the selection. When MTP is
+// enabled, make sure "verify" is also included. By default every signature of
+// the model is used.
+//
+// @param settings The engine settings.
+// @param signatures The signature keys to select.
+// @param num_signatures The number of entries in `signatures`.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings`, `signatures` or one of its entries is NULL, or
+//   `num_signatures` is 0.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_engine_settings_set_selected_signatures(
+    LiteRtLmEngineSettings* settings, const char* const* signatures,
+    size_t num_signatures);
 
 // Represents the activation data type.
 //
