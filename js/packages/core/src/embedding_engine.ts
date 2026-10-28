@@ -17,6 +17,8 @@
 import {Cleanup} from './cleanup.js';
 import {ContentPart, SUPPORTED_AUDIO_MIME_TYPES, SUPPORTED_IMAGE_MIME_TYPES} from './conversation_config.js';
 import {EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings} from './embedding_engine_settings.js';
+import {runExclusiveEngineCreation} from './engine_creation.js';
+import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {createStreamingModelAssets} from './stream_utils.js';
@@ -127,6 +129,18 @@ export class EmbeddingEngine implements Deletable {
   static async create(settings: EmbeddingEngineSettings):
       Promise<EmbeddingEngine> {
     const litertlm = await getOrLoadGlobalLiteRtLm();
+    return runExclusiveEngineCreation(
+        litertlm.liteRtLmWasm,
+        () => EmbeddingEngine.createExclusive(litertlm, settings));
+  }
+
+  /**
+   * Creates the embedding engine. Must only be called while holding the engine
+   * creation mutex (see `runExclusiveEngineCreation`).
+   */
+  private static async createExclusive(
+      litertlm: LiteRtLm,
+      settings: EmbeddingEngineSettings): Promise<EmbeddingEngine> {
     const wasm = litertlm.liteRtLmWasm;
     const backend = settings.backend ?? Backend.GPU;
     settings = {...settings, backend};

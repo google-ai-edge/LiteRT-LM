@@ -17,7 +17,9 @@
 import {Cleanup} from './cleanup.js';
 import {Conversation} from './conversation.js';
 import {ConversationConfig} from './conversation_config.js';
+import {runExclusiveEngineCreation} from './engine_creation.js';
 import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
+import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {Session} from './session.js';
@@ -53,6 +55,19 @@ export class Engine implements Deletable {
   static async create(engineSettings: EngineSettings, inputPromptAsHint = ''):
       Promise<Engine> {
     const litertlm = await getOrLoadGlobalLiteRtLm();
+    return runExclusiveEngineCreation(
+        litertlm.liteRtLmWasm,
+        () => Engine.createExclusive(
+            litertlm, engineSettings, inputPromptAsHint));
+  }
+
+  /**
+   * Creates the engine. Must only be called while holding the engine creation
+   * mutex (see `runExclusiveEngineCreation`).
+   */
+  private static async createExclusive(
+      litertlm: LiteRtLm, engineSettings: EngineSettings,
+      inputPromptAsHint: string): Promise<Engine> {
     const wasm = litertlm.liteRtLmWasm;
     // Default to GPU if not specified.
     const backend = engineSettings.backend ?? Backend.GPU;
