@@ -103,6 +103,8 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
      << absl::StrJoin(settings.prefill_batch_sizes, ", ") << "]\n";
   os << "num_output_candidates: " << settings.num_output_candidates << "\n";
   os << "configure_magic_numbers: " << settings.configure_magic_numbers << "\n";
+  os << "allow_context_length_expansion: "
+     << settings.allow_context_length_expansion << "\n";
   os << "verify_magic_numbers: " << settings.verify_magic_numbers << "\n";
   os << "clear_kv_cache_before_prefill: "
      << settings.clear_kv_cache_before_prefill << "\n";

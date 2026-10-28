@@ -268,6 +268,65 @@ class EngineTest(LiteRtLmTestBase):
 
     mock_set_ringbuffers.assert_called_once_with(mock.ANY, True)
 
+  def test_engine_init_with_selected_signatures(self):
+    lib = litert_lm._ffi._get_lib()
+    selections = []
+
+    def fake_set_selected_signatures(settings, signatures, num_signatures):
+      del settings
+      selections.append(
+          [signatures[i].decode("utf-8") for i in range(num_signatures)]
+      )
+      return 0  # kLiteRtLmStatusOk
+
+    self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_settings_set_selected_signatures",
+            side_effect=fake_set_selected_signatures,
+        )
+    )
+
+    # Default should not select signatures.
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    )
+    self.assertEqual(selections, [])
+
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        selected_signatures=["prefill_1024", "decode"],
+        cache_dir=":nocache",
+    )
+    self.assertEqual(selections, [["prefill_1024", "decode"]])
+
+  def test_engine_init_with_selected_signatures_str_raises(self):
+    with self.assertRaises(TypeError):
+      litert_lm.Engine(
+          self.model_path,
+          backend=litert_lm.Backend.CPU(),
+          selected_signatures="decode",
+          cache_dir=":nocache",
+      )
+
+  def test_engine_init_with_empty_selected_signatures_raises(self):
+    # An explicit empty selection is forwarded to the C API, which rejects it,
+    # rather than silently falling back to all of the model's signatures.
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"litert_lm_engine_settings_set_selected_signatures failed with status"
+        r" INVALID_ARGUMENT \(3\): .+",
+    ):
+      litert_lm.Engine(
+          self.model_path,
+          backend=litert_lm.Backend.CPU(),
+          selected_signatures=[],
+          cache_dir=":nocache",
+      )
+
   def test_engine_init_with_enable_ynnpack(self):
     lib = litert_lm._ffi._get_lib()
     orig_fn = lib.litert_lm_engine_settings_set_enable_ynnpack
