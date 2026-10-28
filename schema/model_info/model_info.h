@@ -125,6 +125,10 @@ struct LlmInferenceCapability {
   // drafter).
   bool supports_speculative_decoding = false;
 
+  // Whether the model supports draft verification (requires a `verify`
+  // signature in the prefill decode model).
+  bool supports_draft_verification = false;
+
   // Maximum vision token budget for multimodal inputs. Defaults to -1 if not
   // defined.
   int max_vision_token_budget = -1;

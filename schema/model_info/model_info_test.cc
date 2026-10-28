@@ -1597,6 +1597,37 @@ TEST(ModelInfoFileTest, GetModelInfo_NpuLayout_ContextFromKvCacheSize) {
   ASSERT_TRUE(result_or->llm_capability.has_value());
   EXPECT_EQ(result_or->llm_capability->max_context_tokens, 640);
   EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+  EXPECT_FALSE(result_or->llm_capability->supports_draft_verification);
+}
+
+TEST(ModelInfoFileTest, GetModelInfo_DetectsDraftVerificationSignature) {
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill_128",
+       {{"mask_global", {1, 1, 128, 768}},
+        {"kv_cache_k_0", {1, 1, 640, 256}},
+        {"kv_cache_v_0", {1, 1, 256, 640}}}},
+      {"decode",
+       {{"mask_global", {1, 1, 1, 641}},
+        {"kv_cache_k_0", {1, 1, 640, 256}},
+        {"kv_cache_v_0", {1, 1, 256, 640}}}},
+      {"verify_32",
+       {{"mask_global", {1, 1, 32, 672}},
+        {"kv_cache_k_0", {1, 1, 640, 256}},
+        {"kv_cache_v_0", {1, 1, 256, 640}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"},
+      /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_TRUE(result_or->llm_capability->supports_draft_verification);
+
+  std::ostringstream oss;
+  oss << *result_or;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr("Draft Verification:     YES"));
 }
 
 // Tests that without LlmMetadata max_num_tokens, a static graph whose KV cache

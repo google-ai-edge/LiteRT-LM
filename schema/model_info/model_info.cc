@@ -1047,7 +1047,7 @@ absl::Status LoadVisionSignaturesIfPresent(
   return absl::OkStatus();
 }
 
-// Context information inspected from the main TFLite graph.
+// Context and capability information inspected from the prefill decode model.
 struct TfliteContextInfo {
   // Whether the KV-cache size is chosen at initialization time: the prefill
   // mask has a magic-number context length, or the KV cache has dynamic (-1)
@@ -1055,6 +1055,9 @@ struct TfliteContextInfo {
   bool is_dynamic = false;
   // Fixed context size of a static graph, or 0 if dynamic or unknown.
   int64_t context_tokens = 0;
+  // Whether the graph exposes at least one `verify` signature for draft
+  // verification.
+  bool supports_draft_verification = false;
 };
 
 // KV-cache input names, as in GetKVCacheRootNames() and the NPU executor.
@@ -1095,11 +1098,15 @@ TfliteContextInfo ExtractContextInfoFromTfliteBuffer(absl::string_view buffer) {
 
   int64_t max_kv_cache_dim = 0;
   for (const auto* sig : *model->signature_defs()) {
-    if (sig == nullptr || sig->signature_key() == nullptr ||
-        sig->inputs() == nullptr) {
+    if (sig == nullptr || sig->signature_key() == nullptr) {
       continue;
     }
-    if (!absl::StartsWith(sig->signature_key()->string_view(), "prefill")) {
+    const absl::string_view sig_key = sig->signature_key()->string_view();
+    if (absl::StartsWith(sig_key, "verify")) {
+      info.supports_draft_verification = true;
+      continue;
+    }
+    if (sig->inputs() == nullptr || !absl::StartsWith(sig_key, "prefill")) {
       continue;
     }
     if (sig->subgraph_index() >= model->subgraphs()->size()) continue;
@@ -1156,6 +1163,7 @@ absl::Status LoadContextInfoFromTfliteIfPresent(
 
   const TfliteContextInfo info =
       ExtractContextInfoFromTfliteBuffer(bytes_or->data());
+  llm_cap.supports_draft_verification = info.supports_draft_verification;
   llm_cap.is_dynamic_context = info.is_dynamic;
   if (llm_cap.max_context_tokens == 0) {
     if (info.is_dynamic) {
@@ -1632,8 +1640,9 @@ std::ostream& operator<<(std::ostream& os,
      << (llm_cap.supports_thinking ? "YES" : "NO") << "\n"
      << "  Speculative Decoding:   "
      << (llm_cap.supports_speculative_decoding ? "YES" : "NO") << "\n"
-     << "  Max Vision Token Budget: "
-     << llm_cap.max_vision_token_budget << "\n"
+     << "  Draft Verification:     "
+     << (llm_cap.supports_draft_verification ? "YES" : "NO") << "\n"
+     << "  Max Vision Token Budget: " << llm_cap.max_vision_token_budget << "\n"
      << "  Min Runtime Version:    "
      << (llm_cap.min_runtime_version.empty() ? "NOT SET"
                                              : llm_cap.min_runtime_version)
