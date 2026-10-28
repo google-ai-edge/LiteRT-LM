@@ -32,7 +32,7 @@ aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
 aiosignal==1.4.0
 attrs==26.1.0
-chardet==5.2.0
+chardet==7.7.0
 charset-normalizer==3.4.7
 colorama==0.4.6
 dataproperty==1.1.0
