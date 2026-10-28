@@ -547,6 +547,34 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "llm_litert_compiled_model_executor_checksum_fake_lm_test",
+    srcs = ["llm_litert_compiled_model_executor_checksum_fake_lm_test.cc"],
+    data = ["//runtime/testdata:checksum_fake_lm_models"],
+    deps = [
+        ":executor_settings_base",
+        ":llm_executor_io_types",
+        ":llm_executor_settings",
+        ":llm_litert_compiled_model_executor",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/test:matchers",
+        "//runtime/components:model_resources",
+        "//runtime/components:sampler_factory",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:test_utils",
+    ],
+)
+
 cc_library(
     name = "llm_processed_context",
     hdrs = ["llm_processed_context.h"],

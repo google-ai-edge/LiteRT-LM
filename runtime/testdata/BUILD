@@ -27,6 +27,12 @@ filegroup(
     ),
 )
 
+# Exact checksum fake LMs with verify signatures.
+filegroup(
+    name = "checksum_fake_lm_models",
+    srcs = glob(["checksum_fake_lm*.tflite"]),
+)
+
 exports_files([
     "have_a_wonderful_day.wav",
     "colored_rect_163_586_615_957.jpg",
