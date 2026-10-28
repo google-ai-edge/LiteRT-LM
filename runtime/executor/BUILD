@@ -1263,6 +1263,7 @@ cc_test(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",

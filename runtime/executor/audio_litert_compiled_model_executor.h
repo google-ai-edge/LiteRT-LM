@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_LITERT_COMPILED_MODEL_EXECUTOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -32,6 +33,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
@@ -588,6 +590,17 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
   absl::StatusOr<LockedTensor> CreateAndLockAudioTensor(int num_tokens,
                                                         int dimensions);
+
+  // Returns whether `consumer` should take `producer` directly as its input
+  // buffer instead of a host copy made by the executor.
+  static bool ShouldShareProducerBuffer(TensorBufferType producer_type,
+                                        size_t producer_packed_size,
+                                        TensorBufferType consumer_type,
+                                        size_t consumer_packed_size);
+  static absl::StatusOr<bool> ShouldShareProducerBuffer(
+      const TensorBuffer& producer, const TensorBuffer& consumer);
+
+  friend class AudioLiteRtCompiledModelExecutorTest;
 
   int sequence_length_;
   int spectrogram_feature_dimensions_;

@@ -174,6 +174,27 @@ inline int CeilIntDiv(int a, int b) { return (a + b - 1) / b; }
 
 }  // namespace
 
+bool AudioLiteRtCompiledModelExecutor::ShouldShareProducerBuffer(
+    TensorBufferType producer_type, size_t producer_packed_size,
+    TensorBufferType consumer_type, size_t consumer_packed_size) {
+  if (consumer_type != TensorBufferType::kHostMemory ||
+      producer_type == TensorBufferType::kHostMemory) {
+    return true;
+  }
+  return producer_packed_size != consumer_packed_size;
+}
+
+absl::StatusOr<bool>
+AudioLiteRtCompiledModelExecutor::ShouldShareProducerBuffer(
+    const TensorBuffer& producer, const TensorBuffer& consumer) {
+  LITERT_ASSIGN_OR_RETURN(auto producer_type, producer.BufferType());
+  LITERT_ASSIGN_OR_RETURN(auto consumer_type, consumer.BufferType());
+  LITERT_ASSIGN_OR_RETURN(auto producer_size, producer.PackedSize());
+  LITERT_ASSIGN_OR_RETURN(auto consumer_size, consumer.PackedSize());
+  return ShouldShareProducerBuffer(producer_type, producer_size, consumer_type,
+                                   consumer_size);
+}
+
 absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::LoadLoRA(
     uint32_t lora_id, const ModelAssets& model_assets) {
   if (lora_manager_ == nullptr) {
@@ -874,10 +895,19 @@ AudioLiteRtCompiledModelExecutor::Create(
             "Audio adapter expects a mask input, but audio encoder does not "
             "provide a mask output.");
       }
-      LITERT_ASSIGN_OR_RETURN(
-          auto encoder_mask_tensor,
-          audio_encoder->GetOutputMaskBuffer()->Duplicate());
-      *audio_adapter->GetMutableMaskBuffer() = std::move(encoder_mask_tensor);
+      // A host-memory adapter mask input behind a device encoder keeps its own
+      // buffer; EncodeInternal() fills it from the single readback it already
+      // does on the encoder's output mask.
+      ABSL_ASSIGN_OR_RETURN(
+          const bool share_mask_buffer,
+          ShouldShareProducerBuffer(*audio_encoder->GetOutputMaskBuffer(),
+                                    *audio_adapter->GetMaskBuffer()));
+      if (share_mask_buffer) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto encoder_mask_tensor,
+            audio_encoder->GetOutputMaskBuffer()->Duplicate());
+        *audio_adapter->GetMutableMaskBuffer() = std::move(encoder_mask_tensor);
+      }
     }
 
     LITERT_ASSIGN_OR_RETURN(
@@ -892,11 +922,17 @@ AudioLiteRtCompiledModelExecutor::Create(
       // Handled in EncodeInternal by conversion.
     } else if (encoder_features_type.ElementType() ==
                adapter_features_type.ElementType()) {
-      LITERT_ASSIGN_OR_RETURN(
-          auto encoder_features_tensor,
-          audio_encoder->GetMutableOutputFeaturesBuffer().Duplicate());
-      audio_adapter->GetMutableFeaturesBuffer() =
-          std::move(encoder_features_tensor);
+      ABSL_ASSIGN_OR_RETURN(
+          const bool share_features_buffer,
+          ShouldShareProducerBuffer(audio_encoder->GetOutputFeaturesBuffer(),
+                                    audio_adapter->GetFeaturesBuffer()));
+      if (share_features_buffer) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto encoder_features_tensor,
+            audio_encoder->GetMutableOutputFeaturesBuffer().Duplicate());
+        audio_adapter->GetMutableFeaturesBuffer() =
+            std::move(encoder_features_tensor);
+      }
     } else {
       ABSL_LOG(ERROR) << "Unsupported type mismatch between audio encoder ("
                       << static_cast<int>(encoder_features_type.ElementType())
@@ -965,9 +1001,22 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
 
   int chunk_valid_tokens = 0;
   if (audio_encoder_->GetOutputMaskBuffer() != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(
-        chunk_valid_tokens,
-        GetValidCount(*audio_encoder_->GetOutputMaskBuffer()));
+    // Read the encoder's output mask back once. It gives the valid token count
+    // and, when the adapter's mask input does not share the encoder's buffer
+    // (host-memory adapter behind a device encoder), it is also the adapter's
+    // mask input.
+    ABSL_ASSIGN_OR_RETURN(const std::vector<uint8_t> encoder_mask,
+                          GetDataAsVector<uint8_t>(
+                              *audio_encoder_->GetMutableOutputMaskBuffer()));
+    chunk_valid_tokens = GetValidCount(encoder_mask);
+    if (audio_adapter_ != nullptr &&
+        audio_adapter_->GetMaskBuffer() != nullptr &&
+        audio_adapter_->GetMaskBuffer()->Get() !=
+            audio_encoder_->GetOutputMaskBuffer()->Get()) {
+      LITERT_RETURN_IF_ERROR(
+          audio_adapter_->GetMutableMaskBuffer()->Write<uint8_t>(
+              absl::MakeConstSpan(encoder_mask)));
+    }
   } else {
     int input_valid_tokens = GetValidCount(spectrogram_mask);
     chunk_valid_tokens =
@@ -1001,6 +1050,18 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
       for (size_t i = 0; i < elements; ++i) {
         adapter_data[i] = static_cast<float>(encoder_data[i]);
       }
+    } else if (adapter_input.Get() != encoder_output.Get()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto encoder_lock_and_addr,
+          TensorBufferScopedLock::Create<const uint8_t>(
+              encoder_output, TensorBuffer::LockMode::kRead));
+      LITERT_ASSIGN_OR_RETURN(
+          auto adapter_lock_and_addr,
+          TensorBufferScopedLock::Create<uint8_t>(
+              adapter_input, TensorBuffer::LockMode::kWrite));
+      LITERT_ASSIGN_OR_RETURN(auto packed_size, adapter_input.PackedSize());
+      std::memcpy(adapter_lock_and_addr.second, encoder_lock_and_addr.second,
+                  packed_size);
     }
 
     if (!audio_embeddings.empty()) {

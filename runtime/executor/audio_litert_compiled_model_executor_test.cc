@@ -41,6 +41,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/scoped_file.h"
@@ -150,6 +151,9 @@ absl::StatusOr<std::vector<float>> EncodeOnesAndGetEmbeddings(
   embeddings.resize(audio_data.GetValidTokens() * kEmbeddingDimensions);
   return embeddings;
 }
+
+}  // namespace
+
 // TODO: b/441514829 - Enable the tests on Windows once the bug is fixed.
 #if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
     !defined(__NT__) && !defined(_WIN64)
@@ -159,8 +163,46 @@ class AudioLiteRtCompiledModelExecutorTest : public ::testing::Test {
     auto env = Environment::Create(std::vector<Environment::Option>());
     env_ = std::make_unique<Environment>(std::move(*env));
   }
+
+  static bool ShouldShareProducerBuffer(TensorBufferType producer_type,
+                                        size_t producer_packed_size,
+                                        TensorBufferType consumer_type,
+                                        size_t consumer_packed_size) {
+    return AudioLiteRtCompiledModelExecutor::ShouldShareProducerBuffer(
+        producer_type, producer_packed_size, consumer_type,
+        consumer_packed_size);
+  }
+
+  static absl::StatusOr<bool> ShouldShareProducerBuffer(
+      const TensorBuffer& producer, const TensorBuffer& consumer) {
+    return AudioLiteRtCompiledModelExecutor::ShouldShareProducerBuffer(
+        producer, consumer);
+  }
+
+  static TensorBuffer* GetEncoderOutputMaskBuffer(
+      AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_encoder_->GetMutableOutputMaskBuffer();
+  }
+
+  static TensorBuffer* GetAdapterMaskBuffer(
+      AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_adapter_->GetMutableMaskBuffer();
+  }
+
+  static TensorBuffer& GetEncoderOutputFeaturesBuffer(
+      AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_encoder_->GetMutableOutputFeaturesBuffer();
+  }
+
+  static TensorBuffer& GetAdapterFeaturesBuffer(
+      AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_adapter_->GetMutableFeaturesBuffer();
+  }
+
   std::unique_ptr<Environment> env_;
 };
+
+namespace {
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest, CreateExecutorTest) {
   EXPECT_OK(CreateAudioExecutor(*env_,
@@ -1144,9 +1186,148 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   EXPECT_OK(audio_executor->Reset());
   EXPECT_OK(audio_executor->UseLoRA(std::nullopt));
 }
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-        // !defined(__NT__) && !defined(_WIN64)
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       ShouldShareProducerBufferDecisionLogic) {
+  constexpr std::array<uint8_t, kEmbeddingSequenceLength> kMaskData = {1, 1, 1,
+                                                                       0, 0};
+  const RankedTensorType mask_tensor_type(
+      GetElementType<bool>(),
+      Layout(Dimensions({1, kEmbeddingSequenceLength})));
+  ASSERT_OK_AND_ASSIGN(auto host_producer, CreateTensorBuffer<const uint8_t>(
+                                               kMaskData, mask_tensor_type));
+  ASSERT_OK_AND_ASSIGN(auto host_consumer, CreateTensorBuffer<const uint8_t>(
+                                               kMaskData, mask_tensor_type));
+  ASSERT_OK_AND_ASSIGN(bool share_host_to_host,
+                       ShouldShareProducerBuffer(host_producer, host_consumer));
+  EXPECT_TRUE(share_host_to_host);
+
+  EXPECT_TRUE(ShouldShareProducerBuffer(TensorBufferType::kHostMemory, 5,
+                                        TensorBufferType::kHostMemory, 5));
+  EXPECT_TRUE(
+      ShouldShareProducerBuffer(TensorBufferType::kWebGpuBufferPacked, 5,
+                                TensorBufferType::kWebGpuBufferPacked, 5));
+  EXPECT_TRUE(ShouldShareProducerBuffer(TensorBufferType::kHostMemory, 5,
+                                        TensorBufferType::kWebGpuBufferPacked,
+                                        5));
+  EXPECT_FALSE(ShouldShareProducerBuffer(TensorBufferType::kWebGpuBufferPacked,
+                                         5, TensorBufferType::kHostMemory, 5));
+  EXPECT_FALSE(ShouldShareProducerBuffer(TensorBufferType::kOpenClBufferPacked,
+                                         5, TensorBufferType::kHostMemory, 5));
+  EXPECT_TRUE(ShouldShareProducerBuffer(TensorBufferType::kWebGpuBufferPacked,
+                                        5, TensorBufferType::kHostMemory, 8));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       Encode_PopulatesUnsharedAdapterHostMaskBuffer) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  TensorBuffer* encoder_mask_buffer =
+      GetEncoderOutputMaskBuffer(*audio_executor);
+  TensorBuffer* adapter_mask_buffer = GetAdapterMaskBuffer(*audio_executor);
+  ASSERT_NE(encoder_mask_buffer, nullptr);
+  ASSERT_NE(adapter_mask_buffer, nullptr);
+  TensorBuffer& encoder_features_buffer =
+      GetEncoderOutputFeaturesBuffer(*audio_executor);
+  TensorBuffer& adapter_features_buffer =
+      GetAdapterFeaturesBuffer(*audio_executor);
+
+  // Replace the adapter's mask and features buffers with separate host buffers
+  // so they do not alias the encoder's output buffers (matching the state when
+  // ShouldShareProducerBuffer returns false for a host adapter behind a device
+  // encoder).
+  constexpr std::array<uint8_t, kEmbeddingSequenceLength> kInitialAdapterMask =
+      {0, 0, 0, 0, 0};
+  auto mask_type = adapter_mask_buffer->TensorType();
+  ASSERT_TRUE(mask_type.HasValue());
+  ASSERT_OK_AND_ASSIGN(
+      *adapter_mask_buffer,
+      CreateTensorBuffer<const uint8_t>(kInitialAdapterMask, *mask_type));
+  ASSERT_NE(adapter_mask_buffer->Get(), encoder_mask_buffer->Get());
+
+  constexpr std::array<float, kEmbeddingSequenceLength * 4>
+      kInitialAdapterFeatures = {};
+  auto features_type = adapter_features_buffer.TensorType();
+  ASSERT_TRUE(features_type.HasValue());
+  ASSERT_OK_AND_ASSIGN(
+      adapter_features_buffer,
+      CreateTensorBuffer<const float>(kInitialAdapterFeatures, *features_type));
+  ASSERT_NE(adapter_features_buffer.Get(), encoder_features_buffer.Get());
+
+  constexpr std::array<float,
+                       kSpectrogramSequenceLength * kSpectrogramFrequencySlots>
+      mel_spectrogram_data = {
+          1., 0., 1., 0., 0., 0., 0., 1., 1., 0., 1., 0., 1., 0., 1., 1.,
+          1., 1., 1., 0., 1., 1., 0., 1., 1., 1., 1., 0., 0., 0., 1., 1.,
+          1., 1., 0., 1., 0., 1., 0., 1., 1., 1., 0., 0., 1., 1., 0., 0.,
+          1., 0., 1., 1., 1., 0., 0., 0., 1., 1., 1., 1., 0., 1., 1., 0.,
+          1., 1., 1., 0., 1., 1., 1., 0., 0., 0., 0., 0., 1., 0., 0.,
+      };
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+
+  constexpr std::array<bool, kSpectrogramSequenceLength> partial_mask_data = {
+      true, true, true, true, true, true, false, false, false, false};
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_mask_tensor_buffer,
+      CreateTensorBuffer<const bool>(
+          partial_mask_data,
+          RankedTensorType(
+              GetElementType<bool>(),
+              Layout(Dimensions({1, kSpectrogramSequenceLength})))));
+
+  ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
+                       audio_executor->Encode(mel_spectrogram_tensor_buffer,
+                                              partial_mask_tensor_buffer));
+  EXPECT_EQ(executor_audio_data.GetValidTokens(), 3);
+  EXPECT_NE(adapter_mask_buffer->Get(), encoder_mask_buffer->Get());
+  EXPECT_NE(adapter_features_buffer.Get(), encoder_features_buffer.Get());
+
+  ASSERT_OK_AND_ASSIGN(auto encoder_mask_after_partial,
+                       GetDataAsVector<uint8_t>(*encoder_mask_buffer));
+  ASSERT_OK_AND_ASSIGN(auto adapter_mask_after_partial,
+                       GetDataAsVector<uint8_t>(*adapter_mask_buffer));
+  EXPECT_EQ(adapter_mask_after_partial, encoder_mask_after_partial);
+  EXPECT_THAT(adapter_mask_after_partial, ElementsAre(1, 1, 1, 0, 0));
+
+  ASSERT_OK_AND_ASSIGN(auto encoder_features_after_partial,
+                       GetDataAsVector<float>(encoder_features_buffer));
+  ASSERT_OK_AND_ASSIGN(auto adapter_features_after_partial,
+                       GetDataAsVector<float>(adapter_features_buffer));
+  EXPECT_EQ(adapter_features_after_partial, encoder_features_after_partial);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_THAT(projected_audio_embeddings_data,
+              ElementsAre(1., 2., 4., 6., 6., 6., 1., 3., 6., 9., 9., 9., 1.,
+                          3., 5., 8., 8., 8.));
+
+  // A subsequent Encode with a full mask updates the unshared adapter mask
+  // buffer again.
+  ASSERT_OK_AND_ASSIGN(auto full_audio_data,
+                       audio_executor->Encode(mel_spectrogram_tensor_buffer));
+  EXPECT_EQ(full_audio_data.GetValidTokens(), kEmbeddingSequenceLength);
+  ASSERT_OK_AND_ASSIGN(auto adapter_mask_after_full,
+                       GetDataAsVector<uint8_t>(*adapter_mask_buffer));
+  EXPECT_THAT(adapter_mask_after_full, ElementsAre(1, 1, 1, 1, 1));
+}
 
 }  // namespace
+#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
+        // !defined(__NT__) && !defined(_WIN64)
 
 }  // namespace litert::lm
