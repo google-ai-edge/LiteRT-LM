@@ -235,19 +235,22 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_loaded_file_max_vision_token_budget(
     const LiteRtLmLoadedFile* loaded_file, int32_t* out_budget);
 
-// Gets the maximum supported context tokens for the loaded LiteRT-LM file.
-// - If the model is static (litert_lm_loaded_file_is_dynamic_context reports
-//   false), this is the fixed context size determined by the model graph.
-// - If the model is dynamic (litert_lm_loaded_file_is_dynamic_context reports
-//   true), this is the largest context size that can be set.
+// Gets the context size, in tokens, for the loaded LiteRT-LM file.
+// - For LLMs, this is the default context size for initializing the model
+//   (LlmMetadata max_num_tokens). If the metadata does not set it, this is the
+//   engine's default (4096), capped by the context size of a static model
+//   graph.
+// - For embedding models, this is the fixed input length if the model is static
+//   (litert_lm_loaded_file_is_dynamic_context reports false), or the largest
+//   supported input length if it is dynamic.
 //
 // @param loaded_file The loaded file to inspect.
-// @param out_max_context_tokens On success, receives the maximum number of
-//   context tokens (always positive); not written on failure.
+// @param out_max_context_tokens On success, receives the number of context
+//   tokens (always positive); not written on failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
 //   `loaded_file` or `out_max_context_tokens` is NULL; kLiteRtLmStatusNotFound
-//   if the model does not define its maximum context size.
+//   if the model does not define its context size.
 //
 // Added in version 0.2.0.
 // Changed in version 1.0.0: returns a status code; the value is returned
@@ -258,8 +261,8 @@ LiteRtLmStatusCode litert_lm_loaded_file_max_context_tokens(
     const LiteRtLmLoadedFile* loaded_file, uint32_t* out_max_context_tokens);
 
 // Gets whether the model has dynamic context.
-// Dynamic context means the context size can be configured by the caller
-// up to the maximum limit.
+// Dynamic context means the context size can be configured by the caller.
+// This is determined from the model graph, not from the LLM metadata.
 //
 // @param loaded_file The loaded file to inspect.
 // @param out_is_dynamic On success, receives true if the model has dynamic

@@ -52,6 +52,17 @@ target_link_libraries(runtime_engine_cpu_affinity_utils
 )
 
 # ==============================================================================
+# Engine Defaults
+# ==============================================================================
+add_litertlm_library(runtime_engine_engine_defaults INTERFACE)
+add_library(LiteRTLM::Runtime::Engine::Defaults ALIAS runtime_engine_engine_defaults)
+
+target_include_directories(runtime_engine_engine_defaults
+  INTERFACE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+# ==============================================================================
 # Engine Settings
 # ==============================================================================
 add_litertlm_library(runtime_engine_engine_settings STATIC
@@ -68,6 +79,7 @@ target_include_directories(runtime_engine_engine_settings
 target_link_libraries(runtime_engine_engine_settings
   PUBLIC
     LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine::Defaults
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Util
     LiteRTLM::Schema::Core
@@ -196,6 +208,7 @@ target_link_libraries(runtime_engine_libs INTERFACE
   LiteRTLM::Runtime::Engine::Interface
   LiteRTLM::Runtime::Engine::EmbeddingEngineInterface
   LiteRTLM::Runtime::Engine::CpuAffinityUtils
+  LiteRTLM::Runtime::Engine::Defaults
   LiteRTLM::Runtime::Engine::Settings
   LiteRTLM::Runtime::Engine::EmbeddingEngineSettings
   LiteRTLM::Runtime::Engine::IoTypes

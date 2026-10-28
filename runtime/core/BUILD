@@ -673,6 +673,7 @@ cc_library(
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/components/constrained_decoding:suppress_tokens_constraint",
         "//runtime/components/constrained_decoding:thinking_budget_constraint",
+        "//runtime/engine:engine_defaults",
         "//runtime/engine:io_types",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:executor_stats",

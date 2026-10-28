@@ -50,6 +50,7 @@
 #include "runtime/components/sampler.h"
 #include "runtime/components/scoring_cpu_util.h"
 #include "runtime/components/stop_token_detector.h"
+#include "runtime/engine/engine_defaults.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -79,7 +80,6 @@ void ConvertFp16ToFp32(absl::Span<const tflite::half> fp16_values,
 // TODO(b/423364170): all LLM Executors should respect the max number of tokens
 // returned by the model. We should remove this default value once all Executors
 // are compliant with the max number of tokens.
-constexpr int kDefaultMaxNumTokens = 4096;
 int TryGetMaxNumTokens(const LlmExecutor& executor) {
   auto settings = executor.GetExecutorSettings();
   if (!settings.ok()) {

@@ -37,8 +37,10 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/base.h"  // from @flatbuffers
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
 #include "flatbuffers/verifier.h"  // from @flatbuffers
+#include "runtime/engine/engine_defaults.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -68,6 +70,12 @@ constexpr size_t kMaxNpuSectionSize = 10 * 1024 * 1024;
 // addressable by the FlatBuffers specification (due to 32-bit signed offsets)
 // and protects against unbounded memory allocations.
 constexpr size_t kMaxVisionSectionSize = 2ULL * 1024 * 1024 * 1024;
+
+// Maximum number of leading bytes of the main TFLite section read to inspect
+// its graph. A FlatBuffer, and therefore the graph, never exceeds
+// FLATBUFFERS_MAX_BUFFER_SIZE; larger models store their weights after the
+// FlatBuffer. The FlatBuffers verifier requires a smaller buffer than that.
+constexpr size_t kMaxTfliteGraphSize = FLATBUFFERS_MAX_BUFFER_SIZE - 1;
 
 // Minimum file offset alignment for a section to be memory-mapped instead of
 // copied, as FlatBuffers require aligned buffers. Conforming LiteRT-LM files
@@ -1000,8 +1008,9 @@ absl::Status LoadLlmMetadataProtoIfPresent(SectionReader& reader,
     }
   }
 
+  // Default context size. is_dynamic_context comes only from the TFLite graph,
+  // see LoadContextInfoFromTfliteIfPresent().
   llm_cap.max_context_tokens = proto_metadata.max_num_tokens();
-  llm_cap.is_dynamic_context = IsMagicNumber(llm_cap.max_context_tokens);
 
   return absl::OkStatus();
 }
@@ -1038,20 +1047,53 @@ absl::Status LoadVisionSignaturesIfPresent(
   return absl::OkStatus();
 }
 
-// Inspects a TFLite model buffer to extract context token limit from prefill
-// signature input mask tensor.
-std::optional<int64_t> ExtractContextTokensFromTfliteBuffer(
-    absl::string_view buffer) {
+// Context information inspected from the main TFLite graph.
+struct TfliteContextInfo {
+  // Whether the KV-cache size is chosen at initialization time: the prefill
+  // mask has a magic-number context length, or the KV cache has dynamic (-1)
+  // dimensions.
+  bool is_dynamic = false;
+  // Fixed context size of a static graph, or 0 if dynamic or unknown.
+  int64_t context_tokens = 0;
+};
+
+// KV-cache input names, as in GetKVCacheRootNames() and the NPU executor.
+bool IsKvCacheInput(absl::string_view name) {
+  return absl::StartsWith(name, "kv_cache_k") ||
+         absl::StartsWith(name, "kv_cache_v") ||
+         absl::StartsWith(name, "kv_cache_c") ||
+         absl::StartsWith(name, "k_cache_") ||
+         absl::StartsWith(name, "v_cache_");
+}
+
+// Returns true if `tensor` has a dynamic (-1) dimension. Dynamic dimensions are
+// only recorded in `shape_signature`; `shape` holds a placeholder (1) for them.
+bool HasDynamicDim(const tflite::Tensor& tensor) {
+  if (tensor.shape_signature() == nullptr) return false;
+  for (int32_t dim : *tensor.shape_signature()) {
+    if (dim < 0) return true;
+  }
+  return false;
+}
+
+// Inspects the KV-cache and mask inputs of a TFLite graph's prefill signatures.
+// The context size is the largest KV-cache dimension, not the mask's last
+// dimension, which on NPU graphs also counts the prefill tokens (e.g. 4096 +
+// 128). Decode signatures are skipped: on NPU graphs their mask is the KV-cache
+// size plus one, which can be a prime number.
+TfliteContextInfo ExtractContextInfoFromTfliteBuffer(absl::string_view buffer) {
+  TfliteContextInfo info;
   flatbuffers::Verifier verifier(
       reinterpret_cast<const uint8_t*>(buffer.data()), buffer.size());
-  if (!tflite::VerifyModelBuffer(verifier)) return std::nullopt;
+  if (!tflite::VerifyModelBuffer(verifier)) return info;
 
   const tflite::Model* model = tflite::GetModel(buffer.data());
   if (model == nullptr || model->signature_defs() == nullptr ||
       model->subgraphs() == nullptr) {
-    return std::nullopt;
+    return info;
   }
 
+  int64_t max_kv_cache_dim = 0;
   for (const auto* sig : *model->signature_defs()) {
     if (sig == nullptr || sig->signature_key() == nullptr ||
         sig->inputs() == nullptr) {
@@ -1060,50 +1102,69 @@ std::optional<int64_t> ExtractContextTokensFromTfliteBuffer(
     if (!absl::StartsWith(sig->signature_key()->string_view(), "prefill")) {
       continue;
     }
+    if (sig->subgraph_index() >= model->subgraphs()->size()) continue;
+    const auto* subgraph = model->subgraphs()->Get(sig->subgraph_index());
+    if (subgraph == nullptr || subgraph->tensors() == nullptr) continue;
+
     for (const auto* input : *sig->inputs()) {
       if (input == nullptr || input->name() == nullptr) continue;
-      if (!absl::StrContains(input->name()->string_view(), "mask")) continue;
+      const absl::string_view name = input->name()->string_view();
+      const bool is_kv_cache = IsKvCacheInput(name);
+      if (!is_kv_cache && !absl::StrContains(name, "mask")) continue;
+      if (input->tensor_index() >= subgraph->tensors()->size()) continue;
+      const auto* tensor = subgraph->tensors()->Get(input->tensor_index());
+      if (tensor == nullptr || tensor->shape() == nullptr ||
+          tensor->shape()->empty()) {
+        continue;
+      }
 
-      uint32_t tensor_idx = input->tensor_index();
-      uint32_t subgraph_idx = sig->subgraph_index();
-      if (subgraph_idx >= model->subgraphs()->size()) continue;
-
-      const auto* subgraph = model->subgraphs()->Get(subgraph_idx);
-      if (subgraph == nullptr || subgraph->tensors() == nullptr) continue;
-      if (tensor_idx >= subgraph->tensors()->size()) continue;
-
-      const auto* tensor = subgraph->tensors()->Get(tensor_idx);
-      if (tensor == nullptr || tensor->shape() == nullptr) continue;
-
-      int rank = tensor->shape()->size();
-      if (rank > 0) {
-        return tensor->shape()->Get(rank - 1);
+      const auto& shape = *tensor->shape();
+      if (is_kv_cache) {
+        info.is_dynamic |= HasDynamicDim(*tensor);
+        for (int32_t dim : shape) {
+          max_kv_cache_dim = std::max<int64_t>(max_kv_cache_dim, dim);
+        }
+      } else {
+        info.is_dynamic |= IsMagicNumber(shape.Get(shape.size() - 1));
       }
     }
   }
-  return std::nullopt;
+
+  // A dynamic graph's sizes are placeholders.
+  if (!info.is_dynamic) info.context_tokens = max_kv_cache_dim;
+  return info;
 }
 
-// Inspects main TFLite model graph for context size if not already populated
-// from LlmMetadata protobuf (e.g. for legacy or raw TFLite models).
-absl::Status InferContextTokensFallbackIfMissing(
+// Sets is_dynamic_context from the main TFLite graph. If LlmMetadata does not
+// set max_num_tokens, also sets max_context_tokens to the size the engine
+// initializes the model with: its default, capped by a static graph's KV-cache
+// size. Leaves it 0 if the graph is static and has no KV-cache inputs.
+absl::Status LoadContextInfoFromTfliteIfPresent(
     SectionReader& reader, const StreamSection& main_tflite_sec,
     LlmInferenceCapability& llm_cap) {
-  if (llm_cap.max_context_tokens != 0 || !main_tflite_sec.is_valid()) {
+  if (!main_tflite_sec.is_valid()) {
     return absl::OkStatus();
   }
-  auto bytes_or =
-      reader.Read(main_tflite_sec, kMaxVisionSectionSize, "Main TFLite");
+  // Read only the leading kMaxTfliteGraphSize bytes, which hold the graph.
+  StreamSection graph_sec = main_tflite_sec;
+  graph_sec.end =
+      std::min<uint64_t>(graph_sec.end, graph_sec.begin + kMaxTfliteGraphSize);
+  auto bytes_or = reader.Read(graph_sec, kMaxTfliteGraphSize, "Main TFLite");
   if (!bytes_or.ok()) {
     return absl::OkStatus();
   }
 
-  auto context_tokens = ExtractContextTokensFromTfliteBuffer(bytes_or->data());
-  if (context_tokens.has_value()) {
-    llm_cap.max_context_tokens = *context_tokens;
-    llm_cap.is_dynamic_context = IsMagicNumber(*context_tokens);
+  const TfliteContextInfo info =
+      ExtractContextInfoFromTfliteBuffer(bytes_or->data());
+  llm_cap.is_dynamic_context = info.is_dynamic;
+  if (llm_cap.max_context_tokens == 0) {
+    if (info.is_dynamic) {
+      llm_cap.max_context_tokens = kDefaultMaxNumTokens;
+    } else if (info.context_tokens > 0) {
+      llm_cap.max_context_tokens =
+          std::min<int64_t>(kDefaultMaxNumTokens, info.context_tokens);
+    }
   }
-
   return absl::OkStatus();
 }
 
@@ -1428,7 +1489,9 @@ absl::StatusOr<ModelInfo> GetModelInfoImpl(
     ABSL_RETURN_IF_ERROR(LoadVisionSignaturesIfPresent(
         reader, sections.vision_sections, llm_cap));
 
-    ABSL_RETURN_IF_ERROR(InferContextTokensFallbackIfMissing(
+    // Must run after LoadLlmMetadataProtoIfPresent(), whose max_num_tokens
+    // takes precedence.
+    ABSL_RETURN_IF_ERROR(LoadContextInfoFromTfliteIfPresent(
         reader, sections.main_tflite, llm_cap));
 
     // Artisan GPU text decoders size their KV cache from the max_num_tokens

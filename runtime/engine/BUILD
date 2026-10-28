@@ -436,10 +436,16 @@ cc_binary(
 )
 
 cc_library(
+    name = "engine_defaults",
+    hdrs = ["engine_defaults.h"],
+)
+
+cc_library(
     name = "engine_settings",
     srcs = ["engine_settings.cc"],
     hdrs = ["engine_settings.h"],
     deps = [
+        ":engine_defaults",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:absl_log",

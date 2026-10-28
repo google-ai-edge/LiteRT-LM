@@ -37,6 +37,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/core/version.h"
+#include "runtime/engine/engine_defaults.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -370,15 +371,19 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   // in the prompt.
   if (main_executor_settings_.GetMaxNumTokens() == 0) {
     // The default maximum number of tokens is set to the smallest multiple of
-    // 4096 greater than the number of tokens in the prompt plus the default
-    // decode length, 1024.
-    int max_num_tokens = ((num_prompt_tokens + 1023) / 4096 + 1) * 4096;
+    // kDefaultMaxNumTokens greater than the number of tokens in the prompt plus
+    // the default decode length, 1024.
+    int max_num_tokens =
+        ((num_prompt_tokens + 1023) / kDefaultMaxNumTokens + 1) *
+        kDefaultMaxNumTokens;
     if (metadata.max_num_tokens() > 0) {
       max_num_tokens = metadata.max_num_tokens();
 #if !defined(__APPLE__)
       // Metal does not constraint the max allocated GPU buffer size.
       if (backend == Backend::GPU && max_num_tokens > 4096) {
-        max_num_tokens = ((num_prompt_tokens + 1023) / 4096 + 1) * 4096;
+        max_num_tokens =
+            ((num_prompt_tokens + 1023) / kDefaultMaxNumTokens + 1) *
+            kDefaultMaxNumTokens;
       }
 #endif  // !__APPLE__
     }
