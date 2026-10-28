@@ -80,10 +80,32 @@ TEST(ModelResourcesStreamingTest, SetAndGetModelBuffer) {
       proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
       std::vector<char>(dummy_bytes.begin(), dummy_bytes.end()));
 
+  EXPECT_TRUE(model_resources.HasTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   ASSERT_OK_AND_ASSIGN(auto buffer,
                        model_resources.GetTFLiteModelBuffer(
                            proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   EXPECT_EQ(buffer, dummy_bytes);
+}
+
+TEST(ModelResourcesStreamingTest, EmptyModelBufferTreatedAsNotFound) {
+  ModelResourcesStreaming model_resources;
+  model_resources.SetModelBuffer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                                 {});
+
+  EXPECT_FALSE(model_resources.HasTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_EQ(
+      model_resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE)
+          .status()
+          .code(),
+      absl::StatusCode::kNotFound);
+  EXPECT_EQ(
+      model_resources
+          .GetTFLiteModelBuffer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE)
+          .status()
+          .code(),
+      absl::StatusCode::kNotFound);
 }
 
 TEST(ModelResourcesStreamingTest, GetScopedFileUnimplementedWhenUnset) {

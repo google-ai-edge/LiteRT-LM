@@ -69,6 +69,10 @@ class ModelResourcesStreaming : public ModelResources {
   using ModelResources::GetTFLiteModelSectionFileRegion;
   using ModelResources::GetWeightInMemoryMap;
   using ModelResources::GetWeightsSectionOffset;
+  using ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override;
+  bool HasTFLiteModel(absl::string_view model_type_str) override;
 
   // Returns the litert::Model for the specified `model_type`.
   // Lazily creates and caches the model from the in-memory flatbuffer stored

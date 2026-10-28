@@ -298,9 +298,26 @@ std::vector<uint8_t> BuildDummyMultiSignatureEncoderModelBuffer(
 // testing.
 class FakeEmbeddingModelResources : public ModelResources {
  public:
+  using ModelResources::GetTFLiteModel;
+  using ModelResources::HasTFLiteModel;
+
   FakeEmbeddingModelResources(const litert::Model* embedder,
                               const litert::Model* encoder)
       : embedder_(embedder), encoder_(encoder) {}
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
+
+  bool HasTFLiteModel(absl::string_view model_type_str) override {
+    if (model_type_str == "tf_lite_embedder") {
+      return embedder_ != nullptr;
+    }
+    if (model_type_str == "tf_lite_text_encoder") {
+      return encoder_ != nullptr;
+    }
+    return false;
+  }
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {

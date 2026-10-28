@@ -142,6 +142,25 @@ class ModelResources {
  public:
   virtual ~ModelResources() = default;
 
+  // Returns true if the ModelResources contains a TFLite model for the given
+  // model type.
+  virtual bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) {
+    return false;
+  }
+
+  // Returns true if the ModelResources contains a TFLite model for the given
+  // model type wire string.
+  virtual bool HasTFLiteModel(absl::string_view model_type_str);
+
+  // Returns true if the ModelResources contains a TFLite model for the given
+  // capability-scoped TfLiteModelTypeT.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  bool HasTFLiteModel(TfLiteModelTypeT model_type) {
+    return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
+
   // Returns the litert model. We will create the model if it is not created
   // yet. And the model is created from memory mapped file, so physical memory
   // is only allocated when the model is actually used.

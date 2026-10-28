@@ -51,6 +51,18 @@ absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesTask::Create(
   return model_resources;
 }
 
+bool ModelResourcesTask::HasTFLiteModel(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  if (auto it = model_map_.find(model_type);
+      it != model_map_.end() && it->second != nullptr) {
+    return true;
+  }
+  std::string model_file =
+      litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
+  auto buffer = model_asset_bundle_resources_->GetFile(model_file);
+  return buffer.ok() && !buffer->empty();
+}
+
 absl::StatusOr<absl::string_view> ModelResourcesTask::GetTFLiteModelBuffer(
     proto::LlmMetadata::TfLiteModelType model_type) {
   std::string model_file =

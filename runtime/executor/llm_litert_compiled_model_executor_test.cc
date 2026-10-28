@@ -1176,6 +1176,14 @@ class TfLiteModelResources : public ModelResources {
   }
 
   // ModelResources implementation:
+  using ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    return model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+           (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER &&
+            with_mtp_drafter_);
+  }
+
   absl::StatusOr<const Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {
     if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {

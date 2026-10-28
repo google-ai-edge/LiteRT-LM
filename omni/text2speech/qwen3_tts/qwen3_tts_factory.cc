@@ -66,6 +66,26 @@ class TalkerLmModelResources : public lm::ModelResources {
   using lm::ModelResources::GetTFLiteModelSectionFileRegion;
   using lm::ModelResources::GetTokenizer;
   using lm::ModelResources::GetWeightsSectionOffset;
+  using lm::ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
+      return inner_->HasTFLiteModel(
+          lm::proto::Text2SpeechMetadata::TF_LITE_TALKER);
+    }
+    return inner_->HasTFLiteModel(model_type);
+  }
+
+  bool HasTFLiteModel(absl::string_view model_type_str) override {
+    if (auto llm_type = lm::ParseLlmTfLiteModelType(model_type_str);
+        llm_type.ok() &&
+        *llm_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
+      return inner_->HasTFLiteModel(
+          lm::proto::Text2SpeechMetadata::TF_LITE_TALKER);
+    }
+    return inner_->HasTFLiteModel(model_type_str);
+  }
 
   absl::StatusOr<const Model*> GetTFLiteModel(
       lm::proto::LlmMetadata::TfLiteModelType model_type) override {

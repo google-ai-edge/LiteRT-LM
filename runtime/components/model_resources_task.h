@@ -37,7 +37,9 @@ class ModelResourcesTask : public ModelResources {
   using ModelResources::GetTFLiteModel;
   using ModelResources::GetTFLiteModelBuffer;
   using ModelResources::GetTokenizer;
+  using ModelResources::HasTFLiteModel;
 
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(

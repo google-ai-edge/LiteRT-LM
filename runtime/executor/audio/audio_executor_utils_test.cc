@@ -45,8 +45,20 @@ constexpr absl::string_view kTestAudioModelNoMaskPath =
 
 class FakeModelResources : public ModelResources {
  public:
+  using ModelResources::HasTFLiteModel;
+
   FakeModelResources(const litert::Model* encoder, const litert::Model* adapter)
       : encoder_(encoder), adapter_(adapter) {}
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW) {
+      return encoder_ != nullptr;
+    }
+    if (model_type == proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER) {
+      return adapter_ != nullptr;
+    }
+    return false;
+  }
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {

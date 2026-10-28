@@ -1322,21 +1322,19 @@ absl::Status InitializeEmbeddingLookups(
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup) {
   absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
-  {
-    auto end_of_audio_model =
-        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO);
-    if (end_of_audio_model.ok()) {
-      end_of_multi_modal_embedding_models.insert(
-          {ExecutorAudioData::kEndToken, end_of_audio_model.value()});
-    }
+  if (resources.HasTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO)) {
+    ABSL_ASSIGN_OR_RETURN(
+        const Model* end_of_audio_model,
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO));
+    end_of_multi_modal_embedding_models.insert(
+        {ExecutorAudioData::kEndToken, end_of_audio_model});
   }
-  {
-    auto end_of_vision_model =
-        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_VISION);
-    if (end_of_vision_model.ok()) {
-      end_of_multi_modal_embedding_models.insert(
-          {ExecutorVisionData::kEndToken, end_of_vision_model.value()});
-    }
+  if (resources.HasTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_VISION)) {
+    ABSL_ASSIGN_OR_RETURN(
+        const Model* end_of_vision_model,
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_VISION));
+    end_of_multi_modal_embedding_models.insert(
+        {ExecutorVisionData::kEndToken, end_of_vision_model});
   }
 
 #ifdef __EMSCRIPTEN__
@@ -1344,9 +1342,10 @@ absl::Status InitializeEmbeddingLookups(
       __attribute__((weak));
 #endif
 
-  auto text_embedder_model =
-      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER);
-  if (text_embedder_model.ok()) {
+  if (resources.HasTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER)) {
+    ABSL_ASSIGN_OR_RETURN(
+        const Model* text_embedder_model,
+        resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER));
     ABSL_ASSIGN_OR_RETURN(auto external_weights,
                           GetExternalWeightResources(
                               resources, proto::LlmMetadata::TF_LITE_EMBEDDER));
@@ -1357,7 +1356,7 @@ absl::Status InitializeEmbeddingLookups(
     }
 #endif
     auto status_or_embedding_lookup = EmbeddingLookupManager::Create(
-        env, *text_embedder_model, end_of_multi_modal_embedding_models,
+        env, text_embedder_model, end_of_multi_modal_embedding_models,
         /*fully_supports_multi_modal=*/true,
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
@@ -1372,9 +1371,11 @@ absl::Status InitializeEmbeddingLookups(
   }
 
   // Create per layer embedding lookups from the resources.
-  auto per_layer_embedder_model =
-      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
-  if (per_layer_embedder_model.ok()) {
+  if (resources.HasTFLiteModel(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)) {
+    ABSL_ASSIGN_OR_RETURN(const Model* per_layer_embedder_model,
+                          resources.GetTFLiteModel(
+                              proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
     ABSL_ASSIGN_OR_RETURN(
         auto external_weights,
         GetExternalWeightResources(
@@ -1386,7 +1387,7 @@ absl::Status InitializeEmbeddingLookups(
     }
 #endif
     auto status_or_per_layer_embedding_lookup = EmbeddingLookupManager::Create(
-        env, *per_layer_embedder_model,
+        env, per_layer_embedder_model,
         /*fully_supports_multi_modal=*/false,
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),

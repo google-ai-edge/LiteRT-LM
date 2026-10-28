@@ -85,6 +85,14 @@ absl::StatusOr<proto::LlmMetadata::TfLiteModelType> ParseLlmTfLiteModelType(
   return model_type;
 }
 
+bool ModelResources::HasTFLiteModel(absl::string_view model_type_str) {
+  auto model_type = ParseLlmTfLiteModelType(model_type_str);
+  if (model_type.ok()) {
+    return HasTFLiteModel(*model_type);
+  }
+  return false;
+}
+
 absl::StatusOr<const litert::Model*> ModelResources::GetTFLiteModel(
     absl::string_view model_type_str) {
   auto model_type = ParseLlmTfLiteModelType(model_type_str);

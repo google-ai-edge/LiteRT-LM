@@ -45,6 +45,8 @@ constexpr absl::string_view kTestVisionModelWithoutAdapterPath =
 
 class FakeModelResources : public ModelResources {
  public:
+  using ModelResources::HasTFLiteModel;
+
   FakeModelResources(const litert::Model* encoder, const litert::Model* adapter,
                      absl::Status encoder_status = absl::OkStatus(),
                      absl::Status adapter_status = absl::OkStatus())
@@ -52,6 +54,16 @@ class FakeModelResources : public ModelResources {
         adapter_(adapter),
         encoder_status_(encoder_status),
         adapter_status_(adapter_status) {}
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER) {
+      return !encoder_status_.ok() || encoder_ != nullptr;
+    }
+    if (model_type == proto::LlmMetadata::TF_LITE_VISION_ADAPTER) {
+      return !adapter_status_.ok() || adapter_ != nullptr;
+    }
+    return false;
+  }
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {

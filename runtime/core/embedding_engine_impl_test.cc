@@ -126,6 +126,28 @@ class FakeModelResources : public ModelResources {
   using ModelResources::GetTFLiteModelPreferActivationType;
   using ModelResources::GetTFLiteModelSectionFileRegion;
   using ModelResources::GetWeightsSectionOffset;
+  using ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
+
+  bool HasTFLiteModel(absl::string_view model_type) override {
+    if (model_type == "tf_lite_vision_encoder" &&
+        (vision_model_ != nullptr || has_vision_)) {
+      return true;
+    }
+    if (model_type == "tf_lite_vision_adapter" &&
+        vision_adapter_model_ != nullptr) {
+      return true;
+    }
+    if ((model_type == "tf_lite_audio_encoder_hw" ||
+         model_type == "tf_lite_audio_frontend") &&
+        has_audio_) {
+      return true;
+    }
+    return delegate_->HasTFLiteModel(model_type);
+  }
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {

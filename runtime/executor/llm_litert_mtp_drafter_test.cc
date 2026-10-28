@@ -56,6 +56,8 @@ using ::testing::status::StatusIs;
 
 class TfLiteModelResources : public ModelResources {
  public:
+  using ModelResources::HasTFLiteModel;
+
   static absl::StatusOr<std::unique_ptr<TfLiteModelResources>> Create(
       const ModelAssets& model_assets, bool with_mtp_drafter = false) {
     LITERT_ASSIGN_OR_RETURN(auto path, model_assets.GetPath());
@@ -63,6 +65,12 @@ class TfLiteModelResources : public ModelResources {
                             Model::CreateFromFile(std::string(path)));
     return absl::WrapUnique(
         new TfLiteModelResources(std::move(model), with_mtp_drafter));
+  }
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    return model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+           (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER &&
+            with_mtp_drafter_);
   }
 
   absl::StatusOr<const Model*> GetTFLiteModel(

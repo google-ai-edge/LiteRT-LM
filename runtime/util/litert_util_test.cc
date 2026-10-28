@@ -131,6 +131,15 @@ class FakeNpuModelResources : public ModelResources {
       : model_(model), aux_buffer_(std::move(aux_buffer)) {}
   ~FakeNpuModelResources() override = default;
 
+  using ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_AUX) {
+      return aux_buffer_.has_value() && !aux_buffer_->empty();
+    }
+    return true;
+  }
+
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {
     return &model_;

@@ -33,6 +33,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -194,12 +195,10 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
     } else {
       if (section->data_type() == schema::AnySectionDataType_TFLiteModel ||
           section->data_type() == schema::AnySectionDataType_TFLiteWeights) {
-        ABSL_LOG(WARNING)
-            << "model_type not found, use tf_lite_prefill_decode";
+        ABSL_LOG(WARNING) << "model_type not found, use tf_lite_prefill_decode";
         // For backward compatibility, we will use the default model type if
         // model_type is not found.
-        buffer_key =
-            BufferKey(section->data_type(), "tf_lite_prefill_decode");
+        buffer_key = BufferKey(section->data_type(), "tf_lite_prefill_decode");
       }
     }
   } else if (section->data_type() ==
@@ -231,10 +230,16 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
     // region. Unlike mmap offsets, pointer arithmetic within an
     // already-mapped region does not require page alignment, so no
     // alignment_gap is needed here.
-    data = static_cast<uint8_t*>(
-               std::get<std::shared_ptr<MemoryMappedFile>>(model_source_)
-                   ->data()) +
-           begin_offset;
+    auto& memory_mapped_model_file =
+        std::get<std::shared_ptr<MemoryMappedFile>>(model_source_);
+    if (end_offset > memory_mapped_model_file->length()) {
+      return absl::OutOfRangeError(
+          absl::StrCat("Section [", begin_offset, ", ", end_offset,
+                       ") extends past the end of the mapped model file (",
+                       memory_mapped_model_file->length(), " bytes)."));
+    }
+    data =
+        static_cast<uint8_t*>(memory_mapped_model_file->data()) + begin_offset;
   } else {
     // If the begin offset is not aligned to the required platform alignment, we
     // need to map the section starting a bit earlier so that the data is
@@ -385,7 +390,22 @@ absl::Status LitertLmLoader::Initialize() {
   return absl::OkStatus();
 }
 
-std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetSectionBuffer(
+bool LitertLmLoader::HasSection(const BufferKey& buffer_key) const {
+  auto it = section_locations_.find(buffer_key);
+  return it != section_locations_.end() && it->second.second > it->second.first;
+}
+
+bool LitertLmLoader::HasTFLiteModel(
+    proto::LlmMetadata::TfLiteModelType model_type) const {
+  return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
+}
+
+bool LitertLmLoader::HasTFLiteModel(absl::string_view model_type_str) const {
+  return HasSection(
+      BufferKey(schema::AnySectionDataType_TFLiteModel, model_type_str));
+}
+
+absl::StatusOr<litert::BufferRef<uint8_t>> LitertLmLoader::GetSectionBuffer(
     BufferKey buffer_key) {
   {
     absl::ReaderMutexLock lock(section_buffers_mutex_);
@@ -402,23 +422,49 @@ std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetSectionBuffer(
     return section_buffer_it->second;
   }
 
+  // EnumNameAnySectionDataType() returns "" (or nullptr) for out-of-range enum
+  // values. Lazily compute section name only when logging errors or warnings.
+  auto get_section_name = [&buffer_key]() {
+    const char* data_type_name =
+        schema::EnumNameAnySectionDataType(buffer_key.data_type);
+    return absl::StrCat((data_type_name != nullptr && data_type_name[0] != '\0')
+                            ? data_type_name
+                            : "UnknownSection",
+                        buffer_key.model_type.has_value()
+                            ? absl::StrCat(" (", *buffer_key.model_type, ")")
+                            : "");
+  };
   auto section_location_it = section_locations_.find(buffer_key);
-  if (section_location_it == section_locations_.end()) {
-    ABSL_LOG(WARNING) << "Section not found: "
-                      << schema::EnumNameAnySectionDataType(
-                             buffer_key.data_type);
-    return std::nullopt;
+  if (section_location_it == section_locations_.end() ||
+      section_location_it->second.second <= section_location_it->second.first) {
+    const std::string section_name = get_section_name();
+    ABSL_LOG(WARNING) << "Section not found: " << section_name;
+    return absl::NotFoundError(
+        absl::StrCat("Section not found: ", section_name));
   }
 
-  // If we have not already mapped this section, map it now.
+  // If we have not already mapped this section, map it now. A section that is
+  // present in the header but cannot be mapped is a broken model file, not a
+  // missing section, so the failure is surfaced rather than swallowed.
   auto [offset_begin, offset_end] = section_location_it->second;
   absl::Status status = MapSection(buffer_key, offset_begin, offset_end);
   if (!status.ok()) {
-    ABSL_LOG(WARNING) << "Failed to map section: " << status;
-    return std::nullopt;
+    const std::string section_name = get_section_name();
+    ABSL_LOG(ERROR) << "Failed to map section " << section_name << ": "
+                    << status;
+    return status;
   }
   // Return a BufferRef to the mapped section.
   return section_buffers_[buffer_key];
+}
+
+std::optional<litert::BufferRef<uint8_t>>
+LitertLmLoader::GetOptionalSectionBuffer(BufferKey buffer_key) {
+  auto section_buffer = GetSectionBuffer(buffer_key);
+  if (!section_buffer.ok()) {
+    return std::nullopt;
+  }
+  return *section_buffer;
 }
 
 absl::StatusOr<std::pair<size_t, size_t>> LitertLmLoader::GetSectionLocation(
@@ -439,10 +485,11 @@ LitertLmLoader::GetSentencePieceTokenizer(
 std::optional<litert::BufferRef<uint8_t>>
 LitertLmLoader::GetSentencePieceTokenizer(absl::string_view model_type_str) {
   std::string key = absl::AsciiStrToLower(model_type_str);
-  auto buf = GetSectionBuffer(
+  auto buf = GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_SP_Tokenizer, key));
   if (!buf.has_value() && key == "tf_lite_prefill_decode") {
-    buf = GetSectionBuffer(BufferKey(schema::AnySectionDataType_SP_Tokenizer));
+    buf = GetOptionalSectionBuffer(
+        BufferKey(schema::AnySectionDataType_SP_Tokenizer));
   }
   return buf;
 }
@@ -456,11 +503,10 @@ LitertLmLoader::GetHuggingFaceTokenizer(
 std::optional<litert::OwningBufferRef<uint8_t>>
 LitertLmLoader::GetHuggingFaceTokenizer(absl::string_view model_type_str) {
   std::string key = absl::AsciiStrToLower(model_type_str);
-  auto optional_section_buffer = GetSectionBuffer(
+  auto optional_section_buffer = GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib, key));
-  if (!optional_section_buffer.has_value() &&
-      key == "tf_lite_prefill_decode") {
-    optional_section_buffer = GetSectionBuffer(
+  if (!optional_section_buffer.has_value() && key == "tf_lite_prefill_decode") {
+    optional_section_buffer = GetOptionalSectionBuffer(
         BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib));
   }
   if (!optional_section_buffer.has_value()) {
@@ -489,13 +535,14 @@ litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteModel(
 
 litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteModel(
     absl::string_view model_type_str) {
-  auto optional_section_buffer = GetSectionBuffer(
+  auto section_buffer = GetSectionBuffer(
       BufferKey(schema::AnySectionDataType_TFLiteModel, model_type_str));
-  if (optional_section_buffer.has_value()) {
-    return optional_section_buffer.value();
+  if (section_buffer.ok()) {
+    return *section_buffer;
   }
   ABSL_LOG(WARNING) << "TFLite model for type: " << model_type_str
-                    << " not found. Skipping.";
+                    << " unavailable: " << section_buffer.status()
+                    << ". Skipping.";
   return litert::BufferRef<uint8_t>();
 }
 
@@ -506,13 +553,14 @@ litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteWeights(
 
 litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteWeights(
     absl::string_view model_type_str) {
-  auto optional_section_buffer = GetSectionBuffer(
+  auto section_buffer = GetSectionBuffer(
       BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type_str));
-  if (optional_section_buffer.has_value()) {
-    return optional_section_buffer.value();
+  if (section_buffer.ok()) {
+    return *section_buffer;
   }
   ABSL_LOG(WARNING) << "TFLite weights for type: " << model_type_str
-                    << " not found. Skipping.";
+                    << " unavailable: " << section_buffer.status()
+                    << ". Skipping.";
   return litert::BufferRef<uint8_t>();
 }
 
@@ -557,37 +605,37 @@ std::optional<std::string> LitertLmLoader::GetTFLiteModelPreferActivationType(
 }
 
 bool LitertLmLoader::HasLlmMetadata() {
-  return GetSectionBuffer(
+  return GetOptionalSectionBuffer(
              BufferKey(schema::AnySectionDataType_LlmMetadataProto))
       .has_value();
 }
 
 std::optional<litert::BufferRef<uint8_t>>
 LitertLmLoader::GetText2SpeechMetadata() {
-  return GetSectionBuffer(
+  return GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_Text2SpeechMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>>
 LitertLmLoader::GetSpeech2TextMetadata() {
-  return GetSectionBuffer(
+  return GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_Speech2TextMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>>
 LitertLmLoader::GetText2ImageMetadata() {
-  return GetSectionBuffer(
+  return GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_Text2ImageMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetAny2AnyMetadata() {
-  return GetSectionBuffer(
+  return GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_Any2AnyMetadataProto));
 }
 
 std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetGenericBinaryData(
     absl::string_view name) {
-  return GetSectionBuffer(
+  return GetOptionalSectionBuffer(
       BufferKey(schema::AnySectionDataType_GenericBinaryData, name));
 }
 

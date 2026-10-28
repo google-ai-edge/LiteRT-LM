@@ -73,6 +73,21 @@ std::vector<std::string> GetExternalBufferGroupNames(
 
 }  // namespace
 
+bool ModelResourcesStreaming::HasTFLiteModel(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
+}
+
+bool ModelResourcesStreaming::HasTFLiteModel(absl::string_view model_type_str) {
+  const std::string key = absl::AsciiStrToLower(model_type_str);
+  if (auto it = models_.find(key);
+      it != models_.end() && it->second != nullptr) {
+    return true;
+  }
+  auto buf_it = model_buffers_.find(key);
+  return buf_it != model_buffers_.end() && !buf_it->second.empty();
+}
+
 absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
     proto::LlmMetadata::TfLiteModelType model_type) {
   return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
@@ -87,7 +102,7 @@ absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
   }
 
   auto buf_it = model_buffers_.find(key);
-  if (buf_it == model_buffers_.end()) {
+  if (buf_it == model_buffers_.end() || buf_it->second.empty()) {
     return absl::NotFoundError(
         absl::StrCat("Model buffer not found for type: ", key));
   }
@@ -115,7 +130,7 @@ absl::StatusOr<absl::string_view> ModelResourcesStreaming::GetTFLiteModelBuffer(
     absl::string_view model_type_str) {
   const std::string key = absl::AsciiStrToLower(model_type_str);
   auto it = model_buffers_.find(key);
-  if (it == model_buffers_.end()) {
+  if (it == model_buffers_.end() || it->second.empty()) {
     return absl::NotFoundError(
         absl::StrCat("Model buffer not found for type: ", key));
   }

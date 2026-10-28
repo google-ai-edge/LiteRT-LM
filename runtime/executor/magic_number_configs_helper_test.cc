@@ -118,6 +118,12 @@ class ModelResourcesMock : public ModelResources {
               GetWeightsSectionOffset,
               (proto::LlmMetadata::TfLiteModelType model_type), (override));
 
+  using ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    return true;
+  }
+
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       proto::LlmMetadata::TfLiteModelType model_type) override {
     return &model_;

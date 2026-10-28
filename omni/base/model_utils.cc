@@ -88,11 +88,19 @@ namespace {
 
 class TfLiteModelResources : public lm::ModelResources {
  public:
+  using lm::ModelResources::HasTFLiteModel;
+
   static absl::StatusOr<std::unique_ptr<TfLiteModelResources>> Create(
       absl::string_view path) {
     LITERT_ASSIGN_OR_RETURN(auto model,
                             Model::CreateFromFile(std::string(path)));
     return absl::WrapUnique(new TfLiteModelResources(std::move(model)));
+  }
+
+  bool HasTFLiteModel(
+      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
+    return model_type == lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+           model_type == lm::proto::LlmMetadata::TF_LITE_MTP_DRAFTER;
   }
 
   absl::StatusOr<const Model*> GetTFLiteModel(
