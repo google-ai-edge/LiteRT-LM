@@ -160,6 +160,70 @@ std::string CreateMinimalEmbeddingTFLiteModel(
                      builder.GetSize());
 }
 
+struct TestInputSpec {
+  std::string name;
+  std::vector<int32_t> shape;
+  // Empty for static shapes; holds -1 for dynamic dimensions otherwise.
+  std::vector<int32_t> shape_signature = {};
+};
+
+struct TestSignatureSpec {
+  std::string key;
+  std::vector<TestInputSpec> inputs;
+};
+
+// Helper to create a minimal LLM TFLite model in memory whose signatures (all
+// in one subgraph) have the given input tensors.
+std::string CreateLlmTFLiteModel(
+    const std::vector<TestSignatureSpec>& signatures) {
+  flatbuffers::FlatBufferBuilder builder;
+
+  std::vector<flatbuffers::Offset<tflite::Tensor>> tensors;
+  for (const auto& signature : signatures) {
+    for (const auto& input : signature.inputs) {
+      tensors.push_back(tflite::CreateTensorDirect(
+          builder, &input.shape, tflite::TensorType_FLOAT32, /*buffer=*/0,
+          input.name.c_str(), /*quantization=*/0, /*is_variable=*/false,
+          /*sparsity=*/0,
+          input.shape_signature.empty() ? nullptr : &input.shape_signature));
+    }
+  }
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs = {
+      tflite::CreateSubGraph(builder, builder.CreateVector(tensors),
+                             /*inputs=*/0, /*outputs=*/0)};
+
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> signature_defs;
+  uint32_t tensor_index = 0;
+  for (const auto& signature : signatures) {
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> inputs;
+    for (const auto& input : signature.inputs) {
+      inputs.push_back(tflite::CreateTensorMap(
+          builder, builder.CreateString(input.name), tensor_index++));
+    }
+    signature_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector(inputs), /*outputs=*/0,
+        builder.CreateString(signature.key), /*subgraph_index=*/0));
+  }
+
+  auto model_offset = tflite::CreateModel(
+      builder, TFLITE_SCHEMA_VERSION, /*operator_codes=*/0,
+      builder.CreateVector(subgraphs), /*description=*/0, /*buffers=*/0,
+      /*metadata_buffer=*/0, /*metadata=*/0,
+      builder.CreateVector(signature_defs));
+
+  tflite::FinishModelBuffer(builder, model_offset);
+  return std::string(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+                     builder.GetSize());
+}
+
+// Helper to create a minimal LLM TFLite model in memory with a prefill
+// signature whose attention mask input has `context_length` as its last
+// dimension.
+std::string CreateMinimalPrefillTFLiteModel(int context_length) {
+  return CreateLlmTFLiteModel(
+      {{"prefill_128", {{"mask", {1, 1, 128, context_length}}}}});
+}
+
 struct TFLiteSectionConfig {
   std::string model_type;
   std::string backend_constraint = "";
@@ -338,7 +402,6 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSystemMetadataAndLlmCapabilities) {
   proto::LlmMetadata proto_meta;
   proto_meta.set_supports_thinking(true);
   proto_meta.set_supports_function_calling(true);
-  proto_meta.set_max_num_tokens(10007);  // Prime number
   auto* sp = proto_meta.mutable_sampler_params();
   sp->set_type(proto::SamplerParameters::TOP_P);
   sp->set_k(10);
@@ -360,8 +423,6 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSystemMetadataAndLlmCapabilities) {
   EXPECT_EQ(llm.supports_function_calling, true);
   EXPECT_EQ(llm.supports_thinking, true);
   EXPECT_TRUE(llm.supports_speculative_decoding);
-  EXPECT_EQ(llm.max_context_tokens, 10007);
-  EXPECT_TRUE(llm.is_dynamic_context);
 
   // Check default sampler parameters
   EXPECT_EQ(llm.default_sampler_params.type, SamplerType::kTopP);
@@ -500,7 +561,7 @@ TEST(ModelInfoFileTest,
 // older models.
 TEST(ModelInfoFileTest, GetModelInfo_NoExplicitCapabilities_ReturnsFalse) {
   proto::LlmMetadata proto_meta;
-  proto_meta.set_max_num_tokens(2048);  // Non-prime number
+  proto_meta.set_max_num_tokens(2048);  // Default context size.
   // Do not set explicit supports_thinking/supports_function_calling
 
   std::string file_data = CreateTestLiteRTLM(
@@ -1422,20 +1483,134 @@ TEST(ModelInfoFileTest, StreamOperators_BackendTypeAndSupportedBackends) {
   }
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_OddCompositeTokens_NotDynamicContext) {
+// Tests that a magic-number context length in the TFLite prefill mask makes the
+// context dynamic, while LlmMetadata max_num_tokens stays the default context
+// size.
+TEST(ModelInfoFileTest,
+     GetModelInfo_DynamicContextFromTflite_DefaultTokensFromLlmMetadata) {
   proto::LlmMetadata proto_meta;
-  // 2025 is an odd composite number (45 * 45). Tests prime search divisor loop.
-  proto_meta.set_max_num_tokens(2025);
+  proto_meta.set_max_num_tokens(2048);
 
   std::string file_data = CreateTestLiteRTLM(
-      "IT", "google/gemma-3-1b-it", {"tf_lite_audio_encoder_hw"}, &proto_meta);
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"}, &proto_meta,
+      {CreateMinimalPrefillTFLiteModel(/*context_length=*/10007)});
 
   std::istringstream stream(file_data, std::ios::binary);
   auto result_or = GetModelInfo(stream);
   ASSERT_OK(result_or);
   ASSERT_TRUE(result_or->llm_capability.has_value());
-  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 2025);
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 2048);
+  EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests that a static TFLite graph is not dynamic even if LlmMetadata
+// max_num_tokens is a prime number.
+TEST(ModelInfoFileTest, GetModelInfo_StaticTflite_IgnoresPrimeLlmMetadata) {
+  proto::LlmMetadata proto_meta;
+  proto_meta.set_max_num_tokens(10007);  // Prime number
+
+  // 2025 is an odd composite number (45 * 45). Tests prime search divisor loop.
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"}, &proto_meta,
+      {CreateMinimalPrefillTFLiteModel(/*context_length=*/2025)});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 10007);
   EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests an NPU-style graph without LlmMetadata max_num_tokens: the context size
+// is the KV-cache size (below the engine default), not the prefill mask's last
+// dimension (KV-cache size plus prefill length), and the decode mask (KV-cache
+// size plus one, here a prime number) does not make the context dynamic.
+TEST(ModelInfoFileTest, GetModelInfo_NpuLayout_ContextFromKvCacheSize) {
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill_128",
+       {{"mask_global", {1, 1, 128, 768}},
+        {"kv_cache_k_0", {1, 1, 640, 256}},
+        {"kv_cache_v_0", {1, 1, 256, 640}}}},
+      {"decode",
+       {{"mask_global", {1, 1, 1, 641}},
+        {"kv_cache_k_0", {1, 1, 640, 256}},
+        {"kv_cache_v_0", {1, 1, 256, 640}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"},
+      /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 640);
+  EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests that without LlmMetadata max_num_tokens, a static graph whose KV cache
+// is larger than the engine's default (4096) reports the default. Uses the
+// k_cache_/v_cache_ KV-cache names.
+TEST(ModelInfoFileTest, GetModelInfo_NoLlmMetadata_LargeStaticGraph) {
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill_128",
+       {{"mask", {1, 1, 128, 8192}},
+        {"k_cache_0", {1, 1, 8192, 256}},
+        {"v_cache_0", {1, 1, 256, 8192}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"},
+      /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 4096);
+  EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests that without LlmMetadata max_num_tokens, a dynamic graph reports the
+// engine's default (4096), not its magic-number placeholder size.
+TEST(ModelInfoFileTest, GetModelInfo_NoLlmMetadata_DynamicGraph) {
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill_128",
+       {{"mask", {1, 1, 128, 32003}}, {"kv_cache_k_0", {1, 1, 32003, 256}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"},
+      /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 4096);
+  EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests that dynamic (-1) KV-cache dimensions make the context dynamic, with
+// LlmMetadata max_num_tokens as the default context size.
+TEST(ModelInfoFileTest, GetModelInfo_DynamicShapes_DynamicContext) {
+  proto::LlmMetadata proto_meta;
+  proto_meta.set_max_num_tokens(8192);
+
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill",
+       {{"mask", {1, 1, 1, 1}, {1, 1, -1, -1}},
+        {"kv_cache_k_0", {1, 2, 1, 64}, {1, 2, -1, 64}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_prefill_decode"}, &proto_meta,
+      {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 8192);
+  EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
 }
 
 TEST(ModelInfoFileTest, GetModelInfo_DetectsNpuFromRawBufferFallbackScan) {

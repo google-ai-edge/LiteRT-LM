@@ -37,6 +37,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@flatbuffers",
+        "//runtime/engine:engine_defaults",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:embedding_model_type_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",

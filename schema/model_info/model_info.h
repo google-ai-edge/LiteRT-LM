@@ -148,16 +148,18 @@ struct LlmInferenceCapability {
   // The minimum LiteRT-LM runtime version required to run this model.
   std::string min_runtime_version;
 
-  // Maximum supported context tokens for the model.
-  // - If is_dynamic_context is false (static model), this is the fixed
-  //   context size.
-  // - If is_dynamic_context is true (dynamic model), this is the largest
-  //   context size that can be set.
+  // Default context size (in tokens) for initializing the model, from
+  // LlmMetadata max_num_tokens. If LlmMetadata does not set it, this is the
+  // engine's default (4096), capped by the KV-cache size of a static main
+  // TFLite graph, or 0 if the graph is static without KV-cache inputs or can't
+  // be read (e.g. hand-written models).
   uint32_t max_context_tokens = 0;
 
   // Whether the model has dynamic context.
   // Dynamic context means the context size can be configured by the caller
-  // up to the maximum limit at initialization time.
+  // at initialization time. Always determined from the main TFLite graph (a
+  // magic-number context length or dynamic KV-cache dimensions), never from
+  // LlmMetadata.
   bool is_dynamic_context = false;
 };
 

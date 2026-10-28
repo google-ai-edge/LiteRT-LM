@@ -248,6 +248,13 @@ message LlmMetadata {
   optional SamplerParameters sampler_params = 4;
 
   // Maximum number of tokens that can be processed by the LLM.
+
+  // Default context size, in tokens, used to initialize the engine and model.
+  // The model can usually support a longer context, but a smaller default is
+  // usually chosen to balance performance and resource use. It can be
+  // overridden via the API when initializing the engine. If not set (or 0),
+  // the engine uses its own default.
+
   int32 max_num_tokens = 5;
 
   // LLM model type.

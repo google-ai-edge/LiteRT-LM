@@ -29,6 +29,7 @@ target_include_directories(runtime_core_tasks
 target_link_libraries(runtime_core_tasks
   PUBLIC
     LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine::Defaults
     LiteRTLM::Runtime::Engine::IoTypes
     LiteRTLM::Runtime::Executor::ExecutorStats
     LiteRTLM::Runtime::Executor::LlmExecutorInterface
