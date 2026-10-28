@@ -34,6 +34,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   gate:
     permissions:
@@ -61,6 +64,7 @@ jobs:
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
+          persist-credentials: false
 
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4
@@ -119,9 +123,9 @@ jobs:
           echo "Downloading model across Hugging Face..."
           curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
             --oauth2-bearer "$HF_TOKEN" \
-            -o ${{ env.MODEL_PATH }} \
-            "${{ env.MODEL_URL }}"
-          ls -lh ${{ env.MODEL_PATH }}
+            -o ${MODEL_PATH} \
+            "${MODEL_URL}"
+          ls -lh ${MODEL_PATH}
 
       - name: Install Rust
         run: |
@@ -177,10 +181,10 @@ jobs:
 
       - name: Run pytest
         run: |
-          if [ -f "${{ env.MODEL_PATH }}" ]; then
-            pytest tools/pytest/ --backend=cpu --model-path=${{ env.MODEL_PATH }} --build-system=bazel
+          if [ -f "${MODEL_PATH}" ]; then
+            pytest tools/pytest/ --backend=cpu --model-path=${MODEL_PATH} --build-system=bazel
           else
-            echo "Skipping pytest on macOS because model file ${{ env.MODEL_PATH }} is not downloaded (unauthenticated PR)."
+            echo "Skipping pytest on macOS because model file ${MODEL_PATH} is not downloaded (unauthenticated PR)."
           fi
 
       # TODO(totero): Re-enable this step once the bug is fixed.

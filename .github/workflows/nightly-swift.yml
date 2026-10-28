@@ -23,13 +23,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   update-nightly-swift:
     name: "Update Package.swift for Nightly Branch"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout nightly branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        # zizmor: ignore[artipacked]
         with:
           ref: nightly
         continue-on-error: true
@@ -37,7 +42,8 @@ jobs:
 
       - name: Fallback to main branch if nightly does not exist
         if: steps.checkout_nightly.outcome == 'failure'
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        # zizmor: ignore[artipacked]
         with:
           ref: main
 
