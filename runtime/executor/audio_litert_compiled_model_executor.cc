@@ -91,7 +91,15 @@ absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
       ::litert::lm::SetCommonGpuOptions(executor_settings, gpu_options));
   gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
   gpu_options.EnableInfiniteFloatCapping(true);
-  gpu_options.SetNumStepsOfCommandBufferPreparations(2);
+  // Do not prepare command buffers ahead of time. The lookahead cache is only
+  // valid while the same inference context dispatches back to back, but the
+  // audio encoder and the audio adapter alternate on every chunk (and the LLM
+  // prefill/decode run in between), so the cache was invalidated on every
+  // Dispatch(). Each dispatch then encoded the command buffers synchronously
+  // AND spawned a background thread that re-encoded them only to be discarded,
+  // doubling the CPU encoding work and contending on the GPU device mutex with
+  // the submitting thread.
+  gpu_options.SetNumStepsOfCommandBufferPreparations(0);
   gpu_options.EnableExternalTensorsMode(false);
   gpu_options.AddExternalTensorPattern("w_prime");
   gpu_options.AddBufferStorageTensorPattern("w_prime");
