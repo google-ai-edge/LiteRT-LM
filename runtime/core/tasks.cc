@@ -302,8 +302,13 @@ class DecodeOneStep {
   // candidates have been found.
   // For external sampling, `decoded_ids` must be provided and will be updated.
   // For internal sampling, `decoded_ids` is ignored.
+  // A step can produce several tokens per candidate (e.g. a speculative
+  // decoding round). At most `max_num_tokens_to_emit` (> 0) of them are
+  // emitted; the rest are rolled back in the executor.
   absl::StatusOr<bool> Run(
-      std::optional<litert::TensorBuffer> decoded_ids = std::nullopt) {
+      std::optional<litert::TensorBuffer> decoded_ids = std::nullopt,
+      int max_num_tokens_to_emit = std::numeric_limits<int>::max()) {
+    RET_CHECK_GT(max_num_tokens_to_emit, 0);
     ABSL_ASSIGN_OR_RETURN(auto token_ids,
                           DecodeAndSample(std::move(decoded_ids)));
 
@@ -312,6 +317,17 @@ class DecodeOneStep {
       RET_CHECK_EQ(token_ids[i].size(), sequence_length)
           << "The current implementation of ProcessTokens() requires that "
              "latest_tokens must contain sequences of the same length.";
+    }
+
+    if (sequence_length > static_cast<size_t>(max_num_tokens_to_emit)) {
+      // Drop the tokens beyond the budget from the executor, so that the last
+      // emitted token becomes its pending input token, as after a single-token
+      // step.
+      const int num_dropped = sequence_length - max_num_tokens_to_emit;
+      ABSL_ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
+      ABSL_RETURN_IF_ERROR(
+          executor_.SetCurrentStep(current_step - num_dropped));
+      sequence_length = max_num_tokens_to_emit;
     }
 
     for (int i = 0; i < num_output_candidates_; ++i) {
@@ -765,8 +781,22 @@ absl::StatusOr<Responses> Decode(
     if (decoded_ids.has_value()) {
       LITERT_ASSIGN_OR_RETURN(decoded_ids_to_use, decoded_ids->Duplicate());
     }
+    // `max_output_tokens` and `max_num_tokens` count tokens, not decode steps:
+    // a speculative decoding step can emit several tokens, and must not take
+    // the turn past either limit.
+    // The executor step is the KV-cache position, i.e. the number of tokens
+    // already in the context window.
+    ABSL_ASSIGN_OR_RETURN(int tokens_in_context, executor.GetCurrentStep());
+    const int tokens_decoded_this_turn =
+        tokens_in_context - executor_step_before_decode;
+    const int output_budget_left = max_output_tokens - tokens_decoded_this_turn;
+    const int context_budget_left = max_num_tokens - tokens_in_context;
+    // Always allow at least one token so that the step can make progress;
+    // `ShouldStop` below ends the turn once a limit is reached.
+    const int max_tokens_this_step =
+        std::max(1, std::min(output_budget_left, context_budget_left));
     absl::StatusOr<bool> all_done =
-        run_one_step->Run(std::move(decoded_ids_to_use));
+        run_one_step->Run(std::move(decoded_ids_to_use), max_tokens_this_step);
     if (!all_done.ok()) {
       return all_done.status();
     }

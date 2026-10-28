@@ -259,6 +259,10 @@ class LlmLiteRtMtpDrafter {
 
   const MtpRoundStats& last_round_stats() const { return last_round_stats_; }
 
+  // Returns the number of tokens drafted per round (γ). A round verifies
+  // `num_draft_steps() + 1` positions.
+  int num_draft_steps() const { return num_draft_steps_; }
+
  private:
   LlmLiteRtMtpDrafter(
       CompiledModel mtp_drafter_model, SimpleSignature drafter_signature,

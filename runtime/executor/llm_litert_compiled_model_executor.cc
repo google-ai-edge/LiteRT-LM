@@ -1367,13 +1367,31 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
   mtp_primed_ = false;
 
   ABSL_ASSIGN_OR_RETURN(
-      const SpeculativeDecodingController::Decision speculation,
+      SpeculativeDecodingController::Decision speculation,
       speculative_decoding_controller_.Decide(
           decode_params.GetSpeculativeDecodingConfig().mode,
           /*drafter_loaded=*/mtp_drafter_ != nullptr,
           /*load_drafter=*/[this] { return EnsureMtpDrafterLoaded(); },
           llm_context_->runtime_config().sampler_params,
           /*constrained=*/decode_params.GetConstrainedDecoder() != nullptr));
+  const bool drafter_is_primed =
+      llm_context_->runtime_state().ran_decode && was_mtp_primed;
+  // A speculative round advances the current step by up to
+  // `num_draft_steps() + 1` tokens: the drafted tokens plus one from the
+  // verifier. If the drafter is not primed, the round first runs a plain decode
+  // step to produce the activations the drafter needs, which adds one more
+  // token. Near the end of the context window, decode plainly instead of going
+  // past it. Such steps are not reported to the adaptive policy.
+  if (speculation.speculate) {
+    const int max_round_tokens =
+        mtp_drafter_->num_draft_steps() + (drafter_is_primed ? 1 : 2);
+    const int remaining_tokens =
+        static_cast<int>(executor_settings_.GetMaxNumTokens()) -
+        llm_context_->runtime_state().current_step;
+    if (max_round_tokens > remaining_tokens) {
+      speculation = SpeculativeDecodingController::Decision();
+    }
+  }
   const bool enable_mtp_drafter = speculation.speculate;
 
   std::vector<std::vector<int>> output_tokens_vector;
@@ -1401,10 +1419,6 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
   } else {
     const absl::Time round_start = absl::Now();
     absl::Duration priming_time = absl::ZeroDuration();
-    // Re-prime the drafter with a plain decode step unless the previous step
-    // was a successful MTP round.
-    const bool drafter_is_primed =
-        llm_context_->runtime_state().ran_decode && was_mtp_primed;
 
     const float lenience =
         decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f);
