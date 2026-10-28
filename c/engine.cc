@@ -882,6 +882,28 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_litert_dispatch_lib_dir(
   return kLiteRtLmStatusOk;
 }
 
+LiteRtLmStatusCode litert_lm_engine_settings_set_selected_signatures(
+    LiteRtLmEngineSettings* settings, const char* const* signatures,
+    size_t num_signatures) {
+  if (!IsValidEngineSettings(settings) || !signatures || num_signatures == 0) {
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "Invalid engine settings or selected signatures.");
+  }
+  std::vector<std::string> selected;
+  selected.reserve(num_signatures);
+  for (size_t i = 0; i < num_signatures; ++i) {
+    if (!signatures[i]) {
+      return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                        "Selected signature is NULL.");
+    }
+    selected.emplace_back(signatures[i]);
+  }
+  settings->settings->GetMutableMainExecutorSettings().SetSelectedSignatures(
+      std::move(selected));
+  return kLiteRtLmStatusOk;
+}
+
 LiteRtLmStatusCode litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings) {
   if (!IsValidEngineSettings(settings)) {

@@ -217,6 +217,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--enable_ynnpack=<true|false>] "
            "[--gpu_external_tensor_mode=<true|false>] "
            "[--configure_magic_numbers=<true|false>] "
+           "[--allow_context_length_expansion=<true|false>] "
            "[--verify_magic_numbers=<true|false>] "
            "[--clear_kv_cache_before_prefill=<true|false>] "
            "[--num_logits_to_print_after_decode=<num_logits_to_print>] "
@@ -299,6 +300,8 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_gpu_external_tensor_mode);
   settings.configure_magic_numbers =
       absl::GetFlag(FLAGS_configure_magic_numbers);
+  settings.allow_context_length_expansion =
+      absl::GetFlag(FLAGS_allow_context_length_expansion);
   settings.verify_magic_numbers = absl::GetFlag(FLAGS_verify_magic_numbers);
   settings.clear_kv_cache_before_prefill =
       absl::GetFlag(FLAGS_clear_kv_cache_before_prefill);
