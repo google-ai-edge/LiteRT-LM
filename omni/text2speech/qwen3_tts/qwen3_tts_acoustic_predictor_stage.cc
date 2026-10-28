@@ -162,7 +162,7 @@ absl::Status Qwen3TtsAcousticPredictorStage::RunPrefill(
   LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
                                         {1, p, qwen3_tts::kHiddenDim}));
   LITERT_RETURN_IF_ERROR(buf.Write<float>(
-      absl::MakeConstSpan(prefill.data(), p * qwen3_tts::kHiddenDim)));
+      absl::MakeConstSpan(prefill).first(p * qwen3_tts::kHiddenDim)));
   LITERT_ASSIGN_OR_RETURN(auto inputs, CreateExecutorInputsWithAudio(buf));
   return talker_runner_->Prefill(inputs);
 }
@@ -198,7 +198,7 @@ absl::StatusOr<std::vector<int>> Qwen3TtsAcousticPredictorStage::RunMtp(
       LITERT_RETURN_IF_ERROR(mtp_embedding_model_->Run(
           mtp_emb_input_buffers_, mtp_emb_output_buffers_));
       LITERT_RETURN_IF_ERROR(mtp_emb_output_buffers_[0].Read<float>(
-          absl::MakeSpan(embed.data(), qwen3_tts::kHiddenDim)));
+          absl::MakeSpan(embed).first(qwen3_tts::kHiddenDim)));
     }
 
     LITERT_RETURN_IF_ERROR(embed_buf.Write<float>(absl::MakeConstSpan(embed)));
@@ -241,7 +241,7 @@ Qwen3TtsAcousticPredictorStage::EmbedCodecToken(int code_id) {
       codec_emb_input_buffers_, codec_emb_output_buffers_));
   std::vector<float> vec(qwen3_tts::kHiddenDim);
   LITERT_RETURN_IF_ERROR(codec_emb_output_buffers_[0].Read<float>(
-      absl::MakeSpan(vec.data(), qwen3_tts::kHiddenDim)));
+      absl::MakeSpan(vec).first(qwen3_tts::kHiddenDim)));
   return vec;
 }
 
@@ -258,7 +258,7 @@ Qwen3TtsAcousticPredictorStage::EmbedMtpTokens(
                                                      mtp_emb_output_buffers_));
     std::vector<float> vec(qwen3_tts::kHiddenDim);
     LITERT_RETURN_IF_ERROR(mtp_emb_output_buffers_[0].Read<float>(
-        absl::MakeSpan(vec.data(), qwen3_tts::kHiddenDim)));
+        absl::MakeSpan(vec).first(qwen3_tts::kHiddenDim)));
     for (int d = 0; d < qwen3_tts::kHiddenDim; ++d) {
       total_vec[d] += vec[d];
     }
@@ -456,8 +456,7 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
 
     LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
                                           {1, 1, qwen3_tts::kHiddenDim}));
-    LITERT_RETURN_IF_ERROR(
-        buf.Write<float>(absl::MakeConstSpan(embed.data(), embed.size())));
+    LITERT_RETURN_IF_ERROR(buf.Write<float>(absl::MakeConstSpan(embed)));
     LITERT_ASSIGN_OR_RETURN(next_inputs, CreateExecutorInputsWithAudio(buf));
   }
 
