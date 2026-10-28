@@ -18,6 +18,7 @@
 // be imported on its own, e.g. from a service worker. Nothing in this
 // directory may import from outside it.
 
+export {type HuggingFaceFile, type HuggingFaceModelRef, type HuggingFaceUri, parseHuggingFaceUri, type ResolvedHuggingFaceModel, resolveHuggingFaceModel, type ResolveHuggingFaceModelOptions, toHuggingFaceUri} from './hugging_face.js';
 export {getModelLockName} from './locks.js';
 export {type CachedModelInfo, createCacheEntryHeaders, getCacheRequestUrlForSource, type ModelCache, type ModelCachePutOptions} from './model_cache.js';
 export {getCacheKey, type ModelLoadProgress, type ModelSource} from './model_source.js';

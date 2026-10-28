@@ -32,6 +32,11 @@ export declare interface ModelSource {
   /**
    * Access token for the download, sent as an `Authorization: Bearer` header.
    * It is never stored in a cache.
+   *
+   * For Hugging Face, this is the token of the user loading the model, e.g.
+   * from Sign in with Hugging Face (OAuth). Don't embed your own token in a
+   * web page: everyone who loads the page can read it. An empty token is the
+   * same as none.
    */
   accessToken?: string;
 }
@@ -58,7 +63,8 @@ export function toModelSource(model: string|ModelSource): ModelSource {
  */
 export function resolveModelUrl(url: string): string {
   if (url.startsWith('hf://')) {
-    throw new Error(`hf:// model URIs are not supported yet: ${url}`);
+    throw new Error(
+        `Resolve hf:// URIs with resolveHuggingFaceModel() first: ${url}`);
   }
   return new URL(url, getCacheEnvironment().baseUrl).href;
 }

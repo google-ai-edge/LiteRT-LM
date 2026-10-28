@@ -70,8 +70,9 @@ describe('model cache keys', () => {
     });
   });
 
-  it('rejects hf:// URLs until they are supported', () => {
-    expect(() => getCacheKey({url: 'hf://org/repo'})).toThrowError(/hf:\/\//);
+  it('rejects hf:// URIs that have not been resolved', () => {
+    expect(() => getCacheKey({url: 'hf://org/repo'}))
+        .toThrowError(/resolveHuggingFaceModel/);
   });
 
   it('ignores malformed metadata headers', () => {
