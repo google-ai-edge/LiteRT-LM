@@ -17,7 +17,6 @@
 
 #include <memory>
 #include <random>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -27,6 +26,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_lm_runner.h"
+#include "omni/base/litert_runner.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/base/stateful_litert_runner.h"
@@ -34,6 +34,18 @@
 #include "omni/text2speech/qwen3_tts/qwen3_tts_model_config.h"
 
 namespace litert::omni::tts {
+
+// Derives and validates the MTP KV cache sequence length from the MTP
+// attention mask tensor buffer's shape (`[1, ..., 1, cache_len]`).
+//
+// args
+// - mask_buffer: Non-state attention mask input TensorBuffer of the MTP model.
+//
+// returns
+// - Positive cache sequence length (>= `qwen3_tts::kNumCodeGroups`) on
+//   success, or `absl::InvalidArgumentError` (or LiteRT buffer error) if the
+//   tensor type or layout dimensions are invalid.
+absl::StatusOr<int> DeriveMtpCacheLen(const TensorBuffer& mask_buffer);
 
 // Stage 2: Acoustic Predictor (Talker + MTP Autoregressive RVQ Generation)
 class Qwen3TtsAcousticPredictorStage
@@ -162,7 +174,9 @@ class Qwen3TtsAcousticPredictorStage
   std::vector<TensorBuffer> mtp_emb_input_buffers_;
   std::vector<TensorBuffer> mtp_emb_output_buffers_;
 
-  int mtp_cache_len_ = 32;
+  // MTP KV cache sequence length derived in Create() from the mask tensor
+  // shape.
+  int mtp_cache_len_ = 0;
   std::mt19937_64 rng_;
 };
 

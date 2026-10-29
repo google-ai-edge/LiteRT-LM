@@ -22,25 +22,26 @@
 #include <iterator>
 #include <memory>
 #include <random>
-#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
-#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_api_types.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/model_resources.h"
@@ -50,7 +51,6 @@
 #include "omni/text2speech/qwen3_tts/common.h"
 #include "omni/text2speech/qwen3_tts/qwen3_tts_io_types.h"
 #include "omni/text2speech/qwen3_tts/qwen3_tts_model_config.h"
-#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "support/util/convert_tensor_buffer.h"
 
@@ -101,6 +101,34 @@ absl::Status ReadTalkerDecodeOutputAsFloat(TensorBuffer& buffer,
 
 }  // namespace
 
+absl::StatusOr<int> DeriveMtpCacheLen(const TensorBuffer& mask_buffer) {
+  LITERT_ASSIGN_OR_RETURN(const RankedTensorType mask_type,
+                          mask_buffer.TensorType());
+  if (mask_type.ElementType() != ElementType::Float32) {
+    return absl::InvalidArgumentError(
+        "MTP attention mask buffer element type must be Float32.");
+  }
+  const Span<const Layout::Dim> dims = mask_type.Layout().Dimensions();
+  if (dims.empty()) {
+    return absl::InvalidArgumentError(
+        "MTP attention mask tensor must have at least 1 dimension.");
+  }
+  for (size_t i = 0; i + 1 < dims.size(); ++i) {
+    if (dims[i] != 1) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("MTP attention mask leading dimension ", i,
+                       " must be 1, got ", dims[i], "."));
+    }
+  }
+  const int32_t cache_len = dims.back();
+  if (cache_len < qwen3_tts::kNumCodeGroups) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("MTP attention mask cache length (", cache_len,
+                     ") must be at least ", qwen3_tts::kNumCodeGroups, "."));
+  }
+  return static_cast<int>(cache_len);
+}
+
 absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>>
 Qwen3TtsAcousticPredictorStage::Create(
     Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
@@ -147,10 +175,8 @@ Qwen3TtsAcousticPredictorStage::Create(
         "MTP model missing required non-state input buffers.");
   }
 
-  LITERT_ASSIGN_OR_RETURN(size_t mask_size_bytes, non_state_in_bufs[2].Size());
-  if (mask_size_bytes > 0) {
-    stage->mtp_cache_len_ = mask_size_bytes / sizeof(float);
-  }
+  ABSL_ASSIGN_OR_RETURN(stage->mtp_cache_len_,
+                        DeriveMtpCacheLen(non_state_in_bufs[2]));
 
   return stage;
 }

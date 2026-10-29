@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # [Google-internal load of `cc_library`]
+# [Google-internal load of `cc_test`]
 
 package(default_visibility = ["//visibility:public"])
 
@@ -91,7 +92,6 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
@@ -101,9 +101,13 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_api_types",
         "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:litert_lm_runner",
         "//omni/base:litert_runner",
@@ -111,9 +115,33 @@ cc_library(
         "//omni/base:model_utils",
         "//omni/base:stage",
         "//omni/base:stateful_litert_runner",
-        "//runtime/executor:litert_compiled_model_executor_utils",
         "//runtime/executor:llm_executor_io_types",
         "//support/util:convert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "qwen3_tts_acoustic_predictor_stage_test",
+    srcs = ["qwen3_tts_acoustic_predictor_stage_test.cc"],
+    deps = [
+        ":common",
+        ":qwen3_tts_acoustic_predictor_stage",
+        ":qwen3_tts_io_types",
+        ":qwen3_tts_model_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "//omni/base:model_resources",
+        "//omni/base:stage",
+        "//support/util:test_utils",
     ],
 )
 
