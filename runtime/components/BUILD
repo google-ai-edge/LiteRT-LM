@@ -45,12 +45,6 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-config_setting(
-    name = "android_webgpu",
-    constraint_values = ["@platforms//os:android"],
-    values = {"copt": "-DLITERT_USE_WEBGPU_ACCELERATOR"},
-)
-
 alias(
     name = "disable_sentencepiece_tokenizer",
     actual = "//build_config:disable_sentencepiece_tokenizer",
@@ -243,15 +237,15 @@ cc_library(
 # target should be linked.
 #
 # The sampler backend has to match the inference backend linked by
-# //runtime/executor:default_static_gpu_accelerator: the sampler is
+# //runtime/executor:default_gpu_accelerator: the sampler is
 # created from the device published by the accelerator, so linking a sampler for a different
 # backend makes GPU sampler creation fail and silently degrades to CPU sampling. That is why the
-# Apple conditions below follow the same
+# Apple and Android conditions below follow the same
 # //runtime/executor:gpu_accelerator flag.
 cc_library(
     name = "default_static_gpu_samplers",
     deps = select({
-        ":android_webgpu": [":top_k_webgpu_sampler_static"],
+        "//runtime/executor:android_webgpu": [":top_k_webgpu_sampler_static"],
         "@platforms//os:android": [":top_k_opencl_sampler_static"],
         "//runtime/executor:ios_webgpu": [":top_k_webgpu_sampler_static"],
         "//runtime/executor:macos_metal": [":top_k_metal_sampler_static"],

@@ -169,6 +169,10 @@ cc_library(
     name = "litert_compiled_model_executor_utils",
     srcs = ["litert_compiled_model_executor_utils.cc"],
     hdrs = ["litert_compiled_model_executor_utils.h"],
+    defines = select({
+        ":gpu_accelerator_webgpu_requested": ["LITERT_USE_WEBGPU_ACCELERATOR"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":executor_settings_base",
         ":executor_stats",
@@ -229,8 +233,9 @@ cc_library(
     ],
 )
 
-# Flags to configure the static GPU accelerator backend for Apple targets (iOS and macOS).
-# By default, iOS uses Metal ("metal") and macOS uses WebGPU ("webgpu").
+# Flags to configure the static GPU accelerator backend for Apple targets (iOS and macOS)
+# and Android.
+# By default, iOS uses Metal ("metal"), macOS uses WebGPU ("webgpu"), and Android uses OpenCL/OpenGL.
 # Pass --//runtime/executor:gpu_accelerator=webgpu or =metal to override.
 # This flag selects both the inference accelerator (below) and the GPU sampler linked by
 # //runtime/components:default_static_gpu_samplers; the two must always
@@ -258,11 +263,17 @@ config_setting(
     define_values = {"LITERT_GPU_ACCELERATOR": "webgpu"},
 )
 
+config_setting(
+    name = "gpu_accelerator_webgpu_copt",
+    values = {"copt": "-DLITERT_USE_WEBGPU_ACCELERATOR"},
+)
+
 selects.config_setting_group(
     name = "gpu_accelerator_webgpu_requested",
     match_any = [
         ":gpu_accelerator_webgpu_setting",
         ":gpu_accelerator_webgpu_define",
+        ":gpu_accelerator_webgpu_copt",
     ],
 )
 
@@ -287,6 +298,14 @@ selects.config_setting_group(
 )
 
 selects.config_setting_group(
+    name = "android_webgpu",
+    match_all = [
+        "@platforms//os:android",
+        ":gpu_accelerator_webgpu_requested",
+    ],
+)
+
+selects.config_setting_group(
     name = "ios_webgpu",
     match_all = [
         "@platforms//os:ios",
@@ -302,71 +321,40 @@ selects.config_setting_group(
     ],
 )
 
-selects.config_setting_group(
-    name = "dynamic_android",
-    match_all = [
-        "@platforms//os:android",
-        "@litert//litert:litert_runtime_link_mode_dynamic",
-    ],
-)
-
-selects.config_setting_group(
-    name = "dynamic_macos_metal",
-    match_all = [
-        ":macos_metal",
-        "@litert//litert:litert_runtime_link_mode_dynamic",
-    ],
-)
-
-selects.config_setting_group(
-    name = "dynamic_macos",
-    match_all = [
-        "@platforms//os:macos",
-        "@litert//litert:litert_runtime_link_mode_dynamic",
-    ],
-)
-
-selects.config_setting_group(
-    name = "dynamic_linux",
-    match_all = [
-        "@platforms//os:linux",
-        "@litert//litert:litert_runtime_link_mode_dynamic",
-    ],
-)
-
-selects.config_setting_group(
-    name = "dynamic_windows",
-    match_all = [
-        "@platforms//os:windows",
-        "@litert//litert:litert_runtime_link_mode_dynamic",
-    ],
-)
-
 cc_library(
-    name = "default_static_gpu_accelerator",
+    name = "default_dynamic_gpu_accelerator",
     data = select({
-        ":dynamic_android": [
+        ":android_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator_so",
         ],
-        ":dynamic_macos_metal": [
+        "@platforms//os:android": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_gl_accelerator_so",
+        ],
+        ":macos_metal": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator_dylib",
         ],
-        ":dynamic_macos": [
+        "@platforms//os:macos": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_dylib",
         ],
-        ":dynamic_windows": [
+        "@platforms//os:windows": [
             "@litert//litert/runtime/accelerators/gpu:libLiteRtWebGpuAccelerator",
         ],
-        ":dynamic_linux": [
+        "@platforms//os:linux": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_so",
         ],
         "//conditions:default": [],
     }),
+    tags = ["manual"],
+)
+
+cc_library(
+    name = "default_static_gpu_accelerator",
     deps = select({
-        # If CAPI is linked dynamically, need to link the accelerator dynamically as well.
-        "@litert//litert:litert_runtime_link_mode_dynamic": [],
-        "@platforms//os:android": [
+        ":android_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator",
+        ],
+        "@platforms//os:android": [
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_gl_accelerator",
         ],
         ":ios_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
@@ -380,6 +368,15 @@ cc_library(
         "//conditions:default": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
         ],
+    }),
+)
+
+alias(
+    name = "default_gpu_accelerator",
+    actual = select({
+        # If CAPI is linked dynamically, need to link the accelerator dynamically as well.
+        "@litert//litert:litert_runtime_link_mode_dynamic": ":default_dynamic_gpu_accelerator",
+        "//conditions:default": ":default_static_gpu_accelerator",
     }),
 )
 
@@ -508,7 +505,7 @@ cc_test(
         "requires-gpu-sm90-full",
     ],
     deps = [
-        ":default_static_gpu_accelerator",
+        ":default_gpu_accelerator",
         ":executor_settings_base",
         ":executor_stats",
         ":litert_compiled_model_executor_utils",
