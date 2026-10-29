@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <ios>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -70,7 +71,7 @@ absl::StatusOr<std::vector<T>> GetDataAsVector(
 }
 
 absl::StatusOr<std::string> GetContents(const std::string& path) {
-  std::ifstream input_stream(path);
+  std::ifstream input_stream(path, std::ios::binary);
   if (!input_stream.is_open()) {
     return absl::InternalError(absl::StrCat("Could not open file: ", path));
   }
@@ -212,9 +213,6 @@ class FrontendModelWrapper {
   std::vector<litert::TensorBuffer> input_buffers_;
   std::vector<litert::TensorBuffer> output_buffers_;
 };
-
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 
 TEST(AudioPreprocessorPffftTest, VerifyPcmFramesToSpectrogram) {
   AudioPreprocessorConfig config =
@@ -807,9 +805,6 @@ TEST(AudioPreprocessorPffftTest, GetPreprocessedAudioDimensionsInvalidWav) {
                   InputAudio(std::string("\x01\x02\x03\x04"))),
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
-
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) &&
-        // !defined(__NT__) && !defined(_WIN64)
 
 }  // namespace
 }  // namespace litert::support

@@ -154,9 +154,6 @@ absl::StatusOr<std::vector<float>> EncodeOnesAndGetEmbeddings(
 
 }  // namespace
 
-// TODO: b/441514829 - Enable the tests on Windows once the bug is fixed.
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 class AudioLiteRtCompiledModelExecutorTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -1327,7 +1324,5 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
 }
 
 }  // namespace
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-        // !defined(__NT__) && !defined(_WIN64)
 
 }  // namespace litert::lm

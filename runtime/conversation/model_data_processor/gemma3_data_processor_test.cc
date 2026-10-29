@@ -932,9 +932,6 @@ get_weather(location="London")
 )");
 }
 
-// TODO(b/441514829): Enable the tests on Windows once the bug is fixed.
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 TEST_F(Gemma3DataProcessorTest, ToInputDataVectorTextAndAudio) {
   ASSERT_OK_AND_ASSIGN(auto processor, Gemma3DataProcessor::Create());
   const std::string rendered_template_prompt =
@@ -1033,9 +1030,6 @@ I am doing well, thanks for asking.<end_of_turn>
                   HasInputAudioEnd(), HasInputText(&expected_text4),
                   HasInputText(&expected_text5)));
 }
-
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) &&
-        // !defined(__NT__) && !defined(_WIN64)
 
 TEST_F(Gemma3DataProcessorTest, CreateConstraint) {
   // Create the model data processor.
@@ -1169,8 +1163,6 @@ TEST_F(Gemma3DataProcessorTest, CloneState) {
   EXPECT_THAT(input_data, ElementsAre(HasInputText(&expected_text)));
 }
 
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 TEST_F(Gemma3DataProcessorTest, CloneStateWithAudio) {
   ASSERT_OK_AND_ASSIGN(auto processor1, Gemma3DataProcessor::Create());
   ASSERT_OK_AND_ASSIGN(auto processor2, Gemma3DataProcessor::Create());
@@ -1210,7 +1202,6 @@ TEST_F(Gemma3DataProcessorTest, CloneStateWithAudio) {
                   HasInputAudioEnd(), HasInputText(&expected_text2),
                   HasInputText(&expected_text3)));
 }
-#endif
 
 }  // namespace
 

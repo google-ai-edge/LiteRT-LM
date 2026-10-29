@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <ios>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -83,7 +84,7 @@ absl::StatusOr<std::vector<T>> GetDataAsVector(
 }
 
 absl::StatusOr<std::string> GetContents(const std::string& path) {
-  std::ifstream input_stream(path);
+  std::ifstream input_stream(path, std::ios::binary);
   if (!input_stream.is_open()) {
     return absl::InternalError(absl::StrCat("Could not open file: ", path));
   }
@@ -200,9 +201,6 @@ class FrontendModelWrapper {
   std::vector<litert::TensorBuffer> output_buffers_;
 };
 
-// TODO: b/441514829 - Enable the tests on Windows once the bug is fixed.
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 TEST(AudioPreprocessorMiniAudioTest, DecodeAudio) {
   ASSERT_OK_AND_ASSIGN(auto raw_audio_data, GetRawAudioData());
   std::vector<float> pcm_frames;
@@ -847,9 +845,6 @@ TEST(AudioPreprocessorMiniAudioTest, PreprocessDryRunMatchesPreprocessShape) {
   EXPECT_EQ(dry_run_type->Layout().Dimensions(),
             preprocessed_type->Layout().Dimensions());
 }
-
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) &&
-        // !defined(__NT__) && !defined(_WIN64)
 
 }  // namespace
 }  // namespace litert::support

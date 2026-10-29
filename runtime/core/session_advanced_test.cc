@@ -2416,8 +2416,6 @@ TEST_F(SessionAdvancedTest, RunIncrementalPrefillWithDecode) {
   }
 }
 
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 TEST_F(SessionAdvancedTest, ProcessAndCombineContentsTextAndAudioSuccess) {
   const std::vector<std::vector<int>> stop_token_ids = {{2294}};
   SessionConfig session_config = SessionConfig::CreateDefault();
@@ -2547,8 +2545,6 @@ TEST_F(SessionAdvancedTest, ProcessAndCombineContentsTextAudioTextSuccess) {
   inputs.emplace_back(InputText("What does the audio say?"));
   EXPECT_OK(session->RunPrefill(inputs));
 }
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-        // !defined(__NT__) && !defined(_WIN64)
 
 TEST_F(SessionAdvancedTest, RunTextScoringEmptyTargetTextFailure) {
   ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
