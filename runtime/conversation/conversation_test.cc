@@ -4000,6 +4000,130 @@ TEST_P(ConversationTest, SendMessageWithConstraint) {
                         }));
 }
 
+// A preface with one tool, so that constrained decoding creates a tool call
+// constraint.
+JsonPreface WeatherToolPreface() {
+  JsonPreface preface;
+  preface.tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {"location": {"type": "string"}},
+          "required": ["location"]
+        }
+      }
+    }
+  ])json");
+  return preface;
+}
+
+// A tool choice only applies to the message it is sent with. The next message
+// without one gets the default tool call constraint again.
+TEST_P(ConversationTest, SendMessageWithToolChoiceOnlyAffectsThatMessage) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(
+              PromptTemplate(kTestJinjaToolsPromptTemplate))
+          .SetPreface(WeatherToolPreface())
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillRepeatedly([](const std::vector<InputData>& contents,
+                         absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                             user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  std::vector<const Constraint*> constraints;
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillRepeatedly(
+          [&constraints](
+              absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+              const DecodeConfig& decode_config) {
+            constraints.push_back(decode_config.GetConstraint());
+            user_callback(Responses(TaskState::kProcessing, {"It is sunny."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  Message user_message = {{"role", "user"}, {"content", "How is the weather?"}};
+  // Every tool call constraint implementation supports "auto".
+  ASSERT_OK(conversation
+                ->SendMessage(user_message,
+                              {.tool_choice = nlohmann::ordered_json("auto")})
+                .status());
+  ASSERT_OK(conversation->SendMessage(user_message).status());
+
+  ASSERT_THAT(constraints, testing::SizeIs(2));
+  if (enable_constrained_decoding_) {
+    EXPECT_NE(constraints[0], nullptr);
+    EXPECT_NE(constraints[1], nullptr);
+    EXPECT_NE(constraints[0], constraints[1]);
+  } else {
+    EXPECT_THAT(constraints, testing::Each(testing::IsNull()));
+  }
+}
+
+TEST_P(ConversationTest, SendMessageWithInvalidToolChoiceFails) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(
+              PromptTemplate(kTestJinjaToolsPromptTemplate))
+          .SetPreface(WeatherToolPreface())
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillRepeatedly([](const std::vector<InputData>& contents,
+                         absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                             user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillRepeatedly(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"It is sunny."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  Message user_message = {{"role", "user"}, {"content", "How is the weather?"}};
+  absl::StatusOr<Message> response = conversation->SendMessage(
+      user_message, {.tool_choice = nlohmann::ordered_json("sometimes")});
+  if (!enable_constrained_decoding_) {
+    // Without constrained decoding, the tool choice isn't used.
+    EXPECT_OK(response);
+  } else {
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+    // The FST constraints only support "auto".
+    EXPECT_THAT(response, StatusIs(absl::StatusCode::kFailedPrecondition));
+#else
+    EXPECT_THAT(response, StatusIs(absl::StatusCode::kInvalidArgument,
+                                   HasSubstr("sometimes")));
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+  }
+}
+
 TEST_P(ConversationTest, Clone) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();

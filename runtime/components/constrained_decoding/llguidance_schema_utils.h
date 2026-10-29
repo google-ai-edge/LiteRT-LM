@@ -62,6 +62,12 @@ struct LlgConstraintsOptions {
 absl::StatusOr<std::string> CreateLarkGrammarForTools(
     const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options);
 
+// Parses a tool_choice JSON (e.g. "auto", "none", "required", or
+// {"type": "function", "function": {"name": "..."}}) and updates options.
+absl::Status ApplyToolChoiceToOptions(
+    const nlohmann::ordered_json& tool_choice,
+    LlgConstraintsOptions& options);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_

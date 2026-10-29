@@ -115,13 +115,19 @@ class ModelDataProcessor {
     return tools;
   }
 
-  // Creates a constraint from the given tools. The constraint is used for
-  // constrained decoding. It is created from the tools defined in the preface,
-  // if any.
+  // Creates a constraint from the given tools and tool_choice. The constraint
+  // is used for constrained decoding. It is created from the tools defined in
+  // the preface, if any.
+  virtual absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
+      const nlohmann::ordered_json& tools,
+      const nlohmann::ordered_json& tool_choice) const {
+    return CreateConstraint(tools);
+  }
+
   virtual absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
       const nlohmann::ordered_json& tools) const {
     return absl::UnimplementedError("CreateConstraint is not implemented.");
-  };
+  }
 
   // Returns the start of tool call blocks.
   virtual absl::string_view CodeFenceStart() const { return ""; }

@@ -67,7 +67,13 @@ class Gemma3DataProcessor
       const nlohmann::ordered_json& tools) const override;
 
   absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
-      const nlohmann::ordered_json& tools) const override;
+      const nlohmann::ordered_json& tools,
+      const nlohmann::ordered_json& tool_choice) const override;
+
+  absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
+      const nlohmann::ordered_json& tools) const override {
+    return CreateConstraint(tools, nullptr);
+  }
 
   // Returns the start of tool call blocks.
   absl::string_view CodeFenceStart() const override;

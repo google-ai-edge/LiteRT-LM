@@ -480,6 +480,7 @@ absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
     std::optional<NoRepeatNgramConfig> no_repeat_ngram_config,
     std::optional<SuppressTokensConfig> suppress_tokens_config,
     std::optional<ConstraintArg> decoding_constraint,
+    std::optional<nlohmann::ordered_json> tool_choice,
     std::optional<int> max_output_tokens,
     std::optional<ThinkingConfig> thinking_config,
     std::optional<absl::string_view> open_channel_name) {
@@ -534,13 +535,26 @@ absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
     ABSL_ASSIGN_OR_RETURN(constraint_,
                           constraint_provider_->CreateConstraint(
                               std::move(decoding_constraint).value()));
-  } else if (config_.constrained_decoding_enabled() && constraint_ == nullptr &&
+  } else if (config_.constrained_decoding_enabled() &&
              std::holds_alternative<JsonPreface>(preface_)) {
     // Create a constraint from the tools defined in the preface, if any.
-    auto json_preface = std::get<JsonPreface>(preface_);
-    if (!json_preface.tools.is_null()) {
+    const nlohmann::ordered_json& tools = std::get<JsonPreface>(preface_).tools;
+    if (!tools.is_null() && tool_choice.has_value() &&
+        !tool_choice->is_null()) {
+      // The tool choice only applies to this message, so its constraint doesn't
+      // replace the default one.
       auto constraint =
-          model_data_processor_->CreateConstraint(json_preface.tools);
+          model_data_processor_->CreateConstraint(tools, *tool_choice);
+      if (constraint.ok()) {
+        tool_choice_constraint_ = std::move(constraint.value());
+        decode_config.SetConstraint(tool_choice_constraint_.get());
+        return decode_config;
+      }
+      if (!absl::IsUnimplemented(constraint.status())) {
+        return constraint.status();
+      }
+    } else if (!tools.is_null() && constraint_ == nullptr) {
+      auto constraint = model_data_processor_->CreateConstraint(tools);
       if (constraint.ok()) {
         constraint_ = std::move(constraint.value());
       } else if (!absl::IsUnimplemented(constraint.status())) {
@@ -832,13 +846,13 @@ absl::Status Conversation::SendMessageAsync(
 
   ABSL_ASSIGN_OR_RETURN(
       auto decode_config,
-      CreateDecodeConfig(std::move(optional_args.repetition_penalty_config),
-                         std::move(optional_args.no_repeat_ngram_config),
-                         std::move(optional_args.suppress_tokens_config),
-                         std::move(optional_args.decoding_constraint),
-                         optional_args.max_output_tokens,
-                         ResolveThinkingConfig(config_, optional_args),
-                         open_channel_name));
+      CreateDecodeConfig(
+          std::move(optional_args.repetition_penalty_config),
+          std::move(optional_args.no_repeat_ngram_config),
+          std::move(optional_args.suppress_tokens_config),
+          std::move(optional_args.decoding_constraint),
+          std::move(optional_args.tool_choice), optional_args.max_output_tokens,
+          ResolveThinkingConfig(config_, optional_args), open_channel_name));
 
   auto shared_user_callback =
       std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Message>)>>(
