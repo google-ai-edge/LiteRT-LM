@@ -19,6 +19,7 @@ import {ReactiveController, ReactiveControllerHost} from 'lit';
 import {ChatSessionStore, ConversationMeta, StoredMessage} from './stores/chat_session_store.js';
 import {LocalDirectoryService} from './stores/local_directory_service.js';
 import {ModelLoaderService} from './stores/model_loader_service.js';
+import {loadModelFromUrl} from './stores/model_url_parameter.js';
 import {SettingsStore} from './stores/settings_store.js';
 
 export type {ConversationMeta, StoredMessage};
@@ -93,6 +94,17 @@ export class LlmChatStateController implements ReactiveController {
   hostConnected() {
     // Triggered automatically when the Lit Element mounts.
     void this.modelLoader.updateCacheSize();
+
+    const loadsModelFromUrl = loadModelFromUrl(window.location.search, {
+      settings: this.settings,
+      modelLoader: this.modelLoader,
+      chatSession: this.chatSession,
+      updateStatus: (msg: string) => {
+        this.statusText = msg;
+        this.requestUpdate();
+      },
+    });
+    if (loadsModelFromUrl) return;
 
     const activeId = window.localStorage.getItem('litertlm-active-conv-id');
     if (activeId &&

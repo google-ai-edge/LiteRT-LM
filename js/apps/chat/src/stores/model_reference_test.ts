@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {parseModelReference} from './model_reference.js';
+import {parseHuggingFaceModelReference, parseModelReference} from './model_reference.js';
 
 describe('parseModelReference', () => {
   const cases: Array<[string, string]> = [
@@ -60,4 +60,24 @@ describe('parseModelReference', () => {
       expect(parseModelReference(text)).toBeUndefined();
     });
   }
+});
+
+describe('parseHuggingFaceModelReference', () => {
+  it('accepts Hugging Face models', () => {
+    expect(parseHuggingFaceModelReference('org/repo')).toBe('hf://org/repo');
+    expect(parseHuggingFaceModelReference('hf://org/repo@web'))
+        .toBe('hf://org/repo@web');
+    expect(parseHuggingFaceModelReference('https://huggingface.co/org/repo'))
+        .toBe('hf://org/repo');
+  });
+
+  it('rejects other URLs', () => {
+    expect(parseHuggingFaceModelReference(
+               'https://example.com/model.litertlm'))
+        .toBeUndefined();
+    expect(parseHuggingFaceModelReference(
+               'https://huggingface.co/org/repo/resolve/main/m.litertlm'))
+        .toBeUndefined();
+    expect(parseHuggingFaceModelReference('not a model')).toBeUndefined();
+  });
 });

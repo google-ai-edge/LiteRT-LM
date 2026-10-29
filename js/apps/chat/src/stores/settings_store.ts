@@ -195,3 +195,18 @@ export class SettingsStore implements Settings {
     return true;
   }
 }
+
+/**
+ * Adds a model to the custom models, unless it's already there, and selects
+ * it.
+ */
+export function selectCustomModel(
+    settings: Pick<
+        SettingsStore, 'customModels'|'selectedModelPath'|'saveSettings'>,
+    model: CustomModel) {
+  if (!settings.customModels.some(m => m.path === model.path)) {
+    settings.customModels = [...settings.customModels, model];
+  }
+  settings.selectedModelPath = model.path;
+  settings.saveSettings();
+}

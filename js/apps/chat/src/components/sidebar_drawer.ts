@@ -19,7 +19,7 @@ import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
-import {CustomModel, MODELS, PartialSettingsSchema, Settings} from '../stores/settings_store.js';
+import {CustomModel, MODELS, PartialSettingsSchema, selectCustomModel, Settings} from '../stores/settings_store.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
 import './custom_dropdown';
@@ -408,14 +408,7 @@ export class LitertSidebar extends LitElement {
     }
     this.isAddingModel = false;
 
-    const exists =
-        this.state.settings.customModels.some(m => m.path === customModel.path);
-    if (!exists) {
-      this.state.settings.customModels =
-          [...this.state.settings.customModels, customModel];
-    }
-    this.state.settings.selectedModelPath = customModel.path;
-    this.state.settings.saveSettings();
+    selectCustomModel(this.state.settings, customModel);
 
     await this.state.modelLoader.loadModelWeights(
         this.state.settings.modelSettings, async () => {

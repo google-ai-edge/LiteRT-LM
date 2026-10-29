@@ -59,3 +59,13 @@ export function parseModelReference(text: string): string|undefined {
   return url.protocol === 'https:' || url.protocol === 'http:' ? url.href :
                                                                  undefined;
 }
+
+/**
+ * Like `parseModelReference()`, but only accepts Hugging Face models: repo IDs,
+ * repo pages and `hf://` URIs. Returns a `hf://` URI.
+ */
+export function parseHuggingFaceModelReference(
+    text: string): string|undefined {
+  const reference = parseModelReference(text);
+  return reference?.startsWith('hf://') ? reference : undefined;
+}
