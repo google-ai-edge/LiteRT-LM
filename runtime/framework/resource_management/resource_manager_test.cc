@@ -17,9 +17,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
@@ -28,6 +30,8 @@
 
 namespace litert::lm {
 namespace {
+
+using ::testing::status::StatusIs;
 
 // A fake executor that reports executor stats and counts stat resets.
 class StatsFakeLlmExecutor : public FakeLlmExecutor {
@@ -70,6 +74,46 @@ TEST(ResourceManagerTest, AcquiredExecutorForwardsExecutorStats) {
 
   executor->ResetExecutorStats();
   EXPECT_EQ(num_resets, 1);
+}
+
+// A fake executor that reports a given draft verification support.
+class DraftVerificationFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  explicit DraftVerificationFakeLlmExecutor(absl::Status support)
+      : FakeLlmExecutor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
+                        /*decode_tokens_set=*/{}),
+        support_(std::move(support)) {}
+
+  absl::Status CheckDraftVerificationSupport() const override {
+    return support_;
+  }
+
+ private:
+  absl::Status support_;
+};
+
+TEST(ResourceManagerTest, AcquiredExecutorForwardsDraftVerificationSupport) {
+  for (const absl::Status& support :
+       {absl::OkStatus(), absl::FailedPreconditionError("No verify.")}) {
+    SCOPED_TRACE(support.ToString());
+    ASSERT_OK_AND_ASSIGN(
+        auto resource_manager,
+        ResourceManager::Create(
+            /*model_resources=*/nullptr,
+            std::make_unique<DraftVerificationFakeLlmExecutor>(support),
+            /*vision_executor_settings=*/nullptr,
+            /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmExecutor> executor,
+                         resource_manager->AcquireExecutor());
+    EXPECT_EQ(executor->CheckDraftVerificationSupport(), support);
+  }
+}
+
+TEST(ResourceManagerTest, ExecutorsDontSupportDraftVerificationByDefault) {
+  FakeLlmExecutor executor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
+                           /*decode_tokens_set=*/{});
+  EXPECT_THAT(executor.CheckDraftVerificationSupport(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
 }  // namespace

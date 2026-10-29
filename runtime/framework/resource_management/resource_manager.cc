@@ -454,6 +454,10 @@ class LockedLlmExecutor : public LlmExecutor {
 
   void ResetExecutorStats() override { llm_executor_->ResetExecutorStats(); }
 
+  absl::Status CheckDraftVerificationSupport() const override {
+    return llm_executor_->CheckDraftVerificationSupport();
+  }
+
   absl::Status Reset() override { return llm_executor_->Reset(); }
 
   absl::StatusOr<int> GetVocabSize() override {

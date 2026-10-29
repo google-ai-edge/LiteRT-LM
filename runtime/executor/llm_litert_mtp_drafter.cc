@@ -262,9 +262,11 @@ LlmLiteRtMtpDrafter::Create(
 
   ABSL_ASSIGN_OR_RETURN(
       std::unique_ptr<LlmLiteRtVerifier> verifier,
-      LlmLiteRtVerifier::Create(env, base_model, kVerifySignatureRunner,
-                                executor_settings, embedding_manager,
-                                ple_manager, executor_metadata));
+      LlmLiteRtVerifier::Create(
+          env, base_model, kVerifySignatureRunner, executor_settings,
+          &embedding_manager,
+          ple_manager.has_value() ? &ple_manager->get() : nullptr,
+          executor_metadata));
   // The verify pass covers the token before the drafted tokens.
   const int num_draft_steps = verifier->width() - 1;
 

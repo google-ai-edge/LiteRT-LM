@@ -95,6 +95,16 @@ class LlmExecutorBase {
                      ExecutorBackendName()));
   };
 
+  // Returns OK if the executor can verify draft tokens, i.e. run them through
+  // the model in parallel and keep the longest prefix that decoding would have
+  // produced. Otherwise returns FailedPrecondition with the reason why it
+  // can't. The result doesn't change over the executor's lifetime.
+  virtual absl::Status CheckDraftVerificationSupport() const {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Draft verification is not supported by backend: ",
+                     ExecutorBackendName()));
+  }
+
   virtual absl::string_view ExecutorBackendName() const = 0;
 
   // Get vocabulary size used to build tensor buffers for decode functions.

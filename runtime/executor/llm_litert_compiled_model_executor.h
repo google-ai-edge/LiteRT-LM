@@ -47,6 +47,7 @@
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
+#include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/llm_processed_context.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_controller.h"
@@ -555,6 +556,8 @@ class LlmLiteRtCompiledModelExecutorStatic
   absl::Status UpdateExecutorSettings(
       const LlmExecutorSettings& executor_settings) override;
 
+  absl::Status CheckDraftVerificationSupport() const override;
+
  private:
   LlmLiteRtCompiledModelExecutorStatic(
       LlmExecutorSettings executor_settings, Environment& env,
@@ -587,6 +590,8 @@ class LlmLiteRtCompiledModelExecutorStatic
         prefill_signature_map_(std::move(prefill_signature_map)) {}
 
   SortedPrefillSignatureMap prefill_signature_map_;
+  // The model's verify signatures and whether draft verification can use them.
+  std::vector<VerifySignatureInfo> verify_signatures_;
   // Signature names are unique across all signatures in a model so it is safe
   // to refer to them by just their unique name.
   absl::flat_hash_map<

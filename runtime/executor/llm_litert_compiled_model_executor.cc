@@ -37,6 +37,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
@@ -75,6 +76,7 @@
 #include "runtime/executor/llm_executor_settings_utils.h"
 #include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
+#include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
@@ -2303,6 +2305,14 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                             /*input_positions_name=*/signatures.input_positions,
                             executor_settings.GetSelectedSignatures()));
   RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<VerifySignatureInfo> verify_signatures,
+      FindVerifySignatures(
+          *compiled_model, kDecodeSignatureRunner, *state,
+          executor_settings.GetSelectedSignatures(),
+          /*has_embedding_lookup=*/embedding_lookup != nullptr,
+          /*has_per_layer_embedding_lookup=*/per_layer_embedding_lookup !=
+              nullptr));
   bool enable_profiling =
       executor_settings.GetAdvancedSettings() &&
       executor_settings.GetAdvancedSettings()->enable_profiling;
@@ -2314,6 +2324,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
       use_fp16_precision, activation_data_type, std::move(mtp_drafter),
       executor_metadata, resources));
+  executor->verify_signatures_ = std::move(verify_signatures);
 
   if (enable_profiling) {
     auto status = executor->StartProfiling();
@@ -2333,6 +2344,24 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::UpdateExecutorSettings(
     ClampMaxNumTokens(executor_settings_, state_->GetNumEntries());
   }
   return absl::OkStatus();
+}
+
+absl::Status
+LlmLiteRtCompiledModelExecutorStatic::CheckDraftVerificationSupport() const {
+  if (verify_signatures_.empty()) {
+    return absl::FailedPreconditionError(
+        "Draft verification needs a verify signature, but the model has none.");
+  }
+  std::vector<std::string> reasons;
+  for (const VerifySignatureInfo& info : verify_signatures_) {
+    if (info.status.ok()) {
+      return absl::OkStatus();
+    }
+    reasons.push_back(absl::StrCat(info.key, ": ", info.status.message()));
+  }
+  return absl::FailedPreconditionError(
+      absl::StrCat("None of the model's verify signatures can verify drafts. ",
+                   absl::StrJoin(reasons, " ")));
 }
 
 /* ===========================================================================*/

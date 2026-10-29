@@ -329,6 +329,7 @@ cc_test(
     deps = [
         ":resource_manager",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
         "//runtime/executor:executor_stats",
         "//runtime/executor:fake_llm_executor",

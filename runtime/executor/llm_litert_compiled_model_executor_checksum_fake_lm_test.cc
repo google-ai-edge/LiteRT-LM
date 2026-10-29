@@ -52,6 +52,9 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::HasSubstr;
+using ::testing::status::StatusIs;
+
 constexpr char kTestdataDir[] =
     "litert_lm/runtime/testdata";
 
@@ -129,12 +132,21 @@ struct FakeLmTestCase {
   std::string name;
   std::string model_file;
   std::optional<std::string> embedder_file;
+  // Whether the model has a verify signature that draft verification can use.
+  bool supports_draft_verification = true;
 };
 
 class FakeLmExecutorTest : public ::testing::TestWithParam<FakeLmTestCase> {
  protected:
   void SetUp() override {
+    ASSERT_NO_FATAL_FAILURE(CreateExecutor(/*selected_signatures=*/{}));
+  }
+
+  // (Re)creates `executor_` for the model of the test case, restricted to
+  // `selected_signatures` if not empty.
+  void CreateExecutor(std::vector<std::string> selected_signatures) {
     const FakeLmTestCase& test_case = GetParam();
+    executor_.reset();
     ASSERT_OK_AND_ASSIGN(resources_,
                          FakeLmModelResources::Create(test_case.model_file,
                                                       test_case.embedder_file));
@@ -145,6 +157,7 @@ class FakeLmExecutorTest : public ::testing::TestWithParam<FakeLmTestCase> {
                                             model_assets, Backend::CPU));
     settings.SetCacheDir(":nocache");
     settings.SetMaxNumTokens(kFakeLmContextSize);
+    settings.SetSelectedSignatures(std::move(selected_signatures));
     CpuConfig cpu_config;
     cpu_config.number_of_threads = 1;
     settings.SetBackendConfig(cpu_config);
@@ -266,13 +279,37 @@ TEST_P(FakeLmExecutorTest, DecodeUntilTheContextFillsTheKvCache) {
       DecodeAndExpectFakeLmTokens(/*num_steps=*/kFakeLmContextSize - 10));
 }
 
+TEST_P(FakeLmExecutorTest, ChecksDraftVerificationSupport) {
+  if (GetParam().supports_draft_verification) {
+    EXPECT_OK(executor_->CheckDraftVerificationSupport());
+  } else {
+    EXPECT_THAT(
+        executor_->CheckDraftVerificationSupport(),
+        StatusIs(absl::StatusCode::kFailedPrecondition, HasSubstr("has none")));
+  }
+}
+
+TEST_P(FakeLmExecutorTest, DraftVerificationNeedsASelectedVerifySignature) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor({"decode", "prefill_8"}));
+  // The executor works, but can't verify drafts.
+  ASSERT_OK(Prefill({3, 1, 4}));
+  DecodeAndExpectFakeLmTokens(/*num_steps=*/1);
+  EXPECT_THAT(executor_->CheckDraftVerificationSupport(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FakeLms, FakeLmExecutorTest,
     ::testing::Values(
         FakeLmTestCase{.name = "TokenInput",
                        .model_file = "checksum_fake_lm.tflite"},
         FakeLmTestCase{.name = "TokenInputWithoutVerify",
-                       .model_file = "checksum_fake_lm_no_verify.tflite"},
+                       .model_file = "checksum_fake_lm_no_verify.tflite",
+                       .supports_draft_verification = false},
+        // Invalid verify signatures disturb neither decoding nor the valid
+        // verify signature.
+        FakeLmTestCase{.name = "TokenInputWithInvalidVerify",
+                       .model_file = "checksum_fake_lm_invalid_verify.tflite"},
         FakeLmTestCase{.name = "EmbeddingInput",
                        .model_file = "checksum_fake_lm_embedding_input.tflite",
                        .embedder_file = "checksum_fake_lm_embedder.tflite"}),

@@ -447,6 +447,7 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
     LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens
     LiteRTLM::Runtime::Executor::LlmLitertCompiledModelCacheUtils
     LiteRTLM::Runtime::Executor::LlmLitertMtpDrafter
+    LiteRTLM::Runtime::Executor::LlmLitertVerifier
     LiteRTLM::Runtime::Executor::MtpGatingPolicy
     LiteRTLM::Runtime::Executor::SpeculativeDecodingController
     LiteRTLM::Runtime::Executor::MagicNumberConfigsHelper
@@ -646,6 +647,7 @@ target_link_libraries(runtime_executor_llm_litert_verifier
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
     LiteRTLM::Runtime::Executor::Litert::State
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
+    LiteRTLM::Runtime::Util::LoraUtil
     LITERTLM_DEPS
 )
 
