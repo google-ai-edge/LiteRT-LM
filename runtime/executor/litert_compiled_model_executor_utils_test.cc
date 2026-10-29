@@ -14,6 +14,8 @@
 
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -936,6 +938,152 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bool) {
       EXPECT_TRUE(mask_ptr[i]) << " at index " << i;
     } else {
       EXPECT_FALSE(mask_ptr[i]) << " at index " << i;
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_Bool_ClampsNearAndBeyondContextLimit) {
+  static_assert(sizeof(bool) == sizeof(uint8_t));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  // Verifier mask shape matching 4K context MTP verifier: [1, 1, 4, 4096]
+  // (0x4000 = 16,384 bytes).
+  constexpr int kSteps = 4;
+  constexpr int kContextSize = 4096;
+  constexpr size_t kMaskBytes = sizeof(bool) * kSteps * kContextSize;
+  constexpr size_t kCanaryBytes = 64;
+  alignas(64) std::array<uint8_t, kMaskBytes + kCanaryBytes> backing_storage;
+  backing_storage.fill(0xAA);
+
+  auto layout =
+      ::litert::Layout(::litert::Dimensions({1, 1, kSteps, kContextSize}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer = TensorBuffer::CreateFromHostMemory(
+      env, ranked_tensor_type, backing_storage.data(), kMaskBytes);
+  ASSERT_TRUE(mask_buffer);
+
+  // At start_timestep = 4093 and 4094 with steps = kSteps + 2 (> kSteps),
+  // query_step reaches 4096 and 4097. FillAttentionMask must clamp both steps
+  // and causal_end to the tensor bounds and never overwrite the trailing canary
+  // bytes past 0x4000.
+  for (int start_timestep : {4093, 4094, 4096}) {
+    std::fill(backing_storage.begin() + kMaskBytes, backing_storage.end(),
+              0xAA);
+    ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+    ASSERT_OK(FillAttentionMask(*mask_buffer, start_timestep,
+                                /*steps=*/kSteps + 2,
+                                proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+    for (size_t i = 0; i < kCanaryBytes; ++i) {
+      EXPECT_EQ(backing_storage[kMaskBytes + i], 0xAA)
+          << "Out-of-bounds write at canary byte " << i
+          << " for start_timestep=" << start_timestep;
+    }
+
+    for (int step_idx = 0; step_idx < kSteps; ++step_idx) {
+      const int expected_unmasked =
+          std::clamp(start_timestep + step_idx + 1, 0, kContextSize);
+      const int row_offset = step_idx * kContextSize;
+      for (int col = 0; col < kContextSize; ++col) {
+        const bool actual = backing_storage[row_offset + col] != 0;
+        EXPECT_EQ(actual, col < expected_unmasked)
+            << "start_timestep=" << start_timestep << ", step_idx=" << step_idx
+            << ", col=" << col;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_TenThousandIterations_NeverCorruptsCanaries) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  constexpr int kSteps = 4;
+  constexpr int kContextSize = 64;
+  constexpr int kSlidingWindow = 16;
+  constexpr size_t kMaskBytes = sizeof(bool) * kSteps * kContextSize;
+  constexpr size_t kDecodeMaskBytes = sizeof(bool) * 1 * kContextSize;
+  constexpr size_t kCanaryBytes = 64;
+
+  alignas(64) std::array<uint8_t, kMaskBytes + kCanaryBytes> backing_storage;
+  backing_storage.fill(0xAA);
+  auto layout =
+      ::litert::Layout(::litert::Dimensions({1, 1, kSteps, kContextSize}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer = TensorBuffer::CreateFromHostMemory(
+      env, ranked_tensor_type, backing_storage.data(), kMaskBytes);
+  ASSERT_TRUE(mask_buffer);
+
+  alignas(64) std::array<uint8_t, kDecodeMaskBytes + kCanaryBytes>
+      decode_backing_storage;
+  decode_backing_storage.fill(0xAA);
+  auto decode_layout =
+      ::litert::Layout(::litert::Dimensions({1, 1, 1, kContextSize}));
+  RankedTensorType decode_tensor_type(ElementType::Bool,
+                                      std::move(decode_layout));
+  auto decode_mask_buffer = TensorBuffer::CreateFromHostMemory(
+      env, decode_tensor_type, decode_backing_storage.data(), kDecodeMaskBytes);
+  ASSERT_TRUE(decode_mask_buffer);
+
+  std::vector<int> vision_tokens(kContextSize + 16, 10);
+  for (size_t i = 2; i < vision_tokens.size(); i += 5) {
+    vision_tokens[i] = -1;
+  }
+
+  constexpr int kIterations = 10000;
+  for (int iter = 0; iter < kIterations; ++iter) {
+    const int start_timestep = (iter * 7) % (kContextSize + 16) - 4;
+    const int steps = (iter % 10) - 1;
+    const int variant = iter % 6;
+
+    if (variant == 5) {
+      ASSERT_OK(InitializeAttentionMask(*decode_mask_buffer, /*is_f16=*/false));
+      ASSERT_OK(FillAttentionMask(
+          *decode_mask_buffer, start_timestep, steps,
+          proto::ATTENTION_MASK_TYPE_CAUSAL, /*token_ids=*/std::nullopt,
+          kSlidingWindow, RingBufferAttentionMaskMode::kDecode));
+      for (size_t c = 0; c < kCanaryBytes; ++c) {
+        ASSERT_EQ(decode_backing_storage[kDecodeMaskBytes + c], 0xAA)
+            << "Decode canary corrupted at iter=" << iter
+            << ", start_timestep=" << start_timestep << ", steps=" << steps;
+      }
+      continue;
+    }
+
+    ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+    switch (variant) {
+      case 0:
+        ASSERT_OK(FillAttentionMask(*mask_buffer, start_timestep, steps,
+                                    proto::ATTENTION_MASK_TYPE_CAUSAL));
+        break;
+      case 1:
+        ASSERT_OK(FillAttentionMask(*mask_buffer, start_timestep, steps,
+                                    proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL));
+        break;
+      case 2:
+        ASSERT_OK(FillAttentionMask(
+            *mask_buffer, start_timestep, steps,
+            proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL, vision_tokens));
+        break;
+      case 3:
+        ASSERT_OK(FillAttentionMask(
+            *mask_buffer, start_timestep, steps,
+            (iter % 12 == 3) ? proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL
+                             : proto::ATTENTION_MASK_TYPE_CAUSAL,
+            vision_tokens, kSlidingWindow,
+            RingBufferAttentionMaskMode::kPrefill));
+        break;
+      case 4:
+        ASSERT_OK(FillAttentionMask(
+            *mask_buffer, start_timestep, steps,
+            proto::ATTENTION_MASK_TYPE_CAUSAL, /*token_ids=*/std::nullopt,
+            kSlidingWindow, RingBufferAttentionMaskMode::kVerify));
+        break;
+    }
+
+    for (size_t c = 0; c < kCanaryBytes; ++c) {
+      ASSERT_EQ(backing_storage[kMaskBytes + c], 0xAA)
+          << "Canary corrupted at iter=" << iter << ", variant=" << variant
+          << ", start_timestep=" << start_timestep << ", steps=" << steps;
     }
   }
 }

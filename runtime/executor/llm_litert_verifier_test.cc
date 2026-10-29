@@ -195,6 +195,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, CreateReadsWidthAndVocabSize) {
   EXPECT_EQ(verifier->signature_key(), "verify");
   EXPECT_EQ(verifier->width(), kVerifyWidth);
   EXPECT_EQ(verifier->vocab_size(), kFakeLmVocabSize);
+  EXPECT_EQ(verifier->max_context_length(), state_->GetNumEntries());
 }
 
 TEST_P(LlmLiteRtVerifierFakeLmTest, CreateFailsForMissingSignature) {

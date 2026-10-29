@@ -137,6 +137,15 @@ absl::Status ConcatenateEmbeddingsAndActivationsFromVerifierBuffer(
   return absl::OkStatus();
 }
 
+TensorBuffer* FindBufferOrNull(
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& buffers,
+    const std::optional<std::string>& name) {
+  if (!name.has_value()) {
+    return nullptr;
+  }
+  const auto it = buffers.find(*name);
+  return it != buffers.end() ? &it->second : nullptr;
+}
 }  // namespace
 
 absl::Status UpdateCompilationOptions(
@@ -353,7 +362,7 @@ LlmLiteRtMtpDrafter::Create(
       std::move(mtp_drafter_input_buffers),
       std::move(mtp_drafter_output_buffers), std::move(drafter_id_tensor),
       num_draft_steps, std::move(drafter_model_signatures),
-      GetAttentionMaskParams(executor_metadata),
+      GetAttentionMaskParams(executor_metadata), backend,
       std::move(drafter_mask_runner)));
 }
 
@@ -378,6 +387,12 @@ absl::Status LlmLiteRtMtpDrafter::SetLenience(float lenience) {
   return absl::OkStatus();
 }
 
+bool LlmLiteRtMtpDrafter::CanDraft(int position,
+                                   const StateInterface& state) const {
+  return CanRunMtpRound(position, num_draft_steps_, state.GetNumEntries(),
+                        verifier_->max_context_length());
+}
+
 absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
     int position, absl::flat_hash_map<absl::string_view, TensorBuffer>&
                       output_kv_cache_buffers) {
@@ -391,23 +406,27 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
   LITERT_RETURN_IF_ERROR(
       active_drafter_input_buffers_["input_pos"].Write<int32_t>(
           absl::MakeSpan(&position, 1)));
-  if (drafter_signatures_.input_attn_mask.has_value()) {
-    auto& mask_buf =
-        active_drafter_input_buffers_[*drafter_signatures_.input_attn_mask];
+  TensorBuffer* drafter_attn_mask_buffer = FindBufferOrNull(
+      active_drafter_input_buffers_, drafter_signatures_.input_attn_mask);
+  TensorBuffer* drafter_attn_mask_local_buffer = FindBufferOrNull(
+      active_drafter_input_buffers_, drafter_signatures_.input_attn_mask_local);
+  const bool skip_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
+      backend_, drafter_signatures_.input_int32_param.has_value(),
+      drafter_signatures_, attn_params_, drafter_attn_mask_buffer,
+      drafter_attn_mask_local_buffer);
+  if (drafter_attn_mask_buffer != nullptr && !skip_global_causal_mask) {
     ABSL_RETURN_IF_ERROR(
-        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(mask_buf,
+        InitializeAttentionMask(*drafter_attn_mask_buffer, /*is_f16=*/false));
+    ABSL_RETURN_IF_ERROR(FillAttentionMask(*drafter_attn_mask_buffer,
                                            /*start_timestep=*/position,
                                            /*steps=*/1,
                                            attn_params_.global_type));
   }
-  if (drafter_signatures_.input_attn_mask_local.has_value()) {
-    auto& mask_buf = active_drafter_input_buffers_[*drafter_signatures_
-                                                        .input_attn_mask_local];
-    ABSL_RETURN_IF_ERROR(
-        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
+  if (drafter_attn_mask_local_buffer != nullptr && !skip_global_causal_mask) {
+    ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
+        *drafter_attn_mask_local_buffer, /*is_f16=*/false));
     ABSL_RETURN_IF_ERROR(FillAttentionMask(
-        mask_buf,
+        *drafter_attn_mask_local_buffer,
         /*start_timestep=*/position,
         /*steps=*/1, attn_params_.local_type,
         /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,
@@ -546,6 +565,13 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification(
 absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
     int position, int token_id, std::optional<TensorBuffer> activations,
     StateInterface& state, const Constraint* constraint) {
+  if (!CanDraft(position, state)) {
+    return absl::OutOfRangeError(absl::StrCat(
+        "MTP draft position out of range: position=", position,
+        ", num_draft_steps=", num_draft_steps_,
+        ", state_entries=", state.GetNumEntries(), ", verifier_context_length=",
+        verifier_->max_context_length().value_or(-1)));
+  }
   auto* litert_state = dynamic_cast<LitertState*>(&state);
   RET_CHECK(litert_state != nullptr);
   LITERT_ASSIGN_OR_RETURN(

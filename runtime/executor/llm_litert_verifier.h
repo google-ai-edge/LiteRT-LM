@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <utility>
@@ -136,6 +137,10 @@ class LlmLiteRtVerifier {
   // The vocabulary size V of the logits.
   int vocab_size() const { return vocab_size_; }
 
+  // The static context length of the `mask [1, 1, W, context]` input, or
+  // `std::nullopt` if the signature has no static 4D attention mask.
+  std::optional<int> max_context_length() const { return max_context_length_; }
+
   // Starts the pass of `ids`, which holds between 1 and W tokens, at the
   // positions [position, position + ids.size()). `state_buffers` are the base
   // model's KV cache buffers of this pass (see
@@ -178,9 +183,10 @@ class LlmLiteRtVerifier {
       const Environment& env, CompiledModel& base_model,
       SimpleSignature signature, EmbeddingLookupManager* embedding_lookup,
       EmbeddingLookupManager* per_layer_embedding_lookup, int width,
-      int vocab_size, int pad_token_id, ModelSignatures signatures,
-      AttentionMaskParams attn_params, ActivationDataType logits_data_type,
-      Backend sampler_backend, std::unique_ptr<Sampler> sampler,
+      int vocab_size, std::optional<int> max_context_length, int pad_token_id,
+      ModelSignatures signatures, AttentionMaskParams attn_params,
+      ActivationDataType logits_data_type, Backend sampler_backend,
+      std::unique_ptr<Sampler> sampler,
       std::unique_ptr<LiteRtLogitMaskRunner> mask_runner,
       absl::flat_hash_map<absl::string_view, TensorBuffer> output_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer> active_input_buffers,
@@ -194,6 +200,7 @@ class LlmLiteRtVerifier {
         per_layer_embedding_lookup_(per_layer_embedding_lookup),
         width_(width),
         vocab_size_(vocab_size),
+        max_context_length_(max_context_length),
         pad_token_id_(pad_token_id),
         signatures_(std::move(signatures)),
         attn_params_(attn_params),
@@ -237,6 +244,9 @@ class LlmLiteRtVerifier {
 
   // The vocabulary size V, read from the `logits [1, W, V]` output.
   const int vocab_size_;
+
+  // The static context length of the `mask [1, 1, W, context]` input, if any.
+  const std::optional<int> max_context_length_;
 
   // The token id of the padding rows of a `tokens` input.
   const int pad_token_id_;

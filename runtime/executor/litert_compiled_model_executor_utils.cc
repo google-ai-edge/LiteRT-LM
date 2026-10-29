@@ -224,9 +224,11 @@ void FillRingBufferPrefillAttentionMask(
     proto::AttentionMaskType attention_mask_type,
     std::optional<absl::Span<const int>> token_ids) {
   const int window_size = sliding_window_size;
+  const int max_chunk_steps = std::max(0, context_size - ring_buffer_size);
+  const int bounded_steps = std::clamp(steps, 0, max_chunk_steps);
 
   for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
-    for (int step_idx = 0; step_idx < steps; ++step_idx) {
+    for (int step_idx = 0; step_idx < bounded_steps; ++step_idx) {
       int query_step = start_timestep + step_idx;
       int offset = batch_idx * batch_offset + step_idx * context_size;
 
@@ -252,10 +254,11 @@ void FillRingBufferPrefillAttentionMask(
       }
 
       // Right mask: current prefill chunk columns [ring_buffer_size,
-      // ring_buffer_size + steps - 1].
+      // ring_buffer_size + bounded_steps - 1].
       if (attention_mask_type ==
               proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
-          token_ids.has_value() && query_step < token_ids->size() &&
+          token_ids.has_value() && query_step >= 0 &&
+          query_step < token_ids->size() &&
           (*token_ids)[query_step] == ExecutorVisionData::kSpecialToken) {
         int start_chunk_idx = std::max(0, step_idx - window_size + 1);
         int end_token_idx =
@@ -267,15 +270,16 @@ void FillRingBufferPrefillAttentionMask(
                            return token_id != ExecutorVisionData::kSpecialToken;
                          }) -
             token_ids->begin();
-        int end_chunk_idx =
-            std::min(steps, first_future_non_vision_token - start_timestep);
+        int end_chunk_idx = std::min(
+            bounded_steps, first_future_non_vision_token - start_timestep);
         if (end_chunk_idx > start_chunk_idx) {
           FillRange(elem_type, mask_ptr,
                     offset + ring_buffer_size + start_chunk_idx,
                     offset + ring_buffer_size + end_chunk_idx);
         }
       } else {
-        for (int chunk_key_idx = 0; chunk_key_idx < steps; ++chunk_key_idx) {
+        for (int chunk_key_idx = 0; chunk_key_idx < bounded_steps;
+             ++chunk_key_idx) {
           bool is_causal = (chunk_key_idx <= step_idx);
           if (attention_mask_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL) {
             is_causal = true;
@@ -319,9 +323,12 @@ void FillRingBufferDecodeAttentionMask(litert::ElementType elem_type,
                                        int start_timestep, int steps,
                                        int sliding_window_size) {
   const int window_size = sliding_window_size;
+  const int max_steps =
+      ring_buffer_size > 0 ? batch_offset / ring_buffer_size : 0;
+  const int bounded_steps = std::clamp(steps, 0, max_steps);
 
   for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
-    for (int step_idx = 0; step_idx < steps; ++step_idx) {
+    for (int step_idx = 0; step_idx < bounded_steps; ++step_idx) {
       int query_step = start_timestep + step_idx;
       int offset = batch_idx * batch_offset + step_idx * ring_buffer_size;
       for (int col = 0; col < ring_buffer_size; ++col) {
@@ -329,7 +336,7 @@ void FillRingBufferDecodeAttentionMask(litert::ElementType elem_type,
         int distance =
             ((diff % ring_buffer_size) + ring_buffer_size) % ring_buffer_size;
         if (distance <= window_size - 1 && distance <= query_step &&
-            distance <= (ring_buffer_size - steps)) {
+            distance <= (ring_buffer_size - bounded_steps)) {
           FillRange(elem_type, mask_ptr, offset + col, offset + col + 1);
         }
       }
@@ -933,13 +940,16 @@ absl::Status FillAttentionMask(
         "not allowed.");
   }
 
+  const int max_steps = context_size > 0 ? batch_offset / context_size : 0;
+  const int bounded_steps = std::clamp(steps, 0, max_steps);
+
   for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
-    for (int step_idx = 0; step_idx < steps; ++step_idx) {
+    for (int step_idx = 0; step_idx < bounded_steps; ++step_idx) {
       int query_step = start_timestep + step_idx;
       int offset = batch_idx * batch_offset + step_idx * context_size;
       if (attention_mask_type ==
               proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
-          query_step < token_ids->size() &&
+          query_step >= 0 && query_step < token_ids->size() &&
           (*token_ids)[query_step] == ExecutorVisionData::kSpecialToken) {
         int start_k = 0;
         if (sliding_window_size.has_value()) {
@@ -966,8 +976,11 @@ absl::Status FillAttentionMask(
                            return token_id != ExecutorVisionData::kSpecialToken;
                          }) -
             token_ids->begin();
+        const int clamped_start = std::clamp(start_k, 0, context_size);
+        const int clamped_end = std::clamp(first_future_non_vision_token,
+                                           clamped_start, context_size);
         FillRange(mask_tensor_type.ElementType(), mask_lock_and_addr.second,
-                  offset + start_k, offset + first_future_non_vision_token);
+                  offset + clamped_start, offset + clamped_end);
       } else {
         // Fast path for text queries or other policies.
         int causal_start = 0;
@@ -977,12 +990,17 @@ absl::Status FillAttentionMask(
         }
         int causal_end = query_step + 1;
         if (attention_mask_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL) {
-          causal_end = std::min<int>(context_size, start_timestep + steps);
+          const int64_t bidir_end =
+              static_cast<int64_t>(start_timestep) + bounded_steps;
+          causal_end =
+              static_cast<int>(std::clamp<int64_t>(bidir_end, 0, context_size));
           if (sliding_window_size.has_value()) {
             causal_end = std::min<int>(
                 causal_end, query_step + sliding_window_size.value());
           }
         }
+        causal_start = std::clamp(causal_start, 0, context_size);
+        causal_end = std::clamp(causal_end, causal_start, context_size);
         FillRange(mask_tensor_type.ElementType(), mask_lock_and_addr.second,
                   offset + causal_start, offset + causal_end);
       }

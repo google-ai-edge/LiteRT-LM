@@ -21,6 +21,7 @@
 #include <filesystem>  // NOLINT(build/c++17)
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -270,6 +271,51 @@ TEST(LlmLiteRtMtpDrafterTest,
   const std::vector<int> drafted = {10, 20, 30};
   const std::vector<int> short_verifier = {10, 20};
   EXPECT_EQ(CountAcceptedPrefix(short_verifier, drafted), 2);
+}
+
+TEST(LlmLiteRtMtpDrafterTest, CanRunMtpRoundEnforcesContextAndStateBounds) {
+  constexpr int kMaxEntries = 4096;
+  constexpr int kNumDraftSteps = 3;  // Verifier processes 4 tokens per round.
+
+  // Drafter reads `position - 1`, so `position < 1` is invalid.
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/0, kNumDraftSteps, kMaxEntries));
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/-1, kNumDraftSteps, kMaxEntries));
+  EXPECT_TRUE(CanRunMtpRound(/*position=*/1, kNumDraftSteps, kMaxEntries));
+
+  // At position 4092, verifier processes positions [4092, 4093, 4094, 4095],
+  // which is the last valid 4-token round within a 4096-entry context.
+  EXPECT_TRUE(CanRunMtpRound(/*position=*/4092, kNumDraftSteps, kMaxEntries,
+                             /*verifier_max_context_length=*/4096));
+
+  // At positions 4093..4096, a 4-token verifier step would reach 4096..4099
+  // and overflow the 4096-entry state/attention mask.
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/4093, kNumDraftSteps, kMaxEntries,
+                              /*verifier_max_context_length=*/4096));
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/4094, kNumDraftSteps, kMaxEntries,
+                              /*verifier_max_context_length=*/4096));
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/4095, kNumDraftSteps, kMaxEntries,
+                              /*verifier_max_context_length=*/4096));
+
+  // If the verifier's static attention mask is smaller than state entries,
+  // `verifier_max_context_length` still bounds the round.
+  EXPECT_TRUE(CanRunMtpRound(/*position=*/1020, kNumDraftSteps, kMaxEntries,
+                             /*verifier_max_context_length=*/1024));
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/1021, kNumDraftSteps, kMaxEntries,
+                              /*verifier_max_context_length=*/1024));
+
+  // Negative draft steps and signed `int` overflow near `INT_MAX` are rejected
+  // without undefined behavior, while dynamic (`<= 0`) context dimensions do
+  // not spuriously disable MTP.
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/1, /*num_draft_steps=*/-1,
+                              kMaxEntries));
+  EXPECT_FALSE(CanRunMtpRound(/*position=*/std::numeric_limits<int>::max() - 2,
+                              kNumDraftSteps, /*max_state_entries=*/0));
+  EXPECT_TRUE(CanRunMtpRound(/*position=*/100, kNumDraftSteps,
+                             /*max_state_entries=*/-1,
+                             /*verifier_max_context_length=*/-1));
+  EXPECT_TRUE(CanRunMtpRound(/*position=*/100, kNumDraftSteps,
+                             /*max_state_entries=*/0,
+                             /*verifier_max_context_length=*/0));
 }
 
 // A toy first-order "language model" over a small vocabulary, used to check
