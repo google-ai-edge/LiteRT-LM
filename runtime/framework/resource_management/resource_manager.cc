@@ -725,9 +725,16 @@ ResourceManager::CloneContextHandler(
   std::unique_ptr<AudioContext> audio_context;
   if (llm_context_handler->HasAudioContext()) {
     ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-    ABSL_ASSIGN_OR_RETURN(
-        audio_context,
-        audio_executor->CloneContext(llm_context_handler->GetAudioContext()));
+    if (llm_context_handler == current_handler_) {
+      // The audio executor holds the live audio state of the currently loaded
+      // context handler, so clone it directly from the executor instead of
+      // from the (possibly stale) context stored in the handler.
+      ABSL_ASSIGN_OR_RETURN(audio_context, audio_executor->CloneContext());
+    } else {
+      ABSL_ASSIGN_OR_RETURN(
+          audio_context,
+          audio_executor->CloneContext(llm_context_handler->GetAudioContext()));
+    }
   }
   return ContextHandler::Bundle(
       processed_context, std::make_unique<RuntimeConfig>(runtime_config),

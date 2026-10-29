@@ -154,6 +154,100 @@ class FakeAudioExecutor : public AudioExecutor {
   std::vector<std::optional<uint32_t>> used_lora_ids_;
 };
 
+// An audio context that records how many chunks were encoded when it was
+// captured.
+class StatefulFakeAudioContext : public AudioContext {
+ public:
+  explicit StatefulFakeAudioContext(int num_encoded_chunks)
+      : num_encoded_chunks_(num_encoded_chunks) {}
+  absl::StatusOr<std::unique_ptr<AudioContext>> Clone() const override {
+    return std::make_unique<StatefulFakeAudioContext>(num_encoded_chunks_);
+  }
+  int num_encoded_chunks() const { return num_encoded_chunks_; }
+
+ private:
+  int num_encoded_chunks_;
+};
+
+// A streaming audio executor whose only state is the number of encoded chunks,
+// so tests can verify that context save/restore reflects the live executor
+// state.
+class StatefulFakeAudioExecutor : public AudioExecutor {
+ public:
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const TensorBuffer& spectrogram_tensor) override {
+    ++num_encoded_chunks_;
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
+  }
+
+  absl::Status Reset() override {
+    num_encoded_chunks_ = 0;
+    return absl::OkStatus();
+  }
+
+  absl::StatusOr<ExecutorAudioData> Flush() override {
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
+  }
+
+  absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
+      const override {
+    AudioExecutorProperties properties;
+    properties.is_streaming_model = true;
+    return properties;
+  }
+
+  absl::StatusOr<std::unique_ptr<AudioContext>> CreateNewContext() override {
+    ++num_create_new_context_calls_;
+    return std::make_unique<StatefulFakeAudioContext>(0);
+  }
+
+  absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext() override {
+    ++num_clone_context_calls_;
+    return std::make_unique<StatefulFakeAudioContext>(num_encoded_chunks_);
+  }
+
+  absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext(
+      const AudioContext& audio_context) override {
+    return audio_context.Clone();
+  }
+
+  absl::Status RestoreContext(
+      std::unique_ptr<AudioContext> audio_context) override {
+    num_encoded_chunks_ =
+        static_cast<const StatefulFakeAudioContext&>(*audio_context)
+            .num_encoded_chunks();
+    return absl::OkStatus();
+  }
+
+  int num_encoded_chunks_ = 0;
+  int num_create_new_context_calls_ = 0;
+  int num_clone_context_calls_ = 0;
+};
+
+// A fake LLM executor that supports the runtime config/state round-trip the
+// resource manager performs when switching between or cloning context handlers
+// that share the same processed context.
+class ContextSwitchingFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  using FakeLlmExecutor::FakeLlmExecutor;
+
+  absl::StatusOr<RuntimeConfig> GetRuntimeConfig() const override {
+    return RuntimeConfig();
+  }
+
+  absl::StatusOr<RuntimeState> GetRuntimeState() const override {
+    return RuntimeState();
+  }
+
+  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override {
+    return absl::OkStatus();
+  }
+};
+
 class NonStreamingFakeAudioExecutor : public AudioExecutor {
  public:
   absl::StatusOr<ExecutorAudioData> Encode(
@@ -483,6 +577,131 @@ TEST_P(ExecutionManagerTest, EncodeAudioWithNonStreamingAudioExecutor) {
                        execution_manager_->FlushAudio(*session_info));
   EXPECT_EQ(flush_data.GetValidTokens(), 0);
   EXPECT_TRUE(fake_audio_executor_ptr->flush_called_);
+}
+
+TEST_P(ExecutionManagerTest, EncodeAudioDoesNotEagerlyCloneAudioContext) {
+  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
+  auto fake_audio_executor = std::make_unique<StatefulFakeAudioExecutor>();
+  auto* fake_audio_executor_ptr = fake_audio_executor.get();
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::move(fake_audio_executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetAudioModalityEnabled(true);
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  const std::vector<float> kSpectrogramData = {1.0f, 2.0f, 3.0f, 4.0f};
+  auto tensor_or = CopyToTensorBuffer<float>(kSpectrogramData, {1, 4});
+  ASSERT_TRUE(tensor_or.HasValue());
+  EXPECT_EQ(fake_audio_executor_ptr->num_create_new_context_calls_, 1);
+  ASSERT_OK(execution_manager_->EncodeAudio(*session_info, *tensor_or));
+  ASSERT_OK(execution_manager_->EncodeAudio(*session_info, *tensor_or));
+  ASSERT_OK(execution_manager_->FlushAudio(*session_info));
+
+  // Encoding, flushing, and resetting must not clone or recreate the audio
+  // context in the handler; the executor keeps the live state until another
+  // context handler needs it.
+  EXPECT_EQ(fake_audio_executor_ptr->num_clone_context_calls_, 0);
+  EXPECT_EQ(fake_audio_executor_ptr->num_create_new_context_calls_, 1);
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 2);
+
+  ASSERT_OK(execution_manager_->ResetAudio(*session_info));
+  EXPECT_EQ(fake_audio_executor_ptr->num_clone_context_calls_, 0);
+  EXPECT_EQ(fake_audio_executor_ptr->num_create_new_context_calls_, 1);
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 0);
+}
+
+TEST_P(ExecutionManagerTest, CloneSessionCapturesLiveAudioContext) {
+  auto fake_llm_executor = std::make_unique<ContextSwitchingFakeLlmExecutor>(
+      kVocabSize, std::vector<std::vector<int>>{{1, 2, 3}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}});
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
+  auto fake_audio_executor = std::make_unique<StatefulFakeAudioExecutor>();
+  auto* fake_audio_executor_ptr = fake_audio_executor.get();
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::move(fake_audio_executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetAudioModalityEnabled(true);
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  const std::vector<float> kSpectrogramData = {1.0f, 2.0f, 3.0f, 4.0f};
+  auto tensor_or = CopyToTensorBuffer<float>(kSpectrogramData, {1, 4});
+  ASSERT_TRUE(tensor_or.HasValue());
+  ASSERT_OK(execution_manager_->EncodeAudio(*session_info, *tensor_or));
+  ASSERT_OK(execution_manager_->EncodeAudio(*session_info, *tensor_or));
+
+  // Clone the session while its audio state only lives in the executor.
+  ASSERT_OK_AND_ASSIGN(const SessionId cloned_session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  absl::Status clone_status;
+  ASSERT_OK(execution_manager_->AddCloneSessionTask(
+      session_id, task_id, {}, cloned_session_id,
+      std::make_shared<std::atomic<bool>>(false),
+      [&clone_status](absl::StatusOr<Responses> responses) {
+        clone_status = responses.status();
+      }));
+  EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+  ASSERT_OK(clone_status);
+
+  ASSERT_OK_AND_ASSIGN(auto cloned_session_info,
+                       execution_manager_->GetSessionInfo(cloned_session_id));
+  ASSERT_TRUE(cloned_session_info->context_handler->HasAudioContext());
+  EXPECT_EQ(static_cast<const StatefulFakeAudioContext&>(
+                cloned_session_info->context_handler->GetAudioContext())
+                .num_encoded_chunks(),
+            2);
+
+  // Switching to the cloned session restores the cloned audio state, and
+  // switching back to the original session restores its live state.
+  ASSERT_OK(execution_manager_->EncodeAudio(*cloned_session_info, *tensor_or));
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 3);
+  ASSERT_OK(execution_manager_->EncodeAudio(*session_info, *tensor_or));
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 3);
+  ASSERT_OK(execution_manager_->EncodeAudio(*cloned_session_info, *tensor_or));
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 4);
+
+  // Resetting a session's audio state in the executor is also lazily saved
+  // when switching to another session and restored when switching back.
+  const int create_calls_before_reset =
+      fake_audio_executor_ptr->num_create_new_context_calls_;
+  ASSERT_OK(execution_manager_->ResetAudio(*session_info));
+  EXPECT_EQ(fake_audio_executor_ptr->num_create_new_context_calls_,
+            create_calls_before_reset);
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 0);
+  ASSERT_OK(execution_manager_->EncodeAudio(*cloned_session_info, *tensor_or));
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 5);
+  ASSERT_OK(execution_manager_->EncodeAudio(*session_info, *tensor_or));
+  EXPECT_EQ(fake_audio_executor_ptr->num_encoded_chunks_, 1);
 }
 
 TEST_P(ExecutionManagerTest, AddPrefillTaskWithPrecomputedAudioEmbeddings) {

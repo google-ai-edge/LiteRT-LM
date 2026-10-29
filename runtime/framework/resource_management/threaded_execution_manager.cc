@@ -1345,18 +1345,11 @@ absl::StatusOr<ExecutorAudioData> ThreadedExecutionManager::EncodeAudio(
                             session_info.context_handler));
   ABSL_ASSIGN_OR_RETURN(auto audio_executor,
                         resource_manager_->AcquireAudioExecutor());
-  ABSL_ASSIGN_OR_RETURN(auto audio_data,
-                        audio_executor->Encode(spectrogram_tensor));
-  if (session_info.context_handler != nullptr) {
-    auto current_audio_context = audio_executor->CloneContext();
-    if (current_audio_context.ok()) {
-      ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
-          std::move(*current_audio_context)));
-    } else if (!absl::IsUnimplemented(current_audio_context.status())) {
-      return current_audio_context.status();
-    }
-  }
-  return audio_data;
+  // The audio context is not cloned back to the context handler here. The
+  // audio executor keeps the live state for the currently loaded context
+  // handler, and the resource manager saves it lazily when switching to a
+  // different context handler or when cloning the context handler.
+  return audio_executor->Encode(spectrogram_tensor);
 }
 
 absl::Status ThreadedExecutionManager::ResetAudio(
@@ -1366,18 +1359,11 @@ absl::Status ThreadedExecutionManager::ResetAudio(
                             session_info.context_handler));
   ABSL_ASSIGN_OR_RETURN(auto audio_executor,
                         resource_manager_->AcquireAudioExecutor());
+  // See EncodeAudio() for why the audio context is not updated in the context
+  // handler here.
   auto reset_status = audio_executor->Reset();
   if (!reset_status.ok() && !absl::IsUnimplemented(reset_status)) {
     return reset_status;
-  }
-  if (session_info.context_handler != nullptr) {
-    auto new_audio_context = audio_executor->CreateNewContext();
-    if (new_audio_context.ok()) {
-      ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
-          std::move(*new_audio_context)));
-    } else if (!absl::IsUnimplemented(new_audio_context.status())) {
-      return new_audio_context.status();
-    }
   }
   return absl::OkStatus();
 }
@@ -1393,15 +1379,7 @@ absl::StatusOr<ExecutorAudioData> ThreadedExecutionManager::FlushAudio(
   if (!audio_data.ok() && !absl::IsUnimplemented(audio_data.status())) {
     return audio_data.status();
   }
-  if (session_info.context_handler != nullptr) {
-    auto current_audio_context = audio_executor->CloneContext();
-    if (current_audio_context.ok()) {
-      ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
-          std::move(*current_audio_context)));
-    } else if (!absl::IsUnimplemented(current_audio_context.status())) {
-      return current_audio_context.status();
-    }
-  }
+  // See EncodeAudio() for why the audio context is not cloned back here.
   if (!audio_data.ok()) {
     ExecutorAudioData empty_audio_data;
     empty_audio_data.SetValidTokens(0);
