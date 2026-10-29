@@ -35,7 +35,7 @@ struct Qwen3TtsModelConfig {
   std::optional<uint64_t> seed = 1;
 
   std::string talker_file = "talker_int4.tflite";
-  std::string mtp_file = "mtp_fp32.tflite";
+  std::string mtp_file = "mtp.tflite";
   std::string codec_file = "codec_decoder_fp32.tflite";
   std::string text_embedding_file = "text_embedding.tflite";
   std::string text_projection_file = "text_projection.tflite";

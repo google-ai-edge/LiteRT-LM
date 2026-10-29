@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
 
+#include <cstddef>
 #include <memory>
 #include <random>
 #include <utility>
@@ -23,6 +24,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_lm_runner.h"
@@ -46,6 +48,61 @@ namespace litert::omni::tts {
 //   success, or `absl::InvalidArgumentError` (or LiteRT buffer error) if the
 //   tensor type or layout dimensions are invalid.
 absl::StatusOr<int> DeriveMtpCacheLen(const TensorBuffer& mask_buffer);
+
+// Output layout of the MTP drafter's per-step (`mtp_step`) signature.
+enum class MtpStepOutputLayout {
+  // Legacy models: the step emits the logits of all 15 residual codebook
+  // heads (`15 * qwen3_tts::kMtpVocab` floats).
+  kAllHeadsLogits,
+  // Per-head models: the step emits the final hidden state
+  // (`qwen3_tts::kHiddenDim` floats), and each codebook head is a separate
+  // `head_<i>` signature.
+  kHiddenState,
+};
+
+// Resolves the MTP step output layout from the packed size of the step's
+// non-state output tensor.
+//
+// args
+// - step_output_bytes: Packed byte size of the MTP step output tensor.
+//
+// returns
+// - The matching `MtpStepOutputLayout` on success, or
+//   `absl::InvalidArgumentError` if the size matches neither layout.
+absl::StatusOr<MtpStepOutputLayout> ResolveMtpStepOutputLayout(
+    size_t step_output_bytes);
+
+// Validates the I/O buffers of a per-codebook MTP head signature
+// (`head_<i>`): exactly one `qwen3_tts::kHiddenDim`-float input and one
+// `qwen3_tts::kMtpVocab`-float logits output.
+//
+// args
+// - signature: Name of the head signature, used in error messages.
+// - input_buffers: Input buffers created for the head signature.
+// - output_buffers: Output buffers created for the head signature.
+//
+// returns
+// - `absl::OkStatus()` if the buffers match, or `absl::InvalidArgumentError`
+//   (or a LiteRT buffer error) otherwise.
+absl::Status ValidateMtpHeadBuffers(
+    absl::string_view signature, const std::vector<TensorBuffer>& input_buffers,
+    const std::vector<TensorBuffer>& output_buffers);
+
+// Returns the argmax token of codebook head `head_idx` from a logits buffer
+// that holds one or more consecutive `qwen3_tts::kMtpVocab`-float heads
+// (the legacy all-heads step output, or a single `head_<i>` output with
+// `head_idx = 0`).
+//
+// args
+// - logits_buffer: Float32 buffer of `N * qwen3_tts::kMtpVocab` logits.
+// - head_idx: Index of the head whose logits slice is evaluated.
+//
+// returns
+// - Token ID in `[0, qwen3_tts::kMtpVocab)` on success, or
+//   `absl::InvalidArgumentError` if `head_idx` is out of range for the
+//   buffer (or a LiteRT buffer error).
+absl::StatusOr<int> ArgmaxMtpHeadLogits(const TensorBuffer& logits_buffer,
+                                        int head_idx);
 
 // Stage 2: Acoustic Predictor (Talker + MTP Autoregressive RVQ Generation)
 class Qwen3TtsAcousticPredictorStage
@@ -122,6 +179,32 @@ class Qwen3TtsAcousticPredictorStage
   absl::StatusOr<std::vector<int>> RunMtp(const std::vector<float>& hidden,
                                           int cb0);
 
+  // Computes the logits of MTP codebook `head_idx` (0-based, excluding
+  // codebook 0) from the output of the last MTP step.
+  //
+  // With per-head signatures (`head_<i>`) only that head's LM projection is
+  // evaluated; legacy MTP models emit all 15 heads from the step itself, in
+  // which case the matching slice is read.
+  //
+  // args
+  // - step_output: Non-state output tensor of the last MTP step.
+  // - head_idx: Index of the residual codebook head to evaluate.
+  //
+  // returns
+  // - Argmax token ID of the selected head on success, or error status.
+  absl::StatusOr<int> PickMtpToken(const TensorBuffer& step_output,
+                                   int head_idx);
+
+  // Resolves the MTP output layout: per-head signatures or legacy
+  // all-heads logits.
+  //
+  // args
+  // - mtp_model: Compiled MTP model.
+  //
+  // returns
+  // - absl::OkStatus() on success, or error status if the layout is unknown.
+  absl::Status InitMtpHeads(CompiledModel& mtp_model);
+
   // Embeds a single audio codec token ID using the codec embedding model.
   //
   // args
@@ -161,8 +244,18 @@ class Qwen3TtsAcousticPredictorStage
   std::shared_ptr<LiteRtLmRunner> talker_runner_;
 
   // Stateful runner for MTP
+  std::shared_ptr<CompiledModel> mtp_model_;
   std::unique_ptr<LiteRtRunner> mtp_runner_raw_;
   std::unique_ptr<StatefulLiteRtRunner> mtp_runner_;
+
+  // Per-codebook MTP LM heads (`head_<i>` signatures). Empty for legacy MTP
+  // models whose step emits the logits of all heads at once.
+  struct MtpHead {
+    size_t signature_index = 0;
+    std::vector<TensorBuffer> input_buffers;
+    std::vector<TensorBuffer> output_buffers;
+  };
+  std::vector<MtpHead> mtp_heads_;
 
   // Embedding compiled models
   std::shared_ptr<CompiledModel> codec_embedding_model_;

@@ -42,6 +42,7 @@
 namespace litert::omni::tts {
 namespace {
 
+using ::absl_testing::IsOk;
 using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
 
@@ -52,6 +53,35 @@ Expected<TensorBuffer> CreateMaskBuffer(Environment& env,
   RankedTensorType tensor_type(element_type, Layout(dims));
   return TensorBuffer::CreateManaged(env, TensorBufferType::kHostMemory,
                                      std::move(tensor_type), buffer_size);
+}
+
+Expected<TensorBuffer> CreateFloatBuffer(Environment& env,
+                                         const Dimensions& dims,
+                                         size_t num_floats) {
+  return CreateMaskBuffer(env, ElementType::Float32, dims,
+                          num_floats * sizeof(float));
+}
+
+// Returns a one-element buffer list holding a `[1, 1, num_floats]` Float32
+// buffer, as created for a single-input or single-output signature.
+std::vector<TensorBuffer> MakeSingleBuffer(Environment& env,
+                                           size_t num_floats) {
+  std::vector<TensorBuffer> buffers;
+  Expected<TensorBuffer> buffer = CreateFloatBuffer(
+      env, Dimensions({1, 1, static_cast<int32_t>(num_floats)}), num_floats);
+  EXPECT_TRUE(buffer.HasValue());
+  if (buffer.HasValue()) buffers.push_back(std::move(*buffer));
+  return buffers;
+}
+
+// Returns `num_heads * kMtpVocab` logits where head `h` peaks at token
+// `peaks[h]`.
+std::vector<float> MakeHeadLogits(absl::Span<const int> peaks) {
+  std::vector<float> logits(peaks.size() * qwen3_tts::kMtpVocab, -1.0f);
+  for (size_t h = 0; h < peaks.size(); ++h) {
+    logits[h * qwen3_tts::kMtpVocab + peaks[h]] = 5.0f;
+  }
+  return logits;
 }
 
 class EmptyFrontendStage
@@ -170,6 +200,93 @@ TEST(Qwen3TtsAcousticPredictorStageTest, CreateRejectsMissingTalkerRunner) {
   EXPECT_THAT(
       Qwen3TtsAcousticPredictorStage::Create(&frontend, config, resources),
       StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(Qwen3TtsAcousticPredictorStageTest, ResolvesMtpStepOutputLayout) {
+  constexpr size_t kNumHeads = qwen3_tts::kNumCodeGroups - 1;
+  EXPECT_THAT(ResolveMtpStepOutputLayout(qwen3_tts::kHiddenDim * sizeof(float)),
+              IsOkAndHolds(MtpStepOutputLayout::kHiddenState));
+  EXPECT_THAT(ResolveMtpStepOutputLayout(kNumHeads * qwen3_tts::kMtpVocab *
+                                         sizeof(float)),
+              IsOkAndHolds(MtpStepOutputLayout::kAllHeadsLogits));
+  EXPECT_THAT(ResolveMtpStepOutputLayout(qwen3_tts::kMtpVocab * sizeof(float)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      ResolveMtpStepOutputLayout(qwen3_tts::kHiddenDim * sizeof(float) + 1),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(ResolveMtpStepOutputLayout(0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Qwen3TtsAcousticPredictorStageTest, ValidatesMtpHeadBuffers) {
+  Expected<Environment> env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+
+  EXPECT_THAT(ValidateMtpHeadBuffers(
+                  "head_0", MakeSingleBuffer(*env, qwen3_tts::kHiddenDim),
+                  MakeSingleBuffer(*env, qwen3_tts::kMtpVocab)),
+              IsOk());
+
+  // Wrong number of inputs / outputs.
+  EXPECT_THAT(ValidateMtpHeadBuffers(
+                  "head_0", {}, MakeSingleBuffer(*env, qwen3_tts::kMtpVocab)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(ValidateMtpHeadBuffers(
+                  "head_0", MakeSingleBuffer(*env, qwen3_tts::kHiddenDim), {}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Input is not a `kHiddenDim` hidden state.
+  EXPECT_THAT(ValidateMtpHeadBuffers(
+                  "head_0", MakeSingleBuffer(*env, qwen3_tts::kHiddenDim / 2),
+                  MakeSingleBuffer(*env, qwen3_tts::kMtpVocab)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Output is not `kMtpVocab` logits.
+  EXPECT_THAT(ValidateMtpHeadBuffers(
+                  "head_0", MakeSingleBuffer(*env, qwen3_tts::kHiddenDim),
+                  MakeSingleBuffer(*env, qwen3_tts::kMtpVocab - 1)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Qwen3TtsAcousticPredictorStageTest, PicksTokensFromAllHeadsLogits) {
+  Expected<Environment> env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  constexpr int kNumHeads = qwen3_tts::kNumCodeGroups - 1;
+  std::vector<int> peaks(kNumHeads);
+  for (int h = 0; h < kNumHeads; ++h) {
+    peaks[h] = (h * 131 + 7) % qwen3_tts::kMtpVocab;
+  }
+  const std::vector<float> logits = MakeHeadLogits(peaks);
+  Expected<TensorBuffer> buffer = CreateFloatBuffer(
+      *env, Dimensions({1, 1, static_cast<int32_t>(logits.size())}),
+      logits.size());
+  ASSERT_TRUE(buffer.HasValue());
+  ASSERT_TRUE(buffer->Write<float>(absl::MakeConstSpan(logits)).HasValue());
+
+  for (int h = 0; h < kNumHeads; ++h) {
+    EXPECT_THAT(ArgmaxMtpHeadLogits(*buffer, h), IsOkAndHolds(peaks[h]))
+        << "head " << h;
+  }
+  EXPECT_THAT(ArgmaxMtpHeadLogits(*buffer, kNumHeads),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(ArgmaxMtpHeadLogits(*buffer, -1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Qwen3TtsAcousticPredictorStageTest, PicksTokenFromPerHeadLogits) {
+  Expected<Environment> env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  constexpr int kPeak = qwen3_tts::kMtpVocab - 1;
+  const std::vector<float> logits = MakeHeadLogits({kPeak});
+  Expected<TensorBuffer> buffer = CreateFloatBuffer(
+      *env, Dimensions({1, 1, qwen3_tts::kMtpVocab}), qwen3_tts::kMtpVocab);
+  ASSERT_TRUE(buffer.HasValue());
+  ASSERT_TRUE(buffer->Write<float>(absl::MakeConstSpan(logits)).HasValue());
+
+  EXPECT_THAT(ArgmaxMtpHeadLogits(*buffer, /*head_idx=*/0),
+              IsOkAndHolds(kPeak));
+  EXPECT_THAT(ArgmaxMtpHeadLogits(*buffer, /*head_idx=*/1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

@@ -15,6 +15,7 @@
 #include "omni/text2speech/qwen3_tts/qwen3_tts_factory.h"
 
 #include <cstddef>
+#include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
 #include <memory>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -53,6 +55,28 @@
 
 namespace litert::omni::tts {
 namespace {
+
+// MTP drafter file name used by unpacked model directories exported before the
+// INT8 per-head MTP (`mtp.tflite`).
+constexpr absl::string_view kLegacyMtpFile = "mtp_fp32.tflite";
+
+// Returns the MTP drafter file name to load from an unpacked `model_dir`:
+// `mtp_file` if it exists, otherwise `kLegacyMtpFile` if that exists (so
+// directories that predate the `mtp.tflite` rename keep working), otherwise
+// `mtp_file` so the subsequent load reports the missing file.
+std::string ResolveMtpFile(absl::string_view model_dir,
+                           absl::string_view mtp_file) {
+  const std::filesystem::path dir{std::string(model_dir)};
+  if (CheckFileReadable((dir / std::string(mtp_file)).string()).ok()) {
+    return std::string(mtp_file);
+  }
+  if (CheckFileReadable((dir / std::string(kLegacyMtpFile)).string()).ok()) {
+    ABSL_LOG(INFO) << mtp_file << " not found in " << model_dir
+                   << "; falling back to " << kLegacyMtpFile;
+    return std::string(kLegacyMtpFile);
+  }
+  return std::string(mtp_file);
+}
 
 class TalkerLmModelResources : public lm::ModelResources {
  public:
@@ -336,11 +360,12 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
   ABSL_RETURN_IF_ERROR(
       resources.AddLmRunner("talker", std::move(talker_runner)));
 
-  LITERT_ASSIGN_OR_RETURN(auto mtp,
-                          CreateCompiledModelForStatefulRunner(
-                              env, cpu_model_options, config.mtp_file,
-                              /*signature_name=*/"", /*num_non_state_inputs=*/3,
-                              /*num_non_state_outputs=*/1));
+  LITERT_ASSIGN_OR_RETURN(
+      auto mtp,
+      CreateCompiledModelForStatefulRunner(
+          env, cpu_model_options, ResolveMtpFile(model_folder, config.mtp_file),
+          /*signature_name=*/"", /*num_non_state_inputs=*/3,
+          /*num_non_state_outputs=*/1));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "mtp", std::make_shared<CompiledModel>(std::move(mtp))));
 

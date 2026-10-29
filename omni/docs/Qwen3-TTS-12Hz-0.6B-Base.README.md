@@ -223,7 +223,7 @@ Measured with `omni_runner` (`android_arm64`, 4 CPU threads) on retail-equivalen
 | Section (`TtsMetadata` role) | Details | Execution backend (`--backend=gpu`) |
 |---|---|---|
 | `tf_lite_talker` | 28-layer Qwen3 autoregressive speech LM (`prefill_32`, `prefill_128`, `decode`, KV cache 1024) predicting codebook 0 at 12.5 Hz. Dynamic INT8 (`441 MB` in `qwen3_tts_int8.litertlm`) or Blockwise-32 OCTAV INT4 (`244 MB` in `qwen3_tts_int4.litertlm`). | **GPU** |
-| `tf_lite_mtp_drafter` | 5-layer inner Multi-Token Prediction transformer (`220 MB`, FP16 weights) invoked 16× per 12.5 Hz frame to predict residual codebooks 1–15. | **CPU** (keeps all 16 inner steps in CPU cache with zero CPU↔GPU sync overhead) |
+| `tf_lite_mtp_drafter` | 5-layer inner Multi-Token Prediction transformer (`111 MB`, dynamic INT8 weights) invoked 16× per 12.5 Hz frame to predict residual codebooks 1–15. The decode step emits the final hidden state; the 15 codebook LM heads are separate `head_<i>` signatures so each step only evaluates the head it needs. | **CPU** (keeps all 16 inner steps in CPU cache with zero CPU↔GPU sync overhead) |
 | `tf_lite_text_projection` | 2-layer MLP (`25 MB`, FP32) projecting text embeddings into the Talker hidden dimension. | **CPU** |
 | `tf_lite_codec_decoder` | RVQ + 8-layer transformer + causal ConvNet upsampler (`457 MB`, FP32) rendering 64-frame chunks into 24 kHz PCM audio. | **CPU** (1D conv lengths up to `122,886` exceed mobile OpenCL 2D texture width limits of `16,384`) |
 | `tf_lite_text_embedding` | `[151936, 2048]` gather lookup table (`1.24 GB`). | **CPU** |

@@ -38,6 +38,11 @@ constexpr int kCodecThinkEos = 2157;
 
 constexpr int kHiddenDim = 1024;
 constexpr int kNumCodeGroups = 16;
+// Vocabulary size of each residual codebook predicted by the MTP drafter.
+constexpr int kMtpVocab = 2048;
+// Prefix of the per-codebook LM head signatures (`head_0` .. `head_14`) in the
+// MTP drafter model.
+constexpr absl::string_view kMtpHeadPrefix = "head_";
 constexpr int kFrameChunkSize = 75;
 constexpr int kVocoderOverlapContext = 25;
 constexpr int kAudioSampleRateHz = 24000;
