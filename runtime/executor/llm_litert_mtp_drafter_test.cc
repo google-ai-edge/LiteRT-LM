@@ -419,31 +419,6 @@ TEST(LlmLiteRtMtpDrafterTest, GreedyVerificationDoesNotFollowTarget) {
   EXPECT_GT(ChiSquared(counts, expected, kTrials), 18.47);
 }
 
-TEST(SeededRandomEngineTest, KeepsStreamWhileSeedIsUnchanged) {
-  SeededRandomEngine engine;
-  std::default_random_engine reference(7);
-  const auto first = engine.Get(7);
-  ASSERT_NE(first, nullptr);
-  EXPECT_EQ((*first)(), reference());
-  const auto again = engine.Get(7);
-  EXPECT_EQ(again, first);
-  EXPECT_EQ((*again)(), reference());
-}
-
-TEST(SeededRandomEngineTest, ReseedsWhenSeedChanges) {
-  SeededRandomEngine engine;
-  const auto seven = engine.Get(7);
-  seven->discard(1);
-  const auto eight = engine.Get(8);
-  EXPECT_NE(eight, seven);
-  std::default_random_engine reference_eight(8);
-  EXPECT_EQ((*eight)(), reference_eight());
-  // Going back to a previous seed restarts its stream.
-  const auto seven_again = engine.Get(7);
-  std::default_random_engine reference_seven(7);
-  EXPECT_EQ((*seven_again)(), reference_seven());
-}
-
 TEST(LlmLiteRtMtpDrafterTest, LenienceRandomEngineRestartsWithVerifierStream) {
   auto first_gen = std::make_shared<std::default_random_engine>(7);
   LenienceRandomEngine lenience;

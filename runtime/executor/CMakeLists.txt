@@ -620,6 +620,36 @@ target_link_libraries(runtime_executor_speculative_decoding_controller
 )
 
 # ==============================================================================
+# LLM LiteRT Verifier
+# ==============================================================================
+add_litertlm_library(runtime_executor_llm_litert_verifier STATIC
+  llm_litert_verifier.cc
+)
+add_library(LiteRTLM::Runtime::Executor::LlmLitertVerifier ALIAS runtime_executor_llm_litert_verifier)
+
+target_include_directories(runtime_executor_llm_litert_verifier
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_llm_litert_verifier
+  PUBLIC
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
+    LiteRTLM::Runtime::Executor::LlmExecutorSettings
+    LiteRTLM::Runtime::Components::SamplerInterface
+    LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+    LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
+    LiteRTLM::Runtime::Executor::Litert::State
+    LiteRTLM::Runtime::Util::ConvertTensorBuffer
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LLM LiteRT MTP Drafter
 # ==============================================================================
 add_litertlm_library(runtime_executor_llm_litert_mtp_drafter STATIC
@@ -639,6 +669,7 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
+    LiteRTLM::Runtime::Executor::LlmLitertVerifier
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
@@ -724,6 +755,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::LlmLitertCompiledModelCacheUtils
   LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::LlmLitertMtpDrafter
+  LiteRTLM::Runtime::Executor::LlmLitertVerifier
   LiteRTLM::Runtime::Executor::MtpGatingPolicy
   LiteRTLM::Runtime::Executor::SpeculativeDecodingController
   LiteRTLM::Runtime::Executor::SpeculativeDecodingMode

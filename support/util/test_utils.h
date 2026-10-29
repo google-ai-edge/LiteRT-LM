@@ -72,8 +72,9 @@ MATCHER_P2(StatusIs, code, msg, "") {
       testing::ExplainMatchResult(msg, status.message(), result_listener);
 }
 
-MATCHER_P(IsOkAndHolds, value, "") {
-  return arg.ok() && *arg == static_cast<decltype(*arg)>(value);
+MATCHER_P(IsOkAndHolds, matcher, "") {
+  return arg.ok() &&
+      testing::ExplainMatchResult(matcher, *arg, result_listener);
 }
 
 }  // namespace testing::status

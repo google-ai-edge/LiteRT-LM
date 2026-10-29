@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // NOLINT: Required for std::filesystem::path.
@@ -49,6 +50,7 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
@@ -729,6 +731,40 @@ absl::Status FillSingleBufferCacheParamTensor(
   LITERT_RETURN_IF_ERROR(sizeof(params) <= packed_size);
   std::memcpy(param_tensor_lock_and_addr.second, params, sizeof(params));
   return absl::OkStatus();
+}
+
+absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
+    Environment& env, CompiledModel& compiled_model, size_t signature_index,
+    absl::string_view output_name, size_t output_index) {
+  LITERT_ASSIGN_OR_RETURN(
+      std::vector<Layout> runtime_layouts,
+      compiled_model.GetOutputTensorLayouts(signature_index,
+                                            /*update_allocation=*/true));
+  // Use runtime layout.
+  RET_CHECK_LT(output_index, runtime_layouts.size())
+      << "Output index is out of bounds.";
+  Layout runtime_layout = runtime_layouts[output_index];
+  LITERT_ASSIGN_OR_RETURN(
+      auto requirements,
+      compiled_model.GetOutputBufferRequirements(signature_index, output_name));
+  LITERT_ASSIGN_OR_RETURN(auto strides, requirements.Strides());
+  if (!strides.empty()) {
+    auto dims = runtime_layout.Dimensions();
+    runtime_layout = Layout(litert::Dimensions(dims.begin(), dims.end()),
+                            litert::Strides(strides.begin(), strides.end()));
+  }
+  RankedTensorType new_tensor_type(litert::ElementType::Float16,
+                                   std::move(runtime_layout));
+  LITERT_ASSIGN_OR_RETURN(size_t size, requirements.BufferSize());
+  LITERT_ASSIGN_OR_RETURN(auto buffer_types, requirements.SupportedTypes());
+  if (buffer_types.empty()) {
+    return absl::InternalError("No supported buffer types found.");
+  }
+  auto buffer_type = buffer_types[0];
+  LITERT_ASSIGN_OR_RETURN(
+      auto buffer, TensorBuffer::CreateManaged(
+                       env, buffer_type, std::move(new_tensor_type), size));
+  return buffer;
 }
 
 AttentionMaskParams GetAttentionMaskParams(

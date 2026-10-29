@@ -667,6 +667,88 @@ TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
           .ok());
 }
 
+// The checksum fake LM: `logits [1, W, 32]`, with W = 1 for `decode` and W = 4
+// for `verify`.
+constexpr char kChecksumFakeLmPath[] =
+    "litert_lm/runtime/testdata/checksum_fake_lm.tflite";
+constexpr int kChecksumFakeLmVocabSize = 32;
+
+class CreateFP16OutputBufferTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+    env_.emplace(std::move(env));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto compiled_model,
+        ::litert::CompiledModel::Create(
+            *env_,
+            (std::filesystem::path(::testing::SrcDir()) / kChecksumFakeLmPath)
+                .string(),
+            ::litert::HwAccelerators::kCpu));
+    compiled_model_.emplace(std::move(compiled_model));
+  }
+
+  // Checks that `CreateFP16OutputBuffer()` creates a float16 `logits` buffer
+  // of shape [1, `width`, 32] for `signature_key`, with the buffer type and
+  // size that the compiled model requires.
+  void ExpectFP16LogitsBuffer(absl::string_view signature_key, int width) {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto signature,
+                                compiled_model_->FindSignature(signature_key));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        size_t signature_index,
+        compiled_model_->GetSignatureIndex(signature_key));
+    const auto& output_names = signature.OutputNames();
+    size_t output_index = 0;
+    while (output_index < output_names.size() &&
+           output_names[output_index] != "logits") {
+      ++output_index;
+    }
+    ASSERT_LT(output_index, output_names.size());
+
+    ASSERT_OK_AND_ASSIGN(
+        TensorBuffer buffer,
+        CreateFP16OutputBuffer(*env_, *compiled_model_, signature_index,
+                               "logits", output_index));
+
+    LITERT_ASSERT_OK_AND_ASSIGN(RankedTensorType tensor_type,
+                                buffer.TensorType());
+    EXPECT_EQ(tensor_type.ElementType(), ElementType::Float16);
+    EXPECT_THAT(tensor_type.Layout().Dimensions(),
+                ElementsAre(1, width, kChecksumFakeLmVocabSize));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto requirements,
+                                compiled_model_->GetOutputBufferRequirements(
+                                    signature_index, "logits"));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto supported_types,
+                                requirements.SupportedTypes());
+    ASSERT_FALSE(supported_types.empty());
+    LITERT_ASSERT_OK_AND_ASSIGN(auto buffer_type, buffer.BufferType());
+    EXPECT_EQ(buffer_type, supported_types[0]);
+    LITERT_ASSERT_OK_AND_ASSIGN(size_t required_size,
+                                requirements.BufferSize());
+    LITERT_ASSERT_OK_AND_ASSIGN(size_t size, buffer.Size());
+    EXPECT_EQ(size, required_size);
+  }
+
+  std::optional<::litert::Environment> env_;
+  std::optional<::litert::CompiledModel> compiled_model_;
+};
+
+TEST_F(CreateFP16OutputBufferTest, CreatesDecodeLogitsBuffer) {
+  ExpectFP16LogitsBuffer("decode", /*width=*/1);
+}
+
+TEST_F(CreateFP16OutputBufferTest, CreatesVerifyLogitsBuffer) {
+  ExpectFP16LogitsBuffer("verify", /*width=*/4);
+}
+
+TEST_F(CreateFP16OutputBufferTest, FailsForAnUnknownOutput) {
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t signature_index,
+                              compiled_model_->GetSignatureIndex("decode"));
+  EXPECT_FALSE(CreateFP16OutputBuffer(*env_, *compiled_model_, signature_index,
+                                      "unknown_output", /*output_index=*/0)
+                   .ok());
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, InitializeAttentionMask_Float32) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
   auto layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));

@@ -221,38 +221,6 @@ absl::Span<const T> GetSpanForChunk(absl::Span<T> span, int num_chunks,
   return span.subspan(chunk_size * chunk_index, chunk_size);
 }
 
-absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
-    Environment& env, CompiledModel& compiled_model, size_t signature_index,
-    absl::string_view output_name, size_t output_index) {
-  LITERT_ASSIGN_OR_RETURN(
-      std::vector<Layout> runtime_layouts,
-      compiled_model.GetOutputTensorLayouts(signature_index,
-                                            /*update_allocation=*/true));
-  // Use runtime layout.
-  Layout runtime_layout = runtime_layouts[output_index];
-  LITERT_ASSIGN_OR_RETURN(
-      auto requirements,
-      compiled_model.GetOutputBufferRequirements(signature_index, output_name));
-  LITERT_ASSIGN_OR_RETURN(auto strides, requirements.Strides());
-  if (!strides.empty()) {
-    auto dims = runtime_layout.Dimensions();
-    runtime_layout = Layout(litert::Dimensions(dims.begin(), dims.end()),
-                            litert::Strides(strides.begin(), strides.end()));
-  }
-  RankedTensorType new_tensor_type(litert::ElementType::Float16,
-                                   std::move(runtime_layout));
-  LITERT_ASSIGN_OR_RETURN(size_t size, requirements.BufferSize());
-  LITERT_ASSIGN_OR_RETURN(auto buffer_types, requirements.SupportedTypes());
-  if (buffer_types.empty()) {
-    return absl::InternalError("No supported buffer types found.");
-  }
-  auto buffer_type = buffer_types[0];
-  LITERT_ASSIGN_OR_RETURN(
-      auto buffer, TensorBuffer::CreateManaged(
-                       env, buffer_type, std::move(new_tensor_type), size));
-  return buffer;
-}
-
 absl::StatusOr<TensorBuffer> CreateHostOutputBuffer(
     Environment& env, CompiledModel& compiled_model, size_t signature_index,
     size_t output_index, RankedTensorType tensor_type) {

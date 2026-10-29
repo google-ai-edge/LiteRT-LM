@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_INFRA_GENAI_INFERENCE_EXECUTOR_LITERT_COMPILED_MODEL_EXECUTOR_UTILS_H_
 #define THIRD_PARTY_ODML_INFRA_GENAI_INFERENCE_EXECUTOR_LITERT_COMPILED_MODEL_EXECUTOR_UTILS_H_
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -259,6 +260,14 @@ absl::Status FillAttentionMask(
 // runtime_batched_matmul kernel.
 absl::Status FillSingleBufferCacheParamTensor(
     ::litert::TensorBuffer& param_tensor, int start_index, int update_length);
+
+// Creates a float16 buffer for the output `output_name`, at index
+// `output_index` of the signature `signature_index` of `compiled_model`, with
+// the output's runtime layout and buffer requirements. Used for the logits that
+// a GPU sampler reads in float16.
+absl::StatusOr<::litert::TensorBuffer> CreateFP16OutputBuffer(
+    ::litert::Environment& env, ::litert::CompiledModel& compiled_model,
+    size_t signature_index, absl::string_view output_name, size_t output_index);
 
 // Builds the model resources from the model_path for compiled model only.
 // Supports .task and .litertlm formats.
