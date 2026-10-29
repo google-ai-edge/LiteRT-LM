@@ -21,6 +21,7 @@ import {runExclusiveEngineCreation} from './engine_creation.js';
 import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
 import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
+import {resolveModelInput, ResolvedModelInput} from './model_input.js';
 import {Mutex} from './mutex.js';
 import {Session} from './session.js';
 import {SessionConfig, sessionConfigToWasmSessionConfig} from './session_config.js';
@@ -54,11 +55,17 @@ export class Engine implements Deletable {
 
   static async create(engineSettings: EngineSettings, inputPromptAsHint = ''):
       Promise<Engine> {
-    const litertlm = await getOrLoadGlobalLiteRtLm();
+    // Resolve a hf:// URI, which chooses the file before anything is
+    // downloaded, outside the engine creation mutex: it makes network requests
+    // but doesn't use Wasm, so it shouldn't hold up other engines.
+    const [litertlm, model] = await Promise.all([
+      getOrLoadGlobalLiteRtLm(),
+      resolveModelInput(engineSettings.model, engineSettings.backend),
+    ]);
     return runExclusiveEngineCreation(
         litertlm.liteRtLmWasm,
         () => Engine.createExclusive(
-            litertlm, engineSettings, inputPromptAsHint));
+            litertlm, engineSettings, model, inputPromptAsHint));
   }
 
   /**
@@ -67,7 +74,7 @@ export class Engine implements Deletable {
    */
   private static async createExclusive(
       litertlm: LiteRtLm, engineSettings: EngineSettings,
-      inputPromptAsHint: string): Promise<Engine> {
+      model: ResolvedModelInput, inputPromptAsHint: string): Promise<Engine> {
     const wasm = litertlm.liteRtLmWasm;
     // Default to GPU if not specified.
     const backend = engineSettings.backend ?? Backend.GPU;
@@ -88,7 +95,7 @@ export class Engine implements Deletable {
     let engine: WasmEngine;
     try {
       const {modelAssets, cleanupModelAssets} =
-          await createStreamingModelAssets(engineSettings.model, wasm, cleanup);
+          await createStreamingModelAssets(model.model, wasm, cleanup);
 
       const wasmEngineSettings =
           visionBackend === undefined && audioBackend === undefined ?
@@ -107,6 +114,7 @@ export class Engine implements Deletable {
 
       const resolvedBackend =
           wasmEngineSettings.getMutableMainExecutorSettings().getBackend().value;
+      model.checkBackend(resolvedBackend);
 
       fillWasmEngineSettingsFromEngineSettings(
           wasmEngineSettings, engineSettings, resolvedBackend, wasm);

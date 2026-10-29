@@ -20,6 +20,7 @@ import {EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEng
 import {runExclusiveEngineCreation} from './engine_creation.js';
 import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
+import {resolveModelInput, ResolvedModelInput} from './model_input.js';
 import {Mutex} from './mutex.js';
 import {createStreamingModelAssets} from './stream_utils.js';
 import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
@@ -128,10 +129,16 @@ export class EmbeddingEngine implements Deletable {
 
   static async create(settings: EmbeddingEngineSettings):
       Promise<EmbeddingEngine> {
-    const litertlm = await getOrLoadGlobalLiteRtLm();
+    // Resolve a hf:// URI, which chooses the file before anything is
+    // downloaded, outside the engine creation mutex: it makes network requests
+    // but doesn't use Wasm, so it shouldn't hold up other engines.
+    const [litertlm, model] = await Promise.all([
+      getOrLoadGlobalLiteRtLm(),
+      resolveModelInput(settings.model, settings.backend),
+    ]);
     return runExclusiveEngineCreation(
         litertlm.liteRtLmWasm,
-        () => EmbeddingEngine.createExclusive(litertlm, settings));
+        () => EmbeddingEngine.createExclusive(litertlm, settings, model));
   }
 
   /**
@@ -139,8 +146,8 @@ export class EmbeddingEngine implements Deletable {
    * creation mutex (see `runExclusiveEngineCreation`).
    */
   private static async createExclusive(
-      litertlm: LiteRtLm,
-      settings: EmbeddingEngineSettings): Promise<EmbeddingEngine> {
+      litertlm: LiteRtLm, settings: EmbeddingEngineSettings,
+      model: ResolvedModelInput): Promise<EmbeddingEngine> {
     const wasm = litertlm.liteRtLmWasm;
     const backend = settings.backend ?? Backend.GPU;
     settings = {...settings, backend};
@@ -155,7 +162,7 @@ export class EmbeddingEngine implements Deletable {
     let engine: WasmEmbeddingEngine;
     try {
       const {modelAssets, cleanupModelAssets} =
-          await createStreamingModelAssets(settings.model, wasm, cleanup);
+          await createStreamingModelAssets(model.model, wasm, cleanup);
 
       const wasmSettings = wasm.EmbeddingEngineSettings.createDefaultMultimodal(
           modelAssets, {value: backend},
@@ -173,6 +180,9 @@ export class EmbeddingEngine implements Deletable {
 
       const resolvedBackend =
           wasmSettings.getMutableMainExecutorSettings().getBackend().value;
+      model.checkBackend(resolvedBackend);
+      // Report the backend the engine uses, like `Engine.settings` does.
+      settings = {...settings, backend: resolvedBackend};
 
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
           wasmSettings, settings);

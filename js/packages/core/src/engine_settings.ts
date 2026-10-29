@@ -15,6 +15,7 @@
  */
 
 import {getGlobalLiteRtLm} from './global_litertlm.js';
+import {ModelInput} from './model_input.js';
 import {RecursiveRequired} from './types.js';
 import {type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
@@ -52,7 +53,13 @@ export interface LlmExecutorSettings {
  * LiteRT-LM EngineSettings
  */
 export interface EngineSettings {
-  model: string|Blob|ReadableStream<Uint8Array>;
+  /** The model: a URL, a `hf://` URI, a `ModelSource`, or the model's data. */
+  model: ModelInput;
+  /**
+   * Backend for the model. Defaults to `Backend.GPU`. For a model loaded from
+   * a `hf://` URI, it also chooses the model file, and the model must use it
+   * if it's set (see `ModelInput`).
+   */
   backend?: Backend;
   /**
    * Backend for the vision encoder. Can be `Backend.CPU` or `Backend.GPU`.
@@ -90,8 +97,8 @@ type OptionalEngineSettingsKeys = 'visionBackend'|'maxVisionTokensPerImage'|
  * (e.g. vision settings when vision is disabled) remain optional.
  */
 export type ResolvedEngineSettings =
-    RecursiveRequired<Omit<EngineSettings, OptionalEngineSettingsKeys>>&
-    Pick<EngineSettings, OptionalEngineSettingsKeys>;
+    RecursiveRequired<Omit<EngineSettings, OptionalEngineSettingsKeys|'model'>>&
+    Pick<EngineSettings, OptionalEngineSettingsKeys|'model'>;
 
 /**
  * Fills a WasmEngineSettings with the values from a EngineSettings.

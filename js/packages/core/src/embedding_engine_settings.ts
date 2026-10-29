@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {ModelInput} from './model_input.js';
 import {Backend, EmbeddingEngineSettings as WasmEmbeddingEngineSettings} from './wasm_binding_types.js';
 
 /**
@@ -27,8 +28,13 @@ export interface EmbeddingExecutorSettings {
  * LiteRT-LM EmbeddingEngineSettings
  */
 export interface EmbeddingEngineSettings {
-  model: string | Blob | ReadableStream<Uint8Array>;
-  /** Backend for the text encoder and embedder. Defaults to `Backend.GPU`. */
+  /** The model: a URL, a `hf://` URI, a `ModelSource`, or the model's data. */
+  model: ModelInput;
+  /**
+   * Backend for the text encoder and embedder. Defaults to `Backend.GPU`. For
+   * a model loaded from a `hf://` URI, it also chooses the model file, and the
+   * model must use it if it's set (see `ModelInput`).
+   */
   backend?: Backend;
   /**
    * Backend for the vision encoder.

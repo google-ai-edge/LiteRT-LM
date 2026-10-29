@@ -40,6 +40,30 @@ describe('stream_utils', () => {
     expect(stream).toBe(existingStream);
   });
 
+  it('fetches a ModelSource with its access token', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch')
+                         .and.resolveTo(new Response(new Uint8Array([5, 6])));
+
+    const stream = await modelToStream(
+        {url: 'https://example.com/model.litertlm', accessToken: 'token'});
+
+    expect(fetchSpy).toHaveBeenCalledOnceWith(
+        'https://example.com/model.litertlm', {
+          credentials: 'same-origin',
+          headers: {'Authorization': 'Bearer token'},
+        });
+    const result = await stream.getReader().read();
+    expect(result.value).toEqual(new Uint8Array([5, 6]));
+  });
+
+  it('rejects unresolved hf:// URIs', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch');
+
+    await expectAsync(modelToStream({url: 'hf://org/repo'}))
+        .toBeRejectedWithError(/resolveHuggingFaceModel/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('creates streaming ModelAssets and manages cleanup', async () => {
     const blob = new Blob([new Uint8Array([1, 2, 3])]);
     const cleanup = new Cleanup();

@@ -16,14 +16,17 @@
 
 import {BlobDataStreamWrapper} from './blob_data_stream_wrapper.js';
 import {Cleanup} from './cleanup.js';
+import {resolveModelUrl} from './model-cache/model_source.js';
+import {ResolvedModel} from './model_input.js';
 import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
 import {LiteRtLmWasm, ModelAssets} from './wasm_binding_types.js';
 
 /**
- * Converts a model source (URL string, Blob, or ReadableStream) into a ReadableStream.
+ * Converts a model source (URL string, `ModelSource`, Blob, or ReadableStream)
+ * into a ReadableStream. `hf://` URIs must be resolved first, with
+ * `resolveModelInput()`.
  */
-export async function modelToStream(
-    model: string | Blob | ReadableStream<Uint8Array>):
+export async function modelToStream(model: ResolvedModel):
     Promise<ReadableStream<Uint8Array>> {
   if (model instanceof ReadableStream) {
     return model;
@@ -32,23 +35,25 @@ export async function modelToStream(
     return model.stream();
   }
 
-  const modelUrl = model;
-  const response = await fetch(modelUrl, {
-    credentials: 'same-origin',
-  });
+  const source = typeof model === 'string' ? {url: model} : model;
+  const init: RequestInit = {credentials: 'same-origin'};
+  if (source.accessToken) {
+    init.headers = {'Authorization': `Bearer ${source.accessToken}`};
+  }
+  const response = await fetch(resolveModelUrl(source.url), init);
   if (!response.ok) {
-    throw new Error(`Failed to fetch model file from ${modelUrl}`);
+    throw new Error(`Failed to fetch model file from ${source.url}`);
   }
   return response.body!;
 }
 
 /**
- * Creates a streaming Wasm `ModelAssets` from a model source (URL string, Blob,
- * or ReadableStream) and registers cleanup callbacks for the underlying
- * `ReadableStreamDataStream` and `ModelAssets`.
+ * Creates a streaming Wasm `ModelAssets` from a model source (URL string,
+ * `ModelSource`, Blob, or ReadableStream) and registers cleanup callbacks for
+ * the underlying `ReadableStreamDataStream` and `ModelAssets`.
  */
 export async function createStreamingModelAssets(
-    model: string|Blob|ReadableStream<Uint8Array>,
+    model: ResolvedModel,
     wasm: LiteRtLmWasm,
     cleanup: Cleanup,
     ): Promise<{modelAssets: ModelAssets; cleanupModelAssets: () => void}> {
