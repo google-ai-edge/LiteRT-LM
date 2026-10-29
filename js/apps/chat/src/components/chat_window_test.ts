@@ -185,6 +185,37 @@ describe('litert-chat-window', () => {
     expect(mockChatSession.cancelGeneration).toHaveBeenCalled();
   });
 
+  it('keeps the streaming bubble from shrinking until generation ends',
+     async () => {
+       const nextFrame = () =>
+           new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+       const renderReply = async (text: string, isGenerating: boolean) => {
+         mockChatSession.isGenerating = isGenerating;
+         mockChatSession.messages = [
+           {role: 'user', text: 'Hi', senderName: 'User'},
+           {role: 'assistant', text, senderName: 'Model'},
+         ];
+         element.requestUpdate();
+         await element.updateComplete;
+         await nextFrame();
+       };
+       const getReplyBubble = () =>
+           element.shadowRoot!.querySelectorAll('litert-chat-bubble')[1] as
+           HTMLElement;
+
+       await renderReply('Paragraph\n\n'.repeat(20), true);
+       const tallHeight = getReplyBubble().offsetHeight;
+
+       // Re-rendered markdown that lays out shorter must not shrink the bubble.
+       await renderReply('Paragraph', true);
+       expect(getReplyBubble().offsetHeight).toBeGreaterThanOrEqual(tallHeight);
+
+       // Once generation ends, the bubble returns to its natural height.
+       await renderReply('Paragraph', false);
+       expect(getReplyBubble().style.minHeight).toBe('');
+       expect(getReplyBubble().offsetHeight).toBeLessThan(tallHeight);
+     });
+
   it('sends message on send button click', async () => {
     const editor = getEditor();
     editor.textContent = 'Test prompt';

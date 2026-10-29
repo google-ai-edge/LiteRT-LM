@@ -18,7 +18,7 @@ import './chat_bubble';
 
 import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
 import {LlmChatStateController} from '../state_controller.js';
-import {LitertChatBubble} from './chat_bubble.js';
+import {LitertChatBubble, trimAmbiguousTail} from './chat_bubble.js';
 
 
 describe('litert-chat-bubble', () => {
@@ -356,5 +356,90 @@ describe('litert-chat-bubble', () => {
     // There should be no KaTeX elements because they are in code blocks
     const katexElements = content!.querySelectorAll('.katex');
     expect(katexElements.length).toBe(0);
+  });
+
+  it('hides a partial bullet while streaming instead of a heading',
+     async () => {
+       element.message = {
+         role: 'assistant',
+         text: 'Some intro text\n-',
+         senderName: 'Assistant',
+       };
+       element.index = 1;
+       element.streaming = true;
+       await element.updateComplete;
+
+       // Without trimming, the `-` would turn the intro into an <h2>.
+       const content = element.shadowRoot!.querySelector('.message-content')!;
+       expect(content.querySelector('h2')).toBeNull();
+       expect(content.textContent).toContain('Some intro text');
+
+       // Once the bullet's text arrives, it renders as a list.
+       element.message = {...element.message, text: 'Some intro text\n- item'};
+       await element.updateComplete;
+       expect(content.querySelector('li')?.textContent).toBe('item');
+     });
+
+  it('renders the full text once streaming ends', async () => {
+    element.message = {
+      role: 'assistant',
+      text: 'Intro\n\n---',
+      senderName: 'Assistant',
+    };
+    element.index = 1;
+    element.streaming = true;
+    await element.updateComplete;
+    const content = element.shadowRoot!.querySelector('.message-content')!;
+    expect(content.querySelector('hr')).toBeNull();
+
+    element.streaming = false;
+    await element.updateComplete;
+    expect(content.querySelector('hr')).toBeTruthy();
+  });
+
+  it('never gets shorter while streaming lists and emphasis', async () => {
+    const replies = [
+      'Steps:\n\n1. **First**: one.\n2. **Second**: two.\n3. Third.\n\nDone.',
+      'Steps:\n\n1. First.\n\n2. Second.\n\n10. Tenth.\n\nDone.',
+      'Intro.\n- Apple\n- **Banana**\n* Cherry\n\n***Note:*** ok.',
+    ];
+    element.index = 1;
+    element.streaming = true;
+    const drops: string[] = [];
+    for (const reply of replies) {
+      let lastHeight = 0;
+      for (let i = 1; i <= reply.length; i++) {
+        const text = reply.slice(0, i);
+        element.message = {role: 'assistant', text, senderName: 'Assistant'};
+        await element.updateComplete;
+        const height = element.offsetHeight;
+        if (height < lastHeight) {
+          drops.push(`${JSON.stringify(text)}: ${lastHeight} -> ${height}`);
+        }
+        lastHeight = height;
+      }
+    }
+    expect(drops).toEqual([]);
+  });
+});
+
+describe('trimAmbiguousTail', () => {
+  it('drops a trailing line of bare markdown punctuation', () => {
+    for (const tail of ['-', '- ', '---', '*', '**', '***', '+', '=', '___',
+                        '#', '## ', '>', '1', '10', '1.', '2)', '`', '``',
+                        '~~']) {
+      expect(trimAmbiguousTail(`Intro\n${tail}`))
+          .withContext(JSON.stringify(tail))
+          .toBe('Intro\n');
+    }
+    expect(trimAmbiguousTail('***')).toBe('');
+  });
+
+  it('keeps lines that have content or are complete', () => {
+    for (const text of ['Intro\n- item', 'Intro\n**Bold', 'Intro\n---\n',
+                        'Intro\n## Title', 'Intro\n1. one', 'Intro\n```py',
+                        'Price: 5-', 'Intro']) {
+      expect(trimAmbiguousTail(text)).withContext(text).toBe(text);
+    }
   });
 });

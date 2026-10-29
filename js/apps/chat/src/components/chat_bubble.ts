@@ -31,6 +31,27 @@ const MATH_START = 'LitertLmMathStart';
 const MATH_END = 'LitertLmMathEnd';
 const MATH_RESTORE_RE = /LitertLmMathStart(\d+)LitertLmMathEnd/g;
 
+/**
+ * Matches a final line consisting only of markdown punctuation. While a reply
+ * is streaming, such a line usually renders as something other than what it
+ * is about to become: `-` under a paragraph is a setext heading until the
+ * bullet's text arrives, `***` is a divider until `***Bold***` completes, `#`
+ * is an empty heading, and a partial closing fence is an extra code line. A
+ * bare number is included too: otherwise `1` renders as a paragraph, vanishes
+ * at `1.`, and reappears as a list item.
+ */
+const AMBIGUOUS_TAIL_RE =
+    /(^|\n)[ \t]*(?:[-*_=+ \t]*|#{1,6}|>+|\d{1,9}[.)]?|`{1,3}|~{1,3})[ \t]*$/;
+
+/**
+ * Drops the last line of streaming text if it's only markdown punctuation, so
+ * it doesn't flash as a heading, divider, or empty block. The line shows up as
+ * soon as more text or a newline arrives.
+ */
+export function trimAmbiguousTail(text: string): string {
+  return text.replace(AMBIGUOUS_TAIL_RE, '$1');
+}
+
 
 
 marked.use({
@@ -88,6 +109,9 @@ export class LitertChatBubble extends LitElement {
 
   @property({ type: Object })
   state!: LlmChatStateController;
+
+  /** Whether this message is the reply currently being generated. */
+  @property({type: Boolean}) streaming = false;
 
   static override styles = [
     sharedStyles, hljsStyles, katexStyles, css`
@@ -419,6 +443,12 @@ export class LitertChatBubble extends LitElement {
         .replace(/\s*\(\d+(\.\d+)?\s*GB\)$/, '');
     }
 
+    // While streaming, don't render a trailing line of bare markdown
+    // punctuation; it would flash as a heading or divider (see
+    // AMBIGUOUS_TAIL_RE).
+    const visible = (text = '') =>
+        this.streaming ? trimAmbiguousTail(text) : text;
+
     return html`
       <div class="message-bubble ${msg.role}" data-raw-text="${msg.text}">
         <span class="message-sender ${msg.role}">${
@@ -432,7 +462,7 @@ export class LitertChatBubble extends LitElement {
             <details class="thought-details" open>
               <summary class="thought-summary">Thought Process</summary>
               <div class="thought-content">${
-                renderHtml(this.renderMarkdown(msg.thoughtText || ''))}</div>
+                renderHtml(this.renderMarkdown(visible(msg.thoughtText)))}</div>
             </details>
           ` :
             ''}
@@ -441,7 +471,7 @@ export class LitertChatBubble extends LitElement {
           ${
         isUser ?
             this.renderUserContent(msg) :
-            html`<div>${renderHtml(this.renderMarkdown(msg.text || ''))}</div>`}
+            html`<div>${renderHtml(this.renderMarkdown(visible(msg.text)))}</div>`}
         </div>
 
         <!-- Message actions bar (Edit / Copy & Retry) -->

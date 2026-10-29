@@ -75,6 +75,9 @@ export class LitertChatWindow extends LitElement {
   private wasGenerating = false;
   private isProgrammaticScroll = false;
 
+  /** The bubble being streamed into; its height only grows while streaming. */
+  private streamingBubble: HTMLElement|null = null;
+
   /** Last known caret position, so toolbar actions can insert in place. */
   private savedRange: Range|null = null;
 
@@ -426,20 +429,53 @@ export class LitertChatWindow extends LitElement {
   }
 
   protected override updated() {
+    const isGenerating = this.state.chatSession.isGenerating;
     // Auto-scroll on new message.
-    if (this.state.chatSession.isGenerating && !this.wasGenerating) {
+    if (isGenerating && !this.wasGenerating) {
       this.shouldAutoScroll = true;
     }
-    this.wasGenerating = this.state.chatSession.isGenerating;
+    if (!isGenerating && this.wasGenerating) {
+      this.releaseStreamingHeight();
+    }
+    this.wasGenerating = isGenerating;
 
-    if (this.state.chatSession.isGenerating && this.shouldAutoScroll) {
+    if (isGenerating) {
+      // Bubbles re-render in a microtask after this, so measure next frame.
       requestAnimationFrame(() => {
-        if (this.msgBox) {
+        // A stale frame may land after generation ended and the hold was
+        // released; don't re-pin the height then.
+        if (!this.msgBox || !this.state.chatSession.isGenerating) return;
+        this.holdStreamingHeight();
+        if (this.shouldAutoScroll) {
           this.isProgrammaticScroll = true;
           this.msgBox.scrollTop = this.msgBox.scrollHeight;
         }
       });
     }
+  }
+
+  /**
+   * Re-rendering partial markdown can shrink the streaming bubble (e.g. when a
+   * code fence closes or rows collapse into a table). Pinning its min-height to
+   * its tallest height so far keeps the scroll height from shrinking
+   * mid-stream, so auto-scroll moves monotonically down instead of jittering
+   * upwards.
+   */
+  private holdStreamingHeight() {
+    const bubble = this.msgBox.lastElementChild as HTMLElement | null;
+    if (!bubble) return;
+    if (bubble !== this.streamingBubble) {
+      this.releaseStreamingHeight();
+      this.streamingBubble = bubble;
+    }
+    // offsetHeight already includes any previous min-height, so this is a max.
+    bubble.style.minHeight = `${bubble.offsetHeight}px`;
+  }
+
+  /** Lets the streaming bubble shrink to its natural height again. */
+  private releaseStreamingHeight() {
+    this.streamingBubble?.style.removeProperty('min-height');
+    this.streamingBubble = null;
   }
 
   /** Replaces the editor's contents and moves the caret to the end. */
@@ -914,6 +950,9 @@ export class LitertChatWindow extends LitElement {
             .message=${msg}
             .index=${idx}
             .state=${this.state}
+            .streaming=${
+            this.state.chatSession.isGenerating &&
+            idx === this.state.chatSession.messages.length - 1}
             @edit-prompt=${this.handleEditPrompt}
           ></litert-chat-bubble>
         `)}
