@@ -16,7 +16,7 @@
 
 import {setCacheEnvironmentForTesting} from './model-cache/environment.js';
 import {HuggingFaceFile, ResolvedHuggingFaceModel} from './model-cache/index.js';
-import {checkModelBackend, resolveModelInput, selectModelFile} from './model_input.js';
+import {checkModelBackend, resolveModel, resolveModelInput, selectModelFile} from './model_input.js';
 import {Backend} from './wasm_binding_types.js';
 
 function files(...paths: string[]): HuggingFaceFile[] {
@@ -401,6 +401,62 @@ describe('resolveModelInput', () => {
     await expectAsync(resolveModelInput(source, undefined))
         .toBeRejectedWithError(
             'hf://org/repo@main/model.litertlm is 1000 bytes, not 5 bytes');
+  });
+
+  describe('resolveModel', () => {
+    it('resolves a hf:// URI for a backend', async () => {
+      const resolved =
+          await resolveModel('hf://org/repo', {backend: Backend.GPU_ARTISAN});
+
+      expect(resolved).toEqual({
+        model: {
+          url: `https://huggingface.co/org/repo/resolve/${
+              COMMIT}/model-gpu.litertlm`,
+          size: 2000,
+          sha256: GPU_SHA256,
+        },
+        huggingFace: jasmine.objectContaining({
+          repo: 'org/repo',
+          revision: 'main',
+          commit: COMMIT,
+          path: 'model-gpu.litertlm',
+        }),
+      });
+    });
+
+    it('chooses the file like Engine.create() without a backend', async () => {
+      const {huggingFace} = await resolveModel('hf://org/repo');
+
+      expect(huggingFace?.path).toBe('model-gpu.litertlm');
+    });
+
+    it('passes the signal to the requests', async () => {
+      const controller = new AbortController();
+
+      await resolveModel('hf://org/repo', {signal: controller.signal});
+
+      for (const [, init] of fetchSpy.calls.allArgs()) {
+        expect(init?.signal).toBe(controller.signal);
+      }
+    });
+
+    it('returns other inputs unchanged', async () => {
+      expect(await resolveModel('model.litertlm')).toEqual({
+        model: 'model.litertlm',
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects if the signal is already aborted', async () => {
+      const reason = new Error('Aborted');
+      const signal = AbortSignal.abort(reason);
+
+      for (const model of ['hf://org/repo', 'model.litertlm', new Blob([])]) {
+        await expectAsync(resolveModel(model, {signal}))
+            .toBeRejectedWith(reason);
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 });
 

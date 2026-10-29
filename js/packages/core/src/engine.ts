@@ -21,7 +21,7 @@ import {runExclusiveEngineCreation} from './engine_creation.js';
 import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
 import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
-import {resolveModelInput, ResolvedModelInput} from './model_input.js';
+import {EngineModelInput, resolveModelInput} from './model_input.js';
 import {Mutex} from './mutex.js';
 import {Session} from './session.js';
 import {SessionConfig, sessionConfigToWasmSessionConfig} from './session_config.js';
@@ -74,7 +74,7 @@ export class Engine implements Deletable {
    */
   private static async createExclusive(
       litertlm: LiteRtLm, engineSettings: EngineSettings,
-      model: ResolvedModelInput, inputPromptAsHint: string): Promise<Engine> {
+      model: EngineModelInput, inputPromptAsHint: string): Promise<Engine> {
     const wasm = litertlm.liteRtLmWasm;
     // Default to GPU if not specified.
     const backend = engineSettings.backend ?? Backend.GPU;

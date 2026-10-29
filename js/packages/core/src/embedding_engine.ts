@@ -20,7 +20,7 @@ import {EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEng
 import {runExclusiveEngineCreation} from './engine_creation.js';
 import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
-import {resolveModelInput, ResolvedModelInput} from './model_input.js';
+import {EngineModelInput, resolveModelInput} from './model_input.js';
 import {Mutex} from './mutex.js';
 import {createStreamingModelAssets} from './stream_utils.js';
 import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
@@ -147,7 +147,7 @@ export class EmbeddingEngine implements Deletable {
    */
   private static async createExclusive(
       litertlm: LiteRtLm, settings: EmbeddingEngineSettings,
-      model: ResolvedModelInput): Promise<EmbeddingEngine> {
+      model: EngineModelInput): Promise<EmbeddingEngine> {
     const wasm = litertlm.liteRtLmWasm;
     const backend = settings.backend ?? Backend.GPU;
     settings = {...settings, backend};

@@ -51,6 +51,38 @@ export declare interface ResolvedModelInput {
   model: ResolvedModel;
   /** The Hugging Face model it resolved to, if it was a `hf://` URI. */
   huggingFace?: ResolvedHuggingFaceModel;
+}
+
+/** Options for `resolveModel()`. */
+export declare interface ResolveModelOptions {
+  /**
+   * The backend the model will be loaded with. For a `hf://` URI without a
+   * path, it chooses the file like `Engine.create()` does (see `ModelInput`).
+   */
+  backend?: Backend;
+  /** Aborts resolving. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Resolves a `hf://` URI to the file that `Engine.create()` would load for it,
+ * pinned to the revision's current commit, without downloading the file.
+ * Other inputs are returned unchanged.
+ *
+ * Use this e.g. to show which file will be loaded, or to download or cache a
+ * model yourself. Loading the resolved model loads the same file even if the
+ * revision moves later.
+ */
+export async function resolveModel(
+    model: ModelInput, options: ResolveModelOptions = {}):
+    Promise<ResolvedModelInput> {
+  const {model: resolved, huggingFace} =
+      await resolveModelInput(model, options.backend, options.signal);
+  return huggingFace ? {model: resolved, huggingFace} : {model: resolved};
+}
+
+/** A `ResolvedModelInput` for creating an engine. */
+export declare interface EngineModelInput extends ResolvedModelInput {
   /**
    * Checks the backend that the engine resolved the model to, once it has read
    * the model's header. Throws if the model came from a `hf://` URI and isn't
@@ -76,8 +108,9 @@ const WEB_BRANCH_ORG = 'litert-community/';
  * This makes network requests for `hf://` URIs, but doesn't use Wasm.
  */
 export async function resolveModelInput(
-    model: ModelInput, backend: Backend|undefined):
-    Promise<ResolvedModelInput> {
+    model: ModelInput, backend: Backend|undefined,
+    signal?: AbortSignal): Promise<EngineModelInput> {
+  signal?.throwIfAborted();
   const source = typeof model === 'string' ? {url: model} :
       model instanceof Blob || model instanceof ReadableStream ? undefined :
                                                                  model;
@@ -108,6 +141,9 @@ export async function resolveModelInput(
   };
   if (source.accessToken) {
     options.accessToken = source.accessToken;
+  }
+  if (signal) {
+    options.signal = signal;
   }
   if (ref.repo.toLowerCase().startsWith(WEB_BRANCH_ORG)) {
     options.defaultRevisions = ['web', 'main'];
