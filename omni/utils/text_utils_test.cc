@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "omni/base/text_utils.h"
+#include "omni/utils/text_utils.h"
 
 #include <cstddef>
 #include <string>

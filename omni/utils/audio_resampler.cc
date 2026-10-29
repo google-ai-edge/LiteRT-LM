@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/speech2text/audio_resampler.h"
+#include "omni/utils/audio_resampler.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,7 +26,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "miniaudio.h"  // from @miniaudio
 
-namespace litert::omni::asr {
+namespace litert::omni {
 
 AudioResampler::~AudioResampler() {
   if (is_initialized_) {
@@ -128,4 +128,4 @@ absl::StatusOr<std::vector<float>> AudioResampler::Resample(
   return output_pcm;
 }
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni

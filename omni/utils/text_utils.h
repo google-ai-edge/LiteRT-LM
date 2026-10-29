@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_TEXT_UTILS_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_TEXT_UTILS_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_TEXT_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_TEXT_UTILS_H_
 
 #include <cstddef>
 #include <string>
@@ -66,4 +66,4 @@ std::string JoinWithCjkAwareSpacing(absl::Span<const std::string> pieces);
 
 }  // namespace litert::omni
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_TEXT_UTILS_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_TEXT_UTILS_H_

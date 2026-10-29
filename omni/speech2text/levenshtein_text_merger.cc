@@ -22,10 +22,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "omni/base/text_utils.h"
 #include "omni/speech2text/detokenizer.h"
 #include "omni/speech2text/levenshtein_align.h"
 #include "omni/speech2text/text_merger.h"
+#include "omni/utils/text_utils.h"
 
 namespace litert::omni::asr {
 namespace {

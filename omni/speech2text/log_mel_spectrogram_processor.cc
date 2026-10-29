@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -37,6 +36,7 @@
 #include "omni/speech2text/audio_preprocessor.h"
 #include "omni/speech2text/audio_source.h"
 #include "omni/speech2text/utils.h"
+#include "omni/utils/audio_utils.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
 #include "support/util/io_types.h"
@@ -45,7 +45,6 @@ namespace litert::omni::asr {
 namespace {
 
 constexpr float kEpsilon = 1e-5f;
-constexpr float kLn10 = 2.302585092994046f;
 // Minimum peak amplitude for unnormalized standard log-mel inputs before
 // scaling up to prevent the power spectrum (`|X[k]|^2`) from collapsing into
 // `mel_floor` (`5.96e-8`) prior to per-utterance mean/std normalization.
@@ -382,32 +381,6 @@ int TrimTrailingRoomNoise(std::vector<float>& raw_speech, int valid_frames,
   return valid_frames;
 }
 
-// Applies center=True reflect padding around raw_speech so each STFT window of
-// length n_fft is centered at frame * hop_length, matching
-// WhisperFeatureExtractor (torch.stft(..., center=True,
-// pad_mode="reflect")[:, :-1]). Standard/USM models (kStandard / normalize_mel)
-// use unpadded causal STFT framing directly from AudioPreprocessorMiniAudio
-// without pre-centering.
-void PutSamplesInCenter(std::vector<float>& raw_speech, int n_fft,
-                        int hop_length) {
-  if (raw_speech.size() <= static_cast<size_t>(n_fft)) {
-    return;
-  }
-  const size_t left_pad = static_cast<size_t>(n_fft / 2);
-  const size_t right_pad =
-      static_cast<size_t>(std::max(0, n_fft - hop_length - n_fft / 2));
-  std::vector<float> padded;
-  padded.reserve(left_pad + raw_speech.size() + right_pad);
-  for (size_t i = left_pad; i >= 1; --i) {
-    padded.push_back(raw_speech[i]);
-  }
-  padded.insert(padded.end(), raw_speech.begin(), raw_speech.end());
-  for (size_t i = 1; i <= right_pad; ++i) {
-    padded.push_back(raw_speech[raw_speech.size() - 1 - i]);
-  }
-  raw_speech = std::move(padded);
-}
-
 // Returns true if a chunk contains only stationary background room noise (or
 // low-level room noise relative to earlier speech in the stream), and updates
 // `peak_speech_rms` with the maximum 100 ms block RMS otherwise.
@@ -450,25 +423,6 @@ bool IsRoomNoiseFollowUpChunk(absl::Span<const float> raw_speech,
   return false;
 }
 
-void NormalizeWhisperMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
-                                    int stat_frames, int num_frames) {
-  float max_val = -std::numeric_limits<float>::infinity();
-  for (size_t m = 0; m < mel_spec.size(); ++m) {
-    for (int f = 0; f < num_frames; ++f) {
-      mel_spec[m][f] = mel_spec[m][f] / kLn10;
-      if (f < stat_frames && mel_spec[m][f] > max_val) {
-        max_val = mel_spec[m][f];
-      }
-    }
-  }
-  float clip_val = max_val - 8.0f;
-  for (size_t m = 0; m < mel_spec.size(); ++m) {
-    for (int f = 0; f < num_frames; ++f) {
-      mel_spec[m][f] = (std::max(mel_spec[m][f], clip_val) + 4.0f) / 4.0f;
-    }
-  }
-}
-
 void ZeroPadNormalizedMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
                                      int stat_frames, int num_frames) {
   // AudioPreprocessorMiniAudio applies fixed kUsmMelMean and kUsmMelStdDev
@@ -497,27 +451,23 @@ void NormalizeStandardMelSpectrogram(std::vector<std::vector<float>>& mel_spec,
   }
 }
 
-std::vector<float> FlattenMelSpectrogram(
-    const std::vector<std::vector<float>>& mel_spec, int n_frames, int n_mels,
-    bool transpose) {
-  std::vector<float> result(n_frames * n_mels, 0.0f);
-  for (size_t m = 0; m < mel_spec.size(); ++m) {
-    for (size_t f = 0;
-         f < mel_spec[m].size() && f < static_cast<size_t>(n_frames); ++f) {
-      if (transpose) {
-        result[f * n_mels + m] = mel_spec[m][f];
-      } else {
-        result[m * n_frames + f] = mel_spec[m][f];
-      }
-    }
-  }
-  return result;
-}
-
 litert::support::AudioPreprocessorConfig CreateMiniAudioConfig(
     int sample_rate_hz,
     const LogMelSpectrogramProcessor::LogMelSpectrogramConfig& config,
     int frame_length) {
+  if (config.norm_type == LogMelSpectrogramProcessor::NormType::kWhisper &&
+      config.fft_length <= 0 && config.input_scale == 1.0f &&
+      config.preemphasis == 0.0f && config.mel_low_hz == 0.0f &&
+      config.mel_high_hz <= 0.0f && !config.normalize_mel &&
+      config.add_floor_to_mel_before_log) {
+    litert::support::AudioPreprocessorConfig preprocessor_config =
+        CreateWhisperAudioPreprocessorConfig(sample_rate_hz, frame_length,
+                                             config.hop_length, config.n_mels,
+                                             config.mel_floor);
+    preprocessor_config.SetSlaneyMel(config.slaney_mel);
+    preprocessor_config.SetPowerSpectrum(config.power_spectrum);
+    return preprocessor_config;
+  }
   const float mel_high_hz =
       config.mel_high_hz > 0.0f ? config.mel_high_hz : sample_rate_hz / 2.0f;
   litert::support::AudioPreprocessorConfig preprocessor_config =

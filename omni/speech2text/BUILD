@@ -64,35 +64,6 @@ cc_test(
 )
 
 cc_library(
-    name = "audio_resampler",
-    srcs = ["audio_resampler.cc"],
-    hdrs = ["audio_resampler.h"],
-    deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
-    ] + select({
-        "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
-        "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
-        "//conditions:default": ["@miniaudio"],
-    }),
-)
-
-cc_test(
-    name = "audio_resampler_test",
-    srcs = ["audio_resampler_test.cc"],
-    deps = [
-        ":audio_resampler",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_matchers",
-        "//support/util:test_utils",
-    ],
-)
-
-cc_library(
     name = "audio_preprocessor",
     hdrs = ["audio_preprocessor.h"],
     deps = [
@@ -121,6 +92,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:stage",
+        "//omni/utils:audio_utils",
         "//support/preprocessor:audio_preprocessor",
         "//support/preprocessor:audio_preprocessor_miniaudio",
         "//support/util:io_types",
@@ -449,7 +421,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "//omni/base:stage",
-        "//omni/base:text_utils",
+        "//omni/utils:text_utils",
         "//support/tokenizer",
     ],
 )
@@ -491,7 +463,7 @@ cc_library(
     deps = [
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "//omni/base:text_utils",
+        "//omni/utils:text_utils",
     ],
 )
 
@@ -518,7 +490,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "//omni/base:stage",
-        "//omni/base:text_utils",
+        "//omni/utils:text_utils",
     ],
 )
 
@@ -556,7 +528,7 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "//omni/base:stage",
-        "//omni/base:text_utils",
+        "//omni/utils:text_utils",
     ],
 )
 
@@ -583,7 +555,6 @@ cc_library(
     hdrs = ["asr_session.h"],
     deps = [
         ":audio_preprocessor",
-        ":audio_resampler",
         ":audio_source",
         ":dummy_preprocessor",
         ":levenshtein_text_merger",
@@ -605,6 +576,7 @@ cc_library(
         "//omni:omni_session",
         "//omni/base:litert_runner",
         "//omni/base:stage",
+        "//omni/utils:audio_resampler",
         "//runtime/components:model_resources",
         "//runtime/framework:threadpool",
         "//runtime/proto:speech2text_metadata_cc_proto",

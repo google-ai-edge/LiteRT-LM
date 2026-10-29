@@ -39,10 +39,10 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
-#include "omni/base/tensor_utils.h"
 #include "omni/text2image/flux2/flux2_math.h"
 #include "omni/text2image/prompt_source.h"
 #include "omni/text2image/text_encoder_stage.h"
+#include "omni/utils/tensor_utils.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::text2image {

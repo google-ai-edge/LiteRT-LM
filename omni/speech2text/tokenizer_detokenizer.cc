@@ -37,9 +37,9 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/base/stage.h"
-#include "omni/base/text_utils.h"
 #include "omni/speech2text/detokenizer.h"
 #include "omni/speech2text/speech_recognizer.h"
+#include "omni/utils/text_utils.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {
@@ -312,7 +312,7 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
           }
         }
       }
-      words.push_back(Detokenizer::Word{.text = std::string(raw_words[i]),
+      words.push_back(Detokenizer::Word{.text = raw_words[i],
                                         .timestamp_ms = timestamp_ms});
     }
   }

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_TENSOR_UTILS_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_TENSOR_UTILS_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_TENSOR_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_TENSOR_UTILS_H_
 
 #include <cstddef>
 
@@ -40,4 +40,4 @@ absl::Status ValidateFloatBuffer(const TensorBuffer& buffer,
 
 }  // namespace litert::omni
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_TENSOR_UTILS_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_TENSOR_UTILS_H_

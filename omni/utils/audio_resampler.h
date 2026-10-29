@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_AUDIO_RESAMPLER_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_AUDIO_RESAMPLER_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_AUDIO_RESAMPLER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_AUDIO_RESAMPLER_H_
 
 #include <vector>
 
@@ -22,7 +22,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "miniaudio.h"  // from @miniaudio
 
-namespace litert::omni::asr {
+namespace litert::omni {
 
 // Resamples mono 32-bit float PCM audio between sample rates using miniaudio.
 class AudioResampler {
@@ -34,12 +34,24 @@ class AudioResampler {
   AudioResampler& operator=(const AudioResampler&) = delete;
 
   // Resets internal filter state and cached history without uninitializing the
-  // resampler.
+  // resampler, preparing it for a new independent audio stream.
   void Reset();
 
   // Resamples `input_pcm` from `input_sample_rate_hz` to
   // `target_sample_rate_hz`. If `input_sample_rate_hz ==
   // target_sample_rate_hz`, returns `input_pcm` unmodified.
+  //
+  // Args:
+  //   input_pcm: Mono 32-bit float PCM samples to resample.
+  //   input_sample_rate_hz: Input PCM sample rate in Hz (must be positive).
+  //   target_sample_rate_hz: Target output sample rate in Hz (must be
+  //     positive).
+  //
+  // Returns:
+  //   Resampled mono 32-bit float PCM samples on success,
+  //   `absl::InvalidArgumentError` if either sample rate is non-positive, or
+  //   `absl::InternalError` if miniaudio resampler initialization or frame
+  //   processing fails.
   absl::StatusOr<std::vector<float>> Resample(absl::Span<const float> input_pcm,
                                               int input_sample_rate_hz,
                                               int target_sample_rate_hz);
@@ -53,6 +65,6 @@ class AudioResampler {
   bool is_initialized_ = false;
 };
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_AUDIO_RESAMPLER_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_UTILS_AUDIO_RESAMPLER_H_

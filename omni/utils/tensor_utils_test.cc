@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/base/tensor_utils.h"
+#include "omni/utils/tensor_utils.h"
 
 #include <cstdint>
 #include <utility>

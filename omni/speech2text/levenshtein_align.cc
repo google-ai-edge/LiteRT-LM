@@ -23,7 +23,7 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "omni/base/text_utils.h"
+#include "omni/utils/text_utils.h"
 
 namespace litert::omni::asr {
 

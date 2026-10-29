@@ -63,8 +63,8 @@ cc_library(
         "//omni/base:io_types",
         "//omni/base:litert_runner",
         "//omni/base:stage",
-        "//omni/base:tensor_utils",
         "//omni/text2image:text_encoder_stage",
+        "//omni/utils:tensor_utils",
     ],
 )
 
@@ -89,8 +89,8 @@ cc_library(
         "//omni/base:io_types",
         "//omni/base:litert_runner",
         "//omni/base:stage",
-        "//omni/base:tensor_utils",
         "//omni/text2image:image_decoder",
+        "//omni/utils:tensor_utils",
     ],
 )
 
@@ -116,9 +116,9 @@ cc_library(
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:litert_runner",
         "//omni/base:stage",
-        "//omni/base:tensor_utils",
         "//omni/text2image:prompt_source",
         "//omni/text2image:text_encoder_stage",
+        "//omni/utils:tensor_utils",
         "//support/tokenizer",
     ],
 )
@@ -145,8 +145,8 @@ cc_library(
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:litert_runner",
         "//omni/base:stage",
-        "//omni/base:tensor_utils",
         "//omni/text2image:text_encoder_stage",
+        "//omni/utils:tensor_utils",
     ],
 )
 
