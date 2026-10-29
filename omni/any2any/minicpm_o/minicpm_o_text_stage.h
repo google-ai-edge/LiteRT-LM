@@ -85,8 +85,9 @@ class MiniCpmOTextStage
   ~MiniCpmOTextStage() override;
 
   // Tokenizes `text` (recognizing MiniCPM-o special control tokens such as
-  // `<|im_start|>`, `<|im_end|>`, `<|audio_start|>`, `<|audio_end|>`, etc.)
-  // and embeds the resulting token IDs into LLM hidden dimension space.
+  // `<|im_start|>`, `<|im_end|>`, `<|audio_start|>`, `<|audio_end|>`,
+  // `<image>`, `</image>`, `<slice>`, `</slice>`, `<image_id>`, `</image_id>`,
+  // etc.) and embeds the resulting token IDs into LLM hidden dimension space.
   absl::StatusOr<MiniCpmOEmbeddingSegment> EmbedControlText(
       absl::string_view text);
 

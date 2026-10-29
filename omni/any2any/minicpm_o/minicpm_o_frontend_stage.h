@@ -31,13 +31,17 @@ namespace litert::omni::any2any {
 
 // Frontend stage for MiniCPM-o:
 // - Reorders `Sequenced<MiniCpmOEmbeddingSegment>` items from parallel modality
-//   stages (`MiniCpmOTextStage` and optional `MiniCpmOAudioStage`) in
-//   contiguous `seqnum` order via an internal `FanInStage`.
+//   stages (`MiniCpmOTextStage`, optional `MiniCpmOAudioStage`, and optional
+//   `MiniCpmOImageStage`) in contiguous `seqnum` order via an internal
+//   `FanInStage`.
 // - Prepends MiniCPM-o chat-template turn headers (`<|im_start|>system...` on
 //   the first turn and `<|im_start|>user\n` at the start of each user turn) via
 //   `MiniCpmOTextStage::EmbedControlText()`.
 // - Frames audio segments with `<|audio_start|>`, `<|audio_end|>`, and trailing
 //   `\n` boundary token embeddings.
+// - Frames image segments with `<image_id>i</image_id><image>...</image>\n`
+//   (and optional `<slice>...</slice>` sub-slice grids) boundary token
+//   embeddings.
 // - Aggregates all segments belonging to the same user turn into a single
 //   turn-level prompt buffer and emits `MiniCpmOFrontendOutput` when a turn is
 //   complete (`is_turn_end = true`).
@@ -45,9 +49,10 @@ class MiniCpmOFrontendStage
     : public SingleThreadedStageWithDeque<MiniCpmOFrontendOutput> {
  public:
   // Constructs a `MiniCpmOFrontendStage` that reorders sequenced embedding
-  // segments from `text_stage` and optional `audio_stage` via `FanInStage`,
-  // frames chat turns and audio boundary tokens, and emits a turn-level
-  // `MiniCpmOFrontendOutput` at the end of each user turn.
+  // segments from `text_stage`, optional `audio_stage`, and optional
+  // `image_stage` via `FanInStage`, frames chat turns and audio/image boundary
+  // tokens, and emits a turn-level `MiniCpmOFrontendOutput` at the end of each
+  // user turn.
   //
   // Args:
   //   text_stage: Non-null upstream `MiniCpmOTextStage` producing
@@ -55,12 +60,17 @@ class MiniCpmOFrontendStage
   //     embedding lookup.
   //   audio_stage: Optional upstream `MiniCpmOAudioStage` (or test modality
   //     stage) producing `Sequenced<MiniCpmOEmbeddingSegment>` items.
+  //   image_stage: Optional upstream `MiniCpmOImageStage` (or test modality
+  //     stage) producing `Sequenced<MiniCpmOEmbeddingSegment>` items.
   //   config: Model configuration specifying hidden dimensions, system prompt,
   //     and audio generation settings.
   explicit MiniCpmOFrontendStage(
       MiniCpmOTextStage* absl_nonnull text_stage,
       SingleThreadedStageWithDeque<
           Sequenced<MiniCpmOEmbeddingSegment>>* absl_nullable audio_stage =
+          nullptr,
+      SingleThreadedStageWithDeque<
+          Sequenced<MiniCpmOEmbeddingSegment>>* absl_nullable image_stage =
           nullptr,
       const MiniCpmOModelConfig& config = {});
 
@@ -77,6 +87,8 @@ class MiniCpmOFrontendStage
   absl::StatusOr<MiniCpmOEmbeddingSegment> BuildTurnStartPrefix();
   absl::StatusOr<MiniCpmOEmbeddingSegment> FrameAudioSegment(
       const MiniCpmOEmbeddingSegment& audio);
+  absl::StatusOr<MiniCpmOEmbeddingSegment> FrameImageSegment(
+      const MiniCpmOEmbeddingSegment& image, int image_index);
   void AppendRawSegment(const MiniCpmOEmbeddingSegment& segment);
   void FlushTurn();
   void ResetTurn();
@@ -97,6 +109,9 @@ class MiniCpmOFrontendStage
   // the current user turn so multi-chunk turns frame all chunks inside a single
   // user block before `EndOfInputTurn`.
   bool in_turn_ = false;
+  // Sequential image index within the conversation for
+  // `<image_id>{i}</image_id>` tags (reset on `Reset()`).
+  int current_image_index_ = 0;
 };
 
 }  // namespace litert::omni::any2any

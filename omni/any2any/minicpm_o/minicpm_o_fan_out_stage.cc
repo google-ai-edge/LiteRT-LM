@@ -80,10 +80,10 @@ MiniCpmOInputFanOutStage::EndOfInputQueue() {
 }
 
 absl::Status MiniCpmOInputFanOutStage::RouteInput(OmniSession::Input input) {
-  if (std::holds_alternative<ImageInput>(input) ||
-      std::holds_alternative<ImageGenInputMetadata>(input)) {
+  if (std::holds_alternative<ImageGenInputMetadata>(input)) {
     return absl::UnimplementedError(
-        "ImageInput is not yet supported in MiniCpmOInputFanOutStage.");
+        "ImageGenInputMetadata is not yet supported in "
+        "MiniCpmOInputFanOutStage.");
   }
   return FanOutStage<OmniSession::Input>::RouteInput(std::move(input));
 }

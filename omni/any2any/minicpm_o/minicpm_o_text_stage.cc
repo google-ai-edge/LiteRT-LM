@@ -100,6 +100,18 @@ absl::StatusOr<std::vector<int>> TokenizeWithSpecialTokens(
       all_tokens.push_back(minicpm_o::kImEndTokenId);
     } else if (matched_token == "<|endoftext|>") {
       all_tokens.push_back(minicpm_o::kEosTokenId);
+    } else if (matched_token == "<image>") {
+      all_tokens.push_back(minicpm_o::kImageStartTokenId);
+    } else if (matched_token == "</image>") {
+      all_tokens.push_back(minicpm_o::kImageEndTokenId);
+    } else if (matched_token == "<slice>") {
+      all_tokens.push_back(minicpm_o::kSliceStartTokenId);
+    } else if (matched_token == "</slice>") {
+      all_tokens.push_back(minicpm_o::kSliceEndTokenId);
+    } else if (matched_token == "<image_id>") {
+      all_tokens.push_back(minicpm_o::kImageIdStartTokenId);
+    } else if (matched_token == "</image_id>") {
+      all_tokens.push_back(minicpm_o::kImageIdEndTokenId);
     } else if (matched_token == "<|audio_start|>") {
       all_tokens.push_back(minicpm_o::kAudioStartTokenId);
     } else if (matched_token == "<|audio_end|>") {

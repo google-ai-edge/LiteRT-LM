@@ -103,6 +103,38 @@ cc_library(
 )
 
 cc_library(
+    name = "minicpm_o_image_stage",
+    srcs = ["minicpm_o_image_stage.cc"],
+    hdrs = ["minicpm_o_image_stage.h"],
+    deps = [
+        ":minicpm_o_io_types",
+        ":minicpm_o_model_config",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni:omni_session",
+        "//omni/base:fan_out_stage",
+        "//omni/base:io_types",
+        "//omni/base:litert_runner",
+        "//omni/base:sequenced",
+        "//omni/base:stage",
+        "//runtime/components/preprocessor:image_preprocessor",
+        "//runtime/components/preprocessor:image_preprocessor_impl",  # build_cleaner: keep
+        "//runtime/components/preprocessor:minicpmv_image_preprocess",
+    ],
+)
+
+cc_library(
     name = "minicpm_o_frontend_stage",
     srcs = ["minicpm_o_frontend_stage.cc"],
     hdrs = ["minicpm_o_frontend_stage.h"],
@@ -116,6 +148,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "//omni/base:fan_in_stage",
         "//omni/base:sequenced",
@@ -130,6 +163,7 @@ cc_test(
         ":minicpm_o_audio_stage",
         ":minicpm_o_fan_out_stage",
         ":minicpm_o_frontend_stage",
+        ":minicpm_o_image_stage",
         ":minicpm_o_io_types",
         ":minicpm_o_model_config",
         ":minicpm_o_text_stage",
