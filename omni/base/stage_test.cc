@@ -62,6 +62,7 @@ TEST(StageTest, StageWithDequeLifecycle) {
 
   EXPECT_FALSE(stage.NeedSchedule());
   EXPECT_FALSE(stage.HasOutput());
+  EXPECT_TRUE(absl::IsNotFound(stage.PeekOutput().status()));
   EXPECT_TRUE(absl::IsNotFound(stage.GetOutput().status()));
 
   stage.AddInput("item1");
@@ -72,10 +73,16 @@ TEST(StageTest, StageWithDequeLifecycle) {
   EXPECT_FALSE(stage.NeedSchedule());
   EXPECT_TRUE(stage.HasOutput());
 
+  auto peeked = stage.PeekOutput();
+  EXPECT_TRUE(peeked.ok());
+  EXPECT_EQ(**peeked, "item1");
+  EXPECT_TRUE(stage.HasOutput());
+
   auto item = stage.GetOutput();
   EXPECT_TRUE(item.ok());
   EXPECT_EQ(*item, "item1");
   EXPECT_FALSE(stage.HasOutput());
+  EXPECT_TRUE(absl::IsNotFound(stage.PeekOutput().status()));
   EXPECT_TRUE(absl::IsNotFound(stage.GetOutput().status()));
 }
 

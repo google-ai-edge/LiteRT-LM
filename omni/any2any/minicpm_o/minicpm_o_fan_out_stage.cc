@@ -36,6 +36,9 @@ MiniCpmOInputFanOutStage::MiniCpmOInputFanOutStage(
       audio_queue_(AddOutputQueue(
           std::make_unique<
               SequencedVariantQueue<OmniSession::Input, AudioInput>>())),
+      audio_input_metadata_queue_(AddOutputQueue(
+          std::make_unique<SequencedVariantQueue<OmniSession::Input,
+                                                 AudioInputMetadata>>())),
       image_queue_(AddOutputQueue(
           std::make_unique<
               SequencedVariantQueue<OmniSession::Input, ImageInput>>())),
@@ -56,6 +59,11 @@ MiniCpmOInputFanOutStage::AudioQueue() {
   return *audio_queue_;
 }
 
+SequencedVariantQueue<OmniSession::Input, AudioInputMetadata>&
+MiniCpmOInputFanOutStage::AudioInputMetadataQueue() {
+  return *audio_input_metadata_queue_;
+}
+
 SequencedVariantQueue<OmniSession::Input, ImageInput>&
 MiniCpmOInputFanOutStage::ImageQueue() {
   return *image_queue_;
@@ -72,11 +80,6 @@ MiniCpmOInputFanOutStage::EndOfInputQueue() {
 }
 
 absl::Status MiniCpmOInputFanOutStage::RouteInput(OmniSession::Input input) {
-  if (std::holds_alternative<AudioInput>(input) ||
-      std::holds_alternative<AudioInputMetadata>(input)) {
-    return absl::UnimplementedError(
-        "AudioInput is not yet supported in MiniCpmOInputFanOutStage.");
-  }
   if (std::holds_alternative<ImageInput>(input) ||
       std::holds_alternative<ImageGenInputMetadata>(input)) {
     return absl::UnimplementedError(

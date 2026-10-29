@@ -22,7 +22,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
@@ -36,28 +35,37 @@
 
 namespace litert::omni::any2any {
 
-// Text processing stage for MiniCPM-o.
-// Consumes `Sequenced<TextInput>` and `Sequenced<EndOfInputTurn>` from FanOut,
-// applies chat templating and tokenization, embeds token IDs into LLM hidden
-// dimension space, and outputs `Sequenced<MiniCpmOEmbeddingSegment>`.
+// Text and turn-control embedding stage for MiniCPM-o:
+// - Consumes `Sequenced<TextInput>`, `Sequenced<EndOfInputTurn>`, and
+//   `Sequenced<EndOfInput>` from `MiniCpmOInputFanOutStage` in ascending
+//   `seqnum` order among its input queues.
+// - Tokenizes user prompt text via `Tokenizer::TextToTokenIds()` (without
+//   parsing special control tokens in untrusted user text) and embeds token IDs
+//   into LLM hidden dimension space via `text_embedder_runner`.
+// - Embeds the turn-closing suffix (`<|im_end|>\n<|im_start|>assistant\n`) on
+//   `EndOfInputTurn` and emits a turn-end marker on `EndOfInput`.
+// - Exposes `EmbedControlText()` for `MiniCpmOFrontendStage` to embed chat
+//   template headers and modality boundary tokens after `FanInStage` reorders
+//   parallel modality segments.
 class MiniCpmOTextStage
     : public SingleThreadedStageWithDeque<Sequenced<MiniCpmOEmbeddingSegment>> {
  public:
-  // Creates a `MiniCpmOTextStage` that consumes sequenced text and end-of-turn
-  // inputs, applies MiniCPM-o chat templating, tokenizes text, and embeds token
-  // IDs using `text_embedder_runner`.
+  // Creates a `MiniCpmOTextStage` that consumes sequenced text, end-of-turn,
+  // and end-of-input items from `MiniCpmOInputFanOutStage` and embeds tokens
+  // using `text_embedder_runner`.
   //
   // Args:
   //   text_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
   //     providing `Sequenced<TextInput>` items.
   //   end_of_turn_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
   //     providing `Sequenced<EndOfInputTurn>` items.
+  //   end_of_input_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
+  //     providing `Sequenced<EndOfInput>` end-of-stream items.
   //   tokenizer: Non-null tokenizer used to convert prompt text and control
   //     tokens into token IDs.
   //   text_embedder_runner: Non-null runner executing the token embedding
   //     lookup model.
-  //   config: Model configuration specifying `llm_hidden_size` and
-  //     `system_prompt`.
+  //   config: Model configuration specifying `llm_hidden_size`.
   //
   // Returns:
   //   A newly initialized `MiniCpmOTextStage` on success, or an error status if
@@ -68,40 +76,48 @@ class MiniCpmOTextStage
       FanOutOutputQueue<OmniSession::Input, TextInput>* absl_nonnull text_queue,
       FanOutOutputQueue<OmniSession::Input, EndOfInputTurn>* absl_nonnull
           end_of_turn_queue,
+      FanOutOutputQueue<OmniSession::Input, EndOfInput>* absl_nonnull
+          end_of_input_queue,
       std::shared_ptr<support::Tokenizer> absl_nonnull tokenizer,
       std::unique_ptr<LiteRtRunner> absl_nonnull text_embedder_runner,
       const MiniCpmOModelConfig& config = {});
 
-  ~MiniCpmOTextStage() override = default;
+  ~MiniCpmOTextStage() override;
+
+  // Tokenizes `text` (recognizing MiniCPM-o special control tokens such as
+  // `<|im_start|>`, `<|im_end|>`, `<|audio_start|>`, `<|audio_end|>`, etc.)
+  // and embeds the resulting token IDs into LLM hidden dimension space.
+  absl::StatusOr<MiniCpmOEmbeddingSegment> EmbedControlText(
+      absl::string_view text);
 
  protected:
   bool NeedScheduleInternal() const override;
   absl::Status ScheduleInternal() override;
-  void ResetInternal() override;
 
  private:
   MiniCpmOTextStage(
       FanOutOutputQueue<OmniSession::Input, TextInput>* absl_nonnull text_queue,
       FanOutOutputQueue<OmniSession::Input, EndOfInputTurn>* absl_nonnull
           end_of_turn_queue,
+      FanOutOutputQueue<OmniSession::Input, EndOfInput>* absl_nonnull
+          end_of_input_queue,
       std::shared_ptr<support::Tokenizer> absl_nonnull tokenizer,
       std::unique_ptr<LiteRtRunner> absl_nonnull text_embedder_runner,
       std::vector<TensorBuffer> text_emb_input_buffers,
       std::vector<TensorBuffer> text_emb_output_buffers,
       const MiniCpmOModelConfig& config);
 
-  // Tokenizes prompt text and projects to LLM embeddings.
+  // Tokenizes plain user prompt text and projects to LLM embeddings.
   absl::StatusOr<MiniCpmOEmbeddingSegment> ProcessText(absl::string_view text);
 
-  // Emits the turn-closing chat template suffix (`<|im_end|>\n<|im_start|>assistant\n`)
-  // and marks the segment with `is_turn_end = true`.
+  // Emits the turn-closing chat template suffix
+  // (`<|im_end|>\n<|im_start|>assistant\n`) and marks the segment with
+  // `is_turn_end = true`.
   absl::StatusOr<MiniCpmOEmbeddingSegment> ProcessEndOfTurn();
-
-  absl::StatusOr<std::vector<float>> EmbedTokenIds(
-      absl::Span<const int> token_ids);
 
   FanOutOutputQueue<OmniSession::Input, TextInput>& text_queue_;
   FanOutOutputQueue<OmniSession::Input, EndOfInputTurn>& end_of_turn_queue_;
+  FanOutOutputQueue<OmniSession::Input, EndOfInput>& end_of_input_queue_;
   MiniCpmOModelConfig config_;
   int hidden_dim_;
 
@@ -109,15 +125,6 @@ class MiniCpmOTextStage
   std::unique_ptr<LiteRtRunner> text_embedder_runner_;
   std::vector<TensorBuffer> text_emb_input_buffers_;
   std::vector<TensorBuffer> text_emb_output_buffers_;
-
-  // Tracks whether the stage is formatting the first user turn so the system
-  // prompt (`<|im_start|>system...`) is prepended only once at the start of a
-  // conversation (and again after `Reset()`).
-  bool is_first_turn_ = true;
-  // Tracks whether the `<|im_start|>user\n` header has already been emitted for
-  // the current user turn so multi-chunk turns frame all chunks inside a single
-  // user block before `EndOfInputTurn`.
-  bool in_turn_ = false;
 };
 
 }  // namespace litert::omni::any2any

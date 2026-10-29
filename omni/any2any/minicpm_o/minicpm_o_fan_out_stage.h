@@ -28,8 +28,8 @@ namespace litert::omni::any2any {
 class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
  public:
   // Constructs a `MiniCpmOInputFanOutStage` pulling inputs from `upstream` and
-  // registering output queues for `TextInput`, `AudioInput`, `ImageInput`,
-  // `EndOfInputTurn`, and `EndOfInput`.
+  // registering output queues for `TextInput`, `AudioInput`,
+  // `AudioInputMetadata`, `ImageInput`, `EndOfInputTurn`, and `EndOfInput`.
   //
   // Args:
   //   upstream: Non-null upstream stage producing `OmniSession::Input` items.
@@ -48,6 +48,14 @@ class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
   // Returns:
   //   Reference to the `SequencedVariantQueue` storing `Sequenced<AudioInput>`.
   SequencedVariantQueue<OmniSession::Input, AudioInput>& AudioQueue();
+
+  // Returns the output queue for `AudioInputMetadata` items.
+  //
+  // Returns:
+  //   Reference to the `SequencedVariantQueue` storing
+  //   `Sequenced<AudioInputMetadata>`.
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata>&
+  AudioInputMetadataQueue();
 
   // Returns the output queue for `ImageInput` items.
   //
@@ -74,6 +82,8 @@ class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
  private:
   SequencedVariantQueue<OmniSession::Input, TextInput>* text_queue_;
   SequencedVariantQueue<OmniSession::Input, AudioInput>* audio_queue_;
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata>*
+      audio_input_metadata_queue_;
   SequencedVariantQueue<OmniSession::Input, ImageInput>* image_queue_;
   SequencedVariantQueue<OmniSession::Input, EndOfInputTurn>* end_of_turn_queue_;
   SequencedVariantQueue<OmniSession::Input, EndOfInput>* end_of_input_queue_;

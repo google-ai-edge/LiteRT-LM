@@ -110,6 +110,18 @@ class FanOutOutputQueue : public SequencedChannel<InputT> {
     queue_.clear();
   }
 
+  // Returns a pointer to the next available Sequenced<OutputT> at the front of
+  // the queue without removing it, or absl::NotFoundError if the queue is
+  // empty.
+  virtual absl::StatusOr<const Sequenced<OutputT>* absl_nonnull> PeekFront()
+      const {
+    absl::MutexLock lock(mutex_);
+    if (queue_.empty()) {
+      return absl::NotFoundError("Queue is empty.");
+    }
+    return &queue_.front();
+  }
+
   // Removes and returns the next available Sequenced<OutputT> from the front
   // of the queue.
   virtual absl::StatusOr<Sequenced<OutputT>> PopFront() {

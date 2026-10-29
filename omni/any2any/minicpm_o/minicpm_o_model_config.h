@@ -42,6 +42,12 @@ inline constexpr int kAudioTokensPerChunk = 10;
 inline constexpr int kImStartTokenId = 151644;
 inline constexpr int kImEndTokenId = 151645;
 inline constexpr int kEosTokenId = 151643;
+inline constexpr int kAudioStartTokenId = 151665;
+inline constexpr int kAudioEndTokenId = 151666;
+// Sentinel token ID placed in `MiniCpmOEmbeddingSegment::token_ids` and
+// `MiniCpmOFrontendOutput::token_ids` for continuous audio encoder embeddings;
+// never passed to the token embedder.
+inline constexpr int kAudioEmbedPlaceholderTokenId = -2;
 inline constexpr int kThinkStartTokenId = 151667;
 inline constexpr int kThinkEndTokenId = 151668;
 inline constexpr int kTtsBosTokenId = 151703;

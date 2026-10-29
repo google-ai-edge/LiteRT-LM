@@ -74,16 +74,49 @@ cc_library(
 )
 
 cc_library(
+    name = "minicpm_o_audio_stage",
+    srcs = ["minicpm_o_audio_stage.cc"],
+    hdrs = ["minicpm_o_audio_stage.h"],
+    deps = [
+        ":minicpm_o_io_types",
+        ":minicpm_o_model_config",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni:omni_session",
+        "//omni/base:fan_out_stage",
+        "//omni/base:io_types",
+        "//omni/base:litert_runner",
+        "//omni/base:sequenced",
+        "//omni/base:stage",
+        "//omni/utils:audio_resampler",
+        "//omni/utils:whisper_log_mel_extractor",
+    ],
+)
+
+cc_library(
     name = "minicpm_o_frontend_stage",
     srcs = ["minicpm_o_frontend_stage.cc"],
     hdrs = ["minicpm_o_frontend_stage.h"],
     deps = [
         ":minicpm_o_io_types",
         ":minicpm_o_model_config",
+        ":minicpm_o_text_stage",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "//omni/base:fan_in_stage",
         "//omni/base:sequenced",
         "//omni/base:stage",
@@ -94,6 +127,7 @@ cc_test(
     name = "minicpm_o_frontend_test",
     srcs = ["minicpm_o_frontend_test.cc"],
     deps = [
+        ":minicpm_o_audio_stage",
         ":minicpm_o_fan_out_stage",
         ":minicpm_o_frontend_stage",
         ":minicpm_o_io_types",

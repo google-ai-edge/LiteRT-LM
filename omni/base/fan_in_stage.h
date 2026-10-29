@@ -17,82 +17,57 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/base/sequenced.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni {
 
-// Adapter around an upstream `Stage<Sequenced<T>>` that unwraps and returns
-// output `T` only when the requested sequence number matches the front item's
-// `seqnum`.
+// Adapter around an upstream `SingleThreadedStageWithDeque<Sequenced<T>>` that
+// unwraps and returns output `T` only when the requested sequence number
+// matches the front item's `seqnum`.
 template <typename T>
 class DesequencedStage {
  public:
-  explicit DesequencedStage(Stage<Sequenced<T>>* absl_nonnull stage)
+  explicit DesequencedStage(
+      SingleThreadedStageWithDeque<Sequenced<T>>* absl_nonnull stage)
       : stage_(*stage) {}
 
   // Returns an output only when `seqnum` matches the next available output's
-  // sequence number; otherwise returns `kNotFound`.
+  // sequence number; otherwise returns `kNotFound` without removing the front
+  // item from `stage_`.
   absl::StatusOr<T> GetOutput(uint64_t seqnum) {
-    absl::MutexLock lock(mutex_);
-    if (!pending_output_.has_value()) {
-      auto status_or_output = stage_.GetOutput();
-      if (!status_or_output.ok()) {
-        return status_or_output.status();
-      }
-      pending_output_ = std::move(*status_or_output);
-    }
-    if (pending_output_->seqnum != seqnum) {
+    ABSL_ASSIGN_OR_RETURN(const Sequenced<T>* peeked, stage_.PeekOutput());
+    if (peeked->seqnum != seqnum) {
       return absl::NotFoundError(
           "Requested seqnum does not match the available output seqnum.");
     }
-    T item = std::move(pending_output_->item);
-    pending_output_.reset();
-    return item;
+    ABSL_ASSIGN_OR_RETURN(Sequenced<T> output, stage_.GetOutput());
+    return std::move(output.item);
   }
 
   // Returns true if this stage has an output ready for `seqnum`.
-  bool HasOutput(uint64_t seqnum) {
-    absl::MutexLock lock(mutex_);
-    if (!pending_output_.has_value()) {
-      auto status_or_output = stage_.GetOutput();
-      if (!status_or_output.ok()) {
-        return false;
-      }
-      pending_output_ = std::move(*status_or_output);
-    }
-    return pending_output_->seqnum == seqnum;
+  bool HasOutput(uint64_t seqnum) const {
+    absl::StatusOr<const Sequenced<T>*> peeked = stage_.PeekOutput();
+    return peeked.ok() && (*peeked)->seqnum == seqnum;
   }
 
-  // Returns true if this stage has any buffered or upstream output available.
-  bool HasAnyOutput() const {
-    absl::MutexLock lock(mutex_);
-    return pending_output_.has_value() || stage_.HasOutput();
-  }
+  // Returns true if this stage has any upstream output available.
+  bool HasAnyOutput() const { return stage_.HasOutput(); }
 
   absl::Status Flush() { return stage_.Flush(); }
 
-  void Reset() {
-    absl::MutexLock lock(mutex_);
-    pending_output_.reset();
-    stage_.Reset();
-  }
+  void Reset() { stage_.Reset(); }
 
  private:
-  mutable absl::Mutex mutex_;
-  Stage<Sequenced<T>>& stage_;
-  std::optional<Sequenced<T>> pending_output_ ABSL_GUARDED_BY(mutex_);
+  SingleThreadedStageWithDeque<Sequenced<T>>& stage_;
 };
 
 // Fan-in stage that collects `Sequenced<T>` from multiple upstream input
@@ -109,7 +84,8 @@ class FanInStage : public SingleThreadedStageWithDeque<T> {
   ~FanInStage() override = default;
 
   // Registers an upstream input stage whose output is `Sequenced<T>`.
-  void AddInputStage(Stage<Sequenced<T>>* absl_nonnull input_stage) {
+  void AddInputStage(
+      SingleThreadedStageWithDeque<Sequenced<T>>* absl_nonnull input_stage) {
     input_stages_.push_back(std::make_unique<DesequencedStage<T>>(input_stage));
   }
 

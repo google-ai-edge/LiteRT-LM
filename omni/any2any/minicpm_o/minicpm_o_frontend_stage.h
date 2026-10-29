@@ -19,44 +19,52 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
+#include "omni/any2any/minicpm_o/minicpm_o_text_stage.h"
 #include "omni/base/fan_in_stage.h"
 #include "omni/base/sequenced.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::any2any {
 
-// Frontend stage for MiniCPM-o that uses an internal
-// `FanInStage<MiniCpmOEmbeddingSegment>` to collect and reorder
-// `Sequenced<MiniCpmOEmbeddingSegment>` from all active modality stages
-// (TextStage in CL 2, AudioStage in CL 3, ImageStage in CL 4) by `seqnum`,
-// appends them in original input sequence order, and emits
-// `MiniCpmOFrontendOutput` when a turn is complete.
+// Frontend stage for MiniCPM-o:
+// - Reorders `Sequenced<MiniCpmOEmbeddingSegment>` items from parallel modality
+//   stages (`MiniCpmOTextStage` and optional `MiniCpmOAudioStage`) in
+//   contiguous `seqnum` order via an internal `FanInStage`.
+// - Prepends MiniCPM-o chat-template turn headers (`<|im_start|>system...` on
+//   the first turn and `<|im_start|>user\n` at the start of each user turn) via
+//   `MiniCpmOTextStage::EmbedControlText()`.
+// - Frames audio segments with `<|audio_start|>`, `<|audio_end|>`, and trailing
+//   `\n` boundary token embeddings.
+// - Aggregates all segments belonging to the same user turn into a single
+//   turn-level prompt buffer and emits `MiniCpmOFrontendOutput` when a turn is
+//   complete (`is_turn_end = true`).
 class MiniCpmOFrontendStage
     : public SingleThreadedStageWithDeque<MiniCpmOFrontendOutput> {
  public:
-  // Constructs a `MiniCpmOFrontendStage` that fans in sequenced embedding
-  // segments from the provided modality stages in ascending `seqnum` order and
-  // emits a `MiniCpmOFrontendOutput` at the end of each user turn.
+  // Constructs a `MiniCpmOFrontendStage` that reorders sequenced embedding
+  // segments from `text_stage` and optional `audio_stage` via `FanInStage`,
+  // frames chat turns and audio boundary tokens, and emits a turn-level
+  // `MiniCpmOFrontendOutput` at the end of each user turn.
   //
   // Args:
-  //   text_stage: Optional upstream text embedding stage producing
-  //     `Sequenced<MiniCpmOEmbeddingSegment>`.
-  //   audio_stage: Optional upstream audio embedding stage producing
-  //     `Sequenced<MiniCpmOEmbeddingSegment>`.
-  //   image_stage: Optional upstream image embedding stage producing
-  //     `Sequenced<MiniCpmOEmbeddingSegment>`.
-  //   config: Model configuration specifying hidden dimensions and audio
-  //     generation settings.
+  //   text_stage: Non-null upstream `MiniCpmOTextStage` producing
+  //     `Sequenced<MiniCpmOEmbeddingSegment>` items and providing control-token
+  //     embedding lookup.
+  //   audio_stage: Optional upstream `MiniCpmOAudioStage` (or test modality
+  //     stage) producing `Sequenced<MiniCpmOEmbeddingSegment>` items.
+  //   config: Model configuration specifying hidden dimensions, system prompt,
+  //     and audio generation settings.
   explicit MiniCpmOFrontendStage(
-      Stage<Sequenced<MiniCpmOEmbeddingSegment>>* absl_nullable text_stage,
-      Stage<Sequenced<MiniCpmOEmbeddingSegment>>* absl_nullable
-          audio_stage = nullptr,
-      Stage<Sequenced<MiniCpmOEmbeddingSegment>>* absl_nullable
-          image_stage = nullptr,
+      MiniCpmOTextStage* absl_nonnull text_stage,
+      SingleThreadedStageWithDeque<
+          Sequenced<MiniCpmOEmbeddingSegment>>* absl_nullable audio_stage =
+          nullptr,
       const MiniCpmOModelConfig& config = {});
-  ~MiniCpmOFrontendStage() override = default;
+
+  ~MiniCpmOFrontendStage() override;
 
  protected:
   bool NeedScheduleInternal() const override;
@@ -65,15 +73,30 @@ class MiniCpmOFrontendStage
   void ResetInternal() override;
 
  private:
-  void AppendSegment(MiniCpmOEmbeddingSegment segment);
+  absl::Status ProcessSegment(const MiniCpmOEmbeddingSegment& segment);
+  absl::StatusOr<MiniCpmOEmbeddingSegment> BuildTurnStartPrefix();
+  absl::StatusOr<MiniCpmOEmbeddingSegment> FrameAudioSegment(
+      const MiniCpmOEmbeddingSegment& audio);
+  void AppendRawSegment(const MiniCpmOEmbeddingSegment& segment);
   void FlushTurn();
   void ResetTurn();
 
-  MiniCpmOModelConfig config_;
+  MiniCpmOTextStage& text_stage_;
   FanInStage<MiniCpmOEmbeddingSegment> fan_in_;
+  MiniCpmOModelConfig config_;
+  int hidden_dim_;
   std::vector<float> prompt_embeddings_;
   std::vector<int> token_ids_;
   bool generate_audio_ = true;
+
+  // Tracks whether the stage is formatting the first user turn so the system
+  // prompt (`<|im_start|>system...`) is prepended only once at the start of a
+  // conversation (and again after `Reset()`).
+  bool is_first_turn_ = true;
+  // Tracks whether the `<|im_start|>user\n` header has already been emitted for
+  // the current user turn so multi-chunk turns frame all chunks inside a single
+  // user block before `EndOfInputTurn`.
+  bool in_turn_ = false;
 };
 
 }  // namespace litert::omni::any2any

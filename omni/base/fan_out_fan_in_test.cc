@@ -115,8 +115,16 @@ TEST(FanOutFanInTest, FanOutOutputQueueBasics) {
   FanOutOutputQueue<std::string> queue;
   EXPECT_EQ(queue.size(), 0);
   EXPECT_TRUE(queue.Empty());
+  EXPECT_THAT(queue.PeekFront(), StatusIs(absl::StatusCode::kNotFound));
 
   EXPECT_OK(queue.PushBack(0, "test"));
+  EXPECT_EQ(queue.size(), 1);
+  EXPECT_FALSE(queue.Empty());
+
+  auto peeked = queue.PeekFront();
+  ASSERT_OK(peeked);
+  EXPECT_EQ((*peeked)->seqnum, 0);
+  EXPECT_EQ((*peeked)->item, "test");
   EXPECT_EQ(queue.size(), 1);
   EXPECT_FALSE(queue.Empty());
 
@@ -125,6 +133,7 @@ TEST(FanOutFanInTest, FanOutOutputQueueBasics) {
   EXPECT_EQ(item->seqnum, 0);
   EXPECT_EQ(item->item, "test");
   EXPECT_TRUE(queue.Empty());
+  EXPECT_THAT(queue.PeekFront(), StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(FanOutFanInTest, SequencedVariantQueueUnwrapsMatchingType) {

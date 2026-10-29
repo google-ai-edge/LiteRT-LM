@@ -18,6 +18,7 @@
 #include <deque>
 #include <utility>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -119,6 +120,16 @@ class SingleThreadedStageWithDeque : public Stage<T> {
   bool HasOutput() const override {
     absl::MutexLock lock(mutex_);
     return !outputs_.empty();
+  }
+
+  // Returns a pointer to the next available output object T without removing it
+  // from the deque, or absl::NotFoundError if no output is currently available.
+  absl::StatusOr<const T* absl_nonnull> PeekOutput() const {
+    absl::MutexLock lock(mutex_);
+    if (outputs_.empty()) {
+      return absl::NotFoundError("Deque has no output available.");
+    }
+    return &outputs_.front();
   }
 
   absl::StatusOr<T> GetOutput() override {

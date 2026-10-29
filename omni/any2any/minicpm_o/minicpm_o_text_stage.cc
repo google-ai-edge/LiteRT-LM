@@ -18,7 +18,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -101,6 +100,10 @@ absl::StatusOr<std::vector<int>> TokenizeWithSpecialTokens(
       all_tokens.push_back(minicpm_o::kImEndTokenId);
     } else if (matched_token == "<|endoftext|>") {
       all_tokens.push_back(minicpm_o::kEosTokenId);
+    } else if (matched_token == "<|audio_start|>") {
+      all_tokens.push_back(minicpm_o::kAudioStartTokenId);
+    } else if (matched_token == "<|audio_end|>") {
+      all_tokens.push_back(minicpm_o::kAudioEndTokenId);
     } else if (matched_token == "<think>") {
       all_tokens.push_back(minicpm_o::kThinkStartTokenId);
     } else if (matched_token == "</think>") {
@@ -118,12 +121,48 @@ absl::StatusOr<std::vector<int>> TokenizeWithSpecialTokens(
   return all_tokens;
 }
 
+// Looks up LLM token embeddings for `token_ids` using `text_embedder_runner`.
+absl::StatusOr<std::vector<float>> EmbedTokenIds(
+    LiteRtRunner& text_embedder_runner,
+    absl::Span<TensorBuffer> text_emb_input_buffers,
+    absl::Span<TensorBuffer> text_emb_output_buffers, int hidden_dim,
+    absl::Span<const int> token_ids) {
+  LITERT_ASSIGN_OR_RETURN(size_t in_bytes, text_emb_input_buffers[0].Size());
+  const int max_batch =
+      std::max(1, static_cast<int>(in_bytes / sizeof(int32_t)));
+  std::vector<float> embeddings(token_ids.size() * hidden_dim);
+
+  int offset = 0;
+  while (offset < static_cast<int>(token_ids.size())) {
+    const int count =
+        std::min(max_batch, static_cast<int>(token_ids.size()) - offset);
+    std::vector<int32_t> batch_ids(max_batch, 0);
+    for (int i = 0; i < count; ++i) {
+      batch_ids[i] = static_cast<int32_t>(token_ids[offset + i]);
+    }
+    LITERT_RETURN_IF_ERROR(text_emb_input_buffers[0].Write<int32_t>(
+        absl::MakeConstSpan(batch_ids)));
+    ABSL_RETURN_IF_ERROR(text_embedder_runner.Run("", text_emb_input_buffers,
+                                                  text_emb_output_buffers));
+
+    std::vector<float> batch_out(max_batch * hidden_dim);
+    LITERT_RETURN_IF_ERROR(
+        text_emb_output_buffers[0].Read<float>(absl::MakeSpan(batch_out)));
+    std::copy(batch_out.begin(), batch_out.begin() + count * hidden_dim,
+              embeddings.begin() + offset * hidden_dim);
+    offset += count;
+  }
+  return embeddings;
+}
+
 }  // namespace
 
 MiniCpmOTextStage::MiniCpmOTextStage(
     FanOutOutputQueue<OmniSession::Input, TextInput>* absl_nonnull text_queue,
     FanOutOutputQueue<OmniSession::Input, EndOfInputTurn>* absl_nonnull
         end_of_turn_queue,
+    FanOutOutputQueue<OmniSession::Input, EndOfInput>* absl_nonnull
+        end_of_input_queue,
     std::shared_ptr<support::Tokenizer> absl_nonnull tokenizer,
     std::unique_ptr<LiteRtRunner> absl_nonnull text_embedder_runner,
     std::vector<TensorBuffer> text_emb_input_buffers,
@@ -131,6 +170,7 @@ MiniCpmOTextStage::MiniCpmOTextStage(
     const MiniCpmOModelConfig& config)
     : text_queue_(*text_queue),
       end_of_turn_queue_(*end_of_turn_queue),
+      end_of_input_queue_(*end_of_input_queue),
       config_(config),
       hidden_dim_(config.llm_hidden_size),
       tokenizer_(std::move(tokenizer)),
@@ -138,10 +178,14 @@ MiniCpmOTextStage::MiniCpmOTextStage(
       text_emb_input_buffers_(std::move(text_emb_input_buffers)),
       text_emb_output_buffers_(std::move(text_emb_output_buffers)) {}
 
+MiniCpmOTextStage::~MiniCpmOTextStage() = default;
+
 absl::StatusOr<std::unique_ptr<MiniCpmOTextStage>> MiniCpmOTextStage::Create(
     FanOutOutputQueue<OmniSession::Input, TextInput>* absl_nonnull text_queue,
     FanOutOutputQueue<OmniSession::Input, EndOfInputTurn>* absl_nonnull
         end_of_turn_queue,
+    FanOutOutputQueue<OmniSession::Input, EndOfInput>* absl_nonnull
+        end_of_input_queue,
     std::shared_ptr<support::Tokenizer> absl_nonnull tokenizer,
     std::unique_ptr<LiteRtRunner> absl_nonnull text_embedder_runner,
     const MiniCpmOModelConfig& config) {
@@ -165,76 +209,52 @@ absl::StatusOr<std::unique_ptr<MiniCpmOTextStage>> MiniCpmOTextStage::Create(
       input_elements * static_cast<size_t>(config.llm_hidden_size) *
       sizeof(float);
   if (input_elements == 0 || out_bytes != expected_out_bytes) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "MiniCpmOTextStage output buffer size (", out_bytes,
-        " bytes) does not match input elements (", input_elements,
-        ") * llm_hidden_size (", config.llm_hidden_size,
-        ") * sizeof(float) (", expected_out_bytes, " bytes)."));
+    return absl::InvalidArgumentError(
+        absl::StrCat("MiniCpmOTextStage output buffer size (", out_bytes,
+                     " bytes) does not match input elements (", input_elements,
+                     ") * llm_hidden_size (", config.llm_hidden_size,
+                     ") * sizeof(float) (", expected_out_bytes, " bytes)."));
   }
   return absl::WrapUnique(new MiniCpmOTextStage(
-      text_queue, end_of_turn_queue, std::move(tokenizer),
+      text_queue, end_of_turn_queue, end_of_input_queue, std::move(tokenizer),
       std::move(text_embedder_runner), std::move(input_buffers),
       std::move(output_buffers), config));
 }
 
-absl::StatusOr<std::vector<float>> MiniCpmOTextStage::EmbedTokenIds(
-    absl::Span<const int> token_ids) {
-  if (token_ids.empty()) {
-    return std::vector<float>{};
-  }
-
-  LITERT_ASSIGN_OR_RETURN(size_t in_bytes, text_emb_input_buffers_[0].Size());
-  const int max_batch =
-      std::max(1, static_cast<int>(in_bytes / sizeof(int32_t)));
-  std::vector<float> embeddings(token_ids.size() * hidden_dim_);
-
-  int offset = 0;
-  while (offset < static_cast<int>(token_ids.size())) {
-    const int count =
-        std::min(max_batch, static_cast<int>(token_ids.size()) - offset);
-    std::vector<int32_t> batch_ids(max_batch, 0);
-    for (int i = 0; i < count; ++i) {
-      batch_ids[i] = static_cast<int32_t>(token_ids[offset + i]);
-    }
-    LITERT_RETURN_IF_ERROR(text_emb_input_buffers_[0].Write<int32_t>(
-        absl::MakeConstSpan(batch_ids)));
-    ABSL_RETURN_IF_ERROR(text_embedder_runner_->Run(
-        "", text_emb_input_buffers_, text_emb_output_buffers_));
-
-    std::vector<float> batch_out(max_batch * hidden_dim_);
-    LITERT_RETURN_IF_ERROR(
-        text_emb_output_buffers_[0].Read<float>(absl::MakeSpan(batch_out)));
-    std::copy(batch_out.begin(), batch_out.begin() + count * hidden_dim_,
-              embeddings.begin() + offset * hidden_dim_);
-    offset += count;
-  }
-  return embeddings;
+absl::StatusOr<MiniCpmOEmbeddingSegment> MiniCpmOTextStage::EmbedControlText(
+    absl::string_view text) {
+  ABSL_ASSIGN_OR_RETURN(std::vector<int> token_ids,
+                        TokenizeWithSpecialTokens(*tokenizer_, text));
+  ABSL_ASSIGN_OR_RETURN(std::vector<float> embeddings,
+                        EmbedTokenIds(*text_embedder_runner_,
+                                      absl::MakeSpan(text_emb_input_buffers_),
+                                      absl::MakeSpan(text_emb_output_buffers_),
+                                      hidden_dim_, token_ids));
+  const int num_tokens = static_cast<int>(token_ids.size());
+  return MiniCpmOEmbeddingSegment{
+      .embeddings = std::move(embeddings),
+      .token_ids = std::move(token_ids),
+      .num_tokens = num_tokens,
+  };
 }
 
 absl::StatusOr<MiniCpmOEmbeddingSegment> MiniCpmOTextStage::ProcessText(
     absl::string_view text) {
   std::vector<int> token_ids;
-  if (!in_turn_) {
-    std::string prefix;
-    if (is_first_turn_ && !config_.system_prompt.empty()) {
-      absl::StrAppend(&prefix, "<|im_start|>system\n", config_.system_prompt,
-                      "<|im_end|>\n");
-    }
-    absl::StrAppend(&prefix, "<|im_start|>user\n");
-    is_first_turn_ = false;
-    in_turn_ = true;
-    ABSL_ASSIGN_OR_RETURN(token_ids,
-                          TokenizeWithSpecialTokens(*tokenizer_, prefix));
-  }
-
   if (!text.empty()) {
     ABSL_ASSIGN_OR_RETURN(support::TokenIds user_tokens,
                           tokenizer_->TextToTokenIds(text));
-    token_ids.insert(token_ids.end(), user_tokens.begin(), user_tokens.end());
+    token_ids.assign(user_tokens.begin(), user_tokens.end());
   }
 
-  ABSL_ASSIGN_OR_RETURN(std::vector<float> embeddings,
-                        EmbedTokenIds(token_ids));
+  std::vector<float> embeddings;
+  if (!token_ids.empty()) {
+    ABSL_ASSIGN_OR_RETURN(
+        embeddings, EmbedTokenIds(*text_embedder_runner_,
+                                  absl::MakeSpan(text_emb_input_buffers_),
+                                  absl::MakeSpan(text_emb_output_buffers_),
+                                  hidden_dim_, token_ids));
+  }
 
   const int num_tokens = static_cast<int>(token_ids.size());
   return MiniCpmOEmbeddingSegment{
@@ -245,89 +265,81 @@ absl::StatusOr<MiniCpmOEmbeddingSegment> MiniCpmOTextStage::ProcessText(
 }
 
 absl::StatusOr<MiniCpmOEmbeddingSegment> MiniCpmOTextStage::ProcessEndOfTurn() {
-  std::string suffix;
-  if (!in_turn_) {
-    if (is_first_turn_ && !config_.system_prompt.empty()) {
-      absl::StrAppend(&suffix, "<|im_start|>system\n", config_.system_prompt,
-                      "<|im_end|>\n");
-    }
-    absl::StrAppend(&suffix, "<|im_start|>user\n");
-    is_first_turn_ = false;
-  }
-  absl::StrAppend(&suffix, "<|im_end|>\n<|im_start|>assistant\n");
-  in_turn_ = false;
-
-  ABSL_ASSIGN_OR_RETURN(std::vector<int> token_ids,
-                        TokenizeWithSpecialTokens(*tokenizer_, suffix));
-  ABSL_ASSIGN_OR_RETURN(std::vector<float> embeddings,
-                        EmbedTokenIds(token_ids));
-
-  const int num_tokens = static_cast<int>(token_ids.size());
-  return MiniCpmOEmbeddingSegment{
-      .embeddings = std::move(embeddings),
-      .token_ids = std::move(token_ids),
-      .num_tokens = num_tokens,
-      .is_turn_end = true,
-  };
+  ABSL_ASSIGN_OR_RETURN(
+      MiniCpmOEmbeddingSegment segment,
+      EmbedControlText("<|im_end|>\n<|im_start|>assistant\n"));
+  segment.is_turn_end = true;
+  return segment;
 }
 
 bool MiniCpmOTextStage::NeedScheduleInternal() const {
-  return !text_queue_.Empty() || !end_of_turn_queue_.Empty();
+  return !text_queue_.Empty() || !end_of_turn_queue_.Empty() ||
+         !end_of_input_queue_.Empty();
 }
 
 absl::Status MiniCpmOTextStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-  if (text_queue_.Empty() && end_of_turn_queue_.Empty()) {
-    return absl::NotFoundError("Text and end-of-turn queues have no output.");
+  if (!NeedScheduleInternal()) {
+    return absl::NotFoundError("MiniCpmOTextStage has no ready input.");
   }
 
-  std::vector<Sequenced<TextInput>> text_items;
-  while (!text_queue_.Empty()) {
-    ABSL_ASSIGN_OR_RETURN(Sequenced<TextInput> sequenced_input,
-                          text_queue_.PopFront());
-    text_items.push_back(std::move(sequenced_input));
-  }
+  enum class Source { kNone, kText, kEndOfTurn, kEndOfInput };
+  while (NeedScheduleInternal()) {
+    Source min_source = Source::kNone;
+    uint64_t min_seqnum = 0;
 
-  std::vector<Sequenced<EndOfInputTurn>> eot_items;
-  while (!end_of_turn_queue_.Empty()) {
-    ABSL_ASSIGN_OR_RETURN(Sequenced<EndOfInputTurn> sequenced_eot,
-                          end_of_turn_queue_.PopFront());
-    eot_items.push_back(std::move(sequenced_eot));
-  }
-
-  size_t text_idx = 0;
-  size_t eot_idx = 0;
-  while (text_idx < text_items.size() || eot_idx < eot_items.size()) {
-    const bool take_text =
-        text_idx < text_items.size() &&
-        (eot_idx >= eot_items.size() ||
-         text_items[text_idx].seqnum < eot_items[eot_idx].seqnum);
-    if (take_text) {
-      ABSL_ASSIGN_OR_RETURN(MiniCpmOEmbeddingSegment segment,
-                            ProcessText(text_items[text_idx].item.text));
-      this->PushOutput(Sequenced<MiniCpmOEmbeddingSegment>{
-          .seqnum = text_items[text_idx].seqnum,
-          .item = std::move(segment),
-      });
-      ++text_idx;
-    } else {
-      ABSL_ASSIGN_OR_RETURN(MiniCpmOEmbeddingSegment segment,
-                            ProcessEndOfTurn());
-      this->PushOutput(Sequenced<MiniCpmOEmbeddingSegment>{
-          .seqnum = eot_items[eot_idx].seqnum,
-          .item = std::move(segment),
-      });
-      ++eot_idx;
+    if (!text_queue_.Empty()) {
+      ABSL_ASSIGN_OR_RETURN(const Sequenced<TextInput>* peeked_text,
+                            text_queue_.PeekFront());
+      min_source = Source::kText;
+      min_seqnum = peeked_text->seqnum;
     }
+    if (!end_of_turn_queue_.Empty()) {
+      ABSL_ASSIGN_OR_RETURN(const Sequenced<EndOfInputTurn>* peeked_eot,
+                            end_of_turn_queue_.PeekFront());
+      if (min_source == Source::kNone || peeked_eot->seqnum < min_seqnum) {
+        min_source = Source::kEndOfTurn;
+        min_seqnum = peeked_eot->seqnum;
+      }
+    }
+    if (!end_of_input_queue_.Empty()) {
+      ABSL_ASSIGN_OR_RETURN(const Sequenced<EndOfInput>* peeked_eoi,
+                            end_of_input_queue_.PeekFront());
+      if (min_source == Source::kNone || peeked_eoi->seqnum < min_seqnum) {
+        min_source = Source::kEndOfInput;
+        min_seqnum = peeked_eoi->seqnum;
+      }
+    }
+
+    MiniCpmOEmbeddingSegment segment;
+    switch (min_source) {
+      case Source::kText: {
+        ABSL_ASSIGN_OR_RETURN(const Sequenced<TextInput>* peeked_text,
+                              text_queue_.PeekFront());
+        ABSL_ASSIGN_OR_RETURN(segment, ProcessText(peeked_text->item.text));
+        ABSL_RETURN_IF_ERROR(text_queue_.PopFront().status());
+        break;
+      }
+      case Source::kEndOfTurn: {
+        ABSL_ASSIGN_OR_RETURN(segment, ProcessEndOfTurn());
+        ABSL_RETURN_IF_ERROR(end_of_turn_queue_.PopFront().status());
+        break;
+      }
+      case Source::kEndOfInput: {
+        segment = MiniCpmOEmbeddingSegment{.is_turn_end = true};
+        ABSL_RETURN_IF_ERROR(end_of_input_queue_.PopFront().status());
+        break;
+      }
+      case Source::kNone:
+        return absl::OkStatus();
+    }
+    this->PushOutput(Sequenced<MiniCpmOEmbeddingSegment>{
+        .seqnum = min_seqnum,
+        .item = std::move(segment),
+    });
   }
   return absl::OkStatus();
-}
-
-void MiniCpmOTextStage::ResetInternal() {
-  SingleThreadedStageWithDeque::ResetInternal();
-  is_first_turn_ = true;
-  in_turn_ = false;
 }
 
 }  // namespace litert::omni::any2any
