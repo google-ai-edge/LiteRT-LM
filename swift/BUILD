@@ -22,24 +22,33 @@ load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
 
 package(default_visibility = ["//visibility:public"])
 
+LITERT_LM_SWIFT_SRCS = [
+    "Benchmark.swift",
+    "Config.swift",
+    "Conversation.swift",
+    "EmbeddingEngine.swift",
+    "EmbeddingEngineConfig.swift",
+    "Engine.swift",
+    "ExperimentalFlags.swift",
+    "LiteRTLMError.swift",
+    "Message.swift",
+    "ModelInfo.swift",
+    "ResponseFormat.swift",
+    "Tool.swift",
+    "ToolManager.swift",
+]
+
+# The sources of the Swift API, e.g. to package them with the CLiteRTLM xcframework as a SwiftPM
+# package.
+filegroup(
+    name = "LiteRT_LM_Swift_srcs",
+    srcs = LITERT_LM_SWIFT_SRCS,
+)
+
 # Swift API for LiteRT LM.
 swift_library(
     name = "LiteRT_LM_Swift",
-    srcs = [
-        "Benchmark.swift",
-        "Config.swift",
-        "Conversation.swift",
-        "EmbeddingEngine.swift",
-        "EmbeddingEngineConfig.swift",
-        "Engine.swift",
-        "ExperimentalFlags.swift",
-        "LiteRTLMError.swift",
-        "Message.swift",
-        "ModelInfo.swift",
-        "ResponseFormat.swift",
-        "Tool.swift",
-        "ToolManager.swift",
-    ],
+    srcs = LITERT_LM_SWIFT_SRCS,
     copts = ["-enable-testing"],
     features = ["-swift.enable_v6"],
     module_name = "LiteRTLM",
