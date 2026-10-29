@@ -219,12 +219,13 @@ jobs:
             test --config=github_actions_bazel_cache --test_output=errors `
             --deleted_packages=swift `
             --test_timeout=300,1500,5400,18000 `
-            --test_tag_filters='-requires-mac-inputs:hard,-nowindows' `
+            --test_tag_filters='-nowindows' `
             --action_env=TMP="$env:TMP" `
             --action_env=TEMP="$env:TEMP" `
             -- `
             //runtime/... `
             //schema/... `
+            //support/... `
             //c/...
 
       - name: Run pytest
