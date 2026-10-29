@@ -190,6 +190,7 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
     std::optional<Backend> sampler_backend) {
   if (backend == Backend::GPU) {
     bool is_text_artisan = false;
+    bool has_tflite_audio_encoder = false;
 
     std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>
         loader_status;
@@ -211,10 +212,13 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
           ABSL_LOG(WARNING)
               << "Failed to load LitertLm header from data stream: "
               << load_header_status;
-        } else if (streaming_loader.HasSection(BufferKey(
-                       schema::AnySectionDataType_TFLiteModel,
-                       proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER))) {
-          is_text_artisan = true;
+        } else {
+          is_text_artisan = streaming_loader.HasSection(
+              BufferKey(schema::AnySectionDataType_TFLiteModel,
+                        proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER));
+          has_tflite_audio_encoder = streaming_loader.HasSection(
+              BufferKey(schema::AnySectionDataType_TFLiteModel,
+                        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
         }
       } else {
         ABSL_LOG(WARNING) << "Failed to get data stream from ModelAssets: "
@@ -239,20 +243,29 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
       // 2. **loader_status gets the unique_ptr.
       // 3. ***loader_status gets the LitertLmLoader.
       const auto& loader = ***loader_status;
-      if (loader
+      is_text_artisan =
+          loader
               .GetSectionLocation(
                   BufferKey(schema::AnySectionDataType_TFLiteModel,
                             proto::LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER))
-              .ok()) {
-        is_text_artisan = true;
-      }
+              .ok();
+      has_tflite_audio_encoder =
+          loader
+              .GetSectionLocation(
+                  BufferKey(schema::AnySectionDataType_TFLiteModel,
+                            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW))
+              .ok();
     }
 
     if (is_text_artisan) {
       ABSL_VLOG(1) << "Artisan model detected. Switching backend from GPU to "
                       "GPU_ARTISAN.";
       backend = Backend::GPU_ARTISAN;
-      if (audio_backend.has_value() && audio_backend.value() == Backend::GPU) {
+      // GPU_ARTISAN audio only works for audio encoders that are part of the
+      // artisan model's weights; LiteRT audio encoders run on the LiteRT GPU
+      // backend.
+      if (!has_tflite_audio_encoder && audio_backend.has_value() &&
+          audio_backend.value() == Backend::GPU) {
         audio_backend = Backend::GPU_ARTISAN;
       }
     }

@@ -502,6 +502,7 @@ cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
+        "@flatbuffers",
         "@litert//litert/cc/internal:scoped_file",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",
@@ -515,6 +516,8 @@ cc_test(
         "//runtime/util:file_data_stream",
         "//runtime/util:litert_lm_streaming_loader",
         "//runtime/util:test_utils",
+        "//schema/core:litertlm_header",
+        "//schema/core:litertlm_header_schema",
         "//support/tokenizer",
     ],
 )

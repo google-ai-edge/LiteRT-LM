@@ -14,7 +14,9 @@
 
 #include "runtime/engine/engine_settings.h"
 
+#include <cstdint>
 #include <fstream>
+#include <ios>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -31,6 +33,8 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -43,6 +47,8 @@
 #include "runtime/util/file_data_stream.h"
 #include "runtime/util/litert_lm_streaming_loader.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
@@ -147,6 +153,126 @@ TEST(EngineSettingsTest, MainExecutorSettingsDefaultExecutorBackend) {
   ASSERT_OK(settings);
   EXPECT_THAT(settings->GetMainExecutorSettings().GetBackend(),
               Eq(Backend::CPU));
+}
+
+std::string WriteLitertLmWithModelTypes(
+    absl::string_view filename,
+    absl::Span<const absl::string_view> model_types) {
+  flatbuffers::FlatBufferBuilder builder;
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections;
+  uint64_t offset = 16384;
+  for (absl::string_view model_type : model_types) {
+    std::vector<flatbuffers::Offset<schema::KeyValuePair>> items = {
+        schema::CreateKeyValuePair(builder, "model_type",
+                                   std::string(model_type)),
+    };
+    sections.push_back(schema::CreateSectionObject(
+        builder, builder.CreateVector(items), /*begin_offset=*/offset,
+        /*end_offset=*/offset + 64, schema::AnySectionDataType_TFLiteModel));
+    offset += 64;
+  }
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  builder.Finish(schema::CreateLiteRTLMMetaData(builder, /*system_metadata=*/0,
+                                                section_metadata));
+
+  std::string path = absl::StrCat(::testing::TempDir(), "/", filename);
+  std::ofstream file(path, std::ios::binary);
+  file.write("LITERTLM", 8);
+  file.write(reinterpret_cast<const char*>(&schema::LITERTLM_MAJOR_VERSION),
+             sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&schema::LITERTLM_MINOR_VERSION),
+             sizeof(uint32_t));
+  file.write(reinterpret_cast<const char*>(&schema::LITERTLM_PATCH_VERSION),
+             sizeof(uint32_t));
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&padding), sizeof(uint32_t));
+  const uint64_t header_end_offset = 32 + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end_offset),
+             sizeof(uint64_t));
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  return path;
+}
+
+TEST(EngineSettingsTest,
+     ArtisanModelSwitchesAudioToGpuArtisanWithoutLiteRtAudioEncoder) {
+  const std::string model_path = WriteLitertLmWithModelTypes(
+      "artisan_only.litertlm", {"tf_lite_artisan_text_decoder"});
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, /*backend=*/Backend::GPU,
+                                    /*vision_backend=*/std::nullopt,
+                                    /*audio_backend=*/Backend::GPU));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetBackend(),
+            Backend::GPU_ARTISAN);
+  ASSERT_TRUE(settings.GetAudioExecutorSettings().has_value());
+  EXPECT_EQ(settings.GetAudioExecutorSettings()->GetBackend(),
+            Backend::GPU_ARTISAN);
+}
+
+TEST(EngineSettingsTest, ArtisanModelKeepsGpuAudioForLiteRtAudioEncoder) {
+  const std::string model_path = WriteLitertLmWithModelTypes(
+      "artisan_with_litert_audio.litertlm",
+      {"tf_lite_artisan_text_decoder", "tf_lite_audio_encoder_hw"});
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, /*backend=*/Backend::GPU,
+                                    /*vision_backend=*/std::nullopt,
+                                    /*audio_backend=*/Backend::GPU));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetBackend(),
+            Backend::GPU_ARTISAN);
+  ASSERT_TRUE(settings.GetAudioExecutorSettings().has_value());
+  EXPECT_EQ(settings.GetAudioExecutorSettings()->GetBackend(), Backend::GPU);
+}
+
+TEST(EngineSettingsTest,
+     ArtisanModelStreamSwitchesAudioToGpuArtisanWithoutLiteRtAudioEncoder) {
+  const std::string model_path = WriteLitertLmWithModelTypes(
+      "artisan_only_stream.litertlm", {"tf_lite_artisan_text_decoder"});
+  ASSERT_OK_AND_ASSIGN(auto data_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(data_stream));
+
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, /*backend=*/Backend::GPU,
+                                    /*vision_backend=*/std::nullopt,
+                                    /*audio_backend=*/Backend::GPU));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetBackend(),
+            Backend::GPU_ARTISAN);
+  ASSERT_TRUE(settings.GetAudioExecutorSettings().has_value());
+  EXPECT_EQ(settings.GetAudioExecutorSettings()->GetBackend(),
+            Backend::GPU_ARTISAN);
+}
+
+TEST(EngineSettingsTest, ArtisanModelStreamKeepsGpuAudioForLiteRtAudioEncoder) {
+  const std::string model_path = WriteLitertLmWithModelTypes(
+      "artisan_with_litert_audio_stream.litertlm",
+      {"tf_lite_artisan_text_decoder", "tf_lite_audio_encoder_hw"});
+  ASSERT_OK_AND_ASSIGN(auto data_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(data_stream));
+
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, /*backend=*/Backend::GPU,
+                                    /*vision_backend=*/std::nullopt,
+                                    /*audio_backend=*/Backend::GPU));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetBackend(),
+            Backend::GPU_ARTISAN);
+  ASSERT_TRUE(settings.GetAudioExecutorSettings().has_value());
+  EXPECT_EQ(settings.GetAudioExecutorSettings()->GetBackend(), Backend::GPU);
 }
 
 TEST(EngineSettingsTest, VisionExecutorSettingsNotSet) {
