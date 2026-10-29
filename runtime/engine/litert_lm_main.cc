@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -47,10 +48,10 @@
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/engine/shared_flags.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"
-#include "runtime/engine/shared_flags.h"
 
 ABSL_FLAG(std::string, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
@@ -58,6 +59,7 @@ ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
 ABSL_FLAG(std::string, input_prompt_file, "", "File path to the input prompt.");
+ABSL_FLAG(std::string, image_path, "", "Path to input image.");
 
 namespace {
 
@@ -123,14 +125,24 @@ absl::Status MainHelper(int argc, char** argv) {
   if (model_path.empty()) {
     return absl::InvalidArgumentError("Model path is empty.");
   }
+  const std::string image_path = absl::GetFlag(FLAGS_image_path);
   ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets,  // NOLINT
                         ModelAssets::Create(model_path));
   auto backend_str = absl::GetFlag(FLAGS_backend);
   ABSL_ASSIGN_OR_RETURN(Backend backend,
                         litert::lm::GetBackendFromString(backend_str));
-  ABSL_ASSIGN_OR_RETURN(
-      EngineSettings engine_settings,
-      EngineSettings::CreateDefault(std::move(model_assets), backend));
+  std::optional<Backend> vision_backend = std::nullopt;
+  const std::optional<std::string> vision_backend_str =
+      absl::GetFlag(FLAGS_vision_backend);
+  if (vision_backend_str.has_value() && !vision_backend_str->empty()) {
+    ABSL_ASSIGN_OR_RETURN(
+        vision_backend, litert::lm::GetBackendFromString(*vision_backend_str));
+  } else if (!image_path.empty()) {
+    vision_backend = backend;
+  }
+  ABSL_ASSIGN_OR_RETURN(EngineSettings engine_settings,
+                        EngineSettings::CreateDefault(std::move(model_assets),
+                                                      backend, vision_backend));
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
@@ -163,6 +175,10 @@ absl::Status MainHelper(int argc, char** argv) {
   // Create the conversation.
   std::unique_ptr<Conversation> conversation;
   auto session_config = litert::lm::SessionConfig::CreateDefault();
+  if (engine->GetEngineSettings().GetVisionExecutorSettings().has_value() ||
+      !image_path.empty()) {
+    session_config.SetVisionModalityEnabled(true);
+  }
   ABSL_ASSIGN_OR_RETURN(auto conversation_config,
                         ConversationConfig::Builder()
                             .SetSessionConfig(session_config)
@@ -172,20 +188,32 @@ absl::Status MainHelper(int argc, char** argv) {
 
   // Prepare the message to send.
   json content_list = json::array();
+  if (!image_path.empty()) {
+    content_list.push_back({{"type", "image"}, {"path", image_path}});
+  }
   const std::string input_prompt = GetInputPrompt();
   std::cout << "input_prompt: " << input_prompt << std::endl;
   content_list.push_back({{"type", "text"}, {"text", input_prompt}});
 
+  litert::lm::OptionalArgs optional_args;
+  if (absl::GetFlag(FLAGS_max_output_tokens) > 0) {
+    optional_args.max_output_tokens = absl::GetFlag(FLAGS_max_output_tokens);
+  }
+
   // Send the message and wait for the response, asynchronously log the
   // response.
+  std::cout << "\n===MODEL_OUTPUT_START===\n" << std::flush;
   ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
       json::object({{"role", "user"}, {"content", content_list}}),
-      CreateMessageCallback()));
+      CreateMessageCallback(), std::move(optional_args)));
   ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(absl::Minutes(10)));
+  std::cout << "\n===MODEL_OUTPUT_END===\n" << std::flush;
 
   // Print the benchmark info.
   auto benchmark_info = conversation->GetBenchmarkInfo();
-  std::cout << std::endl << *benchmark_info << std::endl;
+  if (benchmark_info.ok()) {
+    std::cout << std::endl << *benchmark_info << std::endl;
+  }
   return absl::OkStatus();
 }
 
