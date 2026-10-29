@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm} from '@litert-lm/core';
+import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
+import {getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
 
 describe('ModelLoaderService', () => {
@@ -93,8 +93,10 @@ describe('ModelLoaderService', () => {
     await modelLoader.updateCacheSize();
 
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
-    expect(modelLoader.cachedModels.get('model1.litertlm')).toBe(1024);
-    expect(modelLoader.cachedModels.get('model2.litertlm')).toBe(2048);
+    expect(modelLoader.cachedModels.get('https://example.com/model1.litertlm'))
+        .toBe(1024);
+    expect(modelLoader.cachedModels.get('https://example.com/model2.litertlm'))
+        .toBe(2048);
     expect(updateCalled).toBeTrue();
   });
 
@@ -286,6 +288,104 @@ describe('ModelLoaderService', () => {
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
     expect(mockCache.put).toHaveBeenCalled();
     expect(modelLoader.updateCacheSize).toHaveBeenCalled();
+  });
+
+  describe('addRemoteModel', () => {
+    let fakeResolve: jasmine.Spy<typeof resolveModel>;
+    let latestStatus: string;
+
+    beforeEach(() => {
+      latestStatus = '';
+      fakeResolve = jasmine.createSpy('resolveModel')
+                        .and.callFake(async model => ({model}));
+      modelLoader = new ModelLoaderService(
+          () => {}, (msg: string) => {
+            latestStatus = msg;
+          }, undefined, fakeEngineCreate, fakeLoadWasm, fakeResolve);
+    });
+
+    function resolvedHuggingFaceModel(
+        repo: `${string}/${string}`, path: string): ResolvedModelInput {
+      const source = {
+        url: `https://huggingface.co/${repo}/resolve/c0ffee/${path}`,
+        size: 2_500_000_000,
+        sha256: 'ab'.repeat(32),
+      };
+      return {
+        model: source,
+        huggingFace: {source, repo, revision: 'main', commit: 'c0ffee', path},
+      };
+    }
+
+    it('pins a Hugging Face repo to the file it resolves to', async () => {
+      fakeResolve.and.resolveTo(resolvedHuggingFaceModel(
+          'litert-community/SmolLM3-3B', 'SmolLM3-3B.litertlm'));
+
+      const model =
+          await modelLoader.addRemoteModel(' litert-community/SmolLM3-3B ');
+
+      expect(fakeResolve)
+          .toHaveBeenCalledOnceWith('hf://litert-community/SmolLM3-3B');
+      expect(model).toEqual({
+        name: 'SmolLM3-3B',
+        filename: 'SmolLM3-3B.litertlm',
+        path:
+            'https://huggingface.co/litert-community/SmolLM3-3B/resolve/c0ffee/SmolLM3-3B.litertlm',
+        size: '2.50 GB',
+      });
+      expect(latestStatus).toBe('Added SmolLM3-3B.');
+    });
+
+    it('names a model after its repo and file', async () => {
+      fakeResolve.and.resolveTo(
+          resolvedHuggingFaceModel('org/repo', 'repo_int4.litertlm'));
+      expect((await modelLoader.addRemoteModel('org/repo')).name)
+          .toBe('repo (repo_int4)');
+
+      fakeResolve.and.resolveTo(
+          resolvedHuggingFaceModel('org/repo', 'model.litertlm'));
+      expect((await modelLoader.addRemoteModel('org/repo')).name)
+          .toBe('repo');
+    });
+
+    it('adds a URL as is', async () => {
+      const model = await modelLoader.addRemoteModel(
+          'https://example.com/models/my-model.litertlm');
+
+      expect(model).toEqual({
+        name: 'my-model',
+        filename: 'my-model.litertlm',
+        path: 'https://example.com/models/my-model.litertlm',
+        size: '',
+      });
+    });
+
+    it('rejects text that is not a model reference', async () => {
+      spyOn(console, 'error');
+
+      await expectAsync(modelLoader.addRemoteModel('not a model'))
+          .toBeRejectedWithError(/isn't a URL or a Hugging Face repo/);
+      expect(fakeResolve).not.toHaveBeenCalled();
+      expect(latestStatus).toMatch(/^Failed to add model: /);
+    });
+
+    it('shows resolution errors in the status', async () => {
+      spyOn(console, 'error');
+      fakeResolve.and.rejectWith(new Error('no revision named main exists'));
+
+      await expectAsync(modelLoader.addRemoteModel('org/repo'))
+          .toBeRejectedWithError('no revision named main exists');
+      expect(latestStatus)
+          .toBe('Failed to add model: no revision named main exists');
+    });
+  });
+
+  it('keys models by their normalized URL', () => {
+    expect(getModelKey('https://local-model/my model.litertlm'))
+        .toBe('https://local-model/my%20model.litertlm');
+    expect(getModelKey('local-dir://dir/model.litertlm'))
+        .toBe('local-dir://dir/model.litertlm');
+    expect(getModelKey('not a url')).toBe('not a url');
   });
 
   it('loadModelWeights fails if local model is not in cache', async () => {

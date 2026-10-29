@@ -79,6 +79,7 @@ describe('litert-sidebar', () => {
       'deleteModelFromCache',
       'clearAllCache',
       'cancelDownload',
+      'addRemoteModel',
     ]);
     mockModelLoader.cachedModels = cachedModelsMap;
     mockModelLoader.downloadProgresses = downloadProgressMap;
@@ -114,7 +115,8 @@ describe('litert-sidebar', () => {
     expect(dropdown).toBeTruthy();
 
     const items = element.shadowRoot!.querySelectorAll('.dropdown-item');
-    expect(items.length).toBe(MODELS.length + 1);
+    // The models, the upload item and the add-from-URL item.
+    expect(items.length).toBe(MODELS.length + 2);
     expect(items[0]!.querySelector('.model-name')!.textContent!.trim()).toBe(MODELS[0]!.name);
   });
 
@@ -134,7 +136,7 @@ describe('litert-sidebar', () => {
 
   it('deletes model from cache when clicking delete cache button', async () => {
     // Make the first model cached
-    cachedModelsMap.set(MODELS[0]!.filename, 1024 * 1024 * 1024); // 1 GB
+    cachedModelsMap.set(MODELS[0]!.path, 1024 * 1024 * 1024); // 1 GB
     element.requestUpdate();
     await element.updateComplete;
 
@@ -154,7 +156,7 @@ describe('litert-sidebar', () => {
        mockSettings.selectedModelPath = MODELS[1]!.path;
 
        // Make the selected standard model cached
-       cachedModelsMap.set(MODELS[1]!.filename, 1024 * 1024 * 1024);
+       cachedModelsMap.set(MODELS[1]!.path, 1024 * 1024 * 1024);
        element.requestUpdate();
        await element.updateComplete;
 
@@ -176,7 +178,7 @@ describe('litert-sidebar', () => {
        mockSettings.selectedModelPath = MODELS[1]!.path;
 
        // Make the first model cached (which is not selected)
-       cachedModelsMap.set(MODELS[0]!.filename, 1024 * 1024 * 1024);
+       cachedModelsMap.set(MODELS[0]!.path, 1024 * 1024 * 1024);
        element.requestUpdate();
        await element.updateComplete;
 
@@ -205,7 +207,7 @@ describe('litert-sidebar', () => {
        mockSettings.selectedModelPath = customModelPath;
 
        // Make the custom model cached
-       cachedModelsMap.set('my-custom-model.litertlm', 1024 * 1024 * 1024);
+       cachedModelsMap.set(customModelPath, 1024 * 1024 * 1024);
        element.requestUpdate();
        await element.updateComplete;
 
@@ -220,6 +222,138 @@ describe('litert-sidebar', () => {
        expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
        expect(mockSettings.saveSettings).toHaveBeenCalled();
      });
+
+  describe('adding a model by URL', () => {
+    const remoteModel = {
+      name: 'SmolLM3-3B',
+      filename: 'SmolLM3-3B.litertlm',
+      path:
+          'https://huggingface.co/litert-community/SmolLM3-3B/resolve/c0ffee/SmolLM3-3B.litertlm',
+      size: '3.13 GB',
+    };
+
+    async function openForm(): Promise<HTMLFormElement> {
+      const dropdown =
+          element.shadowRoot!.querySelector('custom-dropdown') as HTMLElement;
+      dropdown.dispatchEvent(new CustomEvent('change', {detail: 'add-url'}));
+      await element.updateComplete;
+      return element.shadowRoot!.querySelector('#add-model-form')!;
+    }
+
+    async function submit(form: HTMLFormElement, text: string) {
+      form.querySelector<HTMLInputElement>('#add-model-input')!.value = text;
+      form.requestSubmit();
+      await new Promise(resolve => setTimeout(resolve));
+      await element.updateComplete;
+    }
+
+    it('has an item at the end of the model list', () => {
+      const items = element.shadowRoot!.querySelectorAll('.dropdown-item');
+      expect((items[items.length - 1] as HTMLElement).dataset['value'])
+          .toBe('add-url');
+    });
+
+    it('shows a form without changing the selected model', async () => {
+      const form = await openForm();
+
+      expect(form).toBeTruthy();
+      expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+      expect(mockModelLoader.loadModelWeights).not.toHaveBeenCalled();
+    });
+
+    it('adds, selects and loads the model', async () => {
+      mockModelLoader.addRemoteModel.and.resolveTo(remoteModel);
+      const form = await openForm();
+
+      await submit(form, 'litert-community/SmolLM3-3B');
+
+      expect(mockModelLoader.addRemoteModel)
+          .toHaveBeenCalledOnceWith('litert-community/SmolLM3-3B');
+      expect(mockSettings.customModels).toEqual([remoteModel]);
+      expect(mockSettings.selectedModelPath).toBe(remoteModel.path);
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+      expect(mockModelLoader.loadModelWeights).toHaveBeenCalled();
+      expect(element.shadowRoot!.querySelector('#add-model-form')).toBeNull();
+    });
+
+    it('does not add a model twice', async () => {
+      mockSettings.customModels = [remoteModel];
+      mockModelLoader.addRemoteModel.and.resolveTo({...remoteModel});
+
+      await submit(await openForm(), 'litert-community/SmolLM3-3B');
+
+      expect(mockSettings.customModels).toEqual([remoteModel]);
+      expect(mockSettings.selectedModelPath).toBe(remoteModel.path);
+    });
+
+    it('keeps the form open if the model cannot be added', async () => {
+      mockModelLoader.addRemoteModel.and.rejectWith(new Error('Not found'));
+
+      await submit(await openForm(), 'org/missing');
+
+      expect(mockSettings.customModels).toEqual([]);
+      expect(mockModelLoader.loadModelWeights).not.toHaveBeenCalled();
+      expect(element.shadowRoot!.querySelector('#add-model-form'))
+          .toBeTruthy();
+    });
+
+    it('hides the form when another model is chosen', async () => {
+      await openForm();
+      const dropdown =
+          element.shadowRoot!.querySelector('custom-dropdown') as HTMLElement;
+
+      dropdown.dispatchEvent(
+          new CustomEvent('change', {detail: MODELS[1]!.path}));
+      await element.updateComplete;
+
+      expect(element.shadowRoot!.querySelector('#add-model-form')).toBeNull();
+      expect(mockSettings.selectedModelPath).toBe(MODELS[1]!.path);
+    });
+
+    for (const target of ['#add-model-input', '.btn-add-model']) {
+      it(`hides the form on Escape in ${target}`, async () => {
+        const form = await openForm();
+
+        form.querySelector(target)!.dispatchEvent(
+            new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+        await element.updateComplete;
+
+        expect(element.shadowRoot!.querySelector('#add-model-form'))
+            .toBeNull();
+      });
+    }
+
+    it('does not add a model while another is loading', async () => {
+      mockModelLoader.isModelLoading = true;
+      const form = await openForm();
+
+      expect(form.querySelector<HTMLInputElement>('#add-model-input')!.disabled)
+          .toBeTrue();
+      expect(form.querySelector<HTMLButtonElement>('.btn-add-model')!.disabled)
+          .toBeTrue();
+      await submit(form, 'litert-community/SmolLM3-3B');
+
+      expect(mockModelLoader.addRemoteModel).not.toHaveBeenCalled();
+      expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+    });
+
+    it('removes an added model that is not cached from the list', async () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      mockSettings.customModels = [remoteModel];
+      mockSettings.selectedModelPath = remoteModel.path;
+      element.requestUpdate();
+      await element.updateComplete;
+
+      const removeBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+          '.delete-cache-btn[title="Remove from list"]')!;
+      removeBtn.click();
+
+      expect(mockModelLoader.deleteModelFromCache).not.toHaveBeenCalled();
+      expect(mockSettings.customModels).toEqual([]);
+      expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+    });
+  });
 
   it('updates settings on slider/number input changes', async () => {
     // 1. Context Length
@@ -288,9 +422,9 @@ describe('litert-sidebar', () => {
 
   it('renders progress bar when model is downloading', async () => {
     mockModelLoader.isModelLoading = true;
-    const modelFilename = MODELS[0]!.filename;
-    downloadProgressMap.set(modelFilename, 45);
-    downloadSpeedsMap.set(modelFilename, '5.2 MB/s');
+    const modelKey = MODELS[0]!.path;
+    downloadProgressMap.set(modelKey, 45);
+    downloadSpeedsMap.set(modelKey, '5.2 MB/s');
     mockModelLoader.downloadAbortController = {} as AbortController;
     
     element.requestUpdate();

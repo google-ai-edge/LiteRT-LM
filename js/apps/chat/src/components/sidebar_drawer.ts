@@ -14,17 +14,24 @@
  * limitations under the License.
  */
 
-import {css, html, LitElement} from 'lit';
-import {customElement, property, query} from 'lit/decorators.js';
+import {css, html, LitElement, nothing} from 'lit';
+import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
-import {MODELS, PartialSettingsSchema, Settings} from '../stores/settings_store.js';
+import {getModelKey} from '../stores/model_loader_service.js';
+import {CustomModel, MODELS, PartialSettingsSchema, Settings} from '../stores/settings_store.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
 import './custom_dropdown';
 import type {CustomDropdown} from './custom_dropdown.js';
 
 /* tslint:disable:no-new-decorators */
+
+/** Returns the label for a model that isn't cached. */
+function getDownloadLabel(model: CustomModel): string {
+  if (model.path.startsWith('https://local-model/')) return 'Local';
+  return model.size ? `Download (${model.size})` : 'Download';
+}
 
 /** Component representing the sidebar drawer. */
 @customElement('litert-sidebar')
@@ -34,6 +41,15 @@ export class LitertSidebar extends LitElement {
 
   @query('custom-dropdown')
   private readonly dropdown!: CustomDropdown;
+
+  @query('#add-model-input')
+  private readonly addModelInput?: HTMLInputElement;
+
+  /** Whether the form to add a model by URL or Hugging Face repo is shown. */
+  @state() private isAddingModel = false;
+
+  /** Whether a model that's being added is being looked up. */
+  @state() private isLookingUpModel = false;
 
   static override styles = [
     sharedStyles, css`
@@ -288,12 +304,23 @@ export class LitertSidebar extends LitElement {
 
   private handleModelChange(e: CustomEvent<string>) {
     const path = e.detail;
+    // Choosing anything else in the list closes the form to add a model.
+    this.isAddingModel = path === 'add-url';
     if (path === 'upload') {
       this.triggerFileUpload();
       return;
     }
     if (path === 'select-dir') {
       void this.state.localDirService.mountDirectory();
+      return;
+    }
+    if (path === 'add-url') {
+      if (this.dropdown) {
+        this.dropdown.value = this.state.settings.selectedModelPath;
+      }
+      void this.updateComplete.then(() => {
+        this.addModelInput?.focus();
+      });
       return;
     }
 
@@ -356,15 +383,80 @@ export class LitertSidebar extends LitElement {
     input.click();
   }
 
+  /**
+   * Adds the model that the user entered by URL or Hugging Face repo to the
+   * custom models, selects it, and loads it, which downloads and caches it.
+   */
+  private async handleAddModel(e: SubmitEvent) {
+    e.preventDefault();
+    const text = this.addModelInput?.value.trim() ?? '';
+    // A model that's added while another is loading couldn't be loaded.
+    if (!text || this.isLookingUpModel ||
+        this.state.modelLoader.isModelLoading) {
+      return;
+    }
+
+    this.isLookingUpModel = true;
+    let customModel: CustomModel;
+    try {
+      customModel = await this.state.modelLoader.addRemoteModel(text);
+    } catch {
+      // The model loader shows the error in the status.
+      return;
+    } finally {
+      this.isLookingUpModel = false;
+    }
+    this.isAddingModel = false;
+
+    const exists =
+        this.state.settings.customModels.some(m => m.path === customModel.path);
+    if (!exists) {
+      this.state.settings.customModels =
+          [...this.state.settings.customModels, customModel];
+    }
+    this.state.settings.selectedModelPath = customModel.path;
+    this.state.settings.saveSettings();
+
+    await this.state.modelLoader.loadModelWeights(
+        this.state.settings.modelSettings, async () => {
+          await this.state.chatSession.createConversationSession();
+        });
+  }
+
+  private closeAddModel() {
+    this.isAddingModel = false;
+  }
+
+  private isCustomModel(modelPath: string): boolean {
+    return this.state.settings.customModels.some(m => m.path === modelPath);
+  }
+
+  /** Removes a custom model that isn't cached from the model list. */
+  private handleRemoveCustomModel(e: Event, modelPath: string) {
+    e.stopPropagation();  // Stop click propagation to prevent selecting model
+    if (!confirm('Remove this model from the list?')) return;
+    this.removeCustomModel(modelPath);
+    this.state.settings.saveSettings();
+  }
+
+  private removeCustomModel(modelPath: string) {
+    this.state.settings.customModels =
+        this.state.settings.customModels.filter(m => m.path !== modelPath);
+    if (this.state.settings.selectedModelPath === modelPath) {
+      this.state.settings.selectedModelPath = MODELS[0]!.path;
+    }
+  }
+
   private async handleRemoveCached(e: Event, modelPath: string) {
     e.stopPropagation();  // Stop click propagation to prevent selecting model
     const deleted =
         await this.state.modelLoader.deleteModelFromCache(modelPath);
     if (deleted) {
       let settingsChanged = false;
-      if (modelPath.startsWith('https://local-model/')) {
-        this.state.settings.customModels =
-            this.state.settings.customModels.filter(m => m.path !== modelPath);
+      // Custom models are removed from the list with their weights. Ones added
+      // by URL can be added again.
+      if (this.isCustomModel(modelPath)) {
+        this.removeCustomModel(modelPath);
         settingsChanged = true;
       }
       if (this.state.settings.selectedModelPath === modelPath) {
@@ -408,8 +500,10 @@ export class LitertSidebar extends LitElement {
   }
 
   override render() {
-    const activeModelFilename =
-        this.state.settings.selectedModelPath.split('/').pop() || '';
+    const activeModelKey = getModelKey(this.state.settings.selectedModelPath);
+    // A model can't be added while one is loading, since it couldn't be loaded.
+    const isAddModelDisabled =
+        this.isLookingUpModel || this.state.modelLoader.isModelLoading;
     const allModels = [
       ...MODELS,
       ...this.state.settings.customModels,
@@ -432,10 +526,10 @@ export class LitertSidebar extends LitElement {
             style="flex: 1; min-width: 0;"
           >
             ${allModels.map(model => {
-      const cachedSizeBytes =
-          this.state.modelLoader.cachedModels.get(model.filename);
+      const modelKey = getModelKey(model.path);
+      const cachedSizeBytes = this.state.modelLoader.cachedModels.get(modelKey);
       const downloadProgress =
-          this.state.modelLoader.downloadProgresses.get(model.filename);
+          this.state.modelLoader.downloadProgresses.get(modelKey);
       const isLocalDir = model.path.startsWith('local-dir://');
 
       return html`
@@ -461,7 +555,19 @@ export class LitertSidebar extends LitElement {
                     </span>
                   ` :
                                                  html`
-                    <span class="download-badge" style="font-size: 0.6rem; color: var(--text-muted); opacity: 0.65;">${model.path.startsWith('https://local-model/') ? 'Local' : `Download (${model.size})`}</span>
+                    <span class="cached-info" style="display: flex; align-items: center; gap: 6px;">
+                      <span class="download-badge" style="font-size: 0.6rem; color: var(--text-muted); opacity: 0.65;">${
+                  getDownloadLabel(model)}</span>
+                      ${
+                  this.isCustomModel(model.path) ? html`
+                      <button class="delete-cache-btn" title="Remove from list" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.78rem; padding: 2px 4px;" @click=${
+                                                       (e: Event) => {
+                                                         this.handleRemoveCustomModel(
+                                                             e, model.path);
+                                                       }}>✕</button>
+                      ` :
+                                                   nothing}
+                    </span>
                   `}
                 </div>
               `;
@@ -483,8 +589,28 @@ export class LitertSidebar extends LitElement {
                 <span style="font-size: 0.8rem;">⬆</span>
               </div>
             `}
+            <div class="dropdown-item" data-value="add-url" style="color: var(--teal);">
+              <span class="model-name">Add model from URL or Hugging Face...</span>
+              <span style="font-size: 0.8rem;">🔗</span>
+            </div>
           </custom-dropdown>
         </div>
+
+        ${
+        this.isAddingModel ? html`
+          <form id="add-model-form" style="display: flex; gap: 6px; align-items: center; width: 100%;" @submit=${
+                                 this.handleAddModel} @keydown=${
+                                 (e: KeyboardEvent) => {
+                                   if (e.key === 'Escape') this.closeAddModel();
+                                 }}>
+            <input id="add-model-input" type="text" placeholder="org/repo, hf://... or https://..." aria-label="Model URL or Hugging Face repo" ?disabled=${
+                                 isAddModelDisabled} style="flex: 1; min-width: 0; padding: 8px; font-size: 0.72rem; box-sizing: border-box;">
+            <button type="submit" class="btn btn-primary btn-add-model" ?disabled=${
+                                 isAddModelDisabled} style="align-self: stretch; padding: 0 14px; font-size: 0.72rem;">${
+                                 this.isLookingUpModel ? 'Adding...' : 'Add'}</button>
+          </form>
+        ` :
+                             nothing}
 
         <!-- Compact inline Caching size display & Clear All link -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.65rem; color: var(--text-muted);">
@@ -622,7 +748,7 @@ export class LitertSidebar extends LitElement {
           ${
         this.state.modelLoader.isModelLoading &&
                 this.state.modelLoader.downloadProgresses.has(
-                    activeModelFilename) ?
+                    activeModelKey) ?
             html`
             <div id="progress-container" style="display: block; margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 8px;">
               <div style="display: flex; justify-content: space-between; font-size: 0.65rem; color: var(--text-muted); margin-bottom: 4px;">
@@ -632,18 +758,18 @@ export class LitertSidebar extends LitElement {
                     'Compiling...'}</span>
                 <span id="progress-percent">${
                 this.state.modelLoader.downloadProgresses.get(
-                    activeModelFilename)}%</span>
+                    activeModelKey)}%</span>
               </div>
               <div style="width: 100%; height: 6px; background-color: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; overflow: hidden;">
                 <div id="progress-bar" style="width: ${
                 this.state.modelLoader.downloadProgresses.get(
-                    activeModelFilename)}%; height: 100%; background-color: var(--teal); transition: width 0.1s ease;"></div>
+                    activeModelKey)}%; height: 100%; background-color: var(--teal); transition: width 0.1s ease;"></div>
               </div>
               <div id="progress-speed" style="font-size: 0.62rem; color: var(--text-muted); font-family: ui-monospace, monospace; margin-top: 4px; text-align: right;">
                 ${
-                this.state.modelLoader.downloadSpeeds.get(activeModelFilename)}
+                this.state.modelLoader.downloadSpeeds.get(activeModelKey)}
               </div>
-              
+
               <!-- Warning-red Cancel Download button -->
               ${
                 this.state.modelLoader.downloadAbortController ?

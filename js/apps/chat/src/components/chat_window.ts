@@ -22,6 +22,7 @@ import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {MediaKind, promptHasContent, PromptMedia, PromptPart, promptPartsToText} from '../stores/chat_session_store.js';
+import {getModelKey} from '../stores/model_loader_service.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 import {AudioRecorder, toSupportedAudio} from '../utils/audio.js';
 
@@ -899,10 +900,8 @@ export class LitertChatWindow extends LitElement {
 
   override render() {
     const isMessagesEmpty = this.state.chatSession.messages.length === 0;
-    const activeModelFilename =
-        this.state.settings.selectedModelPath.split('/').pop() || '';
-    const isCached =
-        this.state.modelLoader.cachedModels.has(activeModelFilename);
+    const isCached = this.state.modelLoader.cachedModels.has(
+        getModelKey(this.state.settings.selectedModelPath));
     const isLoading = this.state.modelLoader.isModelLoading;
 
     return html`

@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig} from '@litert-lm/core';
+import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
+import {parseModelReference} from './model_reference.js';
 import {CustomModel, ModelSettings} from './settings_store.js';
 
 const SUPPRESSED_WARNING_PATTERNS = [
@@ -31,6 +32,25 @@ const SUPPRESSED_WARNING_PATTERNS = [
  * for this many images' embeddings when the model is loaded.
  */
 const MAX_NUM_IMAGES = 8;
+
+/**
+ * Returns a model's key in `ModelLoaderService.cachedModels`,
+ * `downloadProgresses` and `downloadSpeeds`: its normalized URL, which is
+ * also its key in the cache. File names aren't unique: many Hugging Face repos
+ * name their model `model.litertlm`.
+ */
+export function getModelKey(path: string): string {
+  try {
+    return new URL(path).href;
+  } catch {
+    return path;
+  }
+}
+
+/** Formats a model's size for the model list. */
+function formatModelSize(bytes: number): string {
+  return `${(bytes / 1e9).toFixed(2)} GB`;
+}
 
 /**
  * Wraps `console.warn` to suppress known noisy WASM runtime warnings in the
@@ -84,7 +104,8 @@ export class ModelLoaderService {
       private readonly localDirService?: LocalDirectoryService,
       private readonly createEngine: typeof Engine.create = Engine.create,
       private readonly loadWasm:
-          typeof getOrLoadGlobalLiteRtLm = getOrLoadGlobalLiteRtLm) {}
+          typeof getOrLoadGlobalLiteRtLm = getOrLoadGlobalLiteRtLm,
+      private readonly resolve: typeof resolveModel = resolveModel) {}
 
   async updateCacheSize() {
     try {
@@ -95,13 +116,12 @@ export class ModelLoaderService {
       for (const request of keys) {
         const response = await cache.match(request);
         if (response) {
-          const filename = request.url.split('/').pop() || request.url;
           const contentLength = response.headers.get('content-length');
           if (contentLength) {
-            newCachedModels.set(filename, Number(contentLength));
+            newCachedModels.set(request.url, Number(contentLength));
           } else {
             const blob = await response.blob();
-            newCachedModels.set(filename, blob.size);
+            newCachedModels.set(request.url, blob.size);
           }
         }
       }
@@ -187,6 +207,7 @@ export class ModelLoaderService {
 
     const modelPath = settings.selectedModelPath;
     const modelFilename = modelPath.split('/').pop() || modelPath;
+    const modelKey = getModelKey(modelPath);
 
     this.isModelLoading = true;
     this.isDownloadAborted = false;
@@ -224,8 +245,8 @@ export class ModelLoaderService {
         const cache = await window.caches.open('litertlm-models');
         const cachedResponse = await cache.match(modelPath);
 
-        this.downloadProgresses.set(modelFilename, 0);
-        this.downloadSpeeds.set(modelFilename, '0 MB / 0 MB');
+        this.downloadProgresses.set(modelKey, 0);
+        this.downloadSpeeds.set(modelKey, '0 MB / 0 MB');
         this.updateCallback();
 
         if (cachedResponse) {
@@ -243,9 +264,9 @@ export class ModelLoaderService {
                 bytesRead += chunkLength;
                 const percent =
                     totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
-                this.downloadProgresses.set(modelFilename, Math.round(percent));
+                this.downloadProgresses.set(modelKey, Math.round(percent));
                 this.downloadSpeeds.set(
-                    modelFilename,
+                    modelKey,
                     `${(bytesRead / 1e6).toFixed(1)} MB / ${
                         (totalBytes / 1e6).toFixed(1)} MB`);
                 this.updateCallback();
@@ -275,9 +296,9 @@ export class ModelLoaderService {
                 bytesRead += chunkLength;
                 const percent =
                     totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
-                this.downloadProgresses.set(modelFilename, Math.round(percent));
+                this.downloadProgresses.set(modelKey, Math.round(percent));
                 this.downloadSpeeds.set(
-                    modelFilename,
+                    modelKey,
                     `${(bytesRead / 1e6).toFixed(1)} MB / ${
                         (totalBytes / 1e6).toFixed(1)} MB`);
                 this.updateCallback();
@@ -350,15 +371,15 @@ export class ModelLoaderService {
       await onModelLoaded();
 
       this.isModelLoading = false;
-      this.downloadProgresses.delete(modelFilename);
-      this.downloadSpeeds.delete(modelFilename);
+      this.downloadProgresses.delete(modelKey);
+      this.downloadSpeeds.delete(modelKey);
       this.updateCallback();
 
     } catch (err: unknown) {
       console.error(err);
       this.isModelLoading = false;
-      this.downloadProgresses.delete(modelFilename);
-      this.downloadSpeeds.delete(modelFilename);
+      this.downloadProgresses.delete(modelKey);
+      this.downloadSpeeds.delete(modelKey);
 
       const error = err as Error;
       if (error.name === 'AbortError') {
@@ -375,7 +396,7 @@ export class ModelLoaderService {
   async importCustomModel(file: File): Promise<CustomModel> {
     const path = `https://local-model/${file.name}`;
     const cache = await window.caches.open('litertlm-models');
-    
+
     this.updateStatus(`Importing local model ${file.name}...`);
     this.isModelLoading = true;
     this.updateCallback();
@@ -388,18 +409,17 @@ export class ModelLoaderService {
         }
       });
       await cache.put(path, response);
-      
+
       const customModel: CustomModel = {
         name: file.name.replace(/\.litertlm$/, ''),
         filename: file.name,
         path,
         size: `${(file.size / 1e9).toFixed(2)} GB`
       };
-      
+
       await this.updateCacheSize();
       this.updateStatus(`Local model ${file.name} imported.`);
       return customModel;
-      
     } catch (e) {
       console.error('[LiteRT-LM] Failed to import custom model:', e);
       this.updateStatus(`Failed to import model: ${(e as Error).message}`);
@@ -407,6 +427,58 @@ export class ModelLoaderService {
     } finally {
       this.isModelLoading = false;
       this.updateCallback();
+    }
+  }
+
+  /**
+   * Looks up a model that the user entered as a URL, `hf://` URI or Hugging
+   * Face repo (`<org>/<repo>`), and returns it as a custom model. Nothing is
+   * downloaded until the model is loaded.
+   *
+   * A Hugging Face model is pinned to the file and commit that it resolves to
+   * now, so it keeps loading the same file (from the cache, once downloaded)
+   * until it's added again.
+   */
+  async addRemoteModel(text: string): Promise<CustomModel> {
+    try {
+      const reference = parseModelReference(text);
+      if (!reference) {
+        throw new Error(
+            `"${text.trim()}" isn't a URL or a Hugging Face repo (org/repo)`);
+      }
+      this.updateStatus(`Looking up ${reference}...`);
+      // Engines are created without a backend, so choose the file that
+      // Engine.create() would choose without one.
+      const {huggingFace} = await this.resolve(reference);
+      let model: CustomModel;
+      if (huggingFace) {
+        const {repo, path, source} = huggingFace;
+        const filename = path.split('/').pop() || path;
+        const repoName = repo.split('/').pop() || repo;
+        const stem = filename.replace(/\.litertlm$/, '');
+        model = {
+          name: stem === repoName || stem === 'model' ? repoName :
+                                                        `${repoName} (${stem})`,
+          filename,
+          path: source.url,
+          size: source.size === undefined ? '' : formatModelSize(source.size),
+        };
+      } else {
+        const filename =
+            new URL(reference).pathname.split('/').pop() || reference;
+        model = {
+          name: filename.replace(/\.litertlm$/, ''),
+          filename,
+          path: reference,
+          size: '',
+        };
+      }
+      this.updateStatus(`Added ${model.name}.`);
+      return model;
+    } catch (e) {
+      console.error('[LiteRT-LM] Failed to add model:', e);
+      this.updateStatus(`Failed to add model: ${(e as Error).message}`);
+      throw e;
     }
   }
 

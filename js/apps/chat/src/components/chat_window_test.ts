@@ -82,7 +82,8 @@ describe('litert-chat-window', () => {
     mockChatSession.getMedia.and.callFake((id: string) => createdMedia.get(id));
 
     mockSettings = jasmine.createSpyObj('SettingsStore', ['saveSettings']);
-    mockSettings.selectedModelPath = 'path/to/model_file.litertlm';
+    mockSettings.selectedModelPath =
+        'https://example.com/path/to/model_file.litertlm';
 
     cachedModelsMap = new Map<string, number>();
     mockModelLoader = jasmine.createSpyObj('ModelLoaderService', [
@@ -155,7 +156,7 @@ describe('litert-chat-window', () => {
   });
 
   it('shows "Send" when model is cached', async () => {
-    cachedModelsMap.set('model_file.litertlm', 1000);
+    cachedModelsMap.set(mockSettings.selectedModelPath, 1000);
     element.requestUpdate();
     await element.updateComplete;
 
