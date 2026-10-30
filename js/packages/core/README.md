@@ -11,14 +11,24 @@ engineered for **high-performance**, **cross-platform** execution.
 
 ## Supported Models
 
-The LiteRT-LM JS API currently supports a limited set of web-compatible models.
-We're working on expanding this to cover general `.litertlm` model files, but
-for now, the following models are supported:
+The LiteRT-LM JS API supports the models in the
+[Web LLM Models](https://huggingface.co/collections/litert-community/web-llm-models)
+collection on Hugging Face, including Gemma 4 E2B, E4B, 12B, 26B A4B, and 31B.
+Load one by the URL of its model file, or by its repo with a `hf://` URI, which
+chooses the repo's web model file (see [Load Models from Hugging Face](#load-models-from-hugging-face)):
 
-*   `gemma-4-E2B-it-web.litertlm` from
-    [litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm)
-*   `gemma-4-E4B-it-web.litertlm` from
-    [litert-community/gemma-4-E4B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm)
+```ts
+const engine = await Engine.create({
+  // The model's Hugging Face repo
+  model: 'hf://litert-community/gemma-4-E2B-it-litert-lm',
+  // Or the URL of a model file, on Hugging Face or anywhere else
+  // model: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-gpu.litertlm',
+});
+```
+
+Some of these models are gated: Hugging Face only lets users who have accepted
+the model's license download them. To load one, pass the access token of such a
+user (see [Gated Models](#gated-models)).
 
 ## Introduction
 
@@ -32,9 +42,9 @@ Here is a sample REPL chat app built with the JavaScript API:
   import { Engine } from 'https://cdn.jsdelivr.net/npm/@litert-lm/core/+esm';
   const engine = await Engine.create({
     // Load the Gemma 4 E2B model
-    model: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm'
+    model: 'hf://litert-community/gemma-4-E2B-it-litert-lm',
     // Or use the E4B model by swapping in this line
-    // model: 'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm'
+    // model: 'hf://litert-community/gemma-4-E4B-it-litert-lm',
   });
   const chat = await engine.createConversation();
 
@@ -75,7 +85,8 @@ resources when the model is no longer needed.
 import {Engine, EngineSettings} from '@litert-lm/core';
 
 const engineSettings = {
-  model: 'url/path/to/model.litertlm', // or a ReadableStream, or a Blob
+  // A URL, a hf:// URI, a ReadableStream, or a Blob
+  model: 'url/path/to/model.litertlm',
 
   // You can configure context length and other settings here
   mainExecutorSettings: {
@@ -90,6 +101,43 @@ const engine = await Engine.create(engineSettings);
 // Delete the engine when done.
 await engine.delete();
 ```
+
+### Load Models from Hugging Face
+
+A `hf://<org>/<repo>[@<revision>][/<path>]` URI loads a model from the Hugging
+Face Hub. Without a path, LiteRT-LM chooses the model file in the repo for the
+engine's backend. If several files match, it loads one and logs a warning that
+lists the others, which you can load by giving their path:
+
+```ts
+// The repo's web model file.
+model: 'hf://litert-community/gemma-4-E4B-it-litert-lm'
+
+// A specific file at a specific revision (branch, tag or commit).
+model: 'hf://litert-community/gemma-4-E4B-it-litert-lm@main/gemma-4-E4B-it-gpu.litertlm'
+```
+
+The revision is resolved to its current commit before anything is downloaded,
+so the file that's downloaded always matches its SHA-256.
+
+### Gated Models
+
+Hugging Face only lets users who have accepted a gated model's license download
+it. To load a gated model, pass the access token of such a user, for example
+from [Sign in with Hugging Face](https://huggingface.co/docs/hub/oauth), in a
+`ModelSource`:
+
+```ts
+const engine = await Engine.create({
+  model: {
+    url: 'hf://litert-community/Gemma3-1B-IT',
+    accessToken: userAccessToken,
+  },
+});
+```
+
+**Caution:** Don't embed your own access token in a web page: everyone who
+loads the page can read it.
 
 ### Create a Conversation
 
