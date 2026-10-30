@@ -833,8 +833,9 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
                                 *adapter_signature_index, features_input_name));
     adapter_input_buffers[features_input_index].Clear();
     LITERT_RETURN_IF_ERROR(
-        adapter_input_buffers[features_input_index].Write<float>(absl::MakeSpan(
-            encoder_output_data.data(), num_patches * encoder_output_dim)));
+        adapter_input_buffers[features_input_index].Write<float>(
+            absl::MakeSpan(encoder_output_data)
+                .first(num_patches * encoder_output_dim)));
 
     for (const auto& input_name : adapter_input_names) {
       if (input_name == features_input_name) {

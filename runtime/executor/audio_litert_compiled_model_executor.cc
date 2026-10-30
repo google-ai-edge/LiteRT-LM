@@ -1066,8 +1066,8 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
 
     if (!audio_embeddings.empty()) {
       LITERT_RETURN_IF_ERROR(adapter_input.Read<float>(
-          absl::MakeSpan(audio_embeddings.data(),
-                         chunk_valid_tokens * audio_embedding_dimensions_)));
+          absl::MakeSpan(audio_embeddings)
+              .first(chunk_valid_tokens * audio_embedding_dimensions_)));
     }
 
     {
@@ -1078,9 +1078,10 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     }
 
     LITERT_RETURN_IF_ERROR(
-        audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(absl::MakeSpan(
-            projected_audio_embeddings.data(),
-            chunk_valid_tokens * projected_audio_embedding_dimensions_)));
+        audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(
+            absl::MakeSpan(projected_audio_embeddings)
+                .first(chunk_valid_tokens *
+                       projected_audio_embedding_dimensions_)));
   } else {
     LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
     if (encoder_type.ElementType() == litert::ElementType::Float16) {
@@ -1095,9 +1096,10 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
         projected_audio_embeddings[i] = static_cast<float>(encoder_data[i]);
       }
     } else {
-      LITERT_RETURN_IF_ERROR(encoder_output.Read<float>(absl::MakeSpan(
-          projected_audio_embeddings.data(),
-          chunk_valid_tokens * projected_audio_embedding_dimensions_)));
+      LITERT_RETURN_IF_ERROR(encoder_output.Read<float>(
+          absl::MakeSpan(projected_audio_embeddings)
+              .first(chunk_valid_tokens *
+                     projected_audio_embedding_dimensions_)));
     }
   }
 
