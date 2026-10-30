@@ -181,10 +181,16 @@ struct AdvancedSettings {
   // prefill_batch_sizes above with best match which means, a subgraph of
   // prefill will be chosen to have the smallest magic number greater than or
   // equal to the given prefill batch size.
-  // The numbers that replaced magic numbers must be less than magic numbers.
+  // By default, replacements must be less than their magic numbers.
   // Otherwise, default values less than magic numbers will be used that are
   // chosen by some heuristics.
   bool configure_magic_numbers = true;
+
+  // Experimental: allow max_num_tokens_ to exceed the exported context magic
+  // number. Only the context dimension may grow; prefill and decode batch
+  // limits still apply. The caller must ensure the model supports the requested
+  // positions. LiteRT rejects expansion of undersized constant buffers.
+  bool allow_context_length_expansion = false;
 
   // Whether to verify magic numbers when the model contains magic numbers and
   // test signatures.

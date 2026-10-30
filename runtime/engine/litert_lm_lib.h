@@ -113,6 +113,7 @@ struct LiteRtLmSettings {
   // GPU, not by CPU.
   bool gpu_external_tensor_mode = false;
   bool configure_magic_numbers = true;
+  bool allow_context_length_expansion = false;
   bool verify_magic_numbers = false;
   bool clear_kv_cache_before_prefill = true;
   int num_logits_to_print_after_decode = 0;
