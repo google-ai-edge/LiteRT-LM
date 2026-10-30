@@ -62,6 +62,7 @@ EmbeddingExecutorSettings::GetProgramCacheFile(absl::string_view suffix,
 std::ostream& operator<<(std::ostream& os,
                          const EmbeddingExecutorSettings& settings) {
   os << "backend: " << settings.GetBackend() << std::endl;
+  os << "npu_options: " << settings.GetNpuOptions() << std::endl;
   return os;
 }
 

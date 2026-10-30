@@ -54,6 +54,10 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#if !defined(LITERT_DISABLE_NPU)
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#endif  // !defined(LITERT_DISABLE_NPU)
 #include "litert/core/model/model.h"  // from @litert
 #include "litert/core/util/flatbuffer_tools.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
@@ -2073,6 +2077,64 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_options, litert::CpuOptions::Create());
   EXPECT_OK(SetCpuOptions(cpu_options, 8));
 }
+
+#if !defined(LITERT_DISABLE_NPU)
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetNpuOptions_MapsPerformanceModeToVendorOptions) {
+  using QualcommPerfMode = qualcomm::QualcommOptions::HtpPerformanceMode;
+  using GoogleTensorPerfMode =
+      google_tensor::GoogleTensorOptions::PerformanceMode;
+  struct TestCase {
+    NpuPerformanceMode mode;
+    QualcommPerfMode expected_qualcomm_mode;
+    GoogleTensorPerfMode expected_google_tensor_mode;
+  };
+  const TestCase kTestCases[] = {
+      {NpuPerformanceMode::kExtremePowerSaver,
+       QualcommPerfMode::kExtremePowerSaver,
+       GoogleTensorPerfMode::kExtremePowerSaver},
+      {NpuPerformanceMode::kPowerSaver, QualcommPerfMode::kPowerSaver,
+       GoogleTensorPerfMode::kPowerSaver},
+      {NpuPerformanceMode::kBalanced, QualcommPerfMode::kBalanced,
+       GoogleTensorPerfMode::kBalanced},
+      {NpuPerformanceMode::kHighPerformance, QualcommPerfMode::kHighPerformance,
+       GoogleTensorPerfMode::kHighPerformance},
+      {NpuPerformanceMode::kSustainedHighPerformance,
+       QualcommPerfMode::kSustainedHighPerformance,
+       GoogleTensorPerfMode::kSustainedPerformance},
+      {NpuPerformanceMode::kBurst, QualcommPerfMode::kBurst,
+       GoogleTensorPerfMode::kBurst},
+  };
+  for (const TestCase& test_case : kTestCases) {
+    SCOPED_TRACE(::testing::Message() << "mode: " << test_case.mode);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+    EXPECT_OK(SetNpuOptions({.performance_mode = test_case.mode}, options));
+
+    auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+    ASSERT_TRUE(qualcomm_options.HasValue());
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
+              test_case.expected_qualcomm_mode);
+
+    auto google_tensor_options =
+        options.GetOptions<google_tensor::GoogleTensorOptions>();
+    ASSERT_TRUE(google_tensor_options.HasValue());
+    EXPECT_EQ(google_tensor_options.Value().GetPerformanceMode(),
+              test_case.expected_google_tensor_mode);
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetNpuOptions_VendorDefaultPerformanceModeLeavesOptionsUnset) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+  EXPECT_OK(SetNpuOptions(
+      {.performance_mode = NpuPerformanceMode::kVendorDefault}, options));
+
+  auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+  ASSERT_TRUE(qualcomm_options.HasValue());
+  EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
+            qualcomm::QualcommOptions::HtpPerformanceMode::kDefault);
+}
+#endif  // !defined(LITERT_DISABLE_NPU)
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      SetCommonGpuOptions_SetsAllCommonOptions) {

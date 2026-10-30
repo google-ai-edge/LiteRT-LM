@@ -68,6 +68,16 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
   // Setter for adapter_backend.
   absl::Status SetAdapterBackend(Backend backend);
 
+  // Getters for the NPU options used when compiling the vision encoder and
+  // vision adapter models for the NPU backend.
+  const NpuOptions& GetNpuOptions() const { return npu_options_; }
+  NpuOptions& GetMutableNpuOptions() { return npu_options_; }
+  // Setter for the NPU options used when compiling the vision encoder and
+  // vision adapter models for the NPU backend. Ignored by non-NPU backends.
+  void SetNpuOptions(NpuOptions npu_options) {
+    npu_options_ = std::move(npu_options);
+  }
+
   // Getter for scoped_adapter_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterCacheFile() const {
     return scoped_adapter_cache_file_;
@@ -146,6 +156,9 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
 
   // The backend to use for the vision adapter model.
   Backend adapter_backend_;
+
+  // The NPU options for both the vision encoder and vision adapter models.
+  NpuOptions npu_options_;
 
   // The cache file to use for the vision encoder model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;

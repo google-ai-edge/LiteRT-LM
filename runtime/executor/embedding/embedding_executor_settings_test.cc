@@ -71,6 +71,25 @@ TEST(EmbeddingExecutorSettingsTest, GetAndSetNumThreads) {
   EXPECT_EQ(settings.GetNumThreads(), 8);
 }
 
+TEST(EmbeddingExecutorSettingsTest, GetAndSetNpuOptions) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::NPU));
+
+  EXPECT_EQ(settings.GetNpuOptions().performance_mode,
+            NpuPerformanceMode::kBurst);
+
+  settings.SetNpuOptions({.performance_mode = NpuPerformanceMode::kPowerSaver});
+  EXPECT_EQ(settings.GetNpuOptions().performance_mode,
+            NpuPerformanceMode::kPowerSaver);
+
+  settings.GetMutableNpuOptions().performance_mode =
+      NpuPerformanceMode::kBalanced;
+  EXPECT_EQ(settings.GetNpuOptions().performance_mode,
+            NpuPerformanceMode::kBalanced);
+}
+
 TEST(EmbeddingExecutorSettingsTest, GetAndSetScopedFiles) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
   ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,

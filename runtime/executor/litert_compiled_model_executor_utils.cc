@@ -60,6 +60,10 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#if !defined(LITERT_DISABLE_NPU)
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#endif  // !defined(LITERT_DISABLE_NPU)
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/components/model_resources.h"
@@ -1113,6 +1117,72 @@ absl::Status SetCommonGpuOptions(
                              executor_settings.UseIrModel().value_or(false));
   return absl::OkStatus();
 }
+
+#if !defined(LITERT_DISABLE_NPU)
+namespace {
+
+// Applies `mode` to the Qualcomm and Google Tensor performance modes.
+absl::Status SetNpuPerformanceMode(NpuPerformanceMode mode,
+                                   litert::Options& options) {
+  using QualcommPerfMode = qualcomm::QualcommOptions::HtpPerformanceMode;
+  using GoogleTensorPerfMode =
+      google_tensor::GoogleTensorOptions::PerformanceMode;
+
+  QualcommPerfMode qualcomm_mode;
+  GoogleTensorPerfMode google_tensor_mode;
+  switch (mode) {
+    case NpuPerformanceMode::kVendorDefault:
+      // Leave the vendor options untouched so that each vendor applies its own
+      // default performance mode.
+      return absl::OkStatus();
+    case NpuPerformanceMode::kExtremePowerSaver:
+      qualcomm_mode = QualcommPerfMode::kExtremePowerSaver;
+      google_tensor_mode = GoogleTensorPerfMode::kExtremePowerSaver;
+      break;
+    case NpuPerformanceMode::kPowerSaver:
+      qualcomm_mode = QualcommPerfMode::kPowerSaver;
+      google_tensor_mode = GoogleTensorPerfMode::kPowerSaver;
+      break;
+    case NpuPerformanceMode::kBalanced:
+      qualcomm_mode = QualcommPerfMode::kBalanced;
+      google_tensor_mode = GoogleTensorPerfMode::kBalanced;
+      break;
+    case NpuPerformanceMode::kHighPerformance:
+      qualcomm_mode = QualcommPerfMode::kHighPerformance;
+      google_tensor_mode = GoogleTensorPerfMode::kHighPerformance;
+      break;
+    case NpuPerformanceMode::kSustainedHighPerformance:
+      qualcomm_mode = QualcommPerfMode::kSustainedHighPerformance;
+      google_tensor_mode = GoogleTensorPerfMode::kSustainedPerformance;
+      break;
+    case NpuPerformanceMode::kBurst:
+      qualcomm_mode = QualcommPerfMode::kBurst;
+      google_tensor_mode = GoogleTensorPerfMode::kBurst;
+      break;
+    default:
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported NPU performance mode: ", static_cast<int>(mode)));
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
+                          options.GetOptions<qualcomm::QualcommOptions>());
+  qualcomm_options.SetHtpPerformanceMode(qualcomm_mode);
+  LITERT_ASSIGN_OR_RETURN(
+      auto& google_tensor_options,
+      options.GetOptions<google_tensor::GoogleTensorOptions>());
+  google_tensor_options.SetPerformanceMode(google_tensor_mode);
+  return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::Status SetNpuOptions(const NpuOptions& npu_options,
+                           litert::Options& options) {
+  ABSL_RETURN_IF_ERROR(
+      SetNpuPerformanceMode(npu_options.performance_mode, options));
+  return absl::OkStatus();
+}
+#endif  // !defined(LITERT_DISABLE_NPU)
 
 absl::Status SetCpuCacheOptions(
     const absl::StatusOr<

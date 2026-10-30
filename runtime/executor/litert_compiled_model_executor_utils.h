@@ -294,6 +294,17 @@ absl::Status SetCommonGpuOptions(
     std::optional<ActivationDataType> fallback_activation_data_type =
         std::nullopt);
 
+#if !defined(LITERT_DISABLE_NPU)
+// Applies the vendor-agnostic `npu_options` to the vendor-specific NPU options
+// (currently Qualcomm and Google Tensor) in `options`.
+//
+// `npu_options.performance_mode` is mapped to the Qualcomm HTP performance mode
+// and the Google Tensor performance mode. `NpuPerformanceMode::kVendorDefault`
+// leaves the vendor performance modes untouched.
+absl::Status SetNpuOptions(const NpuOptions& npu_options,
+                           litert::Options& options);
+#endif  // !defined(LITERT_DISABLE_NPU)
+
 // Set the CPU weight cache options for XNNPACK.
 // Args:
 //   - weight_cache_file: An optional weight cache file path.

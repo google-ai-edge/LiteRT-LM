@@ -173,6 +173,25 @@ TEST(VisionExecutorSettingsTest, GetProgramCacheFile) {
             adapter_program);
 }
 
+TEST(VisionExecutorSettingsTest, GetAndSetNpuOptions) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,
+                       VisionExecutorSettings::CreateDefault(
+                           model_assets, Backend::NPU, Backend::NPU));
+
+  EXPECT_EQ(settings.GetNpuOptions().performance_mode,
+            NpuPerformanceMode::kBurst);
+
+  settings.SetNpuOptions({.performance_mode = NpuPerformanceMode::kBalanced});
+  EXPECT_EQ(settings.GetNpuOptions().performance_mode,
+            NpuPerformanceMode::kBalanced);
+
+  settings.GetMutableNpuOptions().performance_mode =
+      NpuPerformanceMode::kPowerSaver;
+  EXPECT_EQ(settings.GetNpuOptions().performance_mode,
+            NpuPerformanceMode::kPowerSaver);
+}
+
 TEST(VisionExecutorSettingsTest, SelectedSignatures) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
   ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,

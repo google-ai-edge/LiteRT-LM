@@ -47,7 +47,6 @@
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/vision/vision_executor_utils.h"
 #if !defined(LITERT_DISABLE_NPU)
-#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif  // !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -308,13 +307,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
                               options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
-      qualcomm_options.SetHtpPerformanceMode(
-          qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(
-          auto& google_tensor_options,
-          options.GetOptions<google_tensor::GoogleTensorOptions>());
-      google_tensor_options.SetPerformanceMode(
-          google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      ABSL_RETURN_IF_ERROR(
+          SetNpuOptions(vision_executor_settings_.GetNpuOptions(), options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                       litert::HwAccelerators::kCpu);
       break;
@@ -426,13 +420,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
                               options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
-      qualcomm_options.SetHtpPerformanceMode(
-          qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(
-          auto& google_tensor_options,
-          options.GetOptions<google_tensor::GoogleTensorOptions>());
-      google_tensor_options.SetPerformanceMode(
-          google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      ABSL_RETURN_IF_ERROR(
+          SetNpuOptions(vision_executor_settings_.GetNpuOptions(), options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                       litert::HwAccelerators::kCpu);
       break;

@@ -174,6 +174,47 @@ TEST(LlmExecutorConfigTest, FileFormat) {
   EXPECT_EQ(oss.str(), "LITERT_LM");
 }
 
+TEST(LlmExecutorConfigTest, NpuPerformanceMode) {
+  std::stringstream oss;
+
+  oss << NpuPerformanceMode::kVendorDefault;
+  EXPECT_EQ(oss.str(), "VENDOR_DEFAULT");
+
+  oss.str("");
+  oss << NpuPerformanceMode::kExtremePowerSaver;
+  EXPECT_EQ(oss.str(), "EXTREME_POWER_SAVER");
+
+  oss.str("");
+  oss << NpuPerformanceMode::kPowerSaver;
+  EXPECT_EQ(oss.str(), "POWER_SAVER");
+
+  oss.str("");
+  oss << NpuPerformanceMode::kBalanced;
+  EXPECT_EQ(oss.str(), "BALANCED");
+
+  oss.str("");
+  oss << NpuPerformanceMode::kHighPerformance;
+  EXPECT_EQ(oss.str(), "HIGH_PERFORMANCE");
+
+  oss.str("");
+  oss << NpuPerformanceMode::kSustainedHighPerformance;
+  EXPECT_EQ(oss.str(), "SUSTAINED_HIGH_PERFORMANCE");
+
+  oss.str("");
+  oss << NpuPerformanceMode::kBurst;
+  EXPECT_EQ(oss.str(), "BURST");
+}
+
+TEST(LlmExecutorConfigTest, NpuOptions) {
+  NpuOptions npu_options;
+  EXPECT_EQ(npu_options.performance_mode, NpuPerformanceMode::kBurst);
+
+  std::stringstream oss;
+  npu_options.performance_mode = NpuPerformanceMode::kPowerSaver;
+  oss << npu_options;
+  EXPECT_EQ(oss.str(), "NpuOptions{performance_mode: POWER_SAVER}");
+}
+
 TEST(LlmExecutorConfigTest, ModelAssets) {
   auto model_assets = ModelAssets::Create("/path/to/model1");
   ASSERT_OK(model_assets);

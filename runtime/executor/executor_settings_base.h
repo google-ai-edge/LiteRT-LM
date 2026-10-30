@@ -132,6 +132,42 @@ enum class FileFormat {
 };
 std::ostream& operator<<(std::ostream& os, const FileFormat& file_format);
 
+// Vendor-agnostic NPU performance (power) mode. Each value is translated to the
+// closest vendor-specific performance mode (e.g. Qualcomm HTP performance mode,
+// Google Tensor performance mode) when the NPU options are built.
+enum class NpuPerformanceMode {
+  // Do not set any performance mode, i.e. use the vendor's default.
+  kVendorDefault,
+
+  // Lowest power consumption, lowest performance.
+  kExtremePowerSaver,
+
+  // Low power consumption.
+  kPowerSaver,
+
+  // Balance between power consumption and performance.
+  kBalanced,
+
+  // High performance.
+  kHighPerformance,
+
+  // High performance that can be sustained over a long period of time.
+  kSustainedHighPerformance,
+
+  // Highest performance, highest power consumption.
+  kBurst,
+};
+std::ostream& operator<<(std::ostream& os, const NpuPerformanceMode& mode);
+
+// Vendor-agnostic NPU options applied when compiling a model for the NPU
+// backend. New NPU options should be added as fields of this struct.
+struct NpuOptions {
+  // The NPU performance (power) mode. Defaults to kBurst to preserve the
+  // historical behavior.
+  NpuPerformanceMode performance_mode = NpuPerformanceMode::kBurst;
+};
+std::ostream& operator<<(std::ostream& os, const NpuOptions& npu_options);
+
 // Class to host the model assets, including base models and lora models.
 class ModelAssets {
  public:

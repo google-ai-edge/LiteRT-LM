@@ -59,6 +59,16 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
   // Setter for num_threads for CPU backend.
   void SetNumThreads(int num_threads) { num_threads_ = num_threads; }
 
+  // Getters for the NPU options used when compiling the model for the NPU
+  // backend.
+  const NpuOptions& GetNpuOptions() const { return npu_options_; }
+  NpuOptions& GetMutableNpuOptions() { return npu_options_; }
+  // Setter for the NPU options used when compiling the model for the NPU
+  // backend. Ignored by non-NPU backends.
+  void SetNpuOptions(NpuOptions npu_options) {
+    npu_options_ = std::move(npu_options);
+  }
+
   // Getter for scoped_encoder_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
     return scoped_encoder_cache_file_;
@@ -104,6 +114,9 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
 
  private:
   int num_threads_ = 4;
+
+  // The NPU options for the text encoder model.
+  NpuOptions npu_options_;
 
   // The cache file to use for the text encoder model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;

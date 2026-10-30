@@ -104,6 +104,7 @@ std::ostream& operator<<(std::ostream& os,
   os << "  ModelAssets: " << settings.GetModelAssets() << std::endl;
   os << "  EncoderBackend: " << settings.GetEncoderBackend() << std::endl;
   os << "  AdapterBackend: " << settings.GetAdapterBackend() << std::endl;
+  os << "  NpuOptions: " << settings.GetNpuOptions() << std::endl;
   return os;
 }
 

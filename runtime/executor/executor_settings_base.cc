@@ -239,6 +239,31 @@ std::ostream& operator<<(std::ostream& os, const FileFormat& file_format) {
   }
 }
 
+std::ostream& operator<<(std::ostream& os, const NpuPerformanceMode& mode) {
+  switch (mode) {
+    case NpuPerformanceMode::kVendorDefault:
+      return os << "VENDOR_DEFAULT";
+    case NpuPerformanceMode::kExtremePowerSaver:
+      return os << "EXTREME_POWER_SAVER";
+    case NpuPerformanceMode::kPowerSaver:
+      return os << "POWER_SAVER";
+    case NpuPerformanceMode::kBalanced:
+      return os << "BALANCED";
+    case NpuPerformanceMode::kHighPerformance:
+      return os << "HIGH_PERFORMANCE";
+    case NpuPerformanceMode::kSustainedHighPerformance:
+      return os << "SUSTAINED_HIGH_PERFORMANCE";
+    case NpuPerformanceMode::kBurst:
+      return os << "BURST";
+  }
+  return os << "UNKNOWN";
+}
+
+std::ostream& operator<<(std::ostream& os, const NpuOptions& npu_options) {
+  return os << "NpuOptions{performance_mode: " << npu_options.performance_mode
+            << "}";
+}
+
 // static
 absl::StatusOr<ModelAssets> ModelAssets::Create(absl::string_view model_path) {
   return ModelAssets(model_path);

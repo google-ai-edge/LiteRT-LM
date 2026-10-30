@@ -52,7 +52,6 @@
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/executor/executor_stats.h"
 #if !defined(LITERT_DISABLE_NPU)
-#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif  // !defined(LITERT_DISABLE_NPU)
 #include "absl/strings/match.h"  // from @com_google_absl
@@ -226,13 +225,8 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
                               options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
-      qualcomm_options.SetHtpPerformanceMode(
-          qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(
-          auto& google_tensor_options,
-          options.GetOptions<google_tensor::GoogleTensorOptions>());
-      google_tensor_options.SetPerformanceMode(
-          google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      ABSL_RETURN_IF_ERROR(
+          SetNpuOptions(executor_settings.GetNpuOptions(), options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                       litert::HwAccelerators::kCpu);
       break;
