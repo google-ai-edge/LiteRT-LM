@@ -21,7 +21,7 @@ import {CodeSandbox} from '../components/code_sandbox.js';
 import {createObjectUrl} from '../components/util.js';
 
 import {ModelLoaderService} from './model_loader_service.js';
-import {ModelSettings, SettingsStore} from './settings_store.js';
+import {migrateModelPath, ModelSettings, SettingsStore} from './settings_store.js';
 
 const ConversationMetaSchema = z.object({
   id: z.string(),
@@ -253,7 +253,7 @@ export class ChatSessionStore {
 
       const matchMeta = this.conversationsList.find(c => c.id === id);
       if (matchMeta) {
-        this.settings.selectedModelPath = matchMeta.modelPath;
+        this.settings.selectedModelPath = migrateModelPath(matchMeta.modelPath);
         this.settings.saveSettings();
       }
 

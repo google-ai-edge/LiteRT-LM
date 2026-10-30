@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {MODELS, SettingsStore} from './settings_store.js';
+import {migrateModelPath, MODELS, SettingsStore} from './settings_store.js';
 
 describe('SettingsStore', () => {
   let mockCallbackCount = 0;
@@ -131,5 +131,19 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(mockUpdateCallback);
     expect(store.customModels.length).toBe(1);
     expect(store.customModels[0]!.name).toBe('Custom Model');
+  });
+
+  it('replaces the default models\' old paths', () => {
+    const oldPath =
+        'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm';
+    expect(migrateModelPath(oldPath))
+        .toBe('hf://litert-community/gemma-4-E4B-it-litert-lm');
+    expect(migrateModelPath('https://example.com/model.litertlm'))
+        .toBe('https://example.com/model.litertlm');
+
+    window.localStorage.setItem(
+        'litertlm-chat-settings', JSON.stringify({selectedModelPath: oldPath}));
+    expect(new SettingsStore(mockUpdateCallback).selectedModelPath)
+        .toBe('hf://litert-community/gemma-4-E4B-it-litert-lm');
   });
 });

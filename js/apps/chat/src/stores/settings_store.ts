@@ -53,44 +53,65 @@ export type ModelSettings = Pick<
     'selectedModelPath' | 'contextLength' | 'maxOutputTokens' | 'samplerType' |
     'temperature' | 'topP' | 'topK' | 'enableThinking'>;
 
-/** List of supported default models available for selection. */
+/**
+ * List of supported default models available for selection.
+ *
+ * They're `hf://` URIs, so they load the file that each repo's web model
+ * currently is: the `-gpu.litertlm` file, on the repo's `web` branch while it
+ * has one. The sizes are approximate.
+ */
 export const MODELS = [
   {
     name: 'Gemma 4 E2B',
-    filename: 'gemma-4-E2B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm',
-    size: '1.9 GB'
+    filename: 'gemma-4-E2B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-E2B-it-litert-lm',
+    size: '2.3 GB'
   },
   {
     name: 'Gemma 4 E4B',
-    filename: 'gemma-4-E4B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm',
-    size: '2.8 GB'
+    filename: 'gemma-4-E4B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-E4B-it-litert-lm',
+    size: '3.3 GB'
   },
   {
     name: 'Gemma 4 12B',
-    filename: 'gemma-4-12B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-12B-it-litert-lm/resolve/main/gemma-4-12B-it-web.litertlm',
-    size: '5.6 GB'
+    filename: 'gemma-4-12B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-12B-it-litert-lm',
+    size: '6.2 GB'
   },
   {
     name: 'Gemma 4 26B A4B',
-    filename: 'gemma-4-26B-A4B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-26B-A4B-it-litert-lm/resolve/main/gemma-4-26B-A4B-it-web.litertlm',
-    size: '14.7 GB'
+    filename: 'gemma-4-26B-A4B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-26B-A4B-it-litert-lm',
+    size: '16.4 GB'
   },
   {
     name: 'Gemma 4 31B',
-    filename: 'gemma-4-31B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-31B-it-litert-lm/resolve/main/gemma-4-31B-it-web.litertlm',
-    size: '17.9 GB'
+    filename: 'gemma-4-31B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-31B-it-litert-lm',
+    size: '19.8 GB'
   }
 ];
+
+/**
+ * The default models' old paths, which loaded their `-web.litertlm` files from
+ * `main`, and the paths that replaced them.
+ */
+export const LEGACY_MODEL_PATHS = new Map(
+    MODELS.map(model => {
+      const repo = model.path.slice('hf://'.length);
+      const oldFile =
+          model.filename.replace(/-gpu\.litertlm$/, '-web.litertlm');
+      return [
+        `https://huggingface.co/${repo}/resolve/main/${oldFile}`,
+        model.path,
+      ];
+    }));
+
+/** Returns the path that replaced a default model's old path, if it is one. */
+export function migrateModelPath(path: string): string {
+  return LEGACY_MODEL_PATHS.get(path) ?? path;
+}
 
 
 /** Store for managing inference configuration and persistence. */
@@ -134,8 +155,8 @@ export class SettingsStore implements Settings {
         const result = PartialSettingsSchema.safeParse(parsed);
         if (result.success) {
           const validated = result.data;
-          this.selectedModelPath =
-              validated.selectedModelPath ?? this.selectedModelPath;
+          this.selectedModelPath = migrateModelPath(
+              validated.selectedModelPath ?? this.selectedModelPath);
           this.contextLength = validated.contextLength ?? this.contextLength;
           this.maxOutputTokens =
               validated.maxOutputTokens ?? this.maxOutputTokens;

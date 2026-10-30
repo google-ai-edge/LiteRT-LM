@@ -20,7 +20,7 @@ import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
 import {parseModelReference} from './model_reference.js';
-import {CustomModel, ModelSettings} from './settings_store.js';
+import {CustomModel, LEGACY_MODEL_PATHS, ModelSettings} from './settings_store.js';
 
 const SUPPRESSED_WARNING_PATTERNS = [
   /mel_filterbank\.cc:.*Missing \d+ bands\s+starting at \d+ in mel-frequency design\./,
@@ -46,6 +46,12 @@ export function getModelKey(path: string): string {
     return path;
   }
 }
+
+/**
+ * Local storage key for the URLs that `hf://` models (keyed by `getModelKey()`)
+ * were last loaded from, which are also their keys in the cache.
+ */
+const HF_MODEL_URLS_KEY = 'litertlm-hf-model-urls';
 
 /** Formats a model's size for the model list. */
 function formatModelSize(bytes: number): string {
@@ -112,16 +118,25 @@ export class ModelLoaderService {
       const cache = await window.caches.open('litertlm-models');
       const keys = await cache.keys();
       const newCachedModels = new Map<string, number>();
+      // hf:// models are cached under the URL they were loaded from.
+      const hfModels = new Map(Object.entries(this.getHfModelUrls())
+                                   .map(([uri, url]) => [url, uri]));
 
       for (const request of keys) {
+        if (LEGACY_MODEL_PATHS.has(request.url)) {
+          // A default model's old file, which was replaced by its hf:// URI.
+          await cache.delete(request);
+          continue;
+        }
         const response = await cache.match(request);
         if (response) {
+          const key = hfModels.get(request.url) ?? request.url;
           const contentLength = response.headers.get('content-length');
           if (contentLength) {
-            newCachedModels.set(request.url, Number(contentLength));
+            newCachedModels.set(key, Number(contentLength));
           } else {
             const blob = await response.blob();
-            newCachedModels.set(request.url, blob.size);
+            newCachedModels.set(key, blob.size);
           }
         }
       }
@@ -147,7 +162,7 @@ export class ModelLoaderService {
 
     try {
       const cache = await window.caches.open('litertlm-models');
-      const deleted = await cache.delete(modelPath);
+      const deleted = await cache.delete(this.getCacheUrl(modelPath));
       if (deleted) {
         this.updateStatus('Model cache removed successfully.');
         await this.updateCacheSize();
@@ -243,7 +258,12 @@ export class ModelLoaderService {
         modelInput = file.stream();
       } else {
         const cache = await window.caches.open('litertlm-models');
-        const cachedResponse = await cache.match(modelPath);
+        const previousUrl = this.getHfModelUrls()[modelKey];
+        const modelUrl = await this.resolveModelUrl(modelPath);
+        const cachedResponse = await cache.match(modelUrl);
+        if (cachedResponse) {
+          this.setHfModelUrl(modelPath, modelUrl);
+        }
 
         this.downloadProgresses.set(modelKey, 0);
         this.downloadSpeeds.set(modelKey, '0 MB / 0 MB');
@@ -280,7 +300,7 @@ export class ModelLoaderService {
 
           this.downloadAbortController = new AbortController();
 
-          const response = await fetch(modelPath, {
+          const response = await fetch(modelUrl, {
             signal: this.downloadAbortController.signal,
           });
           if (!response.ok) {
@@ -313,9 +333,14 @@ export class ModelLoaderService {
             }
           });
 
-          void cache.put(modelPath, cacheResponse)
-              .then(() => {
-                this.updateCacheSize();
+          void cache.put(modelUrl, cacheResponse)
+              .then(async () => {
+                this.setHfModelUrl(modelPath, modelUrl);
+                if (previousUrl && previousUrl !== modelUrl) {
+                  // The hf:// model's previous file, which it was updated from.
+                  await cache.delete(previousUrl);
+                }
+                await this.updateCacheSize();
               })
               .catch(err => {
                 if (this.isDownloadAborted) {
@@ -480,6 +505,56 @@ export class ModelLoaderService {
       this.updateStatus(`Failed to add model: ${(e as Error).message}`);
       throw e;
     }
+  }
+
+  /**
+   * Returns the URL to download and cache a model from. A `hf://` model is
+   * resolved to the file it points to now, e.g. on its repo's `web` branch, so
+   * a new version is downloaded when the repo is updated. If that fails, e.g.
+   * offline, the URL it was last loaded from is used, so that it still loads
+   * from the cache.
+   */
+  private async resolveModelUrl(modelPath: string): Promise<string> {
+    if (!modelPath.startsWith('hf://')) return modelPath;
+    this.updateStatus(`Looking up ${modelPath}...`);
+    try {
+      // Engines are created without a backend, so choose the file that
+      // Engine.create() would choose without one.
+      const {huggingFace} = await this.resolve(modelPath);
+      if (huggingFace) return huggingFace.source.url;
+    } catch (e) {
+      const lastUrl = this.getHfModelUrls()[getModelKey(modelPath)];
+      if (!lastUrl) throw e;
+      console.warn(
+          `[LiteRT-LM] Failed to look up ${modelPath}, loading ${lastUrl}:`, e);
+      return lastUrl;
+    }
+    throw new Error(`${modelPath} isn't a Hugging Face model`);
+  }
+
+  /** Returns the URL a model is cached under. */
+  private getCacheUrl(modelPath: string): string {
+    return this.getHfModelUrls()[getModelKey(modelPath)] ?? modelPath;
+  }
+
+  /** Returns the URLs that `hf://` models were last loaded from. */
+  private getHfModelUrls(): Record<string, string> {
+    try {
+      const urls: unknown =
+          JSON.parse(window.localStorage.getItem(HF_MODEL_URLS_KEY) ?? '{}');
+      return typeof urls === 'object' && urls !== null ?
+          urls as Record<string, string> :
+          {};
+    } catch {
+      return {};
+    }
+  }
+
+  private setHfModelUrl(modelPath: string, url: string) {
+    if (!modelPath.startsWith('hf://')) return;
+    const urls = this.getHfModelUrls();
+    urls[getModelKey(modelPath)] = url;
+    window.localStorage.setItem(HF_MODEL_URLS_KEY, JSON.stringify(urls));
   }
 
   cancelDownload() {

@@ -271,6 +271,161 @@ describe('ModelLoaderService', () => {
     expect(latestStatus).toBe('Model download cancelled by user.');
   });
 
+  describe('with hf:// models', () => {
+    const HF_URI = 'hf://litert-community/gemma-4-E2B-it-litert-lm';
+    const OLD_URL =
+        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/0ld/gemma-4-E2B-it-gpu.litertlm';
+    const NEW_URL =
+        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/new/gemma-4-E2B-it-gpu.litertlm';
+    let fakeResolve: jasmine.Spy<typeof resolveModel>;
+    let mockCache: jasmine.SpyObj<Cache>;
+
+    beforeEach(() => {
+      settingsStore.selectedModelPath = HF_URI;
+      fakeResolve = jasmine.createSpy('resolveModel').and.callFake(async () => {
+        const source = {url: NEW_URL, size: 3};
+        return {
+          model: source,
+          huggingFace: {
+            source,
+            repo: 'litert-community/gemma-4-E2B-it-litert-lm',
+            revision: 'web',
+            commit: 'new',
+            path: 'gemma-4-E2B-it-gpu.litertlm',
+          },
+        };
+      });
+      modelLoader = new ModelLoaderService(
+          () => {}, () => {}, undefined, fakeEngineCreate, fakeLoadWasm,
+          fakeResolve);
+      mockCache = jasmine.createSpyObj<Cache>(
+          'Cache', ['match', 'put', 'delete', 'keys']);
+      mockCache.match.and.resolveTo(undefined);
+      mockCache.put.and.resolveTo();
+      mockCache.delete.and.resolveTo(true);
+      mockCache.keys.and.resolveTo([]);
+      spyOn(window.caches, 'open').and.resolveTo(mockCache);
+    });
+
+    function modelResponse(): Response {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {'content-length': '3'},
+      });
+    }
+
+    /** Waits for the downloaded model to be cached. */
+    async function flush() {
+      await new Promise(resolve => setTimeout(resolve));
+    }
+
+    it('downloads and caches the file the model resolves to', async () => {
+      spyOn(window, 'fetch').and.resolveTo(modelResponse());
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+      await flush();
+
+      expect(fakeResolve).toHaveBeenCalledOnceWith(HF_URI);
+      expect(window.fetch)
+          .toHaveBeenCalledOnceWith(NEW_URL, jasmine.anything());
+      expect(mockCache.put)
+          .toHaveBeenCalledOnceWith(NEW_URL, jasmine.any(Response));
+      expect(modelLoader.engine).not.toBeNull();
+    });
+
+    it('reports the cached file under the hf:// URI', async () => {
+      spyOn(window, 'fetch').and.resolveTo(modelResponse());
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+      await flush();
+      mockCache.keys.and.resolveTo([new Request(NEW_URL)]);
+      mockCache.match.and.callFake(async () => modelResponse());
+
+      await modelLoader.updateCacheSize();
+
+      expect(modelLoader.cachedModels).toEqual(new Map([[HF_URI, 3]]));
+    });
+
+    it('loads the cached file without downloading it again', async () => {
+      mockCache.match.and.callFake(
+          async (request: RequestInfo|URL) =>
+              String(request) === NEW_URL ? modelResponse() : undefined);
+      spyOn(window, 'fetch');
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+
+      expect(window.fetch).not.toHaveBeenCalled();
+      expect(modelLoader.engine).not.toBeNull();
+    });
+
+    it('replaces the previous file when the repo is updated', async () => {
+      window.localStorage.setItem(
+          'litertlm-hf-model-urls', JSON.stringify({[HF_URI]: OLD_URL}));
+      spyOn(window, 'fetch').and.resolveTo(modelResponse());
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+      await flush();
+
+      expect(mockCache.put)
+          .toHaveBeenCalledOnceWith(NEW_URL, jasmine.any(Response));
+      expect(mockCache.delete).toHaveBeenCalledOnceWith(OLD_URL);
+    });
+
+    it('loads the last file if the model cannot be looked up', async () => {
+      window.localStorage.setItem(
+          'litertlm-hf-model-urls', JSON.stringify({[HF_URI]: OLD_URL}));
+      fakeResolve.and.rejectWith(new TypeError('Failed to fetch'));
+      spyOn(console, 'warn');
+      mockCache.match.and.callFake(
+          async (request: RequestInfo|URL) =>
+              String(request) === OLD_URL ? modelResponse() : undefined);
+      spyOn(window, 'fetch');
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+
+      expect(window.fetch).not.toHaveBeenCalled();
+      expect(modelLoader.engine).not.toBeNull();
+    });
+
+    it('fails if the model cannot be looked up and was never loaded',
+       async () => {
+         fakeResolve.and.rejectWith(new TypeError('Failed to fetch'));
+         spyOn(console, 'error');
+
+         await modelLoader.loadModelWeights(
+             settingsStore.modelSettings, async () => {});
+
+         expect(modelLoader.engine).toBeNull();
+         expect(modelLoader.isModelLoading).toBeFalse();
+       });
+
+    it('deletes the cached file of a hf:// model', async () => {
+      window.localStorage.setItem(
+          'litertlm-hf-model-urls', JSON.stringify({[HF_URI]: NEW_URL}));
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(modelLoader, 'updateCacheSize').and.resolveTo();
+
+      expect(await modelLoader.deleteModelFromCache(HF_URI)).toBeTrue();
+      expect(mockCache.delete).toHaveBeenCalledOnceWith(NEW_URL);
+    });
+
+    it('deletes the default models\' old files', async () => {
+      const oldDefault =
+          'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm';
+      mockCache.keys.and.resolveTo([new Request(oldDefault)]);
+
+      await modelLoader.updateCacheSize();
+
+      expect(mockCache.delete)
+          .toHaveBeenCalledOnceWith(
+              jasmine.objectContaining({url: oldDefault}));
+      expect(modelLoader.cachedModels.size).toBe(0);
+    });
+  });
+
   it('imports custom model correctly', async () => {
     const mockCache = {
       put: jasmine.createSpy().and.resolveTo(true)
