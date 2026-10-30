@@ -899,6 +899,7 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       .prefill_batch_sizes = settings.prefill_batch_sizes,
       .num_output_candidates = settings.num_output_candidates,
       .configure_magic_numbers = settings.configure_magic_numbers,
+      .allow_context_length_expansion = settings.allow_context_length_expansion,
       .verify_magic_numbers = settings.verify_magic_numbers,
       .clear_kv_cache_before_prefill = settings.clear_kv_cache_before_prefill,
       .num_logits_to_print_after_decode =
