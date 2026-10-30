@@ -50,31 +50,38 @@ fi
 # Set configurations based on mode
 # Staging release should behave exactly like stable release (no fallback, stable wheels),
 # but it won't be uploaded to PyPI (handled in build.sh).
+# All LiteRT-LM wheels (API for every platform, CLI, and Builder) are stored in
+# one folder per build:
+#   nightly: gs://litert-lm-python/nightly_wheels/<YYYYMMDD>/
+#   stable:  gs://litert-lm-python/stable_wheels/<VERSION>/
 if [[ "${IS_STABLE_RELEASE}" == "true" || "${IS_STAGE_RELEASE}" == "true" ]]; then
   echo "Mode: Stable Release or Staging Release (Strict)"
-  API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/stable_wheels"
-  BUILDER_WHEELS_GCS_DIR="gs://litert-lm-builder/stable_wheels"
+  WHEELS_GCS_DIR="gs://litert-lm-python/stable_wheels/${LITERT_LM_VERSION}"
   API_PREFIX="litert_lm_api"
   EXPECTED_VERSION="${LITERT_LM_VERSION}"
   ALLOW_FALLBACK=false
   EXTRA_BAZEL_ARGS=""
 elif [[ "${IS_NIGHTLY_RELEASE}" == "true" ]]; then
   echo "Mode: Nightly Release (Strict)"
-  API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
-  BUILDER_WHEELS_GCS_DIR="gs://litert-lm-builder/nightly_wheels"
+  WHEELS_GCS_DIR="gs://litert-lm-python/nightly_wheels/${TODAY_DATE}"
   API_PREFIX="litert_lm_api_nightly"
   EXPECTED_VERSION="${LITERT_LM_VERSION}.dev${TODAY_DATE}"
   ALLOW_FALLBACK=false
   EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${TODAY_DATE}"
 else
   echo "Mode: Presubmit or Local Developer Build (Fallback Allowed)"
-  API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
-  BUILDER_WHEELS_GCS_DIR="gs://litert-lm-builder/nightly_wheels"
+  # Search every nightly date folder so the fallback can pick the latest wheel.
+  WHEELS_GCS_DIR="gs://litert-lm-python/nightly_wheels/*"
   API_PREFIX="litert_lm_api_nightly"
   EXPECTED_VERSION="${LITERT_LM_VERSION}.dev${TODAY_DATE}"
   ALLOW_FALLBACK=true
   EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${TODAY_DATE}"
 fi
+
+# The wheel folders hold the API wheels for every platform next to the CLI and
+# Builder wheels. This CLI build runs on macOS, so only pick up the macOS API
+# wheel.
+API_WHEEL_SUFFIX="macosx*.whl"
 
 API_WHEELS_DIR="${WORKSPACE_ROOT}/api_wheels"
 mkdir -p "${API_WHEELS_DIR}"
@@ -82,7 +89,7 @@ mkdir -p "${API_WHEELS_DIR}"
 # Check if wheels were pre-fetched by Kokoro via gfile_resources into KOKORO_GFILE_DIR
 if [[ -n "${KOKORO_GFILE_DIR:-}" ]]; then
   echo "Checking KOKORO_GFILE_DIR (${KOKORO_GFILE_DIR}) for pre-fetched API wheels..."
-  MATCHED_WHEEL_LIST=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-${EXPECTED_VERSION}-*.whl" 2>/dev/null)
+  MATCHED_WHEEL_LIST=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-${EXPECTED_VERSION}-*${API_WHEEL_SUFFIX}" 2>/dev/null)
   
   if [[ -z "${MATCHED_WHEEL_LIST}" ]]; then
     if [[ "${ALLOW_FALLBACK}" == "false" ]]; then
@@ -90,10 +97,10 @@ if [[ -n "${KOKORO_GFILE_DIR:-}" ]]; then
       exit 1
     else
       echo "Expected API wheels (${EXPECTED_VERSION}) not found in KOKORO_GFILE_DIR. Trying fallback..."
-      LATEST_FALLBACK_WHEEL=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-*.whl" 2>/dev/null | sort -V | tail -n 1 || true)
+      LATEST_FALLBACK_WHEEL=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-*${API_WHEEL_SUFFIX}" 2>/dev/null | sort -V | tail -n 1 || true)
       if [[ -n "${LATEST_FALLBACK_WHEEL}" ]]; then
          ACTUAL_VERSION=$(basename "$LATEST_FALLBACK_WHEEL" | cut -d'-' -f2)
-         MATCHED_WHEEL_LIST=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-${ACTUAL_VERSION}-*.whl" 2>/dev/null)
+         MATCHED_WHEEL_LIST=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-${ACTUAL_VERSION}-*${API_WHEEL_SUFFIX}" 2>/dev/null)
          EXPECTED_VERSION="${ACTUAL_VERSION}"
          ACTUAL_DATE=$(echo "$ACTUAL_VERSION" | grep -o 'dev[0-9]*' | sed 's/dev//' || true)
          if [[ -n "${ACTUAL_DATE}" ]]; then
@@ -118,7 +125,7 @@ fi
 if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
   echo "Fetching API wheels from GCS..."
   set +e
-  WHEEL_LIST=$(gcloud storage ls "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${EXPECTED_VERSION}-*.whl" 2>/dev/null)
+  WHEEL_LIST=$(gcloud storage ls "${WHEELS_GCS_DIR}/${API_PREFIX}-${EXPECTED_VERSION}-*${API_WHEEL_SUFFIX}" 2>/dev/null)
   set -e
   
   if [[ -z "${WHEEL_LIST}" ]]; then
@@ -128,12 +135,12 @@ if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
     else
       echo "Expected API wheels (${EXPECTED_VERSION}) not found in GCS. Trying fallback..."
       set +e
-      LATEST_FALLBACK_PATH=$(gcloud storage ls --sort-by="~updated" --limit=1 "${API_WHEELS_GCS_DIR}/${API_PREFIX}-*.whl" 2>/dev/null | head -n 1 || true)
+      LATEST_FALLBACK_PATH=$(gcloud storage ls --sort-by="~updated" --limit=1 "${WHEELS_GCS_DIR}/${API_PREFIX}-*${API_WHEEL_SUFFIX}" 2>/dev/null | head -n 1 || true)
       set -e
       if [[ -n "${LATEST_FALLBACK_PATH}" ]]; then
         ACTUAL_VERSION=$(basename "$LATEST_FALLBACK_PATH" | cut -d'-' -f2)
         set +e
-        WHEEL_LIST=$(gcloud storage ls "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${ACTUAL_VERSION}-*.whl" 2>/dev/null)
+        WHEEL_LIST=$(gcloud storage ls "${WHEELS_GCS_DIR}/${API_PREFIX}-${ACTUAL_VERSION}-*${API_WHEEL_SUFFIX}" 2>/dev/null)
         set -e
         EXPECTED_VERSION="${ACTUAL_VERSION}"
         ACTUAL_DATE=$(echo "$ACTUAL_VERSION" | grep -o 'dev[0-9]*' | sed 's/dev//' || true)
@@ -146,7 +153,7 @@ if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
   
   if [[ -n "${WHEEL_LIST}" ]]; then
     echo "Downloading API wheels..."
-    gcloud storage cp "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${EXPECTED_VERSION}-*.whl" "${API_WHEELS_DIR}/"
+    gcloud storage cp "${WHEELS_GCS_DIR}/${API_PREFIX}-${EXPECTED_VERSION}-*${API_WHEEL_SUFFIX}" "${API_WHEELS_DIR}/"
   else
     echo "❌ Failed to find any matching API wheels in GCS!"
     exit 1
@@ -161,7 +168,7 @@ fi
 
 if ! ls "${API_WHEELS_DIR}"/*litert_lm_builder*.whl > /dev/null 2>&1; then
   echo "Fetching matching Builder wheel from GCS..."
-  gcloud storage cp "${BUILDER_WHEELS_GCS_DIR}/*${EXPECTED_VERSION}*.whl" "${API_WHEELS_DIR}/" 2>/dev/null || true
+  gcloud storage cp "${WHEELS_GCS_DIR}/*litert_lm_builder*${EXPECTED_VERSION}*.whl" "${API_WHEELS_DIR}/" 2>/dev/null || true
 fi
 
 # If exact version was not found in fallback/continuous/presubmit mode, fetch latest available builder wheel
@@ -174,7 +181,7 @@ if [[ "${ALLOW_FALLBACK}" == "true" ]] && ! ls "${API_WHEELS_DIR}"/*litert_lm_bu
     fi
   fi
   if ! ls "${API_WHEELS_DIR}"/*litert_lm_builder*.whl > /dev/null 2>&1; then
-    LATEST_BUILDER_GCS=$(gcloud storage ls --sort-by="~updated" --limit=1 "${BUILDER_WHEELS_GCS_DIR}/*litert_lm_builder*.whl" 2>/dev/null | head -n 1 || true)
+    LATEST_BUILDER_GCS=$(gcloud storage ls --sort-by="~updated" --limit=1 "${WHEELS_GCS_DIR}/*litert_lm_builder*.whl" 2>/dev/null | head -n 1 || true)
     if [[ -n "${LATEST_BUILDER_GCS}" ]]; then
       gcloud storage cp "${LATEST_BUILDER_GCS}" "${API_WHEELS_DIR}/" 2>/dev/null || true
     fi
