@@ -557,7 +557,7 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
           size_t start = i * max_seq_len;
           size_t end = std::min(start + max_seq_len, token_ids_vec.size());
           absl::Span<const int32_t> chunk_tokens =
-              absl::MakeSpan(token_ids_vec.data() + start, end - start);
+              absl::MakeSpan(token_ids_vec).subspan(start, end - start);
           LITERT_ASSIGN_OR_RETURN(auto chunk_embedding,
                                   RunEncoderForTokens(chunk_tokens));
           if (i == 0) {

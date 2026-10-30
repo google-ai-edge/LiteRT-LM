@@ -1704,7 +1704,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
   // Prefill once again, and see the token candidate is reduced one.
   ExecutorInputs inputs_next;
   input_tokens_buffer =
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens.data(), 1), {1, 1});
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens).first(1), {1, 1});
   EXPECT_TRUE(input_tokens_buffer);
   inputs_next.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs_next));
@@ -1800,7 +1800,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Prefill once again, and see the token candidate is reduced one.
   ExecutorInputs inputs_next;
   input_tokens_buffer =
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens.data(), 1), {1, 1});
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens).first(1), {1, 1});
   inputs_next.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs_next));
   step = executor->GetCurrentStep();
@@ -1890,7 +1890,7 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   // Prefill once again, and see the token candidate is reduced one.
   ExecutorInputs inputs_next;
   input_tokens_buffer =
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens.data(), 1), {1, 1});
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens).first(1), {1, 1});
   inputs_next.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   EXPECT_OK(executor->Prefill(inputs_next));
   step = executor->GetCurrentStep();
