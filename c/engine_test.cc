@@ -54,6 +54,7 @@ namespace {
 using ::absl_testing::IsOk;
 using ::absl_testing::StatusIs;
 using ::testing::AnyOf;
+using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
@@ -792,6 +793,41 @@ TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
                      .GetBackendConfig<litert::lm::GpuArtisanConfig>();
   ASSERT_OK(config2);
   EXPECT_FALSE(config2->use_autosized_ringbuffers);
+}
+
+TEST(EngineCTest, SetSelectedSignatures) {
+  EngineSettingsPtr settings(
+      CreateEngineSettings("test_model_path_1", "npu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  EXPECT_THAT(
+      settings->settings->GetMainExecutorSettings().GetSelectedSignatures(),
+      IsEmpty());
+
+  const char* const signatures[] = {"prefill_1024", "decode"};
+  EXPECT_EQ(litert_lm_engine_settings_set_selected_signatures(settings.get(),
+                                                              signatures, 2),
+            kLiteRtLmStatusOk);
+  EXPECT_THAT(
+      settings->settings->GetMainExecutorSettings().GetSelectedSignatures(),
+      ElementsAre("prefill_1024", "decode"));
+
+  const char* const with_null[] = {"decode", nullptr};
+  EXPECT_EQ(litert_lm_engine_settings_set_selected_signatures(settings.get(),
+                                                              with_null, 2),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_engine_settings_set_selected_signatures(settings.get(),
+                                                              signatures, 0),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_engine_settings_set_selected_signatures(nullptr,
+                                                              signatures, 2),
+            kLiteRtLmStatusInvalidArgument);
+  // A rejected call leaves the previous selection in place.
+  EXPECT_THAT(
+      settings->settings->GetMainExecutorSettings().GetSelectedSignatures(),
+      ElementsAre("prefill_1024", "decode"));
 }
 
 TEST(EngineCTest, CreateSettingsFromRawFileDescriptor) {
@@ -3424,6 +3460,12 @@ AllEngineSettingsSetters() {
        [](E* s) {
          return litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
              s, true);
+       }},
+      {"set_selected_signatures",
+       [](E* s) {
+         const char* const signatures[] = {"prefill_1024", "decode"};
+         return litert_lm_engine_settings_set_selected_signatures(
+             s, signatures, 2);
        }},
   };
 }

@@ -98,6 +98,11 @@ ABSL_FLAG(bool, gpu_external_tensor_mode, false,
 ABSL_FLAG(bool, configure_magic_numbers, true,
           "If true and the model contains magic numbers, present magic number "
           "configs when the model is initialized.");
+ABSL_FLAG(bool, allow_context_length_expansion, false,
+          "Experimental: allow --max_num_tokens to exceed the exported context "
+          "magic number. Requires --configure_magic_numbers and a model whose "
+          "position encoding and constants support the requested length. Does "
+          "not extend prefill/decode batch limits or establish model quality.");
 ABSL_FLAG(bool, verify_magic_numbers, false,
           "If true and the model contains magic numbers and test signatures, "
           "verify magic number configs when the real dimensions that replaced "

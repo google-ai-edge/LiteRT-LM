@@ -280,6 +280,12 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_engine_settings_set_selected_signatures.restype = ctypes.c_int
+  lib.litert_lm_engine_settings_set_selected_signatures.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_char_p),
+      ctypes.c_size_t,
+  ]
   lib.litert_lm_engine_settings_set_enable_speculative_decoding.restype = (
       ctypes.c_int
   )
