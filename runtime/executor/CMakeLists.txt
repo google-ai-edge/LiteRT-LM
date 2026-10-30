@@ -621,6 +621,31 @@ target_link_libraries(runtime_executor_speculative_decoding_controller
 )
 
 # ==============================================================================
+# NVIDIA MTP Drafter Support
+# ==============================================================================
+add_litertlm_library(runtime_executor_nvidia_mtp_drafter_support STATIC
+  nvidia_mtp_drafter_support.cc
+)
+add_library(LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
+  ALIAS runtime_executor_nvidia_mtp_drafter_support)
+
+target_include_directories(runtime_executor_nvidia_mtp_drafter_support
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
+  PUBLIC
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Components::SamplerInterface
+    LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Generated::Protobuf
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LLM LiteRT Verifier
 # ==============================================================================
 add_litertlm_library(runtime_executor_llm_litert_verifier STATIC
@@ -640,6 +665,8 @@ target_link_libraries(runtime_executor_llm_litert_verifier
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
+    LiteRTLM::Runtime::Executor::LlmExecutorSettingsUtils
+    LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
@@ -672,6 +699,7 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Executor::LlmLitertVerifier
+    LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory

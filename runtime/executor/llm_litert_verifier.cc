@@ -52,6 +52,8 @@
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -350,6 +352,10 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
   const Backend backend = executor_settings.GetBackend();
+  // The sampler factory has no NPU sampler; GetSamplerBackend() falls back to
+  // the CPU sampler there unless a sampler backend is configured explicitly.
+  ABSL_ASSIGN_OR_RETURN(const Backend sampler_backend,
+                        GetSamplerBackend(executor_settings));
   const bool use_fp16_precision =
       backend == Backend::GPU &&
       activation_data_type == ActivationDataType::FLOAT16;
@@ -437,10 +443,13 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
     }
   }
 
+  // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the argmax runs on the
+  // device next to the logits; elsewhere this is CreateSampler().
   ABSL_ASSIGN_OR_RETURN(
       auto sampler,
-      CreateSampler(backend, /*batch_size=*/1, GreedySamplerParams(), env,
-                    /*sequence_size=*/width, vocab_size, logits_data_type));
+      CreateMtpGreedySampler(backend, /*batch_size=*/1, GreedySamplerParams(),
+                             env, /*sequence_size=*/width, vocab_size,
+                             logits_data_type));
   LITERT_ASSIGN_OR_RETURN(auto id_tensor,
                           CreateTensorBuffer<int32_t>({1, width}));
   if (signatures.input_tokens.empty()) {
@@ -483,9 +492,10 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
       env, base_model, std::move(signature), embedding_lookup,
       per_layer_embedding_lookup, width, vocab_size, pad_token_id,
       std::move(signatures), GetAttentionMaskParams(executor_metadata),
-      logits_data_type, backend, std::move(sampler), std::move(mask_runner),
-      std::move(output_buffers), std::move(active_input_buffers),
-      std::move(active_output_buffers), std::move(id_tensor)));
+      logits_data_type, sampler_backend, std::move(sampler),
+      std::move(mask_runner), std::move(output_buffers),
+      std::move(active_input_buffers), std::move(active_output_buffers),
+      std::move(id_tensor)));
 }
 
 absl::Status LlmLiteRtVerifier::Run(

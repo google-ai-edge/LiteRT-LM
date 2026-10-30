@@ -60,6 +60,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
 #include "runtime/executor/llm_litert_verifier.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -80,8 +81,11 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(
     const Environment& env, Backend backend, int output_heads,
     int sequence_size, int vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
-  return CreateSampler(backend, output_heads, GreedySamplerParams(), env,
-                       sequence_size, vocab_size, activation_data_type);
+  // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the argmax runs on the
+  // device next to the logits; elsewhere this is CreateSampler().
+  return CreateMtpGreedySampler(backend, output_heads, GreedySamplerParams(),
+                                env, sequence_size, vocab_size,
+                                activation_data_type);
 }
 
 absl::Status ConcatenateEmbeddingsAndActivations(
@@ -196,6 +200,8 @@ LlmLiteRtMtpDrafter::Create(
   ABSL_ASSIGN_OR_RETURN(
       auto model,
       resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
+  ABSL_RETURN_IF_ERROR(AddNvidiaSharedValueCacheOptions(
+      executor_settings.GetBackend(), *model, base_model, compilation_options));
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
       CompiledModel::Create(env, model->Get(), compilation_options));
