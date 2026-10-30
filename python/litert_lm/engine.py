@@ -77,8 +77,14 @@ class Engine(interfaces.AbstractEngine):
       use_ringbuffers_local_attention: bool | None = None,
       enable_ynnpack: bool | None = None,
       max_vision_tokens_per_image: int | None = None,
+      selected_signatures: collections.abc.Sequence[str] | None = None,
       **kwargs,
   ):
+    if isinstance(selected_signatures, str):
+      raise TypeError(
+          "selected_signatures must be a sequence of signature names, not a"
+          " str."
+      )
     warn_enable_speculative_decoding_deprecated(
         kwargs.get("enable_speculative_decoding")
     )
@@ -99,6 +105,7 @@ class Engine(interfaces.AbstractEngine):
         use_ringbuffers_local_attention=use_ringbuffers_local_attention,
         enable_ynnpack=enable_ynnpack,
         max_vision_tokens_per_image=max_vision_tokens_per_image,
+        selected_signatures=selected_signatures,
         **kwargs,
     )
 
@@ -140,6 +147,18 @@ class Engine(interfaces.AbstractEngine):
           "litert_lm_engine_settings_set_litert_dispatch_lib_dir",
           settings,
           self.backend.litert_dispatch_lib_dir,
+      )
+
+    if self.selected_signatures is not None:
+      signatures = (ctypes.c_char_p * len(self.selected_signatures))(
+          *(s.encode("utf-8") for s in self.selected_signatures)
+      )
+      call_checked(
+          lib,
+          "litert_lm_engine_settings_set_selected_signatures",
+          settings,
+          signatures,
+          len(self.selected_signatures),
       )
 
     if (

@@ -51,6 +51,7 @@ ABSL_DECLARE_FLAG(int, num_cpu_threads);
 ABSL_DECLARE_FLAG(bool, enable_ynnpack);
 ABSL_DECLARE_FLAG(bool, gpu_external_tensor_mode);
 ABSL_DECLARE_FLAG(bool, configure_magic_numbers);
+ABSL_DECLARE_FLAG(bool, allow_context_length_expansion);
 ABSL_DECLARE_FLAG(bool, verify_magic_numbers);
 ABSL_DECLARE_FLAG(bool, clear_kv_cache_before_prefill);
 ABSL_DECLARE_FLAG(int, num_logits_to_print_after_decode);

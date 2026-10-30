@@ -467,6 +467,11 @@ class AbstractEngine(abc.ABC):
         Image downscaling is currently only supported by Gemma4 models, whose
         budget options are 70, 140, 280, 560, or 1120. If None, use the model's
         default.
+      selected_signatures: Model signatures the main executor compiles and
+        runs, for example ["prefill_1024", "decode"]. To run complete token
+        generation, keep at least one prefill signature and "decode". When
+        MTP is enabled, make sure "verify" is also included. If None, every
+        signature of the model is used.
   """
 
   model_path: str
@@ -483,6 +488,7 @@ class AbstractEngine(abc.ABC):
   use_ringbuffers_local_attention: bool | None = None
   enable_ynnpack: bool | None = None
   max_vision_tokens_per_image: int | None = None
+  selected_signatures: collections.abc.Sequence[str] | None = None
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""

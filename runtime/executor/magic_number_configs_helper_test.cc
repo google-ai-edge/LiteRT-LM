@@ -253,6 +253,52 @@ TEST(MagicNumberConfigsHelperTest,
   EXPECT_EQ(helper.magic_number_verifications(), nullptr);
 }
 
+TEST(MagicNumberConfigsHelperTest, ContextLength_ExpansionOptIn) {
+  for (int context : {131072, 262144}) {
+    auto model = LoadModelFromFile(kTestModelPathContextLength);
+    ASSERT_OK(model);
+    auto executor_settings = GetLlmExecutorSettings();
+    ASSERT_OK(executor_settings);
+    executor_settings->SetMaxNumTokens(context);
+    executor_settings->SetAdvancedSettings(
+        AdvancedSettings{.allow_context_length_expansion = true});
+
+    ModelResourcesMock model_resources(*model);
+    MagicNumberConfigsHelper helper;
+    auto env_options =
+        helper.GetLiteRtEnvOptions(model_resources, *executor_settings);
+    ASSERT_EQ(env_options.size(), 1);
+    ASSERT_NE(helper.magic_number_configs(), nullptr);
+    const auto& config = Get(helper.magic_number_configs()->configs, 0);
+    EXPECT_EQ(config.magic_number, 8209);
+    EXPECT_EQ(config.target_number, context);
+    EXPECT_EQ(config.signature_prefix, nullptr);
+  }
+}
+
+TEST(MagicNumberConfigsHelperTest, ContextExpansionKeepsBatchLimits) {
+  auto model = LoadModelFromFile(kTestModelPathDecodeBatch);
+  ASSERT_OK(model);
+  auto executor_settings = GetLlmExecutorSettings();
+  ASSERT_OK(executor_settings);
+  executor_settings->SetMaxNumTokens(262144);
+  executor_settings->SetAdvancedSettings(
+      AdvancedSettings{.prefill_batch_sizes = {8192},
+                       .num_output_candidates = 20,
+                       .allow_context_length_expansion = true});
+
+  ModelResourcesMock model_resources(*model);
+  MagicNumberConfigsHelper helper;
+  auto env_options =
+      helper.GetLiteRtEnvOptions(model_resources, *executor_settings);
+  ASSERT_EQ(env_options.size(), 1);
+  ASSERT_NE(helper.magic_number_configs(), nullptr);
+  ASSERT_EQ(helper.magic_number_configs()->num_configs, 3);
+  EXPECT_EQ(Get(helper.magic_number_configs()->configs, 0).target_number, 262144);
+  EXPECT_EQ(Get(helper.magic_number_configs()->configs, 1).target_number, 8);
+  EXPECT_EQ(Get(helper.magic_number_configs()->configs, 2).target_number, 4096);
+}
+
 TEST(MagicNumberConfigsHelperTest,
      ContextLength_ExplictSettingsWithVerifications) {
   auto model = LoadModelFromFile(kTestModelPathContextLength);
