@@ -86,7 +86,7 @@ const IMPLEMENTATIONS: Array<{
 ];
 
 for (const {name, create} of IMPLEMENTATIONS) {
-  describe(name, () => {
+  describe(`${name} (DataStream contract)`, () => {
     let wasmHeap: Uint8Array;
     const ptr = 100;
 
