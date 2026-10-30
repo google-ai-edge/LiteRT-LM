@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -43,6 +44,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -117,6 +119,31 @@ inline int CountAcceptedPrefix(absl::Span<const int> verifier_ids,
   return accepted;
 }
 
+// Returns true if an MTP round starting at `position` with `num_draft_steps`
+// drafted tokens (verifying `num_draft_steps + 1` tokens in `[position,
+// position + num_draft_steps]`) fits within `max_state_entries` (when > 0) and
+// `verifier_max_context_length` (when > 0).
+inline bool CanRunMtpRound(
+    int position, int num_draft_steps, int max_state_entries,
+    std::optional<int> verifier_max_context_length = std::nullopt) {
+  if (position < 1 || num_draft_steps < 0) {
+    return false;
+  }
+  const int64_t end_position =
+      static_cast<int64_t>(position) + num_draft_steps + 1;
+  if (end_position > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  if (max_state_entries > 0 && end_position > max_state_entries) {
+    return false;
+  }
+  if (verifier_max_context_length.has_value() &&
+      *verifier_max_context_length > 0 &&
+      end_position > *verifier_max_context_length) {
+    return false;
+  }
+  return true;
+}
 // Owns the random number generator of the lenient acceptance test. It is a
 // different engine than the verifier's, seeded with a salted seed, so that
 // lenience doesn't perturb the sampled tokens. It restarts together with the
@@ -240,6 +267,10 @@ class LlmLiteRtMtpDrafter {
   absl::Status SetLenience(float lenience);
   float lenience() const { return lenience_; }
 
+  // Returns true if an MTP round starting at `position` fits within `state`
+  // and the verifier's attention mask capacity.
+  bool CanDraft(int position, const StateInterface& state) const;
+
   const MtpRoundStats& last_round_stats() const { return last_round_stats_; }
 
   // Returns the number of tokens drafted per round (γ). A round verifies
@@ -260,6 +291,7 @@ class LlmLiteRtMtpDrafter {
           drafter_output_buffers,
       TensorBuffer drafter_id_tensor, int num_draft_steps,
       ModelSignatures drafter_signatures, AttentionMaskParams attn_params,
+      Backend backend,
       std::unique_ptr<LiteRtLogitMaskRunner> drafter_mask_runner)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
@@ -275,6 +307,7 @@ class LlmLiteRtMtpDrafter {
         num_draft_steps_(num_draft_steps),
         drafter_signatures_(std::move(drafter_signatures)),
         attn_params_(attn_params),
+        backend_(backend),
         drafter_mask_runner_(std::move(drafter_mask_runner)) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
       auto expected = buffer.Duplicate();
@@ -373,8 +406,9 @@ class LlmLiteRtMtpDrafter {
 
   MtpRoundStats last_round_stats_;
 
-  // Attention mask params.
+  // Attention mask params and execution backend.
   AttentionMaskParams attn_params_;
+  const Backend backend_;
 
   // Active constraint and verified constraint state.
   const Constraint* constraint_ = nullptr;

@@ -72,6 +72,16 @@ absl::StatusOr<int> GetVocabSizeFromLogitsTensor(TensorBuffer& logits_tensor) {
   return logits_tensor_type.Layout().Dimensions()[2];
 }
 
+TensorBuffer* FindBufferOrNull(
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& buffers,
+    const std::optional<std::string>& name) {
+  if (!name.has_value()) {
+    return nullptr;
+  }
+  const auto it = buffers.find(*name);
+  return it != buffers.end() ? &it->second : nullptr;
+}
+
 constexpr absl::string_view kVerifySignaturePrefix = "verify";
 
 // Returns the dimensions of `type`.
@@ -479,13 +489,24 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
 
   // Same default as the prefill's padding.
   const int pad_token_id = std::max(executor_settings.GetPadTokenId(), 0);
+  std::optional<int> max_context_length;
+  if (TensorBuffer* attn_mask =
+          FindBufferOrNull(input_buffers, signatures.input_attn_mask);
+      attn_mask != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(auto mask_type, attn_mask->TensorType());
+    if (mask_type.Layout().Rank() == 4 &&
+        mask_type.Layout().Dimensions()[3] > 0) {
+      max_context_length = mask_type.Layout().Dimensions()[3];
+    }
+  }
   return absl::WrapUnique(new LlmLiteRtVerifier(
       env, base_model, std::move(signature), embedding_lookup,
-      per_layer_embedding_lookup, width, vocab_size, pad_token_id,
-      std::move(signatures), GetAttentionMaskParams(executor_metadata),
-      logits_data_type, backend, std::move(sampler), std::move(mask_runner),
-      std::move(output_buffers), std::move(active_input_buffers),
-      std::move(active_output_buffers), std::move(id_tensor)));
+      per_layer_embedding_lookup, width, vocab_size, max_context_length,
+      pad_token_id, std::move(signatures),
+      GetAttentionMaskParams(executor_metadata), logits_data_type, backend,
+      std::move(sampler), std::move(mask_runner), std::move(output_buffers),
+      std::move(active_input_buffers), std::move(active_output_buffers),
+      std::move(id_tensor)));
 }
 
 absl::Status LlmLiteRtVerifier::Run(
@@ -514,19 +535,26 @@ absl::Status LlmLiteRtVerifier::Run(
   }
 
   // Only the rows of the tokens attend to anything.
-  if (signatures_.input_attn_mask.has_value()) {
-    auto& mask_buf = active_input_buffers_[*signatures_.input_attn_mask];
-    ABSL_RETURN_IF_ERROR(InitializeAttentionMask(mask_buf, /*is_f16=*/false));
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(mask_buf,
+  TensorBuffer* attn_mask_buffer =
+      FindBufferOrNull(active_input_buffers_, signatures_.input_attn_mask);
+  TensorBuffer* attn_mask_local_buffer = FindBufferOrNull(
+      active_input_buffers_, signatures_.input_attn_mask_local);
+  const bool skip_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
+      sampler_backend_, signatures_.input_int32_param.has_value(), signatures_,
+      attn_params_, attn_mask_buffer, attn_mask_local_buffer);
+  if (attn_mask_buffer != nullptr && !skip_global_causal_mask) {
+    ABSL_RETURN_IF_ERROR(
+        InitializeAttentionMask(*attn_mask_buffer, /*is_f16=*/false));
+    ABSL_RETURN_IF_ERROR(FillAttentionMask(*attn_mask_buffer,
                                            /*start_timestep=*/position,
                                            /*steps=*/num_tokens,
                                            attn_params_.global_type));
   }
-  if (signatures_.input_attn_mask_local.has_value()) {
-    auto& mask_buf = active_input_buffers_[*signatures_.input_attn_mask_local];
-    ABSL_RETURN_IF_ERROR(InitializeAttentionMask(mask_buf, /*is_f16=*/false));
+  if (attn_mask_local_buffer != nullptr && !skip_global_causal_mask) {
+    ABSL_RETURN_IF_ERROR(
+        InitializeAttentionMask(*attn_mask_local_buffer, /*is_f16=*/false));
     ABSL_RETURN_IF_ERROR(FillAttentionMask(
-        mask_buf,
+        *attn_mask_local_buffer,
         /*start_timestep=*/position,
         /*steps=*/num_tokens, attn_params_.local_type,
         /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,

@@ -1358,7 +1358,12 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     const int remaining_tokens =
         static_cast<int>(executor_settings_.GetMaxNumTokens()) -
         llm_context_->runtime_state().current_step;
-    if (max_round_tokens > remaining_tokens) {
+    const int draft_position =
+        drafter_is_primed ? llm_context_->runtime_state().current_step - 1
+                          : llm_context_->runtime_state().current_step;
+    if (max_round_tokens > remaining_tokens ||
+        (state_ != nullptr &&
+         !mtp_drafter_->CanDraft(draft_position, *state_))) {
       speculation = SpeculativeDecodingController::Decision();
     }
   }
