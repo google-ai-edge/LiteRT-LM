@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import io
 import os
 import pathlib
@@ -2288,6 +2289,192 @@ data_path = "{vocoder_path}"
         ValueError, "can contain only one top-level capability metadata section"
     ):
       builder.add_any2any_metadata(any2any_meta_path)
+
+  def test_sha256_hashes_computed_for_sections(self):
+    """Tests that sha256 is computed for each section."""
+    sp_content = b"sample sentencepiece tokenizer model data"
+    generic_content = b"sample generic binary payload 12345"
+    sp_path = self._create_dummy_file("sp.model", sp_content)
+    generic_path = self._create_dummy_file("generic.bin", generic_content)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_sentencepiece_tokenizer(sp_path)
+    builder.add_generic_binary_data(generic_path)
+
+    out_path = os.path.join(self.temp_dir, "hashed_model.litertlm")
+    with litertlm_core.open_file(out_path, "wb") as f:
+      builder.build(f)
+
+    # 1. Check with peek output stream.
+    stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(out_path, None, stream)
+    peek_text = stream.getvalue()
+
+    expected_sp_sha = hashlib.sha256(sp_content).hexdigest()
+    expected_generic_sha = hashlib.sha256(generic_content).hexdigest()
+
+    self.assertIn(f"Key: sha256, Value (String): {expected_sp_sha}", peek_text)
+    self.assertIn(
+        f"Key: sha256, Value (String): {expected_generic_sha}", peek_text
+    )
+
+    # 2. Check binary FlatBuffer header directly.
+    metadata = litertlm_peek.read_litertlm_header(out_path, stream)
+    self.assertIsNotNone(metadata)
+
+    # Check section metadata objects.
+    section_metadata = metadata.SectionMetadata()
+    self.assertIsNotNone(section_metadata)
+    self.assertEqual(section_metadata.ObjectsLength(), 2)
+
+    sec0 = section_metadata.Objects(0)
+    self.assertIsNotNone(sec0)
+    sec0_dict = {}
+    for j in range(sec0.ItemsLength()):
+      d = litertlm_peek.kvp_to_dict(sec0.Items(j))
+      sec0_dict[d["key"]] = d["value"]
+    self.assertEqual(sec0_dict.get("sha256"), expected_sp_sha)
+
+    # Verify section 0 slice from file matches expected sha.
+    with open(out_path, "rb") as f:
+      f.seek(sec0.BeginOffset())
+      sec0_bytes = f.read(sec0.EndOffset() - sec0.BeginOffset())
+      self.assertEqual(hashlib.sha256(sec0_bytes).hexdigest(), expected_sp_sha)
+
+    sec1 = section_metadata.Objects(1)
+    self.assertIsNotNone(sec1)
+    sec1_dict = {}
+    for j in range(sec1.ItemsLength()):
+      d = litertlm_peek.kvp_to_dict(sec1.Items(j))
+      sec1_dict[d["key"]] = d["value"]
+    self.assertEqual(sec1_dict.get("sha256"), expected_generic_sha)
+
+    # Verify section 1 slice from file matches expected sha.
+    with open(out_path, "rb") as f:
+      f.seek(sec1.BeginOffset())
+      sec1_bytes = f.read(sec1.EndOffset() - sec1.BeginOffset())
+      self.assertEqual(
+          hashlib.sha256(sec1_bytes).hexdigest(), expected_generic_sha
+      )
+
+  def test_sha256_with_bytes_io_stream(self):
+    """Tests that sha256 is correctly computed when building to BytesIO."""
+    sp_content = b"tokenizer bytes in memory"
+    sp_path = self._create_dummy_file("sp_mem.model", sp_content)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_sentencepiece_tokenizer(sp_path)
+
+    buf = io.BytesIO()
+    builder.build(buf)
+
+    peek_path = os.path.join(self.temp_dir, "bytes_io_model.litertlm")
+    with open(peek_path, "wb") as f:
+      f.write(buf.getvalue())
+
+    expected_sha = hashlib.sha256(sp_content).hexdigest()
+    stream = io.StringIO()
+    metadata = litertlm_peek.read_litertlm_header(peek_path, stream)
+    self.assertIsNotNone(metadata)
+    sec_meta = metadata.SectionMetadata()
+    self.assertIsNotNone(sec_meta)
+    self.assertEqual(sec_meta.ObjectsLength(), 1)
+    sec0 = sec_meta.Objects(0)
+    self.assertIsNotNone(sec0)
+    items = {
+        litertlm_peek.kvp_to_dict(sec0.Items(i))[
+            "key"
+        ]: litertlm_peek.kvp_to_dict(sec0.Items(i))["value"]
+        for i in range(sec0.ItemsLength())
+    }
+    self.assertEqual(items.get("sha256"), expected_sha)
+
+  def test_existing_sha256_is_overridden(self):
+    """Tests that any pre-existing sha256 is overridden."""
+    sp_content = b"sample tokenizer data for override test"
+    sp_path = self._create_dummy_file("sp_override.model", sp_content)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_system_metadata(
+        litertlm_builder.Metadata(
+            key="custom_user_key",
+            value="custom_user_val",
+            dtype=litertlm_builder.DType.STRING,
+        )
+    )
+    builder.add_sentencepiece_tokenizer(
+        sp_path,
+        additional_metadata=[
+            litertlm_builder.Metadata(
+                key="sha256",
+                value="stale_fake_section_hash_that_should_be_overridden",
+                dtype=litertlm_builder.DType.STRING,
+            )
+        ],
+    )
+
+    out_path = os.path.join(self.temp_dir, "override_model.litertlm")
+    with litertlm_core.open_file(out_path, "wb") as f:
+      builder.build(f)
+
+    expected_sp_sha = hashlib.sha256(sp_content).hexdigest()
+
+    stream = io.StringIO()
+    metadata = litertlm_peek.read_litertlm_header(out_path, stream)
+    self.assertIsNotNone(metadata)
+    system_metadata = metadata.SystemMetadata()
+    self.assertIsNotNone(system_metadata)
+
+    # Ensure custom key was preserved.
+    sys_dict = {}
+    for i in range(system_metadata.EntriesLength()):
+      d = litertlm_peek.kvp_to_dict(system_metadata.Entries(i))
+      sys_dict[d["key"]] = d["value"]
+    self.assertEqual(sys_dict.get("custom_user_key"), "custom_user_val")
+
+    # Ensure stale section hash was replaced.
+    sec_meta = metadata.SectionMetadata()
+    self.assertIsNotNone(sec_meta)
+    sec0 = sec_meta.Objects(0)
+    self.assertIsNotNone(sec0)
+    sec_dict = {}
+    for j in range(sec0.ItemsLength()):
+      d = litertlm_peek.kvp_to_dict(sec0.Items(j))
+      sec_dict[d["key"]] = d["value"]
+    self.assertEqual(sec_dict.get("sha256"), expected_sp_sha)
+    self.assertNotEqual(
+        sec_dict.get("sha256"),
+        "stale_fake_section_hash_that_should_be_overridden",
+    )
+
+  def test_compute_sha256_flushes_unwritten_buffer(self):
+    """Tests that _compute_sha256_for_range flushes unwritten buffer to disk."""
+    data = b"unflushed data in large buffer"
+    temp_path = os.path.join(self.temp_dir, "unflushed.bin")
+    with open(temp_path, "wb", buffering=64 * 1024) as f:
+      f.write(data)
+      # Without flush(), data is still in python's buffer and not yet on disk.
+      computed_sha = litertlm_builder._compute_sha256_for_range(
+          f, 0, len(data)
+      )
+    expected_sha = hashlib.sha256(data).hexdigest()
+    self.assertEqual(computed_sha, expected_sha)
+
+  def test_compute_sha256_chunked_reads_with_trailing_data(self):
+    """Tests that _compute_sha256_for_range correctly decrements remaining bytes."""
+    target_data = b"abcdefghijklmnopqrstuvwxyz"
+    trailing_data = b"0123456789_extra_trailing_bytes"
+    full_data = target_data + trailing_data
+    temp_path = os.path.join(self.temp_dir, "chunked.bin")
+    with open(temp_path, "wb") as f:
+      f.write(full_data)
+      # Use small buffer_size=10 so reading target_data (26 bytes) requires
+      # multiple chunked read steps and verifies remaining is decremented.
+      computed_sha = litertlm_builder._compute_sha256_for_range(
+          f, 0, len(target_data), buffer_size=10
+      )
+    expected_sha = hashlib.sha256(target_data).hexdigest()
+    self.assertEqual(computed_sha, expected_sha)
 
 
 if __name__ == "__main__":
