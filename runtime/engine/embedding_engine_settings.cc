@@ -14,19 +14,15 @@
 
 #include "runtime/engine/embedding_engine_settings.h"
 
-#include <algorithm>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
@@ -224,14 +220,8 @@ absl::Status ValidateBackendConstraint(
     return absl::OkStatus();
   }
   std::string backend_str = GetBackendString(executor_settings.GetBackend());
-  std::vector<std::string> constraints =
-      absl::StrSplit(*backend_constraint, ',');
-  bool found =
-      std::any_of(constraints.begin(), constraints.end(),
-                  [&](absl::string_view constraint) {
-                    return absl::EqualsIgnoreCase(constraint, backend_str);
-                  });
-  if (!found) {
+  if (!IsBackendAllowedByConstraint(backend_constraint,
+                                    executor_settings.GetBackend())) {
     return absl::InvalidArgumentError(absl::StrCat(
         modality_name, " backend constraint mismatch. Model requires one of [",
         *backend_constraint, "] but ", modality_name, " backend is ",

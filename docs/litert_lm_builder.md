@@ -41,6 +41,22 @@ You can optionally drive tool dynamically by reading standard TOML configuration
 litert-lm-builder toml --path example.toml output --path real_via_toml.litertlm
 ```
 
+### Backend constraints
+
+`tflite_model` accepts `--backend_constraint` (for example `cpu` or `npu`) to
+declare the backends a model supports. The runtime uses it in two ways:
+
+-   For the embedders (text, per-layer, end of audio and end of vision) and the
+    NPU auxiliary model, it does not compile the model for the accelerators the
+    constraint excludes, so a model that is not ahead-of-time compiled for the
+    NPU is not JIT-compiled for it.
+-   For the main text, vision encoder and audio encoder models, it rejects a
+    selected backend the constraint excludes.
+
+Other models ignore the constraint. A model without a constraint is not
+restricted, so set it on every embedder or auxiliary model that must stay off
+an accelerator.
+
 ### Unpacking with litert-lm-builder
 
 You can unpack an existing `.litertlm` file into a directory containing its

@@ -14,7 +14,6 @@
 
 #include "runtime/engine/engine_settings.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -29,10 +28,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
-#include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
@@ -114,14 +111,8 @@ absl::Status ValidateBackendConstraint(
     // settings.
     std::string backend_constraint_str = backend_constraint.value();
     std::string backend = GetBackendString(executor_settings.GetBackend());
-    std::vector<std::string> constraints =
-        absl::StrSplit(backend_constraint_str, ',');
-    bool found =
-        std::any_of(constraints.begin(), constraints.end(),
-                    [&](absl::string_view constraint) {
-                      return absl::EqualsIgnoreCase(constraint, backend);
-                    });
-    if (!found) {
+    if (!IsBackendAllowedByConstraint(backend_constraint,
+                                      executor_settings.GetBackend())) {
       return absl::InvalidArgumentError(
           absl::StrCat(modality_name,
                        " backend constraint mismatch. Model requires one of [",

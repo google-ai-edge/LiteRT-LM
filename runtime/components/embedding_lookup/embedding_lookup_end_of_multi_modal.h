@@ -19,6 +19,8 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,9 +47,13 @@ class EndOfMultiModalEmbedding : public EmbeddingLookup {
   // Special token is the token that indicates when to insert the end of
   // multi-modal embedding. If the special token is not found in the tokens,
   // the end of multi-modal embedding will not be inserted.
+  //
+  // `backend_constraint` is the backend constraint of the embedding model. When
+  // set, the accelerators the model is compiled for are restricted to it.
   static absl::StatusOr<std::unique_ptr<EndOfMultiModalEmbedding>> Create(
       litert::Environment& env, const litert::Model* absl_nonnull model,
-      int special_token);
+      int special_token,
+      std::optional<std::string> backend_constraint = std::nullopt);
 
   // Multimodal embeddings are not supported during decode.
   absl::Status LookupDecode(int token,
@@ -77,8 +83,12 @@ class EndOfMultiModalEmbedding : public EmbeddingLookup {
  protected:
   EndOfMultiModalEmbedding(litert::Environment& env,
                            const litert::Model* absl_nonnull model,
-                           int special_token)
-      : env_(env), model_(*model), special_token_(special_token) {}
+                           int special_token,
+                           std::optional<std::string> backend_constraint)
+      : env_(env),
+        model_(*model),
+        special_token_(special_token),
+        backend_constraint_(std::move(backend_constraint)) {}
 
   // Loads the provided model. This must be called before Lookup functions.
   absl::Status Initialize();
@@ -95,6 +105,9 @@ class EndOfMultiModalEmbedding : public EmbeddingLookup {
   // The special token that indicates when to insert the end of multi-modal
   // embedding.
   int special_token_;
+
+  // The backend constraint of the embedding model, if any.
+  std::optional<std::string> backend_constraint_;
 
   // Contains the end of multi-modal embedding that was looked up from the
   // model.

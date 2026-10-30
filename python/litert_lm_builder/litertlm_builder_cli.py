@@ -323,7 +323,10 @@ def _add_tflite_model_parser(subparsers) -> None:
       required=False,
       default=None,
       choices=list(litertlm_builder.Backend),
-      help="A list of backend constraints for the tflite model.",
+      help=(
+          "The backends the tflite model supports. If it is not set, the"
+          " runtime does not restrict which backend the model is compiled for."
+      ),
   )
   tflite_model_parser.add_argument(
       "--prefer_activation_type",

@@ -44,6 +44,23 @@
 
 namespace litert::lm {
 
+namespace {
+
+std::optional<std::string> FindBackendConstraint(
+    const absl::flat_hash_map<int, std::string>* backend_constraints,
+    int special_token) {
+  if (backend_constraints == nullptr) {
+    return std::nullopt;
+  }
+  auto it = backend_constraints->find(special_token);
+  if (it == backend_constraints->end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+}  // namespace
+
 absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>>
 EmbeddingLookupManager::Create(
     litert::Environment& env,
@@ -54,13 +71,17 @@ EmbeddingLookupManager::Create(
     std::optional<ScopedFile> external_weight_file,
     litert::Options::ScopedWeightSectionMap external_weight_sections,
     const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-        weight_in_memory_map) {
+        weight_in_memory_map,
+    std::optional<std::string> backend_constraint,
+    const absl::flat_hash_map<int, std::string>*
+        end_of_multi_modal_backend_constraints) {
   auto embedding_lookup_manager = std::make_unique<EmbeddingLookupManager>();
   ABSL_RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
       env, text_embedding_model, end_of_multi_modal_embedding_models,
       fully_supports_multi_modal, std::move(signature_key),
       std::move(external_weight_file), std::move(external_weight_sections),
-      weight_in_memory_map));
+      weight_in_memory_map, std::move(backend_constraint),
+      end_of_multi_modal_backend_constraints));
   return std::move(embedding_lookup_manager);
 }
 
@@ -72,13 +93,15 @@ EmbeddingLookupManager::Create(
     std::optional<ScopedFile> external_weight_file,
     litert::Options::ScopedWeightSectionMap external_weight_sections,
     const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-        weight_in_memory_map) {
+        weight_in_memory_map,
+    std::optional<std::string> backend_constraint) {
   absl::flat_hash_map<int, const litert::Model*>
       end_of_multi_modal_embedding_models;
   return Create(env, text_embedding_model, end_of_multi_modal_embedding_models,
                 fully_supports_multi_modal, std::move(signature_key),
                 std::move(external_weight_file),
-                std::move(external_weight_sections), weight_in_memory_map);
+                std::move(external_weight_sections), weight_in_memory_map,
+                std::move(backend_constraint));
 }
 
 absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>>
@@ -87,11 +110,14 @@ EmbeddingLookupManager::Create(
     std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
     absl::flat_hash_map<int, const litert::Model*>&
         end_of_multi_modal_embedding_models,
-    bool fully_supports_multi_modal) {
+    bool fully_supports_multi_modal,
+    const absl::flat_hash_map<int, std::string>*
+        end_of_multi_modal_backend_constraints) {
   auto embedding_lookup_manager = std::make_unique<EmbeddingLookupManager>();
   ABSL_RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
       env, std::move(text_embedding_lookup),
-      end_of_multi_modal_embedding_models, fully_supports_multi_modal));
+      end_of_multi_modal_embedding_models, fully_supports_multi_modal,
+      end_of_multi_modal_backend_constraints));
   return embedding_lookup_manager;
 }
 
@@ -292,7 +318,10 @@ absl::Status EmbeddingLookupManager::Initialize(
     std::optional<ScopedFile> external_weight_file,
     litert::Options::ScopedWeightSectionMap external_weight_sections,
     const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-        weight_in_memory_map) {
+        weight_in_memory_map,
+    std::optional<std::string> backend_constraint,
+    const absl::flat_hash_map<int, std::string>*
+        end_of_multi_modal_backend_constraints) {
   if (!fully_supports_multi_modal &&
       !end_of_multi_modal_embedding_models.empty()) {
     return absl::InvalidArgumentError(
@@ -305,12 +334,15 @@ absl::Status EmbeddingLookupManager::Initialize(
       EmbeddingLookupText::Create(
           env, std::move(text_embedding_model), std::move(signature_key),
           std::move(external_weight_file), std::move(external_weight_sections),
-          weight_in_memory_map));
+          weight_in_memory_map, std::move(backend_constraint)));
   for (const auto& [special_token, embedding_model] :
        end_of_multi_modal_embedding_models) {
-    ABSL_ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,
-                          EndOfMultiModalEmbedding::Create(
-                              env, std::move(embedding_model), special_token));
+    ABSL_ASSIGN_OR_RETURN(
+        auto end_of_multi_modal_embedding_lookup,
+        EndOfMultiModalEmbedding::Create(
+            env, std::move(embedding_model), special_token,
+            FindBackendConstraint(end_of_multi_modal_backend_constraints,
+                                  special_token)));
     end_of_multi_modal_embedding_lookups_.push_back(
         std::move(end_of_multi_modal_embedding_lookup));
   }
@@ -322,7 +354,9 @@ absl::Status EmbeddingLookupManager::Initialize(
     std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
     absl::flat_hash_map<int, const litert::Model*>&
         end_of_multi_modal_embedding_models,
-    bool fully_supports_multi_modal) {
+    bool fully_supports_multi_modal,
+    const absl::flat_hash_map<int, std::string>*
+        end_of_multi_modal_backend_constraints) {
   if (!fully_supports_multi_modal &&
       !end_of_multi_modal_embedding_models.empty()) {
     return absl::InvalidArgumentError(
@@ -334,9 +368,12 @@ absl::Status EmbeddingLookupManager::Initialize(
 
   for (const auto& [special_token, embedding_model] :
        end_of_multi_modal_embedding_models) {
-    ABSL_ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,
-                          EndOfMultiModalEmbedding::Create(
-                              env, std::move(embedding_model), special_token));
+    ABSL_ASSIGN_OR_RETURN(
+        auto end_of_multi_modal_embedding_lookup,
+        EndOfMultiModalEmbedding::Create(
+            env, std::move(embedding_model), special_token,
+            FindBackendConstraint(end_of_multi_modal_backend_constraints,
+                                  special_token)));
     end_of_multi_modal_embedding_lookups_.push_back(
         std::move(end_of_multi_modal_embedding_lookup));
   }

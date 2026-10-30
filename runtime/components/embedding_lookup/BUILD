@@ -66,6 +66,7 @@ cc_library(
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
+        "//runtime/executor:executor_settings_base",
         "//runtime/util:litert_status_util",
     ],
 )
@@ -121,6 +122,7 @@ cc_library(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc/internal:litert_handle",
         "@litert//litert/cc/options:litert_qualcomm_options",
+        "//runtime/executor:executor_settings_base",
         "//runtime/util:litert_status_util",
         "@litert//tflite:framework_stable",
         "@litert//tflite/c:c_api_types",

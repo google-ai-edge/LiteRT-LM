@@ -1483,17 +1483,38 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
   return absl::OkStatus();
 }
 
+void ApplyBackendConstraint(
+    const std::optional<std::string>& backend_constraint,
+    litert::Options& compilation_options) {
+  auto accelerators = compilation_options.GetHardwareAccelerators();
+  // Options without accelerators are rejected by LiteRT at compile time.
+  if (!accelerators.HasValue()) {
+    return;
+  }
+  compilation_options.SetHardwareAccelerators(
+      RestrictAcceleratorsToBackendConstraint(
+          litert::HwAcceleratorSet(static_cast<int>(*accelerators)),
+          backend_constraint));
+}
+
 absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup) {
   absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
+  absl::flat_hash_map<int, std::string> end_of_multi_modal_backend_constraints;
   if (resources.HasTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO)) {
     ABSL_ASSIGN_OR_RETURN(
         const Model* end_of_audio_model,
         resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO));
     end_of_multi_modal_embedding_models.insert(
         {ExecutorAudioData::kEndToken, end_of_audio_model});
+    if (auto constraint = resources.GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_END_OF_AUDIO);
+        constraint.has_value()) {
+      end_of_multi_modal_backend_constraints.insert(
+          {ExecutorAudioData::kEndToken, std::move(*constraint)});
+    }
   }
   if (resources.HasTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_VISION)) {
     ABSL_ASSIGN_OR_RETURN(
@@ -1501,6 +1522,12 @@ absl::Status InitializeEmbeddingLookups(
         resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_VISION));
     end_of_multi_modal_embedding_models.insert(
         {ExecutorVisionData::kEndToken, end_of_vision_model});
+    if (auto constraint = resources.GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_END_OF_VISION);
+        constraint.has_value()) {
+      end_of_multi_modal_backend_constraints.insert(
+          {ExecutorVisionData::kEndToken, std::move(*constraint)});
+    }
   }
 
 #ifdef __EMSCRIPTEN__
@@ -1526,7 +1553,10 @@ absl::Status InitializeEmbeddingLookups(
         /*fully_supports_multi_modal=*/true,
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
-        resources.GetWeightInMemoryMap(proto::LlmMetadata::TF_LITE_EMBEDDER));
+        resources.GetWeightInMemoryMap(proto::LlmMetadata::TF_LITE_EMBEDDER),
+        resources.GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_EMBEDDER),
+        &end_of_multi_modal_backend_constraints);
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {
       SetCurrentlyCompilingModel("");
@@ -1558,6 +1588,8 @@ absl::Status InitializeEmbeddingLookups(
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
         resources.GetWeightInMemoryMap(
+            proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+        resources.GetTFLiteModelBackendConstraint(
             proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {

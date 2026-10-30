@@ -446,6 +446,12 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
       resources, TfLiteModelTypeToWireString(model_type), compilation_options);
 }
 
+// Narrows the accelerators in `compilation_options` to those permitted by
+// `backend_constraint`.
+void ApplyBackendConstraint(
+    const std::optional<std::string>& backend_constraint,
+    litert::Options& compilation_options);
+
 // Initializes the embedding lookup and per-layer embedding lookup managers from
 // the given model resources and environment.
 absl::Status InitializeEmbeddingLookups(
