@@ -186,29 +186,53 @@ def populate_system_metadata(
 ) -> list[Metadata]:
   """Populates system metadata with default UUID and creation timestamp.
 
+  By default, a `uuid` or `creation_timestamp` already in `system_metadata` is
+  replaced with a new random UUID and the current time. If the
+  `SOURCE_DATE_EPOCH` environment variable is set, as reproducible-build tools
+  do, those entries are kept, and a missing creation timestamp is taken from
+  `SOURCE_DATE_EPOCH` (seconds since the Unix epoch) instead of the current
+  time. A missing UUID is still random, so two builds from the same inputs
+  produce the same bytes only when the caller adds a `uuid`.
+
+  `SOURCE_DATE_EPOCH` is the reproducible-builds convention for a fixed build
+  time: https://reproducible-builds.org/docs/source-date-epoch/
+
   Args:
     system_metadata: The list of system metadata.
 
   Returns:
     The updated list of system metadata.
   """
-  system_metadata = [
-      m for m in system_metadata if m.key not in ("uuid", "creation_timestamp")
-  ]
-  system_metadata.append(
-      Metadata(
-          key="uuid",
-          value=str(uuid.uuid4()),
-          dtype=DType.STRING,
-      )
-  )
-  system_metadata.append(
-      Metadata(
-          key="creation_timestamp",
-          value=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-          dtype=DType.STRING,
-      )
-  )
+  source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+  if source_date_epoch:
+    created = datetime.datetime.fromtimestamp(
+        int(source_date_epoch), datetime.timezone.utc
+    )
+    system_metadata = list(system_metadata)
+  else:
+    created = datetime.datetime.now(datetime.timezone.utc)
+    system_metadata = [
+        m
+        for m in system_metadata
+        if m.key not in ("uuid", "creation_timestamp")
+    ]
+  keys = {m.key for m in system_metadata}
+  if "uuid" not in keys:
+    system_metadata.append(
+        Metadata(
+            key="uuid",
+            value=str(uuid.uuid4()),
+            dtype=DType.STRING,
+        )
+    )
+  if "creation_timestamp" not in keys:
+    system_metadata.append(
+        Metadata(
+            key="creation_timestamp",
+            value=created.isoformat(),
+            dtype=DType.STRING,
+        )
+    )
   return system_metadata
 
 
@@ -1703,7 +1727,8 @@ class LitertLmFileBuilder:
       stream: The binary output stream to write the LiteRT-LM file to.
       sections: The section objects to serialize into the file.
     """
-    # Add UUID if not already present, but always generate a new timestamp.
+    # Write a new uuid and creation_timestamp, or keep the caller's when
+    # SOURCE_DATE_EPOCH is set (see populate_system_metadata).
     self._system_metadata = populate_system_metadata(self._system_metadata)
 
     # Populate a SystemMetadataT object from `self._system_metadata`.

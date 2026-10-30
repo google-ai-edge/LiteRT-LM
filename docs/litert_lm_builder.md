@@ -50,6 +50,25 @@ extracted sections and a reconstructed `model.toml`:
 litert-lm-builder unpack --input demo.litertlm --output ./unpacked_dir
 ```
 
+### Reproducible builds
+
+By default, every build writes a new `uuid` and the current time as
+`creation_timestamp` into the system metadata, so two builds from the same
+inputs give different files. To get the same bytes, set the
+[`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/docs/source-date-epoch/)
+environment variable and add a `uuid`: the builder then keeps the `uuid` and
+`creation_timestamp` you add, and takes a missing `creation_timestamp` from
+`SOURCE_DATE_EPOCH` (seconds since the Unix epoch).
+
+```bash
+SOURCE_DATE_EPOCH=1767225600 litert-lm-builder \
+  system_metadata --str Authors "ODML Team" \
+    --str uuid "6f1b8f0e-2c3d-4e5f-8a9b-0c1d2e3f4a5b" \
+  tflite_model --path schema/testdata/attention.tflite --model_type prefill_decode \
+  sp_tokenizer --path runtime/components/testdata/sentencepiece.model \
+  output --path demo.litertlm
+```
+
 ### litert-lm-peek (Inspection & Extraction)
 
 This tool is designed to inspect the contents of a `.litertlm` file. It reads

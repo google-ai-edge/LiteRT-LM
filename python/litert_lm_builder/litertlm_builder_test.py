@@ -15,6 +15,7 @@
 import io
 import os
 import pathlib
+from unittest import mock
 import zlib
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -175,6 +176,64 @@ class LitertlmBuilderTest(parameterized.TestCase):
     updated = litertlm_builder.populate_system_metadata(metadata)
     uuid_val = next(m.value for m in updated if m.key == "uuid")
     self.assertNotEqual(uuid_val, custom_uuid)
+
+  def test_source_date_epoch_keeps_uuid_and_timestamp(self):
+    """Tests that SOURCE_DATE_EPOCH keeps the caller's uuid and timestamp."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    custom_uuid = "my-custom-uuid-123"
+    custom_time = "2020-01-01T00:00:00Z"
+    builder.add_system_metadata(
+        litertlm_builder.Metadata(
+            key="uuid",
+            value=custom_uuid,
+            dtype=litertlm_builder.DType.STRING,
+        )
+    )
+    builder.add_system_metadata(
+        litertlm_builder.Metadata(
+            key="creation_timestamp",
+            value=custom_time,
+            dtype=litertlm_builder.DType.STRING,
+        )
+    )
+    with mock.patch.dict(os.environ, {"SOURCE_DATE_EPOCH": "1700000000"}):
+      ss = self._build_and_read_litertlm(builder)
+    self.assertIn(f"Key: uuid, Value (String): {custom_uuid}", ss)
+    self.assertIn(f"Key: creation_timestamp, Value (String): {custom_time}", ss)
+
+  def test_source_date_epoch_sets_missing_timestamp(self):
+    """Tests that SOURCE_DATE_EPOCH sets the timestamp when none is given."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    with mock.patch.dict(os.environ, {"SOURCE_DATE_EPOCH": "1700000000"}):
+      ss = self._build_and_read_litertlm(builder)
+    self.assertIn(
+        "Key: creation_timestamp, Value (String): 2023-11-14T22:13:20+00:00", ss
+    )
+    self.assertIn("Key: uuid, Value (String):", ss)
+
+  def test_source_date_epoch_and_uuid_give_identical_files(self):
+    """Tests that two builds with SOURCE_DATE_EPOCH and a uuid are identical."""
+    sp_path = self._create_dummy_file("sp.model", b"dummy sp content")
+    contents = []
+    for i in range(2):
+      builder = litertlm_builder.LitertLmFileBuilder()
+      self._add_system_metadata(builder)
+      builder.add_system_metadata(
+          litertlm_builder.Metadata(
+              key="uuid",
+              value="my-custom-uuid-123",
+              dtype=litertlm_builder.DType.STRING,
+          )
+      )
+      builder.add_sentencepiece_tokenizer(sp_path)
+      path = os.path.join(self.temp_dir, f"build{i}.litertlm")
+      with mock.patch.dict(os.environ, {"SOURCE_DATE_EPOCH": "1700000000"}):
+        with litertlm_core.open_file(path, "wb") as f:
+          builder.build(f)
+      with litertlm_core.open_file(path, "rb") as f:
+        contents.append(f.read())
+    self.assertEqual(contents[0], contents[1])
 
   def test_add_system_metadata_duplicate_key(self):
     """Tests that adding system metadata with a duplicate key raises a ValueError."""
