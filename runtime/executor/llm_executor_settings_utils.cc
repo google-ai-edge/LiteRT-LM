@@ -252,7 +252,14 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           advanced_settings.num_threads_to_compile >= 0
               ? advanced_settings.num_threads_to_compile
               : kDefaultNumThreadsToCompile);
-      compilation_options.SetHardwareAccelerators(HwAccelerators::kGpu);
+      // LOCAL PATCH (kawai fork, not upstream): include CPU in the accelerator
+      // set so ops without a GPU kernel fall back to CPU instead of failing
+      // compiled-model creation with "Some ops are not accelerated". Phone
+      // OpenCL runtimes do not cover every op of the plain Gemma .litertlm,
+      // which made Backend::GPU unloadable on Android. Same partitioning
+      // pattern the NPU branch below uses (kNpu | kCpu).
+      compilation_options.SetHardwareAccelerators(HwAccelerators::kGpu |
+                                                  HwAccelerators::kCpu);
       break;
     }
     case Backend::NPU: {
