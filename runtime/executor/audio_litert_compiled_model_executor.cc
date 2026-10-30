@@ -1554,32 +1554,8 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::RestoreContext(
       continue;
     }
 
-    if (input_buffers_map_[name].IsMetalMemory()) {
-      // b/505373949#comment13: A temporary fix for Metal memory leak.
-      LITERT_ASSIGN_OR_RETURN(auto tensor_type, buffer.TensorType());
-      if (tensor_type.ElementType() == ElementType::Float32) {
-        LITERT_ASSIGN_OR_RETURN(auto data_span,
-                                ReferTensorBufferAsSpan<float>(buffer));
-        LITERT_RETURN_IF_ERROR(
-            input_buffers_map_[name].Write<float>(data_span));
-      } else if (tensor_type.ElementType() == ElementType::Float16) {
-        LITERT_ASSIGN_OR_RETURN(auto data_span,
-                                ReferTensorBufferAsSpan<tflite::half>(buffer));
-        LITERT_RETURN_IF_ERROR(
-            input_buffers_map_[name].Write<tflite::half>(data_span));
-      } else if (tensor_type.ElementType() == ElementType::Bool) {
-        LITERT_ASSIGN_OR_RETURN(auto data_span,
-                                ReferTensorBufferAsSpan<bool>(buffer));
-        LITERT_RETURN_IF_ERROR(input_buffers_map_[name].Write<bool>(data_span));
-      } else {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Unsupported element type for state buffer: ",
-                         tensor_type.ElementType()));
-      }
-    } else {
-      LITERT_ASSIGN_OR_RETURN(auto buffer_copy, buffer.Duplicate());
-      input_buffers_map_[name] = std::move(buffer_copy);
-    }
+    LITERT_ASSIGN_OR_RETURN(auto buffer_copy, buffer.Duplicate());
+    input_buffers_map_[name] = std::move(buffer_copy);
   }
   if (executor_settings_.GetAudioBufferingEnabled()) {
     buffered_spectrogram_ = audio_streaming_context->buffered_spectrogram();

@@ -1640,31 +1640,22 @@ LlmLiteRtCompiledModelExecutorBase::CloneState() const {
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
     std::unique_ptr<StateInterface> state) {
   mtp_primed_ = false;
+  if (sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
   if (state == nullptr) {
     return absl::OkStatus();
   }
-  std::unique_ptr<StateInterface>& target =
-      state->GetBatchSize() > 1 ? decode_state_ : state_;
-
-  // `CloneState()` may snapshot GPU (e.g. Metal) state buffers into host
-  // memory (see `CopyTensorBuffer()`). Swapping such a snapshot in as the live
-  // state does not work: GPU delegates cannot bind host buffers for in-place
-  // KV caches and keep using the previously bound device buffers, which hold
-  // another session's KV cache. Instead, copy the snapshot contents into the
-  // existing device buffers.
-  // TODO: b/572018960 - This adds a full host -> device KV cache copy on every
-  // restore. Once LiteRT fixes the Metal buffer allocation leak (or provides
-  // device-side snapshots), keep snapshots in device memory, drop the Metal
-  // special case in `CopyTensorBuffer()` and remove this copy path to avoid
-  // paying this penalty.
-  auto* current = dynamic_cast<LitertState*>(target.get());
-  auto* restored = dynamic_cast<LitertState*>(state.get());
-  if (current != nullptr && restored != nullptr && !current->IsHostMemory() &&
-      restored->IsHostMemory()) {
-    return current->CopyContentsFrom(*restored);
+  // Prefill always executes with batch size 1 (`state_`). When multi-candidate
+  // decoding (`output_heads > 1`) is configured, decode allocates a separate
+  // batched `decode_state_` (`GetBatchSize() == output_heads`) which
+  // `CloneState()` snapshots; single-head decoding (`output_heads == 1`) leaves
+  // `decode_state_` null and shares `state_` across prefill and decode.
+  if (state->GetBatchSize() > 1) {
+    decode_state_ = std::move(state);
+  } else {
+    state_ = std::move(state);
   }
-
-  target = std::move(state);
   return absl::OkStatus();
 }
 
@@ -1709,6 +1700,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   llm_context_ = std::move(context_data);
   mtp_primed_ = false;
+  if (sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
 
   // We can keep our kv cache buffers if this is the first step. This lets us
   // restore from LlmContexts at step 0 with an empty kv cache.

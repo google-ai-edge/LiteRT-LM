@@ -1087,6 +1087,132 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
                                                     kFirstEncodeTokens));
 }
 
+TEST_F(
+    AudioLiteRtCompiledModelExecutorTest,
+    StreamingEncoder_CloneAndRestoreContextPreservesBufferTypes) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto initial_context,
+                       audio_executor->CreateNewContext());
+  auto* initial_streaming_context =
+      static_cast<AudioStreamingContext*>(initial_context.get());
+  ASSERT_FALSE(initial_streaming_context->state_buffers().empty());
+
+  std::vector<std::pair<std::string, std::pair<TensorBufferType, size_t>>>
+      expected_buffer_specs;
+  for (const auto& [name, buffer] :
+       initial_streaming_context->state_buffers()) {
+    auto buffer_type = buffer.BufferType();
+    auto buffer_size = buffer.Size();
+    ASSERT_TRUE(buffer_type.HasValue()) << "for state buffer " << name;
+    ASSERT_TRUE(buffer_size.HasValue()) << "for state buffer " << name;
+    expected_buffer_specs.push_back(
+        {std::string(name), {*buffer_type, *buffer_size}});
+  }
+
+  auto make_chunk = [](float fill_value) -> absl::StatusOr<TensorBuffer> {
+    std::vector<float> chunk_data(10 * kSpectrogramFrequencySlots, fill_value);
+    return CreateTensorBuffer<const float>(
+        chunk_data,
+        RankedTensorType(
+            GetElementType<float>(),
+            Layout(Dimensions({1, 10, kSpectrogramFrequencySlots}))));
+  };
+
+  // Session A: encode chunk 1, snapshot context, then encode chunk 2.
+  ASSERT_OK_AND_ASSIGN(auto session_a_chunk1, make_chunk(1.0f));
+  ASSERT_OK(audio_executor->Encode(session_a_chunk1).status());
+  ASSERT_OK_AND_ASSIGN(auto context_a, audio_executor->CloneContext());
+  auto* streaming_context_a =
+      static_cast<AudioStreamingContext*>(context_a.get());
+  for (const auto& [name, spec] : expected_buffer_specs) {
+    ASSERT_TRUE(streaming_context_a->state_buffers().contains(name))
+        << "for state buffer " << name;
+    const TensorBuffer& buffer = streaming_context_a->state_buffers().at(name);
+    auto buffer_type = buffer.BufferType();
+    auto buffer_size = buffer.Size();
+    ASSERT_TRUE(buffer_type.HasValue()) << "for state buffer " << name;
+    ASSERT_TRUE(buffer_size.HasValue()) << "for state buffer " << name;
+    EXPECT_EQ(*buffer_type, spec.first) << "for state buffer " << name;
+    EXPECT_EQ(*buffer_size, spec.second) << "for state buffer " << name;
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto session_a_chunk2, make_chunk(2.0f));
+  ASSERT_OK_AND_ASSIGN(auto expected_a_audio,
+                       audio_executor->Encode(session_a_chunk2));
+  ASSERT_OK_AND_ASSIGN(
+      auto expected_a_embeddings_ptr,
+      expected_a_audio.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto expected_a_embeddings,
+                       GetDataAsVector<float>(*expected_a_embeddings_ptr));
+
+  // Session B: restore fresh context, encode different chunk 1, snapshot, and
+  // encode chunk 2.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(initial_context)));
+  ASSERT_OK_AND_ASSIGN(auto session_b_chunk1, make_chunk(3.0f));
+  ASSERT_OK(audio_executor->Encode(session_b_chunk1).status());
+  ASSERT_OK_AND_ASSIGN(auto context_b, audio_executor->CloneContext());
+  auto* streaming_context_b =
+      static_cast<AudioStreamingContext*>(context_b.get());
+  for (const auto& [name, spec] : expected_buffer_specs) {
+    ASSERT_TRUE(streaming_context_b->state_buffers().contains(name))
+        << "for state buffer " << name;
+    const TensorBuffer& buffer_b =
+        streaming_context_b->state_buffers().at(name);
+    const TensorBuffer& buffer_a =
+        streaming_context_a->state_buffers().at(name);
+    auto buffer_type = buffer_b.BufferType();
+    auto buffer_size = buffer_b.Size();
+    ASSERT_TRUE(buffer_type.HasValue()) << "for state buffer " << name;
+    ASSERT_TRUE(buffer_size.HasValue()) << "for state buffer " << name;
+    EXPECT_EQ(*buffer_type, spec.first) << "for state buffer " << name;
+    EXPECT_EQ(*buffer_size, spec.second) << "for state buffer " << name;
+    EXPECT_NE(buffer_b.Get(), buffer_a.Get()) << "for state buffer " << name;
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto session_b_chunk2, make_chunk(0.5f));
+  ASSERT_OK_AND_ASSIGN(auto expected_b_audio,
+                       audio_executor->Encode(session_b_chunk2));
+  ASSERT_OK_AND_ASSIGN(
+      auto expected_b_embeddings_ptr,
+      expected_b_audio.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto expected_b_embeddings,
+                       GetDataAsVector<float>(*expected_b_embeddings_ptr));
+  EXPECT_NE(expected_a_embeddings, expected_b_embeddings);
+
+  // Switch back to Session A and verify chunk 2 matches Session A's baseline.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(context_a)));
+  ASSERT_OK_AND_ASSIGN(auto restored_a_audio,
+                       audio_executor->Encode(session_a_chunk2));
+  ASSERT_OK_AND_ASSIGN(
+      auto restored_a_embeddings_ptr,
+      restored_a_audio.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto restored_a_embeddings,
+                       GetDataAsVector<float>(*restored_a_embeddings_ptr));
+  EXPECT_EQ(restored_a_audio.GetValidTokens(),
+            expected_a_audio.GetValidTokens());
+  EXPECT_EQ(restored_a_embeddings, expected_a_embeddings);
+
+  // Switch back to Session B and verify chunk 2 matches Session B's baseline.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(context_b)));
+  ASSERT_OK_AND_ASSIGN(auto restored_b_audio,
+                       audio_executor->Encode(session_b_chunk2));
+  ASSERT_OK_AND_ASSIGN(
+      auto restored_b_embeddings_ptr,
+      restored_b_audio.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto restored_b_embeddings,
+                       GetDataAsVector<float>(*restored_b_embeddings_ptr));
+  EXPECT_EQ(restored_b_audio.GetValidTokens(),
+            expected_b_audio.GetValidTokens());
+  EXPECT_EQ(restored_b_embeddings, expected_b_embeddings);
+}
+
 // Name of the audio LoRA input that test model inputs are renamed to.
 constexpr absl::string_view kTestAudioLoRAInputName = "key_w_prime_left0";
 

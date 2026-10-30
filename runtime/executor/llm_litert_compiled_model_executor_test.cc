@@ -14,6 +14,7 @@
 
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -792,6 +793,68 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
 
   // Turn 2 Decode - Step 2
   ASSERT_OK_AND_ASSIGN(auto out_tokens2_step2, executor->Decode());
+  EXPECT_EQ(fake_sampler_ptr->inference_called_count(), 4);
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerInputHandlingResetOnRestoreContextTest) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  executor_settings.SetAdvancedSettings(AdvancedSettings{
+      .sampler_handles_input = true,
+  });
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  auto fake_sampler = std::make_unique<FakeSamplerWithInputHandling>();
+  auto* fake_sampler_ptr = fake_sampler.get();
+  TestableLlmLiteRtCompiledModelExecutorStatic::
+      SetSamplerWithInputHandlingForTest(executor.get(),
+                                         std::move(fake_sampler));
+
+  ExecutorInputs inputs;
+  const std::vector<int> prompt_tokens = {1, 2, 3};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(prompt_tokens), {1, 3}));
+  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, executor->CloneContext());
+
+  ASSERT_OK_AND_ASSIGN(auto out_tokens_step1, executor->Decode());
+  ASSERT_OK_AND_ASSIGN(auto out_tokens_step2, executor->Decode());
+  EXPECT_EQ(fake_sampler_ptr->set_count(), 2);
+  EXPECT_EQ(fake_sampler_ptr->inference_called_count(), 2);
+  EXPECT_TRUE(fake_sampler_ptr->HandlesInput());
+
+  // Restoring a context must reset sampler input handling so a subsequent
+  // Decode() runs DecodeInternal against the restored state instead of reading
+  // stale pre-fetched logits.
+  ASSERT_OK(executor->RestoreContext(std::move(cloned_context)));
+  EXPECT_GT(fake_sampler_ptr->reset_count(), 0);
+  EXPECT_FALSE(fake_sampler_ptr->HandlesInput());
+
+  ASSERT_OK_AND_ASSIGN(auto restored_step1, executor->Decode());
+  EXPECT_EQ(fake_sampler_ptr->set_count(), 3);
+  EXPECT_EQ(fake_sampler_ptr->inference_called_count(), 3);
+  ASSERT_OK_AND_ASSIGN(auto restored_step2, executor->Decode());
   EXPECT_EQ(fake_sampler_ptr->inference_called_count(), 4);
 }
 

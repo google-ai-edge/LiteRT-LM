@@ -14,6 +14,7 @@
 
 #include "runtime/util/tensor_buffer_util.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/util/convert_tensor_buffer.h"
 
@@ -69,6 +71,8 @@ TEST(TensorBufferUtilTest, CopyTensorBuffer) {
 
   LITERT_ASSERT_OK_AND_ASSIGN(auto copy, CopyTensorBuffer(env, tensor_buffer));
 
+  EXPECT_THAT(copy.BufferType(),
+              IsOkAndHolds(Eq(TensorBufferType::kHostMemory)));
   EXPECT_THAT(TensorBufferDims(copy), IsOkAndHolds(ElementsAre(5)));
   LITERT_ASSERT_OK_AND_ASSIGN(auto copy_data,
                               CopyFromTensorBuffer<int8_t>(copy));
@@ -86,6 +90,34 @@ TEST(TensorBufferUtilTest, CopyTensorBuffer) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto original_data,
                               CopyFromTensorBuffer<int8_t>(tensor_buffer));
   EXPECT_THAT(original_data, ElementsAre(10, 20, 30, 40, 50));
+}
+
+TEST(TensorBufferUtilTest, CopyTensorBufferPreservesBufferTypeAndPaddedSize) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  const RankedTensorType tensor_type = MakeRankedTensorType<int32_t>({5});
+  constexpr size_t kPackedSize = 5 * sizeof(int32_t);
+  constexpr size_t kPaddedSize = 128;
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto padded_buffer,
+      TensorBuffer::CreateManaged(env, TensorBufferType::kHostMemory,
+                                  tensor_type, kPaddedSize));
+  const std::vector<int32_t> data = {10, 20, 30, 40, 50};
+  LITERT_ASSERT_OK(padded_buffer.Write<int32_t>(data));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto copy, CopyTensorBuffer(env, padded_buffer));
+
+  EXPECT_THAT(copy.BufferType(),
+              IsOkAndHolds(Eq(TensorBufferType::kHostMemory)));
+  EXPECT_THAT(copy.Size(), IsOkAndHolds(Eq(kPaddedSize)));
+  EXPECT_THAT(copy.PackedSize(), IsOkAndHolds(Eq(kPackedSize)));
+  EXPECT_THAT(CopyFromTensorBuffer<int32_t>(copy),
+              IsOkAndHolds(ElementsAre(10, 20, 30, 40, 50)));
+
+  const std::vector<int32_t> updated_data = {60, 70, 80, 90, 100};
+  LITERT_ASSERT_OK(padded_buffer.Write<int32_t>(updated_data));
+  EXPECT_THAT(CopyFromTensorBuffer<int32_t>(copy),
+              IsOkAndHolds(ElementsAre(10, 20, 30, 40, 50)));
 }
 
 TEST(TensorBufferUtilTest,
