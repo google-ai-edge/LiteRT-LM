@@ -85,6 +85,28 @@ target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
 )
 
 # ==============================================================================
+# Memory Snapshot
+# ==============================================================================
+add_litertlm_library(runtime_util_memory_profiling_memory_snapshot STATIC
+  memory_snapshot.cc
+)
+add_library(LiteRTLM::Runtime::Util::MemoryProfiling::MemorySnapshot
+  ALIAS runtime_util_memory_profiling_memory_snapshot)
+
+target_include_directories(runtime_util_memory_profiling_memory_snapshot
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_util_memory_profiling_memory_snapshot
+  PUBLIC
+    LiteRTLM::Runtime::Util::MemoryProfiling::HostMemory
+    LiteRTLM::Runtime::Util::MemoryProfiling::AcceleratorMemoryMonitor
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_util_memory_profiling_libs INTERFACE)
@@ -93,4 +115,5 @@ add_library(LiteRTLM::Runtime::Util::MemoryProfiling ALIAS runtime_util_memory_p
 target_link_libraries(runtime_util_memory_profiling_libs INTERFACE
   LiteRTLM::Runtime::Util::MemoryProfiling::HostMemory
   LiteRTLM::Runtime::Util::MemoryProfiling::AcceleratorMemoryMonitor
+  LiteRTLM::Runtime::Util::MemoryProfiling::MemorySnapshot
 )

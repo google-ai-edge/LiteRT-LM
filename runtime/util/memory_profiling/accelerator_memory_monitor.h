@@ -31,13 +31,33 @@
 namespace litert::lm {
 
 // Accelerator (GPU / NPU) memory used by the current process at a point in
-// time.
+// time, in the two senses a MemorySnapshot (memory_snapshot.h) reports memory
+// in: physically present now, and charged to the process by the platform.
 //
 // Only memory attributed to the calling process is counted; memory used by
 // other processes on the same accelerator is never included.
 struct AcceleratorMemoryUsage {
-  // Total accelerator memory used by the process, in bytes.
+  // Accelerator memory physically present right now, in bytes: in VRAM or in
+  // system RAM, not evicted, swapped or merely reserved. The accelerator part
+  // of "memory resident in RAM".
   uint64_t total_bytes = 0;
+  // Accelerator memory the platform charges to the process, in bytes:
+  // allocated / committed, present or not. The accelerator part of "memory
+  // attributed to the process by the OS". Equal to `total_bytes` where the
+  // platform makes no such distinction.
+  uint64_t attributed_bytes = 0;
+  // The part of `total_bytes` that the OS also counts in the process's own
+  // resident figure (HostMemoryUsage::resident_bytes): accelerator buffers
+  // mapped into the process and touched by the CPU. A snapshot takes it out of
+  // the CPU side so that CPU + accelerator counts each page once. 0 where
+  // there is no such overlap or it cannot be measured.
+  uint64_t resident_counted_by_host_bytes = 0;
+  // The part of `attributed_bytes` that is already inside the memory the OS
+  // attributes to the process (HostMemoryUsage::platform_attributed_bytes):
+  // all of it on Windows (the commit charge includes GPU allocations) and on
+  // Apple platforms (the physical footprint includes Metal buffers), none on
+  // Linux. Taken out of the CPU side the same way.
+  uint64_t attributed_counted_by_host_bytes = 0;
   // Optional breakdown of `total_bytes` into platform-specific categories, as
   // (category name, bytes) pairs. Where a breakdown is available, the entries
   // sum to `total_bytes`. Empty when the platform offers no breakdown.
@@ -51,11 +71,11 @@ struct AcceleratorMemoryUsage {
 // -----------------------------------------------------------------------------
 // Platform contract
 //
-// The functions in this section are implemented once per operating system, in
-// accelerator_memory_<os>.cc; the build picks the file for the target OS and
-// accelerator_memory_unsupported.cc covers every other OS. Each platform file
-// documents at its top what it measures and what it cannot see. Nothing else
-// in this header or in accelerator_memory_monitor.cc is platform-specific.
+// Implemented once per operating system, in accelerator_memory_<os>.cc; the
+// build picks the file for the target OS and accelerator_memory_unsupported.cc
+// covers every other OS. Each platform file documents at its top what it
+// measures and what it cannot see. Nothing else in this header or in
+// accelerator_memory_monitor.cc is platform-specific.
 // -----------------------------------------------------------------------------
 
 // Returns the accelerator memory currently used by this process, or

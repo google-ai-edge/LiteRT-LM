@@ -211,3 +211,30 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+cc_library(
+    name = "memory_snapshot",
+    srcs = ["memory_snapshot.cc"],
+    hdrs = ["memory_snapshot.h"],
+    deps = [
+        ":accelerator_memory_monitor",
+        ":host_memory",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_test(
+    name = "memory_snapshot_test",
+    srcs = ["memory_snapshot_test.cc"],
+    deps = [
+        ":accelerator_memory_monitor",
+        ":host_memory",
+        ":memory_snapshot",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:log_severity",
+        "@com_google_absl//absl/log:scoped_mock_log",
+        "@com_google_absl//absl/strings",
+    ],
+)
