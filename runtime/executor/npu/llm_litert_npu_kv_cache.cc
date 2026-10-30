@@ -83,6 +83,55 @@ void TransposeCopy(uint8_t* dst, const uint8_t* src, int64_t real_len,
   }
 }
 
+// Whether a KV cache of `element_type` is initialized with
+// `kv_cache_init_value`. The value is an integer in the storage domain (e.g. a
+// quantization zero-point), so it applies to the integer types used for
+// quantized KV caches. Every other type (e.g. float KV, whose empty value is
+// 0.0) is initialized with zeros.
+bool UsesKvCacheInitValue(::litert::ElementType element_type) {
+  return element_type == ::litert::ElementType::Int8 ||
+         element_type == ::litert::ElementType::UInt8 ||
+         element_type == ::litert::ElementType::Int16 ||
+         element_type == ::litert::ElementType::UInt16;
+}
+
+// Whether initializing a KV cache of `element_type` writes all zeros.
+bool KvCacheInitIsZero(::litert::ElementType element_type, int64_t init_value) {
+  return !UsesKvCacheInitValue(element_type) || init_value == 0;
+}
+
+// Fills [ptr, ptr + num_bytes) of a KV cache of `element_type` with its
+// initialization value (see UsesKvCacheInitValue).
+void FillKvCacheBytes(void* ptr, size_t num_bytes,
+                      ::litert::ElementType element_type, int64_t init_value) {
+  if (KvCacheInitIsZero(element_type, init_value)) {
+    std::memset(ptr, 0, num_bytes);
+    return;
+  }
+  switch (element_type) {
+    case ::litert::ElementType::Int8:
+      std::fill_n(static_cast<int8_t*>(ptr), num_bytes / sizeof(int8_t),
+                  static_cast<int8_t>(init_value));
+      break;
+    case ::litert::ElementType::UInt8:
+      std::fill_n(static_cast<uint8_t*>(ptr), num_bytes / sizeof(uint8_t),
+                  static_cast<uint8_t>(init_value));
+      break;
+    case ::litert::ElementType::Int16:
+      std::fill_n(static_cast<int16_t*>(ptr), num_bytes / sizeof(int16_t),
+                  static_cast<int16_t>(init_value));
+      break;
+    case ::litert::ElementType::UInt16:
+      std::fill_n(static_cast<uint16_t*>(ptr), num_bytes / sizeof(uint16_t),
+                  static_cast<uint16_t>(init_value));
+      break;
+    default:
+      // Unreachable: KvCacheInitIsZero() is true for every other type.
+      std::memset(ptr, 0, num_bytes);
+      break;
+  }
+}
+
 }  // namespace
 
 int64_t GetKvCacheInitValue(ModelResources& resources) {
@@ -98,23 +147,19 @@ int64_t GetKvCacheInitValue(ModelResources& resources) {
 
 absl::Status FillKVCacheBuffer(TensorBuffer& buffer, int64_t init_value) {
   LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, buffer.TensorType());
+  const ::litert::ElementType element_type = tensor_type.ElementType();
+  if (KvCacheInitIsZero(element_type, init_value)) {
+    // TensorBuffer::Clear() lets the buffer type clear itself efficiently
+    // (e.g. without mapping the memory to the CPU) and falls back to a CPU
+    // memset for types that do not support it.
+    LITERT_RETURN_IF_ERROR(buffer.Clear());
+    return absl::OkStatus();
+  }
   LITERT_ASSIGN_OR_RETURN(auto size, buffer.PackedSize());
   LITERT_ASSIGN_OR_RETURN(
       auto lock, ::litert::TensorBufferScopedLock::Create(
                      buffer, ::litert::TensorBuffer::LockMode::kWrite));
-
-  auto element_type = tensor_type.ElementType();
-  if (element_type == ::litert::ElementType::Int16) {
-    auto* ptr = static_cast<int16_t*>(lock.second);
-    std::fill(ptr, ptr + size / sizeof(int16_t),
-              static_cast<int16_t>(init_value));
-  } else if (element_type == ::litert::ElementType::UInt16) {
-    auto* ptr = static_cast<uint16_t*>(lock.second);
-    std::fill(ptr, ptr + size / sizeof(uint16_t),
-              static_cast<uint16_t>(init_value));
-  } else {
-    std::memset(lock.second, 0, size);
-  }
+  FillKvCacheBytes(lock.second, size, element_type, init_value);
   return absl::OkStatus();
 }
 
@@ -1014,29 +1059,9 @@ absl::Status NpuKVCache::CopySingleKVCacheBuffer(
   }
 
   auto clear_range = [&](size_t element_offset, size_t num_elements) {
-    size_t byte_offset = byte_width.NumBytes(element_offset);
-    size_t byte_size = byte_width.NumBytes(num_elements);
-    void* target_ptr = dst_ptr + byte_offset;
-    auto element_type = dst_type.ElementType();
-    if (element_type == ::litert::ElementType::Int16) {
-      int16_t* ptr = static_cast<int16_t*>(target_ptr);
-      std::fill(ptr, ptr + num_elements,
-                static_cast<int16_t>(kv_cache_init_value));
-    } else if (element_type == ::litert::ElementType::UInt16) {
-      uint16_t* ptr = static_cast<uint16_t*>(target_ptr);
-      std::fill(ptr, ptr + num_elements,
-                static_cast<uint16_t>(kv_cache_init_value));
-    } else if (element_type == ::litert::ElementType::Int8) {
-      int8_t* ptr = static_cast<int8_t*>(target_ptr);
-      std::fill(ptr, ptr + num_elements,
-                static_cast<int8_t>(kv_cache_init_value));
-    } else if (element_type == ::litert::ElementType::UInt8) {
-      uint8_t* ptr = static_cast<uint8_t*>(target_ptr);
-      std::fill(ptr, ptr + num_elements,
-                static_cast<uint8_t>(kv_cache_init_value));
-    } else {
-      std::memset(target_ptr, 0, byte_size);
-    }
+    FillKvCacheBytes(dst_ptr + byte_width.NumBytes(element_offset),
+                     byte_width.NumBytes(num_elements), dst_type.ElementType(),
+                     kv_cache_init_value);
   };
 
   size_t outer_count = 1;

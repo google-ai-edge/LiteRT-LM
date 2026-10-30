@@ -880,6 +880,104 @@ TEST_F(NpuKVCacheTest, NpuKVCacheCommitVerifiedKVCacheSetsPosition) {
   EXPECT_EQ(read_lock->second[2], 102);
 }
 
+TEST_F(NpuKVCacheTest, FillKVCacheBufferHonorsInitValueForInt8) {
+  TensorBuffer buffer =
+      CreateTensorBuffer(std::vector<int8_t>(16, 7), ElementType::Int8);
+  LITERT_ASSERT_OK(FillKVCacheBuffer(buffer, /*init_value=*/-1));
+  auto lock = TensorBufferScopedLock::Create<int8_t>(
+      buffer, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) EXPECT_EQ(lock->second[i], -1);
+}
+
+TEST_F(NpuKVCacheTest, FillKVCacheBufferHonorsInitValueForUInt8) {
+  TensorBuffer buffer =
+      CreateTensorBuffer(std::vector<uint8_t>(16, 7), ElementType::UInt8);
+  LITERT_ASSERT_OK(FillKVCacheBuffer(buffer, /*init_value=*/128));
+  auto lock = TensorBufferScopedLock::Create<uint8_t>(
+      buffer, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) EXPECT_EQ(lock->second[i], 128);
+}
+
+TEST_F(NpuKVCacheTest, FillKVCacheBufferHonorsInitValueForInt16) {
+  TensorBuffer buffer =
+      CreateTensorBuffer(std::vector<int16_t>(16, 7), ElementType::Int16);
+  LITERT_ASSERT_OK(FillKVCacheBuffer(buffer, /*init_value=*/-300));
+  auto lock = TensorBufferScopedLock::Create<int16_t>(
+      buffer, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) EXPECT_EQ(lock->second[i], -300);
+}
+
+TEST_F(NpuKVCacheTest, FillKVCacheBufferHonorsInitValueForUInt16) {
+  TensorBuffer buffer =
+      CreateTensorBuffer(std::vector<uint16_t>(16, 7), ElementType::UInt16);
+  LITERT_ASSERT_OK(FillKVCacheBuffer(buffer, /*init_value=*/32768));
+  auto lock = TensorBufferScopedLock::Create<uint16_t>(
+      buffer, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) EXPECT_EQ(lock->second[i], 32768);
+}
+
+TEST_F(NpuKVCacheTest, FillKVCacheBufferZerosIntegerBufferForZeroInitValue) {
+  TensorBuffer buffer =
+      CreateTensorBuffer(std::vector<int16_t>(16, 7), ElementType::Int16);
+  LITERT_ASSERT_OK(FillKVCacheBuffer(buffer, /*init_value=*/0));
+  auto lock = TensorBufferScopedLock::Create<int16_t>(
+      buffer, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) EXPECT_EQ(lock->second[i], 0);
+}
+
+TEST_F(NpuKVCacheTest, FillKVCacheBufferIgnoresInitValueForFloat) {
+  // The init value is in the integer storage domain; float KV is zeroed.
+  TensorBuffer buffer =
+      CreateTensorBuffer(std::vector<float>(16, 7.0f), ElementType::Float32);
+  LITERT_ASSERT_OK(FillKVCacheBuffer(buffer, /*init_value=*/32768));
+  auto lock = TensorBufferScopedLock::Create<float>(
+      buffer, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) EXPECT_EQ(lock->second[i], 0.0f);
+}
+
+TEST_F(NpuKVCacheTest, ClearKVCacheBuffersOnlyFillsKVCacheBuffers) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  buffers.emplace("kv_cache_k_0", CreateTensorBuffer(std::vector<int8_t>(8, 7),
+                                                     ElementType::Int8));
+  buffers.emplace("kv_cache_v_0", CreateTensorBuffer(std::vector<int8_t>(8, 7),
+                                                     ElementType::Int8));
+  buffers.emplace("input_pos", CreateTensorBuffer(std::vector<int8_t>(8, 7),
+                                                  ElementType::Int8));
+  LITERT_ASSERT_OK(ClearKVCacheBuffers(buffers, /*init_value=*/-1));
+  for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0", "input_pos"}) {
+    auto lock = TensorBufferScopedLock::Create<int8_t>(
+        buffers.at(name), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    const int8_t expected = name == "input_pos" ? 7 : -1;
+    for (int i = 0; i < 8; ++i) EXPECT_EQ(lock->second[i], expected) << name;
+  }
+}
+
+TEST_F(NpuKVCacheTest, CopySingleKVCacheBufferPadsFloatWithZeros) {
+  // [1, 1, seq, 2] float: grow from 2 to 4 with 1 active token; the init value
+  // does not apply to float, so the padding is zero.
+  TensorBuffer src =
+      CreateTensorBufferWithDims(std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f},
+                                 ElementType::Float32, {1, 1, 2, 2});
+  TensorBuffer dst = CreateTensorBufferWithDims(
+      std::vector<float>(8, 9.0f), ElementType::Float32, {1, 1, 4, 2});
+  LITERT_ASSERT_OK(NpuKVCache::CopySingleKVCacheBuffer(
+      src, dst, /*active_seq_len=*/1, /*kv_cache_init_value=*/32768,
+      /*sequence_axis=*/2));
+  auto lock =
+      TensorBufferScopedLock::Create<float>(dst, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  const std::vector<float> expected = {1.0f, 2.0f, 0.0f, 0.0f,
+                                       0.0f, 0.0f, 0.0f, 0.0f};
+  for (int i = 0; i < 8; ++i) EXPECT_EQ(lock->second[i], expected[i]) << i;
+}
+
 TEST_F(NpuKVCacheTest, SingleHeadCopyAndClearKVCache) {
   constexpr int kOldSeqLen = 640;
   constexpr int kNewSeqLen = 1024;

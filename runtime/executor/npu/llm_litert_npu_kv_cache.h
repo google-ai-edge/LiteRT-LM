@@ -34,7 +34,13 @@ namespace litert::lm {
 // Extracts the KV cache init value from ModelResources metadata if available.
 int64_t GetKvCacheInitValue(ModelResources& resources);
 
-// Fills a KV cache TensorBuffer with the specified initialization value.
+// Fills a KV cache TensorBuffer with its initialization value: `init_value`
+// for the integer types used for quantized KV caches (int8, uint8, int16,
+// uint16), where it is a value in the storage domain such as a quantization
+// zero-point; zero for every other type (e.g. float KV). The same rule applies
+// to the padding written by NpuKVCache::CopyKVCache. When the result is all
+// zeros the buffer is cleared with TensorBuffer::Clear(), which the buffer type
+// can do without mapping the memory (falling back to a CPU memset).
 absl::Status FillKVCacheBuffer(::litert::TensorBuffer& buffer,
                                int64_t init_value);
 
