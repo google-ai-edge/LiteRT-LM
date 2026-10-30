@@ -44,6 +44,21 @@ cc_library(
 )
 
 cc_library(
+    name = "qwen3_tts_stop_criteria",
+    srcs = ["qwen3_tts_stop_criteria.cc"],
+    hdrs = ["qwen3_tts_stop_criteria.h"],
+)
+
+cc_test(
+    name = "qwen3_tts_stop_criteria_test",
+    srcs = ["qwen3_tts_stop_criteria_test.cc"],
+    deps = [
+        ":qwen3_tts_stop_criteria",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "qwen3_tts_frontend_stage",
     srcs = ["qwen3_tts_frontend_stage.cc"],
     hdrs = ["qwen3_tts_frontend_stage.h"],
@@ -89,6 +104,7 @@ cc_library(
         ":common",
         ":qwen3_tts_io_types",
         ":qwen3_tts_model_config",
+        ":qwen3_tts_stop_criteria",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",

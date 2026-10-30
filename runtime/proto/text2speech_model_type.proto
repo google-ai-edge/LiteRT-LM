@@ -32,6 +32,16 @@ message Qwen3Tts {
   optional string language = 1;
   optional string speaker_file = 2;
   optional int32 max_frames = 3;
+  // Seed of the codebook-0 sampler. Each session restarts from this seed.
+  optional uint64 seed = 4;
+  // Whether to sample codebook 0 (true) or pick it greedily (false).
+  optional bool do_sample = 5;
+  // Softmax temperature of the codebook-0 sampler.
+  optional float temperature = 6;
+  // Number of most likely codebook-0 tokens to sample from (0 = all).
+  optional int32 top_k = 7;
+  // Penalty applied to codebook-0 tokens that were already generated.
+  optional float repetition_penalty = 8;
 }
 
 // Architecture-specific parameters for TTS models.
