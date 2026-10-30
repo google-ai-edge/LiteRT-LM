@@ -43,6 +43,7 @@ import contextlib
 import dataclasses
 import datetime
 import enum
+import hashlib
 import io
 import logging
 import os
@@ -1736,11 +1737,23 @@ class LitertLmFileBuilder:
         entries=[m.to_key_value_pair() for m in self._system_metadata]
     )
 
-    # Populate a SectionMetadataT object from `self._sections`.
+    # Populate a SectionMetadataT object from `sections`, reserving a 64-char
+    # sha256 placeholder on each section so the packed FlatBuffer size is fixed.
     section_metadata = schema.SectionMetadataT(
         objects=[
             schema.SectionObjectT(
-                items=[m.to_key_value_pair() for m in s.metadata],
+                items=[
+                    *(
+                        m.to_key_value_pair()
+                        for m in s.metadata
+                        if m.key != "sha256"
+                    ),
+                    Metadata(
+                        key="sha256",
+                        value="0" * 64,
+                        dtype=DType.STRING,
+                    ).to_key_value_pair(),
+                ],
                 dataType=s.data_type,
                 beginOffset=1,  # Use a non-zero (default value) placeholder.
                 endOffset=1,  # Use a non-zero (default value) placeholder
@@ -1767,6 +1780,14 @@ class LitertLmFileBuilder:
       section.data_writer(stream)
       offset = stream.tell()
       section_fb.endOffset = offset
+
+      # Compute SHA-256 for the written section data.
+      section_sha256 = _compute_sha256_for_range(
+          stream, section_fb.beginOffset, section_fb.endOffset
+      )
+      assert section_fb.items is not None
+      section_fb.items[-1].value = schema.StringValueT(section_sha256)
+
       offset = _round_up_to_block_size(offset)
 
     # Go back and write the header and updated metadata at the start of the
@@ -1786,6 +1807,34 @@ class LitertLmFileBuilder:
         ).to_bytes(8, "little")
     )
     stream.write(metadata_builder.Output())
+
+
+def _compute_sha256_for_range(
+    stream: BinaryIO,
+    start: int,
+    end: int,
+    buffer_size: int = 1024 * 1024,
+) -> str:
+  """Computes the SHA-256 hash for a byte range [start, end) in stream."""
+  stream.flush()
+  hasher = hashlib.sha256()
+  current_pos = stream.tell()
+  read_cm = (
+      contextlib.nullcontext(stream)
+      if stream.readable()
+      else litertlm_core.open_file(stream.name, "rb")
+  )
+  with read_cm as read_stream:
+    read_stream.seek(start)
+    remaining = end - start
+    while remaining > 0:
+      chunk = read_stream.read(min(buffer_size, remaining))
+      if not chunk:
+        break
+      hasher.update(chunk)
+      remaining -= len(chunk)
+  stream.seek(current_pos)
+  return hasher.hexdigest()
 
 
 def _round_up_to_block_size(offset: int) -> int:
