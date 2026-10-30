@@ -20,11 +20,12 @@ set(LITERTLM_ANTLR_SRC_DIR
   CACHE PATH "Path to antlr source directory"
 )
 set(LITERTLM_ANTLR_TAG "7d5770395bb7b02eb56e7c62662cb1d7c08f42a3" CACHE STRING "ANTLR git tag")
+# No GIT_SHALLOW: the pinned commit is not a branch tip, so a shallow clone
+# cannot check it out ("unable to read tree").
 FetchContent_Declare(
   antlr_lib
   GIT_REPOSITORY https://github.com/antlr/antlr4.git
   GIT_TAG ${LITERTLM_ANTLR_TAG}
-  GIT_SHALLOW true
   SOURCE_SUBDIR runtime/Cpp
   PATCH_COMMAND 
     ${CMAKE_COMMAND} 
@@ -157,7 +158,6 @@ FetchContent_Declare(
   minizip_lib
   GIT_REPOSITORY https://github.com/domoticz/minizip
   GIT_TAG ${LITERTLM_MINIZIP_TAG}
-  GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_MINIZIP_SRC_DIR}
 )
 block()
@@ -175,7 +175,6 @@ FetchContent_Declare(
   minja_lib
   GIT_REPOSITORY https://github.com/google/minja
   GIT_TAG ${LITERTLM_MINJA_TAG}
-  GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_MINJA_SRC_DIR}
   PATCH_COMMAND ${CMAKE_COMMAND} -DTARGET_FILE=${LITERTLM_MINJA_SRC_DIR}/CMakeLists.txt -P${LITERTLM_PATCHES_DIR}/minja_patch.cmake
 )

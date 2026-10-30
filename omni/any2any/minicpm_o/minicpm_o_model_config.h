@@ -136,11 +136,16 @@ struct MiniCpmOModelConfig {
   std::string text_embedder_file = "text_embedder.tflite";
   // Filename of the Qwen3-8B multimodal LLM backbone TFLite model.
   std::string llm_backbone_file = "llm_backbone.tflite";
-  // Filename of the LLM-to-TTS hidden state projector TFLite model.
+  // Filename of the LLM-to-TTS hidden state projector TFLite model
+  // (`[1, llm_hidden_size] -> [1, tts_hidden_size]`).
   std::string tts_projector_file = "tts_projector.tflite";
-  // Filename of the conditional TTS acoustic decoder TFLite model.
+  // Filename of the stateful per-step TTS acoustic decoder TFLite model that
+  // fuses the CosyVoice2 autoregressive speech-token LM head (`code_logits`
+  // over `tts_vocab_size`, stopping at `kTtsEosTokenId`) with the Token2Wav
+  // flow-matching mel-spectrogram head (`mel_frame` of `tts_num_mel_bins`).
   std::string tts_decoder_file = "tts_decoder.tflite";
-  // Filename of the Token2Wav / CosyVoice2 neural vocoder TFLite model.
+  // Filename of the 24 kHz Vocos/HiFi-GAN mel-to-waveform neural vocoder
+  // TFLite model (`[1, tts_num_mel_bins, chunk_frames] -> [1, pcm_samples]`).
   std::string audio_vocoder_file = "audio_vocoder.tflite";
   // Filename of the HuggingFace tokenizer JSON file.
   std::string tokenizer_file = "tokenizer.json";
