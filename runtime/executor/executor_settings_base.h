@@ -81,6 +81,17 @@ std::string GetBackendString(Backend backend);
 // LiteRT accelerator equivalent.
 ::litert::HwAccelerators GetHwAcceleratorForBackend(Backend backend);
 
+// Returns whether the comma-separated `backend_constraint` permits `backend`.
+// An unset or empty constraint permits every backend.
+bool IsBackendAllowedByConstraint(
+    const std::optional<std::string>& backend_constraint, Backend backend);
+
+// Removes the accelerators that `backend_constraint` excludes. CPU is kept as
+// LiteRT's fallback, so the result is never empty.
+::litert::HwAcceleratorSet RestrictAcceleratorsToBackendConstraint(
+    ::litert::HwAcceleratorSet accelerators,
+    const std::optional<std::string>& backend_constraint);
+
 enum class ActivationDataType {
   // Use float32 as the activation data type.
   FLOAT32,

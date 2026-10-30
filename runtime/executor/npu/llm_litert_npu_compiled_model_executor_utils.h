@@ -500,13 +500,15 @@ struct NpuAuxiliaryContext {
 
   static absl::StatusOr<NpuAuxiliaryContext> Create(
       ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-      const LlmExecutorSettings& settings, bool is_dynamic_model = false);
+      const LlmExecutorSettings& settings, bool is_dynamic_model = false,
+      const std::optional<std::string>& backend_constraint = std::nullopt);
 };
 
 // Creates the context for the NPU auxiliary model.
 absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-    const LlmExecutorSettings& settings, bool is_dynamic_model = false);
+    const LlmExecutorSettings& settings, bool is_dynamic_model = false,
+    const std::optional<std::string>& backend_constraint = std::nullopt);
 
 // Holds the context for the drafter model.
 //

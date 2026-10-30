@@ -61,7 +61,8 @@ class EmbeddingLookupText : public EmbeddingLookup {
       std::optional<ScopedFile> external_weight_file = std::nullopt,
       litert::Options::ScopedWeightSectionMap external_weight_sections = {},
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map = nullptr,
+      std::optional<std::string> backend_constraint = std::nullopt);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupText>> Create(
       litert::Environment& env, litert::CompiledModel compiled_model,
@@ -130,13 +131,15 @@ class EmbeddingLookupText : public EmbeddingLookup {
       std::optional<ScopedFile> external_weight_file,
       litert::Options::ScopedWeightSectionMap external_weight_sections,
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr)
+          weight_in_memory_map,
+      std::optional<std::string> backend_constraint)
       : env_(env),
         model_(model),
         signature_key_(std::move(signature_key)),
         external_weight_file_(std::move(external_weight_file)),
         external_weight_sections_(std::move(external_weight_sections)),
-        weight_in_memory_map_(weight_in_memory_map) {}
+        weight_in_memory_map_(weight_in_memory_map),
+        backend_constraint_(std::move(backend_constraint)) {}
 
   // Creates a EmbeddingLookupText instance with an already compiled LiteRT
   // model. Used in the streaming model loading path.
@@ -188,6 +191,7 @@ class EmbeddingLookupText : public EmbeddingLookup {
   litert::Options::ScopedWeightSectionMap external_weight_sections_;
   const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
       weight_in_memory_map_ = nullptr;
+  std::optional<std::string> backend_constraint_;
 };
 
 }  // namespace litert::lm
