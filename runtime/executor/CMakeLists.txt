@@ -66,6 +66,7 @@ target_link_libraries(runtime_executor_audio_litert_compiled_model_executor
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Util::LoraUtil
+    runtime_util_litert_status_util
 
     LITERTLM_DEPS
 )

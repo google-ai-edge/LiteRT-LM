@@ -1449,6 +1449,305 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   EXPECT_THAT(adapter_mask_after_full, ElementsAre(1, 1, 1, 1, 1));
 }
 
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       TrailingZeroPadding_OverwritesStaleInputBuffers_StaticModel) {
+  // First executor encodes a full 10-frame window with all-ones, populating
+  // all input spectrogram and mask buffers with non-zero data.
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  std::vector<float> full_spectrogram(
+      kSpectrogramSequenceLength * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto full_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          full_spectrogram,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+  ASSERT_OK(audio_executor->Encode(full_tensor_buffer));
+
+  // Next, encode a partial window (6 frames of ones, 4 masked out).
+  constexpr std::array<bool, kSpectrogramSequenceLength> partial_mask_data = {
+      true, true, true, true, true, true, false, false, false, false};
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_mask_tensor,
+      CreateTensorBuffer<const bool>(
+          partial_mask_data,
+          RankedTensorType(
+              GetElementType<bool>(),
+              Layout(Dimensions({1, kSpectrogramSequenceLength})))));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_data_reused,
+      audio_executor->Encode(full_tensor_buffer, partial_mask_tensor));
+
+  // Reference executor: freshly created, encodes only the partial window.
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor_clean,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_data_clean,
+      audio_executor_clean->Encode(full_tensor_buffer, partial_mask_tensor));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto reused_proj_ptr,
+      audio_data_reused.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto reused_proj_data,
+                       GetDataAsVector<float>(*reused_proj_ptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto clean_proj_ptr,
+      audio_data_clean.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto clean_proj_data,
+                       GetDataAsVector<float>(*clean_proj_ptr));
+  EXPECT_EQ(reused_proj_data, clean_proj_data);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       TrailingZeroPadding_OverwritesStaleInputBuffers_StreamingModel) {
+  // First executor encodes a full chunk (10 frames), then a partial chunk (5
+  // frames) flushed.
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+
+  std::vector<float> full_spectrogram(10 * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto full_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          full_spectrogram,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
+  ASSERT_OK(audio_executor->Encode(full_tensor_buffer));
+
+  // Reset executor to clear streaming state but keep buffers allocated/dirty.
+  ASSERT_OK(audio_executor->Reset());
+
+  std::vector<float> partial_spectrogram(5 * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          partial_spectrogram,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
+  ASSERT_OK(audio_executor->Encode(partial_tensor_buffer));
+  ASSERT_OK_AND_ASSIGN(auto flush_data_reused, audio_executor->Flush());
+
+  // Reference executor: freshly created.
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor_clean,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+  ASSERT_OK(audio_executor_clean->Encode(partial_tensor_buffer));
+  ASSERT_OK_AND_ASSIGN(auto flush_data_clean, audio_executor_clean->Flush());
+
+  ASSERT_OK_AND_ASSIGN(
+      auto reused_proj_ptr,
+      flush_data_reused.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto reused_proj_data,
+                       GetDataAsVector<float>(*reused_proj_ptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto clean_proj_ptr,
+      flush_data_clean.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto clean_proj_data,
+                       GetDataAsVector<float>(*clean_proj_ptr));
+  EXPECT_EQ(reused_proj_data, clean_proj_data);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       OutputTensorShape_FullVsPartialWindow_StaticModelWithAdapter) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  std::vector<float> mel_spectrogram_data(
+      kSpectrogramSequenceLength * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_tensor,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+
+  // 1. Full unmasked window: buffer_tokens == max_tokens == 5.
+  ASSERT_OK_AND_ASSIGN(auto full_audio_data,
+                       audio_executor->Encode(mel_tensor));
+  EXPECT_EQ(full_audio_data.GetValidTokens(), 5);
+
+  ASSERT_OK_AND_ASSIGN(auto full_proj_ptr,
+                       full_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto full_proj_type = full_proj_ptr->TensorType();
+  ASSERT_TRUE(full_proj_type.HasValue());
+  EXPECT_THAT(full_proj_type->Layout().Dimensions(),
+              ElementsAre(1, 5, kEmbeddingDimensions));
+
+  ASSERT_OK_AND_ASSIGN(auto full_audio_ptr,
+                       full_audio_data.GetAudioEmbeddingsPtr());
+  auto full_audio_type = full_audio_ptr->TensorType();
+  ASSERT_TRUE(full_audio_type.HasValue());
+  EXPECT_THAT(full_audio_type->Layout().Dimensions(), ElementsAre(1, 5, 4));
+
+  // 2. Partial/masked window: buffer_tokens == 3 != max_tokens == 5.
+  constexpr std::array<bool, kSpectrogramSequenceLength> partial_mask_data = {
+      true, true, true, true, true, true, false, false, false, false};
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_mask_tensor,
+      CreateTensorBuffer<const bool>(
+          partial_mask_data,
+          RankedTensorType(
+              GetElementType<bool>(),
+              Layout(Dimensions({1, kSpectrogramSequenceLength})))));
+
+  ASSERT_OK_AND_ASSIGN(auto partial_audio_data,
+                       audio_executor->Encode(mel_tensor, partial_mask_tensor));
+  EXPECT_EQ(partial_audio_data.GetValidTokens(), 3);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_proj_ptr,
+      partial_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto partial_proj_type = partial_proj_ptr->TensorType();
+  ASSERT_TRUE(partial_proj_type.HasValue());
+  EXPECT_THAT(partial_proj_type->Layout().Dimensions(),
+              ElementsAre(1, 3, kEmbeddingDimensions));
+
+  ASSERT_OK_AND_ASSIGN(auto partial_audio_ptr,
+                       partial_audio_data.GetAudioEmbeddingsPtr());
+  auto partial_audio_type = partial_audio_ptr->TensorType();
+  ASSERT_TRUE(partial_audio_type.HasValue());
+  EXPECT_THAT(partial_audio_type->Layout().Dimensions(), ElementsAre(1, 3, 4));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       OutputTensorShape_FullVsPartialWindow_StaticModelWithoutAdapter) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioNoMaskModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  std::vector<float> mel_spectrogram_data(
+      kSpectrogramSequenceLength * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_tensor,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+
+  // 1. Full unmasked window: buffer_tokens == max_tokens == 5.
+  ASSERT_OK_AND_ASSIGN(auto full_audio_data,
+                       audio_executor->Encode(mel_tensor));
+  EXPECT_EQ(full_audio_data.GetValidTokens(), 5);
+
+  ASSERT_OK_AND_ASSIGN(auto full_proj_ptr,
+                       full_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto full_proj_type = full_proj_ptr->TensorType();
+  ASSERT_TRUE(full_proj_type.HasValue());
+  EXPECT_THAT(full_proj_type->Layout().Dimensions(),
+              ElementsAre(1, 5, kNoMaskEmbeddingDimensions));
+
+  ASSERT_OK_AND_ASSIGN(auto full_audio_ptr,
+                       full_audio_data.GetAudioEmbeddingsPtr());
+  auto full_audio_type = full_audio_ptr->TensorType();
+  ASSERT_TRUE(full_audio_type.HasValue());
+  EXPECT_THAT(full_audio_type->Layout().Dimensions(),
+              ElementsAre(1, 5, kNoMaskEmbeddingDimensions));
+
+  // 2. Partial/masked window: buffer_tokens == 3 != max_tokens == 5.
+  constexpr std::array<bool, kSpectrogramSequenceLength> partial_mask_data = {
+      true, true, true, true, true, true, false, false, false, false};
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_mask_tensor,
+      CreateTensorBuffer<const bool>(
+          partial_mask_data,
+          RankedTensorType(
+              GetElementType<bool>(),
+              Layout(Dimensions({1, kSpectrogramSequenceLength})))));
+
+  ASSERT_OK_AND_ASSIGN(auto partial_audio_data,
+                       audio_executor->Encode(mel_tensor, partial_mask_tensor));
+  EXPECT_EQ(partial_audio_data.GetValidTokens(), 3);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_proj_ptr,
+      partial_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto partial_proj_type = partial_proj_ptr->TensorType();
+  ASSERT_TRUE(partial_proj_type.HasValue());
+  EXPECT_THAT(partial_proj_type->Layout().Dimensions(),
+              ElementsAre(1, 3, kNoMaskEmbeddingDimensions));
+
+  ASSERT_OK_AND_ASSIGN(auto partial_audio_ptr,
+                       partial_audio_data.GetAudioEmbeddingsPtr());
+  auto partial_audio_type = partial_audio_ptr->TensorType();
+  ASSERT_TRUE(partial_audio_type.HasValue());
+  EXPECT_THAT(partial_audio_type->Layout().Dimensions(),
+              ElementsAre(1, 3, kNoMaskEmbeddingDimensions));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       OutputTensorShape_FullVsPartialWindow_StreamingModel) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU,
+                          /*audio_buffering_enabled=*/true));
+
+  // 1. Partial window flush: 5 frames buffered -> flush pads to 8 frames -> 4
+  // tokens.
+  std::vector<float> mel_spectrogram_data(5 * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto partial_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
+
+  ASSERT_OK_AND_ASSIGN(auto encode_data,
+                       audio_executor->Encode(partial_tensor_buffer));
+  EXPECT_EQ(encode_data.GetValidTokens(), 0);
+
+  ASSERT_OK_AND_ASSIGN(auto flush_data, audio_executor->Flush());
+  EXPECT_EQ(flush_data.GetValidTokens(), 4);
+
+  ASSERT_OK_AND_ASSIGN(auto flush_proj_ptr,
+                       flush_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto flush_proj_type = flush_proj_ptr->TensorType();
+  ASSERT_TRUE(flush_proj_type.HasValue());
+  EXPECT_THAT(flush_proj_type->Layout().Dimensions(),
+              ElementsAre(1, 4, kEmbeddingDimensions));
+}
+
 }  // namespace
 
 }  // namespace litert::lm

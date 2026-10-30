@@ -200,8 +200,6 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
     virtual absl::Status Initialize() = 0;
 
-    virtual absl::Status ClearInputBuffers() = 0;
-
     virtual absl::Status Reset() = 0;
 
     // Loads the LoRA model into the audio encoder.
@@ -326,13 +324,13 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     // buffers for the audio encoder model.
     absl::Status Initialize() override;
 
-    absl::Status ClearInputBuffers() override;
-
     absl::Status Reset() override { return ClearInputBuffers(); }
 
     bool IsStreaming() const override { return false; }
 
    private:
+    absl::Status ClearInputBuffers();
+
     AudioStaticEncoder(const AudioExecutorSettings& executor_settings,
                        Environment& env, const Model* absl_nonnull model,
                        ModelResources& resources)
@@ -406,8 +404,6 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     // Swap the internal state buffers between input and output buffers map, so
     // the previous state will be used for the current state.
     absl::Status SwapInternalStateBuffers();
-
-    absl::Status ClearInputBuffers() override;
 
     absl::Status Reset() override;
 

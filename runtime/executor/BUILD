@@ -1265,6 +1265,7 @@ cc_library(
         "//runtime/engine:io_types",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:litert_status_util",
         "//runtime/util:lora_util",
         "//runtime/util:tensor_buffer_util",
         "@litert//tflite/types:half",
