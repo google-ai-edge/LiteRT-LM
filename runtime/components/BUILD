@@ -971,7 +971,7 @@ cc_test(
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
         ],
         "//conditions:default": [
-            "//runtime/executor:default_static_gpu_accelerator",
+            "//runtime/executor:default_gpu_accelerator",
         ],
     }),
 )
@@ -1019,7 +1019,7 @@ cc_test(
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
         ],
         "//conditions:default": [
-            "//runtime/executor:default_static_gpu_accelerator",
+            "//runtime/executor:default_gpu_accelerator",
         ],
     }),
 )
@@ -1216,7 +1216,7 @@ cc_test(
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_runtimecapi",
         ],
         "//conditions:default": [
-            "//runtime/executor:default_static_gpu_accelerator",
+            "//runtime/executor:default_gpu_accelerator",
         ],
     }),
 )
