@@ -343,6 +343,7 @@ fake_weights_mode: FAKE_WEIGHTS_NONE
 advanced_settings: prefill_batch_sizes: [128, 256]
 num_output_candidates: 3
 configure_magic_numbers: 1
+allow_context_length_expansion: 0
 verify_magic_numbers: 1
 clear_kv_cache_before_prefill: 0
 num_logits_to_print_after_decode: 10

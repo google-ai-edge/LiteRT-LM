@@ -305,19 +305,30 @@ MagicNumberConfigsHelper::GetLiteRtEnvOptions(
         return std::vector<EnvironmentOptions::Option>{};
       })());
 
+  AdvancedSettings advanced_settings;
+  if (executor_settings.GetAdvancedSettings()) {
+    advanced_settings = *executor_settings.GetAdvancedSettings();
+  }
+
   MagicNumbers target_numbers{.context_length = 0, .num_output_candidates = 0};
   // Magic number configs for context length.
   if (magic_numbers->context_length > 0) {
     auto& config = magic_number_configs_->configs[0];
     config.magic_number = magic_numbers->context_length;
-    config.target_number = target_numbers.context_length = GetTargetNumber(
-        config.magic_number, executor_settings.GetMaxNumTokens());
+    const int64_t requested_context = executor_settings.GetMaxNumTokens();
+    if (advanced_settings.allow_context_length_expansion &&
+        requested_context >= config.magic_number) {
+      config.target_number = requested_context;
+      ABSL_LOG(WARNING) << "Expanding exported context magic number "
+                        << config.magic_number << " to " << requested_context
+                        << "; model position support must be validated by the "
+                           "caller";
+    } else {
+      config.target_number =
+          GetTargetNumber(config.magic_number, requested_context);
+    }
+    target_numbers.context_length = config.target_number;
     config.signature_prefix = nullptr;
-  }
-
-  AdvancedSettings advanced_settings;
-  if (executor_settings.GetAdvancedSettings()) {
-    advanced_settings = *executor_settings.GetAdvancedSettings();
   }
 
   if (magic_numbers->num_output_candidates > 0) {
