@@ -2,18 +2,19 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-10-24
-LITERT_REF = "dcb657e8a537b2dc944e53e14c7eb43bcd9ededa"
+# UPDATED = 2026-10-29
+LITERT_REF = "88479dc24a752958be76dd0f3a40ec4a645d03e2"
 
-LITERT_SHA256 = "601bada4d86862a21105ca656f02a22483d2b5733b9932ce997e4b1f59bf8e52"
+LITERT_SHA256 = "8efc587fc3580097c3eec33759e04488f1ae3ec9b81b14f5aee5d354471c7527"
 
-TENSORFLOW_REF = "4f8e6d470a7f2864a7b2af990d3ffcfc47f05c99"
+TENSORFLOW_REF = "dc3671e8c8dc18f5f82835c65d4ced837c2a6c6a"
 
-TENSORFLOW_SHA256 = "d712b298674539d836c4751772d523c0e3da88af6ebac33ff13300e788a8d4ff"
 
-ML_DRIFT_COMMIT = "76492bb9412030ec93cc5b607df26ab5cf787490"
+TENSORFLOW_SHA256 = "e5af1caf380f9fc7177e0c95db1cd670d1b6e32b80e84c468613707afe84ba0e"
 
-ML_DRIFT_SHA256 = "74f4234ae7b5cde17406f108c2ee760a63b58159e4f5b53691c87f1e13a338b1"
+ML_DRIFT_COMMIT = "2d7fbbd45d8940b5fc7cea1f79e59d9d796164e2"
+
+ML_DRIFT_SHA256 = "074ba94182ba04c7fbdba3f76faea1370417e49f0397552ea6e3344d90d5d77f"
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
@@ -484,31 +485,8 @@ http_archive(
 http_archive(
     name = "litert",
     patch_cmds = [
-        # Replace @//third_party with @litert//third_party in files under third_party/.
-        # Only regular files are passed to `sed -i`, which fails on directories such as
-        # third_party/py/numpy. Uses a shell loop rather than `find`, which may resolve
-        # to find.exe on Windows.
-        "for f in third_party/*/*; do if [ -f \"$f\" ]; then sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' \"$f\" || exit 1; fi; done",
-        "sed -i -e 's|build_file = \"//third_party/dawn:dawn.BUILD\"|build_file = \"@litert//third_party/dawn:dawn.BUILD\"|g' third_party/dawn/workspace.bzl",
-        "sed -i -e 's|python3 -c|$(if python3 -V >/dev/null 2>/dev/null; then echo python3; else echo python; fi) -c|g' third_party/dawn/workspace.bzl",
-        # TODO: b/465678331 - Remove patch_cmds for visibility and legacy_create_init once
-        # cl/1000909231 is submitted and LITERT_REF is updated.
-        # Allow external @litert_lm workspace to depend on ml_drift_delegate and litert_runtime_builtin_none targets.
-        "sed -i -e '/default_visibility/,/\\]/d' ml_drift_delegate/delegate/BUILD",
-        "sed -i -e 's|package(|package(default_visibility = [\"//visibility:public\"],|g' ml_drift_delegate/delegate/BUILD",
-        "sed -i -e 's|visibility = litert_jni_friends() + \\[|visibility = litert_jni_friends() + [\"@//:__subpackages__\", |g' litert/c/internal/BUILD",
-        # Remove unsupported aspect_hints from ml_drift_delegate BUILD files.
-        "sed -i -e '/no_module/d' ml_drift_delegate/delegate/BUILD ml_drift_delegate/delegate/shared_memory_manager/BUILD",
-        # Fix unscrubbed path in gpu_backend_metal_litert.mm.
-        "sed -i -e 's|#import \".*ml_drift/|#import \"ml_drift_delegate/|g' ml_drift_delegate/delegate/gpu_backend_metal_litert.mm",
-        # Disable implicit __init__.py creation in dawn_json_generator and generate_build_identifier_py so @jinja2 is not shadowed.
-        "sed -i -e 's|name = \"dawn_json_generator\",|name = \"dawn_json_generator\", legacy_create_init = 0,|g' third_party/dawn/dawn.BUILD",
+        # @dawn//:webgpu_dawn in LiteRT's dawn.BUILD is headers-only; wire in LiteRT-LM's prebuilt Dawn shared library.
         "sed -i -e 's|\"\\:dawn_native\",|\":dawn_native\", \"@//runtime/components:webgpu_dawn_shared_lib\",|g' third_party/dawn/dawn.BUILD",
-        "sed -i -e 's|name = \"generate_build_identifier_py\",|name = \"generate_build_identifier_py\", legacy_create_init = 0,|g' ml_drift_delegate/delegate/serialization_weight_cache/BUILD",
-        # Make litert_friends public in OSS so external @litert_lm can access accelerator libraries.
-        "sed -i -e '/def litert_friends():/,/return \\[\\]/s|return \\[\\]|return [\"public\"]|' litert/build_common/special_rule.bzl",
-        # Allow Windows targets to access libLiteRtWebGpuAccelerator and ml_drift_webgpu_accelerator_dll.
-        "sed -i -e 's|visibility = \\[\"//visibility:private\"\\]|visibility = [\"//visibility:public\"]|g' litert/runtime/accelerators/gpu/BUILD",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
