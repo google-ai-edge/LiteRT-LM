@@ -47,7 +47,7 @@
 //
 // Added in version 1.0.0.
 #define LITERT_LM_C_API_VERSION_MAJOR 1
-#define LITERT_LM_C_API_VERSION_MINOR 0
+#define LITERT_LM_C_API_VERSION_MINOR 1
 #define LITERT_LM_C_API_VERSION_PATCH 0
 
 #ifdef __cplusplus
