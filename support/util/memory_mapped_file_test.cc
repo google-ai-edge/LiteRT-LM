@@ -176,6 +176,53 @@ TEST(MemoryMappedFile, ModifiesDataButNotFile) {
   EXPECT_EQ(ReadFile(path.string()), "foo bar");
 }
 
+TEST(MemoryMappedFile, SucceedsMappingReadOnly) {
+  auto path = std::filesystem::path(::testing::TempDir()) / "file.txt";
+  WriteFile(path.string(), "foo bar");
+
+  auto file = MemoryMappedFile::Create(path.string(),
+                                       MemoryMappedFile::Access::kReadOnly);
+  ASSERT_OK(file);
+  CheckContents(**file, "foo bar");
+
+  auto scoped_file = ScopedFile::Open(path.string());
+  ASSERT_OK(scoped_file);
+  auto file_from_handle =
+      MemoryMappedFile::Create(scoped_file->file(), /*offset=*/0, /*length=*/0,
+                               /*key=*/"", MemoryMappedFile::Access::kReadOnly);
+  ASSERT_OK(file_from_handle);
+  CheckContents(**file_from_handle, "foo bar");
+}
+
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+TEST(MemoryMappedFile, AccessSelectsMappingProtection) {
+  auto path = std::filesystem::path(::testing::TempDir()) / "file.txt";
+  WriteFile(path.string(), "foo bar");
+
+  // kReadOnly is read-only on every platform.
+  auto read_only = MemoryMappedFile::Create(
+      path.string(), MemoryMappedFile::Access::kReadOnly);
+  ASSERT_OK(read_only);
+  EXPECT_EQ(MappingProtection((*read_only)->data()), "r--");
+
+  // kRead keeps its existing mapping: read-only on Windows, copy-on-write on
+  // POSIX platforms.
+  auto read =
+      MemoryMappedFile::Create(path.string(), MemoryMappedFile::Access::kRead);
+  ASSERT_OK(read);
+#if defined(_WIN32)
+  EXPECT_EQ(MappingProtection((*read)->data()), "r--");
+#else
+  EXPECT_EQ(MappingProtection((*read)->data()), "rw-");
+#endif  // defined(_WIN32)
+
+  // The default (kCopy) stays copy-on-write.
+  auto copy_on_write = MemoryMappedFile::Create(path.string());
+  ASSERT_OK(copy_on_write);
+  EXPECT_EQ(MappingProtection((*copy_on_write)->data()), "rw-");
+}
+#endif  // defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+
 TEST(MemoryMappedFile, ModifiesFileWhenMutable) {
   auto path = std::filesystem::path(::testing::TempDir()) / "file.txt";
   WriteFile(path.string(), "foo bar");

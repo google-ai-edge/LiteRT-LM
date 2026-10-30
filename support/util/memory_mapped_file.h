@@ -33,9 +33,16 @@ namespace litert::support {
 class MemoryMappedFile {
  public:
   enum class Access {
+    // Read access: a read-only view on Windows. On POSIX platforms the same
+    // copy-on-write mapping as kCopy, but without the MADV_WILLNEED that
+    // Create() issues for kCopy on Linux and Android. Use kReadOnly when writes
+    // through data() must fault on every platform.
     kRead = 0,
     kCopy = 1,
     kWrite = 2,
+    // A read-only mapping on every platform (PROT_READ, or FILE_MAP_READ on
+    // Windows): writes through data() fault. Otherwise the same as kCopy.
+    kReadOnly = 3,
   };
 
   // Move constructor and move assignment operator
@@ -49,12 +56,14 @@ class MemoryMappedFile {
   // Gets the required alignment for a file offset passed to Create().
   static size_t GetOffsetAlignment();
 
-  // Creates a read-only MemoryMappedFile object.
+  // Creates a MemoryMappedFile object; `access` selects the kind of mapping
+  // (see Access). The default, Access::kCopy, maps the file copy-on-write.
   static absl::StatusOr<std::unique_ptr<MemoryMappedFile>> Create(
       absl::string_view path, Access access = Access::kCopy);
   // Creates a MemoryMappedFile object from the platform file handle. This does
   // not take ownership of the passed handle. The `key` passed here is an
-  // optimization when mapping the same file with different offsets.
+  // optimization when mapping the same file with different offsets. `access`
+  // is as for the path overload.
   static absl::StatusOr<std::unique_ptr<MemoryMappedFile>> Create(
       ScopedFile::PlatformFile file, uint64_t offset = 0u, uint64_t length = 0u,
       absl::string_view key = "", Access access = Access::kCopy);

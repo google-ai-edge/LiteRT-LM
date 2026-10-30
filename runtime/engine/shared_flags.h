@@ -57,6 +57,7 @@ ABSL_DECLARE_FLAG(bool, clear_kv_cache_before_prefill);
 ABSL_DECLARE_FLAG(int, num_logits_to_print_after_decode);
 ABSL_DECLARE_FLAG(std::string, score_target_text);
 ABSL_DECLARE_FLAG(bool, gpu_madvise_original_shared_tensors);
+ABSL_DECLARE_FLAG(bool, prefetch_embedding_rows);
 ABSL_DECLARE_FLAG(bool, disable_cache);
 ABSL_DECLARE_FLAG(bool, disable_weight_cache);
 ABSL_DECLARE_FLAG(bool, disable_gpu_program_cache);

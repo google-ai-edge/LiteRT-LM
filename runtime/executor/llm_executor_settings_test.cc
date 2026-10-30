@@ -306,6 +306,7 @@ TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
       .enable_speculative_decoding = false,
       .disable_delegate_clustering = false,
       .hint_kernel_batch_size = 10,
+      .prefetch_embedding_rows = true,
   });
 
   std::stringstream oss;
@@ -368,6 +369,7 @@ disable_delegate_clustering: 0
 hint_kernel_batch_size: 10
 error_on_invalid_sampled_token_id: 0
 mtp_gating_config: Not set
+prefetch_embedding_rows: 1
 
 speculative_decoding_config: SpeculativeDecodingConfig{mode: Not set, lenience: Not set}
 )");  // Original output string.

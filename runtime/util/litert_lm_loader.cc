@@ -26,6 +26,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/hash/hash.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -53,8 +54,8 @@ namespace litert::lm {
 namespace {
 // Utility function to Creates a memory-mapped file from a ScopedFile.
 absl::StatusOr<std::unique_ptr<MemoryMappedFile>> CreateMemoryMapFromScopedFile(
-    litert::lm::ScopedFile& scoped_file, uint64_t offset = 0,
-    uint64_t size = 0) {
+    litert::lm::ScopedFile& scoped_file, uint64_t offset = 0, uint64_t size = 0,
+    MemoryMappedFile::Access access = MemoryMappedFile::Access::kCopy) {
   if (!scoped_file.IsValid()) {
     return absl::InvalidArgumentError("Invalid ScopedFile provided.");
   }
@@ -68,7 +69,30 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> CreateMemoryMapFromScopedFile(
   // but the bytes come from the wrong file). Anonymous mappings have no
   // such cross-file aliasing.
   return litert::lm::MemoryMappedFile::Create(platform_file, offset, size,
-                                              /*key=*/"");
+                                              /*key=*/"", access);
+}
+
+// TFLiteModel sections mapped read-only (Access::kReadOnly): the text and
+// per-layer embedding lookup graphs. LlmMetadata and EmbeddingMetadata share
+// these wire names, so embedding-engine models match too; in both, the
+// sections are single-token EmbeddingLookupText graphs over fixed-shape tables
+// that LiteRT only reads. LiteRT's magic-number replacement
+// (ReplaceMagicNumbersIfAny) rewrites sequence-length dimensions of the main
+// model's flatbuffer in place, so `tf_lite_prefill_decode` and every other
+// section keep their copy-on-write mapping. A read-only mapping is what lets
+// LiteRT's embedding row prefetch issue madvise(MADV_WILLNEED) on Apple
+// platforms, where the hint copy-on-writes every page of a writable private
+// mapping, and it drops the commit charge of a copy-on-write view on Windows.
+// Any future in-place write into one of these sections would fault; widen this
+// list only after auditing the writers.
+constexpr absl::string_view kReadOnlyTfLiteModelTypes[] = {
+    "tf_lite_embedder", "tf_lite_per_layer_embedder"};
+
+bool IsReadOnlyModelSection(const BufferKey& buffer_key) {
+  return buffer_key.data_type == schema::AnySectionDataType_TFLiteModel &&
+         buffer_key.model_type.has_value() &&
+         absl::c_linear_search(kReadOnlyTfLiteModelTypes,
+                               *buffer_key.model_type);
 }
 
 bool IsValidTfLiteModelTypeWireString(absl::string_view model_type_str) {
@@ -250,10 +274,21 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
     uint64_t aligned_begin_offset = begin_offset - alignment_gap;
 
     uint64_t aligned_section_size = end_offset - aligned_begin_offset;
+    const MemoryMappedFile::Access access =
+        IsReadOnlyModelSection(buffer_key) ? MemoryMappedFile::Access::kReadOnly
+                                           : MemoryMappedFile::Access::kCopy;
+    ABSL_VLOG(1) << "Mapping section "
+                 << schema::EnumNameAnySectionDataType(buffer_key.data_type)
+                 << (buffer_key.model_type.has_value() ? "/" : "")
+                 << buffer_key.model_type.value_or("") << " [" << begin_offset
+                 << ", " << end_offset << ")"
+                 << (access == MemoryMappedFile::Access::kReadOnly
+                         ? " read-only"
+                         : " copy-on-write");
     ABSL_ASSIGN_OR_RETURN(
         section_memory_mapped_files_[buffer_key],
         CreateMemoryMapFromScopedFile(model_file, aligned_begin_offset,
-                                      aligned_section_size));
+                                      aligned_section_size, access));
     auto& memory_mapped_file = section_memory_mapped_files_[buffer_key];
 
     // The section buffer that is stored should point to the section data only,

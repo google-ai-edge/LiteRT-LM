@@ -165,6 +165,7 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "mtp_gating_config: Not set\n";
   }
+  os << "prefetch_embedding_rows: " << settings.prefetch_embedding_rows << "\n";
   return os;
 }
 

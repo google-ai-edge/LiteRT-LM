@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_SUPPORT_UTIL_TEST_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_SUPPORT_UTIL_TEST_UTILS_H_
 
+#include <string>
+
 #include <gmock/gmock.h>
 #include "absl/status/status.h"  // from @com_google_absl                   // NOLINT
 #include "absl/status/statusor.h"  // from @com_google_absl                 // NOLINT
@@ -46,6 +48,19 @@
 #if !defined(ASSERT_OK_AND_ASSIGN)
 #define ASSERT_OK_AND_ASSIGN(DECL, EXPR) ABSL_ASSERT_OK_AND_ASSIGN(DECL, EXPR)
 #endif  // !defined(ASSERT_OK_AND_ASSIGN)
+
+namespace litert::support {
+
+// Returns the current protection of the memory mapping that contains
+// `address`: "r--" for read-only and "rw-" for writable (including
+// copy-on-write) data mappings, with "x" in the last place for executable
+// mappings on Linux and Apple platforms. Reads /proc/self/maps on Linux and
+// Android, vm_region_64 on Apple platforms and VirtualQuery on Windows.
+// Returns an empty string if no mapping contains `address`, for other Windows
+// page protections, and on other platforms.
+std::string MappingProtection(const void* address);
+
+}  // namespace litert::support
 
 namespace testing::status {
 namespace {

@@ -123,6 +123,17 @@ class EmbeddingLookupText : public EmbeddingLookup {
     return output_buffer_type_;
   }
 
+  // Enables row prefetch for LookupPrefill(span): on the first non-negative
+  // token of each prefill batch, passes the batch's token IDs via
+  // litert::Options::SetPrefetchEmbeddingTokenIds to CompiledModel::Run so
+  // LiteRT prefetches the corresponding CPU EMBEDDING_LOOKUP table rows.
+  // Advisory only; no-op when the signature has no CPU EMBEDDING_LOOKUP op
+  // (e.g. GPU/NPU) or on unsupported platforms.
+  absl::Status EnableRowPrefetch();
+
+  // Whether row prefetch has been enabled on this lookup. Test-only.
+  bool row_prefetch_enabled() const { return row_prefetch_enabled_; }
+
  protected:
   EmbeddingLookupText(
       litert::Environment& env, const litert::Model* model,
@@ -152,8 +163,10 @@ class EmbeddingLookupText : public EmbeddingLookup {
   absl::Status Initialize();
 
   // Internal implementation of Lookup for both the single and multiple token
-  // cases.
-  absl::Status LookupInternal(int token, absl::Span<uint8_t> buffer);
+  // cases. `run_options` (may be null) is forwarded to CompiledModel::Run.
+  // Virtual so tests can observe which calls carry run options.
+  virtual absl::Status LookupInternal(int token, absl::Span<uint8_t> buffer,
+                                      litert::Options* run_options);
 
   // The environment for the embedding lookup.
   litert::Environment& env_;
@@ -188,6 +201,10 @@ class EmbeddingLookupText : public EmbeddingLookup {
   litert::Options::ScopedWeightSectionMap external_weight_sections_;
   const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
       weight_in_memory_map_ = nullptr;
+
+  // When true, LookupPrefill(span) attaches SetPrefetchEmbeddingTokenIds
+  // run options to the first LookupInternal Run call of each batch.
+  bool row_prefetch_enabled_ = false;
 };
 
 }  // namespace litert::lm

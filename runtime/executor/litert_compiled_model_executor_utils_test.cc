@@ -96,12 +96,15 @@ uint64_t AlignLiteRtLmSection(uint64_t offset) {
 
 void BuildAotTestHeader(flatbuffers::FlatBufferBuilder& builder,
                         uint64_t prefill_begin, uint64_t prefill_end,
-                        uint64_t aux_begin, uint64_t aux_end) {
+                        uint64_t aux_begin, uint64_t aux_end,
+                        proto::LlmMetadata::TfLiteModelType first_type =
+                            proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                        proto::LlmMetadata::TfLiteModelType second_type =
+                            proto::LlmMetadata::TF_LITE_AUX) {
   builder.Clear();
   auto prefill_model_type = schema::CreateKeyValuePair(
       builder, "model_type",
-      proto::LlmMetadata::TfLiteModelType_Name(
-          proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+      proto::LlmMetadata::TfLiteModelType_Name(first_type));
   auto prefill_items = builder.CreateVector(
       std::vector<flatbuffers::Offset<schema::KeyValuePair>>{
           prefill_model_type});
@@ -109,10 +112,9 @@ void BuildAotTestHeader(flatbuffers::FlatBufferBuilder& builder,
       builder, prefill_items, prefill_begin, prefill_end,
       schema::AnySectionDataType_TFLiteModel);
 
-  auto aux_model_type =
-      schema::CreateKeyValuePair(builder, "model_type",
-                                 proto::LlmMetadata::TfLiteModelType_Name(
-                                     proto::LlmMetadata::TF_LITE_AUX));
+  auto aux_model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      proto::LlmMetadata::TfLiteModelType_Name(second_type));
   auto aux_items = builder.CreateVector(
       std::vector<flatbuffers::Offset<schema::KeyValuePair>>{aux_model_type});
   auto aux_section =
@@ -128,15 +130,20 @@ void BuildAotTestHeader(flatbuffers::FlatBufferBuilder& builder,
 }
 
 void WriteAotTestModel(const std::filesystem::path& path,
-                       litert::BufferRef<uint8_t> model_buffer) {
+                       litert::BufferRef<uint8_t> model_buffer,
+                       proto::LlmMetadata::TfLiteModelType first_type =
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                       proto::LlmMetadata::TfLiteModelType second_type =
+                           proto::LlmMetadata::TF_LITE_AUX) {
   flatbuffers::FlatBufferBuilder builder;
-  BuildAotTestHeader(builder, 0, 0, 0, 0);
+  BuildAotTestHeader(builder, 0, 0, 0, 0, first_type, second_type);
   const uint64_t prefill_begin =
       AlignLiteRtLmSection(kLiteRtLmPrefixSize + builder.GetSize());
   const uint64_t prefill_end = prefill_begin + model_buffer.Size();
   const uint64_t aux_begin = AlignLiteRtLmSection(prefill_end);
   const uint64_t aux_end = aux_begin + model_buffer.Size();
-  BuildAotTestHeader(builder, prefill_begin, prefill_end, aux_begin, aux_end);
+  BuildAotTestHeader(builder, prefill_begin, prefill_end, aux_begin, aux_end,
+                     first_type, second_type);
 
   std::ofstream file(path, std::ios::binary);
   ASSERT_TRUE(file.good());
@@ -550,6 +557,65 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_THAT(GetOptimizedPrefillWorkGroups(
                   prefill_runner_set, 300, /*max_prefill_sequence_length=*/256),
               StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeEmbeddingLookupsWithRowPrefetchNeverFails) {
+  std::filesystem::path source_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_embedding.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto source_file,
+                       ScopedFile::Open(source_model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto source_loader,
+                       LitertLmLoader::Create(std::move(source_file)));
+  auto embedder_buffer =
+      source_loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER);
+  ASSERT_GT(embedder_buffer.Size(), 0);
+
+  std::filesystem::path ple_model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      "embedder_and_ple_prefetch_test.litertlm";
+  WriteAotTestModel(ple_model_path, embedder_buffer,
+                    proto::LlmMetadata::TF_LITE_EMBEDDER,
+                    proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(ple_model_path.string()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> model_resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+  ASSERT_NE(model_resources, nullptr);
+  LITERT_ASSERT_OK_AND_ASSIGN(::litert::Environment env,
+                              ::litert::Environment::Create({}));
+
+  // Row prefetch is enabled only on `per_layer_embedding_lookup`, leaving
+  // `embedding_lookup` untouched.
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
+  ASSERT_OK(InitializeEmbeddingLookups(env, *model_resources, embedding_lookup,
+                                       per_layer_embedding_lookup,
+                                       /*prefetch_embedding_rows=*/true));
+  ASSERT_NE(embedding_lookup, nullptr);
+  ASSERT_NE(per_layer_embedding_lookup, nullptr);
+  ASSERT_NE(embedding_lookup->GetTextEmbeddingLookup(), nullptr);
+  ASSERT_NE(per_layer_embedding_lookup->GetTextEmbeddingLookup(), nullptr);
+  EXPECT_FALSE(
+      embedding_lookup->GetTextEmbeddingLookup()->row_prefetch_enabled());
+  EXPECT_TRUE(per_layer_embedding_lookup->GetTextEmbeddingLookup()
+                  ->row_prefetch_enabled());
+
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup_default;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_default;
+  ASSERT_OK(InitializeEmbeddingLookups(env, *model_resources,
+                                       embedding_lookup_default,
+                                       per_layer_embedding_lookup_default));
+  ASSERT_NE(embedding_lookup_default, nullptr);
+  ASSERT_NE(per_layer_embedding_lookup_default, nullptr);
+  ASSERT_NE(embedding_lookup_default->GetTextEmbeddingLookup(), nullptr);
+  ASSERT_NE(per_layer_embedding_lookup_default->GetTextEmbeddingLookup(),
+            nullptr);
+  EXPECT_FALSE(embedding_lookup_default->GetTextEmbeddingLookup()
+                   ->row_prefetch_enabled());
+  EXPECT_FALSE(per_layer_embedding_lookup_default->GetTextEmbeddingLookup()
+                   ->row_prefetch_enabled());
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {

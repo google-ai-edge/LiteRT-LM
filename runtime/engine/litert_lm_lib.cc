@@ -925,6 +925,7 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       .share_constant_tensors = settings.share_constant_tensors,
       .sampler_handles_input = settings.sampler_handles_input,
       .mtp_gating_config = GetMtpGatingConfig(settings),
+      .prefetch_embedding_rows = settings.prefetch_embedding_rows,
   };
   if (advanced_settings.mtp_gating_config.has_value()) {
     ABSL_RETURN_IF_ERROR(

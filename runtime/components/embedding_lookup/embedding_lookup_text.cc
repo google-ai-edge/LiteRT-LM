@@ -57,7 +57,8 @@ namespace litert::lm {
 using ::litert::TensorBuffer;
 
 absl::Status EmbeddingLookupText::LookupInternal(int token,
-                                                 absl::Span<uint8_t> buffer) {
+                                                 absl::Span<uint8_t> buffer,
+                                                 litert::Options* run_options) {
   if (!compiled_model_.has_value() || input_buffers_.size() != 1 ||
       output_buffers_.empty()) {
     return absl::InvalidArgumentError(
@@ -72,8 +73,8 @@ absl::Status EmbeddingLookupText::LookupInternal(int token,
   // The input tensor size was verified when the model was loaded.
   input_buffers_[0].Write(absl::MakeSpan(const_cast<const int*>(&token), 1));
 
-  LITERT_RETURN_IF_ERROR(compiled_model_->Run(signature_key_.value(),
-                                              input_buffers_, output_buffers_));
+  LITERT_RETURN_IF_ERROR(compiled_model_->Run(
+      signature_key_.value(), input_buffers_, output_buffers_, run_options));
 
   LITERT_ASSIGN_OR_RETURN(auto output_buffer_size, output_buffers_[0].Size());
 
@@ -136,7 +137,8 @@ absl::Status EmbeddingLookupText::LookupDecode(int token,
   LITERT_ASSIGN_OR_RETURN(auto decode_output_size, decode_output->Size());
 
   return LookupInternal(
-      token, absl::Span<uint8_t>(decode_output_ptr, decode_output_size));
+      token, absl::Span<uint8_t>(decode_output_ptr, decode_output_size),
+      /*run_options=*/nullptr);
 }
 
 absl::Status EmbeddingLookupText::LookupPrefill(
@@ -150,7 +152,8 @@ absl::Status EmbeddingLookupText::LookupPrefill(
   const size_t bytes_per_token = GetFloatsPerToken() * sizeof(float);
   uint8_t* output_ptr =
       reinterpret_cast<uint8_t*>(prefill_output_vector.data());
-  return LookupInternal(token, absl::MakeSpan(output_ptr, bytes_per_token));
+  return LookupInternal(token, absl::MakeSpan(output_ptr, bytes_per_token),
+                        /*run_options=*/nullptr);
 }
 
 size_t EmbeddingLookupText::GetFloatsPerToken() {
@@ -237,10 +240,27 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
       reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr.second);
 
   prefill_output_ptr += byte_offset;
+  std::optional<litert::Options> prefetch_options;
+  if (row_prefetch_enabled_ && !tokens.empty()) {
+    LITERT_ASSIGN_OR_RETURN(litert::Options options, litert::Options::Create());
+    static_assert(sizeof(int) == sizeof(int32_t),
+                  "EmbeddingLookupText token IDs must be 32-bit ints.");
+    LITERT_RETURN_IF_ERROR(
+        options.SetPrefetchEmbeddingTokenIds(absl::MakeConstSpan(
+            reinterpret_cast<const int32_t*>(tokens.data()), tokens.size())));
+    prefetch_options = std::move(options);
+  }
   for (int token : tokens) {
     absl::Span<uint8_t> output_buffer(
         reinterpret_cast<uint8_t*>(prefill_output_ptr), bytes_per_token);
-    ABSL_RETURN_IF_ERROR(LookupInternal(token, output_buffer));
+    litert::Options* run_options = nullptr;
+    if (prefetch_options.has_value() && token >= 0) {
+      run_options = &*prefetch_options;
+    }
+    ABSL_RETURN_IF_ERROR(LookupInternal(token, output_buffer, run_options));
+    if (run_options != nullptr) {
+      prefetch_options.reset();
+    }
     prefill_output_ptr += bytes_per_token;
   }
 
@@ -407,10 +427,21 @@ absl::Status EmbeddingLookupText::Initialize() {
   // Initialize the default embedding vector to be the embedding of token 0.
   default_embedding_vector_.resize(floats_per_token_output_);
   ABSL_RETURN_IF_ERROR(LookupInternal(
-      0, absl::MakeSpan(
-             reinterpret_cast<uint8_t*>(default_embedding_vector_.data()),
-             floats_per_token_output_ * sizeof(float))));
+      0,
+      absl::MakeSpan(
+          reinterpret_cast<uint8_t*>(default_embedding_vector_.data()),
+          floats_per_token_output_ * sizeof(float)),
+      /*run_options=*/nullptr));
 
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingLookupText::EnableRowPrefetch() {
+  if (!compiled_model_.has_value() || !signature_key_.has_value()) {
+    return absl::FailedPreconditionError(
+        "EnableRowPrefetch requires an initialized embedding lookup.");
+  }
+  row_prefetch_enabled_ = true;
   return absl::OkStatus();
 }
 }  // namespace litert::lm
