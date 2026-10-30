@@ -20,11 +20,12 @@ set(LITERTLM_ANTLR_SRC_DIR
   CACHE PATH "Path to antlr source directory"
 )
 set(LITERTLM_ANTLR_TAG "7d5770395bb7b02eb56e7c62662cb1d7c08f42a3" CACHE STRING "ANTLR git tag")
+# No GIT_SHALLOW: the pinned commit is no longer the tip of upstream `dev`, so a
+# shallow clone cannot check it out ("reference is not a tree").
 FetchContent_Declare(
   antlr_lib
   GIT_REPOSITORY https://github.com/antlr/antlr4.git
   GIT_TAG ${LITERTLM_ANTLR_TAG}
-  GIT_SHALLOW true
   SOURCE_SUBDIR runtime/Cpp
   PATCH_COMMAND 
     ${CMAKE_COMMAND} 
