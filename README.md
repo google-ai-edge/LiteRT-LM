@@ -6,22 +6,12 @@ LiteRT, engineered for **high-performance**, **cross-platform** execution.
 🔗 [Product Website](https://ai.google.dev/edge/litert-lm) | 💬✨
 [Chat Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/chat/index.html) | 🔎✨ [Embedding Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/embedding_search/index.html)
 
-## 🔥 What's New: v0.18.0
-
--   **✨ New Model Release (EmbeddingGemma 2):** Shipped multimodal EmbeddingGemma 2
-    supporting text, vision, and audio embeddings with Matryoshka dimension
-    truncation across Python, Kotlin, Swift, Web (JavaScript), and C++. Check
-    out our
-    [DevSite documentation](https://developers.google.com/edge/litert-lm/embedding_models)
-    for more details!
--   **🛠️ CLI & Developer Experience:** Added fast model imports (`litert-lm import`)
-    and an OpenAI-compatible `/v1/embeddings` endpoint (`litert-lm serve`) for
-    multimodal embedding models.
--   **🔍 Model Info API:** Added `ModelInfo` and `litert-lm describe` for full
-    model introspection—covering metadata, capabilities, and runtime
-    requirements before loading.
--   **⚡ NPU & GPU Acceleration:** Enabled dynamic on-demand KV cache growth on
-    NPU and attention mask pruning optimizations on GPU.
+## 🔥 What's New: v0.19.0
+-   * **🎯 Accelerated Logit Masking**: Enables faster constrained decoding on GPUs, with full support for MTP-enabled decoding.
+-   * **🌐 Web SDK**: @litert-lm/core now stream-loads all models, defaults to the GPU backend, and supports image and audio inputs.
+-   * **🎙️ Speech Models**: Added support for multiple ASR and TTS models, including Qwen3-ASR, Kokoro, and Qwen3-TTS.
+-   * **🧱 C API 1.0.0 (Breaking)**: Functions that can fail now return LiteRtLmStatusCode with results in out_* parameters, and only litert_lm_* symbols are exported.
+-   * **⚙️ Performance & Platform**: GPU sampling now matches CPU for the same seed, ModelInfo is faster and uses less memory.
 
 👉 Try Gemma4-E4B with MTP on Linux, macOS, Windows or Raspberry Pi with the
 [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli):
