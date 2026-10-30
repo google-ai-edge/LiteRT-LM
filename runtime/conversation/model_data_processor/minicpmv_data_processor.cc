@@ -14,7 +14,6 @@
 
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -62,67 +61,22 @@ constexpr absl::string_view kImageSoftToken = "<image_soft_token>";
 // kMiniCpmVTokensPerSlice soft tokens per slice. The resampler pos_embed is
 // baked into the graph, so only the coordinates are runtime inputs.
 absl::StatusOr<InputImage> BuildSliceImage(const MiniCpmVSlice& slice) {
-  constexpr int kPatch = kMiniCpmVPatchSize;
-  constexpr int kPatchesPerSide = kMiniCpmVNumPatchesPerSide;
   const int num_patches = slice.num_patches;
-  const int patch_dim = 3 * kPatch * kPatch;
-
-  // strip is [3, patch, num_patches*patch] (channel, py, patch*patch_w+px).
-  // Rearrange to [num_patches, 3*patch*patch] for the fused linear patch
-  // embedding.
-  std::vector<float> images(static_cast<size_t>(num_patches) * patch_dim);
-  const int strip_w = num_patches * kPatch;
-  for (int p = 0; p < num_patches; ++p) {
-    for (int ch = 0; ch < 3; ++ch) {
-      for (int py = 0; py < kPatch; ++py) {
-        for (int px = 0; px < kPatch; ++px) {
-          const int col = p * kPatch + px;
-          const float value =
-              slice.strip[(static_cast<size_t>(ch) * kPatch + py) * strip_w +
-                          col];
-          images[(static_cast<size_t>(p) * patch_dim) +
-                 ((ch * kPatch + py) * kPatch + px)] = value;
-        }
-      }
-    }
-  }
-
-  // Contiguous (w,h) for the baked resampler table gather; pad rows are
-  // (-1,-1). Valid rows use the slice's own target grid (row-major, so the
-  // column is i % tgt_w). vit_positions hold the bucketized 70x70 coordinates
-  // for the ViT absolute position embedding.
-  std::vector<int32_t> positions_xy(static_cast<size_t>(num_patches) * 2);
-  std::vector<int32_t> vit_positions(static_cast<size_t>(num_patches) * 2);
-  const int tgt_w = slice.tgt_w > 0 ? slice.tgt_w : 1;
-  for (int i = 0; i < num_patches; ++i) {
-    const int64_t id = slice.position_ids[i];
-    if (id < 0) {
-      positions_xy[static_cast<size_t>(i) * 2 + 0] = -1;
-      positions_xy[static_cast<size_t>(i) * 2 + 1] = -1;
-      vit_positions[static_cast<size_t>(i) * 2 + 0] = -1;
-      vit_positions[static_cast<size_t>(i) * 2 + 1] = -1;
-    } else {
-      positions_xy[static_cast<size_t>(i) * 2 + 0] = i % tgt_w;
-      positions_xy[static_cast<size_t>(i) * 2 + 1] = i / tgt_w;
-      vit_positions[static_cast<size_t>(i) * 2 + 0] =
-          static_cast<int32_t>(id % kPatchesPerSide);
-      vit_positions[static_cast<size_t>(i) * 2 + 1] =
-          static_cast<int32_t>(id / kPatchesPerSide);
-    }
-  }
+  constexpr int kPatchDim = 3 * kMiniCpmVPatchSize * kMiniCpmVPatchSize;
+  const MiniCpmVPackedSlice packed = PackSlicePatches(slice);
 
   LITERT_ASSIGN_OR_RETURN(
       auto images_tensor,
       CopyToTensorBuffer<float>(
-          absl::MakeConstSpan(images),
-          ::litert::Dimensions({1, num_patches, patch_dim})));
+          absl::MakeConstSpan(packed.images),
+          ::litert::Dimensions({1, num_patches, kPatchDim})));
   LITERT_ASSIGN_OR_RETURN(
       auto positions_tensor,
-      CopyToTensorBuffer<int32_t>(absl::MakeConstSpan(positions_xy),
+      CopyToTensorBuffer<int32_t>(absl::MakeConstSpan(packed.positions_xy),
                                   ::litert::Dimensions({1, num_patches, 2})));
   LITERT_ASSIGN_OR_RETURN(
       auto vit_positions_tensor,
-      CopyToTensorBuffer<int32_t>(absl::MakeConstSpan(vit_positions),
+      CopyToTensorBuffer<int32_t>(absl::MakeConstSpan(packed.vit_positions),
                                   ::litert::Dimensions({1, num_patches, 2})));
 
   absl::flat_hash_map<std::string, ::litert::TensorBuffer> tensors;
@@ -161,27 +115,6 @@ absl::StatusOr<std::vector<std::string>> ExtractAllImageBytes(
     }
   }
   return images;
-}
-
-// Widens a slice strip from its valid width to the fused signature length,
-// padding with zeros. The strip is [3, patch, num_patches*patch], so widening
-// must re-pack rows: a flat resize would keep the old stride and mis-read the
-// later channels.
-void PadSliceToSignatureLength(MiniCpmVSlice& slice, int padded_num_patches) {
-  constexpr int kPatch = kMiniCpmVPatchSize;
-  const int old_w = slice.num_patches * kPatch;
-  const int new_w = padded_num_patches * kPatch;
-  std::vector<float> wide(static_cast<size_t>(3) * kPatch * new_w, 0.0f);
-  for (int row = 0; row < 3 * kPatch; ++row) {
-    std::copy(slice.strip.data() + static_cast<size_t>(row) * old_w,
-              slice.strip.data() + static_cast<size_t>(row) * old_w + old_w,
-              wide.data() + static_cast<size_t>(row) * new_w);
-  }
-  slice.strip = std::move(wide);
-  slice.num_patches = padded_num_patches;
-  // tgt_w is kept so that positions_xy stays contiguous; pad rows are marked
-  // with position_ids = -1.
-  slice.position_ids.resize(padded_num_patches, -1);
 }
 
 // Appends `text` as an InputText, skipping empty segments.

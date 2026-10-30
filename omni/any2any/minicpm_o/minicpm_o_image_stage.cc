@@ -14,7 +14,6 @@
 
 #include "omni/any2any/minicpm_o/minicpm_o_image_stage.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -22,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -71,23 +69,6 @@ class PassthroughDecodedImagePreprocessor : public lm::ImagePreprocessor {
   int width_;
   int height_;
 };
-
-// Pads a MiniCPM-V slice strip to `padded_num_patches` patches of edge
-// `patch_size`.
-void PadSliceToSignatureLength(lm::MiniCpmVSlice& slice, int padded_num_patches,
-                               int patch_size) {
-  const int old_w = slice.num_patches * patch_size;
-  const int new_w = padded_num_patches * patch_size;
-  std::vector<float> wide(static_cast<size_t>(3) * patch_size * new_w, 0.0f);
-  for (int row = 0; row < 3 * patch_size; ++row) {
-    absl::c_copy(absl::MakeConstSpan(slice.strip)
-                     .subspan(static_cast<size_t>(row) * old_w, old_w),
-                 wide.begin() + static_cast<size_t>(row) * new_w);
-  }
-  slice.strip = std::move(wide);
-  slice.num_patches = padded_num_patches;
-  slice.position_ids.resize(padded_num_patches, -1);
-}
 
 // Converts raw RGB (3-channel), RGBA (4-channel), or grayscale (1-channel)
 // `image.image_bytes` into interleaved RGB888 pixels.
@@ -178,18 +159,25 @@ absl::StatusOr<std::unique_ptr<MiniCpmOImageStage>> MiniCpmOImageStage::Create(
         "MiniCpmOImageStage vision_encoder_runner must provide non-empty "
         "input and output buffers.");
   }
-  if (vision_input_buffers.size() >= 3 &&
-      (input_indices.images >= vision_input_buffers.size() ||
-       input_indices.positions_xy >= vision_input_buffers.size() ||
+  if (input_indices.images >= vision_input_buffers.size() ||
+      (vision_input_buffers.size() >= 2 &&
+       input_indices.positions_xy >= vision_input_buffers.size()) ||
+      (vision_input_buffers.size() >= 3 &&
        input_indices.vit_positions >= vision_input_buffers.size())) {
     return absl::InvalidArgumentError(
         "MiniCpmOImageStage input_indices exceed vision_input_buffers size.");
   }
-  if (vision_input_buffers.size() == 2 &&
-      (input_indices.images >= vision_input_buffers.size() ||
-       input_indices.positions_xy >= vision_input_buffers.size())) {
-    return absl::InvalidArgumentError(
-        "MiniCpmOImageStage input_indices exceed vision_input_buffers size.");
+
+  const size_t patch_bytes = static_cast<size_t>(3) * config.vision_patch_size *
+                             config.vision_patch_size * sizeof(float);
+  LITERT_ASSIGN_OR_RETURN(size_t vision_in_bytes,
+                          vision_input_buffers[input_indices.images].Size());
+  if (vision_in_bytes == 0 || vision_in_bytes % patch_bytes != 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "MiniCpmOImageStage vision image input buffer size (", vision_in_bytes,
+        " bytes) must be a positive multiple of 3 * vision_patch_size^2 * "
+        "sizeof(float) (",
+        patch_bytes, " bytes)."));
   }
 
   const size_t hidden_bytes =
@@ -217,63 +205,30 @@ absl::Status MiniCpmOImageStage::PrepareThreeInputBuffers(
   const size_t vit_idx = input_indices_.vit_positions;
 
   const int patch_size = config_.vision_patch_size;
-  constexpr int kPatchesPerSide = lm::kMiniCpmVNumPatchesPerSide;
   const int patch_dim = 3 * patch_size * patch_size;
 
   LITERT_ASSIGN_OR_RETURN(size_t img_bytes,
                           vision_input_buffers_[img_idx].Size());
   const int padded_num_patches =
-      std::max(1, static_cast<int>(img_bytes / (sizeof(float) * patch_dim)));
+      static_cast<int>(img_bytes / (sizeof(float) * patch_dim));
   if (slice.num_patches > padded_num_patches) {
     return absl::InvalidArgumentError(absl::StrFormat(
         "MiniCPM-V slice has %d patches > fused signature capacity %d.",
         slice.num_patches, padded_num_patches));
   }
   if (slice.num_patches != padded_num_patches) {
-    PadSliceToSignatureLength(slice, padded_num_patches, patch_size);
+    lm::PadSliceToSignatureLength(slice, padded_num_patches, patch_size);
   }
 
-  std::vector<float> images(static_cast<size_t>(padded_num_patches) * patch_dim,
-                            0.0f);
-  const int strip_w = padded_num_patches * patch_size;
-  for (int p = 0; p < padded_num_patches; ++p) {
-    for (int ch = 0; ch < 3; ++ch) {
-      for (int py = 0; py < patch_size; ++py) {
-        for (int px = 0; px < patch_size; ++px) {
-          const int col = p * patch_size + px;
-          images[(static_cast<size_t>(p) * patch_dim) +
-                 ((ch * patch_size + py) * patch_size + px)] =
-              slice
-                  .strip[(static_cast<size_t>(ch) * patch_size + py) * strip_w +
-                         col];
-        }
-      }
-    }
-  }
+  const lm::MiniCpmVPackedSlice packed =
+      lm::PackSlicePatches(slice, patch_size);
 
-  std::vector<int32_t> positions_xy(static_cast<size_t>(padded_num_patches) * 2,
-                                    -1);
-  std::vector<int32_t> vit_positions(
-      static_cast<size_t>(padded_num_patches) * 2, -1);
-  const int tgt_w = slice.tgt_w > 0 ? slice.tgt_w : 1;
-  for (int i = 0; i < padded_num_patches; ++i) {
-    const int64_t id = slice.position_ids[i];
-    if (id >= 0) {
-      positions_xy[static_cast<size_t>(i) * 2 + 0] = i % tgt_w;
-      positions_xy[static_cast<size_t>(i) * 2 + 1] = i / tgt_w;
-      vit_positions[static_cast<size_t>(i) * 2 + 0] =
-          static_cast<int32_t>(id % kPatchesPerSide);
-      vit_positions[static_cast<size_t>(i) * 2 + 1] =
-          static_cast<int32_t>(id / kPatchesPerSide);
-    }
-  }
-
-  LITERT_RETURN_IF_ERROR(
-      vision_input_buffers_[img_idx].Write<float>(absl::MakeConstSpan(images)));
+  LITERT_RETURN_IF_ERROR(vision_input_buffers_[img_idx].Write<float>(
+      absl::MakeConstSpan(packed.images)));
   LITERT_RETURN_IF_ERROR(vision_input_buffers_[pos_idx].Write<int32_t>(
-      absl::MakeConstSpan(positions_xy)));
+      absl::MakeConstSpan(packed.positions_xy)));
   LITERT_RETURN_IF_ERROR(vision_input_buffers_[vit_idx].Write<int32_t>(
-      absl::MakeConstSpan(vit_positions)));
+      absl::MakeConstSpan(packed.vit_positions)));
   return absl::OkStatus();
 }
 
@@ -290,14 +245,14 @@ absl::Status MiniCpmOImageStage::PrepareTwoInputBuffers(
   LITERT_ASSIGN_OR_RETURN(size_t img_bytes,
                           vision_input_buffers_[img_idx].Size());
   const int padded_num_patches =
-      std::max(1, static_cast<int>(img_bytes / (sizeof(float) * patch_dim)));
+      static_cast<int>(img_bytes / (sizeof(float) * patch_dim));
   if (slice.num_patches > padded_num_patches) {
     return absl::InvalidArgumentError(absl::StrFormat(
         "MiniCPM-V slice has %d patches > fused signature capacity %d.",
         slice.num_patches, padded_num_patches));
   }
   if (slice.num_patches != padded_num_patches) {
-    PadSliceToSignatureLength(slice, padded_num_patches, patch_size);
+    lm::PadSliceToSignatureLength(slice, padded_num_patches, patch_size);
   }
 
   std::vector<int32_t> position_ids(padded_num_patches, -1);
@@ -313,18 +268,8 @@ absl::Status MiniCpmOImageStage::PrepareTwoInputBuffers(
     }
   }
 
-  const size_t in_floats = img_bytes / sizeof(float);
-  if (slice.strip.size() == in_floats) {
-    LITERT_RETURN_IF_ERROR(vision_input_buffers_[img_idx].Write<float>(
-        absl::MakeConstSpan(slice.strip)));
-  } else {
-    std::vector<float> input_data(in_floats, 0.0f);
-    const size_t copy_count = std::min(in_floats, slice.strip.size());
-    absl::c_copy(absl::MakeConstSpan(slice.strip).first(copy_count),
-                 input_data.begin());
-    LITERT_RETURN_IF_ERROR(vision_input_buffers_[img_idx].Write<float>(
-        absl::MakeConstSpan(input_data)));
-  }
+  LITERT_RETURN_IF_ERROR(vision_input_buffers_[img_idx].Write<float>(
+      absl::MakeConstSpan(slice.strip)));
   LITERT_RETURN_IF_ERROR(vision_input_buffers_[pos_idx].Write<int32_t>(
       absl::MakeConstSpan(position_ids)));
   return absl::OkStatus();
@@ -332,34 +277,24 @@ absl::Status MiniCpmOImageStage::PrepareTwoInputBuffers(
 
 absl::Status MiniCpmOImageStage::PrepareSingleInputBuffer(
     lm::MiniCpmVSlice& slice) {
+  const size_t img_idx = input_indices_.images;
   const int patch_size = config_.vision_patch_size;
   const int patch_dim = 3 * patch_size * patch_size;
 
-  LITERT_ASSIGN_OR_RETURN(size_t in_bytes, vision_input_buffers_[0].Size());
-  const size_t in_floats = in_bytes / sizeof(float);
-  if (in_floats >= static_cast<size_t>(patch_dim) &&
-      in_floats % patch_dim == 0) {
-    const int padded_num_patches = static_cast<int>(in_floats / patch_dim);
-    if (slice.num_patches > padded_num_patches) {
-      return absl::InvalidArgumentError(absl::StrFormat(
-          "MiniCPM-V slice has %d patches > fused signature capacity %d.",
-          slice.num_patches, padded_num_patches));
-    }
-    if (slice.num_patches != padded_num_patches) {
-      PadSliceToSignatureLength(slice, padded_num_patches, patch_size);
-    }
+  LITERT_ASSIGN_OR_RETURN(size_t in_bytes,
+                          vision_input_buffers_[img_idx].Size());
+  const int padded_num_patches =
+      static_cast<int>(in_bytes / (sizeof(float) * patch_dim));
+  if (slice.num_patches > padded_num_patches) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "MiniCPM-V slice has %d patches > fused signature capacity %d.",
+        slice.num_patches, padded_num_patches));
   }
-  if (slice.strip.size() == in_floats) {
-    LITERT_RETURN_IF_ERROR(vision_input_buffers_[0].Write<float>(
-        absl::MakeConstSpan(slice.strip)));
-  } else {
-    std::vector<float> input_data(in_floats, 0.0f);
-    const size_t copy_count = std::min(in_floats, slice.strip.size());
-    absl::c_copy(absl::MakeConstSpan(slice.strip).first(copy_count),
-                 input_data.begin());
-    LITERT_RETURN_IF_ERROR(
-        vision_input_buffers_[0].Write<float>(absl::MakeConstSpan(input_data)));
+  if (slice.num_patches != padded_num_patches) {
+    lm::PadSliceToSignatureLength(slice, padded_num_patches, patch_size);
   }
+  LITERT_RETURN_IF_ERROR(vision_input_buffers_[img_idx].Write<float>(
+      absl::MakeConstSpan(slice.strip)));
   return absl::OkStatus();
 }
 
@@ -452,7 +387,7 @@ absl::StatusOr<MiniCpmOEmbeddingSegment> MiniCpmOImageStage::ProcessImage(
             minicpm_o::kSliceEndTokenId, segment);
       }
       if (gy + 1 < sliced.grid_y) {
-        segment.token_ids.push_back(static_cast<int>('\n'));
+        segment.token_ids.push_back(minicpm_o::kImageSliceRowBreakTokenId);
       }
     }
   }

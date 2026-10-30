@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"  // from @com_google_absl
@@ -191,6 +192,55 @@ TEST_F(MiniCpmVImagePreprocessTest, EnsureDivideRoundsHalfToEven) {
   ASSERT_EQ(sliced->slices.size(), 1);
   EXPECT_EQ(sliced->slices[0].tgt_w, 22);
   EXPECT_EQ(sliced->slices[0].tgt_h, 46);
+}
+
+TEST_F(MiniCpmVImagePreprocessTest,
+       PadSliceToSignatureLengthAndPackSlicePatchesRoundTrip) {
+  // Arrange: 2x1 slice with patch_size = 2 and patches_per_side = 10.
+  constexpr int kPatchSize = 2;
+  constexpr int kPatchesPerSide = 10;
+  MiniCpmVSlice slice;
+  slice.tgt_h = 1;
+  slice.tgt_w = 2;
+  slice.num_patches = 2;
+  slice.position_ids = {0, 35};
+  // Strip shape is [3, 2, 2 * 2] = 24 floats. Fill with distinct values so
+  // row-wise padding and patch-flattening order are verified.
+  slice.strip.resize(3 * kPatchSize * slice.num_patches * kPatchSize);
+  for (size_t i = 0; i < slice.strip.size(); ++i) {
+    slice.strip[i] = static_cast<float>(i + 1);
+  }
+
+  // Act: Pad from 2 patches to 4 patches and pack into 3-input layout.
+  PadSliceToSignatureLength(slice, /*padded_num_patches=*/4, kPatchSize);
+  const MiniCpmVPackedSlice packed =
+      PackSlicePatches(slice, kPatchSize, kPatchesPerSide);
+
+  // Assert
+  EXPECT_EQ(slice.num_patches, 4);
+  EXPECT_EQ(slice.position_ids, (std::vector<int64_t>{0, 35, -1, -1}));
+  ASSERT_EQ(packed.images.size(), 4 * 3 * kPatchSize * kPatchSize);
+  // Padded patches (p = 2, 3) are all zeros.
+  for (size_t i = 2 * 3 * kPatchSize * kPatchSize; i < packed.images.size();
+       ++i) {
+    EXPECT_FLOAT_EQ(packed.images[i], 0.0f);
+  }
+  // Valid patches (p = 0, 1) preserve their strip values.
+  EXPECT_FLOAT_EQ(packed.images[0], 1.0f);
+  EXPECT_FLOAT_EQ(packed.images[1], 2.0f);
+  EXPECT_FLOAT_EQ(packed.images[3 * kPatchSize * kPatchSize + 0], 3.0f);
+  EXPECT_FLOAT_EQ(packed.images[3 * kPatchSize * kPatchSize + 1], 4.0f);
+
+  EXPECT_EQ(packed.positions_xy,
+            (std::vector<int32_t>{0, 0, 1, 0, -1, -1, -1, -1}));
+  EXPECT_EQ(packed.vit_positions,
+            (std::vector<int32_t>{0, 0, 5, 3, -1, -1, -1, -1}));
+
+  // Calling PadSliceToSignatureLength with padded_num_patches <= num_patches is
+  // a no-op and preserves the existing slice.
+  PadSliceToSignatureLength(slice, /*padded_num_patches=*/2, kPatchSize);
+  EXPECT_EQ(slice.num_patches, 4);
+  EXPECT_EQ(slice.strip.size(), 3 * kPatchSize * 4 * kPatchSize);
 }
 
 }  // namespace

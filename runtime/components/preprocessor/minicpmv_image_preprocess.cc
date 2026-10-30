@@ -316,4 +316,72 @@ absl::StatusOr<MiniCpmVSliced> PreprocessImageSliced(
   return result;
 }
 
+void PadSliceToSignatureLength(MiniCpmVSlice& slice, int padded_num_patches,
+                               int patch_size) {
+  if (padded_num_patches <= slice.num_patches) {
+    return;
+  }
+  const int old_w = slice.num_patches * patch_size;
+  const int new_w = padded_num_patches * patch_size;
+  std::vector<float> wide(static_cast<size_t>(3) * patch_size * new_w, 0.0f);
+  for (int row = 0; row < 3 * patch_size; ++row) {
+    std::copy(slice.strip.data() + static_cast<size_t>(row) * old_w,
+              slice.strip.data() + static_cast<size_t>(row) * old_w + old_w,
+              wide.data() + static_cast<size_t>(row) * new_w);
+  }
+  slice.strip = std::move(wide);
+  slice.num_patches = padded_num_patches;
+  // tgt_w is kept so that positions_xy stays contiguous; pad rows are marked
+  // with position_ids = -1.
+  slice.position_ids.resize(padded_num_patches, -1);
+}
+
+MiniCpmVPackedSlice PackSlicePatches(const MiniCpmVSlice& slice, int patch_size,
+                                     int patches_per_side) {
+  const int num_patches = slice.num_patches;
+  const int patch_dim = 3 * patch_size * patch_size;
+
+  // strip is [3, patch_size, num_patches * patch_size]
+  // (channel, py, patch * patch_size + px). Rearrange to
+  // [num_patches, 3 * patch_size * patch_size] for the fused linear patch
+  // embedding.
+  MiniCpmVPackedSlice packed;
+  packed.images.resize(static_cast<size_t>(num_patches) * patch_dim, 0.0f);
+  const int strip_w = num_patches * patch_size;
+  for (int p = 0; p < num_patches; ++p) {
+    for (int ch = 0; ch < 3; ++ch) {
+      for (int py = 0; py < patch_size; ++py) {
+        for (int px = 0; px < patch_size; ++px) {
+          const int col = p * patch_size + px;
+          packed.images[(static_cast<size_t>(p) * patch_dim) +
+                        ((ch * patch_size + py) * patch_size + px)] =
+              slice.strip[(static_cast<size_t>(ch) * patch_size + py) *
+                              strip_w +
+                          col];
+        }
+      }
+    }
+  }
+
+  // Contiguous (w, h) for the baked resampler table gather; pad rows are
+  // (-1, -1). Valid rows use the slice's own target grid (row-major, so the
+  // column is i % tgt_w). vit_positions hold the bucketized 70x70 coordinates
+  // for the ViT absolute position embedding.
+  packed.positions_xy.assign(static_cast<size_t>(num_patches) * 2, -1);
+  packed.vit_positions.assign(static_cast<size_t>(num_patches) * 2, -1);
+  const int tgt_w = slice.tgt_w > 0 ? slice.tgt_w : 1;
+  for (int i = 0; i < num_patches; ++i) {
+    const int64_t id = slice.position_ids[i];
+    if (id >= 0) {
+      packed.positions_xy[static_cast<size_t>(i) * 2 + 0] = i % tgt_w;
+      packed.positions_xy[static_cast<size_t>(i) * 2 + 1] = i / tgt_w;
+      packed.vit_positions[static_cast<size_t>(i) * 2 + 0] =
+          static_cast<int32_t>(id % patches_per_side);
+      packed.vit_positions[static_cast<size_t>(i) * 2 + 1] =
+          static_cast<int32_t>(id / patches_per_side);
+    }
+  }
+  return packed;
+}
+
 }  // namespace litert::lm

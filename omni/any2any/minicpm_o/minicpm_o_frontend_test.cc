@@ -239,7 +239,7 @@ std::vector<int> ExpectedImageStageTokens(int num_queries, int grid_x = 0,
       tokens.push_back(minicpm_o::kSliceEndTokenId);
     }
     if (row + 1 < grid_y) {
-      tokens.push_back(static_cast<int>('\n'));
+      tokens.push_back(minicpm_o::kImageSliceRowBreakTokenId);
     }
   }
   return tokens;
@@ -1879,7 +1879,8 @@ TEST(MiniCpmOFrontendTest,
                   &image_queue, std::move(empty_vision_runner), config),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
-  // Act & Assert: Out-of-bounds input_indices on a 3-input vision runner fail.
+  // Act & Assert: Out-of-bounds input_indices on a 3-input or 1-input vision
+  // runner fail.
   EXPECT_THAT(
       MiniCpmOImageStage::Create(
           &image_queue,
@@ -1889,6 +1890,26 @@ TEST(MiniCpmOFrontendTest,
           config,
           MiniCpmOImageStage::InputIndices{
               .images = 0, .positions_xy = 1, .vit_positions = 3}),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      MiniCpmOImageStage::Create(
+          &image_queue,
+          MakeMockVisionEncoderRunner(config.llm_hidden_size, /*num_queries=*/4,
+                                      /*num_patches=*/8,
+                                      /*three_inputs=*/false),
+          config, MiniCpmOImageStage::InputIndices{.images = 1}),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Act & Assert: Vision image input buffer byte size not divisible by
+  // 3 * vision_patch_size^2 * sizeof(float) fails.
+  MiniCpmOModelConfig bad_patch_config = config;
+  bad_patch_config.vision_patch_size = 5;
+  EXPECT_THAT(
+      MiniCpmOImageStage::Create(
+          &image_queue,
+          MakeMockVisionEncoderRunner(config.llm_hidden_size, /*num_queries=*/4,
+                                      /*num_patches=*/8),
+          bad_patch_config),
       StatusIs(absl::StatusCode::kInvalidArgument));
 
   // Act & Assert: Vision output buffer byte size not divisible by

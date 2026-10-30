@@ -223,7 +223,7 @@ MiniCpmOFrontendStage::FrameImageSegment(const MiniCpmOEmbeddingSegment& image,
                tok != minicpm_o::kImageEndTokenId &&
                tok != minicpm_o::kSliceStartTokenId &&
                tok != minicpm_o::kSliceEndTokenId &&
-               tok != static_cast<int>('\n')) {
+               tok != minicpm_o::kImageSliceRowBreakTokenId) {
       return absl::InvalidArgumentError(
           absl::StrCat("MiniCpmOFrontendStage image segment contains "
                        "unexpected token ID (",
@@ -263,14 +263,12 @@ MiniCpmOFrontendStage::FrameImageSegment(const MiniCpmOEmbeddingSegment& image,
       absl::MakeConstSpan(boundary.embeddings)
           .subspan(4 * static_cast<size_t>(hidden_dim_));
 
-  ABSL_ASSIGN_OR_RETURN(const MiniCpmOEmbeddingSegment image_id_seg,
+  ABSL_ASSIGN_OR_RETURN(MiniCpmOEmbeddingSegment image_id_seg,
                         text_stage_.EmbedControlText(absl::StrCat(
                             "<image_id>", image_index, "</image_id>")));
 
-  std::vector<float> framed_embeddings(image_id_seg.embeddings.begin(),
-                                       image_id_seg.embeddings.end());
-  std::vector<int> framed_token_ids(image_id_seg.token_ids.begin(),
-                                    image_id_seg.token_ids.end());
+  std::vector<float> framed_embeddings = std::move(image_id_seg.embeddings);
+  std::vector<int> framed_token_ids = std::move(image_id_seg.token_ids);
 
   size_t emb_offset = 0;
   for (int tok : image.token_ids) {
@@ -290,7 +288,7 @@ MiniCpmOFrontendStage::FrameImageSegment(const MiniCpmOEmbeddingSegment& image,
       framed_embeddings.insert(framed_embeddings.end(), slice_end_emb.begin(),
                                slice_end_emb.end());
       framed_token_ids.push_back(slice_end_id);
-    } else if (tok == static_cast<int>('\n')) {
+    } else if (tok == minicpm_o::kImageSliceRowBreakTokenId) {
       framed_embeddings.insert(framed_embeddings.end(), newline_emb.begin(),
                                newline_emb.end());
       framed_token_ids.insert(framed_token_ids.end(), newline_tokens.begin(),

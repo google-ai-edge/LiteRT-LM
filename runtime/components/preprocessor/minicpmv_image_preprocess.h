@@ -91,6 +91,31 @@ absl::StatusOr<MiniCpmVSliced> PreprocessImageSliced(
     const std::string& image_bytes, const ImagePreprocessor& image_decoder,
     const MiniCpmVSliceConfig& config = {});
 
+// Widens a slice strip from its valid width to `padded_num_patches` patches of
+// edge `patch_size`, padding with zeros, and pads `slice.position_ids` with
+// -1. The strip is [3, patch_size, num_patches * patch_size], so widening
+// re-packs each row rather than flat-resizing.
+void PadSliceToSignatureLength(MiniCpmVSlice& slice, int padded_num_patches,
+                               int patch_size = kMiniCpmVPatchSize);
+
+// One slice packed into the 3-input fused vision encoder layout:
+//   `images`:        [num_patches, 3 * patch_size * patch_size] float
+//   `positions_xy`:  [num_patches, 2] int32 (contiguous (w, h); -1 pad)
+//   `vit_positions`: [num_patches, 2] int32 (bucketized ViT (w, h); -1 pad)
+struct MiniCpmVPackedSlice {
+  std::vector<float> images;
+  std::vector<int32_t> positions_xy;
+  std::vector<int32_t> vit_positions;
+};
+
+// Rearranges `slice.strip` from [3, patch_size, num_patches * patch_size] into
+// patch-flattened `[num_patches, 3 * patch_size * patch_size]` and unpacks
+// `slice.position_ids` into 2D resampler (`positions_xy`) and ViT
+// (`vit_positions`) coordinates (with `(-1, -1)` for padded entries).
+MiniCpmVPackedSlice PackSlicePatches(
+    const MiniCpmVSlice& slice, int patch_size = kMiniCpmVPatchSize,
+    int patches_per_side = kMiniCpmVNumPatchesPerSide);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PREPROCESSOR_MINICPMV_IMAGE_PREPROCESS_H_
