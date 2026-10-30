@@ -3207,7 +3207,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   LITERT_ASSIGN_OR_RETURN(
       auto npu_auxiliary_context,
       CreateNpuAuxiliaryContext(env, *npu_auxiliary_lrt_model, mutable_settings,
-                                is_dynamic_model));
+                                is_dynamic_model,
+                                resources.GetTFLiteModelBackendConstraint(
+                                    proto::LlmMetadata::TF_LITE_AUX)));
 
   for (auto& group : context_groups) {
     group.decode_aux_signatures = BuildResolvedDecodeAuxiliarySignatures(

@@ -1423,6 +1423,28 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
   return absl::OkStatus();
 }
 
+void ApplyBackendConstraint(
+    const std::optional<std::string>& backend_constraint,
+    litert::Options& compilation_options) {
+  auto accelerators = compilation_options.GetHardwareAccelerators();
+  // Options without accelerators are rejected by LiteRT at compile time.
+  if (!accelerators.HasValue()) {
+    return;
+  }
+  compilation_options.SetHardwareAccelerators(
+      RestrictAcceleratorsToBackendConstraint(
+          litert::HwAcceleratorSet(static_cast<int>(*accelerators)),
+          backend_constraint));
+}
+
+void ApplyBackendConstraint(ModelResources& resources,
+                            absl::string_view model_type_str,
+                            litert::Options& compilation_options) {
+  ApplyBackendConstraint(
+      resources.GetTFLiteModelBackendConstraint(model_type_str),
+      compilation_options);
+}
+
 absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
@@ -1466,7 +1488,9 @@ absl::Status InitializeEmbeddingLookups(
         /*fully_supports_multi_modal=*/true,
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
-        resources.GetWeightInMemoryMap(proto::LlmMetadata::TF_LITE_EMBEDDER));
+        resources.GetWeightInMemoryMap(proto::LlmMetadata::TF_LITE_EMBEDDER),
+        resources.GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {
       SetCurrentlyCompilingModel("");
@@ -1498,6 +1522,8 @@ absl::Status InitializeEmbeddingLookups(
         /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
         std::move(external_weights.sections),
         resources.GetWeightInMemoryMap(
+            proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+        resources.GetTFLiteModelBackendConstraint(
             proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
 #ifdef __EMSCRIPTEN__
     if (SetCurrentlyCompilingModel) {

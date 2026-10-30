@@ -193,6 +193,8 @@ LlmLiteRtMtpDrafter::Create(
       UpdateCompilationOptions(executor_settings, compilation_options));
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, proto::LlmMetadata::TF_LITE_MTP_DRAFTER, compilation_options));
+  ApplyBackendConstraint(resources, proto::LlmMetadata::TF_LITE_MTP_DRAFTER,
+                         compilation_options);
   ABSL_ASSIGN_OR_RETURN(
       auto model,
       resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
