@@ -344,6 +344,16 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     }
   }
 
+  // A benchmark with `num_prefill_tokens > 0` resizes every prefill to that
+  // many tokens. Prefilling a reply again without its channel content would
+  // then prefill that many tokens of a truncated or padded history, and record
+  // it as the last prefill turn of the benchmark instead of the prompt.
+  const EngineSettings& engine_settings = engine.GetEngineSettings();
+  if (engine_settings.IsBenchmarkEnabled() &&
+      engine_settings.GetBenchmarkParams()->num_prefill_tokens() > 0) {
+    filter_channel_content_from_kv_cache = false;
+  }
+
   DataProcessorConfig processor_config;
   if (overwrite_processor_config.has_value()) {
     // Use the overwrite processor config if provided.
