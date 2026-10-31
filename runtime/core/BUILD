@@ -179,7 +179,7 @@ cc_library(
     deps = [
         ":engine_advanced_impl_common",
         "//runtime/components:default_static_gpu_samplers",
-        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:default_gpu_accelerator",
     ],
     alwayslink = 1,
 )
@@ -220,7 +220,7 @@ cc_library(
     }),
     deps = ENGINE_IMPL_LITE_COMMON_DEPS + [
         "//runtime/components:default_static_gpu_samplers",
-        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:default_gpu_accelerator",
     ] + select({
         "//conditions:default": [],
     }) + select({
