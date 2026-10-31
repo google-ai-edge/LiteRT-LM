@@ -710,6 +710,7 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/test:matchers",
         "//runtime/components/constrained_decoding:constrained_decoder",
+        "//runtime/components/constrained_decoding:constraint",
         "//runtime/components/constrained_decoding:fake_constraint",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",

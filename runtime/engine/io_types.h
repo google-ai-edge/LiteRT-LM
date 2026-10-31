@@ -417,6 +417,19 @@ class DecodeConfig {
     return thinking_end_token_ids_;
   }
 
+  // Sets draft token IDs that the decoding verifies first, for example the
+  // previous interim transcript of a streaming speech recognizer. Instead of
+  // decoding these tokens one by one, the runtime runs them through the model
+  // in parallel. The response starts with the longest prefix of the draft that
+  // decoding would have produced, followed by the next decoded token, and
+  // decoding continues from there.
+  void SetDraftTokenIds(std::vector<int> draft_token_ids) {
+    draft_token_ids_ = std::move(draft_token_ids);
+  }
+
+  // Returns the draft token IDs that the decoding verifies first, if any.
+  const std::vector<int>& GetDraftTokenIds() const { return draft_token_ids_; }
+
  private:
   DecodeConfig() = default;
 
@@ -432,6 +445,7 @@ class DecodeConfig {
   std::optional<int> thinking_token_budget_ = std::nullopt;
   std::vector<int> thinking_start_token_ids_;
   std::vector<int> thinking_end_token_ids_;
+  std::vector<int> draft_token_ids_;
 };
 
 // Runtime debug metadata associated with a Session.

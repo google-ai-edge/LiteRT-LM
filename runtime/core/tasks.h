@@ -23,6 +23,7 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
@@ -59,7 +60,8 @@ absl::StatusOr<Responses> Decode(
     std::optional<int> thinking_token_budget = std::nullopt,
     const std::vector<int>& thinking_end_token_ids = {},
     const std::vector<int>& thinking_start_token_ids = {},
-    const SpeculativeDecodingConfig& speculative_decoding_config = {});
+    const SpeculativeDecodingConfig& speculative_decoding_config = {},
+    absl::Span<const int> draft_token_ids = {});
 
 absl::StatusOr<Responses> Score(
     LlmExecutor& executor, Tokenizer& tokenizer,

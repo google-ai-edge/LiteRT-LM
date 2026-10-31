@@ -58,6 +58,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
+#include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  //NOLINT
@@ -203,16 +204,17 @@ class StopTokenStreamFilter {
 // and external sampling.
 class DecodeOneStep {
  private:
-  DecodeOneStep(
-      LlmExecutor* absl_nonnull executor, Tokenizer* absl_nonnull tokenizer,
-      int num_output_candidates, const StopTokenDetector& stop_token_detector,
-      std::optional<BenchmarkInfo>& benchmark_info,
-      std::optional<Sampler*> sampler,
-      std::unique_ptr<CompositeConstraint> composite_constraint,
-      std::unique_ptr<ConstrainedDecoder> constrained_decoder,
-      std::optional<litert::TensorBuffer> scores_tensor,
-      const std::atomic<bool>* cancelled,
-      const SpeculativeDecodingConfig& speculative_decoding_config = {})
+  DecodeOneStep(LlmExecutor* absl_nonnull executor,
+                Tokenizer* absl_nonnull tokenizer, int num_output_candidates,
+                const StopTokenDetector& stop_token_detector,
+                std::optional<BenchmarkInfo>& benchmark_info,
+                std::optional<Sampler*> sampler,
+                std::unique_ptr<CompositeConstraint> composite_constraint,
+                std::unique_ptr<ConstrainedDecoder> constrained_decoder,
+                std::optional<litert::TensorBuffer> scores_tensor,
+                const std::atomic<bool>* cancelled,
+                const SpeculativeDecodingConfig& speculative_decoding_config,
+                std::vector<int> draft_token_ids)
       : executor_(*executor),
         tokenizer_(*tokenizer),
         detokenizer_(&tokenizer_, num_output_candidates),
@@ -226,7 +228,8 @@ class DecodeOneStep {
         result_text_(num_output_candidates, ""),
         result_token_ids_(num_output_candidates),
         cancelled_(cancelled),
-        speculative_decoding_config_(speculative_decoding_config) {
+        speculative_decoding_config_(speculative_decoding_config),
+        draft_token_ids_(std::move(draft_token_ids)) {
     if (scores_tensor.has_value()) {
       scores_tensor_ = std::move(*scores_tensor);
     }
@@ -244,7 +247,8 @@ class DecodeOneStep {
       const std::atomic<bool>* cancelled =
           nullptr,  // Add cancelled signal for one decode step (eg.
                     // for diffusion-llm)
-      const SpeculativeDecodingConfig& speculative_decoding_config = {}) {
+      const SpeculativeDecodingConfig& speculative_decoding_config = {},
+      std::vector<int> draft_token_ids = {}) {
     ABSL_ASSIGN_OR_RETURN(auto composite_constraint,
                           CompositeConstraint::Create());
     if (repetition_penalty_config.enabled()) {
@@ -295,7 +299,7 @@ class DecodeOneStep {
         executor, tokenizer, num_output_candidates, stop_token_detector,
         benchmark_info, sampler, std::move(composite_constraint),
         std::move(constrained_decoder), std::move(scores_tensor), cancelled,
-        speculative_decoding_config));
+        speculative_decoding_config, std::move(draft_token_ids)));
   }
 
   // Runs one step of the decode process and returns if all stops for all
@@ -309,6 +313,11 @@ class DecodeOneStep {
       std::optional<litert::TensorBuffer> decoded_ids = std::nullopt,
       int max_num_tokens_to_emit = std::numeric_limits<int>::max()) {
     RET_CHECK_GT(max_num_tokens_to_emit, 0);
+    if (static_cast<int>(draft_token_ids_.size()) >= max_num_tokens_to_emit) {
+      // Like a decode at the end of its budget, verifies only the draft tokens
+      // that leave room for the token after them.
+      draft_token_ids_.resize(max_num_tokens_to_emit - 1);
+    }
     ABSL_ASSIGN_OR_RETURN(auto token_ids,
                           DecodeAndSample(std::move(decoded_ids)));
 
@@ -538,7 +547,22 @@ class DecodeOneStep {
       if (constrained_decoder_ != nullptr) {
         decode_params.SetConstrainedDecoder(constrained_decoder_.get());
       }
-      ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
+      if (!draft_token_ids_.empty()) {
+        const std::vector<int> draft_token_ids =
+            std::exchange(draft_token_ids_, {});
+        ABSL_ASSIGN_OR_RETURN(
+            DraftVerificationResult result,
+            executor_.VerifyDraft(draft_token_ids, decode_params));
+        if (constrained_decoder_ != nullptr) {
+          // When MTP primes its drafter, it restarts the drafter's constraint
+          // state, which would drop the verified tokens. So the rest of a
+          // constrained turn decodes without MTP.
+          speculative_decoding_config_.mode = SpeculativeDecodingMode::kOff;
+        }
+        output_tokens = {std::move(result.tokens)};
+      } else {
+        ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
+      }
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(
             benchmark_info_->TimeMarkDelta("executor_decode_and_sample"));
@@ -571,6 +595,9 @@ class DecodeOneStep {
   bool is_first_step_ = true;
   const std::atomic<bool>* cancelled_ = nullptr;
   SpeculativeDecodingConfig speculative_decoding_config_;
+
+  // The draft tokens that the first step verifies, if any.
+  std::vector<int> draft_token_ids_;
 };
 
 // Prefills the tokens sampled by the external sampler at the last decode step
@@ -675,9 +702,27 @@ absl::StatusOr<Responses> Decode(
     std::optional<int> thinking_token_budget,
     const std::vector<int>& thinking_end_token_ids,
     const std::vector<int>& thinking_start_token_ids,
-    const SpeculativeDecodingConfig& speculative_decoding_config) {
+    const SpeculativeDecodingConfig& speculative_decoding_config,
+    absl::Span<const int> draft_token_ids) {
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
+  if (!draft_token_ids.empty()) {
+    // The budgets may cut the draft, even to nothing, before `VerifyDraft()`
+    // sees it. Checks the whole draft here, so that the turn fails the same way
+    // whatever its budgets.
+    if (is_custom_sampling) {
+      // The external sampler's decode steps can't verify drafts.
+      return absl::FailedPreconditionError(
+          "Draft verification doesn't support external sampling.");
+    }
+    if (num_output_candidates != 1) {
+      return absl::FailedPreconditionError(
+          "Draft verification supports a single output candidate only.");
+    }
+    ABSL_RETURN_IF_ERROR(executor.CheckDraftVerificationSupport());
+    ABSL_ASSIGN_OR_RETURN(const int vocab_size, executor.GetVocabSize());
+    ABSL_RETURN_IF_ERROR(ValidateDraftTokenIds(draft_token_ids, vocab_size));
+  }
 
   int benchmark_decode_token_count = 0;
   if (benchmark_info.has_value()) {
@@ -758,7 +803,8 @@ absl::StatusOr<Responses> Decode(
           &executor, &tokenizer, num_output_candidates, stop_token_detector,
           benchmark_info, sampler, std::move(repetition_penalty_config),
           std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
-          constraint, cancelled, speculative_decoding_config));
+          constraint, cancelled, speculative_decoding_config,
+          std::vector<int>(draft_token_ids.begin(), draft_token_ids.end())));
   while (true) {
     if (cancelled != nullptr && cancelled->load()) {
       if (benchmark_info.has_value()) {

@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor.h"
@@ -83,6 +84,20 @@ class FakeLlmExecutor : public LlmExecutor {
 
   absl::StatusOr<::litert::TensorBuffer> DecodeLogits(
       const ExecutorInputs& inputs) override;
+
+  // Returns the status set with `SetDraftVerificationSupport()`, or else the
+  // default of `LlmExecutor`.
+  absl::Status CheckDraftVerificationSupport() const override;
+
+  // Verifies the draft against the decode tokens, which stand for the tokens
+  // that the model predicts: accepts the longest prefix of the draft that the
+  // next decode steps would return, then returns the decode token after it.
+  // Stops early when the decode tokens run out. Like `Decode()`, advances a
+  // constrained decoder by the processed tokens, but doesn't mask. Supports
+  // batch size 1 only.
+  absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) override;
 
   absl::string_view ExecutorBackendName() const override {
     return "FakeLlmExecutorBackend";
@@ -181,6 +196,17 @@ class FakeLlmExecutor : public LlmExecutor {
     decode_logits_options_ = options;
   }
 
+  // Sets the status that `CheckDraftVerificationSupport()` returns, e.g. OK to
+  // let the executor verify drafts.
+  void SetDraftVerificationSupport(absl::Status status) {
+    draft_verification_support_ = std::move(status);
+  }
+
+  // Returns the drafts that `VerifyDraft()` received.
+  const std::vector<std::vector<int>>& verified_drafts() const {
+    return verified_drafts_;
+  }
+
   absl::Status Reset() override;
 
   // Returns the effective speculative decoding mode of the last
@@ -238,6 +264,11 @@ class FakeLlmExecutor : public LlmExecutor {
   LastOp last_op_ = LastOp::kNone;
 
   SpeculativeDecodingConfig last_decode_speculative_decoding_config_;
+
+  // The status that `CheckDraftVerificationSupport()` returns, if set.
+  std::optional<absl::Status> draft_verification_support_;
+  // The drafts that `VerifyDraft()` received.
+  std::vector<std::vector<int>> verified_drafts_;
 
   mutable std::optional<::litert::Environment> env_;
 };

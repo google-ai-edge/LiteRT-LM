@@ -523,6 +523,14 @@ TEST(DecodeConfigTest, SetAndGetMaxOutputTokens) {
   EXPECT_EQ(decode_config.GetMaxOutputTokens(), 42);
 }
 
+TEST(DecodeConfigTest, SetAndGetDraftTokenIds) {
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  EXPECT_THAT(decode_config.GetDraftTokenIds(), ::testing::IsEmpty());
+
+  decode_config.SetDraftTokenIds({3, 1, 4});
+  EXPECT_THAT(decode_config.GetDraftTokenIds(), ElementsAre(3, 1, 4));
+}
+
 TEST(VisionExecutorPropertiesTest, OperatorOutput) {
   VisionExecutorProperties properties;
   properties.num_tokens_per_image = 128;

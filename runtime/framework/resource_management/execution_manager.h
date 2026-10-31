@@ -181,6 +181,8 @@ class ExecutionManager {
   // - constraint: The constraint for the decode task.
   // - cancelled: The cancelled flag for the decode task.
   // - callback: The callback function.
+  // - draft_token_ids: The draft tokens that the decode task verifies first,
+  //   if any (see `Tasks::Decode()`).
   virtual absl::Status AddDecodeTask(
       SessionId session_id, TaskId task_id,
       absl::flat_hash_set<TaskId> dep_tasks,
@@ -193,7 +195,8 @@ class ExecutionManager {
       int max_output_tokens,
       std::optional<int> thinking_token_budget = std::nullopt,
       std::vector<int> thinking_start_token_ids = {},
-      std::vector<int> thinking_end_token_ids = {}) = 0;
+      std::vector<int> thinking_end_token_ids = {},
+      std::vector<int> draft_token_ids = {}) = 0;
 
   // Adds a decode task to the execution manager with the maximum output tokens
   // set to infinity.

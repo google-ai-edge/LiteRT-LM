@@ -220,8 +220,12 @@ class SessionAdvancedTest : public testing::Test {
                                              batch_size, audio_embedding);
   }
 
+  // Creates a session that prefills "Hello World!" and decodes "How's it
+  // going?". If set, `draft_verification_support` is what the executor
+  // reports about draft verification.
   absl::StatusOr<std::unique_ptr<SessionAdvanced>> CreateTestSession(
-      const Engine* engine = nullptr) {
+      const Engine* engine = nullptr,
+      std::optional<absl::Status> draft_verification_support = std::nullopt) {
     const std::vector<std::vector<int>> stop_token_ids = {{2294}};
     SessionConfig session_config = SessionConfig::CreateDefault();
     session_config.GetMutableSamplerParams() = sampler_params_;
@@ -235,6 +239,9 @@ class SessionAdvancedTest : public testing::Test {
         // "How's it going?"
         /*decode_tokens=*/{
             {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}});
+    if (draft_verification_support.has_value()) {
+      executor->SetDraftVerificationSupport(*draft_verification_support);
+    }
     fake_executor_ = executor.get();
     ABSL_ASSIGN_OR_RETURN(
         execution_manager_,
@@ -429,6 +436,60 @@ TEST_F(SessionAdvancedTest, RunDecodeWithMaxOutputTokens) {
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids, responses.GetTexts()[0]);
+}
+
+TEST_F(SessionAdvancedTest, RunDecodeVerifiesTheDraft) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      CreateTestSession(/*engine=*/nullptr,
+                        /*draft_verification_support=*/absl::OkStatus()));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetDraftTokenIds({224, 24, 8});
+  ASSERT_OK_AND_ASSIGN(Responses responses, session->RunDecode(decode_config));
+
+  EXPECT_THAT(responses.GetTexts(), testing::ElementsAre("How's it going?"));
+  EXPECT_THAT(fake_executor_->verified_drafts(),
+              testing::ElementsAre(testing::ElementsAre(224, 24, 8)));
+}
+
+TEST_F(SessionAdvancedTest, RunDecodeVerifiesTheDraftTokensThatFit) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      CreateTestSession(/*engine=*/nullptr,
+                        /*draft_verification_support=*/absl::OkStatus()));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetDraftTokenIds({224, 24, 8});
+  decode_config.SetMaxOutputTokens(3);
+  ASSERT_OK(session->RunDecode(decode_config));
+
+  // The 3 output tokens leave room for 2 draft tokens and the token after them.
+  EXPECT_THAT(fake_executor_->verified_drafts(),
+              testing::ElementsAre(testing::ElementsAre(224, 24)));
+}
+
+TEST_F(SessionAdvancedTest, RunDecodeFailsIfTheDraftCantBeVerified) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      CreateTestSession(/*engine=*/nullptr,
+                        /*draft_verification_support=*/
+                        absl::FailedPreconditionError("No verify signature.")));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetDraftTokenIds({224, 24});
+  EXPECT_THAT(session->RunDecode(decode_config),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       testing::HasSubstr("No verify signature.")));
 }
 
 TEST_F(SessionAdvancedTest, RunDecodeWithExternalSampler) {

@@ -314,7 +314,8 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
           session_info_->session_config.GetMaxOutputTokens()),
       decode_config.GetThinkingTokenBudget(),
       decode_config.GetThinkingStartTokenIds(),
-      decode_config.GetThinkingEndTokenIds()));
+      decode_config.GetThinkingEndTokenIds(),
+      decode_config.GetDraftTokenIds()));
 
   last_task_ids_ = {task_id};
 

@@ -34,6 +34,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -302,6 +303,73 @@ absl::Status FakeLlmExecutor::Reset() {
   prefill_tokens_total_ = 0;
   last_op_ = LastOp::kNone;
   return absl::OkStatus();
+}
+
+absl::Status FakeLlmExecutor::CheckDraftVerificationSupport() const {
+  if (draft_verification_support_.has_value()) {
+    return *draft_verification_support_;
+  }
+  return LlmExecutor::CheckDraftVerificationSupport();
+}
+
+absl::StatusOr<DraftVerificationResult> FakeLlmExecutor::VerifyDraft(
+    absl::Span<const int> draft_token_ids,
+    const ExecutorDecodeParams& decode_params) {
+  ABSL_RETURN_IF_ERROR(CheckDraftVerificationSupport());
+  verified_drafts_.emplace_back(draft_token_ids.begin(), draft_token_ids.end());
+  TryDecodeDelay();
+  ABSL_RETURN_IF_ERROR(decode_status_);
+  if (last_op_ == LastOp::kNone) {
+    return absl::FailedPreconditionError(
+        "VerifyDraft called without prior prefill or decode.");
+  }
+  if (batch_size_ != 1) {
+    return absl::FailedPreconditionError(
+        "VerifyDraft supports batch size 1 only.");
+  }
+  if (draft_token_ids.empty()) {
+    return absl::InvalidArgumentError("The draft is empty.");
+  }
+  if (decode_times_ >= decode_tokens_set_.size()) {
+    return absl::InvalidArgumentError(
+        "VerifyDraft called after the last decode token.");
+  }
+  ConstrainedDecoder* constrained_decoder =
+      decode_params.GetConstrainedDecoder();
+  // Advances the constrained decoder by `token`, which became processed.
+  auto process = [constrained_decoder](int token) -> absl::Status {
+    if (constrained_decoder == nullptr) {
+      return absl::OkStatus();
+    }
+    std::vector<int> token_ids = {token};
+    return constrained_decoder->UpdateState(absl::MakeSpan(token_ids));
+  };
+  // As in `Decode()`, the pending token counts for the constraint only if a
+  // decode produced it.
+  if (last_op_ == LastOp::kDecode) {
+    ABSL_RETURN_IF_ERROR(process(decode_tokens_set_[decode_times_ - 1][0]));
+  }
+
+  DraftVerificationResult result;
+  while (decode_times_ < decode_tokens_set_.size()) {
+    if (!result.tokens.empty()) {
+      ABSL_RETURN_IF_ERROR(process(result.tokens.back()));
+    }
+    const int token = decode_tokens_set_[decode_times_][0];
+    result.tokens.push_back(token);
+    processed_tokens_.AddProcessedTokens({token});
+    ++decode_times_;
+    ++current_step_;
+    // A mismatch makes `token` the correction, and `token` after the draft is
+    // the token after it.
+    if (result.num_accepted >= draft_token_ids.size() ||
+        draft_token_ids[result.num_accepted] != token) {
+      break;
+    }
+    ++result.num_accepted;
+  }
+  last_op_ = LastOp::kDecode;
+  return result;
 }
 
 absl::StatusOr<std::vector<std::vector<int>>>

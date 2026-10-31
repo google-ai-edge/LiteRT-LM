@@ -19,6 +19,7 @@
 #include <filesystem>  // NOLINT
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -908,6 +909,58 @@ TEST_P(ExecutionManagerTest, AddDecodeTaskWithInternalSampler) {
                           TaskState::kProcessing, TaskState::kDone));
 
   EXPECT_THAT(responses_texts, ElementsAre("4", "5"));
+}
+
+TEST_P(ExecutionManagerTest, AddDecodeTaskVerifiesTheDraft) {
+  std::unique_ptr<FakeLlmExecutor> executor = CreateDefaultFakeLlmExecutor();
+  executor->SetDraftVerificationSupport(absl::OkStatus());
+  const FakeLlmExecutor* fake_executor = executor.get();
+  CreateExecutionManager(std::move(executor));
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_task_id, std::move(inputs),
+      /*dependency_task_ids=*/{},
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      /*callback=*/[](absl::StatusOr<Responses> responses) {}));
+  ASSERT_OK(
+      execution_manager_->WaitUntilDone(prefill_task_id, absl::Seconds(3)));
+
+  std::string response_text;
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
+      [&response_text](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        if (!responses->GetTexts().empty()) {
+          response_text += responses->GetTexts()[0];
+        }
+      };
+  ASSERT_OK_AND_ASSIGN(const TaskId decode_task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddDecodeTask(
+      session_id, decode_task_id,
+      /*dependency_task_ids=*/{}, RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+      /*constraint=*/nullptr,
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      std::move(callback),
+      /*max_output_tokens=*/std::numeric_limits<int>::max(),
+      /*thinking_token_budget=*/std::nullopt,
+      /*thinking_start_token_ids=*/{}, /*thinking_end_token_ids=*/{},
+      /*draft_token_ids=*/{4}));
+  EXPECT_OK(
+      execution_manager_->WaitUntilDone(decode_task_id, absl::Seconds(3)));
+
+  // The same response as without the draft.
+  EXPECT_EQ(response_text, "45");
+  EXPECT_THAT(fake_executor->verified_drafts(), ElementsAre(ElementsAre(4)));
 }
 
 TEST_P(ExecutionManagerTest, AddDecodeTaskWithExternalSampler) {

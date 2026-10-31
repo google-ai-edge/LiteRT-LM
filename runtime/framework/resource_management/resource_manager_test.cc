@@ -143,29 +143,22 @@ TEST(ResourceManagerTest, AcquiredExecutorForwardsDraftVerification) {
 TEST(ResourceManagerTest, ExecutorsDontSupportDraftVerificationByDefault) {
   FakeLlmExecutor executor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
                            /*decode_tokens_set=*/{});
-  EXPECT_THAT(executor.CheckDraftVerificationSupport(),
+  // The defaults of `LlmExecutor`.
+  EXPECT_THAT(executor.LlmExecutor::CheckDraftVerificationSupport(),
               StatusIs(absl::StatusCode::kFailedPrecondition));
-  EXPECT_THAT(executor.VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
-              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(
+      executor.LlmExecutor::VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
+      StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
-// A fake executor that claims draft verification support, but doesn't
-// implement it.
-class SupportOnlyFakeLlmExecutor : public FakeLlmExecutor {
- public:
-  SupportOnlyFakeLlmExecutor()
-      : FakeLlmExecutor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
-                        /*decode_tokens_set=*/{}) {}
-
-  absl::Status CheckDraftVerificationSupport() const override {
-    return absl::OkStatus();
-  }
-};
-
 TEST(ResourceManagerTest, ExecutorsDontVerifyDraftsByDefault) {
-  SupportOnlyFakeLlmExecutor executor;
-  EXPECT_THAT(executor.VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
-              StatusIs(absl::StatusCode::kUnimplemented));
+  FakeLlmExecutor executor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
+                           /*decode_tokens_set=*/{});
+  executor.SetDraftVerificationSupport(absl::OkStatus());
+  // The default of `LlmExecutor` for an executor that claims support.
+  EXPECT_THAT(
+      executor.LlmExecutor::VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
+      StatusIs(absl::StatusCode::kUnimplemented));
 }
 
 }  // namespace

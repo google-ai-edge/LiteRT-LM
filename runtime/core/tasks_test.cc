@@ -33,10 +33,12 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/engine/io_types.h"
@@ -44,6 +46,7 @@
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -60,6 +63,7 @@ using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 constexpr char kTestdataDir[] =
@@ -875,6 +879,308 @@ TEST_F(TasksMultiTokenDecodeTest, StreamingChunksCarrySeveralTokens) {
 
   EXPECT_THAT(streamed_token_ids, ElementsAre(224, 24, 8, 66));
   EXPECT_LT(num_chunks, static_cast<int>(streamed_token_ids.size()));
+}
+
+// The token ids of "Hello World!", with the bos token id (2) first.
+std::vector<int> HelloWorldTokenIds() {
+  return {2, 90, 547, 58, 735, 210, 466, 2294};
+}
+
+// The decode tokens of "How's it going?", then the stop token id (2294).
+std::vector<std::vector<int>> HowsItGoingDecodeTokens() {
+  return {{224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}};
+}
+
+// Returns a fake executor that can verify drafts and whose model predicts
+// `decode_tokens`, after a prefill of "Hello World!".
+absl::StatusOr<std::unique_ptr<FakeLlmExecutor>> CreatePrefilledDraftExecutor(
+    Tokenizer& tokenizer, const std::vector<std::vector<int>>& decode_tokens,
+    absl::Status draft_verification_support = absl::OkStatus(),
+    int max_num_tokens = 1024) {
+  // The vocabulary covers the token ids of the tests.
+  auto executor = std::make_unique<FakeLlmExecutor>(
+      /*vocab_size=*/2560, std::vector<std::vector<int>>{HelloWorldTokenIds()},
+      decode_tokens);
+  executor->SetDraftVerificationSupport(std::move(draft_verification_support));
+  ABSL_ASSIGN_OR_RETURN(LlmExecutorSettings * settings,
+                        executor->GetMutableExecutorSettings());
+  settings->SetMaxNumTokens(max_num_tokens);
+  std::optional<BenchmarkInfo> benchmark_info;
+  ABSL_ASSIGN_OR_RETURN(auto token_ids_buffer,
+                        tokenizer.TokenIdsToTensorBuffer(HelloWorldTokenIds()));
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+  ABSL_RETURN_IF_ERROR(Tasks::Prefill(*executor, inputs,
+                                      /*wait_for_completion=*/false,
+                                      benchmark_info)
+                           .status());
+  return executor;
+}
+
+// Decodes one candidate until the stop token id 2294, starting with the
+// verification of `draft_token_ids`.
+absl::StatusOr<Responses> DecodeWithDraft(
+    LlmExecutor& executor, Tokenizer& tokenizer,
+    absl::Span<const int> draft_token_ids,
+    int max_output_tokens = std::numeric_limits<int>::max(),
+    Constraint* constraint = nullptr,
+    const SpeculativeDecodingConfig& speculative_decoding_config = {}) {
+  std::optional<BenchmarkInfo> benchmark_info;
+  StopTokenDetector stop_token_detector(/*batch_size=*/1);
+  ABSL_RETURN_IF_ERROR(stop_token_detector.AddStopTokenSequence({2294}));
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+  return Tasks::Decode(
+      executor, tokenizer, stop_token_detector, /*num_output_candidates=*/1,
+      benchmark_info, /*sampler=*/std::nullopt,
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(), constraint,
+      /*decoded_ids=*/std::nullopt, callback, /*cancelled=*/nullptr,
+      max_output_tokens, /*thinking_token_budget=*/std::nullopt,
+      /*thinking_end_token_ids=*/{}, /*thinking_start_token_ids=*/{},
+      speculative_decoding_config, draft_token_ids);
+}
+
+TEST_F(TasksTest, DecodeVerifiesTheDraftFirst) {
+  const std::vector<std::vector<int>> drafts = {
+      // Accepted, then the token after it.
+      {224, 24, 8},
+      // Rejected at the first or a later token, then the correction.
+      {7},
+      {224, 24, 9, 66},
+      // The whole response, without and with the stop token.
+      {224, 24, 8, 66, 246, 18, 2295},
+      {224, 24, 8, 66, 246, 18, 2295, 2294},
+  };
+  for (const std::vector<int>& draft : drafts) {
+    SCOPED_TRACE(testing::PrintToString(draft));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<FakeLlmExecutor> executor,
+        CreatePrefilledDraftExecutor(*tokenizer_, HowsItGoingDecodeTokens()));
+
+    ASSERT_OK_AND_ASSIGN(Responses responses,
+                         DecodeWithDraft(*executor, *tokenizer_, draft));
+
+    EXPECT_THAT(executor->verified_drafts(), ElementsAre(draft));
+    // The same response and context as without a draft.
+    EXPECT_EQ(responses.GetTaskState(), TaskState::kDone);
+    EXPECT_THAT(responses.GetTexts(), ElementsAre("How's it going?"));
+    EXPECT_THAT(responses.GetTokenIds(),
+                ElementsAre(ElementsAre(224, 24, 8, 66, 246, 18, 2295)));
+    EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(8 + 8));
+  }
+}
+
+TEST_F(TasksTest, DecodeKeepsTheStopTokenOfAVerifiedDraftPending) {
+  // The model continues after the stop token.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<FakeLlmExecutor> executor,
+                       CreatePrefilledDraftExecutor(
+                           *tokenizer_, {{224}, {24}, {2294}, {8}, {66}}));
+
+  ASSERT_OK_AND_ASSIGN(
+      Responses responses,
+      DecodeWithDraft(*executor, *tokenizer_, {224, 24, 2294, 8}));
+
+  EXPECT_THAT(responses.GetTokenIds(), ElementsAre(ElementsAre(224, 24)));
+  // As after single-token steps, the stop token is the pending token.
+  EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(8 + 3));
+}
+
+TEST_F(TasksTest, DecodeStreamsTheVerifiedTokensAsOneStep) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<FakeLlmExecutor> executor,
+      CreatePrefilledDraftExecutor(*tokenizer_, HowsItGoingDecodeTokens()));
+  std::optional<BenchmarkInfo> benchmark_info;
+  StopTokenDetector stop_token_detector(/*batch_size=*/1);
+  ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+  std::vector<std::vector<int>> streamed_token_ids;
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
+      [&streamed_token_ids](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        ASSERT_EQ(responses->GetTokenIds().size(), 1);
+        streamed_token_ids.push_back(responses->GetTokenIds()[0]);
+      };
+  const std::vector<int> draft = {224, 24, 8};
+
+  ASSERT_OK(Tasks::Decode(
+      *executor, *tokenizer_, stop_token_detector, /*num_output_candidates=*/1,
+      benchmark_info, /*sampler=*/std::nullopt,
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+      /*decoded_ids=*/std::nullopt, callback, /*cancelled=*/nullptr,
+      /*max_output_tokens=*/std::numeric_limits<int>::max(),
+      /*thinking_token_budget=*/std::nullopt, /*thinking_end_token_ids=*/{},
+      /*thinking_start_token_ids=*/{}, /*speculative_decoding_config=*/{},
+      draft));
+
+  // The verified tokens arrive in one response, except the last one: the
+  // detokenizer releases every token one token later.
+  EXPECT_THAT(
+      streamed_token_ids,
+      ElementsAre(ElementsAre(224, 24, 8), ElementsAre(66), ElementsAre(246),
+                  ElementsAre(18), ElementsAre(2295)));
+}
+
+TEST_F(TasksTest, DecodeFailsIfTheDraftCantBeVerified) {
+  struct TestCase {
+    std::string name;
+    absl::Status draft_verification_support = absl::OkStatus();
+    bool external_sampling = false;
+    int num_output_candidates = 1;
+    std::vector<int> draft = {224, 24, 8};
+    // A budget of 1 token cuts the whole draft, and 3 tokens its last token.
+    int max_output_tokens = std::numeric_limits<int>::max();
+    absl::StatusCode expected_code = absl::StatusCode::kFailedPrecondition;
+  };
+  const std::vector<TestCase> test_cases = {
+      {.name = "Unsupported",
+       .draft_verification_support = absl::FailedPreconditionError("No.")},
+      {.name = "UnsupportedWithoutRoomForTheDraft",
+       .draft_verification_support = absl::FailedPreconditionError("No."),
+       .max_output_tokens = 1},
+      {.name = "ExternalSampling", .external_sampling = true},
+      {.name = "MultipleOutputCandidates", .num_output_candidates = 2},
+      {.name = "NegativeTokenId",
+       .draft = {224, -1},
+       .expected_code = absl::StatusCode::kInvalidArgument},
+      {.name = "TokenIdOutsideOfTheVocabulary",
+       .draft = {224, 2560},
+       .expected_code = absl::StatusCode::kInvalidArgument},
+      {.name = "InvalidTokenIdWithoutRoomForIt",
+       .draft = {224, 24, -1},
+       .max_output_tokens = 3,
+       .expected_code = absl::StatusCode::kInvalidArgument},
+  };
+  for (const TestCase& test_case : test_cases) {
+    SCOPED_TRACE(test_case.name);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<FakeLlmExecutor> executor,
+        CreatePrefilledDraftExecutor(*tokenizer_, HowsItGoingDecodeTokens(),
+                                     test_case.draft_verification_support));
+    std::optional<BenchmarkInfo> benchmark_info;
+    StopTokenDetector stop_token_detector(test_case.num_output_candidates);
+    ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+    // The check doesn't use the sampler.
+    const std::optional<Sampler*> sampler =
+        test_case.external_sampling ? std::make_optional<Sampler*>(nullptr)
+                                    : std::nullopt;
+
+    EXPECT_THAT(
+        Tasks::Decode(*executor, *tokenizer_, stop_token_detector,
+                      test_case.num_output_candidates, benchmark_info, sampler,
+                      RepetitionPenaltyConfig::Default(),
+                      NoRepeatNgramConfig::Default(),
+                      SuppressTokensConfig::Default(),
+                      /*constraint=*/nullptr,
+                      /*decoded_ids=*/std::nullopt, callback,
+                      /*cancelled=*/nullptr, test_case.max_output_tokens,
+                      /*thinking_token_budget=*/std::nullopt,
+                      /*thinking_end_token_ids=*/{},
+                      /*thinking_start_token_ids=*/{},
+                      /*speculative_decoding_config=*/{}, test_case.draft),
+        StatusIs(test_case.expected_code));
+
+    EXPECT_THAT(executor->verified_drafts(), testing::IsEmpty());
+    EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(8));
+  }
+}
+
+TEST_F(TasksTest, DecodeVerifiesTheDraftTokensThatFitIntoTheBudgets) {
+  struct TestCase {
+    std::string name;
+    int max_output_tokens = std::numeric_limits<int>::max();
+    int max_num_tokens = 1024;
+    std::vector<int> expected_verified_draft;
+    std::vector<int> expected_token_ids;
+    TaskState expected_state;
+  };
+  // A draft of 3 tokens that the model accepts emits 4 tokens.
+  const std::vector<TestCase> test_cases = {
+      {.name = "AllOutputTokens",
+       .max_output_tokens = 4,
+       .expected_verified_draft = {224, 24, 8},
+       .expected_token_ids = {224, 24, 8, 66},
+       .expected_state = TaskState::kDone},
+      {.name = "FewerOutputTokens",
+       .max_output_tokens = 3,
+       .expected_verified_draft = {224, 24},
+       .expected_token_ids = {224, 24, 8},
+       .expected_state = TaskState::kDone},
+      {.name = "AllContext",
+       .max_num_tokens = 8 + 4,
+       .expected_verified_draft = {224, 24, 8},
+       .expected_token_ids = {224, 24, 8, 66},
+       .expected_state = TaskState::kMaxNumTokensReached},
+      {.name = "LessContext",
+       .max_num_tokens = 8 + 3,
+       .expected_verified_draft = {224, 24},
+       .expected_token_ids = {224, 24, 8},
+       .expected_state = TaskState::kMaxNumTokensReached},
+  };
+  for (const TestCase& test_case : test_cases) {
+    SCOPED_TRACE(test_case.name);
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<FakeLlmExecutor> executor,
+                         CreatePrefilledDraftExecutor(
+                             *tokenizer_, HowsItGoingDecodeTokens(),
+                             absl::OkStatus(), test_case.max_num_tokens));
+    ASSERT_OK_AND_ASSIGN(Responses responses,
+                         DecodeWithDraft(*executor, *tokenizer_, {224, 24, 8},
+                                         test_case.max_output_tokens));
+    EXPECT_THAT(executor->verified_drafts(),
+                ElementsAre(test_case.expected_verified_draft));
+    EXPECT_EQ(responses.GetTaskState(), test_case.expected_state);
+    EXPECT_THAT(responses.GetTokenIds(),
+                ElementsAre(test_case.expected_token_ids));
+  }
+}
+
+TEST_F(TasksTest, DecodeDecodesIfNoDraftTokenFitsIntoTheBudget) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<FakeLlmExecutor> executor,
+      CreatePrefilledDraftExecutor(*tokenizer_, HowsItGoingDecodeTokens()));
+  ASSERT_OK_AND_ASSIGN(Responses responses,
+                       DecodeWithDraft(*executor, *tokenizer_, {224, 24, 8},
+                                       /*max_output_tokens=*/1));
+  EXPECT_THAT(executor->verified_drafts(), testing::IsEmpty());
+  EXPECT_THAT(responses.GetTokenIds(), ElementsAre(ElementsAre(224)));
+}
+
+TEST_F(TasksTest, DecodeTurnsMtpOffAfterAVerifiedDraftUnderAConstraint) {
+  // The constraint forces the response, so its state must follow the verified
+  // tokens.
+  FakeConstraint constraint({224, 24, 8, 66, 246, 18, 2295, 2294},
+                            /*vocabulary_size=*/2560);
+  struct TestCase {
+    std::string name;
+    std::vector<int> draft;
+    Constraint* constraint;
+    SpeculativeDecodingMode expected_mode;
+  };
+  const std::vector<TestCase> test_cases = {
+      {"DraftAndConstraint",
+       {224, 24, 8},
+       &constraint,
+       SpeculativeDecodingMode::kOff},
+      {"DraftOnly", {224, 24, 8}, nullptr, SpeculativeDecodingMode::kOn},
+      {"ConstraintOnly", {}, &constraint, SpeculativeDecodingMode::kOn},
+  };
+  for (const TestCase& test_case : test_cases) {
+    SCOPED_TRACE(test_case.name);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<FakeLlmExecutor> executor,
+        CreatePrefilledDraftExecutor(*tokenizer_, HowsItGoingDecodeTokens()));
+
+    ASSERT_OK_AND_ASSIGN(
+        Responses responses,
+        DecodeWithDraft(*executor, *tokenizer_, test_case.draft,
+                        /*max_output_tokens=*/std::numeric_limits<int>::max(),
+                        test_case.constraint,
+                        {.mode = SpeculativeDecodingMode::kOn}));
+
+    EXPECT_THAT(responses.GetTexts(), ElementsAre("How's it going?"));
+    EXPECT_EQ(executor->last_decode_speculative_decoding_config().mode,
+              test_case.expected_mode);
+  }
 }
 
 TEST_F(TasksTest, DecodeReachMaxNumTokens) {

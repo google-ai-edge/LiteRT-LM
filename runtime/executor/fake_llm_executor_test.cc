@@ -14,6 +14,7 @@
 
 #include "runtime/executor/fake_llm_executor.h"
 
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -28,6 +29,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -36,6 +38,10 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::FieldsAre;
+using ::testing::IsEmpty;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 TEST(FakeLlmExecutorTest, ExecutorSettings) {
@@ -419,6 +425,77 @@ TEST(FakeLlmExecutorTest, DecodeWithConstraint) {
   // Call Decode for the 5nd time. Should fail.
   EXPECT_THAT(fake_llm_executor.Decode(decode_params),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// Returns a fake executor that can verify drafts and predicts the tokens 4, 5,
+// 6 and 7, after a prefill of 1, 2, 3.
+std::unique_ptr<FakeLlmExecutor> CreatePrefilledDraftExecutor() {
+  auto executor = std::make_unique<FakeLlmExecutor>(
+      /*vocab_size=*/10, std::vector<std::vector<int>>{{1, 2, 3}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}, {7}});
+  executor->SetDraftVerificationSupport(absl::OkStatus());
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3};
+  auto input_tokens_buffer =
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3});
+  EXPECT_TRUE(input_tokens_buffer.HasValue());
+  inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
+  EXPECT_OK(executor->Prefill(inputs));
+  return executor;
+}
+
+TEST(FakeLlmExecutorTest, DoesntVerifyDraftsByDefault) {
+  FakeLlmExecutor fake_llm_executor(/*vocab_size=*/10, {{1, 2, 3}}, {{4}});
+  EXPECT_THAT(fake_llm_executor.CheckDraftVerificationSupport(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(fake_llm_executor.VerifyDraft({4}, ExecutorDecodeParams()),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(fake_llm_executor.verified_drafts(), IsEmpty());
+}
+
+TEST(FakeLlmExecutorTest, VerifyDraftAcceptsThePredictedTokens) {
+  std::unique_ptr<FakeLlmExecutor> executor = CreatePrefilledDraftExecutor();
+  EXPECT_THAT(executor->VerifyDraft({4, 5}, ExecutorDecodeParams()),
+              IsOkAndHolds(FieldsAre(ElementsAre(4, 5, 6), 2)));
+  EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(6));
+  // Decoding continues after the new tokens.
+  EXPECT_THAT(executor->Decode(), IsOkAndHolds(ElementsAre(ElementsAre(7))));
+  EXPECT_THAT(executor->verified_drafts(), ElementsAre(ElementsAre(4, 5)));
+}
+
+TEST(FakeLlmExecutorTest, VerifyDraftReturnsTheCorrection) {
+  std::unique_ptr<FakeLlmExecutor> executor = CreatePrefilledDraftExecutor();
+  EXPECT_THAT(executor->VerifyDraft({4, 9, 6}, ExecutorDecodeParams()),
+              IsOkAndHolds(FieldsAre(ElementsAre(4, 5), 1)));
+  EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(5));
+}
+
+TEST(FakeLlmExecutorTest, VerifyDraftStopsAtTheLastPredictedToken) {
+  std::unique_ptr<FakeLlmExecutor> executor = CreatePrefilledDraftExecutor();
+  EXPECT_THAT(executor->VerifyDraft({4, 5, 6, 7, 8}, ExecutorDecodeParams()),
+              IsOkAndHolds(FieldsAre(ElementsAre(4, 5, 6, 7), 4)));
+  EXPECT_THAT(executor->VerifyDraft({8}, ExecutorDecodeParams()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(FakeLlmExecutorTest, VerifyDraftAdvancesTheConstrainedDecoder) {
+  std::unique_ptr<FakeLlmExecutor> executor = CreatePrefilledDraftExecutor();
+  FakeConstraint constraint({4, 5, 6, 7}, /*vocabulary_size=*/10);
+  ASSERT_OK_AND_ASSIGN(auto constrained_decoder,
+                       ConstrainedDecoder::CreateForHost(&constraint));
+  ExecutorDecodeParams decode_params;
+  decode_params.SetConstrainedDecoder(constrained_decoder.get());
+
+  ASSERT_OK_AND_ASSIGN(auto output_tokens, executor->Decode(decode_params));
+  EXPECT_THAT(output_tokens, ElementsAre(ElementsAre(4)));
+  EXPECT_THAT(executor->VerifyDraft({5}, decode_params),
+              IsOkAndHolds(FieldsAre(ElementsAre(5, 6), 1)));
+  // The decoder's state excludes the pending token 6, as after a decode.
+  ASSERT_OK_AND_ASSIGN(const Constraint::State* state,
+                       constrained_decoder->GetState(0));
+  EXPECT_EQ(static_cast<const FakeConstraint::FakeState*>(state)->index(), 2);
+  ASSERT_OK_AND_ASSIGN(output_tokens, executor->Decode(decode_params));
+  EXPECT_THAT(output_tokens, ElementsAre(ElementsAre(7)));
 }
 
 }  // namespace

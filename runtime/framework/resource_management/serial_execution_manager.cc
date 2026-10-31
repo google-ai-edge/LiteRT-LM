@@ -881,7 +881,7 @@ absl::Status SerialExecutionManager::AddDecodeTask(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     int max_output_tokens, std::optional<int> thinking_token_budget,
     std::vector<int> thinking_start_token_ids,
-    std::vector<int> thinking_end_token_ids) {
+    std::vector<int> thinking_end_token_ids, std::vector<int> draft_token_ids) {
   if (callback == nullptr) {
     callback = [](absl::StatusOr<Responses>) {};
   }
@@ -904,8 +904,8 @@ absl::Status SerialExecutionManager::AddDecodeTask(
                suppress_tokens_config = std::move(suppress_tokens_config),
                constraint, max_output_tokens, thinking_token_budget,
                thinking_start_token_ids = std::move(thinking_start_token_ids),
-               thinking_end_token_ids =
-                   std::move(thinking_end_token_ids)]() mutable {
+               thinking_end_token_ids = std::move(thinking_end_token_ids),
+               draft_token_ids = std::move(draft_token_ids)]() mutable {
     auto task_info_or = StartTask(task_id);
     if (!task_info_or.ok()) {
       FinishTaskAndLogErrors(task_id, task_info_or.status(),
@@ -963,7 +963,8 @@ absl::Status SerialExecutionManager::AddDecodeTask(
         std::move(decoded_ids_buffer), callback, cancelled.get(),
         max_output_tokens, thinking_token_budget, thinking_end_token_ids,
         thinking_start_token_ids,
-        session_info->session_config.GetSpeculativeDecodingConfig());
+        session_info->session_config.GetSpeculativeDecodingConfig(),
+        draft_token_ids);
 
     if (!responses.ok() && absl::IsCancelled(responses.status())) {
       responses = Responses(TaskState::kCancelled);
