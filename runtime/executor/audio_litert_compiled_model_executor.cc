@@ -57,6 +57,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/audio/audio_executor_utils.h"
+#include "runtime/executor/common_utils.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -65,7 +66,6 @@
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
 #include "runtime/util/lora_util.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
-#include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
 
 #if !defined(LITERT_DISABLE_NPU)
@@ -1485,7 +1485,12 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
       // Skip LoRA buffers as they are not part of the streaming state.
       continue;
     }
-    LITERT_ASSIGN_OR_RETURN(auto new_buffer, CopyTensorBuffer(env_, buffer));
+    LITERT_ASSIGN_OR_RETURN(auto tensor_type, buffer.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto size, buffer.PackedSize());
+    LITERT_ASSIGN_OR_RETURN(
+        auto new_buffer,
+        TensorBuffer::CreateManaged(env_, TensorBufferType::kHostMemory,
+                                    tensor_type, size));
     if (name == kPrevMaskName) {
       LITERT_ASSIGN_OR_RETURN(auto prev_mask_type, new_buffer.TensorType());
       LITERT_ASSIGN_OR_RETURN(int prev_mask_size,
@@ -1520,7 +1525,13 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CloneContext() {
       // Skip LoRA buffers as they are not part of the streaming state.
       continue;
     }
-    LITERT_ASSIGN_OR_RETURN(auto new_buffer, CopyTensorBuffer(env_, buffer));
+    LITERT_ASSIGN_OR_RETURN(auto tensor_type, buffer.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto size, buffer.PackedSize());
+    LITERT_ASSIGN_OR_RETURN(
+        auto new_buffer,
+        TensorBuffer::CreateManaged(env_, TensorBufferType::kHostMemory,
+                                    tensor_type, size));
+    ABSL_RETURN_IF_ERROR(CopyBuffer(buffer, new_buffer));
     state_buffers[name] = std::move(new_buffer);
   }
   auto audio_streaming_context =
@@ -1551,8 +1562,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::RestoreContext(
       continue;
     }
 
-    LITERT_ASSIGN_OR_RETURN(auto buffer_copy, buffer.Duplicate());
-    input_buffers_map_[name] = std::move(buffer_copy);
+    ABSL_RETURN_IF_ERROR(CopyBuffer(buffer, input_buffers_map_[name]));
   }
   if (executor_settings_.GetAudioBufferingEnabled()) {
     buffered_spectrogram_ = audio_streaming_context->buffered_spectrogram();

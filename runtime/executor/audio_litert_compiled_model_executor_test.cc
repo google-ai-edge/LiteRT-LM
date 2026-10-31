@@ -29,12 +29,14 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -194,6 +196,11 @@ class AudioLiteRtCompiledModelExecutorTest : public ::testing::Test {
   static TensorBuffer& GetAdapterFeaturesBuffer(
       AudioLiteRtCompiledModelExecutor& executor) {
     return executor.audio_adapter_->GetMutableFeaturesBuffer();
+  }
+
+  static absl::flat_hash_map<absl::string_view, TensorBuffer>&
+  GetMutableEncoderInputBuffersMap(AudioLiteRtCompiledModelExecutor& executor) {
+    return executor.audio_encoder_->GetMutableInputBuffersMap();
   }
 
   std::unique_ptr<Environment> env_;
@@ -972,6 +979,181 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   ASSERT_OK(audio_executor->RestoreContext(std::move(new_context)));
   ASSERT_OK_AND_ASSIGN(auto flush_after_new_restore, audio_executor->Flush());
   EXPECT_EQ(flush_after_new_restore.GetValidTokens(), 0);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       ContextManagement_StreamingEncoder_AllocatesHostMemoryBuffers) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  // 1. Verify CreateNewContext allocates kHostMemory for all state buffers.
+  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
+  ASSERT_NE(new_context, nullptr);
+  auto* new_streaming_context =
+      static_cast<AudioStreamingContext*>(new_context.get());
+  EXPECT_FALSE(new_streaming_context->state_buffers().empty());
+  for (const auto& [name, buffer] : new_streaming_context->state_buffers()) {
+    auto buffer_type = buffer.BufferType();
+    ASSERT_TRUE(buffer_type.HasValue());
+    EXPECT_EQ(*buffer_type, TensorBufferType::kHostMemory)
+        << "CreateNewContext buffer " << name << " is not kHostMemory";
+  }
+
+  // 2. Verify CloneContext allocates kHostMemory for all state buffers.
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
+  ASSERT_NE(cloned_context, nullptr);
+  auto* cloned_streaming_context =
+      static_cast<AudioStreamingContext*>(cloned_context.get());
+  EXPECT_FALSE(cloned_streaming_context->state_buffers().empty());
+  for (const auto& [name, buffer] : cloned_streaming_context->state_buffers()) {
+    auto buffer_type = buffer.BufferType();
+    ASSERT_TRUE(buffer_type.HasValue());
+    EXPECT_EQ(*buffer_type, TensorBufferType::kHostMemory)
+        << "CloneContext buffer " << name << " is not kHostMemory";
+  }
+}
+
+TEST_F(
+    AudioLiteRtCompiledModelExecutorTest,
+    ContextManagement_StreamingEncoder_RestoreCopiesInPlacePreservingHandles) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  auto& input_buffers = GetMutableEncoderInputBuffersMap(*audio_executor);
+  absl::flat_hash_map<std::string, LiteRtTensorBuffer> original_handles;
+  for (const auto& [name, buffer] : input_buffers) {
+    original_handles[name] = buffer.Get();
+  }
+
+  // Mutate state in a cloned context.
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
+  auto* streaming_context =
+      static_cast<AudioStreamingContext*>(cloned_context.get());
+  ASSERT_TRUE(streaming_context->state_buffers().contains("prev_key_0"));
+  auto& test_buf = streaming_context->state_buffers().at("prev_key_0");
+  ASSERT_OK_AND_ASSIGN(auto initial_data, GetDataAsVector<float>(test_buf));
+  std::vector<float> mutated_data(initial_data.size(), 42.0f);
+  ASSERT_TRUE(test_buf.Write<float>(absl::MakeSpan(mutated_data)).HasValue());
+
+  // Restore the mutated context.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(cloned_context)));
+
+  // Verify buffer handles are preserved in place.
+  for (const auto& [name, buffer] : input_buffers) {
+    EXPECT_EQ(buffer.Get(), original_handles.at(name))
+        << "Buffer handle for " << name << " changed after RestoreContext";
+  }
+
+  // Verify the contents were copied into input_buffers_map_.
+  ASSERT_OK_AND_ASSIGN(auto current_data,
+                       GetDataAsVector<float>(input_buffers.at("prev_key_0")));
+  EXPECT_THAT(current_data, ::testing::Each(42.0f));
+
+  // Verify RestoreContext returns an error when the snapshot buffer is larger
+  // than the destination state buffer.
+  absl::flat_hash_map<absl::string_view, TensorBuffer> mismatched_buffers;
+  const int bad_num_elements = static_cast<int>(current_data.size()) + 1;
+  auto bad_size_buf = TensorBuffer::CreateManaged(
+      *env_, TensorBufferType::kHostMemory,
+      RankedTensorType(GetElementType<float>(),
+                       Layout(Dimensions({1, bad_num_elements}))),
+      bad_num_elements * sizeof(float));
+  ASSERT_TRUE(bad_size_buf.HasValue());
+  mismatched_buffers["prev_key_0"] = std::move(*bad_size_buf);
+  auto bad_context =
+      std::make_unique<AudioStreamingContext>(std::move(mismatched_buffers));
+  EXPECT_FALSE(audio_executor->RestoreContext(std::move(bad_context)).ok());
+}
+
+TEST_F(
+    AudioLiteRtCompiledModelExecutorTest,
+    ContextManagement_StreamingEncoder_SnapshotIsolatedAcrossEncodeAndReset) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioStreamingModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  // Encode 1 chunk so streaming state is initialized.
+  std::vector<float> chunk1_data(10 * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto chunk1_buffer,
+      CreateTensorBuffer<const float>(
+          chunk1_data,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
+  ASSERT_OK(audio_executor->Encode(chunk1_buffer).status());
+
+  // Clone context and mutate state in the snapshot with a distinct test
+  // pattern.
+  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
+  auto* streaming_context =
+      static_cast<AudioStreamingContext*>(cloned_context.get());
+  ASSERT_TRUE(streaming_context->state_buffers().contains("prev_key_0"));
+  auto& test_buf = streaming_context->state_buffers().at("prev_key_0");
+  ASSERT_OK_AND_ASSIGN(auto initial_data, GetDataAsVector<float>(test_buf));
+  std::vector<float> custom_pattern(initial_data.size(), 123.45f);
+  ASSERT_TRUE(test_buf.Write<float>(absl::MakeSpan(custom_pattern)).HasValue());
+
+  // Take a secondary shallow clone (as done in Session::Clone /
+  // ResourceManager).
+  ASSERT_OK_AND_ASSIGN(auto snapshot, cloned_context->Clone());
+  auto* streaming_snapshot =
+      static_cast<AudioStreamingContext*>(snapshot.get());
+  ASSERT_TRUE(streaming_snapshot->state_buffers().contains("prev_key_0"));
+  ASSERT_OK_AND_ASSIGN(
+      auto pre_encode_data,
+      GetDataAsVector<float>(
+          streaming_snapshot->state_buffers().at("prev_key_0")));
+  EXPECT_THAT(pre_encode_data, ::testing::Each(123.45f));
+
+  // Restore the cloned context into the executor.
+  ASSERT_OK(audio_executor->RestoreContext(std::move(cloned_context)));
+
+  // Multi-chunk encode (exercises SwapInternalStateBuffers across chunks).
+  std::vector<float> chunk2_data(10 * kSpectrogramFrequencySlots, 2.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto chunk2_buffer,
+      CreateTensorBuffer<const float>(
+          chunk2_data,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
+  ASSERT_OK(audio_executor->Encode(chunk2_buffer).status());
+
+  std::vector<float> chunk3_data(10 * kSpectrogramFrequencySlots, 3.0f);
+  ASSERT_OK_AND_ASSIGN(
+      auto chunk3_buffer,
+      CreateTensorBuffer<const float>(
+          chunk3_data,
+          RankedTensorType(
+              GetElementType<float>(),
+              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
+  ASSERT_OK(audio_executor->Encode(chunk3_buffer).status());
+
+  // Reset the executor (zeros input_buffers_map_ in place).
+  ASSERT_OK(audio_executor->Reset());
+
+  // Verify the snapshot was not corrupted or zeroed out.
+  ASSERT_OK_AND_ASSIGN(
+      auto post_reset_data,
+      GetDataAsVector<float>(
+          streaming_snapshot->state_buffers().at("prev_key_0")));
+  EXPECT_EQ(post_reset_data, pre_encode_data);
+  EXPECT_THAT(post_reset_data, ::testing::Each(123.45f));
 }
 
 // Encoding 10 frames as the first chunk of a stream (no buffering, so the
