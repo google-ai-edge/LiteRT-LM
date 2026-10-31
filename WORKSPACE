@@ -2,19 +2,19 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-10-29
-LITERT_REF = "88479dc24a752958be76dd0f3a40ec4a645d03e2"
+# UPDATED = 2026-10-30
+LITERT_REF = "d2e2e5f09826bb005baf3048b0ea527e93a55287"
 
-LITERT_SHA256 = "8efc587fc3580097c3eec33759e04488f1ae3ec9b81b14f5aee5d354471c7527"
+LITERT_SHA256 = "5d72e9bd8d1227648d26d12af262a73f4294d5e18ff55c9abd86644b96ced462"
 
-TENSORFLOW_REF = "dc3671e8c8dc18f5f82835c65d4ced837c2a6c6a"
+TENSORFLOW_REF = "03db8b6ed187f8b6a2946409f64f95c1de122503"
 
 
-TENSORFLOW_SHA256 = "e5af1caf380f9fc7177e0c95db1cd670d1b6e32b80e84c468613707afe84ba0e"
+TENSORFLOW_SHA256 = "fab3e04534af41203c199eaf1a13e5faa323382ec09bbe63afee74bd86dfdad9"
 
-ML_DRIFT_COMMIT = "2d7fbbd45d8940b5fc7cea1f79e59d9d796164e2"
+ML_DRIFT_COMMIT = "f0863b8c96f298113d087be7bb3de7e0f50fca26"
 
-ML_DRIFT_SHA256 = "074ba94182ba04c7fbdba3f76faea1370417e49f0397552ea6e3344d90d5d77f"
+ML_DRIFT_SHA256 = "05860a21fbbb3b163d725a128485cb1cecc34178e548e80a80bf81cd4c5d4ee0"
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
@@ -529,19 +529,6 @@ http_archive(
 
 http_archive(
     name = "ml_drift",
-    patch_cmds = [
-        # TODO: b/465678331 - Remove patch_cmds once cl/1000935259 is submitted and ML_DRIFT_COMMIT is updated.
-        # Add external/ml_drift to flatc include paths for gl_inference_context_cc_fbs.
-        "sed -i -e 's|\"-I .\",|\"-I .\", \"-I external/ml_drift\",|g' ml_drift/gl/BUILD",
-        # Point ml_drift_delegate references to @litert//ml_drift_delegate.
-        "sed -i -e 's|@//ml_drift_delegate|@litert//ml_drift_delegate|g' ml_drift/common/default/BUILD ml_drift/common/task/BUILD ml_drift/common/kernels/BUILD",
-        # Avoid passing -ldl to MSVC linker on Windows in opencl_wrapper.
-        "sed -i -e 's|\"//conditions:default\": \\[\"-ldl\"\\],|\"@platforms//os:windows\": [], \"//conditions:default\": [\"-ldl\"],|g' ml_drift/cl/BUILD",
-        # Use @FP16//:FP16 from tf_workspace2() to avoid case-insensitive @fp16/@FP16 collision on Windows.
-        "sed -i -e 's|\"@fp16\"|\"@FP16//:FP16\"|g' ml_drift/common/BUILD",
-        # Avoid int -> uint32_t narrowing conversion in VulkanInfo default member initializers on MSVC.
-        "sed -i -e 's|uint32_t api_version\\(.*\\) = -1;|uint32_t api_version\\1 = static_cast<uint32_t>(-1);|g' ml_drift/common/gpu_info.h",
-    ],
     repo_mapping = {
         "@fp16": "@FP16",
         "@com_github_google_re2": "@com_googlesource_code_re2",
