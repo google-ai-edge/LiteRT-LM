@@ -27,7 +27,11 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "bazel_skylib",
     sha256 = "3b5b49006181f5f8ff626ef8ddceaa95e9bb8ad294f7b5d7b11ea9f7ddaf8c59",
-    urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz"],
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz",
+    ],
 )
 
 # Declared before `tf_workspace2()` so that it takes precedence over TensorFlow's
@@ -58,14 +62,20 @@ alias(
 """,
     sha256 = "d973501a40c55126b31accc2d9f08d931ec3cc190c0430309a5e341d3c0ce32a",
     strip_prefix = "FP16-4dfe081cf6bcd15db339cf2680b9281b8451eeb3",
-    url = "https://github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+        "https://github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+    ],
 )
 
 http_archive(
     name = "rules_shell",
     sha256 = "bc61ef94facc78e20a645726f64756e5e285a045037c7a61f65af2941f4c25e1",
     strip_prefix = "rules_shell-0.4.1",
-    url = "https://github.com/bazelbuild/rules_shell/releases/download/v0.4.1/rules_shell-v0.4.1.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/bazelbuild/rules_shell/releases/download/v0.4.1/rules_shell-v0.4.1.tar.gz",
+        "https://github.com/bazelbuild/rules_shell/releases/download/v0.4.1/rules_shell-v0.4.1.tar.gz",
+    ],
 )
 
 load("@rules_shell//shell:repositories.bzl", "rules_shell_dependencies", "rules_shell_toolchains")
@@ -115,14 +125,20 @@ http_archive(
 http_archive(
     name = "build_bazel_apple_support",
     sha256 = "ee20cc5c0bab47065473c8033d462374dd38d172406ecc8de5c8f08487943f2f",
-    url = "https://github.com/bazelbuild/apple_support/releases/download/1.23.1/apple_support.1.23.1.tar.gz",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/apple_support/releases/download/1.23.1/apple_support.1.23.1.tar.gz",
+        "https://github.com/bazelbuild/apple_support/releases/download/1.23.1/apple_support.1.23.1.tar.gz",
+    ],
 )
 
 http_archive(
     name = "bazel_features",
     sha256 = "c26b4e69cf02fea24511a108d158188b9d8174426311aac59ce803a78d107648",
     strip_prefix = "bazel_features-1.43.0",
-    url = "https://github.com/bazel-contrib/bazel_features/releases/download/v1.43.0/bazel_features-v1.43.0.tar.gz",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazel-contrib/bazel_features/releases/download/v1.43.0/bazel_features-v1.43.0.tar.gz",
+        "https://github.com/bazel-contrib/bazel_features/releases/download/v1.43.0/bazel_features-v1.43.0.tar.gz",
+    ],
 )
 
 # Same version that tensorflow uses, but with patches to fix build errors.
@@ -135,7 +151,10 @@ http_archive(
     patches = ["@//third_party/abseil:abseil.patch"],
     sha256 = "6e1aee535473414164bf83e4ebc40240dec71a4701f8a642d906e95bea1aea0c",
     strip_prefix = "abseil-cpp-20260526.0",
-    url = "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
+        "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
+    ],
 )
 
 # Toolchains for ML projects
@@ -160,6 +179,10 @@ http_archive(
 # pinned to v0.7.2 because v0.7.3+ requires @protobuf_maven for @com_google_protobuf//java/util)
 http_archive(
     name = "rules_android",
+    patch_cmds = [
+        # Prefer Google's owned Maven mirrors (maven.google.com and GCS Maven Central mirror) before hitting repo1.maven.org.
+        "sed -e '/\"https:\\/\\/maven\\.google\\.com\"/d' -e 's|\"https://repo1.maven.org/maven2\"|\"https://maven.google.com\", \"https://maven-central.storage-download.googleapis.com/maven2\", \"https://repo1.maven.org/maven2\"|g' defs.bzl > defs.bzl.tmp && mv defs.bzl.tmp defs.bzl",
+    ],
     sha256 = "0da7198c7c8bac7e11e08dca3c434617b8593075858716595672e9aeefbef2a7",
     strip_prefix = "rules_android-0.7.2",
     url = "https://github.com/bazelbuild/rules_android/releases/download/v0.7.2/rules_android-v0.7.2.tar.gz",
@@ -170,6 +193,7 @@ http_archive(
     name = "io_bazel_rules_go",
     sha256 = "68af54cb97fbdee5e5e8fe8d210d15a518f9d62abfd71620c3eaff3b26a5ff86",
     urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
         "https://mirror.bazel.build/github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
         "https://github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
     ],
@@ -275,6 +299,7 @@ maven_install(
     ],
     repositories = [
         "https://maven.google.com",
+        "https://maven-central.storage-download.googleapis.com/maven2",
         "https://repo1.maven.org/maven2",
     ],
 )
@@ -576,7 +601,11 @@ http_archive(
     name = "absl_py",
     sha256 = "8a3d0830e4eb4f66c4fa907c06edf6ce1c719ced811a12e26d9d3162f8471758",
     strip_prefix = "abseil-py-2.1.0",
-    url = "https://github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+        "https://mirror.bazel.build/github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+        "https://github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+    ],
 )
 
 http_archive(
