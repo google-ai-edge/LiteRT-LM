@@ -328,6 +328,12 @@ struct AdvancedSettings {
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);
 
+// Default maximum number of images per prefill when vision is enabled and the
+// application does not set max_num_images. Backends that need a fixed-size
+// media embedding cache (e.g. GPU_ARTISAN) split a prefill with more images
+// into multiple prefills.
+inline constexpr uint32_t kDefaultMaxNumImages = 4;
+
 // Settings for the LLM executor.
 //
 // This class holds the settings for the LLM executor, including the
@@ -440,8 +446,10 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   // the size of the kv-cache.
   uint32_t max_num_tokens_;
 
-  // Maximum number of images the model can handle.
-  uint32_t max_num_images_;
+  // Maximum number of images per prefill the model can handle. 0 means image
+  // input is disabled; EngineSettings::CreateDefault() resets it to
+  // kDefaultMaxNumImages when vision is enabled.
+  uint32_t max_num_images_ = kDefaultMaxNumImages;
 
   // LoRA rank. 0 means LoRA is disabled.
   uint32_t lora_rank_ = 0;
