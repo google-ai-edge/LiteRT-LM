@@ -26,6 +26,35 @@ const COMMIT = 'c0ffee'.padEnd(40, '0');
 const DOWNLOAD_URL_PREFIX =
     `https://huggingface.co/org/repo/resolve/${COMMIT}/`;
 
+/** Returns whether `path` is served and starts with the `.litertlm` magic. */
+async function servesLiteRtLmFile(path: string): Promise<boolean> {
+  try {
+    const response = await fetch(path);
+    if (!response.ok || !response.body) {
+      return false;
+    }
+    // Only read the first chunk, since the models are large.
+    const reader = response.body.getReader();
+    const {value} = await reader.read();
+    await reader.cancel();
+    return new TextDecoder().decode(value?.subarray(0, 8)) === 'LITERTLM';
+  } catch {
+    return false;
+  }
+}
+
+/** Returns whether the browser provides a WebGPU adapter. */
+async function hasWebGpuAdapter(): Promise<boolean> {
+  const gpu =
+      (navigator as Navigator & {gpu?: {requestAdapter(): Promise<unknown>}})
+          .gpu;
+  try {
+    return !!(await gpu?.requestAdapter());
+  } catch {
+    return false;
+  }
+}
+
 // Loads real engines from a fake Hugging Face Hub, whose files are served from
 // local models.
 describe('Engine with a hf:// model', () => {
@@ -33,11 +62,32 @@ describe('Engine with a hf:// model', () => {
   let repoFiles: Map<string, string>;
   let downloads: string[];
   let downloadCancelled: boolean;
+  // The local models and a WebGPU adapter are available when the tests run
+  // internally on a GPU, but not everywhere: e.g. the open-source unit test
+  // runner doesn't serve `/models`, and its browser may have no GPU.
+  let modelsAvailable = false;
+  let webGpuAvailable = false;
 
   beforeAll(async () => {
     unloadLiteRtLm();
     await loadLiteRtLm('/wasm');
+    modelsAvailable = await servesLiteRtLmFile(CPU_MODEL_PATH) &&
+        await servesLiteRtLmFile(GPU_ARTISAN_MODEL_PATH);
+    webGpuAvailable = await hasWebGpuAdapter();
   });
+
+  /**
+   * Marks the current spec pending unless the local models, and WebGPU if
+   * `needsWebGpu`, are available.
+   */
+  function skipUnlessAvailable(needsWebGpu: boolean) {
+    if (!modelsAvailable) {
+      pending('The local models are not served at /models.');
+    }
+    if (needsWebGpu && !webGpuAvailable) {
+      pending('No WebGPU adapter is available.');
+    }
+  }
 
   beforeEach(() => {
     downloads = [];
@@ -85,6 +135,7 @@ describe('Engine with a hf:// model', () => {
   }
 
   it('loads the file for the backend', async () => {
+    skipUnlessAvailable(/* needsWebGpu= */ false);
     repoFiles = new Map([
       ['model.litertlm', CPU_MODEL_PATH],
       ['model-gpu.litertlm', GPU_ARTISAN_MODEL_PATH],
@@ -103,6 +154,7 @@ describe('Engine with a hf:// model', () => {
   });
 
   it('prefers the GPU_ARTISAN model if no backend is given', async () => {
+    skipUnlessAvailable(/* needsWebGpu= */ true);
     repoFiles = new Map([
       ['model.litertlm', CPU_MODEL_PATH],
       ['model-gpu.litertlm', GPU_ARTISAN_MODEL_PATH],
@@ -121,6 +173,9 @@ describe('Engine with a hf:// model', () => {
 
   it('rejects a model for a different backend than the one requested',
      async () => {
+       // Requesting Backend.GPU sets up WebGPU before the model's header is
+       // read.
+       skipUnlessAvailable(/* needsWebGpu= */ true);
        repoFiles = new Map([['model.litertlm', GPU_ARTISAN_MODEL_PATH]]);
 
        await expectAsync(Engine.create({
