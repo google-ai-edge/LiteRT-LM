@@ -276,6 +276,11 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
                                   model_assets, backend, sampler_backend));
   std::optional<VisionExecutorSettings> vision_executor_settings;
   if (vision_backend.has_value()) {
+    // Allow image inputs on the main executor when vision is enabled, unless
+    // max_num_images is already set to a positive value.
+    if (executor_settings.GetMaxNumImages() == 0) {
+      executor_settings.SetMaxNumImages(kDefaultMaxNumImages);
+    }
     ABSL_ASSIGN_OR_RETURN(
         vision_executor_settings,
         VisionExecutorSettings::CreateDefault(

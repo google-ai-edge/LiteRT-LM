@@ -853,7 +853,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
   }
   if (backend == Backend::GPU_ARTISAN) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
-    executor_settings.SetMaxNumImages(settings.max_num_images);
+    // A non-positive max_num_images keeps the default.
+    if (settings.max_num_images > 0) {
+      executor_settings.SetMaxNumImages(settings.max_num_images);
+    }
     ABSL_ASSIGN_OR_RETURN(
         auto gpu_artisan_settings,
         executor_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>());

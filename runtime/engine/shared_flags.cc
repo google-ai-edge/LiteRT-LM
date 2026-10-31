@@ -54,8 +54,9 @@ ABSL_FLAG(int, max_output_tokens, -1,
           "Maximum number of output tokens for generation. For thinking "
           "models, both thinking (reasoning) tokens and the final response "
           "tokens count towards this limit.");
-ABSL_FLAG(int, max_num_images, 1,
-          "Maximum number of images to use for LLM execution.");
+ABSL_FLAG(int, max_num_images, 0,
+          "Maximum number of images per prefill for LLM execution. If not "
+          "positive, the default is used.");
 ABSL_FLAG(int, visual_token_budget, -1,
           "Visual token budget for multimodal processing (maximum number of "
           "vision tokens per image).");

@@ -38,6 +38,7 @@
 #include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -281,6 +282,18 @@ TEST(EngineSettingsTest, VisionExecutorSettingsNotSet) {
   auto settings = EngineSettings::CreateDefault(*model_assets, Backend::CPU);
   ASSERT_OK(settings);
   EXPECT_FALSE(settings->GetVisionExecutorSettings().has_value());
+  EXPECT_EQ(settings->GetMainExecutorSettings().GetMaxNumImages(),
+            kDefaultMaxNumImages);
+}
+
+TEST(EngineSettingsTest, CreateDefaultWithVisionSetsDefaultMaxNumImages) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU, Backend::GPU);
+  ASSERT_OK(settings);
+  EXPECT_EQ(settings->GetMainExecutorSettings().GetMaxNumImages(),
+            kDefaultMaxNumImages);
 }
 
 TEST(EngineSettingsTest, VisionExecutorSettingsSetAndGetBackend) {

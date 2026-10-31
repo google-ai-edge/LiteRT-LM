@@ -507,6 +507,7 @@ cc_test(
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_io_types",
+        "//runtime/executor:llm_executor_settings",
         "//runtime/executor:speculative_decoding_mode",
         "//runtime/proto:engine_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
