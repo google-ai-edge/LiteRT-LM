@@ -321,6 +321,9 @@ selects.config_setting_group(
     ],
 )
 
+# Dynamic GPU accelerator shared libraries bundled as runtime data when
+# litert_runtime_link_mode=dynamic. Do not depend on this target directly; use
+# :default_gpu_accelerator instead.
 cc_library(
     name = "default_dynamic_gpu_accelerator",
     data = select({
@@ -345,10 +348,15 @@ cc_library(
         "//conditions:default": [],
     }),
     tags = ["manual"],
+    visibility = ["//visibility:private"],
 )
 
+# Statically linked GPU accelerator libraries used by default when
+# litert_runtime_link_mode is not dynamic. Do not depend on this target
+# directly; use :default_gpu_accelerator instead.
 cc_library(
     name = "default_static_gpu_accelerator",
+    visibility = ["//visibility:private"],
     deps = select({
         ":android_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator",
@@ -371,6 +379,9 @@ cc_library(
     }),
 )
 
+# Default GPU accelerator target for LiteRT-LM. Selects the dynamic GPU
+# accelerator shared library when litert_runtime_link_mode=dynamic and the
+# statically linked GPU accelerator otherwise.
 alias(
     name = "default_gpu_accelerator",
     actual = select({
