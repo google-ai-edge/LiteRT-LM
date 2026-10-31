@@ -95,46 +95,6 @@ jobs:
         run: |
           npm install -g @bazel/bazelisk
 
-
-      - name: Install Android SDK
-        run: |
-          export ANDROID_HOME=/opt/android-sdk
-          mkdir -p $ANDROID_HOME/cmdline-tools
-
-          # Download the official Android headless command-line tools
-          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
-          unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
-          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-          rm cmdline-tools.zip
-
-          # Turn off pipefail temporarily so the SIGPIPE on 'yes' doesn't crash the step
-          set +o pipefail
-
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" > /dev/null
-
-          # Turn pipefail back on to keep the rest of your script safe
-          set -o pipefail
-
-          # Inject BOTH standard variable names (some rules_android versions are pedantic)
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-
-      - name: Setup Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
-        with:
-          ndk-version: r28b
-          add-to-path: false
-
-      - name: Export NDK Home globally
-        # This guarantees Bazel finds it during both the Linux //... eval and the actual Android compile
-        env:
-          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-
       - name: Download Model
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -168,7 +128,9 @@ jobs:
             --deleted_packages=swift \
             --java_runtime_version=remotejdk_17 \
             //... \
-            //runtime/engine:litert_lm_main
+            //runtime/engine:litert_lm_main \
+            -- \
+            -//kotlin/java/com/google/ai/edge/litertlm:litertlm-android
 
       - name: Check if litert_lm_main doesn't link libLiteRt.so.
         # Return exit code 1 if libLiteRt.so is required.
