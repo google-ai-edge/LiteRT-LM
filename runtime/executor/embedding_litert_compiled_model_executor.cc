@@ -225,6 +225,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
                               options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
+      qualcomm_options.SetHtpFileReadMemoryBudgetMB(16);
       ABSL_RETURN_IF_ERROR(
           SetNpuOptions(executor_settings.GetNpuOptions(), options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
