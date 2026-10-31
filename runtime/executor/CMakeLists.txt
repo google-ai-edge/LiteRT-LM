@@ -671,6 +671,8 @@ target_link_libraries(runtime_executor_llm_litert_verifier
     LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager

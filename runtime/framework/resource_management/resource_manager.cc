@@ -458,6 +458,13 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->CheckDraftVerificationSupport();
   }
 
+  absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) override {
+    ABSL_RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
+    return llm_executor_->VerifyDraft(draft_token_ids, decode_params);
+  }
+
   absl::Status Reset() override { return llm_executor_->Reset(); }
 
   absl::StatusOr<int> GetVocabSize() override {

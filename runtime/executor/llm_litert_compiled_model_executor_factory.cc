@@ -41,7 +41,6 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
-#include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/status_macros.h"
@@ -255,8 +254,7 @@ CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
     std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
-    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
-    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model) {
   std::unique_ptr<LlmExecutor> executor;
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   if (resources != nullptr) {
@@ -273,14 +271,14 @@ CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
         LlmLiteRtCompiledModelExecutorDynamic::Create(
             executor_settings, lrt_env, std::move(compiled_model), resources,
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            std::move(compiled_mtp_drafter_model), std::move(mtp_drafter)));
+            std::move(compiled_mtp_drafter_model)));
   } else {
     ABSL_ASSIGN_OR_RETURN(
         executor,
         LlmLiteRtCompiledModelExecutorStatic::Create(
             executor_settings, lrt_env, std::move(compiled_model), resources,
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            std::move(compiled_mtp_drafter_model), std::move(mtp_drafter)));
+            std::move(compiled_mtp_drafter_model)));
   }
 
   return executor;
@@ -338,8 +336,7 @@ CreateLlmLiteRtCompiledModelExecutor(
     std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
-    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
-    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model) {
   Backend backend = executor_settings.GetBackend();
   switch (backend) {
     case Backend::CPU:
@@ -347,7 +344,7 @@ CreateLlmLiteRtCompiledModelExecutor(
       return CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
           executor_settings, lrt_env, std::move(compiled_model), resources,
           std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-          std::move(compiled_mtp_drafter_model), std::move(mtp_drafter));
+          std::move(compiled_mtp_drafter_model));
     case Backend::NPU:
       return absl::InvalidArgumentError(
           "NPU backend is not supported with pre-compiled models yet.");

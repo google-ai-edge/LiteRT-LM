@@ -64,6 +64,22 @@ inline constexpr absl::string_view kMtpRoundTimeLatency = "mtp_round_time";
 inline constexpr absl::string_view kPlainStepTimeLatency = "plain_step_time";
 inline constexpr absl::string_view kLogitsStepTimeLatency = "logits_step_time";
 
+// Draft verification metric and latency names. A draft verification
+// (`LlmExecutorBase::VerifyDraft()`) verifies the draft tokens of a caller in
+// one or more passes of verify signatures. Only completed verifications count.
+inline constexpr absl::string_view kDraftVerificationsMetric =
+    "draft_verifications";
+inline constexpr absl::string_view kDraftVerifyPassesMetric =
+    "draft_verify_passes";
+inline constexpr absl::string_view kDraftVerifyDraftTokensMetric =
+    "draft_verify_draft_tokens";
+inline constexpr absl::string_view kDraftVerifyAcceptedTokensMetric =
+    "draft_verify_accepted_tokens";
+inline constexpr absl::string_view kDraftVerifyEmittedTokensMetric =
+    "draft_verify_emitted_tokens";
+inline constexpr absl::string_view kDraftVerifyTimeLatency =
+    "draft_verify_time";
+
 using MetricValue = std::variant<int64_t, double>;
 
 // Holds latency and metrics statistics for an executor or submodule.
@@ -114,6 +130,14 @@ struct ExecutorStats {
   // because of lenience. No-op if `lenient_accepted_tokens <= 0`, so the
   // metric is only present once a draft token was leniently accepted.
   void AccumulateMtpLenientAccepted(int64_t lenient_accepted_tokens);
+  // Accumulates a completed draft verification of `draft_tokens` draft tokens
+  // in `passes` verify passes, which accepted `accepted_tokens` of them and
+  // emitted `emitted_tokens` tokens (the accepted ones, and the decoded token
+  // after them if any) in `verify_time`.
+  void AccumulateDraftVerification(int64_t passes, int64_t draft_tokens,
+                                   int64_t accepted_tokens,
+                                   int64_t emitted_tokens,
+                                   absl::Duration verify_time);
 
   int64_t mtp_rounds() const { return GetMetricAsInt64(kMtpRoundsMetric); }
   int64_t mtp_num_draft_tokens() const {
@@ -147,6 +171,24 @@ struct ExecutorStats {
   }
   int64_t mtp_lenient_accepted_tokens() const {
     return GetMetricAsInt64(kMtpLenientAcceptedTokensMetric);
+  }
+  int64_t draft_verifications() const {
+    return GetMetricAsInt64(kDraftVerificationsMetric);
+  }
+  int64_t draft_verify_passes() const {
+    return GetMetricAsInt64(kDraftVerifyPassesMetric);
+  }
+  int64_t draft_verify_draft_tokens() const {
+    return GetMetricAsInt64(kDraftVerifyDraftTokensMetric);
+  }
+  int64_t draft_verify_accepted_tokens() const {
+    return GetMetricAsInt64(kDraftVerifyAcceptedTokensMetric);
+  }
+  int64_t draft_verify_emitted_tokens() const {
+    return GetMetricAsInt64(kDraftVerifyEmittedTokensMetric);
+  }
+  absl::Duration draft_verify_time() const {
+    return GetLatencyOrZero(kDraftVerifyTimeLatency);
   }
 };
 

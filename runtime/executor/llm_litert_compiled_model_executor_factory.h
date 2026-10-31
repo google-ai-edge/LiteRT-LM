@@ -24,7 +24,6 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/llm_litert_mtp_drafter.h"
 
 namespace litert::lm {
 
@@ -61,10 +60,9 @@ CreateLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
 //     and per-layer embedding lookups are loaded from `resources` (the passed
 //     `per_layer_embedding_lookup` is then ignored). If `embedding_lookup` is
 //     provided, `per_layer_embedding_lookup` is used as-is (may be null).
-//   - If `mtp_drafter` is provided, it is used directly. Otherwise, when
-//     speculative decoding is enabled and `resources` is provided, a drafter
-//     is created from `compiled_mtp_drafter_model` if given, or else by
-//     loading and compiling the drafter model from `resources`.
+//   - When speculative decoding is enabled and `resources` is provided, the
+//     MTP drafter is created from `compiled_mtp_drafter_model` if given, or
+//     else by loading and compiling the drafter model from `resources`.
 //
 // Args:
 //   executor_settings: Settings for the executor. Backend must be CPU or GPU.
@@ -74,9 +72,7 @@ CreateLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
 //   embedding_lookup: Optional pre-built text embedding lookup.
 //   per_layer_embedding_lookup: Optional pre-built per-layer embedding lookup.
 //   compiled_mtp_drafter_model: Optional pre-compiled MTP drafter model. Only
-//     used when `mtp_drafter` is null and `resources` is non-null.
-//   mtp_drafter: Optional pre-built MTP drafter. Takes precedence over
-//     `compiled_mtp_drafter_model`.
+//     used when `resources` is non-null.
 absl::StatusOr<std::unique_ptr<LlmExecutor>>
 CreateLlmLiteRtCompiledModelExecutor(
     LlmExecutorSettings executor_settings, Environment& lrt_env,
@@ -85,8 +81,7 @@ CreateLlmLiteRtCompiledModelExecutor(
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
         nullptr,
-    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
-    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr);
 
 }  // namespace litert::lm
 

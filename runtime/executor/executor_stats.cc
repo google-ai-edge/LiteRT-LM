@@ -145,6 +145,19 @@ void ExecutorStats::AccumulateMtpLenientAccepted(
   Accumulate(kMtpLenientAcceptedTokensMetric, lenient_accepted_tokens);
 }
 
+void ExecutorStats::AccumulateDraftVerification(int64_t passes,
+                                                int64_t draft_tokens,
+                                                int64_t accepted_tokens,
+                                                int64_t emitted_tokens,
+                                                absl::Duration verify_time) {
+  Accumulate(kDraftVerificationsMetric, int64_t{1});
+  Accumulate(kDraftVerifyPassesMetric, passes);
+  Accumulate(kDraftVerifyDraftTokensMetric, draft_tokens);
+  Accumulate(kDraftVerifyAcceptedTokensMetric, accepted_tokens);
+  Accumulate(kDraftVerifyEmittedTokensMetric, emitted_tokens);
+  Accumulate(kDraftVerifyTimeLatency, verify_time);
+}
+
 std::ostream& operator<<(std::ostream& os, const ExecutorStats& stats) {
   if (stats.latencies.empty() && stats.metrics.empty() &&
       stats.substats.empty()) {

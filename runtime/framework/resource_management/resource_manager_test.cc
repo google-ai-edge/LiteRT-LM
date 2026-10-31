@@ -18,19 +18,26 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::FieldsAre;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 // A fake executor that reports executor stats and counts stat resets.
@@ -76,7 +83,8 @@ TEST(ResourceManagerTest, AcquiredExecutorForwardsExecutorStats) {
   EXPECT_EQ(num_resets, 1);
 }
 
-// A fake executor that reports a given draft verification support.
+// A fake executor that reports a given draft verification support and accepts
+// every draft that it verifies.
 class DraftVerificationFakeLlmExecutor : public FakeLlmExecutor {
  public:
   explicit DraftVerificationFakeLlmExecutor(absl::Status support)
@@ -86,6 +94,15 @@ class DraftVerificationFakeLlmExecutor : public FakeLlmExecutor {
 
   absl::Status CheckDraftVerificationSupport() const override {
     return support_;
+  }
+
+  absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) override {
+    return DraftVerificationResult{
+        .tokens =
+            std::vector<int>(draft_token_ids.begin(), draft_token_ids.end()),
+        .num_accepted = static_cast<int>(draft_token_ids.size())};
   }
 
  private:
@@ -109,11 +126,46 @@ TEST(ResourceManagerTest, AcquiredExecutorForwardsDraftVerificationSupport) {
   }
 }
 
+TEST(ResourceManagerTest, AcquiredExecutorForwardsDraftVerification) {
+  ASSERT_OK_AND_ASSIGN(
+      auto resource_manager,
+      ResourceManager::Create(
+          /*model_resources=*/nullptr,
+          std::make_unique<DraftVerificationFakeLlmExecutor>(absl::OkStatus()),
+          /*vision_executor_settings=*/nullptr,
+          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmExecutor> executor,
+                       resource_manager->AcquireExecutor());
+  EXPECT_THAT(executor->VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
+              IsOkAndHolds(FieldsAre(ElementsAre(3, 1, 4), 3)));
+}
+
 TEST(ResourceManagerTest, ExecutorsDontSupportDraftVerificationByDefault) {
   FakeLlmExecutor executor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
                            /*decode_tokens_set=*/{});
   EXPECT_THAT(executor.CheckDraftVerificationSupport(),
               StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(executor.VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+// A fake executor that claims draft verification support, but doesn't
+// implement it.
+class SupportOnlyFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  SupportOnlyFakeLlmExecutor()
+      : FakeLlmExecutor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
+                        /*decode_tokens_set=*/{}) {}
+
+  absl::Status CheckDraftVerificationSupport() const override {
+    return absl::OkStatus();
+  }
+};
+
+TEST(ResourceManagerTest, ExecutorsDontVerifyDraftsByDefault) {
+  SupportOnlyFakeLlmExecutor executor;
+  EXPECT_THAT(executor.VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
+              StatusIs(absl::StatusCode::kUnimplemented));
 }
 
 }  // namespace

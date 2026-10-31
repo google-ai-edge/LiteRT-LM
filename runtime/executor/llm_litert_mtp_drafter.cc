@@ -183,7 +183,8 @@ LlmLiteRtMtpDrafter::Create(
     const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
     EmbeddingLookupManager& embedding_manager,
     std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
-    const proto::ExecutorMetadata* executor_metadata) {
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner verify_pass_runner) {
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
@@ -211,7 +212,7 @@ LlmLiteRtMtpDrafter::Create(
 
   return Create(env, std::move(compiled_model), executor_settings, base_model,
                 *base_model_desc, embedding_manager, ple_manager,
-                executor_metadata);
+                executor_metadata, std::move(verify_pass_runner));
 }
 
 absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>
@@ -220,7 +221,8 @@ LlmLiteRtMtpDrafter::Create(
     const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
     const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
     std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
-    const proto::ExecutorMetadata* executor_metadata) {
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner verify_pass_runner) {
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
@@ -272,7 +274,7 @@ LlmLiteRtMtpDrafter::Create(
           env, base_model, kVerifySignatureRunner, executor_settings,
           &embedding_manager,
           ple_manager.has_value() ? &ple_manager->get() : nullptr,
-          executor_metadata));
+          executor_metadata, std::move(verify_pass_runner)));
   // The verify pass covers the token before the drafted tokens.
   const int num_draft_steps = verifier->width() - 1;
 
@@ -435,23 +437,15 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterOutputBuffers() {
   return absl::OkStatus();
 }
 
-absl::StatusOr<LlmLiteRtMtpDrafter::DraftingResult>
-LlmLiteRtMtpDrafter::RunDraftingLoop(
+absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
     int token_id, std::optional<TensorBuffer>& activations,
-    const Constraint* constraint,
-    const Constraint::State* verified_constraint_state) {
-  DraftingResult result;
-  result.drafted_tokens.reserve(num_draft_steps_);
-  result.draft_constraint_states.reserve(num_draft_steps_);
-  if (constraint != nullptr) {
-    // One extra slot for the final position's mask, added in RunVerification.
-    result.draft_masks.reserve(num_draft_steps_ + 1);
-  }
+    DraftConstraintStates* constraint_states) {
+  std::vector<int> drafted_tokens;
+  drafted_tokens.reserve(num_draft_steps_);
   int last_drafted_token_id = token_id;
   std::vector<float> embedding_vector;
   TensorBuffer* activations_ptr =
       activations.has_value() ? &activations.value() : nullptr;
-  const Constraint::State* current_draft_state = verified_constraint_state;
   for (int i = 0; i < num_draft_steps_; ++i) {
     LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
     // Concat and lookup embeddings with previous activations.
@@ -479,16 +473,11 @@ LlmLiteRtMtpDrafter::RunDraftingLoop(
         drafter_signature_.Key(), active_drafter_input_buffers_,
         active_drafter_output_buffers_, async));
 
-    if (constraint != nullptr) {
-      if (current_draft_state != nullptr) {
-        ABSL_ASSIGN_OR_RETURN(auto mask,
-                              constraint->ComputeMask(*current_draft_state));
-        ABSL_RETURN_IF_ERROR(drafter_mask_runner_->Apply(
-            active_drafter_output_buffers_["logits"], mask.get()));
-        result.draft_masks.push_back(std::move(mask));
-      } else {
-        result.draft_masks.push_back(nullptr);
-      }
+    if (constraint_states != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(const LogitMask* mask,
+                            constraint_states->NextMask());
+      ABSL_RETURN_IF_ERROR(drafter_mask_runner_->Apply(
+          active_drafter_output_buffers_["logits"], mask));
     }
 
     ABSL_RETURN_IF_ERROR(drafter_sampler_->SampleToIdAndScoreBuffer(
@@ -498,55 +487,16 @@ LlmLiteRtMtpDrafter::RunDraftingLoop(
                             CopyFromTensorBuffer<int32_t>(drafter_id_tensor_));
     RET_CHECK_EQ(id_vector.size(), 1);
     int sampled_draft_id = id_vector[0];
-    result.drafted_tokens.push_back(sampled_draft_id);
+    drafted_tokens.push_back(sampled_draft_id);
 
-    if (constraint != nullptr && current_draft_state != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(
-          auto next_state,
-          AdvanceConstraintState(*constraint, *current_draft_state,
-                                 sampled_draft_id));
-      result.draft_constraint_states.push_back(std::move(next_state));
-      current_draft_state = result.draft_constraint_states.back().get();
+    if (constraint_states != nullptr) {
+      ABSL_RETURN_IF_ERROR(constraint_states->Append(sampled_draft_id));
     }
 
     last_drafted_token_id = sampled_draft_id;
     activations_ptr = &active_drafter_output_buffers_["projected_activations"];
   }
-  return result;
-}
-
-absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification(
-    int position, int token_id, DraftingResult& drafting_result,
-    const LitertState::StateBuffers& state_buffers) {
-  std::vector<int> drafted_tokens_with_input_token;
-  drafted_tokens_with_input_token.reserve(num_draft_steps_ + 1);
-  drafted_tokens_with_input_token.push_back(token_id);
-  drafted_tokens_with_input_token.insert(drafted_tokens_with_input_token.end(),
-                                         drafting_result.drafted_tokens.begin(),
-                                         drafting_result.drafted_tokens.end());
-  ABSL_RETURN_IF_ERROR(
-      verifier_->Run(position, drafted_tokens_with_input_token, state_buffers));
-
-  // Apply constraint masks to verifier logits for all positions in a single
-  // pass. Masks for positions [0, num_draft_steps_ - 1] were already computed
-  // during RunDraftingLoop; only the final position's mask needs to be
-  // computed here.
-  std::vector<std::unique_ptr<LogitMask>> masks;
-  if (constraint_ != nullptr) {
-    const auto& draft_constraint_states =
-        drafting_result.draft_constraint_states;
-    masks = std::move(drafting_result.draft_masks);
-    const Constraint::State* final_state =
-        draft_constraint_states.empty() ? constraint_state_.get()
-                                        : draft_constraint_states.back().get();
-    if (final_state != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(auto mask, constraint_->ComputeMask(*final_state));
-      masks.push_back(std::move(mask));
-    } else {
-      masks.push_back(nullptr);
-    }
-  }
-  return verifier_->MaskAndSample(masks);
+  return drafted_tokens;
 }
 
 absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
@@ -573,38 +523,45 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
         constraint_state_,
         AdvanceConstraintState(*constraint_, *constraint_->Start(), token_id));
   }
+  // The constraint states along the drafted tokens, which give the masks of
+  // the drafting steps and of the verify pass.
+  std::optional<DraftConstraintStates> constraint_states;
+  if (constraint_ != nullptr) {
+    RET_CHECK(constraint_state_ != nullptr);
+    constraint_states.emplace(*constraint_, *constraint_state_);
+  }
+  DraftConstraintStates* constraint_states_ptr =
+      constraint_states.has_value() ? &*constraint_states : nullptr;
 
   const absl::Time draft_start = absl::Now();
-  ABSL_ASSIGN_OR_RETURN(DraftingResult drafting_result,
-                        RunDraftingLoop(token_id, activations, constraint_,
-                                        constraint_state_.get()));
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<int> drafted_tokens,
+      RunDraftingLoop(token_id, activations, constraint_states_ptr));
   const absl::Duration drafting_time = absl::Now() - draft_start;
 
   const absl::Time verify_start = absl::Now();
-  ABSL_ASSIGN_OR_RETURN(
-      std::vector<int> verifier_id_vector,
-      RunVerification(position, token_id, drafting_result, state_buffers));
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  ABSL_ASSIGN_OR_RETURN(VerifyPassResult pass,
+                        verifier_->Verify(position, token_id, drafted_tokens,
+                                          state_buffers, constraint_states_ptr,
+                                          lenience_, [&](int /*i*/) -> double {
+                                            return unit(lenience_rng_.engine());
+                                          }));
   const absl::Duration verify_time = absl::Now() - verify_start;
 
-  RET_CHECK_EQ(verifier_id_vector.size(),
-               drafting_result.drafted_tokens.size() + 1);
-  std::uniform_real_distribution<double> unit(0.0, 1.0);
-  const LenientAcceptResult accept_result = CountAcceptedPrefixWithLenience(
-      verifier_id_vector, drafting_result.drafted_tokens, lenience_,
-      [&](int /*i*/) -> double { return unit(lenience_rng_.engine()); });
-  int num_correct_tokens = accept_result.accepted;
-  int bonus_token = verifier_id_vector[num_correct_tokens];
+  // The pass takes all the drafted tokens, so it always decodes a bonus token.
+  RET_CHECK(pass.outcome.next_token.has_value());
+  const int num_correct_tokens = pass.outcome.num_accepted;
+  const int bonus_token = *pass.outcome.next_token;
   last_verified_token_id_idx_ = num_correct_tokens;
 
   // Update verified constraint state according to verified + bonus tokens.
   if (constraint_ != nullptr) {
-    if (num_correct_tokens > 0 &&
-        num_correct_tokens <=
-            static_cast<int>(drafting_result.draft_constraint_states.size())) {
-      constraint_state_ = std::move(
-          drafting_result.draft_constraint_states[num_correct_tokens - 1]);
+    if (pass.constraint_state != nullptr) {
+      constraint_state_ = std::move(pass.constraint_state);
     }
-    if (bonus_token >= 0 && constraint_state_ != nullptr) {
+    if (bonus_token >= 0) {
+      RET_CHECK(constraint_state_ != nullptr);
       ABSL_ASSIGN_OR_RETURN(constraint_state_,
                             AdvanceConstraintState(
                                 *constraint_, *constraint_state_, bonus_token));
@@ -612,12 +569,12 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   }
 
   MTP_DRAFTER_LOG() << "drafted_tokens: "
-                    << absl::StrJoin(drafting_result.drafted_tokens, ", ");
+                    << absl::StrJoin(drafted_tokens, ", ");
   MTP_DRAFTER_LOG() << "bonus_token: " << bonus_token;
   MTP_DRAFTER_LOG() << "num_correct_tokens: " << num_correct_tokens;
 
   // The first token comes from the decode output and is always correct.
-  std::vector<int> output_tokens = std::move(drafting_result.drafted_tokens);
+  std::vector<int> output_tokens = std::move(drafted_tokens);
   output_tokens.resize(num_correct_tokens);
   output_tokens.push_back(bonus_token);
   num_drafted_tokens_ += num_draft_steps_;
@@ -626,7 +583,7 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
       .drafted_tokens = num_draft_steps_,
       .accepted_tokens = num_correct_tokens,
       .emitted_tokens = num_correct_tokens + 1,
-      .lenient_accepted_tokens = accept_result.lenient_accepted,
+      .lenient_accepted_tokens = pass.outcome.num_lenient_accepted,
       .drafting_time = drafting_time,
       .verify_time = verify_time,
   };

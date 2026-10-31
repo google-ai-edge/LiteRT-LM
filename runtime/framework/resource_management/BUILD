@@ -330,10 +330,13 @@ cc_test(
         ":resource_manager",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
         "//runtime/executor:executor_stats",
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/util:test_utils",
     ],
 )

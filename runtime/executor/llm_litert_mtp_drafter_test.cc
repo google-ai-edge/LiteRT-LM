@@ -45,6 +45,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -227,51 +228,6 @@ TEST(LlmLiteRtMtpDrafterTest, UpdateCompilationOptions) {
   EXPECT_OK(UpdateCompilationOptions(settings_cpu, options));
 }
 
-TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixAllAccepted) {
-  const std::vector<int> drafted = {10, 20, 30};
-  const std::vector<int> verifier_ids = {10, 20, 30, 99};
-  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
-  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
-  EXPECT_EQ(accepted, 3);
-  EXPECT_EQ(verifier_ids[accepted], 99);
-}
-
-TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixNoneAccepted) {
-  const std::vector<int> drafted = {10, 20, 30};
-  const std::vector<int> verifier_ids = {11, 20, 30, 99};
-  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
-  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
-  EXPECT_EQ(accepted, 0);
-  EXPECT_EQ(verifier_ids[accepted], 11);
-}
-
-TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixMismatchInMiddle) {
-  const std::vector<int> drafted = {10, 20, 30};
-  const std::vector<int> verifier_ids = {10, 25, 30, 99};
-  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
-  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
-  EXPECT_EQ(accepted, 1);
-  EXPECT_EQ(verifier_ids[accepted], 25);
-}
-
-TEST(LlmLiteRtMtpDrafterTest, CountAcceptedPrefixEmptyDraftedWithBonusOnly) {
-  const std::vector<int> drafted = {};
-  const std::vector<int> verifier_ids = {42};
-  ASSERT_EQ(verifier_ids.size(), drafted.size() + 1);
-  const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
-  EXPECT_EQ(accepted, 0);
-  EXPECT_EQ(verifier_ids[accepted], 42);
-}
-
-TEST(LlmLiteRtMtpDrafterTest,
-     CountAcceptedPrefixDefensivelyClampsIfVerifierShorterThanDrafted) {
-  // Callers enforce verifier_ids.size() == drafted.size() + 1 via RET_CHECK,
-  // but CountAcceptedPrefix safely avoids out-of-bounds reads if misused.
-  const std::vector<int> drafted = {10, 20, 30};
-  const std::vector<int> short_verifier = {10, 20};
-  EXPECT_EQ(CountAcceptedPrefix(short_verifier, drafted), 2);
-}
-
 // A toy first-order "language model" over a small vocabulary, used to check
 // that exact-match verification with a *sampling* verifier and a *greedy*
 // drafter emits tokens from the verifier's distribution (speculative sampling).
@@ -330,9 +286,11 @@ std::vector<int> GenerateWithMtpRounds(
                             ? target_samplers[previous](rng)
                             : Argmax(kTarget[previous]);
     }
-    const int accepted = CountAcceptedPrefix(verifier_ids, drafted);
-    emitted.insert(emitted.end(), drafted.begin(), drafted.begin() + accepted);
-    emitted.push_back(verifier_ids[accepted]);
+    const VerifyPassOutcome outcome =
+        EvaluateVerifyPass(verifier_ids, drafted, num_draft_steps);
+    emitted.insert(emitted.end(), drafted.begin(),
+                   drafted.begin() + outcome.num_accepted);
+    emitted.push_back(*outcome.next_token);
     last = emitted.back();
   }
   emitted.resize(num_tokens);
@@ -451,78 +409,6 @@ TEST(LlmLiteRtMtpDrafterTest, LenienceRandomEngineDefaultsToSeedZero) {
   EXPECT_EQ(never_updated.engine()(), seed_zero.engine()());
 }
 
-// Lenient acceptance: r = (1 - c) * p + c * delta(draft).
-
-TEST(LlmLiteRtMtpDrafterTest, LenienceZeroMatchesExactAcceptance) {
-  std::mt19937_64 rng(42);
-  std::uniform_int_distribution<int> token(0, 3);
-  for (int trial = 0; trial < 1000; ++trial) {
-    std::vector<int> drafted(4);
-    std::vector<int> verifier_ids(5);
-    for (int& t : drafted) t = token(rng);
-    for (int& t : verifier_ids) t = token(rng);
-    int uniform_calls = 0;
-    const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
-        verifier_ids, drafted, /*lenience=*/0.0f, [&](int) {
-          ++uniform_calls;
-          return 0.0;
-        });
-    EXPECT_EQ(result.accepted, CountAcceptedPrefix(verifier_ids, drafted));
-    EXPECT_EQ(result.lenient_accepted, 0);
-    EXPECT_EQ(uniform_calls, 0);
-  }
-}
-
-TEST(LlmLiteRtMtpDrafterTest, LenienceOneAcceptsEverything) {
-  const std::vector<int> drafted = {10, 20, 30};
-  const std::vector<int> verifier_ids = {11, 21, 30, 99};
-  const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
-      verifier_ids, drafted, /*lenience=*/1.0f, [](int) { return 0.999999; });
-  EXPECT_EQ(result.accepted, 3);
-  EXPECT_EQ(result.lenient_accepted, 2);
-  EXPECT_EQ(verifier_ids[result.accepted], 99);
-}
-
-TEST(LlmLiteRtMtpDrafterTest, LenienceUsesUniformOnlyOnMismatch) {
-  const std::vector<int> drafted = {10, 20, 30};
-  const std::vector<int> verifier_ids = {10, 25, 31, 99};
-  std::vector<int> positions;
-  const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
-      verifier_ids, drafted, /*lenience=*/0.5f, [&](int i) {
-        positions.push_back(i);
-        return i == 1 ? 0.1 : 0.9;  // Accept position 1, reject position 2.
-      });
-  EXPECT_EQ(result.accepted, 2);
-  EXPECT_EQ(result.lenient_accepted, 1);
-  EXPECT_EQ(verifier_ids[result.accepted], 31);
-  EXPECT_EQ(positions, (std::vector<int>{1, 2}));
-}
-
-TEST(LlmLiteRtMtpDrafterTest, AcceptanceIsMonotoneInLenience) {
-  // With shared randomness, raising c can only extend the accepted prefix.
-  std::mt19937_64 rng(7);
-  std::uniform_int_distribution<int> token(0, 2);
-  std::uniform_real_distribution<double> unit(0.0, 1.0);
-  const std::vector<float> lenience = {0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f};
-  for (int trial = 0; trial < 2000; ++trial) {
-    std::vector<int> drafted(5);
-    std::vector<int> verifier_ids(6);
-    std::vector<double> uniforms(5);
-    for (int& t : drafted) t = token(rng);
-    for (int& t : verifier_ids) t = token(rng);
-    for (double& u : uniforms) u = unit(rng);
-    int previous = -1;
-    for (const float c : lenience) {
-      const int accepted =
-          CountAcceptedPrefixWithLenience(verifier_ids, drafted, c, [&](int i) {
-            return uniforms[i];
-          }).accepted;
-      EXPECT_GE(accepted, previous);
-      previous = accepted;
-    }
-  }
-}
-
 TEST(LlmLiteRtMtpDrafterTest, LenientAcceptanceSamplesFromMixture) {
   // The first emitted token must follow r = (1 - c) * p + c * delta(draft).
   constexpr int64_t kTrials = 200000;
@@ -537,9 +423,10 @@ TEST(LlmLiteRtMtpDrafterTest, LenientAcceptanceSamplesFromMixture) {
   for (int64_t t = 0; t < kTrials; ++t) {
     // The bonus position is irrelevant for the first token.
     const std::vector<int> verifier_ids = {verifier(rng), 0};
-    const LenientAcceptResult result = CountAcceptedPrefixWithLenience(
-        verifier_ids, drafted, kLenience, [&](int) { return unit(rng); });
-    ++counts[result.accepted == 1 ? drafted[0] : verifier_ids[0]];
+    const VerifyPassOutcome outcome =
+        EvaluateVerifyPass(verifier_ids, drafted, /*num_draft_inputs=*/1,
+                           kLenience, [&](int) { return unit(rng); });
+    ++counts[outcome.num_accepted == 1 ? drafted[0] : verifier_ids[0]];
   }
   std::vector<double> expected(kVocab);
   for (int v = 0; v < kVocab; ++v) {

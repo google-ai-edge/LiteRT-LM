@@ -701,5 +701,49 @@ TEST(BenchmarkInfoTest, LogitsOnlyDecodeStepsPrintedSeparately) {
   EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("logits_steps")));
 }
 
+TEST(BenchmarkInfoTest, DraftVerificationBlockPrintedWhenDraftsWereVerified) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateDraftVerification(/*passes=*/2, /*draft_tokens=*/20,
+                                    /*accepted_tokens=*/12,
+                                    /*emitted_tokens=*/13,
+                                    /*verify_time=*/absl::Milliseconds(30));
+  stats.AccumulateDraftVerification(/*passes=*/1, /*draft_tokens=*/4,
+                                    /*accepted_tokens=*/4,
+                                    /*emitted_tokens=*/4,
+                                    /*verify_time=*/absl::Milliseconds(12));
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(),
+              HasSubstr("  Draft Verification:\n"
+                        "    Verifications:     2 (3 passes)\n"
+                        "    Acceptance rate:   66.7% (16 of 24 draft tokens)\n"
+                        "    Tokens per pass:   5.67 (17 emitted)\n"
+                        "    Time per pass:     14.00 ms (21.00 ms per "
+                        "verification)\n"));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Speculative Decoding")));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("draft_verify")));
+}
+
+TEST(BenchmarkInfoTest, DraftVerificationBlockOmittedWithoutVerifications) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3,
+                           /*drafting_time=*/absl::Milliseconds(6),
+                           /*verify_time=*/absl::Milliseconds(14),
+                           /*round_time=*/absl::Milliseconds(20));
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(), HasSubstr("Speculative Decoding"));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Draft Verification")));
+}
+
 }  // namespace
 }  // namespace litert::lm

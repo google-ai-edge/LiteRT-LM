@@ -37,7 +37,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
@@ -310,13 +309,9 @@ absl::Status PopulateLastTokenEmbedding(
 }
 
 absl::Status InitializeAuxiliaryExecutorComponents(
-    ::litert::Environment& lrt_env,
-    const LlmExecutorSettings& executor_settings, CompiledModel& compiled_model,
-    ModelResources* resources,
+    ::litert::Environment& lrt_env, ModelResources* resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup,
-    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
-    std::unique_ptr<LlmLiteRtMtpDrafter>& mtp_drafter,
     const proto::ExecutorMetadata*& executor_metadata) {
   if (resources != nullptr) {
     auto executor_metadata_or = resources->GetExecutorMetadata();
@@ -328,35 +323,47 @@ absl::Status InitializeAuxiliaryExecutorComponents(
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
         lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup));
   }
-  if (mtp_drafter == nullptr && resources != nullptr) {
-    if (executor_settings.GetEffectiveSpeculativeDecodingMode() !=
-        SpeculativeDecodingMode::kOff) {
-      RET_CHECK_NE(embedding_lookup, nullptr);
-      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
-          ple_manager_opt;
-      if (per_layer_embedding_lookup) {
-        ple_manager_opt = std::ref(*per_layer_embedding_lookup);
-      }
-      if (compiled_mtp_drafter_model != nullptr) {
-        ABSL_ASSIGN_OR_RETURN(const litert::Model* base_model_desc,
-                              resources->GetTFLiteModel(
-                                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
-        ABSL_ASSIGN_OR_RETURN(
-            mtp_drafter,
-            LlmLiteRtMtpDrafter::Create(
-                lrt_env, std::move(*compiled_mtp_drafter_model),
-                executor_settings, compiled_model, *base_model_desc,
-                *embedding_lookup, ple_manager_opt, executor_metadata));
-      } else {
-        ABSL_ASSIGN_OR_RETURN(
-            mtp_drafter,
-            LlmLiteRtMtpDrafter::Create(lrt_env, *resources, executor_settings,
-                                        compiled_model, *embedding_lookup,
-                                        ple_manager_opt, executor_metadata));
-      }
-    }
-  }
   return absl::OkStatus();
+}
+
+// Whether the executor's `Create()` loads the MTP drafter right after
+// construction, instead of lazily on the first speculative step.
+bool LoadsMtpDrafterAtCreation(const LlmExecutorSettings& executor_settings,
+                               const ModelResources* resources) {
+  return resources != nullptr &&
+         executor_settings.GetEffectiveSpeculativeDecodingMode() !=
+             SpeculativeDecodingMode::kOff;
+}
+
+// Creates the MTP drafter of `base_model`, whose verify passes start with
+// `verify_pass_runner`. The drafter model is `compiled_mtp_drafter_model` if
+// not null, or else loaded from `resources` and compiled.
+absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> CreateMtpDrafter(
+    Environment& env, ModelResources& resources,
+    const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+    EmbeddingLookupManager* embedding_lookup,
+    EmbeddingLookupManager* per_layer_embedding_lookup,
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner verify_pass_runner,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model) {
+  RET_CHECK_NE(embedding_lookup, nullptr)
+      << "Speculative decoding requires embedding lookup.";
+  std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager_opt;
+  if (per_layer_embedding_lookup != nullptr) {
+    ple_manager_opt = std::ref(*per_layer_embedding_lookup);
+  }
+  if (compiled_mtp_drafter_model == nullptr) {
+    return LlmLiteRtMtpDrafter::Create(
+        env, resources, executor_settings, base_model, *embedding_lookup,
+        ple_manager_opt, executor_metadata, std::move(verify_pass_runner));
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      const litert::Model* base_model_desc,
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  return LlmLiteRtMtpDrafter::Create(
+      env, std::move(*compiled_mtp_drafter_model), executor_settings,
+      base_model, *base_model_desc, *embedding_lookup, ple_manager_opt,
+      executor_metadata, std::move(verify_pass_runner));
 }
 
 }  // namespace
@@ -907,26 +914,44 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
     output_buffers[output_name] = std::move(output_buffer_dup);
   }
 
+  return RunSignature(prefill_signature, input_buffers, output_buffers, async);
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::RunSignature(
+    absl::string_view signature,
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& output_buffers,
+    bool async) {
+
+  ABSL_ASSIGN_OR_RETURN(const int current_step, GetCurrentStep());
   if (pre_graph_run_callback_) {
-    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
-    pre_graph_run_callback_(prefill_signature, current_step, input_buffers);
+    pre_graph_run_callback_(signature, current_step, input_buffers);
   }
 
   litert::Options run_options = GetRunOptions();
   if (async) {
     LITERT_RETURN_IF_ERROR(compiled_model_->RunAsync(
-        prefill_signature, input_buffers, output_buffers, async, &run_options));
+        signature, input_buffers, output_buffers, async, &run_options));
   } else {
-    LITERT_RETURN_IF_ERROR(compiled_model_->Run(
-        prefill_signature, input_buffers, output_buffers, &run_options));
+    LITERT_RETURN_IF_ERROR(compiled_model_->Run(signature, input_buffers,
+                                                output_buffers, &run_options));
   }
 
   if (post_graph_run_callback_) {
-    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
-    post_graph_run_callback_(prefill_signature, current_step, output_buffers);
+    post_graph_run_callback_(signature, current_step, output_buffers);
   }
 
   return absl::OkStatus();
+}
+
+LlmLiteRtVerifier::PassRunner
+LlmLiteRtCompiledModelExecutorBase::CreateVerifyPassRunner() {
+  using BufferMap = absl::flat_hash_map<absl::string_view, TensorBuffer>;
+  return [this](absl::string_view signature_key, BufferMap& input_buffers,
+                BufferMap& output_buffers) {
+    return RunSignature(signature_key, input_buffers, output_buffers,
+                        /*async=*/true);
+  };
 }
 
 absl::StatusOr<ProcessedTokens::StepAndToken>
@@ -1210,25 +1235,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     decode_output_buffers[name] = std::move(buffer);
   }
 
-  if (pre_graph_run_callback_) {
-    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
-    pre_graph_run_callback_(kDecodeSignatureRunner, current_step,
-                            decode_input_buffers);
-  }
-
-  litert::Options run_options = GetRunOptions();
-  bool async = true;
-  LITERT_RETURN_IF_ERROR(
-      compiled_model_->RunAsync(kDecodeSignatureRunner, decode_input_buffers,
-                                decode_output_buffers, async, &run_options));
-
-  if (post_graph_run_callback_) {
-    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
-    post_graph_run_callback_(kDecodeSignatureRunner, current_step,
-                             decode_output_buffers);
-  }
-
-  return absl::OkStatus();
+  return RunSignature(kDecodeSignatureRunner, decode_input_buffers,
+                      decode_output_buffers, /*async=*/true);
 }
 
 int LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecodeStatic(
@@ -1284,16 +1292,13 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::EnsureMtpDrafterLoaded() {
   }
   RET_CHECK_EQ(output_heads, 1)
       << "Speculative decoding (MTP) only supports a single output head.";
-  RET_CHECK_NE(embedding_lookup_, nullptr)
-      << "Speculative decoding requires embedding lookup.";
-  std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager_opt;
-  if (per_layer_embedding_lookup_) {
-    ple_manager_opt = std::ref(*per_layer_embedding_lookup_);
-  }
-  ABSL_ASSIGN_OR_RETURN(mtp_drafter_, LlmLiteRtMtpDrafter::Create(
-                                          env_, *resources_, executor_settings_,
-                                          *compiled_model_, *embedding_lookup_,
-                                          ple_manager_opt, executor_metadata_));
+  ABSL_ASSIGN_OR_RETURN(
+      mtp_drafter_,
+      CreateMtpDrafter(env_, *resources_, executor_settings_, *compiled_model_,
+                       embedding_lookup_.get(),
+                       per_layer_embedding_lookup_.get(), executor_metadata_,
+                       CreateVerifyPassRunner(),
+                       /*compiled_mtp_drafter_model=*/nullptr));
   return MaybeUpdateVerifierSamplerConfig();
 }
 
@@ -1302,6 +1307,13 @@ LlmLiteRtCompiledModelExecutorBase::MaybeUpdateVerifierSamplerConfig() {
   if (mtp_drafter_ == nullptr || sampler_ == nullptr) {
     return absl::OkStatus();
   }
+  auto [sampler_params, rand_gen] = GetVerifierSamplerConfig();
+  return mtp_drafter_->UpdateVerifierSamplerConfig(sampler_params,
+                                                   std::move(rand_gen));
+}
+
+std::pair<proto::SamplerParameters, std::shared_ptr<std::default_random_engine>>
+LlmLiteRtCompiledModelExecutorBase::GetVerifierSamplerConfig() {
   proto::SamplerParameters sampler_params = GreedySamplerParams();
   if (llm_context_->runtime_config().sampler_params.has_value() &&
       llm_context_->runtime_config().sampler_params->type() !=
@@ -1311,13 +1323,15 @@ LlmLiteRtCompiledModelExecutorBase::MaybeUpdateVerifierSamplerConfig() {
   std::shared_ptr<std::default_random_engine> rand_gen;
   if (rand_gen == nullptr) {
     // The session sampler owns a generator seeded with the session seed. Give
-    // the verifier an independent stream rather than a second generator with
-    // the same seed (which would correlate its draws with the session's).
+    // the verifiers an independent stream rather than a second generator with
+    // the same seed (which would correlate its draws with the session's), and
+    // the same one for all of them, so that the passes of different verify
+    // signatures and the MTP drafter's don't repeat each other's draws.
     constexpr int32_t kVerifierSeedSalt = 0x56455249;  // "VERI"
     sampler_params.set_seed(sampler_params.seed() ^ kVerifierSeedSalt);
+    rand_gen = verifier_rand_gen_.Get(sampler_params.seed());
   }
-  return mtp_drafter_->UpdateVerifierSamplerConfig(sampler_params,
-                                                   std::move(rand_gen));
+  return {std::move(sampler_params), std::move(rand_gen)};
 }
 
 absl::StatusOr<std::vector<std::vector<int>>>
@@ -2130,13 +2144,11 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
-    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
-    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model) {
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   ABSL_RETURN_IF_ERROR(InitializeAuxiliaryExecutorComponents(
-      lrt_env, executor_settings, *compiled_model, resources, embedding_lookup,
-      per_layer_embedding_lookup, std::move(compiled_mtp_drafter_model),
-      mtp_drafter, executor_metadata));
+      lrt_env, resources, embedding_lookup, per_layer_embedding_lookup,
+      executor_metadata));
   std::string cache_path = executor_settings.GetCacheDir();
   auto activation_data_type = ActivationDataType::FLOAT16;
   // TODO: b/433590109 - Some GPUs do not support FP16, so we need to check the
@@ -2277,7 +2289,9 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   RET_CHECK(output_logits_buffer_tensor_type.Layout().Dimensions().size() == 3)
       << "Output logits must be (batch, seq, vocab)";
   int batch_size = output_logits_buffer_tensor_type.Layout().Dimensions()[0];
-  if (mtp_drafter != nullptr) {
+  const bool load_mtp_drafter =
+      LoadsMtpDrafterAtCreation(executor_settings, resources);
+  if (load_mtp_drafter) {
     RET_CHECK_EQ(batch_size, 1)
         << "Speculative decoding (MTP) only supports a single output head.";
   }
@@ -2299,14 +2313,6 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                             /*input_positions_name=*/signatures.input_positions,
                             executor_settings.GetSelectedSignatures()));
   RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
-  ABSL_ASSIGN_OR_RETURN(
-      std::vector<VerifySignatureInfo> verify_signatures,
-      FindVerifySignatures(
-          *compiled_model, kDecodeSignatureRunner, *state,
-          executor_settings.GetSelectedSignatures(),
-          /*has_embedding_lookup=*/embedding_lookup != nullptr,
-          /*has_per_layer_embedding_lookup=*/per_layer_embedding_lookup !=
-              nullptr));
   bool enable_profiling =
       executor_settings.GetAdvancedSettings() &&
       executor_settings.GetAdvancedSettings()->enable_profiling;
@@ -2316,9 +2322,27 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       std::move(state), std::move(decode_state), std::move(prefill_runner_set),
       signatures, batch_size, std::move(cache_path),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-      use_fp16_precision, activation_data_type, std::move(mtp_drafter),
-      executor_metadata, resources));
-  executor->verify_signatures_ = std::move(verify_signatures);
+      use_fp16_precision, activation_data_type, executor_metadata, resources));
+  ABSL_ASSIGN_OR_RETURN(
+      executor->draft_verifier_,
+      LlmLiteRtDraftVerifier::Create(
+          lrt_env, *executor->compiled_model_, kDecodeSignatureRunner,
+          *executor->state_, executor->executor_settings_,
+          executor->embedding_lookup_.get(),
+          executor->per_layer_embedding_lookup_.get(), executor_metadata,
+          executor->CreateVerifyPassRunner()));
+  if (load_mtp_drafter) {
+    // Created after the executor, so that the drafter's verify passes run
+    // with the executor's pass runner.
+    ABSL_ASSIGN_OR_RETURN(
+        executor->mtp_drafter_,
+        CreateMtpDrafter(lrt_env, *resources, executor->executor_settings_,
+                         *executor->compiled_model_,
+                         executor->embedding_lookup_.get(),
+                         executor->per_layer_embedding_lookup_.get(),
+                         executor_metadata, executor->CreateVerifyPassRunner(),
+                         std::move(compiled_mtp_drafter_model)));
+  }
 
   if (enable_profiling) {
     auto status = executor->StartProfiling();
@@ -2342,20 +2366,149 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::UpdateExecutorSettings(
 
 absl::Status
 LlmLiteRtCompiledModelExecutorStatic::CheckDraftVerificationSupport() const {
-  if (verify_signatures_.empty()) {
+  RET_CHECK(draft_verifier_ != nullptr);
+  return draft_verifier_->CheckSupport();
+}
+
+absl::StatusOr<DraftVerificationResult>
+LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
+    absl::Span<const int> draft_token_ids,
+    const ExecutorDecodeParams& decode_params) {
+
+  // Checks everything that can fail before any state changes.
+  ABSL_RETURN_IF_ERROR(CheckDraftVerificationSupport());
+  if (llm_context_->runtime_config().output_heads.value_or(1) != 1) {
     return absl::FailedPreconditionError(
-        "Draft verification needs a verify signature, but the model has none.");
+        "Draft verification supports a single output candidate only.");
   }
-  std::vector<std::string> reasons;
-  for (const VerifySignatureInfo& info : verify_signatures_) {
-    if (info.status.ok()) {
-      return absl::OkStatus();
+  ABSL_ASSIGN_OR_RETURN(const int vocab_size, GetVocabSize());
+  ABSL_RETURN_IF_ERROR(ValidateDraftTokenIds(draft_token_ids, vocab_size));
+  // Applies a pending rewind, as a decode would.
+  ABSL_RETURN_IF_ERROR(RollBackProcessedTokens());
+  const ProcessedTokens::StepAndToken pending =
+      llm_context_->processed_context()
+          .processed_tokens()
+          .GetNextUnprocessedToken();
+  if (pending.token.size() != 1) {
+    return absl::FailedPreconditionError(
+        "Draft verification needs a pending token from a prefill or decode.");
+  }
+  if (pending.token[0]->id() < 0) {
+    return absl::FailedPreconditionError(
+        "Draft verification can't follow multimodal input directly.");
+  }
+  // Like the MTP rounds of `Decode()`, stays within the context, so that the
+  // new pending token has a KV cache slot.
+  const int current_step = llm_context_->runtime_state().current_step;
+  const int max_num_tokens =
+      static_cast<int>(executor_settings_.GetMaxNumTokens());
+  if (current_step + static_cast<int>(draft_token_ids.size()) + 1 >
+      max_num_tokens) {
+    return absl::ResourceExhaustedError(absl::StrCat(
+        "The draft of ", draft_token_ids.size(),
+        " tokens leaves no room for the token after it in the context: ",
+        current_step, " of ", max_num_tokens, " tokens are used."));
+  }
+  // Near the end of the KV cache, verifies as many passes as fit, as a decode
+  // stops at the end of the context.
+  const int kv_cache_size = state_->GetNumEntries();
+  if (!draft_verifier_->PassFits(pending.step, kv_cache_size)) {
+    return absl::ResourceExhaustedError(
+        absl::StrCat("No verify pass fits into the KV cache of ", kv_cache_size,
+                     " entries at position ", pending.step, "."));
+  }
+  auto* litert_state = dynamic_cast<LitertState*>(state_.get());
+  RET_CHECK(litert_state != nullptr);
+
+  // Prepares like a decode step, which feeds the pending token to the
+  // constraint only if a decode produced it. `PrepareFirstDecode()`, which
+  // marks the pending token as decoded, waits for the first committed pass, so
+  // that a cancelled or failed verification leaves a prefilled one as it is.
+  const absl::Time start_time = absl::Now();
+  bool feed_pending_token = llm_context_->runtime_state().ran_decode;
+  mtp_primed_ = false;
+  ABSL_RETURN_IF_ERROR(InitializeSampler());
+  // The verify passes don't run the decode that the sampler may have already
+  // run for the pending token, and a committed pass changes the pending token.
+  // Reset before the first pass, so that a decode after a cancelled or failed
+  // verification doesn't reuse the stale logits.
+  if (sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
+  auto [sampler_params, rand_gen] = GetVerifierSamplerConfig();
+  draft_verifier_->SetSamplerConfig(sampler_params, std::move(rand_gen));
+
+  DraftVerificationResult result;
+  int num_passes = 0;
+  int num_verified_drafts = draft_token_ids.size();
+  // The draft tokens that remain.
+  absl::Span<const int> drafts = draft_token_ids;
+  while (true) {
+    if (decode_params.GetCancelled() != nullptr &&
+        decode_params.GetCancelled()->load()) {
+      if (num_passes == 0) {
+        return absl::CancelledError("Draft verification was cancelled.");
+      }
+      // Returns the tokens that the completed passes committed, so that the
+      // caller sees every token of the context before it notices the
+      // cancellation. Only completed verifications count in the stats.
+      return result;
     }
-    reasons.push_back(absl::StrCat(info.key, ": ", info.status.message()));
+    // Unlike a decode step, a pass only needs the pending token's id: it looks
+    // up the embeddings of all its tokens itself.
+    const ProcessedTokens::StepAndToken step_and_token =
+        llm_context_->processed_context()
+            .processed_tokens()
+            .GetNextUnprocessedToken();
+    RET_CHECK_EQ(step_and_token.token.size(), 1);
+    if (num_passes > 0 &&
+        !draft_verifier_->PassFits(step_and_token.step, kv_cache_size)) {
+      // The draft tokens that remain aren't verified.
+      num_verified_drafts -= drafts.size();
+      break;
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        const VerifyPassOutcome outcome,
+        draft_verifier_->VerifyPass(
+            step_and_token.step, step_and_token.token[0]->id(), drafts,
+            *litert_state, decode_params.GetConstrainedDecoder(),
+            feed_pending_token));
+    ++num_passes;
+
+    // Commits the pass: the pending token and the accepted draft inputs are
+    // processed, and the last new token is pending.
+    std::vector<int> new_tokens(drafts.begin(),
+                                drafts.begin() + outcome.num_accepted);
+    if (outcome.next_token.has_value()) {
+      new_tokens.push_back(*outcome.next_token);
+    }
+    RET_CHECK(!new_tokens.empty());
+    ABSL_RETURN_IF_ERROR(PrepareFirstDecode());
+    ABSL_RETURN_IF_ERROR(
+        ConsumePendingOrAddProcessedToken(step_and_token.token));
+    if (new_tokens.size() > 1) {
+      llm_context_->processed_context().processed_tokens().AddProcessedTokens(
+          std::vector<int>(new_tokens.begin(), new_tokens.end() - 1));
+    }
+    ABSL_RETURN_IF_ERROR(llm_context_->processed_context()
+                             .processed_tokens()
+                             .AddPendingInputToken({std::make_shared<TokenData>(
+                                 new_tokens.back())}));
+    llm_context_->runtime_state().current_step += new_tokens.size();
+    feed_pending_token = true;
+    result.tokens.insert(result.tokens.end(), new_tokens.begin(),
+                         new_tokens.end());
+    result.num_accepted += outcome.num_accepted;
+    drafts.remove_prefix(outcome.num_accepted);
+    if (outcome.next_token.has_value() || drafts.empty()) {
+      break;
+    }
   }
-  return absl::FailedPreconditionError(
-      absl::StrCat("None of the model's verify signatures can verify drafts. ",
-                   absl::StrJoin(reasons, " ")));
+
+  executor_stats_.AccumulateDraftVerification(
+      num_passes, num_verified_drafts, result.num_accepted,
+      result.tokens.size(), absl::Now() - start_time);
+  return result;
 }
 
 /* ===========================================================================*/
@@ -2512,13 +2665,11 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
     std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
-    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
-    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model) {
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   ABSL_RETURN_IF_ERROR(InitializeAuxiliaryExecutorComponents(
-      lrt_env, executor_settings, *compiled_model, resources, embedding_lookup,
-      per_layer_embedding_lookup, std::move(compiled_mtp_drafter_model),
-      mtp_drafter, executor_metadata));
+      lrt_env, resources, embedding_lookup, per_layer_embedding_lookup,
+      executor_metadata));
 
   std::string weight_cache_path = executor_settings.GetCacheDir();
 
@@ -2605,8 +2756,20 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       batch_size, std::move(weight_cache_path), std::move(embedding_lookup),
       std::move(per_layer_embedding_lookup),
       /*use_fp16_precision=*/false,
-      /*logits_data_type=*/LogitsDataType::FLOAT32, std::move(mtp_drafter),
-      executor_metadata, resources));
+      /*logits_data_type=*/LogitsDataType::FLOAT32, executor_metadata,
+      resources));
+  if (LoadsMtpDrafterAtCreation(executor->executor_settings_, resources)) {
+    // Created after the executor, so that the drafter's verify passes run
+    // with the executor's pass runner.
+    ABSL_ASSIGN_OR_RETURN(
+        executor->mtp_drafter_,
+        CreateMtpDrafter(lrt_env, *resources, executor->executor_settings_,
+                         *executor->compiled_model_,
+                         executor->embedding_lookup_.get(),
+                         executor->per_layer_embedding_lookup_.get(),
+                         executor_metadata, executor->CreateVerifyPassRunner(),
+                         std::move(compiled_mtp_drafter_model)));
+  }
   if (enable_profiling) {
     auto status = executor->StartProfiling();
     if (!status.ok()) {

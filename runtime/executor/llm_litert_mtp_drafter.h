@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 
-#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -26,12 +25,10 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
@@ -39,11 +36,9 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
-#include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
-#include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_verifier.h"
@@ -51,71 +46,6 @@
 #include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
-
-// Result of lenient prefix acceptance.
-struct LenientAcceptResult {
-  // Number of accepted draft tokens. The bonus token is
-  // `verifier_ids[accepted]`.
-  int accepted = 0;
-  // Of `accepted`, how many were accepted only because of lenience (i.e. the
-  // verifier sample disagreed with the draft).
-  int lenient_accepted = 0;
-};
-
-// Lenient acceptance for greedy (one-hot) drafts with sampled verification.
-//
-// `verifier_ids[i]` is a sample y_i ~ p_i from the (processed) verifier
-// distribution at draft position i, and `drafted[i]` is the greedy draft x_i.
-// At each position the draft is accepted if y_i == x_i; otherwise it is still
-// accepted with probability `lenience` (using an independent uniform
-// `uniform(i)` in [0, 1)); else y_i is emitted and acceptance stops.
-//
-// This samples exactly from r_i = (1 - c) * p_i + c * delta(x_i):
-//   P(accept) = p(x) + (1 - p(x)) * c = (1 - c) * p(x) + c = r(x),
-// and on rejection the emitted token is y_i conditioned on y_i != x_i, i.e.
-// p_i with x_i removed and renormalized, which is the residual
-// norm(max(0, p - r)) of r. `lenience == 0` is identical to
-// `CountAcceptedPrefix` and never calls `uniform`; `lenience >= 1` accepts
-// every draft token.
-//
-// `uniform` is only called at positions where y_i != x_i.
-inline LenientAcceptResult CountAcceptedPrefixWithLenience(
-    absl::Span<const int> verifier_ids, absl::Span<const int> drafted,
-    float lenience, absl::FunctionRef<double(int)> uniform) {
-  const int limit =
-      static_cast<int>(std::min(verifier_ids.size(), drafted.size()));
-  LenientAcceptResult result;
-  while (result.accepted < limit) {
-    const int i = result.accepted;
-    if (verifier_ids[i] == drafted[i]) {
-      ++result.accepted;
-      continue;
-    }
-    if (lenience > 0.0f && uniform(i) < static_cast<double>(lenience)) {
-      ++result.accepted;
-      ++result.lenient_accepted;
-      continue;
-    }
-    break;
-  }
-  return result;
-}
-
-// Returns the number of accepted draft tokens (longest matching prefix between
-// `verifier_ids` and `drafted`). The bonus token is `verifier_ids[result]`.
-//
-// Precondition: `verifier_ids.size() == drafted.size() + 1`. Safe (never reads
-// out of bounds) if the precondition is violated.
-inline int CountAcceptedPrefix(absl::Span<const int> verifier_ids,
-                               absl::Span<const int> drafted) {
-  const int limit =
-      static_cast<int>(std::min(verifier_ids.size(), drafted.size()));
-  int accepted = 0;
-  while (accepted < limit && verifier_ids[accepted] == drafted[accepted]) {
-    ++accepted;
-  }
-  return accepted;
-}
 
 // Owns the random number generator of the lenient acceptance test. It is a
 // different engine than the verifier's, seeded with a salted seed, so that
@@ -169,7 +99,7 @@ struct MtpRoundStats {
   // Wall time of `RunDraftingLoop()`.
   absl::Duration drafting_time;
 
-  // Wall time of `RunVerification()`.
+  // Wall time of the verify pass.
   absl::Duration verify_time;
 };
 
@@ -183,12 +113,15 @@ class LlmLiteRtMtpDrafter {
   // sampler.
   // The base_model is used for verification. The model is expected to have a
   // "verify" signature and be invokable when Draft is called (i.e., not busy).
+  // The verify passes start with `verify_pass_runner`, e.g. the executor's, so
+  // that they run like its other graph runs; see `LlmLiteRtVerifier::Create()`.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> Create(
       Environment& env, ModelResources& resources,
       const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
       EmbeddingLookupManager& embedding_manager,
       std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
-      const proto::ExecutorMetadata* executor_metadata = nullptr);
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      LlmLiteRtVerifier::PassRunner verify_pass_runner = nullptr);
 
   // Creates an LlmLiteRtMtpDrafter directly from a pre-compiled
   // litert::CompiledModel.
@@ -204,7 +137,8 @@ class LlmLiteRtMtpDrafter {
       const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
       std::optional<std::reference_wrapper<EmbeddingLookupManager>>
           ple_manager = std::nullopt,
-      const proto::ExecutorMetadata* executor_metadata = nullptr);
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      LlmLiteRtVerifier::PassRunner verify_pass_runner = nullptr);
 
   // Draft the next set of tokens using the MTP drafter model.
   // Inputs:
@@ -286,28 +220,18 @@ class LlmLiteRtMtpDrafter {
     }
   }
 
-  struct DraftingResult {
-    std::vector<int> drafted_tokens;
-    std::vector<std::unique_ptr<Constraint::State>> draft_constraint_states;
-    std::vector<std::unique_ptr<LogitMask>> draft_masks;
-  };
-
   absl::Status PrepareDrafterInputBuffers(
       int position, absl::flat_hash_map<absl::string_view, TensorBuffer>&
                         output_kv_cache_buffers);
 
   absl::Status PrepareDrafterOutputBuffers();
 
-  absl::StatusOr<DraftingResult> RunDraftingLoop(
+  // Drafts `num_draft_steps_` tokens after `token_id` and returns them. With
+  // `constraint_states`, each drafted token is sampled under its mask and
+  // appended to them.
+  absl::StatusOr<std::vector<int>> RunDraftingLoop(
       int token_id, std::optional<TensorBuffer>& activations,
-      const Constraint* constraint,
-      const Constraint::State* verified_constraint_state);
-
-  // Runs the verify pass of `token_id` and the drafted tokens at `position`
-  // and returns the verifier's token for each of these positions.
-  absl::StatusOr<std::vector<int>> RunVerification(
-      int position, int token_id, DraftingResult& drafting_result,
-      const LitertState::StateBuffers& state_buffers);
+      DraftConstraintStates* constraint_states);
 
   // The MTP drafter model.
   CompiledModel mtp_drafter_model_;

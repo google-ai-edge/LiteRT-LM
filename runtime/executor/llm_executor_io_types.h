@@ -22,6 +22,7 @@
 #include <ostream>
 #include <random>
 #include <utility>
+#include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
@@ -477,6 +478,18 @@ class ExecutorDecodeParams {
   SpeculativeDecodingConfig speculative_decoding_config_;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
+
+// The result of `LlmExecutorBase::VerifyDraft()`.
+struct DraftVerificationResult {
+  // The new context tokens, in order: the accepted prefix of the draft, then
+  // the token decoded after it (a correction of the first rejected draft token,
+  // or the token after the whole draft), unless the last accepted draft token
+  // was verified without decoding a token after it. The last token is the new
+  // pending token, as with `Decode()`.
+  std::vector<int> tokens;
+  // The number of leading `tokens` that come from the draft.
+  int num_accepted = 0;
+};
 
 }  // namespace litert::lm
 

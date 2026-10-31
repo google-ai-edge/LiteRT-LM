@@ -204,5 +204,34 @@ TEST(ExecutorStatsTest, AccumulateMtpLenientAccepted) {
   EXPECT_EQ(stats.mtp_lenient_accepted_tokens(), 5);
 }
 
+TEST(ExecutorStatsTest, AccumulateDraftVerification) {
+  ExecutorStats stats;
+  EXPECT_EQ(stats.draft_verifications(), 0);
+  EXPECT_EQ(stats.draft_verify_passes(), 0);
+  EXPECT_EQ(stats.draft_verify_draft_tokens(), 0);
+  EXPECT_EQ(stats.draft_verify_accepted_tokens(), 0);
+  EXPECT_EQ(stats.draft_verify_emitted_tokens(), 0);
+  EXPECT_EQ(stats.draft_verify_time(), absl::ZeroDuration());
+
+  stats.AccumulateDraftVerification(/*passes=*/2, /*draft_tokens=*/20,
+                                    /*accepted_tokens=*/12,
+                                    /*emitted_tokens=*/13,
+                                    /*verify_time=*/absl::Milliseconds(30));
+  stats.AccumulateDraftVerification(/*passes=*/1, /*draft_tokens=*/4,
+                                    /*accepted_tokens=*/4,
+                                    /*emitted_tokens=*/4,
+                                    /*verify_time=*/absl::Milliseconds(12));
+
+  EXPECT_EQ(stats.draft_verifications(), 2);
+  EXPECT_EQ(stats.draft_verify_passes(), 3);
+  EXPECT_EQ(stats.draft_verify_draft_tokens(), 24);
+  EXPECT_EQ(stats.draft_verify_accepted_tokens(), 16);
+  EXPECT_EQ(stats.draft_verify_emitted_tokens(), 17);
+  EXPECT_EQ(stats.draft_verify_time(), absl::Milliseconds(42));
+  // Draft verification is separate from decode steps.
+  EXPECT_EQ(stats.plain_steps(), 0);
+  EXPECT_EQ(stats.mtp_rounds(), 0);
+}
+
 }  // namespace
 }  // namespace litert::lm

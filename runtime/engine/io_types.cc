@@ -555,6 +555,37 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
                 logits_steps, logits_ms)
          << std::endl;
     }
+    if (const int64_t verifications = stats.draft_verifications();
+        verifications > 0) {
+      const int64_t passes = stats.draft_verify_passes();
+      const int64_t drafted = stats.draft_verify_draft_tokens();
+      const int64_t accepted = stats.draft_verify_accepted_tokens();
+      const int64_t emitted = stats.draft_verify_emitted_tokens();
+      const double verify_ms =
+          absl::ToDoubleMilliseconds(stats.draft_verify_time());
+      os << "--------------------------------------------------" << std::endl;
+      os << "  Draft Verification:" << std::endl;
+      PrintSummaryLine(
+          os, "Verifications",
+          absl::StrFormat("%d (%d passes)", verifications, passes));
+      PrintSummaryLine(
+          os, "Acceptance rate",
+          absl::StrFormat("%.1f%% (%d of %d draft tokens)",
+                          drafted > 0
+                              ? 100.0 * static_cast<double>(accepted) / drafted
+                              : 0.0,
+                          accepted, drafted));
+      PrintSummaryLine(
+          os, "Tokens per pass",
+          absl::StrFormat(
+              "%.2f (%d emitted)",
+              passes > 0 ? static_cast<double>(emitted) / passes : 0.0,
+              emitted));
+      PrintSummaryLine(os, "Time per pass",
+                       absl::StrFormat("%.2f ms (%.2f ms per verification)",
+                                       passes > 0 ? verify_ms / passes : 0.0,
+                                       verify_ms / verifications));
+    }
   }
   os << "--------------------------------------------------" << std::endl;
   return os;

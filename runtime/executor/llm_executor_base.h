@@ -22,9 +22,11 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/executor_stats.h"
@@ -103,6 +105,19 @@ class LlmExecutorBase {
     return absl::FailedPreconditionError(
         absl::StrCat("Draft verification is not supported by backend: ",
                      ExecutorBackendName()));
+  }
+
+  // Verifies `draft_token_ids`, draft tokens that follow the pending token:
+  // runs them through the model in parallel, accepts their longest prefix that
+  // `Decode(decode_params)` steps would have produced, and decodes the token
+  // after it, as these steps would have. Fails if
+  // `CheckDraftVerificationSupport()` fails.
+  virtual absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) {
+    ABSL_RETURN_IF_ERROR(CheckDraftVerificationSupport());
+    return absl::UnimplementedError(absl::StrCat(
+        "VerifyDraft not implemented for backend: ", ExecutorBackendName()));
   }
 
   virtual absl::string_view ExecutorBackendName() const = 0;

@@ -17,12 +17,15 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -31,6 +34,8 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -44,6 +49,74 @@
 #include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
+
+// Draft verification with the verify signatures of a base model:
+//   - `LlmLiteRtVerifier` runs the passes of one verify signature. The MTP
+//     drafter verifies each round with one pass of its `verify` signature.
+//   - `LlmLiteRtDraftVerifier` verifies drafts of any length for the executor,
+//     with one `LlmLiteRtVerifier` per usable verify signature (see
+//     `FindVerifySignatures()`).
+//   - `DraftConstraintStates` gives the rows of a pass their constraint masks.
+//   - The free functions below plan the passes and decide which draft tokens
+//     a pass accepts, independently of the model.
+//
+// Draft verification runs verify passes over the pending token (the last
+// context token, not processed yet) and the draft tokens. A pass of width W
+// takes the pending token at `position` and up to W - 1 draft tokens; the
+// token it samples after its last input checks one more draft token. A pass
+// that accepts all of these W draft tokens hands the last one over as the
+// pending token of the next pass.
+
+// Returns InvalidArgument if `draft_token_ids` is empty or holds a token id
+// outside the vocabulary of `vocab_size` tokens.
+absl::Status ValidateDraftTokenIds(absl::Span<const int> draft_token_ids,
+                                   int vocab_size);
+
+// Returns the width of the next pass, which takes the pending token at
+// `position` and `num_drafts` draft tokens, among the verify signature widths
+// `widths`: the smallest width that takes all of them, else the largest one.
+// Only widths whose pass fits into the KV cache of `kv_cache_size` entries
+// count. Returns nullopt if none fits.
+std::optional<int> SelectVerifyWidth(absl::Span<const int> widths,
+                                     int num_drafts, int position,
+                                     int kv_cache_size);
+
+// The outcome of a verify pass.
+struct VerifyPassOutcome {
+  // The number of draft tokens that the pass accepted.
+  int num_accepted = 0;
+
+  // The token decoded after the accepted draft tokens: a correction of the
+  // first rejected draft token, or the token after the last draft token. Null
+  // if the pass accepted a draft token after its last input, which becomes the
+  // pending token of the next pass.
+  std::optional<int> next_token;
+
+  // Of `num_accepted`, the draft tokens accepted only because of lenience.
+  int num_lenient_accepted = 0;
+};
+
+// Returns how many of the unverified draft tokens `drafts` a verify pass
+// accepted: the longest prefix that matches its sampled tokens. The pass fed
+// the pending token plus the first `num_draft_inputs` draft tokens (fewer than
+// `drafts.size()` if the pass is too narrow), and `pass_tokens[i]` is its
+// sampled token for `drafts[i]`. The last one checks one draft token beyond
+// the inputs, if there is one.
+// Requires `pass_tokens.size() == num_draft_inputs + 1` and
+// `num_draft_inputs <= drafts.size()`.
+VerifyPassOutcome EvaluateVerifyPass(absl::Span<const int> pass_tokens,
+                                     absl::Span<const int> drafts,
+                                     int num_draft_inputs);
+
+// Like above, but a draft token x that differs from its sampled token is still
+// accepted with probability `lenience` c, if `uniform(i)` (a uniform random
+// number in [0, 1) for draft token i, only drawn then) is below c. If the
+// sampled token follows p, x is accepted with probability (1 - c) * p(x) + c,
+// and the new token follows (1 - c) * p + c * delta(x). c = 0 is exact.
+VerifyPassOutcome EvaluateVerifyPass(absl::Span<const int> pass_tokens,
+                                     absl::Span<const int> drafts,
+                                     int num_draft_inputs, float lenience,
+                                     absl::FunctionRef<double(int)> uniform);
 
 // A verify signature of a base model; see `FindVerifySignatures()`.
 struct VerifySignatureInfo {
@@ -100,11 +173,80 @@ class SeededRandomEngine {
   int32_t seed_ = 0;
 };
 
+// The constraint states along a draft, and the logit masks that they give the
+// draft tokens: state i follows the first i draft tokens, and its mask applies
+// to draft token i, i.e. to row i of a verify pass over the draft.
+//
+// The MTP drafter appends each token after sampling it under its mask.
+// `LlmLiteRtVerifier::Verify()` appends the draft tokens of its pass that are
+// missing, masks the rows, and returns the state that follows the accepted
+// draft tokens.
+class DraftConstraintStates {
+ public:
+  // Starts the draft at the state `start`, which must outlive this object.
+  DraftConstraintStates(const Constraint& constraint,
+                        const Constraint::State& start);
+
+  // Starts the draft at the state `start`, which this object takes over.
+  DraftConstraintStates(const Constraint& constraint,
+                        std::unique_ptr<Constraint::State> start);
+
+  // The number of draft tokens appended so far.
+  int num_tokens() const { return static_cast<int>(states_.size()) - 1; }
+
+  // Returns the mask of the next draft token, which is computed on the first
+  // call and owned by this object.
+  absl::StatusOr<const LogitMask*> NextMask();
+
+  // Appends `token` to the draft, after computing its mask (`NextMask()`) if
+  // that hasn't happened yet. Fails, leaving the draft as is, if the
+  // constraint disallows `token` (see `AdvanceConstraintState()`).
+  absl::Status Append(int token);
+
+  // Returns the masks of the rows of a verify pass of width `width` over the
+  // draft: the masks of the appended draft tokens and of the next one, then
+  // nulls for the padding rows. Requires `num_tokens() < width`.
+  absl::StatusOr<absl::Span<const std::unique_ptr<LogitMask>>> PassMasks(
+      int width);
+
+  // Moves out the state that follows the first `n` draft tokens, to finish
+  // with the draft. Returns null if that is the start state and this object
+  // doesn't own it.
+  absl::StatusOr<std::unique_ptr<Constraint::State>> TakeState(int n);
+
+ private:
+  // The constraint, owned by the caller.
+  const Constraint* constraint_;
+
+  // The start state, owned by `states_[0]` or by the caller.
+  const Constraint::State* start_;
+
+  // `states_[i]` owns the state that follows the first i draft tokens.
+  // `states_[0]` is null if the caller owns the start state.
+  std::vector<std::unique_ptr<Constraint::State>> states_;
+
+  // `masks_[i]` is the mask of draft token i, null until computed.
+  std::vector<std::unique_ptr<LogitMask>> masks_;
+};
+
+// The result of `LlmLiteRtVerifier::Verify()`.
+struct VerifyPassResult {
+  // The accepted draft tokens and the new pending token.
+  VerifyPassOutcome outcome;
+
+  // With constraint states, the state that follows the accepted draft tokens,
+  // except an accepted draft token that becomes the pending token of the next
+  // pass. Null without constraint states, or if that is a start state that
+  // they don't own (see `DraftConstraintStates::TakeState()`).
+  std::unique_ptr<Constraint::State> constraint_state;
+};
+
 // Runs the passes of one verify signature of a base model. A verify pass
 // processes up to W consecutive tokens like a prefill does, writing their KV
 // cache entries, and also returns the logits of every input row. The verifier
 // masks and samples these logits into the token that follows each row's
-// prefix.
+// prefix. The MTP drafter uses one directly, and `LlmLiteRtDraftVerifier` holds
+// one per usable verify signature.
 //
 // The signature takes the positions `input_pos [W]`, either the token ids
 // `tokens [1, W]` or the token embeddings `embeddings [1, W, D]` (and
@@ -112,20 +254,33 @@ class SeededRandomEngine {
 // base model's KV cache, and it returns `logits [1, W, V]`.
 class LlmLiteRtVerifier {
  public:
+  // Starts a pass of the verify signature `signature_key` with
+  // `input_buffers` and `output_buffers`, which hold all the inputs and
+  // outputs of the pass, including the KV cache. A runner may bind further
+  // inputs, e.g. LoRA weights, before it starts the pass.
+  using PassRunner = absl::AnyInvocable<absl::Status(
+      absl::string_view signature_key,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& output_buffers)>;
+
   // Creates a verifier for the signature `signature_key` of `base_model`. If
   // the signature takes embeddings, they are looked up with
   // `embedding_lookup`, and the per-layer embeddings with
   // `per_layer_embedding_lookup`; the lookups the signature needs must not be
   // null. Padding rows take the pad token id of `executor_settings` (0 if
   // unset). The sampler is greedy until `UpdateSamplerConfig()` is called.
-  // `env`, `base_model` and the embedding lookups must outlive the verifier.
+  // The passes start with `pass_runner`, e.g. so that they run like the
+  // executor's prefill and decode runs, or directly on `base_model` if it is
+  // null. `env`, `base_model` and the embedding lookups must outlive the
+  // verifier.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> Create(
       Environment& env, CompiledModel& base_model,
       absl::string_view signature_key,
       const LlmExecutorSettings& executor_settings,
       EmbeddingLookupManager* embedding_lookup,
       EmbeddingLookupManager* per_layer_embedding_lookup,
-      const proto::ExecutorMetadata* executor_metadata = nullptr);
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      PassRunner pass_runner = nullptr);
 
   // The key of the verify signature.
   absl::string_view signature_key() const { return signature_.Key(); }
@@ -139,7 +294,7 @@ class LlmLiteRtVerifier {
   // Starts the pass of `ids`, which holds between 1 and W tokens, at the
   // positions [position, position + ids.size()). `state_buffers` are the base
   // model's KV cache buffers of this pass (see
-  // `LitertState::GetStateBuffers()`).
+  // `LitertState::GetStateBuffers()`). The pass starts with the pass runner.
   //
   // A pass with fewer than W tokens is padded like a prefill: the padding rows
   // take the pad token id (or zero embeddings), position 0 and no attention.
@@ -158,6 +313,30 @@ class LlmLiteRtVerifier {
   absl::StatusOr<std::vector<int>> MaskAndSample(
       absl::Span<const std::unique_ptr<LogitMask>> masks);
 
+  // Verifies `drafts`, the draft tokens after `pending_token` at `position`,
+  // in a pass that takes the pending token and up to W - 1 draft tokens (see
+  // `Run()` for `state_buffers`), and accepts them like
+  // `EvaluateVerifyPass()`.
+  //
+  // With `constraint_states`, which start at the state that predicts the
+  // first draft token and may already hold some of the pass's draft tokens
+  // (e.g. a drafter's), each row is masked with the mask of its draft token.
+  // A draft token that the constraint disallows ends the draft.
+  absl::StatusOr<VerifyPassResult> Verify(
+      int position, int pending_token, absl::Span<const int> drafts,
+      const LitertState::StateBuffers& state_buffers,
+      DraftConstraintStates* constraint_states);
+
+  // Like above, but accepts draft tokens with `lenience` and `uniform`, see
+  // `EvaluateVerifyPass()`. A leniently accepted draft token isn't checked
+  // against its mask, so `constraint_states` must already hold all of
+  // `drafts`, sampled under their masks like a drafter's.
+  absl::StatusOr<VerifyPassResult> Verify(
+      int position, int pending_token, absl::Span<const int> drafts,
+      const LitertState::StateBuffers& state_buffers,
+      DraftConstraintStates* constraint_states, float lenience,
+      absl::FunctionRef<double(int)> uniform);
+
   // Reconfigures the sampler to sample from `sampler_params` with the random
   // number generator `rand_gen` (typically the session sampler's), recreating
   // it if its top-k capacity is too small. If `rand_gen` is null, the sampler
@@ -175,8 +354,8 @@ class LlmLiteRtVerifier {
  private:
   // Takes ownership of the objects that `Create()` built for the signature.
   LlmLiteRtVerifier(
-      const Environment& env, CompiledModel& base_model,
-      SimpleSignature signature, EmbeddingLookupManager* embedding_lookup,
+      const Environment& env, SimpleSignature signature, PassRunner pass_runner,
+      EmbeddingLookupManager* embedding_lookup,
       EmbeddingLookupManager* per_layer_embedding_lookup, int width,
       int vocab_size, int pad_token_id, ModelSignatures signatures,
       AttentionMaskParams attn_params, ActivationDataType logits_data_type,
@@ -188,8 +367,8 @@ class LlmLiteRtVerifier {
           active_output_buffers,
       TensorBuffer id_tensor)
       : env_(env),
-        base_model_(base_model),
         signature_(std::move(signature)),
+        pass_runner_(std::move(pass_runner)),
         embedding_lookup_(embedding_lookup),
         per_layer_embedding_lookup_(per_layer_embedding_lookup),
         width_(width),
@@ -218,11 +397,12 @@ class LlmLiteRtVerifier {
   // The LiteRT environment, used to recreate `sampler_`. Owned by the caller.
   const Environment& env_;
 
-  // The base model, owned by the executor.
-  CompiledModel& base_model_;
-
-  // The verify signature of `base_model_` that the passes run.
+  // The verify signature of the base model that the passes run.
   SimpleSignature signature_;
+
+  // Starts the passes: the runner given to `Create()`, or one that runs them
+  // directly on the base model.
+  PassRunner pass_runner_;
 
   // Looks up the input embeddings of a pass. Owned by the caller; null if the
   // signature takes no embeddings.
@@ -289,6 +469,108 @@ class LlmLiteRtVerifier {
 
   // The sampled token ids [1, W].
   TensorBuffer id_tensor_;
+};
+
+// Verifies drafts of any length for the executor. Holds an `LlmLiteRtVerifier`
+// for each usable verify signature, created on first use, and runs each pass
+// with the narrowest one that takes the rest of the draft, else the widest,
+// among those whose pass fits into the KV cache (see `SelectVerifyWidth()`).
+class LlmLiteRtDraftVerifier {
+ public:
+  // Creates a draft verifier for the verify signatures of `base_model` that
+  // can share the KV cache `state` of its decode signature
+  // `decode_signature_key` (see `FindVerifySignatures()`). See
+  // `LlmLiteRtVerifier::Create()` for the other parameters. `env`,
+  // `base_model`, `executor_settings` and the embedding lookups must outlive
+  // the draft verifier.
+  static absl::StatusOr<std::unique_ptr<LlmLiteRtDraftVerifier>> Create(
+      Environment& env, CompiledModel& base_model,
+      absl::string_view decode_signature_key, const StateInterface& state,
+      const LlmExecutorSettings& executor_settings,
+      EmbeddingLookupManager* embedding_lookup,
+      EmbeddingLookupManager* per_layer_embedding_lookup,
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      LlmLiteRtVerifier::PassRunner pass_runner = nullptr);
+
+  // Returns OK if a verify signature is usable, else FAILED_PRECONDITION with
+  // the reasons why none is.
+  absl::Status CheckSupport() const;
+
+  // Returns whether a pass that starts with the pending token at `position`
+  // fits into the KV cache of `kv_cache_size` entries.
+  bool PassFits(int position, int kv_cache_size) const;
+
+  // Sets the sampler parameters and the random number generator of the
+  // passes, see `LlmLiteRtVerifier::UpdateSamplerConfig()`. Greedy until set.
+  void SetSamplerConfig(const proto::SamplerParameters& sampler_params,
+                        std::shared_ptr<std::default_random_engine> rand_gen);
+
+  // Verifies `drafts`, the draft tokens after `pending_token` at `position`,
+  // in one pass with the KV cache `state` (see `LlmLiteRtVerifier::Verify()`).
+  // Like `Decode()`, turns a negative (invalid) sampled token into 0, or into
+  // an error with `AdvancedSettings::error_on_invalid_sampled_token_id`.
+  //
+  // With a `constrained_decoder`, the rows are masked with the constraint
+  // states that follow its state, advanced by the pending token if
+  // `feed_pending_token` (a decode step feeds its input token to the decoder
+  // only if a decode step produced it). Afterwards, the decoder's state
+  // follows the accepted draft tokens, except the new pending token, as after
+  // a decode step.
+  absl::StatusOr<VerifyPassOutcome> VerifyPass(
+      int position, int pending_token, absl::Span<const int> drafts,
+      LitertState& state, ConstrainedDecoder* constrained_decoder,
+      bool feed_pending_token);
+
+ private:
+  LlmLiteRtDraftVerifier(Environment& env, CompiledModel& base_model,
+                         const LlmExecutorSettings& executor_settings,
+                         EmbeddingLookupManager* embedding_lookup,
+                         EmbeddingLookupManager* per_layer_embedding_lookup,
+                         const proto::ExecutorMetadata* executor_metadata,
+                         LlmLiteRtVerifier::PassRunner pass_runner,
+                         std::vector<VerifySignatureInfo> signatures);
+
+  // Returns the verifier of the usable verify signature of width `width`.
+  absl::StatusOr<LlmLiteRtVerifier*> GetOrCreateVerifier(int width);
+
+  // The LiteRT environment of the verifiers.
+  Environment& env_;
+
+  // The base model, owned by the executor.
+  CompiledModel& base_model_;
+
+  // The executor's settings, read when a verifier is created and by the policy
+  // for invalid sampled tokens.
+  const LlmExecutorSettings& executor_settings_;
+
+  // The embedding lookups of the verifiers, owned by the executor; null if the
+  // model has none.
+  EmbeddingLookupManager* embedding_lookup_;
+  EmbeddingLookupManager* per_layer_embedding_lookup_;
+
+  // The executor metadata, owned by the caller; may be null.
+  const proto::ExecutorMetadata* executor_metadata_;
+
+  // Starts the passes of all verifiers; null to run them directly on
+  // `base_model_`.
+  LlmLiteRtVerifier::PassRunner pass_runner_;
+
+  // The model's verify signatures and whether draft verification can use
+  // them.
+  std::vector<VerifySignatureInfo> signatures_;
+
+  // The widths of the usable verify signatures.
+  std::vector<int> widths_;
+
+  // The verifiers of the usable verify signatures by width, created on first
+  // use.
+  absl::flat_hash_map<int, std::unique_ptr<LlmLiteRtVerifier>> verifiers_;
+
+  // The sampler parameters of the passes.
+  proto::SamplerParameters sampler_params_;
+
+  // The random number generator of the passes; null for the verifiers' own.
+  std::shared_ptr<std::default_random_engine> rand_gen_;
 };
 
 }  // namespace litert::lm

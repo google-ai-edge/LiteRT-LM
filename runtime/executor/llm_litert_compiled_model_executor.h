@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -252,7 +253,6 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       bool use_fp16_precision, LogitsDataType logits_data_type,
-      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter,
       const proto::ExecutorMetadata* executor_metadata = nullptr,
       GraphRunCallback pre_graph_run_callback = nullptr,
       GraphRunCallback post_graph_run_callback = nullptr,
@@ -272,7 +272,6 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         logits_data_type_(logits_data_type),
         gpu_optimized_single_buffer_cache_(
             signatures_.input_int32_param.has_value()),
-        mtp_drafter_(std::move(mtp_drafter)),
         executor_metadata_(executor_metadata),
         pre_graph_run_callback_(std::move(pre_graph_run_callback)),
         post_graph_run_callback_(std::move(post_graph_run_callback)),
@@ -286,7 +285,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
             executor_settings_.GetAdvancedSettings()
                 .value_or(AdvancedSettings())
                 .mtp_gating_config.value_or(MtpGatingConfig()),
-            mtp_drafter_ != nullptr
+            resources != nullptr
                 ? executor_settings_.GetEffectiveSpeculativeDecodingMode()
                 : SpeculativeDecodingMode::kOff) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
@@ -313,6 +312,14 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // (parameters and random generator), or greedy if the session has no sampler
   // parameters. No-op until both the drafter and the session sampler exist.
   absl::Status MaybeUpdateVerifierSamplerConfig();
+
+  // Returns the sampler parameters and the random number generator that verify
+  // passes sample with: the session sampler's, so that the accepted tokens
+  // follow the session's distribution. If the session sampler's generator
+  // can't be shared, returns `verifier_rand_gen_`.
+  std::pair<proto::SamplerParameters,
+            std::shared_ptr<std::default_random_engine>>
+  GetVerifierSamplerConfig();
 
   // Attempts to create a compiled model for the MTP drafter.
   // Returns a unique_ptr to the compiled model if the resource is found, or
@@ -385,6 +392,21 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Static version of BindTensorsAndRunDecode to be used as a callback for
   // sampler.
   static int BindTensorsAndRunDecodeStatic(void* arg);
+
+  // Runs `signature` once with `input_buffers` and `output_buffers`, which
+  // hold all the inputs and outputs of the run, including the KV cache, with
+  // the run options, and calls the graph run callbacks before and after the
+  // run. Every prefill, decode and verify pass of the model runs through here.
+  absl::Status RunSignature(
+      absl::string_view signature,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& output_buffers,
+      bool async);
+
+  // Returns a pass runner for the verifiers of the model (the draft
+  // verifiers and the MTP drafter's) that starts their passes with
+  // `RunSignature()`.
+  LlmLiteRtVerifier::PassRunner CreateVerifyPassRunner();
 
   // Creates Prefill input buffers for a given signature.
   absl::Status CreatePrefillInputBuffers(
@@ -493,6 +515,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // The MTP drafter model.
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter_;
 
+  // The random number generator of all verify passes if they can't share the
+  // session sampler's, see `GetVerifierSamplerConfig()`.
+  SeededRandomEngine verifier_rand_gen_;
+
   // The executor metadata.
   const proto::ExecutorMetadata* executor_metadata_ = nullptr;
 
@@ -545,8 +571,7 @@ class LlmLiteRtCompiledModelExecutorStatic
          std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
          std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
              nullptr,
-         std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
-         std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
+         std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr);
 
   using LlmLiteRtCompiledModelExecutorBase::Prefill;
 
@@ -557,6 +582,10 @@ class LlmLiteRtCompiledModelExecutorStatic
       const LlmExecutorSettings& executor_settings) override;
 
   absl::Status CheckDraftVerificationSupport() const override;
+
+  absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) override;
 
  private:
   LlmLiteRtCompiledModelExecutorStatic(
@@ -575,7 +604,6 @@ class LlmLiteRtCompiledModelExecutorStatic
           nullptr,
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
-      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr,
       const proto::ExecutorMetadata* executor_metadata = nullptr,
       ModelResources* resources = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
@@ -584,14 +612,16 @@ class LlmLiteRtCompiledModelExecutorStatic
             std::move(state), std::move(decode_state), signatures,
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            use_fp16_precision, logits_data_type, std::move(mtp_drafter),
-            executor_metadata, /*pre_graph_run_callback=*/nullptr,
+            use_fp16_precision, logits_data_type, executor_metadata,
+            /*pre_graph_run_callback=*/nullptr,
             /*post_graph_run_callback=*/nullptr, resources),
         prefill_signature_map_(std::move(prefill_signature_map)) {}
 
   SortedPrefillSignatureMap prefill_signature_map_;
-  // The model's verify signatures and whether draft verification can use them.
-  std::vector<VerifySignatureInfo> verify_signatures_;
+
+  // Verifies drafts with the model's verify signatures.
+  std::unique_ptr<LlmLiteRtDraftVerifier> draft_verifier_;
+
   // Signature names are unique across all signatures in a model so it is safe
   // to refer to them by just their unique name.
   absl::flat_hash_map<
@@ -624,8 +654,7 @@ class LlmLiteRtCompiledModelExecutorDynamic
          std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
          std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
              nullptr,
-         std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
-         std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
+         std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr);
 
   using LlmLiteRtCompiledModelExecutorBase::Prefill;
 
@@ -647,7 +676,6 @@ class LlmLiteRtCompiledModelExecutorDynamic
           nullptr,
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
-      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr,
       const proto::ExecutorMetadata* executor_metadata = nullptr,
       ModelResources* resources = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
@@ -656,8 +684,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
             std::move(state), /*decode_state=*/nullptr, signatures,
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            use_fp16_precision, logits_data_type, std::move(mtp_drafter),
-            executor_metadata, /*pre_graph_run_callback=*/nullptr,
+            use_fp16_precision, logits_data_type, executor_metadata,
+            /*pre_graph_run_callback=*/nullptr,
             /*post_graph_run_callback=*/nullptr, resources),
         prefill_chunk_size_(prefill_chunk_size),
         kv_increament_size_(kv_increament_size) {}
