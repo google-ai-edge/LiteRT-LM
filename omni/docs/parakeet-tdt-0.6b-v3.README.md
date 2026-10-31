@@ -33,12 +33,15 @@ language:
 tags:
   - litert
   - litert-lm
+  - mediapipe
   - tflite
   - asr
   - automatic-speech-recognition
   - speech-to-text
   - on-device
   - android
+  - ios
+  - web
   - parakeet
   - tdt
   - fastconformer
@@ -53,17 +56,19 @@ tags:
 <!-- disableFinding(SNIPPET_INVALID_LANGUAGE) -->
 <!-- disableFinding(WHITESPACE_LINES) -->
 
-# Parakeet-TDT-0.6B-v3 for LiteRT-LM
+# Parakeet-TDT-0.6B-v3 for MediaPipe & LiteRT-LM
 
 Fully on-device, 25-language speech-to-text in a single file.
 
 This is
 [nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 (600M-parameter FastConformer encoder + Token-and-Duration Transducer, TDT,
-decoder) packaged as a `.litertlm` bundle for
-[LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), Google's open-source
-on-device inference runtime, alongside standalone `.tflite` and AOT-compiled NPU
-variants for [LiteRT](https://github.com/google-ai-edge/LiteRT). Everything
+decoder) packaged as a `.litertlm` bundle for the
+**[MediaPipe Audio Transcriber (`AudioTranscriber`) Task](https://ai.google.dev/edge/mediapipe/solutions/audio/audio_transcriber)**
+and [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), Google's
+open-source on-device inference runtime, across Android, iOS, macOS, Python,
+Web, and C++, alongside standalone `.tflite` and AOT-compiled NPU variants for
+[LiteRT](https://github.com/google-ai-edge/LiteRT). Everything
 needed to transcribe arbitrary-length audio with automatic language detection,
 punctuation, and capitalization is inside the one `.litertlm` file: INT8
 encoder, hybrid stateful/stateless TDT decoder, unified 8,192-token multilingual
@@ -88,7 +93,7 @@ Slaney log-mel front-end configuration) — no Python and no network required.
 
 | File | Size | Backend | Recommended for |
 |---|---:|---|---|
-| **`parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm`** ⭐ | 615 MB | CPU / GPU | **LiteRT-LM (`OmniEngine` / `omni_runner`) on Android, Linux, or macOS.** All-in-one `.litertlm` bundle with INT8 stateful model, tokenizer, and `Speech2TextMetadata`. |
+| **`parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm`** ⭐ | 615 MB | CPU / GPU (`Delegate.CPU` / `--backend=cpu` recommended) | **MediaPipe (`AudioTranscriber`) and LiteRT-LM (`OmniEngine` / `omni_runner`) across Android, iOS, macOS, Linux, Python, and Web.** All-in-one `.litertlm` bundle with INT8 stateful model, tokenizer, and `Speech2TextMetadata`. |
 | `parakeet_tdt_0.6b_v3_5s_i8_stateful.tflite` | 614 MB | CPU / GPU | Direct [LiteRT SDK](https://github.com/google-ai-edge/LiteRT/tree/main/litert/samples/asr) integration without LiteRT-LM (`encode`, stateless `decode`, and stateful `decode_1`). |
 | `parakeet_tdt_0.6b_v3_5s_i8.tflite` | 614 MB | CPU / GPU | Standalone INT8 `.tflite` with stateless `encode` and `decode` signatures only. |
 | `parakeet_tdt_0.6b_v3_5s_f32_stateful.tflite`<br>`parakeet_tdt_0.6b_v3_5s_f32.tflite` | 2.42 GB | CPU / GPU | Unquantized FP32 reference baselines (stateful and stateless; ~2.5 GB peak RAM). |
@@ -98,10 +103,10 @@ How the variants differ:
 
 -   **`.litertlm` vs. `.tflite`** — the `.litertlm` file bundles the `.tflite`
     graph together with the compressed Hugging Face `tokenizer.json` and
-    `Speech2TextMetadata` protobuf in one self-contained archive for LiteRT-LM's
-    `OmniEngine`. Standalone `.tflite` files contain only the neural network
-    graph and expect the host app to supply mel preprocessing and
-    detokenization.
+    `Speech2TextMetadata` protobuf in one self-contained archive for MediaPipe's
+    `AudioTranscriber` and LiteRT-LM's `OmniEngine`. Standalone `.tflite` files
+    contain only the neural network graph and expect the host app to supply mel
+    preprocessing and detokenization.
 -   **Stateful (`_stateful`) vs. stateless** — stateful models expose three
     signatures: `encode`, stateless multi-token `decode`, and single-token
     stateful `decode_1` (which carries explicit 2-layer LSTM hidden and cell
@@ -125,7 +130,298 @@ How the variants differ:
 | **Qualcomm Snapdragon** | `Qualcomm_SM8450` (8 Gen 1), `SM8550` (8 Gen 2), `SM8650` (8 Gen 3), `SM8750` (8 Elite), `SM8850` (8 Elite Gen 5), `SA8255`, `SA8295` |
 | **MediaTek Dimensity** | `MediaTek_MT6877`, `MT6878`, `MT6879`, `MT6897`, `MT6983` (9000), `MT6985` (9200), `MT6989` (9300), `MT6991` (9400), `MT6993`, `MT8171`, `MT8188`, `MT8189` |
 
-## Quick start
+## Download
+
+```sh
+pip install -U huggingface_hub
+
+# Recommended: INT8 stateful .litertlm bundle (615 MB, 25 European languages)
+hf download litert-community/parakeet-tdt-0.6b-v3 \
+    parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm --local-dir .
+```
+
+---
+
+## MediaPipe Audio Transcriber Task Capabilities
+
+When loaded with the [MediaPipe `AudioTranscriber` Task](https://ai.google.dev/edge/mediapipe/solutions/audio/audio_transcriber), Parakeet-TDT-0.6B-v3 supports:
+
+- **Single-file `.litertlm` deployment**: Accepts mono floating-point (`float32`) PCM audio in `[-1.0, 1.0]` at any sample rate (automatically resampled to 16 kHz when `sampleRateHz` / `sample_rate_hz` is set) with built-in 128-bin Slaney log-mel preprocessing, hybrid stateful/stateless TDT decoding, and 25-language SentencePiece detokenization—zero external Python or audio library dependencies.
+- **Low-latency streaming transcription (`transcribe` / `transcribeStream` + `finishStream` / `finish_stream`)**: Feed live microphone audio in small chunks (`endOfStream = false` / `end_of_stream=False`) and receive recognized `TranscriptionSegment` / `Segment` updates continuously while the user speaks, then call `finishStream` / `finish_stream` to flush any remaining buffered audio.
+- **Single-call audio clip transcription**: Pass a complete audio recording with `endOfStream = true` (`end_of_stream=True`) or followed by `finishStream()` to transcribe an entire clip in one pass.
+- **Real-time interim & finalized segments (`enableInterimResults` / `enable_interim_results`)**: Optionally emit low-latency non-final hypotheses (`isFinal = false` / `is_final=False`) while a 5-second sliding window is still in progress, and automatically promote cross-window seam-aligned words to finalized segments (`isFinal = true` / `is_final=True`) via `TimestampTextMerger`.
+- **Segment-level timestamps (`fromTimestampMs` / `toTimestampMs`)**: Every emitted segment includes start and end timestamps in milliseconds relative to the start of the stream (`fromTimestampMs` / `toTimestampMs` on Android & Web, `fromTimestampInMilliseconds` / `toTimestampInMilliseconds` on iOS & macOS, `from_timestamp_ms` / `to_timestamp_ms` in Python & C++).
+- **Engine prewarming (`prewarm`)**: Run a warm-up pass ahead of time on a background thread so the first spoken utterance is transcribed without cold-start initialization latency.
+
+---
+
+## Usage with MediaPipe Audio Transcriber Task
+
+### 1. Android (Kotlin / Java)
+
+See the [MediaPipe Audio Transcriber Android Guide](https://ai.google.dev/edge/mediapipe/solutions/audio/audio_transcriber/android) and [Android Sample App](https://github.com/google-ai-edge/mediapipe-samples/tree/main/examples/audio_transcriber/android) for a complete project setup.
+
+#### Add the Gradle dependency
+
+Add the MediaPipe Audio Tasks dependency to your module's `build.gradle.kts` (`minSdk = 26`, `arm64-v8a`):
+
+```kotlin
+dependencies {
+    implementation("com.google.mediapipe:tasks-audio:latest.release")
+}
+```
+
+#### Initialize and prewarm the task
+
+```kotlin
+import com.google.mediapipe.tasks.audio.audiotranscriber.AudioTranscriber
+import com.google.mediapipe.tasks.audio.audiotranscriber.AudioTranscriber.AudioTranscriberOptions
+import com.google.mediapipe.tasks.audio.audiotranscriber.AudioTranscriberResult
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
+
+val options = AudioTranscriberOptions.builder()
+    .setBaseOptions(
+        BaseOptions.builder()
+            .setModelAssetPath("/data/user/0/com.example.app/files/parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm")
+            .setDelegate(Delegate.CPU) // CPU recommended for Parakeet-TDT (or Delegate.GPU)
+            .build()
+    )
+    .setSampleRateHz(16000)
+    .setEnableInterimResults(true)
+    .setCacheDir(context.cacheDir.absolutePath)
+    .build()
+
+val transcriber = AudioTranscriber.createFromOptions(context, options)
+
+// Optional: warm up the inference engine on a background thread before recording starts:
+transcriber.prewarm()
+```
+
+#### Streaming microphone transcription & single-clip transcription
+
+```kotlin
+// 1. Streaming microphone chunks on a background worker thread (endOfStream = false):
+while (isRecording) {
+    val read = audioRecord.read(chunk, 0, chunk.size, AudioRecord.READ_BLOCKING)
+    if (read > 0) {
+        val result: AudioTranscriberResult =
+            transcriber.transcribe(chunk.copyOf(read), /* endOfStream= */ false)
+        for (segment in result.segments()) {
+            println(
+                "[${segment.fromTimestampMs()}..${segment.toTimestampMs()} ms] " +
+                    "(final=${segment.isFinal()}): ${segment.transcript()}"
+            )
+        }
+    }
+}
+// Flush remaining buffered audio when recording stops:
+val finalResult: AudioTranscriberResult = transcriber.finishStream()
+println("Final tail: ${finalResult.text}")
+
+// 2. Single-call audio clip transcription (endOfStream = true automatically flushes and finalizes):
+val clipResult = transcriber.transcribe(audioClipSamples, /* endOfStream= */ true)
+println("Clip transcript: ${clipResult.text}")
+
+// Release native resources when done:
+transcriber.close()
+```
+
+---
+
+### 2. iOS & macOS (Swift)
+
+See the [MediaPipe Audio Transcriber iOS Guide](https://ai.google.dev/edge/mediapipe/solutions/audio/audio_transcriber/ios) and [iOS Sample App](https://github.com/google-ai-edge/mediapipe-samples/tree/main/examples/audio_transcriber/ios).
+
+#### Add the Swift Package
+
+In Xcode, select **File > Add Package Dependencies...**, enter `https://github.com/google-ai-edge/mediapipe`, and add the **`MediaPipeTasksAudio`** library to your target.
+
+#### Initialize and transcribe speech
+
+```swift
+import Foundation
+import MediaPipeTasksAudio
+
+let modelPath = Bundle.main.path(
+    forResource: "parakeet_tdt_0.6b_v3_5s_i8_stateful",
+    ofType: "litertlm"
+)!
+let cacheDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("mediapipe_asr_cache").path
+
+let options = AudioTranscriberOptions()
+options.baseOptions.modelAssetPath = modelPath
+options.baseOptions.delegate = .CPU // CPU recommended (or .GPU)
+options.sampleRateHz = 16000 // Or 48000 to match AVAudioEngine inputNode sampleRate
+options.enableInterimResults = true
+options.cacheDirectory = cacheDir
+
+let transcriber = try AudioTranscriber(options: options)
+try transcriber.prewarm()
+
+// 1. Streaming microphone buffers on a serial background queue:
+func processAudioChunk(_ samples: [Float]) throws {
+    guard !samples.isEmpty else { return }
+    let result = try samples.withUnsafeBufferPointer { buffer in
+        try transcriber.transcribe(
+            samples: buffer.baseAddress!,
+            count: UInt(buffer.count),
+            endOfStream: false
+        )
+    }
+    for segment in result.segments {
+        print(
+            "[\(segment.fromTimestampInMilliseconds)..\(segment.toTimestampInMilliseconds) ms] " +
+            "(final=\(segment.isFinal)): \(segment.transcript)"
+        )
+    }
+}
+
+// Flush remaining buffered audio when the user stops speaking:
+let finalResult = try transcriber.finishStream()
+print("Finalized tail: \(finalResult.text)")
+
+// Release native resources when done:
+try transcriber.close()
+```
+
+---
+
+### 3. Python
+
+```python
+import numpy as np
+import soundfile as sf
+from mediapipe.tasks.python.audio import audio_transcriber
+from mediapipe.tasks.python.core import base_options
+
+audio_samples, sample_rate = sf.read("audio_sample.wav", dtype="float32")
+if audio_samples.ndim > 1:
+    audio_samples = np.mean(audio_samples, axis=1)
+
+options = audio_transcriber.AudioTranscriberOptions(
+    base_options=base_options.BaseOptions(
+        model_asset_path="parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm",
+        delegate=base_options.BaseOptions.Delegate.CPU,
+    ),
+    sample_rate_hz=sample_rate,
+    enable_interim_results=True,
+    cache_dir="/tmp/mediapipe_asr_cache",
+)
+
+with audio_transcriber.AudioTranscriber.create_from_options(options) as transcriber:
+    transcriber.prewarm()
+
+    # 1. Unary audio clip transcription (end_of_stream=True automatically flushes and finalizes)
+    result = transcriber.transcribe(audio_samples, end_of_stream=True)
+    for seg in result.segments:
+        print(f"[{seg.from_timestamp_ms}..{seg.to_timestamp_ms} ms] (final={seg.is_final}): {seg.transcript}")
+
+    # 2. Streaming chunk-by-chunk transcription (e.g. 500 ms chunks)
+    chunk_size = sample_rate // 2
+    for offset in range(0, len(audio_samples), chunk_size):
+        chunk = audio_samples[offset : offset + chunk_size]
+        partial = transcriber.transcribe(chunk, end_of_stream=False)
+        for seg in partial.segments:
+            print(f"{'FINAL' if seg.is_final else 'INTERIM'}: {seg.transcript}")
+    final_tail = transcriber.finish_stream()
+    if final_tail.text:
+        print(f"FINAL: {final_tail.text}")
+```
+
+---
+
+### 4. Web (JavaScript / TypeScript)
+
+```typescript
+import { AudioTranscriber, FilesetResolver } from "@mediapipe/tasks-audio";
+
+const wasmFileset = await FilesetResolver.forAudioTasks(
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@latest/wasm"
+);
+
+const transcriber = await AudioTranscriber.createFromOptions(wasmFileset, {
+  baseOptions: {
+    modelAssetPath: "parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm",
+    delegate: "CPU", // Or "GPU" (WebGPU)
+  },
+  sampleRateHz: 16000,
+  enableInterimResults: true,
+});
+
+await transcriber.prewarm();
+
+// 1. Unary audio clip transcription (endOfStream defaults to true, which flushes and finalizes)
+const clipResult = await transcriber.transcribe(audioClipFloat32Array);
+console.log("Transcript:", clipResult.text);
+
+// 2. Streaming microphone chunks (endOfStream = false)
+const streamResult = await transcriber.transcribeStream(micChunkFloat32Array);
+for (const seg of streamResult.segments) {
+  console.log(
+    `[${seg.fromTimestampMs}..${seg.toTimestampMs} ms] (final=${seg.isFinal}): ${seg.transcript}`
+  );
+}
+const finalResult = await transcriber.finishStream();
+
+transcriber.close();
+```
+
+---
+
+### 5. C++
+
+```cpp
+#include "mediapipe/tasks/cc/audio/audio_transcriber/audio_transcriber.h"
+
+using ::mediapipe::tasks::audio::audio_transcriber::AudioTranscriber;
+using ::mediapipe::tasks::audio::audio_transcriber::AudioTranscriberOptions;
+using ::mediapipe::tasks::core::BaseOptions;
+
+auto options = std::make_unique<AudioTranscriberOptions>();
+options->base_options.model_asset_path =
+    "parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm";
+options->base_options.delegate = BaseOptions::Delegate::CPU;
+options->sample_rate_hz = 16000;
+options->enable_interim_results = true;
+options->cache_dir = "/tmp/mediapipe_asr_cache";
+
+ABSL_ASSIGN_OR_RETURN(auto transcriber,
+                      AudioTranscriber::Create(std::move(options)));
+ABSL_RETURN_IF_ERROR(transcriber->Prewarm());
+
+// Streaming audio chunks (end_of_stream = false):
+ABSL_ASSIGN_OR_RETURN(
+    auto partial,
+    transcriber->Transcribe(pcm_chunk, /*end_of_stream=*/false));
+for (const auto& seg : partial.segments) {
+  // seg.transcript, seg.is_final, seg.from_timestamp_ms, seg.to_timestamp_ms
+}
+
+// Flush remaining buffered audio at the end of the stream:
+ABSL_ASSIGN_OR_RETURN(auto final_result, transcriber->FinishStream());
+ABSL_RETURN_IF_ERROR(transcriber->Close());
+```
+
+---
+
+## Configuration Options Reference
+
+### `AudioTranscriberOptions`
+
+| Option (Android / iOS / Web) | Option (Python / C++) | Description | Default |
+|---|---|---|---|
+| `baseOptions.modelAssetPath` | `base_options.model_asset_path` | Path (or URL on Web) to the `.litertlm` model bundle (`parakeet_tdt_0.6b_v3_5s_i8_stateful.litertlm`). | *Required* |
+| `baseOptions.delegate` | `base_options.delegate` | Execution delegate (`CPU` recommended on Android, iOS, and desktop for lowest autoregressive TDT decode latency; `GPU` also supported). | `CPU` (`GPU` on Web) |
+| `sampleRateHz` | `sample_rate_hz` | Input mono PCM float32 sample rate in Hz. Automatically resampled to 16 kHz when different from `16000`. | `16000` |
+| `enableInterimResults` | `enable_interim_results` | Whether to emit non-final interim hypotheses (`isFinal = false` / `is_final = false`) while audio is streaming. | `false` |
+| `modelArchitecture` | `model_architecture` | ASR architecture family (`AUTO` / `.auto` / `kAuto` or `OMNI` / `.omni` / `kOmni`). Automatically inferred from the `.litertlm` bundle when set to `AUTO`. | `AUTO` |
+| `cacheDir` (`cacheDirectory` on iOS) | `cache_dir` | Writable directory path to persist compiled XNNPACK weight packs and GPU kernel caches across runs. | `""` (`None` in Python) |
+
+---
+
+## Usage with LiteRT-LM Omni (`omni_runner` & C++)
 
 All commands below accept mono or multi-channel WAV files at any sample rate
 (automatically resampled to 16 kHz mono) and stream confirmed and unconfirmed
@@ -200,7 +496,7 @@ The full list of flags and the C++ `OmniEngine` / `OmniSession` streaming API
 are documented in the
 [LiteRT-LM omni README](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni).
 
-### Use from C++
+### Use from C++ (`OmniEngine`)
 
 ```cpp
 #include "omni/omni_engine.h"
@@ -237,7 +533,7 @@ ABSL_RETURN_IF_ERROR(input->PushInput(
     OmniSession::AudioInput{.pcm_samples = std::move(pcm_chunk)}));
 input->Finish();
 // Pull OmniSession::TextOutput updates (confirmed_text + unconfirmed_text)
-// with session->ProcessNext() until OutOfRange, then call session->Flush().
+// with session->ProcessNext() until OutOfRange or NotFound, then call session->Flush().
 ```
 
 In your `BUILD` file, link only the Parakeet-TDT target
@@ -369,7 +665,7 @@ RAM** is the process's peak resident set (`VmHWM`), including model load.
     with `overlap_ratio = 0.5` steps the 5 s window forward every 2.5 seconds
     (`2×` encoder passes per unit of audio time) to guarantee seamless
     cross-boundary word alignment. Reducing `overlap_ratio` to `0.4` (the
-    default in `parakeet_tdt.cc`) increases long-form streaming RTFx by ~20 %.
+    `omni_runner` CLI default) increases long-form streaming RTFx by ~20 %.
 -   **3.2× lower peak memory with INT8:** Dynamic range quantization reduces
     peak resident memory (`VmHWM`) from `2,458`–`2,575 MB` on FP32 to
     **765–800 MB** on INT8 on Galaxy S24 Ultra (and from `2,583`–`2,601 MB` to
@@ -383,7 +679,7 @@ RAM** is the process's peak resident set (`VmHWM`), including model load.
 | **Encoder** | 600M-parameter FastConformer (`encode`) with 8× depthwise-separable conv subsampling (500 mel frames @ 10 ms → 63 frames @ 80 ms, `1024`-dim), quantized to channel-wise INT8 weights. |
 | **TDT decoder** | 2-layer LSTM prediction network (`decode` & stateful `decode_1`, state `[2, 1, 640]`) + Token-and-Duration Transducer joint network outputting `8,198` logits (`8,192` vocab + `<blank>` + duration steps `0..4`). |
 | **Tokenizer** | Zlib-compressed Hugging Face `tokenizer.json` (8,192 multilingual SentencePiece tokens with punctuation & capitalization) + incremental word-timestamp detokenizer. |
-| **Text merger** | `TimestampTextMerger`: monotone dynamic-programming seam alignment across overlapping 5 s windows (`overlap_ratio = 0.4` default). |
+| **Text merger** | `TimestampTextMerger`: monotone dynamic-programming seam alignment across overlapping 5 s windows (`overlap_ratio = 0.4` in `omni_runner`, `0.75` in `AsrSession` / `AudioTranscriber`). |
 | **Output** | Streaming `OmniSession::TextOutput` chunks (`confirmed_text` + `unconfirmed_text`). |
 
 The models were exported from the upstream NeMo checkpoint
@@ -430,8 +726,9 @@ with the AI Edge Quantizer. No retraining or fine-tuning was done.
     Sekoyan et al.).
 -   **Conversion & runtime:**
     [litert-torch](https://github.com/google-ai-edge/litert-torch),
-    [LiteRT](https://github.com/google-ai-edge/LiteRT), and
-    [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) (Apache-2.0).
+    [LiteRT](https://github.com/google-ai-edge/LiteRT),
+    [MediaPipe](https://ai.google.dev/edge/mediapipe/solutions/audio/audio_transcriber),
+    and [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) (Apache-2.0).
 -   **Training data, as disclosed by the upstream model:** 660,000 hours of
     multilingual speech across 25 European languages from the public
     [Granary](https://huggingface.co/datasets/nvidia/Granary) corpus
