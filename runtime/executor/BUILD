@@ -499,6 +499,8 @@ cc_test(
         "//runtime/testdata",
     ],
     tags = [
+        # Runs in presubmit as the GPU executor smoke test; other GPU tests are
+        # nopresubmit.
         "noasan",
         "nomsan",
         "notsan",

@@ -623,7 +623,8 @@ cc_test(
     data = ["//runtime/testdata"],
     tags = [
         "manual",
-        "requires-gpu-sm80",
+        "nopresubmit",
+        "requires-gpu-sm90",
     ],
     deps = [
         ":model_resources",
@@ -668,7 +669,8 @@ cc_test(
     data = ["//runtime/testdata"],
     tags = [
         "manual",
-        "requires-gpu-sm80",
+        "nopresubmit",
+        "requires-gpu-sm90",
     ],
     deps = [
         ":model_resources",
@@ -754,8 +756,9 @@ cc_test(
         # Sanitizer runtimes are incompatible with RTLD_DEEPBIND.
         "noasan",
         "nomsan",
+        "nopresubmit",
         "notsan",
-        "requires-gpu-sm80",
+        "requires-gpu-sm90",
     ],
     deps = [
         ":model_resources",
@@ -935,6 +938,7 @@ cc_test(
     data = ["//runtime/testdata"],
     tags = [
         "manual",
+        "nopresubmit",
         "requires-gpu-sm90-full",
     ],
     deps = [
@@ -985,6 +989,7 @@ cc_test(
     data = ["//runtime/testdata"],
     tags = [
         "manual",
+        "nopresubmit",
         "requires-gpu-sm90-full",
     ],
     deps = [
