@@ -542,7 +542,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
     const InferenceContext& mask_inference_context,
     const InferenceContext& cache_update_inference_context,
     MaskUpdateMethod mask_update_method,
-    KVCacheUpdateMethod cache_update_method) {
+    KVCacheUpdateMethod cache_update_method, bool lazy_warmup) {
   // We need to fill the embedding input buffers with non-zero values because
   // some of the Gemma3 models contain embedding lookup preprocessing that
   // quantize a float embedding tensor into a quantized embedding tensor and use
@@ -550,7 +550,15 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
   // third_party/tensorflow/lite/kernels/div.cc:242 data[i] != 0 was not true.
   // ERROR: Node number 21 (DIV) failed to invoke.
 
-  for (auto& group : context_groups) {
+  // With `lazy_warmup`, only the group a session starts in is warmed up; the
+  // other groups run for the first time when a session reaches them (see
+  // NpuConfig::use_lazy_warmup_for_npu).
+  const size_t num_groups_to_warm_up =
+      lazy_warmup ? std::min<size_t>(1, context_groups.size())
+                  : context_groups.size();
+  for (size_t group_index = 0; group_index < num_groups_to_warm_up;
+       ++group_index) {
+    auto& group = context_groups[group_index];
     if (group.text_decoder_inference_context.decode_input_buffers.contains(
             TextDecoderSignatures::kInputEmbeddings)) {
       LITERT_RETURN_IF_ERROR(Fill(
@@ -958,10 +966,14 @@ absl::Status DrafterAuxContext::BindContextGroup(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
     DrafterContext& drafter_context, DrafterAuxContext& drafter_aux_context,
-    absl::Span<const NpuContextGroup> context_groups) {
-  // Like the text decoder, warm up every context group so that all drafter
-  // signatures are initialized before the first inference.
-  for (size_t i = 0; i < context_groups.size(); ++i) {
+    absl::Span<const NpuContextGroup> context_groups, bool lazy_warmup) {
+  // Like the text decoder, warm up every context group (or, with
+  // `lazy_warmup`, only the first one) so that the drafter signatures are
+  // initialized before the first inference.
+  const size_t num_groups_to_warm_up =
+      lazy_warmup ? std::min<size_t>(1, context_groups.size())
+                  : context_groups.size();
+  for (size_t i = 0; i < num_groups_to_warm_up; ++i) {
     LITERT_RETURN_IF_ERROR(
         drafter_context.BindContextGroup(i, context_groups[i]));
     LITERT_RETURN_IF_ERROR(drafter_aux_context.BindContextGroup(
@@ -3293,6 +3305,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       SpeculativeDecodingType::kNone;
   std::optional<DrafterContext> drafter_context = std::nullopt;
   std::optional<DrafterAuxContext> drafter_aux_context = std::nullopt;
+  const bool lazy_warmup =
+      npu_config_status.ok() && npu_config_status->use_lazy_warmup_for_npu;
 
   if (mutable_settings.GetEffectiveSpeculativeDecodingMode() !=
       SpeculativeDecodingMode::kOff) {
@@ -3322,8 +3336,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
                                     context_groups, mtp_mask_update_method));
       speculative_decoding_type = SpeculativeDecodingType::kMTP;
 
-      LITERT_RETURN_IF_ERROR(WarmupDrafterInference(
-          *drafter_context, *drafter_aux_context, context_groups));
+      LITERT_RETURN_IF_ERROR(
+          WarmupDrafterInference(*drafter_context, *drafter_aux_context,
+                                 context_groups, lazy_warmup));
     }
   }
 
@@ -3331,7 +3346,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       text_decoder_compiled_model, context_groups,
       npu_auxiliary_context.npu_auxiliary_compiled_model, main_rope.Context(),
       main_mask.Context(), main_cache.Context(), mask_update_method,
-      cache_update_method));
+      cache_update_method, lazy_warmup));
 
   NpuGraphLayout initial_layout = context_groups[0].layout;
   return absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(

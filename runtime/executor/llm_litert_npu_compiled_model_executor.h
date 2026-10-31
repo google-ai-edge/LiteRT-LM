@@ -507,6 +507,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           text_decoder_verify_input_buffers);
 
+  // Runs a warmup inference of every context group's (or, with `lazy_warmup`,
+  // only the first group's) prefill, decode and auxiliary signatures.
   static absl::Status WarmupInference(
       ::litert::CompiledModel& text_decoder_compiled_model,
       std::vector<NpuContextGroup>& context_groups,
@@ -515,15 +517,17 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       const InferenceContext& mask_inference_context,
       const InferenceContext& cache_update_inference_context,
       MaskUpdateMethod mask_update_method = MaskUpdateMethod::kModel,
-      KVCacheUpdateMethod cache_update_method = KVCacheUpdateMethod::kModel);
+      KVCacheUpdateMethod cache_update_method = KVCacheUpdateMethod::kModel,
+      bool lazy_warmup = false);
 
   // Runs a 'warmup' inference of the drafter model and its RoPE/mask builders
-  // for every text decoder context group and leaves the drafter bound to the
-  // first context group. This is intended to be called before the first actual
-  // inference.
+  // for every text decoder context group (or, with `lazy_warmup`, only the
+  // first one) and leaves the drafter bound to the first context group. This
+  // is intended to be called before the first actual inference.
   static absl::Status WarmupDrafterInference(
       DrafterContext& drafter_context, DrafterAuxContext& drafter_aux_context,
-      absl::Span<const NpuContextGroup> context_groups);
+      absl::Span<const NpuContextGroup> context_groups,
+      bool lazy_warmup = false);
 
   // Clears all buffers in the provided 'buffers' map that belong to the KV
   // cache.

@@ -95,6 +95,8 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
   os << "use_hw_cache_update_for_npu: " << config.use_hw_cache_update_for_npu
      << "\n";
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
+  os << "use_lazy_warmup_for_npu: "
+     << config.use_lazy_warmup_for_npu << "\n";
   return os;
 }
 

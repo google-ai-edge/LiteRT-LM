@@ -731,6 +731,8 @@ TEST(LlmExecutorConfigTest, NpuConfigDefaults) {
   EXPECT_TRUE(config.use_hw_cache_update_for_npu);
   EXPECT_TRUE(config.use_hw_ple_for_npu);
   EXPECT_FALSE(config.enable_npu_debug_logging);
+  // Warming up all signatures stays the default; lazy warm-up is opt-in.
+  EXPECT_FALSE(config.use_lazy_warmup_for_npu);
 }
 
 TEST(LlmExecutorConfigTest, SelectedSignatures) {

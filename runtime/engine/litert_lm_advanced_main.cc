@@ -378,6 +378,8 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.use_hw_ple_for_npu = absl::GetFlag(FLAGS_use_hw_ple_for_npu);
   settings.enable_npu_debug_logging =
       absl::GetFlag(FLAGS_enable_npu_debug_logging);
+  settings.use_lazy_warmup_for_npu =
+      absl::GetFlag(FLAGS_use_lazy_warmup_for_npu);
   settings.disable_input_prompt_as_hint =
       absl::GetFlag(FLAGS_disable_input_prompt_as_hint);
 

@@ -257,6 +257,11 @@ ABSL_FLAG(bool, use_hw_cache_update_for_npu, true,
 ABSL_FLAG(bool, use_hw_ple_for_npu, true, "If true, use HW PLE for NPU.");
 ABSL_FLAG(bool, enable_npu_debug_logging, false,
           "If true, enable debug logging for NPU.");
+ABSL_FLAG(bool, use_lazy_warmup_for_npu, false,
+          "If true, the NPU executor warms up only the signatures used at the "
+          "start of a session (the smallest context size) when it is created; "
+          "the others are warmed up on first use. If false, all signatures "
+          "are warmed up.");
 ABSL_FLAG(
     bool, disable_input_prompt_as_hint, false,
     "If true, disable the input prompt as a hint when creating the engine. "

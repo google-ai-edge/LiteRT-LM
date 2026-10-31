@@ -162,6 +162,17 @@ struct NpuConfig {
 
   // Whether enable debug logging for NPU.
   bool enable_npu_debug_logging = false;
+
+  // The NPU executor runs warm-up inferences when it is created, so that
+  // first-run costs (e.g. loading the compiled model onto the NPU and
+  // registering buffers with it) are not paid during the first prefill. By
+  // default, all of the model's signatures are warmed up. With lazy warm-up,
+  // only the signatures used at the start of a session (the smallest context
+  // size) are warmed up; the others are warmed up on first use, which reduces
+  // executor creation time and memory until a session grows past the smallest
+  // context size. Applies to the MTP drafter as well. Has no effect on models
+  // with a single context size.
+  bool use_lazy_warmup_for_npu = false;
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
 

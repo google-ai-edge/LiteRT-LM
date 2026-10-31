@@ -890,6 +890,8 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
         settings.use_hw_cache_update_for_npu;
     npu_settings.use_hw_ple_for_npu = settings.use_hw_ple_for_npu;
     npu_settings.enable_npu_debug_logging = settings.enable_npu_debug_logging;
+    npu_settings.use_lazy_warmup_for_npu =
+        settings.use_lazy_warmup_for_npu;
     executor_settings.SetBackendConfig(npu_settings);
   }
   const std::optional<Backend> sampler_backend = GetSamplerBackend(settings);
