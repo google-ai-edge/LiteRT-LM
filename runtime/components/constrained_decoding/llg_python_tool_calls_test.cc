@@ -73,6 +73,9 @@ class SimpleTokenizer : public Tokenizer {
         {"<eos>", kEosId, true},
         {"<div>", 505, false},
         {"</div>", 506, false},
+        // The channel markup, e.g. for the thought channel.
+        {"<|channel>", 507, true},
+        {"<channel|>", 508, true},
     };
 
     for (const auto& def : token_defs) {
@@ -318,6 +321,80 @@ get_weather(location="Mountain View")
                 R"(```tool_code
 get_weather(location="Mountain View")
 ```)");
+}
+
+// "none": the answer can't contain the tool_code fence or a call written as
+// text.
+TEST_F(LlgPythonToolCallsTest, TextOnlyRejectsCallSyntaxAsText) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kTextOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "I can't check the weather right now.");
+  // Mentioning the tool is fine, calling it is not.
+  AssertAccepts(*constraint, "The get_weather tool can tell you.");
+  AssertRejects(*constraint, R"(get_weather(location="Paris"))");
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="Paris")
+```)");
+  AssertRejects(*constraint, "");
+}
+
+// As in the FC format, the modes that allow text also allow a channel (e.g.
+// the thought channel) at the start of the turn.
+TEST_F(LlgPythonToolCallsTest, TextModesAllowChannelFirst) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "name": "get_weather",
+      "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"]
+      }
+    }
+  ])json");
+
+  LlgConstraintsOptions text_only =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextOnly);
+  text_only.channel_start = "<|channel>";
+  text_only.channel_end = "<channel|>";
+  auto text_only_constraint = CreateConstraint(tools, text_only);
+  ASSERT_NE(text_only_constraint, nullptr);
+  AssertAccepts(*text_only_constraint,
+                "<|channel>thought\nHmm.<channel|>It is sunny.");
+  // No visible answer.
+  AssertRejects(*text_only_constraint,
+                "<|channel>thought\nIt is sunny.<channel|>");
+
+  LlgConstraintsOptions text_and_calls =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  text_and_calls.channel_start = "<|channel>";
+  text_and_calls.channel_end = "<channel|>";
+  auto text_and_calls_constraint = CreateConstraint(tools, text_and_calls);
+  ASSERT_NE(text_and_calls_constraint, nullptr);
+  AssertAccepts(*text_and_calls_constraint,
+                "<|channel>thought\nHmm.<channel|>It is sunny.");
+  AssertAccepts(*text_and_calls_constraint,
+                R"(<|channel>thought
+Check the weather.<channel|>```tool_code
+get_weather(location="Paris")
+```)");
+  // The channel is only allowed at the start.
+  AssertRejects(*text_and_calls_constraint,
+                "It is sunny.<|channel>thought\nDone.<channel|>");
 }
 
 // Gemma 3 uses this mode by default. The tool_code fence is plain text, so a

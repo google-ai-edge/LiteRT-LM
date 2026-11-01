@@ -157,6 +157,7 @@ cc_library(
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/conversation/model_data_processor",
         "//runtime/conversation/model_data_processor:config_registry",
         "//runtime/conversation/model_data_processor:gemma3_data_processor_config",
@@ -228,6 +229,7 @@ cc_library(
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/conversation/model_data_processor",
         "//runtime/conversation/model_data_processor:config_registry",
         "//runtime/conversation/model_data_processor:gemma3_data_processor_config",
@@ -316,6 +318,7 @@ cc_test(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -330,6 +333,7 @@ cc_test(
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
@@ -338,8 +342,9 @@ cc_test(
         "//runtime/engine:litert_lm_lib",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:llm_metadata_cc_proto",
-        "//runtime/proto:token_cc_proto",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
+        "//support/tokenizer:sentencepiece_tokenizer",
     ],
 )
 

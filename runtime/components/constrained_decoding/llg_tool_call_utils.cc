@@ -22,7 +22,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
-#include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
@@ -176,18 +175,78 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
   }
 }
 
-std::string GetTextOnlyBlock(const LlgConstraintsOptions& options) {
-  std::string escaped_fence =
-      absl::StrReplaceAll(options.code_fence_start, {{"\n", "\\n"}});
+namespace {
+
+// Returns `text` escaped so that a Lark regex (`/.../`) matches it literally.
+std::string EscapeForLarkRegex(absl::string_view text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (const char c : text) {
+    switch (c) {
+      case '\n':
+        escaped.append("\\n");
+        break;
+      case '\\':
+      case '/':
+      case '.':
+      case '^':
+      case '$':
+      case '|':
+      case '?':
+      case '*':
+      case '+':
+      case '(':
+      case ')':
+      case '[':
+      case ']':
+      case '{':
+      case '}':
+        escaped.push_back('\\');
+        escaped.push_back(c);
+        break;
+      default:
+        escaped.push_back(c);
+    }
+  }
+  return escaped;
+}
+
+}  // namespace
+
+std::string GetStartRule(const LlgConstraintsOptions& options,
+                         absl::string_view body) {
+  if (options.channel_start.empty() || options.channel_end.empty()) {
+    return absl::StrCat("start: ", body, "\n");
+  }
+  // The channel tokens are special tokens, so text can't match them. Only this
+  // rule can, and only before `body`.
+  return absl::StrFormat(
+      R"(start: channel_block_opt %s
+channel_block_opt: channel_block |
+channel_block: %s CHANNEL_TEXT? %s
+CHANNEL_TEXT: /(.|\n)+/
+)",
+      body, options.channel_start, options.channel_end);
+}
+
+std::string GetTextOnlyBlock(const LlgConstraintsOptions& options,
+                             const std::vector<std::string>& call_prefixes) {
+  // The answer can't contain the code fence or the start of a call to any of
+  // the tools, so the model can't write a tool call as text.
+  std::vector<std::string> forbidden = {
+      EscapeForLarkRegex(options.code_fence_start)};
+  for (const std::string& call_prefix : call_prefixes) {
+    forbidden.push_back(EscapeForLarkRegex(call_prefix));
+  }
   // The answer needs at least one character, so the model can't end the turn
   // without answering.
-  return absl::StrFormat(
-      R"(
-FORBIDDEN_CALL : /(.|\n)*%s(.|\n)*/
+  return absl::StrCat(absl::StrFormat(
+                          R"(
+FORBIDDEN_CALL : /(.|\n)*(%s)(.|\n)*/
 SAFE_TEXT : /(.|\n)+/ & ~FORBIDDEN_CALL
-start : SAFE_TEXT
 )",
-      escaped_fence);
+                          absl::StrJoin(forbidden, "|")),
+                      GetStartRule(options, "SAFE_TEXT"));
 }
 
 std::string GetRuleForType(const std::string& type,

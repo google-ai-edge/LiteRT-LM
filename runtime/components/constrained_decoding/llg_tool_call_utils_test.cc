@@ -127,10 +127,29 @@ TEST(LlgToolCallUtilsTest, AppendOptionalProperties) {
 
 TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
   LlgConstraintsOptions options;
-  options.code_fence_start = "```";
+  options.code_fence_start = "<|tool_call>";
 
-  std::string block = GetTextOnlyBlock(options);
+  std::string block =
+      GetTextOnlyBlock(options, {"call:get_weather", "get.time("});
   EXPECT_THAT(block, testing::HasSubstr("SAFE_TEXT : /(.|\\n)+/"));
+  // The fence and the call prefixes are escaped, so they match literally.
+  EXPECT_THAT(block, testing::HasSubstr(
+                         R"((<\|tool_call>|call:get_weather|get\.time\())"));
+}
+
+TEST(LlgToolCallUtilsTest, GetStartRule) {
+  LlgConstraintsOptions options;
+  EXPECT_EQ(GetStartRule(options, "SAFE_TEXT"), "start: SAFE_TEXT\n");
+
+  // Both channel tokens are needed.
+  options.channel_start = "<|channel>";
+  EXPECT_EQ(GetStartRule(options, "SAFE_TEXT"), "start: SAFE_TEXT\n");
+
+  options.channel_end = "<channel|>";
+  const std::string rule = GetStartRule(options, "SAFE_TEXT");
+  EXPECT_THAT(rule, testing::HasSubstr("start: channel_block_opt SAFE_TEXT\n"));
+  EXPECT_THAT(rule, testing::HasSubstr(
+                        "channel_block: <|channel> CHANNEL_TEXT? <channel|>"));
 }
 
 TEST(LlgToolCallUtilsTest, SanitizeLarkRuleName) {

@@ -71,6 +71,13 @@ struct Gemma4DataProcessorConfig {
   std::string open_quote = "<|\"|>";
   std::string close_quote = "<|\"|>";
   std::string function_response_start = "<|tool_response>";
+  // The start and end of a channel, e.g. the thought channel. When text is
+  // allowed, the tool call constraints accept one channel at the start of the
+  // turn, so the model can think first even if thinking is only enabled in the
+  // prompt. They never match the channel markup as text, so with the "none"
+  // tool choice the model still has to give a visible answer.
+  std::string channel_start = "<|channel>";
+  std::string channel_end = "<channel|>";
   // The syntax type of the tool call.
   std::string syntax_type = "fc";
   // Whether to escape the fence strings for regex matching.

@@ -20,6 +20,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/tool_choice.h"
 
 namespace litert::lm {
 
@@ -52,6 +53,14 @@ struct LlgConstraintsOptions {
   std::string close_quote;
   std::string function_response_start;
 
+  // If both are set, the start and end of a channel, e.g. "<|channel>" and
+  // "<channel|>" for the thought channel. Both must be special tokens. In
+  // kTextOnly and kTextAndOrFunctionCalls, the model may open one channel at
+  // the start of its turn, e.g. to think when thinking is enabled only in the
+  // prompt. kTextOnly still needs a visible answer after it.
+  std::string channel_start;
+  std::string channel_end;
+
   // If non-empty, tool calls can only use these functions, which must be in
   // the provided tools. If empty, all provided tools are available. Applies to
   // every mode that allows tool calls; kTextOnly ignores it.
@@ -61,6 +70,12 @@ struct LlgConstraintsOptions {
 // Converts tools to a Lark grammar string.
 absl::StatusOr<std::string> CreateLarkGrammarForTools(
     const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options);
+
+// Sets the constraint mode and the allowed functions in `options` for
+// `tool_choice`. Returns InvalidArgument if a ForcedFunction has no name or an
+// AllowedTools has no names.
+absl::Status ApplyToolChoiceToOptions(const ToolChoice& tool_choice,
+                                      LlgConstraintsOptions& options);
 
 }  // namespace litert::lm
 
