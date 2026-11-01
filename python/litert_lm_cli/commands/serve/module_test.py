@@ -1437,11 +1437,35 @@ class ServeTest(parameterized.TestCase):
             body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
             "get_weather",
         )
+      self.assertIsNone(
+          mock_conv.send_message_async.call_args.kwargs["tool_choice"]
+      )
 
-      # 2. Streaming with messages array and include_usage
+      # 1b. Non-streaming with tool_choice, which is passed with the message.
+      data_tool_choice = json.dumps({
+          "model": "gemma3",
+          "input": {"role": "user", "content": "Weather in NYC?"},
+          "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+          "tool_choice": "required",
+          "stream": False,
+      }).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=data_tool_choice,
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as resp:
+        self.assertEqual(resp.status, 200)
+      self.assertEqual(
+          mock_conv.send_message_async.call_args.kwargs["tool_choice"],
+          "required",
+      )
+
+      # 2. Streaming with messages array, include_usage and tool_choice
       data_stream = json.dumps({
           "model": "gemma3",
           "messages": [{"role": "user", "content": "Hi"}],
+          "tool_choice": "none",
           "stream": True,
           "stream_options": {"include_usage": True},
       }).encode("utf-8")
@@ -1457,6 +1481,9 @@ class ServeTest(parameterized.TestCase):
         self.assertIn("Hello world", raw)
         self.assertIn("get_weather", raw)
         self.assertIn("data: [DONE]", raw)
+      self.assertEqual(
+          mock_conv.send_message_async.call_args.kwargs["tool_choice"], "none"
+      )
     finally:
       server.shutdown()
       thread.join()

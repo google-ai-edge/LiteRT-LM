@@ -1817,6 +1817,58 @@ class FunctionCallingTest(LiteRtLmTestBase):
       text_pieces = self._extract_text(stream)
       self.assertNotEmpty(text_pieces)
 
+  def test_send_message_with_tool_choice(self):
+    lib = litert_lm._ffi._get_lib()
+    with (
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_optional_args_set_tool_choice",
+            wraps=lib.litert_lm_conversation_optional_args_set_tool_choice,
+        ) as mock_set_tool_choice,
+        self._create_engine(max_num_tokens=64) as engine,
+        engine.create_conversation(max_output_tokens=2) as conversation,
+    ):
+      conversation.send_message("Hello")
+      mock_set_tool_choice.assert_not_called()
+
+      conversation.send_message("Hello", tool_choice="auto")
+      mock_set_tool_choice.assert_called_once()
+      self.assertEqual(mock_set_tool_choice.call_args.args[1], '"auto"')
+
+      mock_set_tool_choice.reset_mock()
+      self._extract_text(
+          conversation.send_message_async(
+              "Hello",
+              tool_choice={
+                  "type": "function",
+                  "function": {"name": "get_weather"},
+              },
+          )
+      )
+      mock_set_tool_choice.assert_called_once()
+      self.assertEqual(
+          mock_set_tool_choice.call_args.args[1],
+          '{"type": "function", "function": {"name": "get_weather"}}',
+      )
+
+  def test_send_message_with_invalid_tool_choice(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      with self.assertRaisesRegex(
+          ValueError, "tool_choice must be a str or Mapping"
+      ):
+        conversation.send_message("Hello", tool_choice=1)  # pyrefly: ignore[bad-argument-type]
+
+      with self.assertRaisesRegex(
+          ValueError, "tool_choice must be a str or Mapping"
+      ):
+        next(conversation.send_message_async("Hello", tool_choice=1))  # pyrefly: ignore[bad-argument-type]
+
+      with self.assertRaisesRegex(RuntimeError, "Unsupported tool_choice"):
+        conversation.send_message("Hello", tool_choice="sometimes")
+
 
 if __name__ == "__main__":
   absltest.main()

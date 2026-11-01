@@ -199,6 +199,12 @@ cc_test(
 )
 
 cc_library(
+    name = "tool_choice",
+    hdrs = ["tool_choice.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "constrained_decoder",
     srcs = ["constrained_decoder.cc"],
     hdrs = ["constrained_decoder.h"],
@@ -407,6 +413,7 @@ cc_library(
         "llguidance_schema_utils.h",
     ],
     deps = [
+        ":tool_choice",
         ":tool_utils",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/functional:any_invocable",
@@ -428,6 +435,7 @@ cc_test(
         ":llg_constraint_config",
         ":llg_constraint_provider",
         ":llguidance_schema_utils",
+        ":tool_choice",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",

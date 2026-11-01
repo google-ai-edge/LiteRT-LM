@@ -32,6 +32,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
@@ -115,13 +116,20 @@ class ModelDataProcessor {
     return tools;
   }
 
-  // Creates a constraint from the given tools. The constraint is used for
-  // constrained decoding. It is created from the tools defined in the preface,
-  // if any.
+  // Creates a constraint from the given tools and tool choice. The constraint
+  // is used for constrained decoding. It is created from the tools defined in
+  // the preface, if any. Without a tool choice, the model's default tool call
+  // mode is used.
+  virtual absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
+      const nlohmann::ordered_json& tools,
+      std::optional<ToolChoice> tool_choice) const {
+    return CreateConstraint(tools);
+  }
+
   virtual absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
       const nlohmann::ordered_json& tools) const {
     return absl::UnimplementedError("CreateConstraint is not implemented.");
-  };
+  }
 
   // Returns the start of tool call blocks.
   virtual absl::string_view CodeFenceStart() const { return ""; }
