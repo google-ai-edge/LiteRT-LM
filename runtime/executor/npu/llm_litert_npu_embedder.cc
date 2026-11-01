@@ -529,9 +529,15 @@ absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
 
     LITERT_ASSIGN_OR_RETURN(
         embedding_lookup_manager,
-        EmbeddingLookupManager::Create(env, embedder_lrt_model,
-                                       end_of_multi_modal_embedding_models,
-                                       true, "decode_embedder"));
+        EmbeddingLookupManager::Create(
+            env, embedder_lrt_model, end_of_multi_modal_embedding_models,
+            /*fully_supports_multi_modal=*/true,
+            /*signature_key=*/"decode_embedder",
+            /*external_weight_file=*/std::nullopt,
+            /*external_weight_sections=*/{},
+            /*weight_in_memory_map=*/nullptr,
+            resources.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_EMBEDDER)));
   }
 
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
@@ -694,7 +700,9 @@ absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
       std::move(ple_params), std::move(prefill_embeddings_buffer),
       std::move(decode_embeddings_buffer), std::move(verify_embeddings_buffer),
       std::move(prefill_ple_buffer), std::move(decode_ple_buffer),
-      std::move(verify_ple_buffer));
+      std::move(verify_ple_buffer),
+      resources.GetTFLiteModelBackendConstraint(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
 }
 
 absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
@@ -708,7 +716,8 @@ absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
     std::optional<::litert::TensorBuffer> verify_embeddings_buffer,
     std::optional<::litert::TensorBuffer> prefill_ple_buffer,
     std::optional<::litert::TensorBuffer> decode_ple_buffer,
-    std::optional<::litert::TensorBuffer> verify_ple_buffer) {
+    std::optional<::litert::TensorBuffer> verify_ple_buffer,
+    std::optional<std::string> per_layer_embedder_backend_constraint) {
   NpuEmbedder embedder;
   embedder.embedding_lookup_manager_ = std::move(embedding_lookup_manager);
   embedder.embedder_context_ = std::move(embedder_context);
@@ -716,6 +725,8 @@ absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
   embedder.per_layer_embedding_lookup_manager_ =
       std::move(per_layer_embedding_lookup_manager);
   embedder.embedder_per_layer_model_ = embedder_per_layer_model;
+  embedder.per_layer_embedder_backend_constraint_ =
+      std::move(per_layer_embedder_backend_constraint);
   embedder.ple_params_ = std::move(ple_params);
   embedder.prefill_embeddings_buffer_ = std::move(prefill_embeddings_buffer);
   embedder.decode_embeddings_buffer_ = std::move(decode_embeddings_buffer);
@@ -1092,7 +1103,14 @@ absl::Status NpuEmbedder::WriteAndPadPleEmbeddings(
       embedder_per_layer_model_ != nullptr) {
     LITERT_ASSIGN_OR_RETURN(
         per_layer_embedding_lookup_manager_,
-        EmbeddingLookupManager::Create(env, embedder_per_layer_model_, false));
+        EmbeddingLookupManager::Create(
+            env, embedder_per_layer_model_,
+            /*fully_supports_multi_modal=*/false,
+            /*signature_key=*/std::nullopt,
+            /*external_weight_file=*/std::nullopt,
+            /*external_weight_sections=*/{},
+            /*weight_in_memory_map=*/nullptr,
+            per_layer_embedder_backend_constraint_));
   }
   if (per_layer_embedding_lookup_manager_ != nullptr) {
     auto* ple_lookup =

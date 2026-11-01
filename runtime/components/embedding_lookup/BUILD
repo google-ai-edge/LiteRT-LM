@@ -66,6 +66,7 @@ cc_library(
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
+        "//runtime/executor:executor_settings_base",
         "//runtime/util:litert_status_util",
     ],
 )

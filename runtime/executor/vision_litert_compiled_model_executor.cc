@@ -433,6 +433,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, proto::LlmMetadata::TF_LITE_VISION_ADAPTER, options));
+  ApplyBackendConstraint(resources, proto::LlmMetadata::TF_LITE_VISION_ADAPTER,
+                         options);
 
   if (!vision_executor_settings_.GetAdapterSelectedSignatures().empty()) {
     std::vector<absl::string_view> adapter_selected_signatures;

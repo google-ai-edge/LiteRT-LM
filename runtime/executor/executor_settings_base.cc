@@ -32,6 +32,7 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
@@ -131,6 +132,41 @@ std::ostream& operator<<(std::ostream& os, const Backend& backend) {
     default:
       return ::litert::HwAccelerators::kNone;
   }
+}
+
+bool IsBackendAllowedByConstraint(
+    const std::optional<std::string>& backend_constraint, Backend backend) {
+  if (!backend_constraint.has_value() || backend_constraint->empty()) {
+    return true;
+  }
+  const std::string backend_str = GetBackendString(backend);
+  for (absl::string_view allowed : absl::StrSplit(*backend_constraint, ',')) {
+    if (absl::EqualsIgnoreCase(absl::StripAsciiWhitespace(allowed),
+                               backend_str)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+::litert::HwAcceleratorSet RestrictAcceleratorsToBackendConstraint(
+    ::litert::HwAcceleratorSet accelerators,
+    const std::optional<std::string>& backend_constraint) {
+  if (!backend_constraint.has_value() || backend_constraint->empty()) {
+    return accelerators;
+  }
+  ::litert::HwAcceleratorSet allowed(::litert::HwAccelerators::kCpu);
+  if (IsBackendAllowedByConstraint(backend_constraint, Backend::GPU)) {
+    allowed |= ::litert::HwAccelerators::kGpu;
+  }
+  if (IsBackendAllowedByConstraint(backend_constraint, Backend::NPU)) {
+    allowed |= ::litert::HwAccelerators::kNpu;
+  }
+  ::litert::HwAcceleratorSet restricted(accelerators.value & allowed.value);
+  if (restricted.value == 0) {
+    return ::litert::HwAcceleratorSet(::litert::HwAccelerators::kCpu);
+  }
+  return restricted;
 }
 
 absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {

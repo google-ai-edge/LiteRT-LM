@@ -44,6 +44,7 @@
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #if defined(__EMSCRIPTEN__)
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
@@ -264,10 +265,12 @@ EmbeddingLookupText::Create(
     std::optional<ScopedFile> external_weight_file,
     litert::Options::ScopedWeightSectionMap external_weight_sections,
     const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-        weight_in_memory_map) {
+        weight_in_memory_map,
+    std::optional<std::string> backend_constraint) {
   auto handler = std::unique_ptr<EmbeddingLookupText>(new EmbeddingLookupText(
       env, model, std::move(signature_key), std::move(external_weight_file),
-      std::move(external_weight_sections), weight_in_memory_map));
+      std::move(external_weight_sections), weight_in_memory_map,
+      std::move(backend_constraint)));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
@@ -290,12 +293,12 @@ absl::Status EmbeddingLookupText::Initialize() {
           "Model is null but compiled_model_ is not provided.");
     }
     LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+    litert::HwAcceleratorSet accelerators(litert::HwAccelerators::kCpu);
 #if defined(__ANDROID__)
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                    litert::HwAccelerators::kCpu);
-#else
-    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+    accelerators |= litert::HwAccelerators::kNpu;
 #endif
+    options.SetHardwareAccelerators(RestrictAcceleratorsToBackendConstraint(
+        accelerators, backend_constraint_));
     if (external_weight_file_.has_value() &&
         !external_weight_sections_.empty()) {
       auto res = options.SetExternalWeightScopedFile(

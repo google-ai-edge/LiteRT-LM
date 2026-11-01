@@ -620,9 +620,11 @@ std::ostream& operator<<(std::ostream& os, const LatencyStats& stats) {
 
 absl::StatusOr<NpuAuxiliaryContext> NpuAuxiliaryContext::Create(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-    const LlmExecutorSettings& settings, bool is_dynamic_model) {
+    const LlmExecutorSettings& settings, bool is_dynamic_model,
+    const std::optional<std::string>& backend_constraint) {
   LITERT_ASSIGN_OR_RETURN(auto options,
                           CreateLiteRtNpuOptions(settings, is_dynamic_model));
+  ApplyBackendConstraint(backend_constraint, options);
   LITERT_ASSIGN_OR_RETURN(
       CompiledModel npu_auxiliary_compiled_model,
       CompiledModelWrapper::Create(env, npu_auxiliary_model.Get(), options));
@@ -631,9 +633,10 @@ absl::StatusOr<NpuAuxiliaryContext> NpuAuxiliaryContext::Create(
 
 absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-    const LlmExecutorSettings& settings, bool is_dynamic_model) {
+    const LlmExecutorSettings& settings, bool is_dynamic_model,
+    const std::optional<std::string>& backend_constraint) {
   return NpuAuxiliaryContext::Create(env, npu_auxiliary_model, settings,
-                                     is_dynamic_model);
+                                     is_dynamic_model, backend_constraint);
 }
 
 namespace {

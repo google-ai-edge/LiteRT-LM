@@ -775,6 +775,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources_, proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER, options));
+  ApplyBackendConstraint(resources_, proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER,
+                         options);
 
 #ifdef __EMSCRIPTEN__
   extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)

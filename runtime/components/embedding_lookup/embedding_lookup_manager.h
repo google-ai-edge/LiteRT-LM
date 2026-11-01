@@ -71,7 +71,8 @@ class EmbeddingLookupManager {
       std::optional<ScopedFile> external_weight_file = std::nullopt,
       litert::Options::ScopedWeightSectionMap external_weight_sections = {},
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map = nullptr,
+      std::optional<std::string> backend_constraint = std::nullopt);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -81,7 +82,8 @@ class EmbeddingLookupManager {
       std::optional<ScopedFile> external_weight_file = std::nullopt,
       litert::Options::ScopedWeightSectionMap external_weight_sections = {},
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map = nullptr,
+      std::optional<std::string> backend_constraint = std::nullopt);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -155,7 +157,8 @@ class EmbeddingLookupManager {
       std::optional<ScopedFile> external_weight_file,
       litert::Options::ScopedWeightSectionMap external_weight_sections,
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map,
+      std::optional<std::string> backend_constraint);
 
   absl::Status Initialize(
       litert::Environment& env,

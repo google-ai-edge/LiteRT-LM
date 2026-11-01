@@ -224,14 +224,8 @@ absl::Status ValidateBackendConstraint(
     return absl::OkStatus();
   }
   std::string backend_str = GetBackendString(executor_settings.GetBackend());
-  std::vector<std::string> constraints =
-      absl::StrSplit(*backend_constraint, ',');
-  bool found =
-      std::any_of(constraints.begin(), constraints.end(),
-                  [&](absl::string_view constraint) {
-                    return absl::EqualsIgnoreCase(constraint, backend_str);
-                  });
-  if (!found) {
+  if (!IsBackendAllowedByConstraint(backend_constraint,
+                                    executor_settings.GetBackend())) {
     return absl::InvalidArgumentError(absl::StrCat(
         modality_name, " backend constraint mismatch. Model requires one of [",
         *backend_constraint, "] but ", modality_name, " backend is ",
