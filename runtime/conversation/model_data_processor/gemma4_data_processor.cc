@@ -30,6 +30,8 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include <variant>
+
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
 #elif !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
@@ -39,6 +41,7 @@
 #include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
 #endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
@@ -196,7 +199,8 @@ absl::StatusOr<Message> Gemma4DataProcessor::ToMessageImpl(
 
 absl::StatusOr<std::unique_ptr<Constraint>>
 Gemma4DataProcessor::CreateConstraint(
-    const nlohmann::ordered_json& tools) const {
+    const nlohmann::ordered_json& tools,
+    std::optional<ToolChoice> tool_choice) const {
 #if defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
   return absl::FailedPreconditionError(
       "Constrained decoding is disabled at build time, but it was requested "
@@ -224,6 +228,16 @@ Gemma4DataProcessor::CreateConstraint(
         "Build with --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable "
         "them.");
   }
+  // The FST path only supports the default "auto" tool choice.
+  const bool is_auto_tool_choice =
+      tool_choice.has_value() &&
+      std::holds_alternative<ToolChoice::Auto>(tool_choice->choice);
+  if (tool_choice.has_value() && !is_auto_tool_choice) {
+    return absl::FailedPreconditionError(
+        "tool_choice other than \"auto\" requires LLGuidance tool call "
+        "constraints. Build with "
+        "--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable them.");
+  }
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatFcStyle,
       .code_fence_start = config_.code_fence_start.c_str(),
@@ -240,6 +254,9 @@ Gemma4DataProcessor::CreateConstraint(
     default:
       gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
       break;
+  }
+  if (is_auto_tool_choice) {
+    gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
   }
   std::string functions_str = functions.dump();
   LiteRtLmConstraint* constraint =
@@ -267,6 +284,10 @@ Gemma4DataProcessor::CreateConstraint(
     default:
       options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
       break;
+  }
+
+  if (tool_choice.has_value()) {
+    ABSL_RETURN_IF_ERROR(ApplyToolChoiceToOptions(*tool_choice, options));
   }
 
   ABSL_ASSIGN_OR_RETURN(std::string lark_grammar,

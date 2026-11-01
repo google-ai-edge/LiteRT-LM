@@ -20,6 +20,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/tool_choice.h"
 
 namespace litert::lm {
 
@@ -61,6 +62,12 @@ struct LlgConstraintsOptions {
 // Converts tools to a Lark grammar string.
 absl::StatusOr<std::string> CreateLarkGrammarForTools(
     const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options);
+
+// Sets the constraint mode and the allowed functions in `options` for
+// `tool_choice`. Returns InvalidArgument if a ForcedFunction has no name or an
+// AllowedTools has no names.
+absl::Status ApplyToolChoiceToOptions(const ToolChoice& tool_choice,
+                                      LlgConstraintsOptions& options);
 
 }  // namespace litert::lm
 
