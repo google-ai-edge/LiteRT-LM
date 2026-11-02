@@ -836,8 +836,18 @@ AudioLiteRtCompiledModelExecutor::Create(
   LITERT_ASSIGN_OR_RETURN(
       auto resources,
       BuildLiteRtCompiledModelResources(executor_settings.GetModelAssets()));
+  return Create(std::move(executor_settings), env, std::move(resources));
+}
+
+absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
+AudioLiteRtCompiledModelExecutor::Create(
+    AudioExecutorSettings executor_settings, Environment& env,
+    std::shared_ptr<ModelResources> resources) {
+  if (resources == nullptr) {
+    return absl::InvalidArgumentError("ModelResources cannot be null.");
+  }
   ABSL_ASSIGN_OR_RETURN(auto executor,
-                        Create(executor_settings, env, *resources));
+                        Create(std::move(executor_settings), env, *resources));
   executor->resources_ = std::move(resources);
   return executor;
 }

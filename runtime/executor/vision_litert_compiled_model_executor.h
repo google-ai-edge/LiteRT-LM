@@ -52,10 +52,29 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
          Environment& env);
 
   // Creates a VisionLiteRtCompiledModelExecutor from the given
-  // VisionExecutorSettings and ModelResources.
+  // VisionExecutorSettings and ModelResources. `resources` and `env` must
+  // outlive the executor.
   static absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
   Create(const VisionExecutorSettings& vision_executor_settings,
          Environment& env, ModelResources& resources);
+
+  // Creates a VisionLiteRtCompiledModelExecutor from the given
+  // VisionExecutorSettings and ModelResources, sharing the ownership of
+  // `resources`.
+  //
+  // The same resources can be shared with other executors (e.g. an
+  // `EmbeddingLiteRtCompiledModelExecutor` created from the same model), so
+  // that each executor can be created and destroyed independently: the
+  // resources are released when the last executor using them is destroyed.
+  // `env` must outlive the executor.
+  //
+  // Note: `ModelResources` is not thread-safe, and `Create()` mutates
+  // `*resources` (e.g. it lazily loads the models). It must not be called
+  // concurrently with other users of the same `ModelResources` instance across
+  // threads without external synchronization.
+  static absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+  Create(const VisionExecutorSettings& vision_executor_settings,
+         Environment& env, std::shared_ptr<ModelResources> resources);
 
   // Encodes the input image tensor into vision embeddings.
   // Args:
@@ -265,7 +284,7 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
   explicit VisionLiteRtCompiledModelExecutor(
       const VisionExecutorSettings& vision_executor_settings, Environment& env,
-      std::unique_ptr<ModelResources> resources,
+      std::shared_ptr<ModelResources> resources,
       std::unique_ptr<VisionEncoder> vision_encoder,
       std::unique_ptr<VisionAdapter> vision_adapter,
       std::vector<int> expected_input_dimension,
@@ -286,7 +305,7 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
   Environment& env_;
 
   // The model resources for the vision encoder and vision adapter models.
-  std::unique_ptr<ModelResources> resources_;
+  std::shared_ptr<ModelResources> resources_;
 
   // The vision encoder and vision adapter models.
   std::unique_ptr<VisionEncoder> vision_encoder_;

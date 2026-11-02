@@ -31,6 +31,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
@@ -89,6 +90,8 @@ using ::testing::status::StatusIs;
 
 constexpr absl::string_view kTestEmbeddingModelPath =
     "litert_lm/runtime/testdata/test_embedding.litertlm";
+constexpr absl::string_view kTestAudioModelPath =
+    "litert_lm/runtime/testdata/dummy_audio_only.litertlm";
 
 class MockTokenizer : public Tokenizer {
  public:
@@ -120,6 +123,12 @@ class FakeModelResources : public ModelResources {
         vision_adapter_model_(vision_adapter_model) {}
   ~FakeModelResources() override = default;
 
+  // Serves the audio models (`tf_lite_audio_*`) from `audio_resources`, which
+  // must outlive this object.
+  void SetAudioResources(ModelResources* audio_resources) {
+    audio_resources_ = audio_resources;
+  }
+
   using ModelResources::GetTFLiteModel;
   using ModelResources::GetTFLiteModelBackendConstraint;
   using ModelResources::GetTFLiteModelBuffer;
@@ -145,6 +154,10 @@ class FakeModelResources : public ModelResources {
          model_type == "tf_lite_audio_frontend") &&
         has_audio_) {
       return true;
+    }
+    if (audio_resources_ != nullptr &&
+        absl::StartsWith(model_type, "tf_lite_audio")) {
+      return audio_resources_->HasTFLiteModel(model_type);
     }
     return delegate_->HasTFLiteModel(model_type);
   }
@@ -174,6 +187,10 @@ class FakeModelResources : public ModelResources {
          model_type == "tf_lite_audio_frontend") &&
         has_audio_) {
       return nullptr;
+    }
+    if (audio_resources_ != nullptr &&
+        absl::StartsWith(model_type, "tf_lite_audio")) {
+      return audio_resources_->GetTFLiteModel(model_type);
     }
     return delegate_->GetTFLiteModel(model_type);
   }
@@ -269,11 +286,20 @@ class FakeModelResources : public ModelResources {
   absl::flat_hash_map<std::string, int> get_tflite_model_call_counts_;
   const litert::Model* vision_model_ = nullptr;
   const litert::Model* vision_adapter_model_ = nullptr;
+  ModelResources* audio_resources_ = nullptr;
 };
 
+// Builds a dummy vision encoder model with one signature per entry in
+// `signature_keys`. Each signature takes `images` of shape
+// [1, num_tokens * 4, image_channels] and returns `features` of shape
+// [1, num_tokens, feature_dim]. The model only runs an ABS op, which resizes
+// `features` to the shape of `images` at runtime, so `image_channels` must be
+// equal to `feature_dim` for the model to produce `feature_dim`-sized
+// embeddings when it is run.
 std::vector<uint8_t> BuildDummyVisionModelBuffer(
     const std::vector<std::string>& signature_keys,
-    const std::vector<int32_t>& num_tokens_vec, int feature_dim) {
+    const std::vector<int32_t>& num_tokens_vec, int feature_dim,
+    int image_channels = 3) {
   flatbuffers::FlatBufferBuilder builder;
 
   auto opcode =
@@ -285,7 +311,7 @@ std::vector<uint8_t> BuildDummyVisionModelBuffer(
 
   for (size_t i = 0; i < signature_keys.size(); ++i) {
     int32_t num_tokens = num_tokens_vec[i];
-    std::vector<int32_t> image_dims = {1, num_tokens * 4, 3};
+    std::vector<int32_t> image_dims = {1, num_tokens * 4, image_channels};
     std::vector<int32_t> output_dims = {1, num_tokens, feature_dim};
 
     auto image_tensor = tflite::CreateTensor(
@@ -1389,6 +1415,224 @@ TEST(EmbeddingEngineImplTest,
   EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
                 proto::LlmMetadata::TF_LITE_VISION_ENCODER),
             call_count_after_first);
+}
+
+TEST(EmbeddingEngineImplTest, UnloadVisionEncoderReloadsOnNextImage) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestEmbeddingModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> real_resources,
+                       CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OwnedEnvironment> env,
+                       CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  // The dummy vision encoder produces embeddings of the same dimension as the
+  // input embeddings of the text encoder in the test embedding model, so that
+  // the image embeddings can be fed to the text encoder.
+  constexpr int kTextEncoderInputEmbeddingDim = 512;
+  constexpr int kVisionTokensPerImage = 70;
+  const std::vector<uint8_t> vision_buffer = BuildDummyVisionModelBuffer(
+      {"vision_70"}, {kVisionTokensPerImage},
+      /*feature_dim=*/kTextEncoderInputEmbeddingDim,
+      /*image_channels=*/kTextEncoderInputEmbeddingDim);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      ::litert::Model vision_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                                 vision_buffer.size())));
+
+  // Declared before the input tensor buffers so that it is destroyed after
+  // them: the engine takes the ownership of `env`, and a TensorBuffer created
+  // from `env` calls into the environment when it is destroyed.
+  std::unique_ptr<EmbeddingEngine> engine;
+
+  // A pre-processed image matching the input of the dummy vision encoder, so
+  // that the request succeeds end-to-end without an image preprocessor.
+  ASSERT_OK_AND_ASSIGN(
+      ::litert::TensorBuffer images_tensor,
+      CreateDummyTensorBuffer(env->env, {1, kVisionTokensPerImage * 4,
+                                         kTextEncoderInputEmbeddingDim}));
+  absl::flat_hash_map<std::string, ::litert::TensorBuffer> image_tensor_map;
+  image_tensor_map.emplace("images", std::move(images_tensor));
+  std::vector<InputData> image_contents;
+  image_contents.push_back(InputImage(std::move(image_tensor_map)));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/std::nullopt, /*vision_model=*/&vision_model);
+  FakeModelResources* resources_ptr = resources.get();
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingEngineSettings settings,
+      EmbeddingEngineSettings::CreateDefault(model_assets, Backend::CPU,
+                                             /*vision_backend=*/Backend::CPU,
+                                             /*audio_backend=*/Backend::CPU));
+  settings.SetVisionTokensPerImage(kVisionTokensPerImage);
+  settings.SetLazyLoadMultimodalEncoders(true);
+
+  ASSERT_OK_AND_ASSIGN(
+      engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  // Unloading encoders that are not loaded yet is a no-op.
+  EXPECT_OK(engine->UnloadVisionEncoder());
+  EXPECT_OK(engine->UnloadAudioEncoder());
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            0);
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  // The first image input loads the vision encoder.
+  EXPECT_OK(engine->ComputeEmbedding(image_contents, options));
+  const int call_count_after_load = resources_ptr->GetTFLiteModelCallCount(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+  EXPECT_GT(call_count_after_load, 0);
+
+  // After the vision encoder is unloaded, the next image input reloads it from
+  // the model resources, which are still alive, and runs it successfully.
+  EXPECT_OK(engine->UnloadVisionEncoder());
+  EXPECT_OK(engine->ComputeEmbedding(image_contents, options));
+  EXPECT_GT(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            call_count_after_load);
+  EXPECT_TRUE(engine->GetSelectedVisionSignatureInfo().has_value());
+  EXPECT_EQ(engine->GetSelectedVisionSignatureInfo()->max_num_patches,
+            kVisionTokensPerImage);
+}
+
+TEST(EmbeddingEngineImplTest, UnloadAudioEncoderReloadsOnNextAudio) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestEmbeddingModelPath))
+                                     .string();
+  const std::string audio_model_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       std::string(kTestAudioModelPath))
+          .string();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> real_resources,
+                       CreateTestModelResources(model_path));
+  // Serves the audio encoder and adapter of the dummy audio model.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> audio_resources,
+                       CreateTestModelResources(audio_model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OwnedEnvironment> env,
+                       CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  // Declared before the input tensor buffers so that it is destroyed after
+  // them: the engine takes the ownership of `env`, and a TensorBuffer created
+  // from `env` calls into the environment when it is destroyed.
+  std::unique_ptr<EmbeddingEngine> engine;
+
+  // A pre-processed mel spectrogram matching the input of the dummy audio
+  // encoder ([1, sequence_length, frequency_slots]).
+  ASSERT_OK_AND_ASSIGN(::litert::TensorBuffer spectrogram_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 10, 8}));
+  std::vector<InputData> audio_contents;
+  audio_contents.push_back(InputAudio(std::move(spectrogram_tensor)));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false);
+  resources->SetAudioResources(audio_resources.get());
+  FakeModelResources* resources_ptr = resources.get();
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingEngineSettings settings,
+      EmbeddingEngineSettings::CreateDefault(model_assets, Backend::CPU,
+                                             /*vision_backend=*/Backend::CPU,
+                                             /*audio_backend=*/Backend::CPU));
+  settings.SetLazyLoadMultimodalEncoders(true);
+
+  ASSERT_OK_AND_ASSIGN(
+      engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            0);
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  // The dummy audio model produces 6-dimensional embeddings, while the text
+  // encoder of the test embedding model takes 512-dimensional ones. So each
+  // request fails when the audio embeddings are fed to the text encoder, which
+  // happens only after the audio encoder was loaded and run successfully.
+  const auto fails_in_text_encoder = StatusIs(
+      absl::StatusCode::kInvalidArgument,
+      HasSubstr("The embedding buffer is not large enough to contain the "
+                "number of requested tokens."));
+
+  // The first audio input loads the audio encoder.
+  EXPECT_THAT(engine->ComputeEmbedding(audio_contents, options),
+              fails_in_text_encoder);
+  const int call_count_after_load = resources_ptr->GetTFLiteModelCallCount(
+      proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW);
+  EXPECT_GT(call_count_after_load, 0);
+
+  // Subsequent audio inputs reuse the loaded audio encoder, which shows that
+  // it was loaded successfully.
+  EXPECT_THAT(engine->ComputeEmbedding(audio_contents, options),
+              fails_in_text_encoder);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            call_count_after_load);
+
+  // After the audio encoder is unloaded, the next audio input reloads it from
+  // the model resources, which are still alive, and runs it.
+  EXPECT_OK(engine->UnloadAudioEncoder());
+  EXPECT_THAT(engine->ComputeEmbedding(audio_contents, options),
+              fails_in_text_encoder);
+  const int call_count_after_reload = resources_ptr->GetTFLiteModelCallCount(
+      proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW);
+  EXPECT_GT(call_count_after_reload, call_count_after_load);
+
+  // The reloaded audio encoder is reused as well.
+  EXPECT_THAT(engine->ComputeEmbedding(audio_contents, options),
+              fails_in_text_encoder);
+  EXPECT_EQ(resources_ptr->GetTFLiteModelCallCount(
+                proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+            call_count_after_reload);
+}
+
+TEST(EmbeddingEngineImplTest, UnloadEncodersRequiresLazyLoading) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestEmbeddingModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> real_resources,
+                       CreateTestModelResources(model_path));
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OwnedEnvironment> env,
+                       CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingEngineSettings settings,
+      EmbeddingEngineSettings::CreateDefault(model_assets, Backend::CPU,
+                                             /*vision_backend=*/Backend::CPU,
+                                             /*audio_backend=*/Backend::CPU));
+  ASSERT_FALSE(settings.GetLazyLoadMultimodalEncoders());
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<EmbeddingEngine> engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  EXPECT_THAT(engine->UnloadVisionEncoder(),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("requires lazy loading")));
+  EXPECT_THAT(engine->UnloadAudioEncoder(),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("requires lazy loading")));
 }
 
 class FakeEmbeddingExecutor : public EmbeddingExecutorBase {

@@ -35,6 +35,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
@@ -114,6 +115,71 @@ absl::StatusOr<std::vector<T>> ReadTensorBuffer(
   std::vector<T> data(size);
   LITERT_RETURN_IF_ERROR(tensor_buffer.Read<T>(absl::MakeSpan(data)));
   return data;
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     CreateWithSharedResourcesKeepsResourcesAliveUntilDestroyed) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestVisionModelWithAdapterPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ScopedFile scoped_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LitertLmLoader> loader,
+                       LitertLmLoader::Create(std::move(scoped_file)));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> litert_lm_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+  std::shared_ptr<ModelResources> resources = std::move(litert_lm_resources);
+  std::weak_ptr<ModelResources> weak_resources = resources;
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<VisionLiteRtCompiledModelExecutor> vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env, resources));
+
+  // The executor keeps the resources alive after the caller releases them,
+  // e.g. after another executor sharing them is destroyed.
+  resources.reset();
+  EXPECT_FALSE(weak_resources.expired());
+
+  std::vector<float> input_data(10 * 8, 1.0f);
+  RankedTensorType input_tensor_type(ElementType::Float32,
+                                     Layout(litert::Dimensions{1, 10, 8}));
+  ASSERT_OK_AND_ASSIGN(
+      auto input_buffer,
+      CreateTensorBuffer<float>(absl::MakeSpan(input_data), input_tensor_type));
+  EXPECT_OK(vision_executor->Encode(input_buffer));
+
+  // The resources are released with the last executor using them.
+  vision_executor.reset();
+  EXPECT_TRUE(weak_resources.expired());
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     CreateWithNullSharedResourcesFails) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestVisionModelWithAdapterPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+
+  EXPECT_THAT(VisionLiteRtCompiledModelExecutor::Create(
+                  settings, env, std::shared_ptr<ModelResources>()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(VisionLiteRtCompiledModelExecutorTest,

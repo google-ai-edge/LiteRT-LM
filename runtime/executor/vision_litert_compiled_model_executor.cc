@@ -548,14 +548,24 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
 
 absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
 litert::lm::VisionLiteRtCompiledModelExecutor::Create(
-    const VisionExecutorSettings& vision_executor_settings, Environment& env) {
-  LITERT_ASSIGN_OR_RETURN(auto resources,
-                          BuildLiteRtCompiledModelResources(
-                              vision_executor_settings.GetModelAssets()));
+    const VisionExecutorSettings& vision_executor_settings, Environment& env,
+    std::shared_ptr<ModelResources> resources) {
+  if (resources == nullptr) {
+    return absl::InvalidArgumentError("ModelResources cannot be null.");
+  }
   ABSL_ASSIGN_OR_RETURN(auto executor,
                         Create(vision_executor_settings, env, *resources));
   executor->resources_ = std::move(resources);
   return executor;
+}
+
+absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+litert::lm::VisionLiteRtCompiledModelExecutor::Create(
+    const VisionExecutorSettings& vision_executor_settings, Environment& env) {
+  LITERT_ASSIGN_OR_RETURN(auto resources,
+                          BuildLiteRtCompiledModelResources(
+                              vision_executor_settings.GetModelAssets()));
+  return Create(vision_executor_settings, env, std::move(resources));
 }
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(

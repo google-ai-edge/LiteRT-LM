@@ -34,6 +34,7 @@ filegroup(
 )
 
 exports_files([
+    "dummy_audio_only.litertlm",
     "have_a_wonderful_day.wav",
     "colored_rect_163_586_615_957.jpg",
     "test_lm.litertlm",

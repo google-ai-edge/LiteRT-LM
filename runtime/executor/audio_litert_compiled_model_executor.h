@@ -114,6 +114,24 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   Create(AudioExecutorSettings executor_settings, Environment& env,
          ModelResources& resources);
 
+  // Creates an AudioLiteRtCompiledModelExecutor from the given
+  // AudioExecutorSettings and ModelResources, sharing the ownership of
+  // `resources`.
+  //
+  // The same resources can be shared with other executors (e.g. an
+  // `EmbeddingLiteRtCompiledModelExecutor` created from the same model), so
+  // that each executor can be created and destroyed independently: the
+  // resources are released when the last executor using them is destroyed.
+  // `env` must outlive the executor.
+  //
+  // Note: `ModelResources` is not thread-safe, and `Create()` mutates
+  // `*resources` (e.g. it lazily loads the models). It must not be called
+  // concurrently with other users of the same `ModelResources` instance across
+  // threads without external synchronization.
+  static absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
+  Create(AudioExecutorSettings executor_settings, Environment& env,
+         std::shared_ptr<ModelResources> resources);
+
   // Run the audio encoder and audio adapter models to encode the spectrogram
   // tensor into audio embeddings. It is caller's responsibility to ensure the
   // spectrogram tensor is valid and has the correct shape. It is assumed that
@@ -523,7 +541,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   explicit AudioLiteRtCompiledModelExecutor(
       AudioExecutorSettings executor_settings,
       AudioExecutorProperties executor_properties, Environment& env,
-      std::unique_ptr<ModelResources> resources,
+      std::shared_ptr<ModelResources> resources,
       std::unique_ptr<AudioEncoder> audio_encoder,
       std::unique_ptr<AudioAdapter> audio_adapter, int sequence_length,
       int spectrogram_feature_dimensions,
@@ -607,7 +625,10 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   AudioExecutorProperties executor_properties_;
   /// The LiteRT environment.
   Environment& env_;
-  std::unique_ptr<ModelResources> resources_;
+  // Keeps the model resources alive if they are owned (or shared) by this
+  // executor. Declared before the encoder and adapter, which refer to the
+  // resources, so that they are destroyed first.
+  std::shared_ptr<ModelResources> resources_;
   std::unique_ptr<AudioEncoder> audio_encoder_;
   std::unique_ptr<AudioAdapter> audio_adapter_;
 

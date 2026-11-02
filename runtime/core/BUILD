@@ -876,6 +876,7 @@ cc_test(
     name = "embedding_engine_impl_test",
     srcs = ["embedding_engine_impl_test.cc"],
     data = [
+        "//runtime/testdata:dummy_audio_only.litertlm",
         "//runtime/testdata:test_embedding.litertlm",
         "//runtime/testdata:test_lm.litertlm",
     ],

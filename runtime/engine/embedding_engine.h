@@ -18,6 +18,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
@@ -106,6 +107,30 @@ class EmbeddingEngine {
   // during engine creation, or nullopt otherwise.
   virtual const std::optional<SelectedVisionSignatureInfo>&
   GetSelectedVisionSignatureInfo() const = 0;
+
+  // Unloads the vision encoder to release its memory. The vision encoder is
+  // reloaded on the next image input. Unloading an encoder that is not loaded
+  // is a no-op.
+  //
+  // Requires lazy loading of the multimodal encoders
+  // (EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders), otherwise returns
+  // a FailedPreconditionError. Must not be called concurrently with
+  // ComputeEmbedding or ComputeEmbeddingBatch.
+  virtual absl::Status UnloadVisionEncoder() {
+    return absl::UnimplementedError("UnloadVisionEncoder is not implemented.");
+  }
+
+  // Unloads the audio encoder to release its memory. The audio encoder is
+  // reloaded on the next audio input. Unloading an encoder that is not loaded
+  // is a no-op.
+  //
+  // Requires lazy loading of the multimodal encoders
+  // (EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders), otherwise returns
+  // a FailedPreconditionError. Must not be called concurrently with
+  // ComputeEmbedding or ComputeEmbeddingBatch.
+  virtual absl::Status UnloadAudioEncoder() {
+    return absl::UnimplementedError("UnloadAudioEncoder is not implemented.");
+  }
 };
 
 }  // namespace litert::lm

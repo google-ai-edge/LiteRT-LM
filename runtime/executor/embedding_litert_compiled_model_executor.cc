@@ -323,7 +323,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
 absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
 EmbeddingLiteRtCompiledModelExecutor::Create(
     EmbeddingExecutorSettings executor_settings, Environment& env,
-    std::unique_ptr<ModelResources> resources) {
+    std::shared_ptr<ModelResources> resources) {
   RET_CHECK_NE(resources, nullptr) << "ModelResources is null.";
 
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
@@ -348,7 +348,7 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
 absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
 EmbeddingLiteRtCompiledModelExecutor::Create(
     EmbeddingExecutorSettings executor_settings, Environment& env,
-    std::unique_ptr<ModelResources> resources,
+    std::shared_ptr<ModelResources> resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
     CompiledTextEncoderInfo compiled_text_encoder_info) {
@@ -706,7 +706,7 @@ EmbeddingLiteRtCompiledModelExecutor::StopProfiling() {
 
 EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(
     EmbeddingExecutorSettings executor_settings, Environment& env,
-    std::unique_ptr<ModelResources> resources,
+    std::shared_ptr<ModelResources> resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
     std::unique_ptr<litert::CompiledModel> compiled_model,

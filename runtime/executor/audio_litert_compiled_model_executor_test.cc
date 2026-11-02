@@ -44,8 +44,11 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "runtime/components/model_resources.h"
+#include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "runtime/util/test_utils.h"     //NOLINT
@@ -66,6 +69,7 @@ constexpr int kEmbeddingSequenceLength = 5;
 constexpr int kEmbeddingDimensions = 6;
 
 using ::testing::ElementsAre;
+using ::testing::status::StatusIs;
 
 template <typename T>
 absl::StatusOr<std::vector<T>> GetDataAsVector(
@@ -214,6 +218,72 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, CreateExecutorTest) {
                                  std::string(kTestAudioModelPath))
                                     .string(),
                                 /*max_sequence_length=*/0, Backend::CPU));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       CreateWithSharedResourcesKeepsResourcesAliveUntilDestroyed) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestAudioModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ScopedFile scoped_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LitertLmLoader> loader,
+                       LitertLmLoader::Create(std::move(scoped_file)));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> litert_lm_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+  std::shared_ptr<ModelResources> resources = std::move(litert_lm_resources);
+  std::weak_ptr<ModelResources> weak_resources = resources;
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(model_assets,
+                                           /*max_sequence_length=*/0,
+                                           /*encoder_backend=*/Backend::CPU,
+                                           /*adapter_backend=*/Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<AudioLiteRtCompiledModelExecutor> audio_executor,
+      AudioLiteRtCompiledModelExecutor::Create(settings, *env_, resources));
+
+  // The executor keeps the resources alive after the caller releases them,
+  // e.g. after another executor sharing them is destroyed.
+  resources.reset();
+  EXPECT_FALSE(weak_resources.expired());
+
+  std::vector<float> mel_spectrogram_data(
+      kSpectrogramSequenceLength * kSpectrogramFrequencySlots, 1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      TensorBuffer mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+  EXPECT_OK(audio_executor->Encode(mel_spectrogram_tensor_buffer));
+
+  // The resources are released with the last executor using them.
+  audio_executor.reset();
+  EXPECT_TRUE(weak_resources.expired());
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       CreateWithNullSharedResourcesFails) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestAudioModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(model_assets,
+                                           /*max_sequence_length=*/0,
+                                           /*encoder_backend=*/Backend::CPU,
+                                           /*adapter_backend=*/Backend::CPU));
+
+  EXPECT_THAT(AudioLiteRtCompiledModelExecutor::Create(
+                  settings, *env_, std::shared_ptr<ModelResources>()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 #if !defined(LITERT_DISABLE_NPU)

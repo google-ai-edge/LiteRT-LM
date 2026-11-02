@@ -56,10 +56,9 @@ struct SpecialTokens {
 // multimodal encoders is enabled (see
 // `EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders`).
 struct LazyMultimodalLoadingConfig {
-  // Non-owning pointer to the model resources holding the vision and audio
-  // encoder models. The resources are owned by the embedding executor, which
-  // is destroyed after the lazily created encoders.
-  ModelResources* resources = nullptr;
+  // The model resources holding the vision and audio encoder models. The
+  // ownership is shared with the embedding executor and the vision executor.
+  std::shared_ptr<ModelResources> resources;
 
   // Settings used to compile the vision encoder. Nullopt if the vision
   // modality is not configured, in which case image inputs are rejected.
@@ -213,6 +212,12 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   // i.e. if the audio modality was not configured or if the model does not
   // bundle an audio encoder.
   absl::Status EnsureAudioExecutorLoaded();
+
+  // See EmbeddingEngine::UnloadVisionEncoder.
+  absl::Status UnloadVisionEncoder() override;
+
+  // See EmbeddingEngine::UnloadAudioEncoder.
+  absl::Status UnloadAudioEncoder() override;
 
   std::unique_ptr<OwnedEnvironment> env_;
   std::unique_ptr<::litert::support::Tokenizer> tokenizer_;

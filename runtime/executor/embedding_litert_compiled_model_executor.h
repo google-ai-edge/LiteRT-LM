@@ -70,15 +70,26 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
 
   // Creates an EmbeddingLiteRtCompiledModelExecutor from the given settings,
   // LiteRT environment, and model resources.
+  //
+  // The executor shares the ownership of `resources`, so the same resources
+  // can be shared with other executors (e.g. a
+  // `VisionLiteRtCompiledModelExecutor` created from the same model) that can
+  // then be created and destroyed independently of this executor. `env` must
+  // outlive the executor.
+  //
+  // Note: `ModelResources` is not thread-safe, and `Create()` mutates
+  // `*resources` (e.g. it lazily loads the models). It must not be called
+  // concurrently with other users of the same `ModelResources` instance across
+  // threads without external synchronization.
   static absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
   Create(EmbeddingExecutorSettings executor_settings, litert::Environment& env,
-         std::unique_ptr<ModelResources> resources);
+         std::shared_ptr<ModelResources> resources);
 
   // Creates an EmbeddingLiteRtCompiledModelExecutor with pre-compiled
   // components.
   static absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
   Create(EmbeddingExecutorSettings executor_settings, litert::Environment& env,
-         std::unique_ptr<ModelResources> resources,
+         std::shared_ptr<ModelResources> resources,
          std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
          std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
          CompiledTextEncoderInfo compiled_text_encoder_info);
@@ -126,7 +137,7 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
 
   EmbeddingLiteRtCompiledModelExecutor(
       EmbeddingExecutorSettings executor_settings, litert::Environment& env,
-      std::unique_ptr<ModelResources> resources,
+      std::shared_ptr<ModelResources> resources,
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       std::unique_ptr<litert::CompiledModel> compiled_model,
@@ -139,7 +150,7 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
 
   EmbeddingExecutorSettings executor_settings_;
   litert::Environment& env_;
-  std::unique_ptr<ModelResources> resources_;
+  std::shared_ptr<ModelResources> resources_;
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_;
   std::unique_ptr<litert::CompiledModel> compiled_model_;

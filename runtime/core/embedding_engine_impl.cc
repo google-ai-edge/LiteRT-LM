@@ -422,6 +422,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     return absl::InvalidArgumentError("OwnedEnvironment cannot be null.");
   }
 
+  // The model resources are shared by the embedding executor and the vision
+  // executor (and kept by the engine to compile the multimodal encoders on
+  // their first use), so that each executor can be destroyed independently.
+  std::shared_ptr<ModelResources> shared_resources = std::move(resources);
+
   if (IsPixelTensorDevice()) {
     auto cores = GetPixelPerformanceCores();
     auto status = SetCpuAffinity(cores);
@@ -432,12 +437,12 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Resolve and validate first, then read the resolved metadata back out.
   const proto::EmbeddingMetadata* metadata_from_file = nullptr;
-  auto resources_metadata = resources->GetEmbeddingMetadata();
+  auto resources_metadata = shared_resources->GetEmbeddingMetadata();
   if (resources_metadata.ok()) {
     metadata_from_file = *resources_metadata;
   }
-  LITERT_RETURN_IF_ERROR(
-      ResolveAndValidateSettings(*resources, settings, metadata_from_file));
+  LITERT_RETURN_IF_ERROR(ResolveAndValidateSettings(*shared_resources, settings,
+                                                    metadata_from_file));
   std::optional<proto::EmbeddingMetadata> metadata =
       settings.GetEmbeddingMetadata();
 
@@ -454,7 +459,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   LITERT_ASSIGN_OR_RETURN(
       std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info,
-      SetTextEncoderSignaturesFromSettings(*resources, settings));
+      SetTextEncoderSignaturesFromSettings(*shared_resources, settings));
 
   // Auto-select vision encoder and adapter signatures if
   // vision_tokens_per_image is set.
@@ -464,7 +469,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   // image input, and EnsureVisionExecutorLoaded() checks for the encoder then.
   const bool has_vision_encoder =
       !lazy_load_multimodal_encoders &&
-      resources
+      shared_resources
           ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
           .ok();
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
@@ -518,7 +523,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       LITERT_ASSIGN_OR_RETURN(
           selected_vision_signature_info,
           SelectAndApplyVisionSignatures(
-              *resources, vision_tokens_per_image,
+              *shared_resources, vision_tokens_per_image,
               settings.GetMinVisionTokensPerImage(), vision_max_num_patches,
               *settings.GetMutableVisionExecutorSettings()));
     } else if (!lazy_load_multimodal_encoders) {
@@ -565,27 +570,29 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     LITERT_ASSIGN_OR_RETURN(
         vision_executor,
         VisionLiteRtCompiledModelExecutor::Create(
-            *settings.GetVisionExecutorSettings(), env->env, *resources));
+            *settings.GetVisionExecutorSettings(), env->env, shared_resources));
   }
 
   // Initialize the audio executor.
   std::unique_ptr<AudioExecutor> audio_executor = nullptr;
   if (!lazy_load_multimodal_encoders &&
-      (resources
+      (shared_resources
            ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)
            .ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         audio_executor,
         AudioLiteRtCompiledModelExecutor::Create(
-            *settings.GetAudioExecutorSettings(), env->env, *resources));
+            *settings.GetAudioExecutorSettings(), env->env, shared_resources));
   }
 
   special_tokens.has_end_of_vision_model =
-      resources->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_VISION)
+      shared_resources
+          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_VISION)
           .ok();
   special_tokens.has_end_of_audio_model =
-      resources->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_AUDIO)
+      shared_resources
+          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_AUDIO)
           .ok();
 
   // Initialize the image preprocessor if requisite parameters are available in
@@ -597,13 +604,12 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
 
   // Capture what is needed to compile the vision and audio encoders on their
-  // first use. The model resources are moved into the embedding executor
-  // below, which is destroyed after the lazily created encoders.
+  // first use (and to recompile them after they are unloaded).
   std::optional<LazyMultimodalLoadingConfig> lazy_multimodal_loading_config =
       std::nullopt;
   if (lazy_load_multimodal_encoders) {
     lazy_multimodal_loading_config = LazyMultimodalLoadingConfig{
-        .resources = resources.get(),
+        .resources = shared_resources,
         .vision_executor_settings = settings.GetVisionExecutorSettings(),
         .audio_executor_settings = settings.GetAudioExecutorSettings(),
         .vision_tokens_per_image = settings.GetVisionTokensPerImage(),
@@ -617,7 +623,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       auto embedding_executor,
       EmbeddingLiteRtCompiledModelExecutor::Create(
           std::move(settings.GetMutableMainExecutorSettings()), env->env,
-          std::move(resources)));
+          shared_resources));
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(
@@ -1274,7 +1280,7 @@ absl::Status EmbeddingEngineImpl::EnsureVisionExecutorLoaded() {
   LITERT_ASSIGN_OR_RETURN(
       vision_executor_,
       VisionLiteRtCompiledModelExecutor::Create(
-          *config.vision_executor_settings, env_->env, resources));
+          *config.vision_executor_settings, env_->env, config.resources));
   if (benchmark_info_.has_value()) {
     // Profiling of this request was started before the executor existed.
     ABSL_RETURN_IF_ERROR(vision_executor_->StartProfiling());
@@ -1306,10 +1312,42 @@ absl::Status EmbeddingEngineImpl::EnsureAudioExecutorLoaded() {
   LITERT_ASSIGN_OR_RETURN(
       audio_executor_,
       AudioLiteRtCompiledModelExecutor::Create(*config.audio_executor_settings,
-                                               env_->env, resources));
+                                               env_->env, config.resources));
   if (benchmark_info_.has_value()) {
     // Profiling of this request was started before the executor existed.
     ABSL_RETURN_IF_ERROR(audio_executor_->StartProfiling());
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingEngineImpl::UnloadVisionEncoder() {
+  if (!lazy_multimodal_loading_config_.has_value() ||
+      !lazy_multimodal_loading_config_->vision_executor_settings.has_value()) {
+    return absl::FailedPreconditionError(
+        "Unloading the vision encoder requires lazy loading of the multimodal "
+        "encoders (EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders) "
+        "and a configured vision modality, so that the encoder can be "
+        "reloaded on the next image input.");
+  }
+  if (vision_executor_ != nullptr) {
+    ABSL_LOG(INFO) << "Unloading the vision encoder.";
+    vision_executor_.reset();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingEngineImpl::UnloadAudioEncoder() {
+  if (!lazy_multimodal_loading_config_.has_value() ||
+      !lazy_multimodal_loading_config_->audio_executor_settings.has_value()) {
+    return absl::FailedPreconditionError(
+        "Unloading the audio encoder requires lazy loading of the multimodal "
+        "encoders (EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders) "
+        "and a configured audio modality, so that the encoder can be "
+        "reloaded on the next audio input.");
+  }
+  if (audio_executor_ != nullptr) {
+    ABSL_LOG(INFO) << "Unloading the audio encoder.";
+    audio_executor_.reset();
   }
   return absl::OkStatus();
 }
