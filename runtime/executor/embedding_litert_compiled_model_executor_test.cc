@@ -583,7 +583,7 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,
-     Create_MissingEmbedder_ReturnsNotFoundError) {
+     Create_MissingEmbedder_RejectsTokenInputs) {
   auto encoder_buf = BuildDummyTfLiteModelBuffer(
       "encoder", {1, 1, 8}, tflite::TensorType_FLOAT32, {1, 8},
       tflite::TensorType_FLOAT32);
@@ -599,14 +599,122 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
 
+  // The embedder is optional: without it, only pre-computed input embeddings
+  // are supported.
   auto fake_resources =
       std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
-  auto embedding_executor = EmbeddingLiteRtCompiledModelExecutor::Create(
-      settings, env, std::move(fake_resources));
-  EXPECT_THAT(
-      embedding_executor,
-      StatusIs(absl::StatusCode::kNotFound,
-               "kTfLiteEmbedder model not found in resources for embedding."));
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[] = {42};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto token_ids_buffer,
+      TensorBuffer::CreateFromHostMemory(
+          env, RankedTensorType(ElementType::Int32, Layout(Dimensions({1}))),
+          token_data, sizeof(token_data)));
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+  EXPECT_THAT(embedding_executor->ComputeEmbedding(inputs),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("requires the embedder model")));
+
+  std::vector<float> input_embeddings(8, 1.0f);
+  ASSERT_OK_AND_ASSIGN(std::vector<float> output,
+                       embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                           input_embeddings));
+  EXPECT_EQ(output.size(), 8);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingFromInputEmbeddings_PadsAndMasksTheSequence) {
+  // The encoder computes `output = embeddings + input_mask` for a sequence
+  // length of 4 and an embedding dimension of 8.
+  auto encoder_buf = BuildDummyEncoderModelBuffer(
+      "encoder", /*embeddings_dims=*/{1, 4, 8}, /*mask_dims=*/{1, 4, 1},
+      /*output_dims=*/{1, 4, 8});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  // A sequence of 2 embeddings, padded to the signature length of 4.
+  std::vector<float> input_embeddings(2 * 8);
+  for (size_t i = 0; i < input_embeddings.size(); ++i) {
+    input_embeddings[i] = 0.5f * i;
+  }
+  ASSERT_OK_AND_ASSIGN(std::vector<float> output,
+                       embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                           input_embeddings));
+  ASSERT_EQ(output.size(), 4 * 8);
+  for (size_t i = 0; i < input_embeddings.size(); ++i) {
+    // Active positions: the input embeddings plus a mask of 1.
+    EXPECT_FLOAT_EQ(output[i], input_embeddings[i] + 1.0f) << "i=" << i;
+  }
+  for (size_t i = input_embeddings.size(); i < output.size(); ++i) {
+    // Padded positions: zero embeddings plus a mask of 0.
+    EXPECT_FLOAT_EQ(output[i], 0.0f) << "i=" << i;
+  }
+
+  // A full sequence reuses the same signature.
+  std::vector<float> full_input_embeddings(4 * 8, 2.0f);
+  ASSERT_OK_AND_ASSIGN(output,
+                       embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                           full_input_embeddings));
+  for (float value : output) {
+    EXPECT_FLOAT_EQ(value, 3.0f);
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingFromInputEmbeddings_InvalidSizes) {
+  auto encoder_buf = BuildDummyEncoderModelBuffer(
+      "encoder", /*embeddings_dims=*/{1, 4, 8}, /*mask_dims=*/{1, 4, 1},
+      /*output_dims=*/{1, 4, 8});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  // Empty.
+  EXPECT_THAT(embedding_executor->ComputeEmbeddingFromInputEmbeddings({}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  // Not a multiple of the embedding dimension.
+  EXPECT_THAT(embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                  std::vector<float>(15, 1.0f)),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("multiple of the embedding dimension")));
+  // Longer than the longest signature.
+  EXPECT_THAT(embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                  std::vector<float>(5 * 8, 1.0f)),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("exceeds maximum supported signature")));
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,

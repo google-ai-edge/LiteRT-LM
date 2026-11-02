@@ -71,6 +71,11 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Creates an EmbeddingLiteRtCompiledModelExecutor from the given settings,
   // LiteRT environment, and model resources.
   //
+  // The embedder model (kTfLiteEmbedder) is optional. Without it, the executor
+  // can only compute embeddings from pre-computed input embeddings (see
+  // `ComputeEmbeddingFromInputEmbeddings`), and `ComputeEmbedding` /
+  // `ComputeEmbeddingBatch` return a FailedPreconditionError.
+  //
   // The executor shares the ownership of `resources`, so the same resources
   // can be shared with other executors (e.g. a
   // `VisionLiteRtCompiledModelExecutor` created from the same model) that can
@@ -117,6 +122,26 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       const std::vector<ExecutorInputs>& batch_inputs,
       const ComputeEmbeddingOptions& options) override;
 
+  // Runs the text encoder on pre-computed input embeddings, skipping the
+  // embedding lookup. This lets the embedding lookup (and the merging of
+  // multimodal embeddings, e.g. vision soft tokens) run outside of this
+  // executor, e.g. on another backend.
+  //
+  // `input_embeddings` holds `[sequence_length, embed_dim]` float values in
+  // row-major order, where `embed_dim` is the last dimension of
+  // `GetExpectedInputDimension()`. The text encoder signature with the
+  // smallest sequence length that fits `sequence_length` is used; the
+  // remaining positions are padded with zeros and masked out.
+  //
+  // Returns the output embedding vector of the text encoder, of size
+  // `GetEmbeddingDimension()`. Returns an InvalidArgumentError if the size of
+  // `input_embeddings` is not a positive multiple of `embed_dim` or if the
+  // sequence is longer than the longest signature, and an UnimplementedError
+  // if the text encoder requires per-layer embeddings (which are computed
+  // from token IDs).
+  absl::StatusOr<std::vector<float>> ComputeEmbeddingFromInputEmbeddings(
+      absl::Span<const float> input_embeddings);
+
   // Returns the name of the hardware backend used by this executor.
   absl::string_view ExecutorBackendName() const override;
 
@@ -132,6 +157,30 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   litert::Environment* GetEnvironment() const override;
 
  private:
+  // The buffers and input indices of a text encoder run.
+  struct EncoderRun {
+    // The selected signature, i.e. the one with the smallest sequence length
+    // that fits the input.
+    size_t signature_index = 0;
+    // The sequence length of the selected signature.
+    size_t padded_sequence_length = 0;
+    std::vector<litert::TensorBuffer>* input_buffers = nullptr;
+    std::vector<litert::TensorBuffer>* output_buffers = nullptr;
+    size_t embeddings_buffer_index = 0;
+    std::optional<size_t> input_mask_buffer_index;
+    std::optional<size_t> per_layer_embeddings_buffer_index;
+  };
+
+  // Selects the text encoder signature for `sequence_length` and gets (or
+  // creates) its buffers.
+  absl::StatusOr<EncoderRun> PrepareEncoderRun(size_t sequence_length);
+
+  // Fills the input mask of `run`, runs the text encoder and returns its output
+  // embedding vector. The embeddings (and per-layer embeddings, if any) inputs
+  // of `run` must be filled.
+  absl::StatusOr<std::vector<float>> FinishEncoderRun(const EncoderRun& run,
+                                                      size_t sequence_length);
+
   absl::StatusOr<std::vector<float>> RunEncoderForTokens(
       absl::Span<const int32_t> tokens);
 

@@ -1176,6 +1176,7 @@ cc_library(
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_expected",
         "@litert//litert/cc:litert_macros",

@@ -41,6 +41,7 @@
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -331,8 +332,8 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
       env, *resources, embedding_lookup, per_layer_embedding_lookup));
   if (embedding_lookup == nullptr) {
-    return absl::NotFoundError(
-        "kTfLiteEmbedder model not found in resources for embedding.");
+    ABSL_LOG(INFO) << "kTfLiteEmbedder model not found in resources. The "
+                      "executor only supports pre-computed input embeddings.";
   }
 
   ABSL_ASSIGN_OR_RETURN(auto compiled_text_encoder_info,
@@ -352,11 +353,6 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
     CompiledTextEncoderInfo compiled_text_encoder_info) {
-  if (embedding_lookup == nullptr) {
-    return absl::NotFoundError(
-        "kTfLiteEmbedder model not found in resources for embedding.");
-  }
-
   return absl::WrapUnique(new EmbeddingLiteRtCompiledModelExecutor(
       std::move(executor_settings), env, std::move(resources),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
@@ -378,67 +374,65 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   return Create(std::move(executor_settings), env, std::move(resources));
 }
 
-absl::StatusOr<std::vector<float>>
-EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
-    absl::Span<const int32_t> tokens) {
-  ScopedLatency scoped_total_latency(latency_stats_);
-
+absl::StatusOr<EmbeddingLiteRtCompiledModelExecutor::EncoderRun>
+EmbeddingLiteRtCompiledModelExecutor::PrepareEncoderRun(
+    size_t sequence_length) {
   // Find the smallest signature larger than or equal to the input size.
-  auto it = encoder_signatures_.lower_bound(tokens.size());
+  auto it = encoder_signatures_.lower_bound(sequence_length);
   if (it == encoder_signatures_.end()) {
     return absl::InternalError(absl::StrCat(
-        "No suitable signature found for sequence length ", tokens.size()));
+        "No suitable signature found for sequence length ", sequence_length));
   }
-  size_t signature_index = it->second;
+  EncoderRun run;
+  run.signature_index = it->second;
+  run.padded_sequence_length = it->first;
 
   // Lazily create input buffers.
-  if (!input_buffers_cache_.contains(signature_index)) {
+  if (!input_buffers_cache_.contains(run.signature_index)) {
     LITERT_ASSIGN_OR_RETURN(
         auto input_buffers,
-        compiled_model_->CreateInputBuffers(signature_index));
-    input_buffers_cache_[signature_index] = std::move(input_buffers);
+        compiled_model_->CreateInputBuffers(run.signature_index));
+    input_buffers_cache_[run.signature_index] = std::move(input_buffers);
   }
-  auto& input_buffers = input_buffers_cache_[signature_index];
 
   // Lazily create output buffers.
-  if (!output_buffers_cache_.contains(signature_index)) {
+  if (!output_buffers_cache_.contains(run.signature_index)) {
     LITERT_ASSIGN_OR_RETURN(
         auto output_buffers,
-        compiled_model_->CreateOutputBuffers(signature_index));
-    output_buffers_cache_[signature_index] = std::move(output_buffers);
+        compiled_model_->CreateOutputBuffers(run.signature_index));
+    output_buffers_cache_[run.signature_index] = std::move(output_buffers);
   }
-  auto& output_buffers = output_buffers_cache_[signature_index];
+  run.input_buffers = &input_buffers_cache_[run.signature_index];
+  run.output_buffers = &output_buffers_cache_[run.signature_index];
+
   LITERT_ASSIGN_OR_RETURN(
       auto input_names,
-      compiled_model_->GetSignatureInputNames(signature_index));
-
-  size_t embeddings_buffer_index = 0;
-  std::optional<size_t> input_mask_buffer_index;
-  std::optional<size_t> per_layer_embeddings_buffer_index;
-
+      compiled_model_->GetSignatureInputNames(run.signature_index));
   for (size_t i = 0; i < input_names.size(); ++i) {
     absl::string_view name = input_names[i];
     if (absl::StrContains(name, kPerLayerEmbeddingsName)) {
-      per_layer_embeddings_buffer_index = i;
+      run.per_layer_embeddings_buffer_index = i;
     } else if (absl::StrContains(name, kInputMaskName)) {
-      input_mask_buffer_index = i;
+      run.input_mask_buffer_index = i;
     } else if (absl::StrContains(name, kEmbeddingsName)) {
-      embeddings_buffer_index = i;
+      run.embeddings_buffer_index = i;
     }
   }
+  return run;
+}
 
-  {
-    ScopedLatency scoped(latency_stats_, kEmbedderLookupLatency);
-    ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-        tokens, &input_buffers[embeddings_buffer_index], /*token_offset=*/0));
-  }
+absl::StatusOr<std::vector<float>>
+EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(const EncoderRun& run,
+                                                       size_t sequence_length) {
+  std::vector<litert::TensorBuffer>& input_buffers = *run.input_buffers;
+  std::vector<litert::TensorBuffer>& output_buffers = *run.output_buffers;
 
   // Compute mask for text encoder. The mask masks out tokens outside of the
   // input sequence length, which can be smaller than the static size of the
   // TFLite graph.
-  if (input_mask_buffer_index.has_value()) {
+  if (run.input_mask_buffer_index.has_value()) {
     ScopedLatency scoped(latency_stats_, kMaskPreparationLatency);
-    auto& mask_buffer = input_buffers[*input_mask_buffer_index];
+    auto& mask_buffer = input_buffers[*run.input_mask_buffer_index];
     LITERT_ASSIGN_OR_RETURN(
         auto mask_lock_and_addr,
         litert::TensorBufferScopedLock::Create(
@@ -447,25 +441,17 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
     LITERT_ASSIGN_OR_RETURN(auto mask_size_bytes, mask_buffer.Size());
     size_t mask_elements = mask_size_bytes / sizeof(float);
 
-    const size_t active_elements = std::min(tokens.size(), mask_elements);
+    const size_t active_elements = std::min(sequence_length, mask_elements);
     std::fill_n(mask_ptr, active_elements, 1.0f);
     if (active_elements < mask_elements) {
       std::fill(mask_ptr + active_elements, mask_ptr + mask_elements, 0.0f);
     }
   }
 
-  if (per_layer_embeddings_buffer_index.has_value() &&
-      per_layer_embedding_lookup_ != nullptr) {
-    ScopedLatency scoped(latency_stats_, kPerLayerEmbedderLookupLatency);
-    ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
-        tokens, &input_buffers[*per_layer_embeddings_buffer_index],
-        /*token_offset=*/0));
-  }
-
   {
     ScopedLatency scoped(latency_stats_, kTextEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(
-        compiled_model_->Run(signature_index, input_buffers, output_buffers));
+    LITERT_RETURN_IF_ERROR(compiled_model_->Run(run.signature_index,
+                                                input_buffers, output_buffers));
   }
 
   std::vector<float> output_vector;
@@ -476,16 +462,112 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
   }
 
   AccumulateStat(latency_stats_, kEmbeddingNumTokensMetric,
-                 static_cast<int64_t>(tokens.size()));
+                 static_cast<int64_t>(sequence_length));
   AccumulateStat(latency_stats_, kEmbeddingNumPaddedTokensMetric,
-                 static_cast<int64_t>(it->first));
+                 static_cast<int64_t>(run.padded_sequence_length));
 
   return output_vector;
+}
+
+absl::StatusOr<std::vector<float>>
+EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
+    absl::Span<const int32_t> tokens) {
+  ScopedLatency scoped_total_latency(latency_stats_);
+  RET_CHECK_NE(embedding_lookup_, nullptr);
+
+  ABSL_ASSIGN_OR_RETURN(EncoderRun run, PrepareEncoderRun(tokens.size()));
+  std::vector<litert::TensorBuffer>& input_buffers = *run.input_buffers;
+
+  {
+    ScopedLatency scoped(latency_stats_, kEmbedderLookupLatency);
+    ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
+        tokens, &input_buffers[run.embeddings_buffer_index],
+        /*token_offset=*/0));
+  }
+
+  if (run.per_layer_embeddings_buffer_index.has_value() &&
+      per_layer_embedding_lookup_ != nullptr) {
+    ScopedLatency scoped(latency_stats_, kPerLayerEmbedderLookupLatency);
+    ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
+        tokens, &input_buffers[*run.per_layer_embeddings_buffer_index],
+        /*token_offset=*/0));
+  }
+
+  return FinishEncoderRun(run, tokens.size());
+}
+
+absl::StatusOr<std::vector<float>>
+EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
+    absl::Span<const float> input_embeddings) {
+  ScopedLatency scoped_total_latency(latency_stats_);
+
+  if (expected_input_dimension_.empty() ||
+      expected_input_dimension_.back() <= 0) {
+    return absl::FailedPreconditionError(
+        "The embedding dimension of the text encoder input is unknown.");
+  }
+  const size_t embed_dim = expected_input_dimension_.back();
+  if (input_embeddings.empty() || input_embeddings.size() % embed_dim != 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The size of the input embeddings (", input_embeddings.size(),
+        ") must be a positive multiple of the embedding dimension (", embed_dim,
+        ")."));
+  }
+  const size_t sequence_length = input_embeddings.size() / embed_dim;
+  if (encoder_signatures_.empty()) {
+    return absl::FailedPreconditionError("No encoder signatures available.");
+  }
+  const size_t max_seq_len = std::prev(encoder_signatures_.end())->first;
+  if (sequence_length > max_seq_len) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Input sequence length (", sequence_length,
+        ") exceeds maximum supported signature length (", max_seq_len, ")."));
+  }
+
+  ABSL_ASSIGN_OR_RETURN(EncoderRun run, PrepareEncoderRun(sequence_length));
+  if (run.per_layer_embeddings_buffer_index.has_value()) {
+    return absl::UnimplementedError(
+        "The text encoder requires per-layer embeddings, which are computed "
+        "from token IDs. Use ComputeEmbedding instead.");
+  }
+
+  {
+    ScopedLatency scoped(latency_stats_, kEmbedderLookupLatency);
+    litert::TensorBuffer& embeddings_buffer =
+        (*run.input_buffers)[run.embeddings_buffer_index];
+    LITERT_ASSIGN_OR_RETURN(auto tensor_type, embeddings_buffer.TensorType());
+    if (tensor_type.ElementType() != litert::ElementType::Float32) {
+      return absl::UnimplementedError(
+          absl::StrCat("Unsupported text encoder input element type: ",
+                       static_cast<int>(tensor_type.ElementType()),
+                       ". Only float32 input embeddings are supported."));
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock_and_addr,
+        litert::TensorBufferScopedLock::Create(
+            embeddings_buffer, litert::TensorBuffer::LockMode::kWrite));
+    float* embeddings_ptr = static_cast<float*>(lock_and_addr.second);
+    LITERT_ASSIGN_OR_RETURN(size_t buffer_size_bytes, embeddings_buffer.Size());
+    const size_t buffer_elements = buffer_size_bytes / sizeof(float);
+    RET_CHECK_LE(input_embeddings.size(), buffer_elements)
+        << "The text encoder input buffer is too small.";
+    absl::c_copy(input_embeddings, embeddings_ptr);
+    std::fill(embeddings_ptr + input_embeddings.size(),
+              embeddings_ptr + buffer_elements, 0.0f);
+  }
+
+  return FinishEncoderRun(run, sequence_length);
 }
 
 absl::StatusOr<EmbeddingOutput>
 EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
     const ExecutorInputs& inputs, const ComputeEmbeddingOptions& options) {
+  if (embedding_lookup_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "Computing embeddings from token IDs requires the embedder model "
+        "(kTfLiteEmbedder), which the model does not contain. Use "
+        "ComputeEmbeddingFromInputEmbeddings instead.");
+  }
   ABSL_RETURN_IF_ERROR(embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
   if (per_layer_embedding_lookup_ != nullptr) {
     ABSL_RETURN_IF_ERROR(
