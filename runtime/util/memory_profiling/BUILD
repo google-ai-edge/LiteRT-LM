@@ -20,14 +20,19 @@
 #   accelerator_memory_monitor  the accelerator side: types, the per-OS
 #                               platform contract, formatting, and the
 #                               accelerator-only AcceleratorMemoryMonitor
+#   memory_snapshot             MemorySnapshot / TakeMemorySnapshot(): host and
+#                               accelerator memory at one instant
+#   memory_monitor              MemoryMonitor: peaks of both over time, sampled
+#                               from a background thread
 #
-# Both sides follow the same layout: a platform-neutral header declares a
-# platform contract, and each operating system contributes one <side>_<os>.cc
-# implementing it and one <side>_<os>_test.cc that only runs on that OS.
-# Building blocks an implementation is made of go in their own files when they
-# can be tested without the OS (accelerator_memory_dmabuf.* is Android's, built
-# on Linux too so that its test runs in CI). <side>_unsupported.cc covers every
-# other OS. To add an OS, add its files and one entry to each select() below.
+# The host and accelerator sides follow the same layout: a platform-neutral
+# header declares a platform contract, and each operating system contributes
+# one <side>_<os>.cc implementing it (plus an internal <side>_<os>.h when its
+# test needs the building blocks) and one <side>_<os>_test.cc that only runs
+# on that OS. Building blocks that can be tested without the OS go in their own
+# files (accelerator_memory_dmabuf.* is Android's, built on Linux too so that
+# its test runs in CI). <side>_unsupported.cc covers every other OS. To add an
+# OS, add its files and one entry to each select() below.
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
@@ -236,5 +241,36 @@ cc_test(
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/log:scoped_mock_log",
         "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "memory_monitor",
+    srcs = ["memory_monitor.cc"],
+    hdrs = ["memory_monitor.h"],
+    deps = [
+        ":accelerator_memory_monitor",
+        ":memory_snapshot",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_test(
+    name = "memory_monitor_test",
+    srcs = ["memory_monitor_test.cc"],
+    deps = [
+        ":accelerator_memory_monitor",
+        ":memory_monitor",
+        ":memory_snapshot",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
     ],
 )
