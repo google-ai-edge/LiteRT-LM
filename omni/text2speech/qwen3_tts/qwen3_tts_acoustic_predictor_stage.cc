@@ -55,6 +55,7 @@
 #include "omni/text2speech/qwen3_tts/common.h"
 #include "omni/text2speech/qwen3_tts/qwen3_tts_io_types.h"
 #include "omni/text2speech/qwen3_tts/qwen3_tts_model_config.h"
+#include "omni/text2speech/qwen3_tts/qwen3_tts_stop_criteria.h"
 #include "omni/utils/tensor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "support/util/convert_tensor_buffer.h"
@@ -516,6 +517,7 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
 
   int total_generated_frames = 0;
   lm::ExecutorInputs next_inputs;
+  Qwen3TtsStopCriteria stop_criteria(frontend.trailing_len, config_.max_frames);
 
   // Wall-clock accounting of the two model-bound phases, reported at VLOG(1)
   // once per utterance.
@@ -523,7 +525,7 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
   absl::Duration mtp_time;
   const absl::Time loop_start = absl::Now();
 
-  while (total_generated_frames < config_.max_frames) {
+  while (total_generated_frames < stop_criteria.FrameLimit()) {
     const absl::Time decode_start = absl::Now();
     auto decode_res = talker_runner_->Decode(next_inputs);
     if (!decode_res.ok()) {
@@ -605,6 +607,12 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
       PushOutput(std::move(out));
       chunk_frames.clear();
       chunk_codec_features.clear();
+    }
+
+    if (stop_criteria.ShouldStop(step, cb0)) {
+      ABSL_VLOG(1) << "Qwen3-TTS stopped without EOS after "
+                   << total_generated_frames << " frames.";
+      break;
     }
 
     LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
