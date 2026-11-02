@@ -113,7 +113,7 @@ lists the others, which you can load by giving their path:
 // The repo's web model file.
 model: 'hf://litert-community/gemma-4-E4B-it-litert-lm'
 
-// A specific file at a specific revision (branch, tag or commit).
+// A specific file at a specific revision (branch, tag, or commit).
 model: 'hf://litert-community/gemma-4-E4B-it-litert-lm@main/gemma-4-E4B-it-gpu.litertlm'
 ```
 
