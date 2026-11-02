@@ -110,7 +110,9 @@ class LlmExecutorBase {
   // Verifies `draft_token_ids`, draft tokens that follow the pending token:
   // runs them through the model in parallel, accepts their longest prefix that
   // `Decode(decode_params)` steps would have produced, and decodes the token
-  // after it, as these steps would have. Fails if
+  // after it, as these steps would have. With a speculative lenience c > 0 in
+  // `decode_params`, a draft token that disagrees with them is still accepted
+  // with probability c (see `SpeculativeDecodingConfig::lenience`). Fails if
   // `CheckDraftVerificationSupport()` fails.
   virtual absl::StatusOr<DraftVerificationResult> VerifyDraft(
       absl::Span<const int> draft_token_ids,

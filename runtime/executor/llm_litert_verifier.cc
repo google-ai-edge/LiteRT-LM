@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -377,6 +378,43 @@ absl::StatusOr<int> CheckVerifySignature(
   return width;
 }
 
+absl::StatusOr<bool> MaskAllowsToken(const LogitMask* mask, int token,
+                                     int vocab_size) {
+  constexpr float kDisallowed = -std::numeric_limits<float>::infinity();
+  if (token < 0 || token >= vocab_size) {
+    return false;
+  }
+  if (mask == nullptr) {
+    return true;
+  }
+  switch (mask->GetType()) {
+    case MaskType::kBitmap:
+      return static_cast<const BitmapLogitMask*>(mask)->IsAllowed(token);
+    case MaskType::kSparse:
+      // A sparse mask only disallows a token with a bias of -inf.
+      return absl::c_none_of(
+          static_cast<const SparseLogitMask*>(mask)->entries(),
+          [&](const SparseLogitMask::Entry& entry) {
+            return entry.token_id == token && entry.bias == kDisallowed;
+          });
+    case MaskType::kComposite:
+      for (const std::unique_ptr<LogitMask>& part :
+           static_cast<const CompositeLogitMask*>(mask)->masks()) {
+        ABSL_ASSIGN_OR_RETURN(const bool allowed,
+                              MaskAllowsToken(part.get(), token, vocab_size));
+        if (!allowed) {
+          return false;
+        }
+      }
+      return true;
+    case MaskType::kCustom:
+      break;
+  }
+  std::vector<float> logits(vocab_size, 0.0f);
+  ABSL_RETURN_IF_ERROR(mask->Apply(absl::MakeSpan(logits)));
+  return logits[token] != kDisallowed;
+}
+
 }  // namespace
 
 absl::StatusOr<std::vector<VerifySignatureInfo>> FindVerifySignatures(
@@ -456,8 +494,12 @@ absl::Status DraftConstraintStates::Append(int token) {
 
 absl::StatusOr<absl::Span<const std::unique_ptr<LogitMask>>>
 DraftConstraintStates::PassMasks(int width) {
-  RET_CHECK_LT(num_tokens(), width);
-  ABSL_RETURN_IF_ERROR(NextMask().status());
+  RET_CHECK_LE(num_tokens(), width);
+  if (num_tokens() < width) {
+    // Each appended draft token computed the mask of its row. The row after
+    // them, if the pass has one, still needs its mask.
+    ABSL_RETURN_IF_ERROR(NextMask().status());
+  }
   // The padding rows have no masks.
   masks_.resize(width);
   return absl::MakeConstSpan(masks_);
@@ -575,10 +617,9 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
   // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the argmax runs on the
   // device next to the logits; elsewhere this is CreateSampler().
   ABSL_ASSIGN_OR_RETURN(
-      auto sampler,
-      CreateMtpGreedySampler(backend, /*batch_size=*/1, GreedySamplerParams(),
-                             env, /*sequence_size=*/width, vocab_size,
-                             logits_data_type));
+      auto sampler, CreateMtpGreedySampler(
+                        backend, /*batch_size=*/1, GreedySamplerParams(), env,
+                        /*sequence_size=*/width, vocab_size, logits_data_type));
   LITERT_ASSIGN_OR_RETURN(auto id_tensor,
                           CreateTensorBuffer<int32_t>({1, width}));
   if (signatures.input_tokens.empty()) {
@@ -796,42 +837,75 @@ absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
     const LitertState::StateBuffers& state_buffers,
     DraftConstraintStates* constraint_states, float lenience,
     absl::FunctionRef<double(int)> uniform) {
-  if (lenience > 0.0f && constraint_states != nullptr) {
-    // A leniently accepted draft token isn't checked against its mask.
-    RET_CHECK_EQ(constraint_states->num_tokens(),
-                 static_cast<int>(drafts.size()))
-        << "Lenient verification needs drafts sampled under their masks.";
-  }
-  // The pass takes the pending token and up to W - 1 draft tokens.
+  // 1. Start the pass over the pending token and up to W - 1 draft inputs. Row
+  // i of the pass predicts `drafts[i]`.
   int num_draft_inputs = std::min(width_ - 1, static_cast<int>(drafts.size()));
   std::vector<int> ids = {pending_token};
   ids.insert(ids.end(), drafts.begin(), drafts.begin() + num_draft_inputs);
   ABSL_RETURN_IF_ERROR(Run(position, ids, state_buffers));
 
-  // While the pass runs, the masks of its rows.
+  // 2. While the pass runs, compute the mask of each row from the constraint
+  // state after `drafts[0, i)`. Exact verification only needs the states of
+  // the inputs. Lenience can also accept the draft token after them without
+  // sampling it, as the next pending token, so that token is appended too. A
+  // draft token whose transition fails ends the draft before it.
   absl::Span<const std::unique_ptr<LogitMask>> masks;
+  // The number of draft tokens that the constraint allows.
+  int num_allowed = static_cast<int>(drafts.size());
   if (constraint_states != nullptr) {
-    RET_CHECK_LE(constraint_states->num_tokens(), num_draft_inputs);
-    while (constraint_states->num_tokens() < num_draft_inputs) {
+    const int num_constrained =
+        lenience > 0.0f ? std::min(width_, static_cast<int>(drafts.size()))
+                        : num_draft_inputs;
+    RET_CHECK_LE(constraint_states->num_tokens(), num_constrained);
+    while (constraint_states->num_tokens() < num_constrained) {
       ABSL_RETURN_IF_ERROR(constraint_states->NextMask().status());
       if (!constraint_states->Append(drafts[constraint_states->num_tokens()])
                .ok()) {
-        // The constraint disallows the draft token: the draft ends before it.
-        num_draft_inputs = constraint_states->num_tokens();
-        drafts = drafts.first(num_draft_inputs);
+        num_allowed = constraint_states->num_tokens();
         break;
       }
     }
     ABSL_ASSIGN_OR_RETURN(masks, constraint_states->PassMasks(width_));
   }
+
+  // 3. Sample every row under its mask.
   ABSL_ASSIGN_OR_RETURN(std::vector<int> pass_tokens, MaskAndSample(masks));
+
+  // 4. A sampled token always satisfies its mask, but a leniently accepted
+  // draft token differs from it. Some constraints (e.g. suppressed tokens)
+  // disallow tokens only through their masks, so the draft also ends before
+  // the first mismatching draft token that its row's mask disallows.
+  if (constraint_states != nullptr && lenience > 0.0f) {
+    const int num_checked = std::min(num_allowed, num_draft_inputs + 1);
+    for (int i = 0; i < num_checked; ++i) {
+      if (pass_tokens[i] == drafts[i]) {
+        continue;
+      }
+      ABSL_ASSIGN_OR_RETURN(
+          const bool allowed,
+          MaskAllowsToken(masks[i].get(), drafts[i], vocab_size_));
+      if (!allowed) {
+        num_allowed = i;
+        break;
+      }
+    }
+  }
+
+  // 5. Accept a prefix of the allowed draft tokens. The rows after the end of
+  // the draft followed a disallowed token, so their tokens are dropped.
+  if (num_allowed < static_cast<int>(drafts.size())) {
+    drafts = drafts.first(num_allowed);
+    num_draft_inputs = std::min(num_draft_inputs, num_allowed);
+  }
   pass_tokens.resize(num_draft_inputs + 1);
 
   VerifyPassResult result;
   result.outcome = EvaluateVerifyPass(pass_tokens, drafts, num_draft_inputs,
                                       lenience, uniform);
+  // 6. Return the constraint state after the accepted inputs. A draft token
+  // accepted after the last input is the new pending token, which the caller
+  // feeds to the constraint like a decoded token.
   if (constraint_states != nullptr) {
-    // A draft token accepted after the last input is the new pending token.
     const int num_accepted_inputs =
         std::min(result.outcome.num_accepted, num_draft_inputs);
     ABSL_ASSIGN_OR_RETURN(result.constraint_state,
@@ -939,8 +1013,19 @@ bool LlmLiteRtDraftVerifier::PassFits(int position, int kv_cache_size) const {
 void LlmLiteRtDraftVerifier::SetSamplerConfig(
     const proto::SamplerParameters& sampler_params,
     std::shared_ptr<std::default_random_engine> rand_gen) {
+  // The lenience stream restarts only when the sampler's stream does.
+  lenience_rng_.Update(sampler_params.seed(), rand_gen);
   sampler_params_ = sampler_params;
   rand_gen_ = std::move(rand_gen);
+}
+
+absl::Status LlmLiteRtDraftVerifier::SetLenience(float lenience) {
+  if (!(lenience >= 0.0f && lenience <= 1.0f)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Speculative lenience must be in [0, 1], got ", lenience));
+  }
+  lenience_ = lenience;
+  return absl::OkStatus();
 }
 
 absl::StatusOr<VerifyPassOutcome> LlmLiteRtDraftVerifier::VerifyPass(
@@ -979,11 +1064,14 @@ absl::StatusOr<VerifyPassOutcome> LlmLiteRtDraftVerifier::VerifyPass(
   LITERT_ASSIGN_OR_RETURN(
       auto state_buffers,
       state.GetStateBuffers(base_model_, verifier->signature_key()));
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
   ABSL_ASSIGN_OR_RETURN(
       VerifyPassResult pass,
       verifier->Verify(
           position, pending_token, drafts, state_buffers,
-          constraint_states.has_value() ? &*constraint_states : nullptr));
+          constraint_states.has_value() ? &*constraint_states : nullptr,
+          lenience_,
+          [&](int /*i*/) -> double { return unit(lenience_rng_.engine()); }));
 
   if (pass.outcome.next_token.has_value() && *pass.outcome.next_token < 0) {
     const auto& advanced_settings = executor_settings_.GetAdvancedSettings();

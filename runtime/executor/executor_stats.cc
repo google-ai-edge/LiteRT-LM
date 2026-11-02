@@ -158,6 +158,12 @@ void ExecutorStats::AccumulateDraftVerification(int64_t passes,
   Accumulate(kDraftVerifyTimeLatency, verify_time);
 }
 
+void ExecutorStats::AccumulateDraftVerifyLenientAccepted(
+    int64_t lenient_accepted_tokens) {
+  if (lenient_accepted_tokens <= 0) return;
+  Accumulate(kDraftVerifyLenientAcceptedTokensMetric, lenient_accepted_tokens);
+}
+
 std::ostream& operator<<(std::ostream& os, const ExecutorStats& stats) {
   if (stats.latencies.empty() && stats.metrics.empty() &&
       stats.substats.empty()) {

@@ -422,7 +422,9 @@ class DecodeConfig {
   // decoding these tokens one by one, the runtime runs them through the model
   // in parallel. The response starts with the longest prefix of the draft that
   // decoding would have produced, followed by the next decoded token, and
-  // decoding continues from there.
+  // decoding continues from there. With a speculative lenience c > 0 (see
+  // `SessionConfig::SetSpeculativeDecodingConfig()`), a draft token that
+  // decoding disagrees with is still accepted with probability c.
   void SetDraftTokenIds(std::vector<int> draft_token_ids) {
     draft_token_ids_ = std::move(draft_token_ids);
   }

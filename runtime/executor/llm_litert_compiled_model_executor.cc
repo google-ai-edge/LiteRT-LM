@@ -2383,6 +2383,8 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
   }
   ABSL_ASSIGN_OR_RETURN(const int vocab_size, GetVocabSize());
   ABSL_RETURN_IF_ERROR(ValidateDraftTokenIds(draft_token_ids, vocab_size));
+  ABSL_RETURN_IF_ERROR(draft_verifier_->SetLenience(
+      decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f)));
   // Applies a pending rewind, as a decode would.
   ABSL_RETURN_IF_ERROR(RollBackProcessedTokens());
   const ProcessedTokens::StepAndToken pending =
@@ -2441,6 +2443,7 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
   DraftVerificationResult result;
   int num_passes = 0;
   int num_verified_drafts = draft_token_ids.size();
+  int num_lenient_accepted = 0;
   // The draft tokens that remain.
   absl::Span<const int> drafts = draft_token_ids;
   while (true) {
@@ -2499,6 +2502,7 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
     result.tokens.insert(result.tokens.end(), new_tokens.begin(),
                          new_tokens.end());
     result.num_accepted += outcome.num_accepted;
+    num_lenient_accepted += outcome.num_lenient_accepted;
     drafts.remove_prefix(outcome.num_accepted);
     if (outcome.next_token.has_value() || drafts.empty()) {
       break;
@@ -2508,6 +2512,7 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
   executor_stats_.AccumulateDraftVerification(
       num_passes, num_verified_drafts, result.num_accepted,
       result.tokens.size(), absl::Now() - start_time);
+  executor_stats_.AccumulateDraftVerifyLenientAccepted(num_lenient_accepted);
   return result;
 }
 

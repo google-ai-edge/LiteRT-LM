@@ -233,5 +233,20 @@ TEST(ExecutorStatsTest, AccumulateDraftVerification) {
   EXPECT_EQ(stats.mtp_rounds(), 0);
 }
 
+TEST(ExecutorStatsTest, AccumulateDraftVerifyLenientAccepted) {
+  ExecutorStats stats;
+  stats.AccumulateDraftVerifyLenientAccepted(0);
+  // The metric is only recorded once a draft token has been leniently
+  // accepted.
+  EXPECT_FALSE(
+      stats.GetMetric(kDraftVerifyLenientAcceptedTokensMetric).has_value());
+  stats.AccumulateDraftVerifyLenientAccepted(2);
+  stats.AccumulateDraftVerifyLenientAccepted(0);
+  stats.AccumulateDraftVerifyLenientAccepted(3);
+  EXPECT_EQ(stats.draft_verify_lenient_accepted_tokens(), 5);
+  // MTP rounds count their lenient accepts separately.
+  EXPECT_EQ(stats.mtp_lenient_accepted_tokens(), 0);
+}
+
 }  // namespace
 }  // namespace litert::lm

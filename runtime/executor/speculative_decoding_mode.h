@@ -68,16 +68,17 @@ struct SpeculativeDecodingConfig {
   // How speculative decoding is used. Runtime default: kOff.
   std::optional<SpeculativeDecodingMode> mode;
 
-  // Lenience factor c in [0, 1] of the speculative decoding acceptance test.
+  // Lenience factor c in [0, 1] of the acceptance test of drafted tokens.
   // - std::nullopt or 0 (default): exact; emitted tokens follow the session's
   //   sampling distribution p.
   // - c > 0: a drafted token is also accepted with probability c when the
   //   verifier disagrees with it, so emitted tokens follow
   //   (1 - c) * p + c * delta(draft). This trades output quality for speed;
-  //   c = 1 accepts every drafted token.
-  // Only applies to speculative decode steps; the adaptive gating policy never
-  // changes it. The NPU executor does not support lenience: it logs a warning
-  // and stays exact.
+  //   c = 1 accepts every drafted token that the constraints allow.
+  // Applies to speculative decode steps and to the verification of a caller's
+  // draft (`DecodeConfig::SetDraftTokenIds()`); the adaptive gating policy
+  // never changes it. The NPU executor does not support lenience: it logs a
+  // warning and stays exact.
   std::optional<float> lenience;
 
   bool operator==(const SpeculativeDecodingConfig&) const = default;

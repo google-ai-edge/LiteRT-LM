@@ -14,7 +14,9 @@
 
 #include "runtime/executor/llm_litert_verifier.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -26,6 +28,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
@@ -40,10 +43,12 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/constrained_decoding/composite_constraint.h"
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
+#include "runtime/components/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -52,6 +57,7 @@
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -59,6 +65,7 @@ namespace {
 using ::absl_testing::IsOk;
 using ::absl_testing::IsOkAndHolds;
 using ::testing::AllOf;
+using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::Eq;
@@ -176,6 +183,57 @@ class StrictFakeConstraint : public FakeConstraint {
  private:
   std::vector<int> token_ids_;
   mutable int num_masks_ = 0;
+};
+
+// A custom mask that disallows one token.
+class DisallowTokenMask : public LogitMask {
+ public:
+  explicit DisallowTokenMask(int token) : token_(token) {}
+
+  absl::Status Apply(absl::Span<float> logits) const override {
+    logits[token_] = -std::numeric_limits<float>::infinity();
+    return absl::OkStatus();
+  }
+
+  absl::Status Apply(absl::Span<tflite::half> logits) const override {
+    logits[token_] = tflite::half::min();
+    return absl::OkStatus();
+  }
+
+ private:
+  const int token_;
+};
+
+// Disallows token 0 only through its masks, which are sparse masks with a -inf
+// bias or custom masks.
+class MaskOnlyConstraint : public Constraint {
+ public:
+  explicit MaskOnlyConstraint(MaskType mask_type) : mask_type_(mask_type) {}
+
+  std::unique_ptr<State> Start() const override {
+    return std::make_unique<State>();
+  }
+
+  bool IsEnded(const State& state) const override { return false; }
+
+  int GetVocabularySize() const override { return kFakeLmVocabSize; }
+
+  absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
+                                                     int token) const override {
+    return std::make_unique<State>();
+  }
+
+  absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const State& state) const override {
+    if (mask_type_ == MaskType::kSparse) {
+      return SparseLogitMask::CreateBiases(
+          {{0, -std::numeric_limits<float>::infinity()}});
+    }
+    return std::make_unique<DisallowTokenMask>(0);
+  }
+
+ private:
+  const MaskType mask_type_;
 };
 
 // Returns the number of forced tokens that `state` of a FakeConstraint
@@ -580,19 +638,93 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyUsesTheMasksOfAppendedDraftTokens) {
   EXPECT_EQ(NumForcedTokens(*result.constraint_state), 3);
 }
 
-TEST_P(LlmLiteRtVerifierFakeLmTest, LenienceNeedsDraftTokensSampledUnderMasks) {
+TEST_P(LlmLiteRtVerifierFakeLmTest,
+       LenienceAcceptsNoDraftTokenThatTheConstraintDisallows) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
-  StrictFakeConstraint constraint({10, 11, 12, 13});
+  // A permissive constraint disallows tokens only through its masks, a strict
+  // one also through failed transitions.
+  FakeConstraint permissive_constraint({10, 11, 12, 13}, kFakeLmVocabSize);
+  StrictFakeConstraint strict_constraint({10, 11, 12, 13});
+  for (const Constraint* constraint :
+       {static_cast<const Constraint*>(&permissive_constraint),
+        static_cast<const Constraint*>(&strict_constraint)}) {
+    SCOPED_TRACE(::testing::Message()
+                 << "Strict: " << (constraint == &strict_constraint));
+    const std::unique_ptr<Constraint::State> start = constraint->Start();
+    DraftConstraintStates constraint_states(*constraint, *start);
+    ASSERT_OK_AND_ASSIGN(auto state_buffers,
+                         state_->GetStateBuffers(*model_, "verify"));
+    // Full lenience would accept the disallowed draft token 0.
+    ASSERT_OK_AND_ASSIGN(
+        VerifyPassResult result,
+        verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 0, 12},
+                         state_buffers, &constraint_states, /*lenience=*/1.0f,
+                         [](int) { return 0.5; }));
+    EXPECT_THAT(result.outcome, FieldsAre(1, Optional(11), 0));
+    ASSERT_NE(result.constraint_state, nullptr);
+    EXPECT_EQ(NumForcedTokens(*result.constraint_state), 1);
+  }
+}
+
+TEST_P(LlmLiteRtVerifierFakeLmTest,
+       LenienceChecksTheDraftTokenAfterTheInputsWithTheConstraint) {
+  ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
+  StrictFakeConstraint constraint({10, 11, 12, 13, 14});
   const std::unique_ptr<Constraint::State> start = constraint.Start();
   DraftConstraintStates constraint_states(constraint, *start);
   ASSERT_OK_AND_ASSIGN(auto state_buffers,
                        state_->GetStateBuffers(*model_, "verify"));
-  // The draft tokens weren't appended, i.e. sampled under their masks, so
-  // lenience could accept disallowed ones.
-  EXPECT_THAT(verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 11},
-                               state_buffers, &constraint_states,
-                               /*lenience=*/1.0f, [](int) { return 0.5; }),
-              StatusIs(absl::StatusCode::kInternal));
+  // The pass takes 3 draft tokens. Lenience would accept the disallowed fourth
+  // as the pending token of the next pass.
+  ASSERT_OK_AND_ASSIGN(
+      VerifyPassResult result,
+      verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 11, 12, 0, 14},
+                       state_buffers, &constraint_states, /*lenience=*/1.0f,
+                       [](int) { return 0.5; }));
+  EXPECT_THAT(result.outcome, FieldsAre(3, Optional(13), 0));
+  ASSERT_NE(result.constraint_state, nullptr);
+  EXPECT_EQ(NumForcedTokens(*result.constraint_state), 3);
+}
+
+TEST_P(LlmLiteRtVerifierFakeLmTest,
+       LenienceAcceptsTheDraftTokensThatTheConstraintAllows) {
+  ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
+  // Constraints that disallow token 0 only through their masks: like the
+  // constraint of a session that suppresses it (a composite mask of bitmaps),
+  // and with sparse and custom masks.
+  std::vector<std::unique_ptr<Constraint>> constraints;
+  constraints.push_back(std::make_unique<SuppressTokensConstraint>(
+      kFakeLmVocabSize, absl::flat_hash_set<int>{0}));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<CompositeConstraint> suppress_tokens,
+                       CompositeConstraint::Create(std::move(constraints)));
+  const MaskOnlyConstraint sparse(MaskType::kSparse);
+  const MaskOnlyConstraint custom(MaskType::kCustom);
+  struct Case {
+    absl::string_view name;
+    const Constraint* constraint;
+  };
+  for (const Case& test_case :
+       {Case{"suppressed tokens", suppress_tokens.get()},
+        Case{"sparse", &sparse}, Case{"custom", &custom}}) {
+    SCOPED_TRACE(test_case.name);
+    const std::unique_ptr<Constraint::State> start =
+        test_case.constraint->Start();
+    DraftConstraintStates constraint_states(*test_case.constraint, *start);
+    ASSERT_OK_AND_ASSIGN(auto state_buffers,
+                         state_->GetStateBuffers(*model_, "verify"));
+    // The fake LM predicts 3 after the pending token 3, and 9 after 3, 5.
+    int num_uniforms = 0;
+    EXPECT_THAT(verifier->Verify(/*position=*/0, /*pending_token=*/3, {5, 0, 7},
+                                 state_buffers, &constraint_states,
+                                 /*lenience=*/1.0f,
+                                 [&](int) {
+                                   ++num_uniforms;
+                                   return 0.5;
+                                 }),
+                IsOkAndHolds(Field(&VerifyPassResult::outcome,
+                                   FieldsAre(1, Optional(9), 1))));
+    EXPECT_EQ(num_uniforms, 1);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(FakeLms, LlmLiteRtVerifierFakeLmTest,
@@ -924,6 +1056,69 @@ TEST_F(LlmLiteRtDraftVerifierTest,
   EXPECT_EQ(NumForcedTokens(*new_state), 0);
 }
 
+TEST_F(LlmLiteRtDraftVerifierTest, PassesAcceptDraftTokensWithTheLenience) {
+  ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
+  ASSERT_OK(draft_verifier_->SetLenience(1.0f));
+  // The fake LM predicts 3 after the pending token 3, and 9 after 3, 5.
+  EXPECT_THAT(
+      draft_verifier_->VerifyPass(
+          /*position=*/0, /*pending_token=*/3, {5, 0}, *state_,
+          /*constrained_decoder=*/nullptr,
+          /*feed_pending_token=*/false),
+      IsOkAndHolds(FieldsAre(2, Optional(FakeLmNextToken({3, 5, 0})), 2)));
+  // Exact again.
+  ASSERT_OK(draft_verifier_->SetLenience(0.0f));
+  EXPECT_THAT(
+      draft_verifier_->VerifyPass(
+          /*position=*/3, /*pending_token=*/10, {5, 0}, *state_,
+          /*constrained_decoder=*/nullptr,
+          /*feed_pending_token=*/false),
+      IsOkAndHolds(FieldsAre(0, Optional(FakeLmNextToken({3, 5, 0, 10})), 0)));
+}
+
+TEST_F(LlmLiteRtDraftVerifierTest,
+       LenientPassesDrawFromAStreamThatRestartsWithTheGenerator) {
+  ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
+  ASSERT_OK(draft_verifier_->SetLenience(0.5f));
+  // Returns whether each of 32 passes leniently accepts the draft token 0,
+  // which the fake LM doesn't predict after the pending token 3.
+  auto lenient_accepts =
+      [&](std::shared_ptr<std::default_random_engine> rand_gen)
+      -> absl::StatusOr<std::vector<int>> {
+    draft_verifier_->SetSamplerConfig(GreedySamplerParams(),
+                                      std::move(rand_gen));
+    std::vector<int> accepts;
+    for (int i = 0; i < 32; ++i) {
+      ABSL_ASSIGN_OR_RETURN(VerifyPassOutcome outcome,
+                            draft_verifier_->VerifyPass(
+                                /*position=*/0, /*pending_token=*/3, {0},
+                                *state_, /*constrained_decoder=*/nullptr,
+                                /*feed_pending_token=*/false));
+      accepts.push_back(outcome.num_lenient_accepted);
+    }
+    return accepts;
+  };
+  auto rand_gen = std::make_shared<std::default_random_engine>(0);
+  ASSERT_OK_AND_ASSIGN(const std::vector<int> first, lenient_accepts(rand_gen));
+  EXPECT_THAT(first, AllOf(Contains(0), Contains(1)));
+  // The same generator continues the stream.
+  EXPECT_THAT(lenient_accepts(rand_gen), IsOkAndHolds(Ne(first)));
+  // A new generator with the same seed (e.g. a new session's) restarts it.
+  EXPECT_THAT(lenient_accepts(std::make_shared<std::default_random_engine>(0)),
+              IsOkAndHolds(first));
+}
+
+TEST_F(LlmLiteRtDraftVerifierTest, LenienceMustBeBetweenZeroAndOne) {
+  ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
+  EXPECT_OK(draft_verifier_->SetLenience(0.0f));
+  EXPECT_OK(draft_verifier_->SetLenience(1.0f));
+  for (float lenience :
+       {-0.1f, 1.1f, std::numeric_limits<float>::quiet_NaN()}) {
+    EXPECT_THAT(draft_verifier_->SetLenience(lenience),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+}
+
 TEST(DraftConstraintStatesTest, MasksFollowTheDraftTokens) {
   StrictFakeConstraint constraint({5, 6, 7, 8});
   const std::unique_ptr<Constraint::State> start = constraint.Start();
@@ -959,13 +1154,19 @@ TEST(DraftConstraintStatesTest, AppendFailsForADisallowedToken) {
   EXPECT_EQ(states.num_tokens(), 2);
 }
 
-TEST(DraftConstraintStatesTest, PassMasksNeedARowForTheNextToken) {
+TEST(DraftConstraintStatesTest, PassMasksNeedARowForEveryAppendedToken) {
   StrictFakeConstraint constraint({5, 6, 7});
   const std::unique_ptr<Constraint::State> start = constraint.Start();
   DraftConstraintStates states(constraint, *start);
   ASSERT_OK(states.Append(5));
   ASSERT_OK(states.Append(6));
-  EXPECT_THAT(states.PassMasks(/*width=*/2),
+  // A pass with a row for each appended token doesn't need the next mask.
+  ASSERT_OK_AND_ASSIGN(auto masks, states.PassMasks(/*width=*/2));
+  ASSERT_EQ(masks.size(), 2);
+  EXPECT_TRUE(AllowsOnly(masks[0].get(), 5));
+  EXPECT_TRUE(AllowsOnly(masks[1].get(), 6));
+  EXPECT_EQ(constraint.num_masks(), 2);
+  EXPECT_THAT(states.PassMasks(/*width=*/1),
               StatusIs(absl::StatusCode::kInternal));
 }
 
@@ -1026,6 +1227,47 @@ TEST(SeededRandomEngineTest, ReseedsWhenSeedChanges) {
   const auto seven_again = engine.Get(7);
   std::default_random_engine reference_seven(7);
   EXPECT_EQ((*seven_again)(), reference_seven());
+}
+
+TEST(LenienceRandomEngineTest, RestartsWithVerifierStream) {
+  auto first_gen = std::make_shared<std::default_random_engine>(7);
+  LenienceRandomEngine lenience;
+  lenience.Update(/*seed=*/7, first_gen);
+  const uint64_t first_draw = lenience.engine()();
+  const uint64_t second_draw = lenience.engine()();
+
+  // The same seed and generator continue the stream.
+  lenience.Update(/*seed=*/7, first_gen);
+  const uint64_t third_draw = lenience.engine()();
+  EXPECT_NE(third_draw, first_draw);
+
+  // A new generator with the same seed (e.g. a new session) restarts it.
+  auto second_gen = std::make_shared<std::default_random_engine>(7);
+  lenience.Update(/*seed=*/7, second_gen);
+  EXPECT_EQ(lenience.engine()(), first_draw);
+  EXPECT_EQ(lenience.engine()(), second_draw);
+
+  // So does a seed change, and going back to the old seed.
+  lenience.Update(/*seed=*/8, second_gen);
+  EXPECT_NE(lenience.engine()(), first_draw);
+  lenience.Update(/*seed=*/7, second_gen);
+  EXPECT_EQ(lenience.engine()(), first_draw);
+}
+
+TEST(LenienceRandomEngineTest, DefaultsToSeedZero) {
+  LenienceRandomEngine never_updated;
+  LenienceRandomEngine seed_zero;
+  seed_zero.Update(/*seed=*/0, std::make_shared<std::default_random_engine>(0));
+  EXPECT_EQ(never_updated.engine()(), seed_zero.engine()());
+}
+
+TEST(LenienceRandomEngineTest, SaltsGiveDifferentStreams) {
+  auto gen = std::make_shared<std::default_random_engine>(7);
+  LenienceRandomEngine default_salt;
+  LenienceRandomEngine other_salt(/*salt=*/1);
+  default_salt.Update(/*seed=*/7, gen);
+  other_salt.Update(/*seed=*/7, gen);
+  EXPECT_NE(default_salt.engine()(), other_salt.engine()());
 }
 
 constexpr int kLargeKvCache = 1000;

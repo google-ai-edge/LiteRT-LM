@@ -377,38 +377,6 @@ TEST(LlmLiteRtMtpDrafterTest, GreedyVerificationDoesNotFollowTarget) {
   EXPECT_GT(ChiSquared(counts, expected, kTrials), 18.47);
 }
 
-TEST(LlmLiteRtMtpDrafterTest, LenienceRandomEngineRestartsWithVerifierStream) {
-  auto first_gen = std::make_shared<std::default_random_engine>(7);
-  LenienceRandomEngine lenience;
-  lenience.Update(/*seed=*/7, first_gen);
-  const uint64_t first_draw = lenience.engine()();
-  const uint64_t second_draw = lenience.engine()();
-
-  // The same seed and generator continue the stream.
-  lenience.Update(/*seed=*/7, first_gen);
-  const uint64_t third_draw = lenience.engine()();
-  EXPECT_NE(third_draw, first_draw);
-
-  // A new generator with the same seed (e.g. a new session) restarts it.
-  auto second_gen = std::make_shared<std::default_random_engine>(7);
-  lenience.Update(/*seed=*/7, second_gen);
-  EXPECT_EQ(lenience.engine()(), first_draw);
-  EXPECT_EQ(lenience.engine()(), second_draw);
-
-  // So does a seed change, and going back to the old seed.
-  lenience.Update(/*seed=*/8, second_gen);
-  EXPECT_NE(lenience.engine()(), first_draw);
-  lenience.Update(/*seed=*/7, second_gen);
-  EXPECT_EQ(lenience.engine()(), first_draw);
-}
-
-TEST(LlmLiteRtMtpDrafterTest, LenienceRandomEngineDefaultsToSeedZero) {
-  LenienceRandomEngine never_updated;
-  LenienceRandomEngine seed_zero;
-  seed_zero.Update(/*seed=*/0, std::make_shared<std::default_random_engine>(0));
-  EXPECT_EQ(never_updated.engine()(), seed_zero.engine()());
-}
-
 TEST(LlmLiteRtMtpDrafterTest, LenientAcceptanceSamplesFromMixture) {
   // The first emitted token must follow r = (1 - c) * p + c * delta(draft).
   constexpr int64_t kTrials = 200000;

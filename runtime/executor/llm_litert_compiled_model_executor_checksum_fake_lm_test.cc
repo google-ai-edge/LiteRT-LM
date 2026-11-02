@@ -21,7 +21,9 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -519,6 +521,52 @@ TEST_P(FakeLmDraftVerificationTest, RejectsInvalidDrafts) {
   DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
 }
 
+TEST_P(FakeLmDraftVerificationTest, AcceptsMismatchesWithTheLenience) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  std::vector<int> draft = FakeLmContinuation(12);
+  draft[1] = (draft[1] + 1) % kFakeLmVocabSize;
+  draft[6] = (draft[6] + 1) % kFakeLmVocabSize;
+  // The draft tokens that decoding wouldn't produce after the ones before.
+  int num_mismatches = 0;
+  std::vector<int> context = context_;
+  for (int token : draft) {
+    num_mismatches += token != FakeLmNextToken(context);
+    context.push_back(token);
+  }
+  ExecutorDecodeParams params;
+  params.SetSpeculativeDecodingConfig({.lenience = 1.0f});
+
+  // Full lenience accepts every draft token.
+  ASSERT_OK_AND_ASSIGN(DraftVerificationResult result,
+                       VerifyDraft(draft, params));
+  EXPECT_EQ(result.num_accepted, static_cast<int>(draft.size()));
+  // The token after the draft, unless the draft ends at a pass boundary.
+  ASSERT_THAT(result.tokens.size(),
+              AnyOf(Eq(draft.size()), Eq(draft.size() + 1)));
+  EXPECT_THAT(absl::MakeConstSpan(result.tokens).first(draft.size()),
+              ElementsAreArray(draft));
+  std::optional<ExecutorStats> stats = executor_->GetExecutorStats();
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->draft_verify_accepted_tokens(),
+            static_cast<int64_t>(draft.size()));
+  EXPECT_EQ(stats->draft_verify_lenient_accepted_tokens(), num_mismatches);
+  // Decoding continues after the accepted draft tokens.
+  DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
+}
+
+TEST_P(FakeLmDraftVerificationTest, RejectsALenienceOutsideZeroToOne) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  for (float lenience :
+       {-0.5f, 1.5f, std::numeric_limits<float>::quiet_NaN()}) {
+    SCOPED_TRACE(::testing::Message() << "Lenience: " << lenience);
+    ExecutorDecodeParams params;
+    params.SetSpeculativeDecodingConfig({.lenience = lenience});
+    EXPECT_THAT(executor_->VerifyDraft(FakeLmContinuation(3), params),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+  DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
+}
+
 TEST_P(FakeLmDraftVerificationTest, StopsWhenCancelled) {
   ASSERT_OK(Prefill({3, 1, 4}));
   std::atomic<bool> cancelled = true;
@@ -642,37 +690,42 @@ TEST_P(FakeLmDraftVerificationTest, AccumulatesTheCompletedVerifications) {
 TEST_P(FakeLmDraftVerificationTest,
        ConstraintCutsTheDraftAtTheFirstDisallowedToken) {
   // A permissive constraint rejects a disallowed draft token through the mask
-  // of its row, a strict one also through the failed transition.
+  // of its row, a strict one also through the failed transition. Lenience
+  // doesn't accept it either.
   FakeConstraint permissive_constraint(ForcedTokens(), kFakeLmVocabSize);
   StrictFakeConstraint strict_constraint(ForcedTokens(), kFakeLmVocabSize);
   for (Constraint* constraint :
        {static_cast<Constraint*>(&permissive_constraint),
         static_cast<Constraint*>(&strict_constraint)}) {
-    // Cuts in the first pass, in a later pass of the narrowest signature, and
-    // at the token after the last draft input of a pass.
-    for (int cut : {0, 2, 3, 5}) {
-      SCOPED_TRACE(::testing::Message()
-                   << "Strict: " << (constraint == &strict_constraint)
-                   << ", cut: " << cut);
-      // A new executor, since a rewind wouldn't reset whether the pending
-      // token comes from a decode.
-      ASSERT_NO_FATAL_FAILURE(CreateExecutor(/*selected_signatures=*/{}));
-      ASSERT_OK(Prefill({3, 1, 4}));
-      ASSERT_OK_AND_ASSIGN(auto decoder,
-                           ConstrainedDecoder::CreateForHost(constraint));
-      ExecutorDecodeParams params;
-      params.SetConstrainedDecoder(decoder.get());
-      std::vector<int> draft(kForcedTokens.begin(), kForcedTokens.begin() + 8);
-      draft[cut] = 0;
-      EXPECT_THAT(VerifyDraft(draft, params),
-                  IsOkAndHolds(FieldsAre(
-                      ElementsAreArray(kForcedTokens.begin(),
-                                       kForcedTokens.begin() + cut + 1),
-                      cut)));
-      // Decoding with the same decoder continues the forced tokens.
-      ASSERT_OK_AND_ASSIGN(auto output_tokens, executor_->Decode(params));
-      EXPECT_THAT(output_tokens,
-                  ElementsAre(ElementsAre(kForcedTokens[cut + 1])));
+    for (float lenience : {0.0f, 1.0f}) {
+      // Cuts in the first pass, in a later pass of the narrowest signature,
+      // and at the token after the last draft input of a pass.
+      for (int cut : {0, 2, 3, 5}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "Strict: " << (constraint == &strict_constraint)
+                     << ", lenience: " << lenience << ", cut: " << cut);
+        // A new executor, since a rewind wouldn't reset whether the pending
+        // token comes from a decode.
+        ASSERT_NO_FATAL_FAILURE(CreateExecutor(/*selected_signatures=*/{}));
+        ASSERT_OK(Prefill({3, 1, 4}));
+        ASSERT_OK_AND_ASSIGN(auto decoder,
+                             ConstrainedDecoder::CreateForHost(constraint));
+        ExecutorDecodeParams params;
+        params.SetConstrainedDecoder(decoder.get());
+        params.SetSpeculativeDecodingConfig({.lenience = lenience});
+        std::vector<int> draft(kForcedTokens.begin(),
+                               kForcedTokens.begin() + 8);
+        draft[cut] = 0;
+        EXPECT_THAT(VerifyDraft(draft, params),
+                    IsOkAndHolds(FieldsAre(
+                        ElementsAreArray(kForcedTokens.begin(),
+                                         kForcedTokens.begin() + cut + 1),
+                        cut)));
+        // Decoding with the same decoder continues the forced tokens.
+        ASSERT_OK_AND_ASSIGN(auto output_tokens, executor_->Decode(params));
+        EXPECT_THAT(output_tokens,
+                    ElementsAre(ElementsAre(kForcedTokens[cut + 1])));
+      }
     }
   }
 }

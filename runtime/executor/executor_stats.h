@@ -77,6 +77,10 @@ inline constexpr absl::string_view kDraftVerifyAcceptedTokensMetric =
     "draft_verify_accepted_tokens";
 inline constexpr absl::string_view kDraftVerifyEmittedTokensMetric =
     "draft_verify_emitted_tokens";
+// Number of draft tokens accepted only because of a nonzero speculative
+// lenience (included in `kDraftVerifyAcceptedTokensMetric`).
+inline constexpr absl::string_view kDraftVerifyLenientAcceptedTokensMetric =
+    "draft_verify_lenient_accepted_tokens";
 inline constexpr absl::string_view kDraftVerifyTimeLatency =
     "draft_verify_time";
 
@@ -138,6 +142,11 @@ struct ExecutorStats {
                                    int64_t accepted_tokens,
                                    int64_t emitted_tokens,
                                    absl::Duration verify_time);
+  // Accumulates the draft tokens of a completed draft verification that were
+  // accepted only because of lenience. No-op if `lenient_accepted_tokens <=
+  // 0`, so the metric is only present once a draft token was leniently
+  // accepted.
+  void AccumulateDraftVerifyLenientAccepted(int64_t lenient_accepted_tokens);
 
   int64_t mtp_rounds() const { return GetMetricAsInt64(kMtpRoundsMetric); }
   int64_t mtp_num_draft_tokens() const {
@@ -186,6 +195,9 @@ struct ExecutorStats {
   }
   int64_t draft_verify_emitted_tokens() const {
     return GetMetricAsInt64(kDraftVerifyEmittedTokensMetric);
+  }
+  int64_t draft_verify_lenient_accepted_tokens() const {
+    return GetMetricAsInt64(kDraftVerifyLenientAcceptedTokensMetric);
   }
   absl::Duration draft_verify_time() const {
     return GetLatencyOrZero(kDraftVerifyTimeLatency);

@@ -734,6 +734,26 @@ TEST(BenchmarkInfoTest, DraftVerificationBlockPrintedWhenDraftsWereVerified) {
                         "verification)\n"));
   EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Speculative Decoding")));
   EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("draft_verify")));
+  EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Lenient accepts")));
+}
+
+TEST(BenchmarkInfoTest, DraftVerificationBlockPrintsLenientAccepted) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ExecutorStats stats;
+  stats.module_name = std::string(kLlmModuleName);
+  stats.AccumulateDraftVerification(/*passes=*/1, /*draft_tokens=*/4,
+                                    /*accepted_tokens=*/4,
+                                    /*emitted_tokens=*/4,
+                                    /*verify_time=*/absl::Milliseconds(12));
+  stats.AccumulateDraftVerifyLenientAccepted(1);
+  benchmark_info.SetExecutorStats(stats);
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(),
+              HasSubstr("    Time per pass:     12.00 ms (12.00 ms per "
+                        "verification)\n"
+                        "    Lenient accepts:   1 (25.0% of accepted)\n"));
 }
 
 TEST(BenchmarkInfoTest, DraftVerificationBlockOmittedWithoutVerifications) {

@@ -585,6 +585,16 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
                        absl::StrFormat("%.2f ms (%.2f ms per verification)",
                                        passes > 0 ? verify_ms / passes : 0.0,
                                        verify_ms / verifications));
+      if (stats.GetMetric(kDraftVerifyLenientAcceptedTokensMetric)
+              .has_value()) {
+        const int64_t lenient = stats.draft_verify_lenient_accepted_tokens();
+        PrintSummaryLine(
+            os, "Lenient accepts",
+            absl::StrFormat(
+                "%d (%.1f%% of accepted)", lenient,
+                accepted > 0 ? 100.0 * static_cast<double>(lenient) / accepted
+                             : 0.0));
+      }
     }
   }
   os << "--------------------------------------------------" << std::endl;

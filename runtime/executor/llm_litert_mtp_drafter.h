@@ -47,40 +47,6 @@
 
 namespace litert::lm {
 
-// Owns the random number generator of the lenient acceptance test. It is a
-// different engine than the verifier's, seeded with a salted seed, so that
-// lenience doesn't perturb the sampled tokens. It restarts together with the
-// verifier's stream, i.e. when the seed changes or the verifier is handed a
-// different generator (e.g. a new session's), so that lenient runs with the
-// same seed are reproducible. Repeated updates with the same seed and generator
-// continue its stream.
-class LenienceRandomEngine {
- public:
-  void Update(int32_t seed,
-              const std::shared_ptr<std::default_random_engine>& verifier_gen) {
-    if (seed != seed_ || verifier_gen != verifier_gen_.lock()) {
-      engine_.seed(SaltedSeed(seed));
-      seed_ = seed;
-      verifier_gen_ = verifier_gen;
-    }
-  }
-
-  std::mt19937_64& engine() { return engine_; }
-
- private:
-  static uint64_t SaltedSeed(int32_t seed) {
-    constexpr uint64_t kLenienceSeedSalt = 0x4c454e49;  // "LENI"
-    return static_cast<uint64_t>(static_cast<uint32_t>(seed)) ^
-           kLenienceSeedSalt;
-  }
-
-  std::mt19937_64 engine_{SaltedSeed(0)};
-  int32_t seed_ = 0;
-  // Not owned: only used to detect a new verifier generator. An expired
-  // pointer never compares equal to a live one.
-  std::weak_ptr<std::default_random_engine> verifier_gen_;
-};
-
 // Statistics of the last successful `LlmLiteRtMtpDrafter::Draft()` call.
 struct MtpRoundStats {
   // Number of draft steps (γ).
