@@ -42,6 +42,8 @@ constexpr absl::string_view kTestAudioModelPath =
     "litert_lm/runtime/testdata/dummy_audio_only.litertlm";
 constexpr absl::string_view kTestAudioModelNoMaskPath =
     "litert_lm/runtime/testdata/dummy_audio_no_mask.litertlm";
+constexpr absl::string_view kTestAudioStreamingModelPath =
+    "litert_lm/runtime/testdata/dummy_audio_streaming.litertlm";
 
 class FakeModelResources : public ModelResources {
  public:
@@ -185,6 +187,35 @@ TEST(AudioExecutorUtilsTest, GetPropertiesWithoutMask) {
   EXPECT_TRUE(properties.is_streaming_model);
   EXPECT_EQ(properties.audio_shrink_factor, 2);
   EXPECT_EQ(properties.streaming_chunk_size, 10);
+}
+
+TEST(AudioExecutorUtilsTest, GetPropertiesFusedStreamingEncoderWithoutAdapter) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestAudioStreamingModelPath))
+                                     .string();
+
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  auto model_file_ptr = std::make_shared<ScopedFile>(std::move(model_file));
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_file_ptr));
+
+  ASSERT_OK_AND_ASSIGN(auto resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+  ASSERT_NE(resources, nullptr);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto encoder_model,
+      resources->GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
+
+  FakeModelResources fake_resources(encoder_model, /*adapter=*/nullptr);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto properties,
+      GetAudioExecutorPropertiesFromModelResources(fake_resources));
+
+  EXPECT_TRUE(properties.is_streaming_model);
+  EXPECT_EQ(properties.streaming_chunk_size, 10);
+  EXPECT_EQ(properties.streaming_chunk_overlap_size, 3);
+  EXPECT_EQ(properties.audio_shrink_factor, 1);
 }
 
 }  // namespace

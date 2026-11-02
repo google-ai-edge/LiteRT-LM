@@ -69,9 +69,11 @@ GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
   bool has_adapter = audio_adapter_model_or.ok();
   properties.is_streaming_model = IsStreamingEncoder(input_names, has_adapter);
 
-  absl::string_view mask_name = properties.is_streaming_model && has_adapter
-                                    ? kSegmentMaskName
-                                    : kMaskName;
+  absl::string_view mask_name =
+      std::find(input_names.begin(), input_names.end(), kSegmentMaskName) !=
+              input_names.end()
+          ? kSegmentMaskName
+          : kMaskName;
 
   bool has_mask = std::find(input_names.begin(), input_names.end(),
                             mask_name) != input_names.end();
@@ -107,6 +109,7 @@ GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
       LITERT_ASSIGN_OR_RETURN(
           auto features_tensor_type,
           audio_encoder_model->GetOutputTensorType(0, kFeaturesName));
+      RET_CHECK_GE(features_tensor_type.Layout().Dimensions().size(), 2);
       output_sequence_length =
           features_tensor_type.Layout()
               .Dimensions()[features_tensor_type.Layout().Dimensions().size() -
@@ -120,8 +123,13 @@ GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
                             2];
     }
   }
+  RET_CHECK_GT(output_sequence_length, 0);
 
-  if (properties.is_streaming_model && has_adapter) {
+  const bool has_feature_states = std::any_of(
+      input_names.begin(), input_names.end(), [](absl::string_view input_name) {
+        return absl::StrContains(input_name, kFeatureStatesNamePattern);
+      });
+  if (properties.is_streaming_model && has_feature_states) {
     // Get the feature states tensor type and use it to get the overlap size.
     std::string feature_states_name =
         absl::StrCat(kFeatureStatesNamePattern, "_0");
