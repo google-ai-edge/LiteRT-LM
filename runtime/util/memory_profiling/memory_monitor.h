@@ -27,7 +27,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory.h"
 #include "runtime/util/memory_profiling/memory_snapshot.h"
 
 namespace litert::lm {

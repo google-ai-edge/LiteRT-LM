@@ -21,7 +21,7 @@
 #include <string>
 
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory.h"
 #include "runtime/util/memory_profiling/host_memory.h"
 
 namespace litert::lm {

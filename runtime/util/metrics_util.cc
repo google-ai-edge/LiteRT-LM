@@ -66,6 +66,9 @@ absl::StatusOr<proto::LitertLmMetrics> ToProto(const LitertLmMetrics& metrics) {
   for (const auto& [category, mb] : metrics.peak_accelerator_breakdown_mb) {
     peak_accelerator_breakdown_mb[category] = mb;
   }
+  if (metrics.peak_total_private_mb.has_value()) {
+    proto_metrics.set_peak_total_private_mb(*metrics.peak_total_private_mb);
+  }
 
   if (metrics.benchmark_info.has_value()) {
     const auto& info = metrics.benchmark_info.value();

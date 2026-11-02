@@ -224,12 +224,12 @@ cc_library(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
-        "//runtime/util/memory_profiling:accelerator_memory_monitor",
+        "//runtime/util/memory_profiling:accelerator_memory",
+        "//runtime/util/memory_profiling:memory_monitor",
         "//support/tokenizer",
         "@com_googlesource_code_re2//:re2",
         "@stb//:stb_image",
         "@litert//tflite/profiling:memory_info",
-        "@litert//tflite/profiling:memory_usage_monitor",
     ] + select({
         "@platforms//os:linux": [
         ],
@@ -409,10 +409,10 @@ cc_library(
         "//runtime/util:litert_util",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:scoped_file",
-        "//runtime/util/memory_profiling:accelerator_memory_monitor",
+        "//runtime/util/memory_profiling:accelerator_memory",
+        "//runtime/util/memory_profiling:memory_monitor",
         "//support/preprocessor:audio_preprocessor_miniaudio",  # buildcleaner: keep
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
-        "@litert//tflite/profiling:memory_usage_monitor",
     ],
 )
 

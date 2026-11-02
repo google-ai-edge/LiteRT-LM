@@ -40,6 +40,7 @@ TEST(MetricsUtilTest, EmptyMetrics) {
   metrics.peak_accelerator_mb = 512.25f;
   metrics.peak_accelerator_breakdown_mb = {{"local", 500.0f},
                                            {"non-local", 12.25f}};
+  metrics.peak_total_private_mb = 520.0f;
 
   ASSERT_OK_AND_ASSIGN(auto proto, ToProto(metrics));
 
@@ -49,6 +50,7 @@ TEST(MetricsUtilTest, EmptyMetrics) {
   EXPECT_THAT(proto.peak_accelerator_breakdown_mb(),
               UnorderedElementsAre(Pair("local", FloatEq(500.0f)),
                                    Pair("non-local", FloatEq(12.25f))));
+  EXPECT_THAT(proto.peak_total_private_mb(), FloatEq(520.0f));
   EXPECT_FALSE(proto.has_benchmark_params());
   EXPECT_THAT(proto.init_phase_durations_us(), SizeIs(0));
   EXPECT_THAT(proto.mark_durations_us(), SizeIs(0));
@@ -61,6 +63,7 @@ TEST(MetricsUtilTest, UnsupportedAcceleratorMemoryLeavesFieldsEmpty) {
 
   EXPECT_FALSE(proto.has_peak_accelerator_mb());
   EXPECT_THAT(proto.peak_accelerator_breakdown_mb(), SizeIs(0));
+  EXPECT_FALSE(proto.has_peak_total_private_mb());
 }
 
 TEST(MetricsUtilTest, ZeroAcceleratorMemoryIsDistinctFromUnsupported) {

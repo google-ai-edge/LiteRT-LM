@@ -13,27 +13,146 @@
 // limitations under the License.
 
 // Android implementation of the platform contract in
-// accelerator_memory_monitor.h.
+// accelerator_memory.h.
 //
-// What is measured: the dma-buf heap backed buffers the process holds open,
-// read from /proc/self/fdinfo (accelerator_memory_dmabuf.h). In practice these
-// are AHardwareBuffers, which is how LiteRT-LM's GPU and NPU backends allocate
-// accelerator memory on Android. The breakdown is per exporter, i.e. per
-// dma-buf heap ("system", "system-uncached", vendor heaps).
+// Android has no per-process accelerator memory API an app may call: the
+// memtrack HAL behind `dumpsys meminfo` is reserved to the system server, and
+// the GPU drivers' own nodes (/sys/kernel/debug/mali0, /sys/class/kgsl/.../
+// proc/<pid>) are root-only or SELinux-restricted. Everything here is read
+// from the process's own /proc files, which are always readable. Three
+// sources, because the GPU vendors account for their memory in three
+// different ways (measured on a Pixel 9 Pro, a Galaxy S25 Ultra, a Pixel 11
+// Pro and an Exynos Galaxy S24; see the comments at each):
 //
-// What is not seen: memory the GPU driver allocates from its own pool (Mali
-// kbase, Adreno KGSL) does not go through dma-buf and is invisible here, so the
-// result is a lower bound on accelerator memory rather than a complete measure.
+//   1. dma-buf heap buffers (accelerator_memory_dmabuf.h): the
+//      AHardwareBuffers through which LiteRT-LM's NPU backends, and some GPU
+//      backends, allocate. Read from /proc/self/fdinfo. On the S25 Ultra's
+//      Hexagon NPU this is the whole working set (915 MB for Gemma 4 E2B), and
+//      the only source that sees it: memtrack reports 0 for it.
+//
+//   2. The GPU driver's pool, for drivers that map every allocation into the
+//      process (accelerator_memory_android.h, GpuDriverMappings): Qualcomm's
+//      KGSL (listed in /proc/self/maps as "/kgsl-3d0 (deleted)", one shmem
+//      file per allocation) and the DRM render nodes used by PowerVR and
+//      Samsung's Xclipse (/dev/dri/renderD*). The bytes mapped are the
+//      process's GPU memory, within 1% of memtrack where memtrack has a
+//      figure. Neither driver reports memory through DRM fdinfo
+//      (accelerator_memory_linux.cc's source), so the Linux reader does not
+//      apply on Android.
+//
+//   3. The GPU driver's pool, for Arm Mali through kbase (/dev/mali*). kbase
+//      maps its memory by physical frame number, invisible to /proc/self/maps
+//      and smaps, but adds every page to the process's VmRSS counter so that
+//      the low-memory killer sees it. The pool is therefore VmRSS (which has
+//      it) minus smaps_rollup's Rss (which does not): 1241 MB on the Pixel 9
+//      Pro against memtrack's 1254 MB, and 0 on every non-Mali device
+//      measured.
+//
+// From these, the four figures of the contract
+// (AcceleratorMemoryUsageFromAndroidSources):
+//
+//   total_bytes (present) = dma-bufs + mapped pools + Mali pool. None of it
+//                           is swappable and Linux has no commit charge, so
+//   attributed_bytes      = total_bytes.
+//   resident_counted_by_host_bytes
+//                         = the Mali pool (kbase put it in VmRSS, which is how
+//                           it was found) + the dma-buf and mapped-pool pages
+//                           the CPU has touched, which are shmem-backed and so
+//                           counted by RssShmem (174 MB of 1474 MB on the
+//                           S25 Ultra; 0 on the others).
+//   attributed_counted_by_host_bytes = the same.
+//   breakdown             = per dma-buf heap, plus one "gpu driver (<node>)"
+//                           entry per driver in use.
+//
+// Approximations, documented so that they can be revisited:
+//   - A mapped pool is taken to be present in full. KGSL and the DRM drivers
+//     back their allocations when they make them, and memtrack agrees to
+//     within 1%, but memory the driver evicts under pressure would still be
+//     counted.
+//   - RssShmem stands for "GPU or dma-buf pages the CPU touched". A process
+//     that uses shmem for something else (ashmem, binder buffers) inflates it;
+//     it is capped at the dma-buf plus mapped-pool total so the CPU side can
+//     never be reduced by more than the accelerator side claims.
+//   - The Mali pool is the kernel's counter, which includes pages kbase keeps
+//     in its per-context pool after a free; the figure can lag a release.
+//   - smaps_rollup walks the process's page tables (10-30 ms on a phone), so
+//     it and /proc/self/maps are re-read at most every
+//     kAddressSpaceRefreshInterval (below) and the pools are carried over in
+//     between. During model load the GPU figure can therefore be up to that
+//     much behind; at steady state it does not move.
+//
+// What is not seen: GPU memory of a driver that neither maps its allocations
+// into the process nor counts them in VmRSS (none of the four measured), and
+// vendor NPU pools that bypass dma-buf.
 
+#include "runtime/util/memory_profiling/accelerator_memory_android.h"
+
+#include <cstdint>
 #include <optional>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
+#include "runtime/util/memory_profiling/accelerator_memory.h"
 #include "runtime/util/memory_profiling/accelerator_memory_dmabuf.h"
-#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/proc_mappings.h"
 
 namespace litert::lm {
 
+namespace {
+
+// How often the address-space walk (/proc/self/maps and
+// /proc/self/smaps_rollup) is repeated. The knob to turn if GPU memory moves
+// faster than this in a workload of interest, at the cost of the walk's 10-30
+// ms per refresh on the sampling thread; MemoryMonitor samples every 50 ms by
+// default. /proc/self/status and /proc/self/fdinfo are cheap and are read on
+// every call.
+constexpr absl::Duration kAddressSpaceRefreshInterval = absl::Milliseconds(500);
+
+// The address-space walk, cached between refreshes.
+struct AddressSpaceWalk {
+  GpuDriverMappings driver;
+  // The Mali pool, computed at walk time from the VmRSS of the same instant
+  // (see UnmappedRssBytes).
+  uint64_t mali_pool_bytes = 0;
+};
+
+const AddressSpaceWalk& GetAddressSpaceWalk(
+    const ProcResidentCounters& status) {
+  static absl::Mutex* const mutex = new absl::Mutex;
+  static AddressSpaceWalk* const walk ABSL_GUARDED_BY(*mutex) =
+      new AddressSpaceWalk;
+  static absl::Time last_refresh ABSL_GUARDED_BY(*mutex) = absl::InfinitePast();
+
+  absl::MutexLock lock(mutex);
+  const absl::Time now = absl::Now();
+  if (now - last_refresh < kAddressSpaceRefreshInterval) return *walk;
+  last_refresh = now;
+  walk->driver = SummarizeGpuDriverMappings(ReadProcMaps("/proc/self"));
+  // smaps_rollup is the expensive read; only Mali needs it.
+  walk->mali_pool_bytes =
+      walk->driver.has_mali
+          ? UnmappedRssBytes(status, ReadSmapsRollupRss("/proc/self"))
+          : 0;
+  return *walk;
+}
+
+}  // namespace
+
 std::optional<AcceleratorMemoryUsage> GetProcessAcceleratorMemoryUsage() {
-  return AcceleratorMemoryUsageFromDmaBuf(ReadDmaBufSummary("/proc/self"));
+  const DmaBufSummary dmabuf = ReadDmaBufSummary("/proc/self");
+  const std::optional<ProcResidentCounters> status =
+      ReadProcStatusResident("/proc/self");
+  if (!status.has_value()) {
+    // No /proc/self/status: nothing beyond dma-bufs can be told apart.
+    return AcceleratorMemoryUsageFromDmaBuf(dmabuf);
+  }
+  const AddressSpaceWalk& walk = GetAddressSpaceWalk(*status);
+  return AcceleratorMemoryUsageFromAndroidSources(
+      dmabuf, walk.driver,
+      AndroidResidentView{.status = *status,
+                          .unmapped_rss_bytes = walk.mali_pool_bytes});
 }
 
 }  // namespace litert::lm
