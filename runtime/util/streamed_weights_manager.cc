@@ -30,11 +30,14 @@
 #include <string>
 #include <utility>
 
+#include "absl/base/no_destructor.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "runtime/util/data_stream.h"
 
 namespace litert::lm {
@@ -47,20 +50,89 @@ std::string NormalizeModelTypeKey(absl::string_view model_type_str) {
   return absl::AsciiStrToLower(model_type_str);
 }
 
-// The model type wire string of the submodel currently being compiled, or
-// empty if unknown.
-std::string& CurrentlyCompilingModel() {
-  static auto* const model_type = new std::string();
-  return *model_type;
-}
+// Process-wide registry of the DataStreams holding the external weights of the
+// submodels which are being loaded by streaming, keyed by model type wire
+// string, plus the model type of the submodel which the calling thread is
+// currently compiling.
+//
+// Engines may be created concurrently on different threads, so the registry is
+// guarded by a mutex. The currently compiling model, however, is a per-thread
+// property: a thread sets it right before calling CompiledModel::Create(),
+// during which the WebGPU delegate synchronously invokes the weight upload
+// callback (UploadStoredWeightsOnWeb()) on that same thread, which reads it
+// back. Keeping it thread-local lets concurrent compilations on different
+// threads not clobber each other's model type, and needs no locking.
+class WeightsStreams {
+ public:
+  // Returns the singleton instance.
+  static WeightsStreams& Get() {
+    static absl::NoDestructor<WeightsStreams> instance;
+    return *instance;
+  }
 
-// Global map of stored weights streams, keyed by model type wire string.
-absl::flat_hash_map<std::string, std::shared_ptr<DataStream>>&
-GetStoredWeightsStreams() {
-  static auto* const m =
-      new absl::flat_hash_map<std::string, std::shared_ptr<DataStream>>();
-  return *m;
-}
+  void SetCurrentModel(absl::string_view model_type_str) {
+    CurrentModel() = NormalizeModelTypeKey(model_type_str);
+  }
+
+  std::string GetCurrentModel() const { return CurrentModel(); }
+
+  void Store(absl::string_view model_type_str,
+             std::shared_ptr<DataStream> stream) {
+    absl::MutexLock lock(mutex_);
+    streams_[NormalizeModelTypeKey(model_type_str)] = std::move(stream);
+  }
+
+  absl::Status Read(absl::string_view model_type_str, uint64_t offset,
+                    uint64_t size, void* buffer) {
+    const std::string key = NormalizeModelTypeKey(model_type_str);
+    absl::MutexLock lock(mutex_);
+    auto it = streams_.find(key);
+    if (it == streams_.end() || it->second == nullptr) {
+      return absl::NotFoundError(absl::StrCat(
+          "Stored weights stream not found for model type: ", model_type_str));
+    }
+    return it->second->ReadAndDiscard(buffer, offset, size);
+  }
+
+  absl::Status Clear(absl::string_view model_type_str) {
+    const std::string key = NormalizeModelTypeKey(model_type_str);
+    absl::MutexLock lock(mutex_);
+    auto it = streams_.find(key);
+    if (it != streams_.end()) {
+      if (it->second) {
+        (void)it->second->Discard(0, UINT64_MAX);
+      }
+      streams_.erase(it);
+    }
+    return absl::OkStatus();
+  }
+
+  absl::Status ClearAll() {
+    absl::MutexLock lock(mutex_);
+    for (auto& [model_type, stream] : streams_) {
+      if (stream) {
+        (void)stream->Discard(0, UINT64_MAX);
+      }
+    }
+    streams_.clear();
+    return absl::OkStatus();
+  }
+
+ private:
+  friend class absl::NoDestructor<WeightsStreams>;
+  WeightsStreams() = default;
+
+  // Returns the model type wire string of the submodel currently being compiled
+  // by the calling thread, or empty if none.
+  static std::string& CurrentModel() {
+    thread_local std::string current_model;
+    return current_model;
+  }
+
+  mutable absl::Mutex mutex_;
+  absl::flat_hash_map<std::string, std::shared_ptr<DataStream>> streams_
+      ABSL_GUARDED_BY(mutex_);
+};
 
 #ifdef __EMSCRIPTEN__
 absl::Status UploadStoredWeightsOnWeb(
@@ -107,55 +179,39 @@ absl::Status UploadStoredWeightsOnWeb(
 
 }  // namespace
 
+// The free functions below are the public API: besides regular callers, the
+// executors and the web bindings bind to them as weak symbols (e.g.
+// `extern void SetCurrentlyCompilingModel(absl::string_view)
+// __attribute__((weak))` in litert_compiled_model_executor_utils.cc), so their
+// names and signatures must not change.
+
 void SetCurrentlyCompilingModel(absl::string_view model_type_str) {
-  CurrentlyCompilingModel() = NormalizeModelTypeKey(model_type_str);
+  WeightsStreams::Get().SetCurrentModel(model_type_str);
 }
 
-std::string GetCurrentlyCompilingModel() { return CurrentlyCompilingModel(); }
+std::string GetCurrentlyCompilingModel() {
+  return WeightsStreams::Get().GetCurrentModel();
+}
 
 void StoreWeightsStream(absl::string_view model_type_str,
                         std::shared_ptr<DataStream> stream) {
 #ifdef __EMSCRIPTEN__
   weight_loader::RegisterWebWeightUploadCallback(&UploadStoredWeightsOnWeb);
 #endif  // __EMSCRIPTEN__
-  GetStoredWeightsStreams()[NormalizeModelTypeKey(model_type_str)] =
-      std::move(stream);
+  WeightsStreams::Get().Store(model_type_str, std::move(stream));
 }
 
 absl::Status ReadStoredWeights(absl::string_view model_type_str,
                                uint64_t offset, uint64_t size, void* buffer) {
-  const std::string key = NormalizeModelTypeKey(model_type_str);
-  auto& streams = GetStoredWeightsStreams();
-  auto it = streams.find(key);
-  if (it == streams.end() || it->second == nullptr) {
-    return absl::NotFoundError(absl::StrCat(
-        "Stored weights stream not found for model type: ", model_type_str));
-  }
-  return it->second->ReadAndDiscard(buffer, offset, size);
+  return WeightsStreams::Get().Read(model_type_str, offset, size, buffer);
 }
 
 absl::Status ClearStoredWeightsStream(absl::string_view model_type_str) {
-  const std::string key = NormalizeModelTypeKey(model_type_str);
-  auto& streams = GetStoredWeightsStreams();
-  auto it = streams.find(key);
-  if (it != streams.end()) {
-    if (it->second) {
-      (void)it->second->Discard(0, UINT64_MAX);
-    }
-    streams.erase(it);
-  }
-  return absl::OkStatus();
+  return WeightsStreams::Get().Clear(model_type_str);
 }
 
 absl::Status ClearStoredWeightsStreams() {
-  auto& streams = GetStoredWeightsStreams();
-  for (auto& [model_type, stream] : streams) {
-    if (stream) {
-      (void)stream->Discard(0, UINT64_MAX);
-    }
-  }
-  streams.clear();
-  return absl::OkStatus();
+  return WeightsStreams::Get().ClearAll();
 }
 
 }  // namespace litert::lm

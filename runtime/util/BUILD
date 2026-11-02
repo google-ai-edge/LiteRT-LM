@@ -51,10 +51,13 @@ cc_library(
     hdrs = ["streamed_weights_manager.h"],
     deps = [
         ":data_stream",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@litert//weight_loader:external_weight_loader",
         "//runtime/components:model_resources",

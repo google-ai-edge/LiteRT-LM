@@ -41,11 +41,16 @@ namespace litert::lm {
 // C++ WebGPU weight upload callback (`UploadStoredWeightsOnWeb`), which queries
 // `GetCurrentlyCompilingModel()`, calls `ReadStoredWeights()` in chunks, and
 // writes directly to `wgpu::Queue::WriteBuffer`.
+//
+// Thread safety: the stream registry is shared by all threads and guarded
+// internally, so engines may be loaded concurrently. The currently compiling
+// model type is tracked per thread, since the upload callback runs on the
+// thread which calls `litert::CompiledModel::Create()`; set it on that thread.
 
 // Sets the model type wire string (e.g. "tf_lite_embedder") of the submodel
-// currently being compiled so the WebGPU weight streaming callback knows which
-// stored stream to read from. An empty string means no submodel is being
-// compiled.
+// currently being compiled by the calling thread so the WebGPU weight streaming
+// callback knows which stored stream to read from. An empty string means no
+// submodel is being compiled.
 //
 // args:
 //   model_type_str: The model type wire string, or empty to reset.
@@ -62,8 +67,8 @@ void SetCurrentlyCompilingModel(TfLiteModelTypeT model_type) {
   SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(model_type));
 }
 
-// Returns the model type wire string of the submodel currently being compiled,
-// or an empty string if unknown.
+// Returns the model type wire string of the submodel currently being compiled
+// by the calling thread, or an empty string if unknown.
 std::string GetCurrentlyCompilingModel();
 
 // Registers a DataStream containing external weights for `model_type_str` so

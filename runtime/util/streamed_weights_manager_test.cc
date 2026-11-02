@@ -18,7 +18,9 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
@@ -103,6 +105,44 @@ TEST(StreamedWeightsManagerTest, ClearAllStoredWeightsStreams) {
                               /*offset=*/0, /*size=*/4, buffer)
                 .code(),
             absl::StatusCode::kNotFound);
+}
+
+TEST(StreamedWeightsManagerTest, ConcurrentStoreReadAndClearWeightsStreams) {
+  constexpr int kNumThreads = 8;
+  // Set a model on the main thread to verify that the worker threads neither
+  // observe nor clobber it.
+  SetCurrentlyCompilingModel("main_thread_model");
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([i]() {
+      const std::string model_key = "model_type_" + std::to_string(i);
+      const std::string payload = "weights_payload_" + std::to_string(i);
+      EXPECT_EQ(GetCurrentlyCompilingModel(), "");
+      SetCurrentlyCompilingModel(model_key);
+
+      auto stream = std::make_shared<MemoryDataStream>(payload);
+      StoreWeightsStream(model_key, stream);
+
+      // Read back through the compiling model of this thread, like the WebGPU
+      // weight upload callback does; it must not be affected by other threads.
+      const std::string compiling_model = GetCurrentlyCompilingModel();
+      EXPECT_EQ(compiling_model, model_key);
+      std::string buffer(payload.size(), '\0');
+      EXPECT_TRUE(
+          ReadStoredWeights(compiling_model, 0, payload.size(), buffer.data())
+              .ok());
+      EXPECT_EQ(buffer, payload);
+      EXPECT_TRUE(ClearStoredWeightsStream(model_key).ok());
+      SetCurrentlyCompilingModel("");
+    });
+  }
+  for (auto& t : threads) {
+    t.join();
+  }
+  EXPECT_EQ(GetCurrentlyCompilingModel(), "main_thread_model");
+  SetCurrentlyCompilingModel("");
+  EXPECT_TRUE(ClearStoredWeightsStreams().ok());
 }
 
 }  // namespace
