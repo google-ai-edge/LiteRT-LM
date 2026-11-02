@@ -4827,6 +4827,113 @@ TEST(AppendMessageTest, Gemma3Async) {
   done5.WaitForNotificationWithTimeout(absl::Seconds(3));
 }
 
+TEST(
+    AppendMessageTest,
+    CloseTurnOnPrefillFollowedByEmptyMessageSkipsSecondPrefillAndTriggersDecode) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetStartTokenId(0);
+  session_config.GetMutableStopTokenIds().push_back({1});
+  *session_config.GetMutableLlmModelType().mutable_gemma3() = {};
+  session_config.SetApplyPromptTemplateInSession(false);
+  EXPECT_CALL(*mock_session_ptr, GetSessionConfig())
+      .WillRepeatedly(testing::ReturnRef(session_config));
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+      .WillRepeatedly(testing::Return(absl::OkStatus()));
+  ASSERT_OK_AND_ASSIGN(
+      auto tokenizer,
+      SentencePieceTokenizer::CreateFromFile(
+          (std::filesystem::path(::testing::SrcDir()) / kTestTokenizerPath)
+              .string()));
+
+  auto mock_engine = std::make_unique<MockEngine>();
+  EXPECT_CALL(*mock_engine, CreateSession(testing::_))
+      .WillOnce(testing::Return(std::move(mock_session)));
+  EXPECT_CALL(*mock_engine, GetTokenizer())
+      .WillRepeatedly(testing::ReturnRef(*tokenizer));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  EXPECT_CALL(*mock_engine, GetEngineSettings())
+      .WillRepeatedly(testing::ReturnRef(engine_settings));
+
+  std::string template_text =
+      ReadFile(GetTestdataPath(kGemma3ToolsMultiPrefillTemplatePath));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config)
+          .SetOverwritePromptTemplate(PromptTemplate(template_text))
+          .SetPrefillPrefaceOnInit(false)
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  // 1st call: SendMessageAsync with has_pending_message=true and
+  // close_turn_on_prefill=true prefills the complete user turn AND model
+  // generation prompt in a single RunPrefillAsync call without starting decode.
+  absl::string_view expected_single_prefill =
+      "<start_of_turn>user\nHello world!<end_of_turn>\n<start_of_turn>model\n";
+  EXPECT_CALL(
+      *mock_session_ptr,
+      RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
+                          testing::Property(&InputText::GetRawTextString,
+                                            expected_single_prefill))),
+                      testing::_))
+      .Times(1)
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  absl::Notification done1;
+  ASSERT_OK(conversation->SendMessageAsync(
+      Message{{"role", "user"}, {"content", "Hello world!"}},
+      [&done1](absl::StatusOr<Message> message) {
+        ASSERT_OK(message);
+        EXPECT_TRUE(message->is_null());
+        done1.Notify();
+      },
+      {.has_pending_message = true, .close_turn_on_prefill = true}));
+  ASSERT_TRUE(done1.WaitForNotificationWithTimeout(absl::Seconds(3)));
+
+  // 2nd call: Trigger decode by sending an empty message with
+  // has_pending_message=false. Verify RunPrefillAsync is NOT called a second
+  // time and RunDecodeAsync is called directly.
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .Times(1)
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+  Message expected_assistant_message =
+      Message({{"role", "assistant"},
+               {"content", {{{"type", "text"}, {"text", "I am good."}}}}});
+  absl::Notification done2;
+  EXPECT_OK(conversation->SendMessageAsync(
+      Message{{"role", "user"}, {"content", ""}},
+      CreateTestMessageCallback(expected_assistant_message, done2),
+      {.has_pending_message = false}));
+  ASSERT_TRUE(done2.WaitForNotificationWithTimeout(absl::Seconds(3)));
+
+  // Verify history contains exactly 2 messages (the user message and assistant
+  // response, without the empty placeholder decode trigger).
+  auto history = conversation->GetHistory();
+  ASSERT_EQ(history.size(), 2u);
+  EXPECT_EQ(history[0]["role"], "user");
+  EXPECT_EQ(history[0]["content"], "Hello world!");
+  EXPECT_EQ(history[1]["role"], "assistant");
+}
+
 TEST(AppendMessageTest, Gemma3SyncPrefillPrefaceOnInitAndAlternateRoles) {
   // Set up mock Session.
   auto mock_session = std::make_unique<MockSession>();
