@@ -308,6 +308,52 @@ class LitertlmPeekUtilTest(absltest.TestCase):
     self.assertIn("max_history_size: 8", stdout)
     self.assertIn(">>>>>>>> end of ExecutorMetadata", stdout)
 
+  def test_dump_omits_sha256_from_additional_metadata(self):
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            max_history_size=8
+        )
+    )
+    bin_proto = executor_metadata.SerializeToString()
+    temp_dir = self.create_tempdir().full_path
+    metadata_path = os.path.join(temp_dir, "executor.pb")
+    with open(metadata_path, "wb") as f:
+      f.write(bin_proto)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_executor_metadata(
+        metadata_path,
+        additional_metadata=[
+            litertlm_builder.Metadata(
+                key="custom_key",
+                value="custom_value",
+                dtype=litertlm_builder.DType.STRING,
+            )
+        ],
+    )
+    output_path = os.path.join(temp_dir, "test.litertlm")
+    with open(output_path, "wb") as f:
+      builder.build(f)
+
+    dump_dir = os.path.join(temp_dir, "dump")
+    output_stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(output_path, dump_dir, output_stream)
+
+    stdout = output_stream.getvalue()
+    # sha256 should still be printed to console output
+    self.assertIn("Key: sha256", stdout)
+
+    toml_path = os.path.join(dump_dir, "model.toml")
+    self.assertTrue(os.path.exists(toml_path))
+    with open(toml_path, "r") as f:
+      toml_content = f.read()
+
+    # sha256 must NOT be in additional_metadata in model.toml
+    self.assertNotIn("sha256", toml_content)
+    # custom_key must be preserved in additional_metadata
+    self.assertIn("custom_key", toml_content)
+    self.assertIn("custom_value", toml_content)
+
 
 if __name__ == "__main__":
   absltest.main()

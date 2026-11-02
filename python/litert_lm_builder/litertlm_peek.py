@@ -669,6 +669,8 @@ def peek_litertlm_file(
                 model_type = item_dict["value"]
               elif item_dict["key"] == "backend_constraint":
                 backend_constraint = item_dict["value"]
+              elif item_dict["key"] == "sha256":
+                continue
               else:
                 section_metadata_items.append(item_dict)
 
