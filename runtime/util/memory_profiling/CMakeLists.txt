@@ -63,6 +63,8 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     accelerator_memory_dmabuf.cc
     accelerator_memory_unsupported.cc
   )
+elseif(WIN32)
+  list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_windows.cc)
 else()
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_unsupported.cc)
 endif()
@@ -83,6 +85,13 @@ target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
   PUBLIC
     LITERTLM_DEPS
 )
+if(WIN32)
+  # dxgi: IDXGIAdapter3::QueryVideoMemoryInfo for per-process video memory
+  # usage. gdi32: D3DKMTQueryStatistics for the part of it that is charged to
+  # the process's private memory footprint.
+  target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
+    PUBLIC dxgi gdi32)
+endif()
 
 # ==============================================================================
 # Memory Snapshot

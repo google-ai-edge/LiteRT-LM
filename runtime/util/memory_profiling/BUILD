@@ -129,11 +129,21 @@ cc_library(
             "accelerator_memory_dmabuf.cc",
             "accelerator_memory_unsupported.cc",
         ],
+        "@platforms//os:windows": ["accelerator_memory_windows.cc"],
         "//conditions:default": ["accelerator_memory_unsupported.cc"],
     }),
     hdrs = ["accelerator_memory_monitor.h"] + select({
         "@platforms//os:android": ["accelerator_memory_dmabuf.h"],
         "@platforms//os:linux": ["accelerator_memory_dmabuf.h"],
+        "@platforms//os:windows": ["accelerator_memory_windows.h"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        # dxgi: IDXGIAdapter3::QueryVideoMemoryInfo; gdi32: D3DKMTQueryStatistics.
+        "@platforms//os:windows": [
+            "dxgi.lib",
+            "gdi32.lib",
+        ],
         "//conditions:default": [],
     }),
     deps = [
@@ -214,6 +224,37 @@ cc_test(
     deps = [
         ":accelerator_memory_monitor",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_windows_test",
+    srcs = ["accelerator_memory_windows_test.cc"],
+    # The test allocates GPU memory through Direct3D 11.
+    linkopts = ["d3d11.lib"],
+    # Runs in TAP's Windows project. The tags make the other TAP projects and
+    # Tricorder's builder skip it; target_compatible_with alone is not enough,
+    # as an explicitly requested incompatible target is a build error
+    # (b/202306027).
+    tags = [
+        "noandroid",
+        "nobuilder",
+        "noios",
+        "nolinux",
+        "nomacos",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        ":host_memory",
+        ":memory_snapshot",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
     ],
 )
 
