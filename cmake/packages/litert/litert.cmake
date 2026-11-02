@@ -44,6 +44,7 @@ include(ExternalProject)
         minja_lib
         json_lib
         stb_impl
+        highway_lib
         zlib_lib
 
       GIT_REPOSITORY

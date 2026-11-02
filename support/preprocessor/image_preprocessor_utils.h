@@ -15,8 +15,11 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_SUPPORT_PREPROCESSOR_IMAGE_PREPROCESSOR_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_SUPPORT_PREPROCESSOR_IMAGE_PREPROCESSOR_UTILS_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <utility>
 
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "support/preprocessor/image_preprocessor.h"
@@ -93,6 +96,33 @@ absl::StatusOr<ImageSize> ComputeResizedImageSize(
 absl::StatusOr<InputImage> CreateDryRunImage(
     const InputImage& input_image, const ImageSize& resized_size,
     const ImagePreprocessParameter& parameter);
+
+// Converts `num_pixels` interleaved uint8 pixels starting at `src` into floats
+// at `dst` (e.g. rescaling and normalizing them). `dst` holds
+// `num_pixels * channels` floats and never aliases `src`.
+using Uint8RowConverter =
+    absl::FunctionRef<void(const uint8_t* src, float* dst, size_t num_pixels)>;
+
+// Patchifies uint8 image pixels straight into the float "images" tensor,
+// converting each patch row with `convert_row`. This fuses the uint8 -> float
+// conversion into patchification, so no intermediate float image is needed.
+// The conversion itself is supplied by the caller, which keeps this library
+// free of SIMD dependencies.
+//
+// args:
+//   image_data: The flat NHWC image data in uint8 format (e.g. RGB), sized
+//     to match the target dimensions of `parameter`.
+//   parameter: The image preprocess parameter containing the target
+//     dimensions and the patchify config.
+//   convert_row: Converts one patch row of uint8 pixels into floats.
+//
+// returns:
+//   The InputImage containing the patchified image and, if requested by the
+//   patchify config, the patch positions. Returns an error if the patchify
+//   config is missing or the dimensions are inconsistent.
+absl::StatusOr<InputImage> PatchifyImage(
+    absl::Span<const uint8_t> image_data,
+    const ImagePreprocessParameter& parameter, Uint8RowConverter convert_row);
 
 }  // namespace litert::support
 

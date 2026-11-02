@@ -407,6 +407,7 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
             miniaudio_lib
             minizip_lib
             minja_lib
+            highway_lib
             zlib_lib
             antlr_lib
             LiteRTLM::nlohmann_json::nlohmann_json

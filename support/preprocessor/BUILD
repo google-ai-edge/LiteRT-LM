@@ -253,7 +253,6 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
         "//support/util:io_types",
         "//support/util:litert_status_util",
     ],
@@ -286,7 +285,6 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
         "//support/util:io_types",
         "//support/util:litert_status_util",
     ],
@@ -312,26 +310,37 @@ cc_test(
 )
 
 cc_library(
+    name = "stb_resize",
+    srcs = ["stb_resize.cc"],
+    hdrs = ["stb_resize.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@stb//:stblib",
+    ],
+)
+
+cc_library(
     name = "stb_image_preprocessor",
     srcs = ["stb_image_preprocessor.cc"],
     hdrs = ["stb_image_preprocessor.h"],
     deps = [
         ":image_preprocessor",
         ":image_preprocessor_utils",
+        ":pixel_convert",
+        ":stb_resize",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc:litert_tensor_buffer_types",
-        "//support/util:convert_tensor_buffer",
         "//support/util:io_types",
-        "//support/util:litert_status_util",
         "@stb//:stblib",
     ],
 )
@@ -399,12 +408,32 @@ cc_library(
 )
 
 cc_library(
+    name = "pixel_convert",
+    srcs = ["pixel_convert.cc"],
+    hdrs = ["pixel_convert.h"],
+    deps = [
+        "@com_google_absl//absl/types:span",
+        "@highway//:hwy",
+    ],
+)
+
+cc_test(
+    name = "pixel_convert_test",
+    srcs = ["pixel_convert_test.cc"],
+    deps = [
+        ":pixel_convert",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "image_preprocessor_utils",
     srcs = ["image_preprocessor_utils.cc"],
     hdrs = ["image_preprocessor_utils.h"],
     deps = [
         ":image_preprocessor",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",

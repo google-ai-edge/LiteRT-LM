@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <utility>
@@ -151,9 +153,39 @@ absl::StatusOr<PatchGrid> ComputePatchGrid(
 
 }  // namespace
 
-absl::StatusOr<InputImage> PatchifyImage(
-    absl::Span<const float> image_data,
-    const ImagePreprocessParameter& parameter) {
+namespace {
+
+// Copies one row of `model_patch_width` pixels of an already-float image into
+// a patch row.
+void CopyFloatPatchRow(const float* src_row, float* dst_row,
+                       int model_patch_width, int channels) {
+  std::memcpy(
+      dst_row, src_row,
+      static_cast<size_t>(model_patch_width) * channels * sizeof(float));
+}
+
+// Converts one row of `model_patch_width` uint8 pixels into a float patch row
+// with the caller-supplied converter.
+class ConvertUint8PatchRow {
+ public:
+  explicit ConvertUint8PatchRow(Uint8RowConverter convert_row)
+      : convert_row_(convert_row) {}
+
+  void operator()(const uint8_t* src_row, float* dst_row, int model_patch_width,
+                  int /*channels*/) const {
+    convert_row_(src_row, dst_row, static_cast<size_t>(model_patch_width));
+  }
+
+ private:
+  Uint8RowConverter convert_row_;
+};
+
+// Splits `image_data` (NHWC) into model patches, writing each patch row with
+// `copy_row_fn(src_row, dst_row, model_patch_width, channels)`.
+template <typename T, typename CopyRowFn>
+absl::StatusOr<InputImage> PatchifyImageImpl(
+    absl::Span<const T> image_data, const ImagePreprocessParameter& parameter,
+    const CopyRowFn& copy_row_fn) {
   const auto& patchify_config = parameter.GetPatchifyConfig();
   if (!patchify_config.has_value()) {
     return absl::InternalError("Patchify config is not set.");
@@ -168,7 +200,8 @@ absl::StatusOr<InputImage> PatchifyImage(
   const int width = target_dimensions[2];
   const int channels = target_dimensions[3];
 
-  if (image_data.size() != batch_size * height * width * channels) {
+  if (image_data.size() !=
+      static_cast<size_t>(batch_size) * height * width * channels) {
     return absl::InvalidArgumentError(
         "Image data size does not match target dimensions.");
   }
@@ -201,17 +234,16 @@ absl::StatusOr<InputImage> PatchifyImage(
           int global_patch_idx = b * num_model_patches + model_patch_idx;
 
           for (int ph = 0; ph < model_patch_height; ++ph) {
-            for (int pw = 0; pw < model_patch_width; ++pw) {
-              for (int c = 0; c < channels; ++c) {
-                int src_h = mh * model_patch_height + ph;
-                int src_w = mw * model_patch_width + pw;
-                int src_idx =
-                    ((b * height + src_h) * width + src_w) * channels + c;
-                int dest_idx = global_patch_idx * model_patch_dim +
-                               (ph * model_patch_width + pw) * channels + c;
-                patches_ptr[dest_idx] = image_data[src_idx];
-              }
-            }
+            int src_h = mh * model_patch_height + ph;
+            int src_w = mw * model_patch_width;
+            size_t src_idx =
+                ((static_cast<size_t>(b) * height + src_h) * width + src_w) *
+                channels;
+            size_t dest_idx =
+                static_cast<size_t>(global_patch_idx) * model_patch_dim +
+                static_cast<size_t>(ph) * model_patch_width * channels;
+            copy_row_fn(image_data.data() + src_idx, patches_ptr + dest_idx,
+                        model_patch_width, channels);
           }
         }
       }
@@ -250,6 +282,8 @@ absl::StatusOr<InputImage> PatchifyImage(
   }
   return InputImage(std::move(tensor_map));
 }
+
+}  // namespace
 
 absl::StatusOr<InputImage> CreatePatchPositionsImage(
     int height, int width, const ImagePreprocessParameter& parameter) {
@@ -317,6 +351,19 @@ absl::StatusOr<InputImage> CreateDryRunImage(
                              .status());
   }
   return input_image.CreateCopy();
+}
+
+absl::StatusOr<InputImage> PatchifyImage(
+    absl::Span<const float> image_data,
+    const ImagePreprocessParameter& parameter) {
+  return PatchifyImageImpl(image_data, parameter, CopyFloatPatchRow);
+}
+
+absl::StatusOr<InputImage> PatchifyImage(
+    absl::Span<const uint8_t> image_data,
+    const ImagePreprocessParameter& parameter, Uint8RowConverter convert_row) {
+  return PatchifyImageImpl(image_data, parameter,
+                           ConvertUint8PatchRow(convert_row));
 }
 
 }  // namespace litert::support

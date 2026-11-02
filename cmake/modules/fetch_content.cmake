@@ -253,6 +253,29 @@ if(NOT TARGET stb_impl)
   target_include_directories(stb_impl PUBLIC ${LITERTLM_STB_SRC_DIR})
 endif()
 
+# --- Highway (portable SIMD with runtime dispatch) ---
+set(LITERTLM_HIGHWAY_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/highway CACHE PATH "Path to highway source directory")
+# Keep in sync with the `highway` http_archive in the Bazel WORKSPACE.
+set(LITERTLM_HIGHWAY_TAG "1.3.0" CACHE STRING "Highway git tag")
+FetchContent_Declare(
+  highway_lib
+  GIT_REPOSITORY https://github.com/google/highway
+  GIT_TAG ${LITERTLM_HIGHWAY_TAG}
+  GIT_SHALLOW true
+  SOURCE_DIR ${LITERTLM_HIGHWAY_SRC_DIR}
+)
+block()
+  set(BUILD_SHARED_LIBS OFF)
+  set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+  set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(highway_lib)
+endblock()
+if(TARGET hwy)
+  add_library(highway_lib ALIAS hwy)
+endif()
+
 # --- ZLIB ---
 set(LITERTLM_ZLIB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/zlib CACHE PATH "Path to zlib source directory")
 set(LITERTLM_ZLIB_TAG "master" CACHE STRING "ZLIB git tag")
@@ -283,6 +306,7 @@ set(LITERTLM_FETCHCONTENT_MODULE_SRC_DIRS
   ${LITERTLM_MINJA_SRC_DIR}
   ${LITERTLM_JSON_SRC_DIR}
   ${LITERTLM_STB_SRC_DIR}
+  ${LITERTLM_HIGHWAY_SRC_DIR}
   ${LITERTLM_ZLIB_SRC_DIR}
   ${LITERTLM_CORROSION_SRC_DIR}
 )
@@ -296,6 +320,7 @@ set(LITERTLM_FETCHCONTENT_MODULE_INCLUDE_DIR
   ${LITERTLM_MINJA_SRC_DIR}/include
   ${LITERTLM_JSON_SRC_DIR}/include
   ${LITERTLM_STB_SRC_DIR}
+  ${LITERTLM_HIGHWAY_SRC_DIR}
   ${LITERTLM_ZLIB_SRC_DIR}
   ${LITERTLM_CORROSION_INCLUDE_DIR}
 )
@@ -310,5 +335,6 @@ add_dependencies(fetch_content_complete
     minja_lib
     json_lib
     stb_impl
+    highway_lib
     zlib_lib
 )

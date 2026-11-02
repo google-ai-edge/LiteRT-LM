@@ -92,6 +92,44 @@ target_link_libraries(support_preprocessor_mel_filterbank
 )
 
 # ==============================================================================
+# Pixel Convert
+# ==============================================================================
+add_litertlm_library(support_preprocessor_pixel_convert STATIC
+  pixel_convert.cc
+)
+add_library(LiteRTLM::Support::Preprocessor::PixelConvert ALIAS support_preprocessor_pixel_convert)
+
+target_include_directories(support_preprocessor_pixel_convert
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(support_preprocessor_pixel_convert
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# STB Resize
+# ==============================================================================
+add_litertlm_library(support_preprocessor_stb_resize STATIC
+  stb_resize.cc
+)
+add_library(LiteRTLM::Support::Preprocessor::StbResize ALIAS support_preprocessor_stb_resize)
+
+target_include_directories(support_preprocessor_stb_resize
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(support_preprocessor_stb_resize
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # STB Image Preprocessor
 # ==============================================================================
 add_litertlm_library(support_preprocessor_stb_image_preprocessor STATIC
@@ -107,6 +145,9 @@ target_include_directories(support_preprocessor_stb_image_preprocessor
 
 target_link_libraries(support_preprocessor_stb_image_preprocessor
   PUBLIC
+    LiteRTLM::Support::Preprocessor::ImagePreprocessorUtils
+    LiteRTLM::Support::Preprocessor::PixelConvert
+    LiteRTLM::Support::Preprocessor::StbResize
     LiteRTLM::Support::Util::IoTypes
     LITERTLM_DEPS
 )
@@ -143,5 +184,7 @@ target_link_libraries(support_processor_libs INTERFACE
   LiteRTLM::Support::Preprocessor::AudioUtils
   LiteRTLM::Support::Preprocessor::ImagePreprocessorUtils
   LiteRTLM::Support::Preprocessor::MelFilterBank
+  LiteRTLM::Support::Preprocessor::PixelConvert
   LiteRTLM::Support::Preprocessor::StbImage
+  LiteRTLM::Support::Preprocessor::StbResize
 )

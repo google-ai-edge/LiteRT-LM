@@ -54,6 +54,7 @@ target_link_libraries(LITERTLM_DEPS INTERFACE
     minja_lib
     antlr_lib
     stb_impl
+    highway_lib
     zlib_lib
 
     litertlm_cxx_bridge

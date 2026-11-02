@@ -15,6 +15,7 @@
 #include "support/preprocessor/stb_image_preprocessor.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -25,15 +26,17 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/preprocessor/image_preprocessor_utils.h"
+#include "support/preprocessor/pixel_convert.h"
+#include "support/preprocessor/stb_resize.h"
 #include "support/util/io_types.h"
-#include "stb_image.h"  // from @stb
-#include "stb_image_resize2.h"  // from @stb
+#include "stb_image.h"  // from @stb  // NOLINT
 
 namespace litert::support {
 
@@ -81,13 +84,6 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
   resized_image_data.resize(static_cast<size_t>(target_dimensions[0]) *
                             new_height * new_width * target_dimensions[3]);
 
-  int alpha_channel = -1;
-  if (target_dimensions[3] == 4) {
-    alpha_channel = 3;
-  } else if (target_dimensions[3] == 2) {
-    alpha_channel = 1;
-  }
-
   const int batch_size = target_dimensions[0];
   const int channels = target_dimensions[3];
 
@@ -97,17 +93,30 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
     unsigned char* output_data =
         resized_image_data.data() + i * new_height * new_width * channels;
 
-    if (stbir_resize(input_data, width, height, 0, output_data, new_width,
-                     new_height, 0,
-                     static_cast<stbir_pixel_layout>(channels),
-                     STBIR_TYPE_UINT8_SRGB, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_CATMULLROM) == 0) {
-      return absl::InternalError("Failed to resize image.");
-    }
+    ABSL_RETURN_IF_ERROR(ResizeSrgbUint8(input_data, width, height, output_data,
+                                         new_width, new_height, channels));
   }
 
   return absl::OkStatus();
 }
+
+// Applies the per-channel affine transform `x * scale[c] + offset[c]` to rows
+// of interleaved uint8 pixels using the SIMD pixel converter.
+class AffinePixelConverter {
+ public:
+  AffinePixelConverter(int channels, absl::Span<const float> scale,
+                       absl::Span<const float> offset)
+      : channels_(channels), scale_(scale), offset_(offset) {}
+
+  void operator()(const uint8_t* src, float* dst, size_t num_pixels) const {
+    ConvertUint8ToFloat(src, dst, num_pixels, channels_, scale_, offset_);
+  }
+
+ private:
+  int channels_;
+  absl::Span<const float> scale_;
+  absl::Span<const float> offset_;
+};
 
 // Resizes, rescales, normalizes and optionally patchifies pixels that have
 // already been decoded. Both Preprocess() overloads funnel through here, so
@@ -143,20 +152,9 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
     resized_image.resize(static_cast<size_t>(target_width) * target_height *
                          target_channels);
 
-    int alpha_channel = -1;
-    if (target_channels == 4) {
-      alpha_channel = 3;
-    } else if (target_channels == 2) {
-      alpha_channel = 1;
-    }
-
-    if (stbir_resize(pixels, width, height, 0,
-    resized_image.data(), target_width, target_height, 0,
-    static_cast<stbir_pixel_layout>(target_channels),
-    STBIR_TYPE_UINT8_SRGB, STBIR_EDGE_CLAMP,
-    STBIR_FILTER_CATMULLROM) == 0) {
-    return absl::InternalError("Failed to resize image.");
-    }
+    ABSL_RETURN_IF_ERROR(ResizeSrgbUint8(pixels, width, height,
+                                         resized_image.data(), target_width,
+                                         target_height, target_channels));
   }
 
   const Dimensions& final_dimensions = updated_parameter.GetTargetDimensions();
@@ -165,20 +163,15 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
   const int target_width = final_dimensions.at(2);
   const int target_channels = final_dimensions.at(3);
 
-  // Rescale the pixel values into floats. Defaults to the [0, 255] -> [0, 1]
-  // mapping unless an explicit rescale factor is provided.
+  // Compute per-channel scale and offset for affine rescale & normalization:
+  // float_val = uint8_val * scale[c] + offset[c].
   const float rescale_factor =
       updated_parameter.GetNormalizationConfig().has_value()
           ? updated_parameter.GetNormalizationConfig()->rescale_factor
           : (1.0f / 255.0f);
-  std::vector<float> float_image(resized_image.size());
-  for (size_t i = 0; i < resized_image.size(); ++i) {
-    float_image[i] = static_cast<float>(resized_image[i]) * rescale_factor;
-  }
+  std::vector<float> scale(target_channels, rescale_factor);
+  std::vector<float> offset(target_channels, 0.0f);
 
-  // Optionally apply per-channel mean/std normalization. This walks the
-  // resized buffer, so it is strided by the output channel count, which is not
-  // necessarily the count the input arrived with.
   if (updated_parameter.GetNormalizationConfig().has_value()) {
     const auto& normalization_config =
         *updated_parameter.GetNormalizationConfig();
@@ -190,16 +183,16 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
           "Normalization mean/std size does not match the number of channels (",
           target_channels, ")."));
     }
-    for (size_t index = 0; index < float_image.size(); ++index) {
-      const int ch = index % target_channels;
-      float_image[index] =
-          (float_image[index] - normalization_config.mean[ch]) /
-          normalization_config.std[ch];
+    for (int ch = 0; ch < target_channels; ++ch) {
+      scale[ch] = rescale_factor / normalization_config.std[ch];
+      offset[ch] =
+          -normalization_config.mean[ch] / normalization_config.std[ch];
     }
   }
 
   if (updated_parameter.GetPatchifyConfig().has_value()) {
-    return PatchifyImage(std::move(float_image), updated_parameter);
+    return PatchifyImage(absl::MakeConstSpan(resized_image), updated_parameter,
+                         AffinePixelConverter(target_channels, scale, offset));
   }
 
   const size_t num_elements = static_cast<size_t>(batch_size) * target_height *
@@ -217,9 +210,10 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
           processed_tensor_buffer, ::litert::TensorBuffer::LockMode::kWrite));
   float* float_buffer_ptr =
       reinterpret_cast<float*>(processed_tensor_lock_and_addr.second);
-  for (size_t i = 0; i < float_image.size(); ++i) {
-    float_buffer_ptr[i] = float_image[i];
-  }
+  ConvertUint8ToFloat(
+      resized_image.data(), float_buffer_ptr,
+      static_cast<size_t>(batch_size) * target_height * target_width,
+      target_channels, scale, offset);
   InputImage processed_image(std::move(processed_tensor_buffer));
 
   return processed_image;

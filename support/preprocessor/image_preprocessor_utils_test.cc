@@ -14,6 +14,7 @@
 
 #include "support/preprocessor/image_preprocessor_utils.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -33,6 +34,26 @@ using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::Pair;
 using ::testing::status::StatusIs;
+
+// Scalar reference converter: dst = src * scale[c] + offset[c].
+class ScalarAffineConverter {
+ public:
+  ScalarAffineConverter(const std::vector<float>& scale,
+                        const std::vector<float>& offset)
+      : scale_(scale), offset_(offset) {}
+
+  void operator()(const uint8_t* src, float* dst, size_t num_pixels) const {
+    const size_t channels = scale_.size();
+    for (size_t i = 0; i < num_pixels * channels; ++i) {
+      dst[i] = static_cast<float>(src[i]) * scale_[i % channels] +
+               offset_[i % channels];
+    }
+  }
+
+ private:
+  const std::vector<float>& scale_;
+  const std::vector<float>& offset_;
+};
 
 TEST(GetAspectRatioPreservingSizeTest, SquareImageNoResize) {
   ImagePreprocessParameter::PatchifyConfig config;
@@ -796,6 +817,66 @@ TEST(ImagePreprocessorUtilsTest,
   EXPECT_THAT(CreatePatchPositionsImage(4, -4, parameter),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        "Image dimensions must be positive."));
+}
+
+TEST(ImagePreprocessorUtilsTest, PatchifyImageUint8FusedSuccess) {
+  // Input image: 2x2 patches of 2x2 pixels, 3 channels (RGB)
+  // Total height = 4, width = 4, channels = 3.
+  constexpr int kHeight = 4;
+  constexpr int kWidth = 4;
+  constexpr int kChannels = 3;
+  constexpr int kNumElements = kHeight * kWidth * kChannels;
+
+  std::vector<uint8_t> u8_image(kNumElements);
+  for (int i = 0; i < kNumElements; ++i) {
+    u8_image[i] = static_cast<uint8_t>((i * 13 + 7) % 256);
+  }
+
+  const std::vector<float> scale = {1.0f / 255.0f, 1.0f / 128.0f,
+                                    2.0f / 255.0f};
+  const std::vector<float> offset = {-0.5f, 0.0f, 0.5f};
+
+  std::vector<float> float_image(kNumElements);
+  for (int i = 0; i < kNumElements; ++i) {
+    int c = i % kChannels;
+    float_image[i] = static_cast<float>(u8_image[i]) * scale[c] + offset[c];
+  }
+
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, kHeight, kWidth, kChannels});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+
+  ASSERT_OK_AND_ASSIGN(auto expected_image,
+                       PatchifyImage(float_image, parameter));
+  ASSERT_OK_AND_ASSIGN(
+      auto actual_image,
+      PatchifyImage(u8_image, parameter, ScalarAffineConverter(scale, offset)));
+
+  ASSERT_OK_AND_ASSIGN(auto expected_map,
+                       expected_image.GetPreprocessedImageTensorMap());
+  ASSERT_OK_AND_ASSIGN(auto actual_map,
+                       actual_image.GetPreprocessedImageTensorMap());
+
+  ASSERT_TRUE(expected_map->contains("images"));
+  ASSERT_TRUE(actual_map->contains("images"));
+
+  auto exp_lock = ::litert::TensorBufferScopedLock::Create(
+      expected_map->at("images"), ::litert::TensorBuffer::LockMode::kRead);
+  auto act_lock = ::litert::TensorBufferScopedLock::Create(
+      actual_map->at("images"), ::litert::TensorBuffer::LockMode::kRead);
+
+  ASSERT_TRUE(exp_lock.HasValue());
+  ASSERT_TRUE(act_lock.HasValue());
+
+  const float* exp_data = reinterpret_cast<const float*>(exp_lock->second);
+  const float* act_data = reinterpret_cast<const float*>(act_lock->second);
+
+  for (int i = 0; i < kNumElements; ++i) {
+    EXPECT_NEAR(act_data[i], exp_data[i], 1e-5f) << "Mismatch at index " << i;
+  }
 }
 
 }  // namespace
