@@ -2134,6 +2134,31 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
             qualcomm::QualcommOptions::HtpPerformanceMode::kDefault);
 }
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetNpuOptions_MapsPerformanceControlToQualcommPerfCtrlMode) {
+  using PerfCtrlMode = qualcomm::QualcommOptions::HtpPerfCtrlMode;
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+    EXPECT_OK(SetNpuOptions(NpuOptions{}, options));
+    auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+    ASSERT_TRUE(qualcomm_options.HasValue());
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerfCtrlMode(),
+              PerfCtrlMode::kManual);
+  }
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+    EXPECT_OK(SetNpuOptions(
+        {.performance_control = NpuPerformanceControl::kPerInference},
+        options));
+    auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+    ASSERT_TRUE(qualcomm_options.HasValue());
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerfCtrlMode(),
+              PerfCtrlMode::kAuto);
+    // The performance mode is applied independently.
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
+              qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  }
+}
 #endif  // !defined(LITERT_DISABLE_NPU)
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,

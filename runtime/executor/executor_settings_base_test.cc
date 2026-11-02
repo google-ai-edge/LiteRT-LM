@@ -205,14 +205,29 @@ TEST(LlmExecutorConfigTest, NpuPerformanceMode) {
   EXPECT_EQ(oss.str(), "BURST");
 }
 
+TEST(LlmExecutorConfigTest, NpuPerformanceControl) {
+  std::stringstream oss;
+  oss << NpuPerformanceControl::kWhileLoaded;
+  EXPECT_EQ(oss.str(), "WHILE_LOADED");
+
+  oss.str("");
+  oss << NpuPerformanceControl::kPerInference;
+  EXPECT_EQ(oss.str(), "PER_INFERENCE");
+}
+
 TEST(LlmExecutorConfigTest, NpuOptions) {
   NpuOptions npu_options;
   EXPECT_EQ(npu_options.performance_mode, NpuPerformanceMode::kBurst);
+  EXPECT_EQ(npu_options.performance_control,
+            NpuPerformanceControl::kWhileLoaded);
 
   std::stringstream oss;
   npu_options.performance_mode = NpuPerformanceMode::kPowerSaver;
+  npu_options.performance_control = NpuPerformanceControl::kPerInference;
   oss << npu_options;
-  EXPECT_EQ(oss.str(), "NpuOptions{performance_mode: POWER_SAVER}");
+  EXPECT_EQ(oss.str(),
+            "NpuOptions{performance_mode: POWER_SAVER, performance_control: "
+            "PER_INFERENCE}");
 }
 
 TEST(LlmExecutorConfigTest, ModelAssets) {

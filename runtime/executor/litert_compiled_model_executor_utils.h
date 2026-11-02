@@ -301,6 +301,9 @@ absl::Status SetCommonGpuOptions(
 // `npu_options.performance_mode` is mapped to the Qualcomm HTP performance mode
 // and the Google Tensor performance mode. `NpuPerformanceMode::kVendorDefault`
 // leaves the vendor performance modes untouched.
+//
+// `npu_options.performance_control` is mapped to the Qualcomm HTP performance
+// control mode (kWhileLoaded -> kManual, kPerInference -> kAuto).
 absl::Status SetNpuOptions(const NpuOptions& npu_options,
                            litert::Options& options);
 #endif  // !defined(LITERT_DISABLE_NPU)

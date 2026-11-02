@@ -259,8 +259,20 @@ std::ostream& operator<<(std::ostream& os, const NpuPerformanceMode& mode) {
   return os << "UNKNOWN";
 }
 
+std::ostream& operator<<(std::ostream& os,
+                         const NpuPerformanceControl& control) {
+  switch (control) {
+    case NpuPerformanceControl::kWhileLoaded:
+      return os << "WHILE_LOADED";
+    case NpuPerformanceControl::kPerInference:
+      return os << "PER_INFERENCE";
+  }
+  return os << "UNKNOWN";
+}
+
 std::ostream& operator<<(std::ostream& os, const NpuOptions& npu_options) {
   return os << "NpuOptions{performance_mode: " << npu_options.performance_mode
+            << ", performance_control: " << npu_options.performance_control
             << "}";
 }
 

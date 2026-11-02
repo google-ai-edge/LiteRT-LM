@@ -1174,13 +1174,33 @@ absl::Status SetNpuPerformanceMode(NpuPerformanceMode mode,
   return absl::OkStatus();
 }
 
+// Applies `control` to the Qualcomm performance control mode.
+absl::Status SetNpuPerformanceControl(NpuPerformanceControl control,
+                                      litert::Options& options) {
+  using QualcommPerfCtrlMode = qualcomm::QualcommOptions::HtpPerfCtrlMode;
+
+  LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
+                          options.GetOptions<qualcomm::QualcommOptions>());
+  // No `default:`, so that -Wswitch flags a newly added enumerator.
+  switch (control) {
+    case NpuPerformanceControl::kWhileLoaded:
+      qualcomm_options.SetHtpPerfCtrlMode(QualcommPerfCtrlMode::kManual);
+      return absl::OkStatus();
+    case NpuPerformanceControl::kPerInference:
+      qualcomm_options.SetHtpPerfCtrlMode(QualcommPerfCtrlMode::kAuto);
+      return absl::OkStatus();
+  }
+  return absl::InvalidArgumentError(absl::StrCat(
+      "Unsupported NPU performance control: ", static_cast<int>(control)));
+}
+
 }  // namespace
 
 absl::Status SetNpuOptions(const NpuOptions& npu_options,
                            litert::Options& options) {
   ABSL_RETURN_IF_ERROR(
       SetNpuPerformanceMode(npu_options.performance_mode, options));
-  return absl::OkStatus();
+  return SetNpuPerformanceControl(npu_options.performance_control, options);
 }
 #endif  // !defined(LITERT_DISABLE_NPU)
 

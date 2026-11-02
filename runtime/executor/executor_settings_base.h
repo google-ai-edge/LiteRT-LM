@@ -159,12 +159,31 @@ enum class NpuPerformanceMode {
 };
 std::ostream& operator<<(std::ostream& os, const NpuPerformanceMode& mode);
 
+// Controls when the NPU performance mode is applied.
+enum class NpuPerformanceControl {
+  // The performance mode is applied when the model is loaded and held until it
+  // is unloaded (Qualcomm: HtpPerfCtrlMode::kManual).
+  kWhileLoaded,
+
+  // The performance mode is applied before each inference and released shortly
+  // after it, so that the NPU can return to a low power state while idle
+  // (Qualcomm: HtpPerfCtrlMode::kAuto).
+  kPerInference,
+};
+std::ostream& operator<<(std::ostream& os,
+                         const NpuPerformanceControl& control);
+
 // Vendor-agnostic NPU options applied when compiling a model for the NPU
 // backend. New NPU options should be added as fields of this struct.
 struct NpuOptions {
   // The NPU performance (power) mode. Defaults to kBurst to preserve the
   // historical behavior.
   NpuPerformanceMode performance_mode = NpuPerformanceMode::kBurst;
+
+  // When `performance_mode` is applied. Defaults to kWhileLoaded to preserve
+  // the historical behavior. Currently only honored by Qualcomm NPUs.
+  NpuPerformanceControl performance_control =
+      NpuPerformanceControl::kWhileLoaded;
 };
 std::ostream& operator<<(std::ostream& os, const NpuOptions& npu_options);
 
