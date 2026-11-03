@@ -21,6 +21,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -49,10 +50,17 @@ class TopPSampler : public Sampler {
   // sequence_size]. The scores_tensor is optional. If it is not nullptr, the
   // sampled scores are also written to it (in the same shape as the
   // ids_tensor). The scores are the log of the probability of the sampled
-  // token.
+  // token. The tokens are picked with uniform values drawn from the sampler's
+  // random number generator.
   absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
                                         TensorBuffer& ids_tensor,
                                         TensorBuffer* scores_tensor) override;
+
+  // Same as above, but with caller-supplied uniform values. See
+  // `Sampler::SampleToIdAndScoreBuffer()`.
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override;
 
   // Updates the configs of the sampler.
   absl::Status UpdateConfig(

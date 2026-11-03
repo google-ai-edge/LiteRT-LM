@@ -19,6 +19,7 @@
 #include <random>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/proto/sampler_params.pb.h"
 
@@ -45,6 +46,16 @@ class Sampler {
   virtual absl::Status SampleToIdAndScoreBuffer(
       const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
       TensorBuffer* scores_tensor) = 0;
+
+  // Same as above, but picks the token at (b, s) with
+  // `uniforms[b * sequence_size + s]` in [0, 1) instead of the sampler's
+  // generator. Returns `UnimplementedError` if unsupported.
+  virtual absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) {
+    return absl::UnimplementedError(
+        "SampleToIdAndScoreBuffer with uniforms is not implemented.");
+  }
 
   // Updates the configs of the sampler.
   virtual absl::Status UpdateConfig(

@@ -37,6 +37,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_layout.h"  // from @litert
 #include "litert/cc/internal/litert_shared_library.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -57,6 +58,7 @@
 #include "litert/vendors/nvidia/dispatch/greedy_sampler_c_api.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"
@@ -307,6 +309,15 @@ class NvidiaGreedySampler final : public Sampler {
     return absl::OkStatus();
   }
 
+  // Greedy sampling is deterministic, so the uniforms are only validated, as
+  // the host sampler does.
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
+    ABSL_RETURN_IF_ERROR(ValidateUniforms(uniforms, rows_));
+    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
+  }
+
   absl::Status UpdateConfig(
       const proto::SamplerParameters& sampler_params, int batch_size,
       std::shared_ptr<std::default_random_engine> /*rand_gen*/) override {
@@ -431,17 +442,17 @@ class LazyNvidiaGreedySampler : public Sampler {
   absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
                                         TensorBuffer& ids_tensor,
                                         TensorBuffer* scores_tensor) override {
-    if (!decided_) {
-      decided_ = true;
-      if (env_ != nullptr) {
-        ABSL_ASSIGN_OR_RETURN(
-            device_, TryCreateNvidiaGreedySampler(
-                         *env_, Backend::NPU, sampler_params_, logits_tensor));
-      }
-    }
-    Sampler& sampler = device_ != nullptr ? *device_ : *host_;
-    return sampler.SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
-                                            scores_tensor);
+    ABSL_ASSIGN_OR_RETURN(Sampler * sampler, ChooseSampler(logits_tensor));
+    return sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
+                                             scores_tensor);
+  }
+
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
+    ABSL_ASSIGN_OR_RETURN(Sampler * sampler, ChooseSampler(logits_tensor));
+    return sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
+                                             scores_tensor, uniforms);
   }
 
   absl::Status UpdateConfig(
@@ -454,6 +465,20 @@ class LazyNvidiaGreedySampler : public Sampler {
   }
 
  private:
+  // Makes the device-or-host choice on the first call after creation or a
+  // configuration update.
+  absl::StatusOr<Sampler*> ChooseSampler(const TensorBuffer& logits_tensor) {
+    if (!decided_) {
+      decided_ = true;
+      if (env_ != nullptr) {
+        ABSL_ASSIGN_OR_RETURN(
+            device_, TryCreateNvidiaGreedySampler(
+                         *env_, Backend::NPU, sampler_params_, logits_tensor));
+      }
+    }
+    return device_ != nullptr ? device_.get() : host_.get();
+  }
+
   const Environment* env_;
   proto::SamplerParameters sampler_params_;
   std::unique_ptr<Sampler> host_;

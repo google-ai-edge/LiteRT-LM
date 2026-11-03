@@ -56,6 +56,7 @@ cc_library(
     srcs = ["sampling_cpu_util.cc"],
     hdrs = ["sampling_cpu_util.h"],
     deps = [
+        ":sampling_uniforms",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -85,6 +86,7 @@ cc_library(
     hdrs = ["sampler.h"],
     deps = [
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/proto:sampler_params_cc_proto",
     ],
@@ -95,9 +97,39 @@ cc_test(
     srcs = ["sampling_cpu_util_test.cc"],
     deps = [
         ":sampling_cpu_util",
+        ":sampling_uniforms",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "sampling_uniforms",
+    srcs = ["sampling_uniforms.cc"],
+    hdrs = ["sampling_uniforms.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//support/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "sampling_uniforms_test",
+    srcs = ["sampling_uniforms_test.cc"],
+    deps = [
+        ":sampling_uniforms",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/types:span",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -170,8 +202,10 @@ cc_library(
     deps = [
         ":sampler",
         ":sampling_cpu_util",
+        ":sampling_uniforms",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
@@ -189,9 +223,11 @@ cc_test(
     name = "top_p_cpu_sampler_test",
     srcs = ["top_p_cpu_sampler_test.cc"],
     deps = [
+        ":sampling_uniforms",
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_expected",
@@ -201,6 +237,7 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:test_utils",
         "@litert//tflite/types:half",
     ],
 )

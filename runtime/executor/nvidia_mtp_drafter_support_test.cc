@@ -224,6 +224,47 @@ TEST(NvidiaMtpDrafterSupportTest, GreedySamplerFallsBackOffNvidiaBuffers) {
   }
 }
 
+TEST(NvidiaMtpDrafterSupportTest, GreedySamplerValidatesUniforms) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  for (Backend backend : {Backend::CPU, Backend::NPU}) {
+    SCOPED_TRACE(static_cast<int>(backend));
+    proto::SamplerParameters params;
+    params.set_type(proto::SamplerParameters::TOP_P);
+    params.set_k(1);
+    params.set_p(0.0f);
+    params.set_temperature(1.0f);
+    params.set_seed(0);
+    ASSERT_OK_AND_ASSIGN(auto sampler,
+                         CreateMtpGreedySampler(
+                             backend, /*batch_size=*/1, params, std::cref(env),
+                             /*sequence_size=*/1, /*vocab_size=*/8,
+                             ActivationDataType::FLOAT32));
+    ASSERT_NE(sampler, nullptr);
+    const std::vector<float> values = {0.1f, 0.2f, 0.7f, 0.3f,
+                                       0.0f, 0.4f, 0.5f, 0.6f};
+    LITERT_ASSERT_OK_AND_ASSIGN(auto logits,
+                                CreateTensorBuffer<float>({1, 1, 8}));
+    LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto ids, CreateTensorBuffer<int32_t>({1, 1}));
+
+    // Greedy sampling ignores the value of a valid uniform.
+    const std::vector<float> uniforms = {0.5f};
+    ASSERT_OK(
+        sampler->SampleToIdAndScoreBuffer(logits, ids, nullptr, uniforms));
+    std::vector<int32_t> id(1);
+    LITERT_ASSERT_OK(ids.Read<int32_t>(absl::MakeSpan(id)));
+    EXPECT_EQ(id[0], 2);
+
+    for (const std::vector<float>& invalid :
+         std::vector<std::vector<float>>{{}, {0.5f, 0.5f}, {1.0f}}) {
+      EXPECT_THAT(
+          sampler->SampleToIdAndScoreBuffer(logits, ids, nullptr, invalid),
+          StatusIs(absl::StatusCode::kInvalidArgument));
+    }
+  }
+}
+
 proto::SamplerParameters GreedyParameters() {
   proto::SamplerParameters params;
   params.set_type(proto::SamplerParameters::TOP_P);

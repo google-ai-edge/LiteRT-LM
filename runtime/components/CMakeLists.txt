@@ -277,6 +277,27 @@ target_link_libraries(runtime_components_sampler_factory
 )
 
 # ==============================================================================
+# Sampling Uniforms
+# ==============================================================================
+add_litertlm_library(runtime_components_sampling_uniforms STATIC
+  sampling_uniforms.cc
+)
+add_library(LiteRTLM::Runtime::Components::SamplingUniforms
+  ALIAS runtime_components_sampling_uniforms)
+
+target_include_directories(runtime_components_sampling_uniforms
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
+)
+
+target_link_libraries(runtime_components_sampling_uniforms
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Sampling CPU Util
 # ==============================================================================
 add_litertlm_library(runtime_components_sampling_cpu_util STATIC
@@ -294,6 +315,7 @@ target_include_directories(runtime_components_sampling_cpu_util
 
 target_link_libraries(runtime_components_sampling_cpu_util
    PUBLIC
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LITERTLM_DEPS
 )
 
@@ -404,6 +426,7 @@ target_link_libraries(runtime_components_top_p_cpu_sampler
   PUBLIC
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplingCpuUtil
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
     LiteRTLM::Runtime::Util::TensorBufferUtil
     LITERTLM_DEPS
@@ -432,6 +455,7 @@ target_link_libraries(runtime_components_libs INTERFACE
   LiteRTLM::Runtime::Components::PromptTemplate
   LiteRTLM::Runtime::Components::SamplerFactory
   LiteRTLM::Runtime::Components::SamplingCpuUtil
+  LiteRTLM::Runtime::Components::SamplingUniforms
   LiteRTLM::Runtime::Components::ScoringCpuUtil
   LiteRTLM::Runtime::Components::StopTokenDetector
   LiteRTLM::Runtime::Components::TokenIdUtil

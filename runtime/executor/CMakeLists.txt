@@ -643,6 +643,7 @@ target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Generated::Protobuf
     LITERTLM_DEPS
 )

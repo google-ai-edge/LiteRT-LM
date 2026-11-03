@@ -18,12 +18,14 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <random>
 #include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -31,13 +33,16 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 namespace {
 
+using ::absl_testing::StatusIs;
 using ::testing::ElementsAre;
 using ::testing::FloatNear;
 
@@ -338,6 +343,33 @@ TEST(TopPSamplerTest, UpdateConfig) {
   EXPECT_NE(ids.Value()[0], 4);
 }
 
+TEST(TopPSamplerTest, UpdateConfigRejectsNonPositiveBatchSize) {
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler,
+      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
+                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1));
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(3);
+  sampler_params.set_p(1.0);
+  sampler_params.set_temperature(1.0);
+  for (int batch_size : {0, -1}) {
+    EXPECT_THAT(sampler->UpdateConfig(sampler_params, batch_size, nullptr),
+                StatusIs(absl::StatusCode::kInvalidArgument))
+        << "batch_size=" << batch_size;
+  }
+
+  // The rejected updates leave the sampler usable with its batch size of 1.
+  const std::vector<float> logits = {0.0f, 1.0f, 0.0f};
+  auto logits_tensor = CopyToTensorBuffer<float>(logits, {1, 3});
+  ASSERT_TRUE(logits_tensor.HasValue());
+  std::vector<int> ids_vector(1);
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
+  ASSERT_TRUE(ids_tensor.HasValue());
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                              /*scores_tensor=*/nullptr));
+}
+
 TEST(TopPSamplerTest,
      SampleToIdAndScoreBuffer_GreedyScoresTensorNullAndNonNull) {
   auto sampler_or =
@@ -446,6 +478,77 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_ExactLogProbsViaCreate) {
   EXPECT_THAT(*scores, ElementsAre(FloatNear(-0.44018677f, 1e-5)));
 }
 
+// Probabilities 0.5, 0.3 and 0.2 for tokens 0, 1 and 2.
+std::vector<float> ThreeTokenLogits() {
+  return {std::log(0.5f), std::log(0.3f), std::log(0.2f)};
+}
+
+TEST(TopPSamplerTest, SampleWithUniforms_PerPosition) {
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler,
+      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
+                          /*batch_size=*/2, /*sequence_size=*/2, /*seed=*/1));
+  std::vector<float> logits;
+  for (int i = 0; i < 4; ++i) {
+    const std::vector<float> row = ThreeTokenLogits();
+    logits.insert(logits.end(), row.begin(), row.end());
+  }
+  auto logits_tensor = CopyToTensorBuffer<float>(logits, {2, 2, 3});
+  ASSERT_TRUE(logits_tensor.HasValue());
+  std::vector<int> ids_vector(4);
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {2, 2});
+  ASSERT_TRUE(ids_tensor.HasValue());
+
+  // Batch-major: (b0, s0), (b0, s1), (b1, s0), (b1, s1).
+  const std::vector<float> uniforms = {0.1f, 0.6f, 0.9f, 0.3f};
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                              /*scores_tensor=*/nullptr,
+                                              absl::MakeConstSpan(uniforms)));
+  auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(ids.HasValue());
+  EXPECT_THAT(*ids, ElementsAre(0, 1, 2, 0));
+}
+
+TEST(TopPSamplerTest, SampleWithoutUniforms_DrawsUniformsFromSeed) {
+  constexpr int kSeed = 123;
+  constexpr int kSteps = 32;
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler,
+      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
+                          /*batch_size=*/1, /*sequence_size=*/1, kSeed));
+  ASSERT_OK_AND_ASSIGN(
+      auto reference,
+      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
+                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/0));
+  auto logits_tensor = CopyToTensorBuffer<float>(ThreeTokenLogits(), {1, 3});
+  ASSERT_TRUE(logits_tensor.HasValue());
+  std::vector<int> ids_vector(1);
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
+  ASSERT_TRUE(ids_tensor.HasValue());
+  auto reference_ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
+  ASSERT_TRUE(reference_ids_tensor.HasValue());
+
+  // The sampler's own generator yields the same tokens as uniforms drawn from
+  // a generator with the same seed.
+  std::default_random_engine rng(kSeed);
+  for (int step = 0; step < kSteps; ++step) {
+    std::vector<float> uniforms(1);
+    DrawUniforms(rng, absl::MakeSpan(uniforms));
+    EXPECT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                                /*scores_tensor=*/nullptr));
+    EXPECT_OK(reference->SampleToIdAndScoreBuffer(
+        *logits_tensor, *reference_ids_tensor, /*scores_tensor=*/nullptr,
+        absl::MakeConstSpan(uniforms)));
+    auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
+    ASSERT_TRUE(ids.HasValue());
+    auto reference_ids = CopyFromTensorBuffer<int>(*reference_ids_tensor);
+    ASSERT_TRUE(reference_ids.HasValue());
+    EXPECT_EQ(*ids, *reference_ids) << "step=" << step;
+  }
+}
+
 }  // namespace
 }  // namespace litert::lm
-
