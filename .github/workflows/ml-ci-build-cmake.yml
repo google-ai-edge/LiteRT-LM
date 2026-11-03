@@ -82,13 +82,12 @@ jobs:
         run: |
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
           apt-get update && apt-get install -yq \
-            build-essential gcc clang cmake make gdb pkg-config \
-            openjdk-17-jdk-headless git wget curl unzip \
+            build-essential gcc clang lld cmake make gdb pkg-config \
+            openjdk-17-jdk-headless git wget curl unzip zstd \
             tar python3 python3-dev python3-pip git-lfs \
             python3-numpy ccache zlib1g-dev libssl-dev \
             libpng-dev libcurl4-openssl-dev libfftw3-dev \
-            golang-go npm patchelf \
-            apt-file && apt-file update
+            golang-go npm patchelf
           git lfs install
 
       - name: Install sccache
@@ -149,12 +148,64 @@ jobs:
         with:
           halt-dispatch-input: ${{ inputs.MyHaltForConnectionInput }}
 
+      - name: Restore CMake External Dependencies Cache
+        id: external-cache
+        run: |
+          LITERT_REF=$(awk -F'"' '/^LITERT_REF =/ {print $2}' WORKSPACE)
+          DEPS_HASH=$(cat CMakeLists.txt CMakePresets.json cmake/modules/external_project.cmake cmake/packages/*/*.cmake cmake/patches/*.cmake cmake/scripts/*.cmake | sha256sum | cut -c1-16)
+          CACHE_KEY="linux-x86_64-${DEPS_HASH}-${LITERT_REF:0:12}"
+          CACHE_URI="gs://${SCCACHE_GCS_BUCKET}/cmake-external-cache/${CACHE_KEY}.tar.zst"
+          echo "cache_uri=${CACHE_URI}" >> "$GITHUB_OUTPUT"
+          echo "Checking for CMake external cache at ${CACHE_URI}..."
+          if gcloud storage cp "${CACHE_URI}" /tmp/cmake-external-cache.tar.zst 2>/dev/null; then
+            echo "Cache hit! Extracting external dependencies..."
+            mkdir -p cmake/build/default/prebuild/build
+            tar -I 'zstd -d -T0' -xf /tmp/cmake-external-cache.tar.zst -C cmake/build/default/prebuild/build
+            rm -f /tmp/cmake-external-cache.tar.zst
+            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Cache miss for ${CACHE_URI}."
+            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Configure CMake
         run: |
           cmake --preset default
 
       - name: Build
         run: cmake --build cmake/build/default -j16
+
+      - name: Save CMake External Dependencies Cache
+        if: steps.external-cache.outputs.cache_hit != 'true'
+        run: |
+          CACHE_URI="${{ steps.external-cache.outputs.cache_uri }}"
+          echo "Archiving external dependencies to ${CACHE_URI}..."
+          tar \
+            --exclude='.git' \
+            --exclude='*.o' \
+            --exclude='*.d' \
+            --exclude='*.zip' \
+            --exclude='*.tar.gz' \
+            --exclude='CMakeFiles' \
+            --exclude='qnn_headers' \
+            --exclude='litecore_headers' \
+            --exclude='external/tokenizers-cpp/src/tokenizers-cpp_external-build/release' \
+            --exclude='external/abseil-cpp/src/absl_external' \
+            --exclude='external/abseil-cpp/src/absl_external-build' \
+            --exclude='external/googletest/src/gtest_external' \
+            --exclude='external/googletest/src/gtest_external-build' \
+            --exclude='external/protobuf/src/protobuf_external' \
+            --exclude='external/protobuf/src/protobuf_external-build' \
+            --exclude='external/flatbuffers/src/flatbuffers_external' \
+            --exclude='external/flatbuffers/src/flatbuffers_external-build' \
+            --exclude='external/re2/src/re2_external' \
+            --exclude='external/re2/src/re2_external-build' \
+            --exclude='external/tensorflow/src/tflite_external/third_party' \
+            -I 'zstd -T0 -3' \
+            -cf /tmp/cmake-external-cache.tar.zst \
+            -C cmake/build/default/prebuild/build external
+          gcloud storage cp /tmp/cmake-external-cache.tar.zst "${CACHE_URI}" || true
+          rm -f /tmp/cmake-external-cache.tar.zst
 
       - name: Show sccache stats
         if: always()

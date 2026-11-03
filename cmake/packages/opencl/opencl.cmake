@@ -18,23 +18,28 @@ set(LITERTLM_OPENCL_EXT_PREFIX ${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}/opencl_heade
 set(LITERTLM_OPENCL_SRC_DIR ${LITERTLM_OPENCL_EXT_PREFIX}/src/opencl_headers_external)
 set(LITERTLM_OPENCL_INCLUDE_DIR ${LITERTLM_OPENCL_SRC_DIR} CACHE INTERNAL "" FORCE)
 set(LITERTLM_OPENCL_TAG "v2024.05.08" CACHE STRING "OpenCL headers git tag")
+set(LITERTLM_OPENCL_EXTERNAL_DONE "${LITERTLM_OPENCL_EXT_PREFIX}/src/opencl_headers_external-stamp/opencl_headers_external-done" CACHE INTERNAL "")
 
-ExternalProject_Add(
-  opencl_headers_external
-  GIT_REPOSITORY https://github.com/KhronosGroup/OpenCL-Headers.git
-  GIT_TAG        ${LITERTLM_OPENCL_TAG}
-  PREFIX         ${LITERTLM_OPENCL_EXT_PREFIX}
-  UPDATE_COMMAND
-      git fetch origin ${LITERTLM_OPENCL_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+if(NOT EXISTS "${LITERTLM_OPENCL_EXTERNAL_DONE}")
+  ExternalProject_Add(
+    opencl_headers_external
+    GIT_REPOSITORY https://github.com/KhronosGroup/OpenCL-Headers.git
+    GIT_TAG        ${LITERTLM_OPENCL_TAG}
+    PREFIX         ${LITERTLM_OPENCL_EXT_PREFIX}
+    UPDATE_COMMAND ""
     PATCH_COMMAND
       ${CMAKE_COMMAND}
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND     ""
-  INSTALL_COMMAND   ""
-  GIT_SHALLOW       TRUE
-)
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND     ""
+    INSTALL_COMMAND   ""
+    GIT_SHALLOW       TRUE
+  )
+else()
+  message(STATUS "[LiteRTLM] OpenCL headers already present at: ${LITERTLM_OPENCL_INCLUDE_DIR}")
+  if(NOT TARGET opencl_headers_external)
+    add_custom_target(opencl_headers_external)
+  endif()
+endif()
 
 add_library(opencl_headers_lib INTERFACE)
 add_dependencies(opencl_headers_lib opencl_headers_external)

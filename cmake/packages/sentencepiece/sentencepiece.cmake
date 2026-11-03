@@ -22,6 +22,7 @@ setup_external_install_structure("${LITERTLM_SENTENCEPIECE_INSTALL_PREFIX}")
 
 set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
 
+if(NOT EXISTS "${LITERTLM_SENTENCEPIECE_EXTERNAL_DONE}")
   ExternalProject_Add(
     sentencepiece_external
     DEPENDS
@@ -29,11 +30,9 @@ set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
       protobuf_external
     GIT_REPOSITORY https://github.com/google/sentencepiece.git
     GIT_TAG        ${LITERTLM_SENTENCEPIECE_TAG}
+    GIT_SHALLOW    TRUE
     PREFIX         ${LITERTLM_SENTENCEPIECE_EXT_PREFIX}
-    UPDATE_COMMAND
-      git fetch origin ${LITERTLM_SENTENCEPIECE_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+    UPDATE_COMMAND ""
     PATCH_COMMAND
       ${CMAKE_COMMAND}
       "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
@@ -123,9 +122,22 @@ set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
         BYPRODUCTS ${LITERTLM_SENTENCEPIECE_TARGET_MAP_PATH}
     )
   endif()
+else()
+  message(STATUS "[LiteRTLM] SentencePiece already installed at: ${LITERTLM_SENTENCEPIECE_INSTALL_PREFIX}")
+  if(LITERTLM_GENERATE_TARGET_MAP)
+    execute_process(
+      COMMAND ${CMAKE_COMMAND}
+        "-DDEP_NAME=sentencepiece"
+        "-DSEARCH_DIR=${LITERTLM_SENTENCEPIECE_LIB_DIR}"
+        "-DSEARCH_STR=LITERTLM_SENTENCEPIECE_LIB_DIR"
+        "-DOUTPUT_FILE=${LITERTLM_SENTENCEPIECE_TARGET_MAP_PATH}"
+        -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+    )
+  endif()
   if(NOT TARGET sentencepiece_external)
     add_custom_target(sentencepiece_external)
   endif()
+endif()
 
 include(${LITERTLM_SENTENCEPIECE_AGGREGATE_PATH})
 generate_sentencepiece_aggregate()

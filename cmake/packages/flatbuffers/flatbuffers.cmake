@@ -33,12 +33,12 @@ if(NOT EXISTS "${LITERTLM_FLATBUFFERS_EXTERNAL_DONE}")
       https://github.com/google/flatbuffers.git
     GIT_TAG
       ${LITERTLM_FLATBUFFERS_TAG}
+    GIT_SHALLOW
+      TRUE
     PREFIX
       ${LITERTLM_FLATBUFFERS_EXT_PREFIX}
     UPDATE_COMMAND
-      git fetch origin ${LITERTLM_FLATBUFFERS_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+      ""
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
@@ -76,6 +76,16 @@ if(NOT EXISTS "${LITERTLM_FLATBUFFERS_EXTERNAL_DONE}")
   endif()
 else()
     message(STATUS "[LiteRTLM] Flatbuffers already installed at: ${LITERTLM_FLATBUFFERS_INSTALL_PREFIX}")
+    if(LITERTLM_GENERATE_TARGET_MAP)
+      execute_process(
+        COMMAND ${CMAKE_COMMAND}
+            "-DDEP_NAME=flatbuffers"
+            "-DSEARCH_DIR=${LITERTLM_FLATBUFFERS_LIB_DIR}"
+            "-DSEARCH_STR=LITERTLM_FLATBUFFERS_LIB_DIR"
+            "-DOUTPUT_FILE=${LITERTLM_FLATBUFFERS_TARGET_MAP_PATH}"
+            -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+      )
+    endif()
     if(NOT TARGET flatbuffers_external)
         add_custom_target(flatbuffers_external)
     endif()

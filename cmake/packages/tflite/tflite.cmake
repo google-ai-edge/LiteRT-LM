@@ -53,14 +53,15 @@ if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
             opencl_headers_external
             protobuf_external
             sentencepiece_external
-        GIT_REPOSITORY  https://github.com/tensorflow/tensorflow.git
-        GIT_TAG         ${LITERTLM_TFLITE_TAG}
         PREFIX          "${LITERTLM_TFLITE_EXT_PREFIX}"
         SOURCE_SUBDIR   "tensorflow/lite"
-        UPDATE_COMMAND
-            git fetch origin ${LITERTLM_TFLITE_TAG}
-            COMMAND git reset --hard FETCH_HEAD
-            COMMAND git clean -dfx
+        DOWNLOAD_COMMAND
+            ${CMAKE_COMMAND}
+            "-DSRC_DIR=<SOURCE_DIR>"
+            "-DREPO_URL=https://github.com/tensorflow/tensorflow.git"
+            "-DTAG=${LITERTLM_TFLITE_TAG}"
+            -P "${LITERTLM_SCRIPTS_DIR}/shallow_git_fetch.cmake"
+        UPDATE_COMMAND ""
         PATCH_COMMAND
             ${CMAKE_COMMAND}
             "-DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}"

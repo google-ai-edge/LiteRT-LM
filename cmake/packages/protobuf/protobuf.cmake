@@ -21,7 +21,7 @@ setup_external_install_structure("${LITERTLM_PROTOBUF_INSTALL_PREFIX}")
 set(LITERTLM_PROTOBUF_TAG "v36.1" CACHE STRING "Protobuf git tag")
 
 include(ExternalProject)
-if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
+if(NOT EXISTS "${LITERTLM_PROTOBUF_EXTERNAL_DONE}")
   message(STATUS "Protobuf not found. Configuring external build...")
   ExternalProject_Add(
     protobuf_external
@@ -32,12 +32,12 @@ if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
       https://github.com/protocolbuffers/protobuf
     GIT_TAG
       ${LITERTLM_PROTOBUF_TAG}
+    GIT_SHALLOW
+      TRUE
     PREFIX
       ${LITERTLM_PROTOBUF_EXT_PREFIX}
     UPDATE_COMMAND
-      git fetch origin ${LITERTLM_PROTOBUF_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+      ""
     PATCH_COMMAND
       ${CMAKE_COMMAND}
       "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
@@ -97,6 +97,16 @@ if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
   endif()
 else()
   message(STATUS "[LiteRTLM] Protobuf already installed at: ${LITERTLM_PROTOBUF_INSTALL_PREFIX}")
+  if(LITERTLM_GENERATE_TARGET_MAP)
+    execute_process(
+      COMMAND ${CMAKE_COMMAND}
+        "-DDEP_NAME=protobuf"
+        "-DSEARCH_DIR=${LITERTLM_PROTOBUF_LIB_DIR}"
+        "-DSEARCH_STR=LITERTLM_PROTOBUF_LIB_DIR"
+        "-DOUTPUT_FILE=${LITERTLM_PROTOBUF_TARGET_MAP_PATH}"
+        -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+    )
+  endif()
   if(NOT TARGET protobuf_external)
     add_custom_target(protobuf_external)
   endif()
