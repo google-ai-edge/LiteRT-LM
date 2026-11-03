@@ -31,6 +31,8 @@ if(NOT EXISTS "${LITERTLM_ABSL_EXTERNAL_DONE}")
       https://github.com/abseil/abseil-cpp
     GIT_TAG
       ${LITERTLM_ABSL_TAG}
+    GIT_SHALLOW
+      TRUE
     PREFIX
       ${LITERTLM_ABSL_EXT_PREFIX}
     SOURCE_DIR
@@ -38,9 +40,7 @@ if(NOT EXISTS "${LITERTLM_ABSL_EXTERNAL_DONE}")
     BINARY_DIR
       ${LITERTLM_ABSL_BUILD_DIR}
     UPDATE_COMMAND
-      git fetch origin ${LITERTLM_ABSL_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+      ""
     PATCH_COMMAND
       ${CMAKE_COMMAND}
       -DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}
@@ -90,6 +90,16 @@ if(NOT EXISTS "${LITERTLM_ABSL_EXTERNAL_DONE}")
     endif()
 else()
   message(STATUS "Abseil already installed at: ${LITERTLM_ABSL_INSTALL_PREFIX}")
+  if(LITERTLM_GENERATE_TARGET_MAP)
+    execute_process(
+      COMMAND ${CMAKE_COMMAND}
+        "-DDEP_NAME=absl"
+        "-DSEARCH_DIR=${LITERTLM_ABSL_LIB_DIR}"
+        "-DSEARCH_STR=LITERTLM_ABSL_LIB_DIR"
+        "-DOUTPUT_FILE=${LITERTLM_ABSL_TARGET_MAP_PATH}"
+        -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+    )
+  endif()
   if(NOT TARGET absl_external)
     add_custom_target(absl_external)
   endif()

@@ -104,8 +104,13 @@ set(LITERTLM_STAGING_DIR "${CMAKE_BINARY_DIR}/../tmp/lib"
     CACHE PATH "")
 set(LITERTLM_THIRD_PARTY_DIR "${CMAKE_BINARY_DIR}/third_party"
     CACHE PATH "")
-set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${CMAKE_BINARY_DIR}/external"
-    CACHE PATH "LiteRT-LM: Root directory for external projects")
+if(NOT LITERTLM_CROSSCOMPILING AND DEFINED LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR)
+    set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}"
+        CACHE PATH "LiteRT-LM: Root directory for external projects" FORCE)
+else()
+    set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${CMAKE_BINARY_DIR}/external"
+        CACHE PATH "LiteRT-LM: Root directory for external projects")
+endif()
 set(LITERTLM_IMPORTED_SRC_DIR "${LITERTLM_CMAKE_DIR}/import/src" CACHE PATH "")
 set(LITERTLM_IMPORTED_LITERT_SRC_DIR "${LITERTLM_IMPORTED_SRC_DIR}/litert" )
 set(LITERTLM_INCLUDE_PATHS
@@ -373,6 +378,17 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
         else()
             # Linux Linker (ELF)
             set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+            if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+                execute_process(
+                    COMMAND ${CMAKE_CXX_COMPILER} -fuse-ld=lld -Wl,--version
+                    OUTPUT_QUIET ERROR_QUIET
+                    RESULT_VARIABLE _LITERTLM_LLD_CHECK
+                )
+                if(_LITERTLM_LLD_CHECK EQUAL 0)
+                    message(STATUS "[LiteRTLM] Using LLD linker")
+                    set(_LITERTLM_LINK_MULTIDEF "-fuse-ld=lld ${_LITERTLM_LINK_MULTIDEF}")
+                endif()
+            endif()
             set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
             set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
             set(_LITERTLM_LINK_WHOLE_START "-Wl,--whole-archive")

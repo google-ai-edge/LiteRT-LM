@@ -20,7 +20,7 @@ setup_external_install_structure("${LITERTLM_RE2_INSTALL_PREFIX}")
 set(LITERTLM_RE2_TAG "main" CACHE STRING "RE2 git tag")
 
 include(ExternalProject)
-if(NOT EXISTS "${LITERTLM_RE2_CONFIG_CMAKE_FILE}")
+if(NOT EXISTS "${LITERTLM_RE2_EXTERNAL_DONE}")
   message(STATUS "RE2 not found. Configuring external build...")
   ExternalProject_Add(
     re2_external
@@ -30,12 +30,12 @@ if(NOT EXISTS "${LITERTLM_RE2_CONFIG_CMAKE_FILE}")
       https://github.com/google/re2/
     GIT_TAG
       ${LITERTLM_RE2_TAG}
+    GIT_SHALLOW
+      TRUE
     PREFIX
       ${LITERTLM_RE2_EXT_PREFIX}
     UPDATE_COMMAND
-      git fetch origin ${LITERTLM_RE2_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+      ""
     PATCH_COMMAND
       ${CMAKE_COMMAND}
       "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
@@ -84,6 +84,16 @@ if(NOT EXISTS "${LITERTLM_RE2_CONFIG_CMAKE_FILE}")
   endif()
 else()
   message(STATUS "RE2 already installed at: ${LITERTLM_RE2_INSTALL_PREFIX}")
+  if(LITERTLM_GENERATE_TARGET_MAP)
+    execute_process(
+      COMMAND ${CMAKE_COMMAND}
+          "-DDEP_NAME=re2"
+          "-DSEARCH_DIR=${LITERTLM_RE2_LIB_DIR}"
+          "-DSEARCH_STR=LITERTLM_RE2_LIB_DIR"
+          "-DOUTPUT_FILE=${LITERTLM_RE2_TARGET_MAP_PATH}"
+          -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+    )
+  endif()
   if(NOT TARGET re2_external)
     add_custom_target(re2_external)
   endif()

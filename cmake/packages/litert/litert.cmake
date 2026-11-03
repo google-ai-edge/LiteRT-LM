@@ -25,6 +25,7 @@ set(LITERTLM_LITERT_EXTERNAL_DONE ${LITERTLM_LITERT_STAMP_DIR}/litert_external-d
 set(LITERTLM_LITERT_TAG "main" CACHE STRING "LiteRT git tag")
 
 include(ExternalProject)
+if(NOT EXISTS "${LITERTLM_LITERT_EXTERNAL_DONE}")
   if(TARGET fetch_content_complete)
     ExternalProject_Add(
       litert_external
@@ -51,6 +52,7 @@ include(ExternalProject)
         https://github.com/google-ai-edge/LiteRT.git
       GIT_TAG
         ${LITERTLM_LITERT_TAG}
+      GIT_SHALLOW TRUE
       GIT_SUBMODULES ""
       GIT_SUBMODULES_RECURSE FALSE
       PREFIX
@@ -59,10 +61,7 @@ include(ExternalProject)
         litert
       BINARY_DIR
         ${LITERTLM_LITERT_BUILD_DIR}
-      UPDATE_COMMAND
-        git fetch origin ${LITERTLM_LITERT_TAG}
-        COMMAND git reset --hard FETCH_HEAD
-        COMMAND git clean -dfx
+      UPDATE_COMMAND ""
       PATCH_COMMAND
         ${CMAKE_COMMAND}
         "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
@@ -232,11 +231,23 @@ include(ExternalProject)
         BYPRODUCTS ${LITERTLM_LITERT_TARGET_MAP_PATH}
       )
     endif()
+  else()
+    message(FATAL_ERROR "fetch_content_complete does not exist")
+  endif()
 else()
-  message(FATAL_ERROR "fetch_content_complete does not exist")
+  message(STATUS "[LiteRTLM] LiteRT already installed at: ${LITERTLM_LITERT_INSTALL_PREFIX}")
+  if(LITERTLM_GENERATE_TARGET_MAP)
+    execute_process(
+      COMMAND ${CMAKE_COMMAND}
+        "-DDEP_NAME=litert"
+        "-DSEARCH_DIR=${LITERTLM_LITERT_BUILD_DIR}"
+        "-DSEARCH_STR=LITERTLM_LITERT_BUILD_DIR"
+        "-DOUTPUT_FILE=${LITERTLM_LITERT_TARGET_MAP_PATH}"
+        -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+    )
+  endif()
 endif()
 
-message(STATUS "[LiteRTLM] LiteRT already installed at: ${LITERTLM_LITERT_INSTALL_PREFIX}")
 if(NOT TARGET litert_external)
     add_custom_target(litert_external)
 endif()

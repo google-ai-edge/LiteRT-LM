@@ -65,6 +65,7 @@ FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
     GIT_TAG ${LITERTLM_CORROSION_TAG}
+    GIT_SHALLOW true
     SOURCE_DIR ${LITERTLM_CORROSION_SRC_DIR}
 )
 FetchContent_MakeAvailable(Corrosion)
@@ -81,6 +82,7 @@ FetchContent_Declare(
   llguidance
   GIT_REPOSITORY https://github.com/guidance-ai/llguidance.git
   GIT_TAG ${LITERTLM_LLGUIDANCE_TAG}
+  GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_LLGUIDANCE_SRC_DIR}
 )
 FetchContent_Populate(llguidance)
@@ -288,6 +290,9 @@ FetchContent_Declare(
 )
 block()
   set(BUILD_SHARED_LIBS OFF)
+  set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+  set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(zlib_lib)
 endblock()
 if(TARGET zlibstatic)

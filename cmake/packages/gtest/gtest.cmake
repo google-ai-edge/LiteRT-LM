@@ -33,12 +33,12 @@ if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
       https://github.com/google/googletest
     GIT_TAG
       ${LITERTLM_GTEST_TAG}
+    GIT_SHALLOW
+      TRUE
     PREFIX
       ${LITERTLM_GTEST_EXT_PREFIX}
     UPDATE_COMMAND
-      git fetch origin ${LITERTLM_GTEST_TAG}
-      COMMAND git reset --hard FETCH_HEAD
-      COMMAND git clean -dfx
+      ""
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
@@ -84,6 +84,16 @@ if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
   endif()
 else()
     message(STATUS "GoogleTest already installed at: ${LITERTLM_GTEST_INSTALL_PREFIX}")
+    if(LITERTLM_GENERATE_TARGET_MAP)
+      execute_process(
+        COMMAND ${CMAKE_COMMAND}
+            "-DDEP_NAME=gtest"
+            "-DSEARCH_DIR=${LITERTLM_GTEST_LIB_DIR}"
+            "-DSEARCH_STR=LITERTLM_GTEST_LIB_DIR"
+            "-DOUTPUT_FILE=${LITERTLM_GTEST_TARGET_MAP_PATH}"
+            -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+      )
+    endif()
     if(NOT TARGET gtest_external)
         add_custom_target(gtest_external)
     endif()
