@@ -20,9 +20,11 @@
 #include <cstring>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -31,12 +33,20 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 
 namespace {
+
+// Returns true if `token_ids[index]` is a vision token placeholder.
+bool IsVisionToken(absl::Span<const int> token_ids, int64_t index) {
+  return index >= 0 && index < static_cast<int64_t>(token_ids.size()) &&
+         token_ids[index] == ExecutorVisionData::kSpecialToken;
+}
 
 // Internal template for filling masks.
 // T: element type (int8_t or int16_t).
@@ -161,12 +171,21 @@ void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
 //     logic.
 //   window_size: The attention window size (only used if uses_ringbuffer is
 //     true).
+//   mask_type: The attention mask type of this mask. Only affects the current
+//     batch part: kBidirectional attends to all batch tokens, and
+//     kVisionBidirectional lets a vision query additionally attend to the later
+//     vision tokens of its contiguous run of vision tokens in the batch.
+//   token_ids: Optional raw (unclamped) token ids of the current batch, where
+//     vision tokens are ExecutorVisionData::kSpecialToken. Required for
+//     kVisionBidirectional to have any effect.
 template <typename T>
 void FillMaskSingle(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
                     const int32_t* input_tokens, int64_t input_tokens_size,
                     const bool* valid_mask, int64_t valid_mask_size,
                     T valid_val, T masked_val, int64_t capacity,
-                    bool uses_ringbuffer, int64_t window_size) {
+                    bool uses_ringbuffer, int64_t window_size,
+                    proto::AttentionMaskType mask_type,
+                    absl::Span<const int> token_ids) {
   // Number of tokens processed in this step (e.g., 1 for decode, chunk size for
   // prefill, or draft length for speculative verification).
   const int64_t batch_size = seq_q;
@@ -218,7 +237,37 @@ void FillMaskSingle(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
     }
 
     // Fill in the mask for the tokens in the current batch.
-    for (int64_t k_rel = 0; k_rel < batch_size; ++k_rel) {
+    //
+    // By default the query attends causally to the batch tokens at or before
+    // it. This mirrors FillRingBufferPrefillAttentionMask of the CPU/GPU
+    // executor: with kVisionBidirectional a vision query also attends to the
+    // later vision tokens of its contiguous run of vision tokens, and with
+    // kBidirectional the query attends to all batch tokens. Local masks are
+    // additionally bounded by the sliding window.
+    const bool apply_window = uses_ringbuffer && window_size > 0;
+    int64_t batch_start = 0;
+    int64_t batch_end = q;  // Last batch index (inclusive) to attend to.
+    if (mask_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL) {
+      batch_end = batch_size - 1;
+    } else if (mask_type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
+               IsVisionToken(token_ids, q)) {
+      int64_t search_end = static_cast<int64_t>(token_ids.size());
+      if (apply_window) {
+        search_end = std::min(search_end, q + window_size);
+      }
+      int64_t first_future_non_vision = q + 1;
+      while (first_future_non_vision < search_end &&
+             IsVisionToken(token_ids, first_future_non_vision)) {
+        ++first_future_non_vision;
+      }
+      batch_end = first_future_non_vision - 1;
+    }
+    if (apply_window) {
+      batch_start = std::max<int64_t>(0, q - window_size + 1);
+      batch_end = std::min(batch_end, q + window_size - 1);
+    }
+    for (int64_t k_rel = batch_start; k_rel <= batch_end && k_rel < batch_size;
+         ++k_rel) {
       // The current batch's tokens are appended after the history cache slots
       // [0, capacity-1] in the KV cache layout, so we offset by capacity.
       int64_t k = capacity + k_rel;
@@ -237,7 +286,7 @@ void FillMaskSingle(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
         }
       }
 
-      if (k_rel <= q && is_valid) {
+      if (is_valid) {
         row[k] = valid_val;
       }
     }
@@ -249,8 +298,9 @@ absl::Status UpdateInterleavedSWAMasks(
     int64_t seq_q, int64_t seq_k_local, int64_t seq_k_global, int32_t time_step,
     const int32_t* input_tokens, int64_t input_tokens_size,
     const bool* valid_mask, int64_t valid_mask_size,
-    int64_t sliding_window_size = 0, int64_t local_capacity = 0,
-    int64_t global_capacity = 0) {
+    int64_t sliding_window_size, int64_t local_capacity,
+    int64_t global_capacity, proto::AttentionMaskType global_mask_type,
+    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids) {
   // If capacities are not explicitly provided, fall back to calculating from
   // tensor dimensions (seq_k - seq_q).
   if (local_capacity <= 0) {
@@ -300,65 +350,75 @@ absl::Status UpdateInterleavedSWAMasks(
       FillMaskSingle<int8_t>(
           static_cast<int8_t*>(local_ptr), seq_q, seq_k_local, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 127,
-          -128, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+          -128, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
+          local_mask_type, token_ids);
     }
     if (global_ptr) {
       FillMaskSingle<int8_t>(
           static_cast<int8_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 127,
-          -128, global_capacity, /*uses_ringbuffer=*/false, 0);
+          -128, global_capacity, /*uses_ringbuffer=*/false, 0, global_mask_type,
+          token_ids);
     }
   } else if (element_type == ::litert::ElementType::Int16) {
     if (local_ptr) {
-      FillMaskSingle<int16_t>(
-          static_cast<int16_t*>(local_ptr), seq_q, seq_k_local, time_step,
-          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0,
-          -32767, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+      FillMaskSingle<int16_t>(static_cast<int16_t*>(local_ptr), seq_q,
+                              seq_k_local, time_step, input_tokens,
+                              input_tokens_size, valid_mask, valid_mask_size, 0,
+                              -32767, local_capacity, /*uses_ringbuffer=*/true,
+                              local_window_size, local_mask_type, token_ids);
     }
     if (global_ptr) {
       FillMaskSingle<int16_t>(
           static_cast<int16_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0,
-          -32767, global_capacity, /*uses_ringbuffer=*/false, 0);
+          -32767, global_capacity, /*uses_ringbuffer=*/false, 0,
+          global_mask_type, token_ids);
     }
   } else if (element_type == ::litert::ElementType::Float32) {
     if (local_ptr) {
-      FillMaskSingle<float>(
-          static_cast<float*>(local_ptr), seq_q, seq_k_local, time_step,
-          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0.0f,
-          -1e9f, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+      FillMaskSingle<float>(static_cast<float*>(local_ptr), seq_q, seq_k_local,
+                            time_step, input_tokens, input_tokens_size,
+                            valid_mask, valid_mask_size, 0.0f, -1e9f,
+                            local_capacity, /*uses_ringbuffer=*/true,
+                            local_window_size, local_mask_type, token_ids);
     }
     if (global_ptr) {
       FillMaskSingle<float>(
           static_cast<float*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0.0f,
-          -1e9f, global_capacity, /*uses_ringbuffer=*/false, 0);
+          -1e9f, global_capacity, /*uses_ringbuffer=*/false, 0,
+          global_mask_type, token_ids);
     }
   } else if (element_type == ::litert::ElementType::Float16) {
     if (local_ptr) {
       FillMaskSingle<uint16_t>(
           static_cast<uint16_t*>(local_ptr), seq_q, seq_k_local, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
-          0xFC00, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+          0xFC00, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
+          local_mask_type, token_ids);
     }
     if (global_ptr) {
       FillMaskSingle<uint16_t>(
           static_cast<uint16_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
-          0xFC00, global_capacity, /*uses_ringbuffer=*/false, 0);
+          0xFC00, global_capacity, /*uses_ringbuffer=*/false, 0,
+          global_mask_type, token_ids);
     }
   } else if (element_type == ::litert::ElementType::BFloat16) {
     if (local_ptr) {
       FillMaskSingle<uint16_t>(
           static_cast<uint16_t*>(local_ptr), seq_q, seq_k_local, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
-          0xFF80, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+          0xFF80, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
+          local_mask_type, token_ids);
     }
     if (global_ptr) {
       FillMaskSingle<uint16_t>(
           static_cast<uint16_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
-          0xFF80, global_capacity, /*uses_ringbuffer=*/false, 0);
+          0xFF80, global_capacity, /*uses_ringbuffer=*/false, 0,
+          global_mask_type, token_ids);
     }
   } else {
     return absl::InvalidArgumentError("Unsupported mask element type");
@@ -373,7 +433,8 @@ absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     int64_t sliding_window_size, bool uses_ringbuffer, int64_t global_capacity,
-    int64_t local_capacity) {
+    int64_t local_capacity, proto::AttentionMaskType global_mask_type,
+    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids) {
   static constexpr absl::string_view kMaskLocal = "mask_local";
   static constexpr absl::string_view kMaskGlobal = "mask_global";
   static constexpr absl::string_view kInputTimeStep = "time_step";
@@ -513,7 +574,18 @@ absl::Status HWMaskUpdate(
     return UpdateInterleavedSWAMasks(
         local_ptr, global_ptr, mask_type.ElementType(), seq_q, seq_k_local,
         seq_k_global, time_step, input_tokens, input_tokens_size, valid_mask,
-        valid_mask_size, sliding_window_size, local_capacity, global_capacity);
+        valid_mask_size, sliding_window_size, local_capacity, global_capacity,
+        global_mask_type, local_mask_type, token_ids);
+  }
+
+  // Models without a ring buffer, where all layers share one KV cache size:
+  // this path only fills causal masks.
+  if ((global_mask_type != proto::ATTENTION_MASK_TYPE_CAUSAL ||
+       local_mask_type != proto::ATTENTION_MASK_TYPE_CAUSAL) &&
+      seq_q > 1) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "Non-causal attention mask types are only supported for models with "
+           "interleaved sliding window attention; filling causal masks.";
   }
 
   // If we made it here, all layers use the same KV cache size.
@@ -569,12 +641,13 @@ absl::Status HWMaskUpdate(
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const NpuGraphLayout& layout) {
+    const NpuGraphLayout& layout, absl::Span<const int> token_ids) {
   int64_t local_capacity =
       layout.local_cache_length.value_or(layout.global_cache_length);
   return HWMaskUpdate(in_buffers, out_buffers, layout.sliding_window_size,
                       layout.uses_ringbuffer, layout.global_cache_length,
-                      local_capacity);
+                      local_capacity, layout.global_mask_type,
+                      layout.local_mask_type, token_ids);
 }
 
 absl::StatusOr<NpuMask> NpuMask::CreateForTest(
@@ -782,10 +855,27 @@ absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.prefill_output_buffers),
-        *layout_);
+        *layout_, prefill_token_ids_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
+  // The mask subgraph of the auxiliary model, as produced by the converter
+  // today (build_full_mask() in litert_torch's split_cache/attention_mask.py),
+  // only builds causal masks and receives clamped token ids, so it cannot
+  // express vision-bidirectional attention. Fail instead of silently attending
+  // causally over the image; use_hw_masking_for_npu computes these masks.
+  if (layout_ != nullptr &&
+      (layout_->local_mask_type ==
+           proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL ||
+       layout_->global_mask_type ==
+           proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL) &&
+      absl::c_linear_search(prefill_token_ids_,
+                            ExecutorVisionData::kSpecialToken)) {
+    return absl::FailedPreconditionError(
+        "The model requests vision-bidirectional attention masks, which the "
+        "auxiliary mask model does not support. Enable "
+        "use_hw_masking_for_npu to compute the masks on the CPU.");
+  }
   absl::string_view sig = signature.empty() ? kPrefillMaskBase : signature;
   auto res = compiled_model_->Run(
       sig,
@@ -888,6 +978,7 @@ absl::Status NpuMask::RunDrafter(absl::string_view signature) const {
 }
 
 absl::Status NpuMask::SetDecodeInput(int32_t step, int32_t token_id) {
+  last_prefill_token_was_vision_ = false;
   LITERT_RETURN_IF_ERROR(SetFirstElement(
       mask_context_.decode_input_buffers[MaskSignatures::kMaskInputTimeStep],
       step));
@@ -932,6 +1023,22 @@ absl::Status NpuMask::SetVerifyInput(int32_t start_step,
 
 absl::Status NpuMask::SetPrefillInput(int32_t start_step,
                                       absl::Span<const int> token_ids) {
+  // Keep the unclamped ids for vision-bidirectional masking, and warn when an
+  // image continues from the previous chunk: its earlier tokens were already
+  // processed with only the part of the image that was in their chunk.
+  prefill_token_ids_.assign(token_ids.begin(), token_ids.end());
+  if (!token_ids.empty()) {
+    if (last_prefill_token_was_vision_ && IsVisionToken(token_ids, 0)) {
+      ABSL_LOG(WARNING)
+          << "Vision tokens are split across prefill chunks (chunk starting at "
+             "step "
+          << start_step
+          << "); vision-bidirectional attention only applies within a chunk.";
+    }
+    last_prefill_token_was_vision_ =
+        IsVisionToken(token_ids, static_cast<int64_t>(token_ids.size()) - 1);
+  }
+
   LITERT_RETURN_IF_ERROR(SetFirstElement(
       mask_context_.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep],
       start_step));

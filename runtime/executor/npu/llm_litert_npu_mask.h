@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -57,6 +58,17 @@ struct MaskSignatures {
 // 1. Regular Prefill:
 //    mask_.SetPrefillInput(internal_start_step, tokens_to_embed);
 //    mask_.RunPrefill(prefill_signature);
+//
+//    `tokens_to_embed` are the token ids of the chunk as passed to the
+//    embedder, in chunk order, where image positions are
+//    ExecutorVisionData::kSpecialToken. When the layout's local (or global)
+//    mask type is ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL (e.g. Gemma4 12B),
+//    the hand-written mask update (MaskUpdateMethod::kWH) lets each vision
+//    token attend to the later vision tokens of its image within the chunk.
+//    The mask subgraph of the auxiliary model (MaskUpdateMethod::kModel), as
+//    produced by the converter today, only produces causal masks and does not
+//    know where the vision tokens are, so RunPrefill fails for
+//    vision-bidirectional masks with kModel.
 //
 // 2. Regular Single-Token Decode:
 //    mask_.SetDecodeInput(current_step, token_id);
@@ -155,6 +167,13 @@ class NpuMask {
       absl::string_view verify_signature);
 
   // --- Stage 1: Prefill ---
+  // `token_ids` are the token ids of the chunk as passed to the embedder, in
+  // chunk order, where image positions are `ExecutorVisionData::kSpecialToken`.
+  // The ids written to the `input_tokens` buffer are clamped to be
+  // non-negative: the auxiliary mask model expects real token ids, and the
+  // hand-written (kWH) mask update treats -1 in that buffer as padding when the
+  // model has no `valid_mask` input. An unclamped copy is kept separately to
+  // apply vision-bidirectional attention in the kWH mask update.
   absl::Status SetPrefillInput(int32_t start_step,
                                absl::Span<const int> token_ids);
   absl::Status RunPrefill(absl::string_view signature = "") const;
@@ -190,19 +209,36 @@ class NpuMask {
   const ::litert::CompiledModel* compiled_model_ = nullptr;
   InferenceContext mask_context_;
   const NpuGraphLayout* layout_ = nullptr;
+  // Unclamped token ids of the current prefill chunk (see SetPrefillInput).
+  std::vector<int> prefill_token_ids_;
+  // Whether the last token of the previous prefill chunk was a vision token.
+  // Only used to warn when an image is split across prefill chunks (its
+  // tokens then only attend bidirectionally within each chunk); the masks do
+  // not depend on it.
+  bool last_prefill_token_was_vision_ = false;
 };
 
 // Performs manual attention mask update (CPU fallback).
+//
+// `token_ids` are the optional token ids of the chunk, in chunk order, where
+// image positions are `ExecutorVisionData::kSpecialToken`. They are used to
+// apply vision-bidirectional attention within
+// the chunk when the layout's mask type requests it.
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const NpuGraphLayout& layout);
+    const NpuGraphLayout& layout, absl::Span<const int> token_ids = {});
 
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     int64_t sliding_window_size = 512, bool uses_ringbuffer = false,
-    int64_t global_capacity = 0, int64_t local_capacity = 0);
+    int64_t global_capacity = 0, int64_t local_capacity = 0,
+    proto::AttentionMaskType global_mask_type =
+        proto::ATTENTION_MASK_TYPE_CAUSAL,
+    proto::AttentionMaskType local_mask_type =
+        proto::ATTENTION_MASK_TYPE_CAUSAL,
+    absl::Span<const int> token_ids = {});
 
 }  // namespace litert::lm
 

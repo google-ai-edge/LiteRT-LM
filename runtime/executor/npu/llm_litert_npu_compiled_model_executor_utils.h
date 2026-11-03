@@ -242,6 +242,11 @@ struct NpuGraphLayout {
   std::optional<int> local_cache_length = std::nullopt;
   int sliding_window_size = 512;
   bool uses_ringbuffer = false;
+  // Attention mask types of the global and local (sliding window) attention
+  // layers, read from ExecutorMetadata.attention_mask_settings. E.g. Gemma4
+  // 12B uses a causal global mask and a vision-bidirectional local mask.
+  proto::AttentionMaskType global_mask_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+  proto::AttentionMaskType local_mask_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
   absl::flat_hash_map<std::string, KVCacheBuffer> kv_cache_buffers;
 
   // Resolves the graph layout giving preference to ExecutorMetadata when

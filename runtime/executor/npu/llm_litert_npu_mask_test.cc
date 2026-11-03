@@ -14,18 +14,23 @@
 
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/log_severity.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/scoped_mock_log.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -33,7 +38,10 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/proto/executor_metadata.pb.h"
 
 namespace litert::lm {
 namespace {
@@ -1501,6 +1509,374 @@ TEST_F(NpuMaskTest, HWMaskUpdateLayoutRejectsKeyDimNarrowerThanQueryDim) {
   layout.uses_ringbuffer = true;
 
   EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, layout).ok());
+}
+
+// =============================================================================
+// Vision-bidirectional attention (e.g. the local layers of Gemma4 12B).
+//
+// The CPU/GPU executor fills the same "ring buffer history | current chunk"
+// local mask layout with FillAttentionMask in RingBufferAttentionMaskMode::
+// kPrefill. The tests below use it as the reference for the NPU HWMaskUpdate.
+// =============================================================================
+
+constexpr int kV = ExecutorVisionData::kSpecialToken;
+constexpr int kVisionTestGlobalCapacity = 64;
+
+struct VisionMaskCase {
+  const char* name;
+  int time_step;      // Position of the first token of the chunk.
+  int chunk_len;      // Query length of the mask (the prefill signature size).
+  int ring_capacity;  // Local (ring buffer) KV cache capacity.
+  int window;         // Sliding window size.
+  std::vector<int> chunk_tokens;  // Raw chunk tokens, may be < chunk_len.
+};
+
+class NpuVisionMaskTest : public NpuMaskTest {
+ protected:
+  // Returns whether [q][k] of the local mask attends, as filled by the CPU/GPU
+  // executor. Only the first chunk_tokens.size() rows are filled.
+  std::vector<bool> ReferenceLocalMask(
+      const VisionMaskCase& c,
+      proto::AttentionMaskType mask_type =
+          proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL) {
+    const int num_tokens = c.chunk_tokens.size();
+    const int seq_k = c.ring_capacity + c.chunk_len;
+    // Full token history: text before the chunk, then the chunk's tokens.
+    std::vector<int> history(c.time_step, 7);
+    history.insert(history.end(), c.chunk_tokens.begin(), c.chunk_tokens.end());
+    TensorBuffer mask = CreateTensorBufferWithDims(
+        std::vector<uint8_t>(c.chunk_len * seq_k, 0), ElementType::Bool,
+        {1, 1, c.chunk_len, seq_k});
+    ABSL_CHECK_OK(FillAttentionMask(mask, c.time_step, num_tokens, mask_type,
+                                    absl::MakeConstSpan(history), c.window,
+                                    RingBufferAttentionMaskMode::kPrefill));
+    auto lock = TensorBufferScopedLock::Create<bool>(
+        mask, TensorBuffer::LockMode::kRead);
+    ABSL_CHECK(lock.HasValue());
+    return std::vector<bool>(lock->second, lock->second + c.chunk_len * seq_k);
+  }
+
+  template <typename T>
+  std::vector<bool> RunNpuMask(const VisionMaskCase& c, ElementType type,
+                               T valid_val,
+                               proto::AttentionMaskType local_mask_type,
+                               bool read_global = false) {
+    const int num_tokens = c.chunk_tokens.size();
+    const int seq_k_local = c.ring_capacity + c.chunk_len;
+    const int seq_k_global = kVisionTestGlobalCapacity + c.chunk_len;
+    std::vector<uint8_t> valid(c.chunk_len, 0);
+    std::fill(valid.begin(), valid.begin() + num_tokens, 1);
+
+    absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+    in_buffers.emplace("time_step", CreateTensorBufferWithDims(
+                                        std::vector<int32_t>{c.time_step},
+                                        ElementType::Int32, {1}));
+    in_buffers.emplace(
+        "valid_mask",
+        CreateTensorBufferWithDims(valid, ElementType::Bool, {1, c.chunk_len}));
+    absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+    out_buffers.emplace(
+        "mask_local",
+        CreateTensorBufferWithDims(std::vector<T>(c.chunk_len * seq_k_local),
+                                   type, {1, c.chunk_len, seq_k_local}));
+    out_buffers.emplace(
+        "mask_global",
+        CreateTensorBufferWithDims(std::vector<T>(c.chunk_len * seq_k_global),
+                                   type, {1, c.chunk_len, seq_k_global}));
+
+    ABSL_CHECK_OK(HWMaskUpdate(
+        in_buffers, out_buffers, c.window, /*uses_ringbuffer=*/true,
+        kVisionTestGlobalCapacity, c.ring_capacity,
+        proto::ATTENTION_MASK_TYPE_CAUSAL, local_mask_type, c.chunk_tokens));
+
+    const int seq_k = read_global ? seq_k_global : seq_k_local;
+    auto lock = TensorBufferScopedLock::Create<T>(
+        out_buffers.at(read_global ? "mask_global" : "mask_local"),
+        TensorBuffer::LockMode::kRead);
+    ABSL_CHECK(lock.HasValue());
+    std::vector<bool> attends(c.chunk_len * seq_k);
+    for (int i = 0; i < attends.size(); ++i) {
+      attends[i] = lock->second[i] == valid_val;
+    }
+    return attends;
+  }
+
+  std::vector<bool> RunNpuLocalMaskFloat(
+      const VisionMaskCase& c,
+      proto::AttentionMaskType local_mask_type =
+          proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL) {
+    return RunNpuMask<float>(c, ElementType::Float32, 0.0f, local_mask_type);
+  }
+};
+
+std::vector<VisionMaskCase> VisionMaskCases() {
+  return {
+      {"ImageInMiddle",
+       0,
+       16,
+       16,
+       16,
+       {1, 2, kV, kV, kV, kV, kV, kV, 3, 4, 5, 6, 7, 8, 9, 10}},
+      {"ImagesAtChunkStartAndEnd",
+       5,
+       16,
+       16,
+       16,
+       {kV, kV, kV, 1, 2, 3, 4, 5, 6, 7, 8, 9, kV, kV, kV, kV}},
+      {"TwoImages",
+       3,
+       16,
+       16,
+       16,
+       {1, kV, kV, kV, 2, 3, kV, kV, kV, kV, 4, 5, 6, 7, 8, 9}},
+      {"WholeChunkIsImage", 0, 16, 16, 16, std::vector<int>(16, kV)},
+      {"RingBufferWrappedWindowSmallerThanRing",
+       40,
+       16,
+       24,
+       20,
+       {1, 2, kV, kV, kV, kV, kV, kV, kV, kV, 3, 4, kV, kV, 5, 6}},
+      {"WindowSmallerThanChunk",
+       10,
+       16,
+       8,
+       8,
+       {1, kV, kV, kV, kV, kV, kV, kV, kV, kV, kV, kV, kV, 2, 3, 4}},
+      {"PaddedChunk", 7, 16, 16, 16, {1, kV, kV, kV, kV, 2, 3, kV, kV}},
+  };
+}
+
+TEST_F(NpuVisionMaskTest, LocalMaskMatchesCpuGpuExecutorRingBufferMask) {
+  for (const VisionMaskCase& c : VisionMaskCases()) {
+    SCOPED_TRACE(c.name);
+    const std::vector<bool> expected = ReferenceLocalMask(c);
+    const std::vector<bool> actual = RunNpuLocalMaskFloat(c);
+    const int seq_k = c.ring_capacity + c.chunk_len;
+    // The reference only fills the rows of real tokens.
+    for (int q = 0; q < c.chunk_tokens.size(); ++q) {
+      for (int k = 0; k < seq_k; ++k) {
+        EXPECT_EQ(actual[q * seq_k + k], expected[q * seq_k + k])
+            << "q=" << q << " k=" << k
+            << (k < c.ring_capacity
+                    ? absl::StrCat(" (history slot ", k, ")")
+                    : absl::StrCat(" (chunk key ", k - c.ring_capacity, ")"));
+      }
+    }
+  }
+}
+
+TEST_F(NpuVisionMaskTest, LocalMaskIsTheSameForAllElementTypes) {
+  for (const VisionMaskCase& c : VisionMaskCases()) {
+    SCOPED_TRACE(c.name);
+    const auto local = proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+    const std::vector<bool> expected = RunNpuLocalMaskFloat(c);
+    EXPECT_EQ(RunNpuMask<int8_t>(c, ElementType::Int8, int8_t{127}, local),
+              expected);
+    EXPECT_EQ(RunNpuMask<int16_t>(c, ElementType::Int16, int16_t{0}, local),
+              expected);
+    EXPECT_EQ(RunNpuMask<uint16_t>(c, ElementType::Float16, uint16_t{0}, local),
+              expected);
+    EXPECT_EQ(
+        RunNpuMask<uint16_t>(c, ElementType::BFloat16, uint16_t{0}, local),
+        expected);
+  }
+}
+
+// The example from the design discussion: chunk "T T V V V V T T".
+TEST_F(NpuVisionMaskTest, VisionQueriesAttendToTheirWholeImageRun) {
+  const VisionMaskCase c = {"Example", 0, 8,
+                            8,         8, {1, 2, kV, kV, kV, kV, 3, 4}};
+  const std::vector<bool> attends = RunNpuLocalMaskFloat(c);
+  const int seq_k = c.ring_capacity + c.chunk_len;
+  auto chunk_attends = [&](int q, int k_rel) {
+    return attends[q * seq_k + c.ring_capacity + k_rel];
+  };
+  // Expected attended chunk keys [0, end] per query.
+  const std::vector<int> expected_end = {0, 1, 5, 5, 5, 5, 6, 7};
+  for (int q = 0; q < c.chunk_len; ++q) {
+    for (int k_rel = 0; k_rel < c.chunk_len; ++k_rel) {
+      EXPECT_EQ(chunk_attends(q, k_rel), k_rel <= expected_end[q])
+          << "q=" << q << " k_rel=" << k_rel;
+    }
+  }
+  // Nothing is in the history yet at time step 0.
+  for (int q = 0; q < c.chunk_len; ++q) {
+    for (int k = 0; k < c.ring_capacity; ++k) {
+      EXPECT_FALSE(attends[q * seq_k + k]) << "q=" << q << " k=" << k;
+    }
+  }
+}
+
+TEST_F(NpuVisionMaskTest, CausalLocalMaskTypeIgnoresVisionTokens) {
+  const VisionMaskCase c = {"Example", 0, 8,
+                            8,         8, {1, 2, kV, kV, kV, kV, 3, 4}};
+  const std::vector<bool> attends =
+      RunNpuLocalMaskFloat(c, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  const int seq_k = c.ring_capacity + c.chunk_len;
+  for (int q = 0; q < c.chunk_len; ++q) {
+    for (int k_rel = 0; k_rel < c.chunk_len; ++k_rel) {
+      EXPECT_EQ(attends[q * seq_k + c.ring_capacity + k_rel], k_rel <= q)
+          << "q=" << q << " k_rel=" << k_rel;
+    }
+  }
+}
+
+TEST_F(NpuVisionMaskTest, GlobalMaskStaysCausalWithVisionTokens) {
+  const VisionMaskCase c = {"Example", 3, 8,
+                            8,         8, {1, 2, kV, kV, kV, kV, 3, 4}};
+  const std::vector<bool> attends = RunNpuMask<float>(
+      c, ElementType::Float32, 0.0f,
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL, /*read_global=*/true);
+  const int seq_k = kVisionTestGlobalCapacity + c.chunk_len;
+  for (int q = 0; q < c.chunk_len; ++q) {
+    for (int k = 0; k < kVisionTestGlobalCapacity; ++k) {
+      EXPECT_EQ(attends[q * seq_k + k], k < c.time_step)
+          << "q=" << q << " k=" << k;
+    }
+    for (int k_rel = 0; k_rel < c.chunk_len; ++k_rel) {
+      EXPECT_EQ(attends[q * seq_k + kVisionTestGlobalCapacity + k_rel],
+                k_rel <= q)
+          << "q=" << q << " k_rel=" << k_rel;
+    }
+  }
+}
+
+// ATTENTION_MASK_TYPE_BIDIRECTIONAL: every query of the chunk (text and vision)
+// attends to all tokens of the chunk within the sliding window, as in the
+// CPU/GPU executor.
+TEST_F(NpuVisionMaskTest, BidirectionalLocalMaskMatchesCpuGpuExecutor) {
+  for (const VisionMaskCase& c : VisionMaskCases()) {
+    SCOPED_TRACE(c.name);
+    const std::vector<bool> expected =
+        ReferenceLocalMask(c, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+    const std::vector<bool> actual =
+        RunNpuLocalMaskFloat(c, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+    const int seq_k = c.ring_capacity + c.chunk_len;
+    for (int q = 0; q < c.chunk_tokens.size(); ++q) {
+      for (int k = 0; k < seq_k; ++k) {
+        EXPECT_EQ(actual[q * seq_k + k], expected[q * seq_k + k])
+            << "q=" << q << " k=" << k;
+      }
+    }
+  }
+}
+
+class NpuMaskSplitImageWarningTest : public NpuVisionMaskTest {
+ protected:
+  absl::StatusOr<NpuMask> CreateMask(int chunk_len) {
+    InferenceContext ctx;
+    ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+        CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                   {1});
+    ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+        CreateTensorBufferWithDims(std::vector<int32_t>(chunk_len, 0),
+                                   ElementType::Int32, {1, chunk_len});
+    ctx.decode_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+        CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                   {1});
+    return NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
+                                  std::move(ctx), &layout_);
+  }
+
+  NpuGraphLayout layout_;
+};
+
+TEST_F(NpuMaskSplitImageWarningTest, WarnsWhenAnImageContinuesInTheNextChunk) {
+  LITERT_ASSERT_OK_AND_ASSIGN(NpuMask mask, CreateMask(/*chunk_len=*/4));
+  absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(log, Log(absl::LogSeverity::kWarning, testing::_,
+                       testing::HasSubstr("split across prefill chunks")))
+      .Times(1);
+  log.StartCapturingLogs();
+  // The image starts in the first chunk and continues in the second one.
+  LITERT_ASSERT_OK(mask.SetPrefillInput(0, {1, 2, kV, kV}));
+  LITERT_ASSERT_OK(mask.SetPrefillInput(4, {kV, kV, 3}));
+}
+
+TEST_F(NpuMaskSplitImageWarningTest, NoWarningWhenAnImageStartsAChunk) {
+  LITERT_ASSERT_OK_AND_ASSIGN(NpuMask mask, CreateMask(/*chunk_len=*/4));
+  absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(log, Log(absl::LogSeverity::kWarning, testing::_,
+                       testing::HasSubstr("split across prefill chunks")))
+      .Times(0);
+  log.StartCapturingLogs();
+  // The first chunk ends with text, so the image starting the second chunk is
+  // complete within it.
+  LITERT_ASSERT_OK(mask.SetPrefillInput(0, {1, 2, 3, 4}));
+  LITERT_ASSERT_OK(mask.SetPrefillInput(4, {kV, kV, 5}));
+}
+
+TEST_F(NpuMaskSplitImageWarningTest, NoWarningAfterDecode) {
+  LITERT_ASSERT_OK_AND_ASSIGN(NpuMask mask, CreateMask(/*chunk_len=*/4));
+  absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+  EXPECT_CALL(log, Log(absl::LogSeverity::kWarning, testing::_,
+                       testing::HasSubstr("split across prefill chunks")))
+      .Times(0);
+  log.StartCapturingLogs();
+  // A decode step between the two prefills: the image in the second prefill
+  // is a new image, not a continuation.
+  LITERT_ASSERT_OK(mask.SetPrefillInput(0, {1, 2, kV, kV}));
+  LITERT_ASSERT_OK(mask.SetDecodeInput(4, 7));
+  LITERT_ASSERT_OK(mask.SetPrefillInput(5, {kV, kV, 3}));
+}
+
+// NpuMask keeps the clamped ids for the mask model input, but uses the raw ids
+// for the CPU mask update.
+TEST_F(NpuVisionMaskTest, NpuMaskRunPrefillUsesUnclampedTokenIds) {
+  constexpr int kChunk = 8;
+  constexpr int kRing = 8;
+  InferenceContext ctx;
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+      CreateTensorBufferWithDims(std::vector<int32_t>(kChunk, 0),
+                                 ElementType::Int32, {1, kChunk});
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputValidMask] =
+      CreateTensorBufferWithDims(std::vector<uint8_t>(kChunk, 0),
+                                 ElementType::Bool, {1, kChunk});
+  ctx.prefill_output_buffers.emplace(
+      "mask_local", CreateTensorBufferWithDims(
+                        std::vector<float>(kChunk * (kRing + kChunk)),
+                        ElementType::Float32, {1, kChunk, kRing + kChunk}));
+  ctx.prefill_output_buffers.emplace(
+      "mask_global",
+      CreateTensorBufferWithDims(
+          std::vector<float>(kChunk * (kVisionTestGlobalCapacity + kChunk)),
+          ElementType::Float32,
+          {1, kChunk, kVisionTestGlobalCapacity + kChunk}));
+
+  NpuGraphLayout layout;
+  layout.global_cache_length = kVisionTestGlobalCapacity;
+  layout.local_cache_length = kRing;
+  layout.sliding_window_size = kRing;
+  layout.uses_ringbuffer = true;
+  layout.local_mask_type = proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
+                                        std::move(ctx), &layout));
+
+  const std::vector<int> tokens = {1, 2, kV, kV, kV, kV, 3, 4};
+  LITERT_ASSERT_OK(mask.SetPrefillInput(0, tokens));
+  LITERT_ASSERT_OK(mask.RunPrefill());
+
+  {
+    auto tokens_lock = TensorBufferScopedLock::Create<int32_t>(
+        mask.Context().prefill_input_buffers.at(
+            MaskSignatures::kMaskInputTokens),
+        TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(tokens_lock.HasValue());
+    EXPECT_EQ(tokens_lock->second[2], 0);  // Vision token clamped to 0.
+  }
+  auto local_lock = TensorBufferScopedLock::Create<float>(
+      mask.Context().prefill_output_buffers.at("mask_local"),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock.HasValue());
+  const float* row2 = local_lock->second + 2 * (kRing + kChunk);
+  // The first vision token attends to the last vision token, but not to the
+  // text token after the image.
+  EXPECT_EQ(row2[kRing + 5], kValidMaskValue);
+  EXPECT_EQ(row2[kRing + 6], kMaskedMaskValue);
 }
 
 }  // namespace

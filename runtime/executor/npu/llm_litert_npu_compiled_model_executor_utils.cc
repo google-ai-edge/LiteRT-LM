@@ -1233,6 +1233,14 @@ NpuGraphLayout NpuGraphLayout::Resolve(
     layout.sliding_window_size = *layout.local_cache_length;
   }
 
+  // 4. Resolve the attention mask types with GetAttentionMaskParams(), the
+  // helper the CPU/GPU executor uses, so that both executors interpret
+  // ExecutorMetadata.attention_mask_settings the same way.
+  const AttentionMaskParams mask_params =
+      GetAttentionMaskParams(executor_metadata);
+  layout.global_mask_type = mask_params.global_type;
+  layout.local_mask_type = mask_params.local_type;
+
   return layout;
 }
 

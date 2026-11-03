@@ -1321,5 +1321,51 @@ TEST_F(DrafterContextTest,
                          "expects shape [1, 1, 1, 1024]")));
 }
 
+TEST_F(ExecutorUtilsTest, ResolveGraphLayout_Gemma4_12bAttentionMaskTypes) {
+  // Mirrors the attention_mask_settings of the Gemma4 12B executor metadata:
+  // causal global layers and vision-bidirectional local (ring buffer) layers.
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  proto::ExecutorMetadata metadata;
+  auto* llm_meta = metadata.mutable_llm_executor_metadata();
+  auto* sb = llm_meta->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_LOCAL_KEY_CACHE);
+  sb->set_minimum_sequence_length(1024);
+  sb->set_maximum_sequence_length(1024);
+  auto* mask_settings = llm_meta->mutable_attention_mask_settings();
+  mask_settings->set_attention_mask_type(proto::ATTENTION_MASK_TYPE_CAUSAL);
+  mask_settings->set_local_attention_mask_type(
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL);
+  mask_settings->set_sliding_window_size(1024);
+
+  NpuGraphLayout layout =
+      NpuGraphLayout::Resolve(1024, 16383, buffers, &metadata);
+  EXPECT_TRUE(layout.uses_ringbuffer);
+  EXPECT_EQ(layout.sliding_window_size, 1024);
+  EXPECT_EQ(layout.global_mask_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  EXPECT_EQ(layout.local_mask_type,
+            proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL);
+}
+
+TEST_F(ExecutorUtilsTest,
+       ResolveGraphLayout_LocalMaskTypeDefaultsToGlobalMaskType) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  proto::ExecutorMetadata metadata;
+  metadata.mutable_llm_executor_metadata()
+      ->mutable_attention_mask_settings()
+      ->set_attention_mask_type(proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+
+  NpuGraphLayout layout =
+      NpuGraphLayout::Resolve(128, 1024, buffers, &metadata);
+  EXPECT_EQ(layout.global_mask_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+  EXPECT_EQ(layout.local_mask_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+}
+
+TEST_F(ExecutorUtilsTest, ResolveGraphLayout_MaskTypesDefaultToCausal) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  NpuGraphLayout layout = NpuGraphLayout::Resolve(128, 1024, buffers, nullptr);
+  EXPECT_EQ(layout.global_mask_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  EXPECT_EQ(layout.local_mask_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+}
+
 }  // namespace
 }  // namespace litert::lm
