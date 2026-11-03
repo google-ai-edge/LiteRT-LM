@@ -183,6 +183,12 @@ TEST(DataUtilsTest, NormalizeContent_String) {
   EXPECT_EQ(NormalizeContent(content), expected);
 }
 
+TEST(DataUtilsTest, NormalizeContent_EmptyString) {
+  const ordered_json content = "";
+  const ordered_json expected = ordered_json::array();
+  EXPECT_EQ(NormalizeContent(content), expected);
+}
+
 TEST(DataUtilsTest, NormalizeContent_Object) {
   const ordered_json content = {{"type", "text"}, {"text", "Hello"}};
   const ordered_json expected = {{{"type", "text"}, {"text", "Hello"}}};
@@ -198,6 +204,13 @@ TEST(DataUtilsTest, NormalizeMessageContent_StringContent) {
   const ordered_json msg = {{"role", "user"}, {"content", "Hello"}};
   const ordered_json expected = {
       {"role", "user"}, {"content", {{{"type", "text"}, {"text", "Hello"}}}}};
+  EXPECT_EQ(NormalizeMessageContent(msg), expected);
+}
+
+TEST(DataUtilsTest, NormalizeMessageContent_EmptyStringContent) {
+  const ordered_json msg = {{"role", "user"}, {"content", ""}};
+  const ordered_json expected = {{"role", "user"},
+                                 {"content", ordered_json::array()}};
   EXPECT_EQ(NormalizeMessageContent(msg), expected);
 }
 
