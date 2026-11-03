@@ -125,4 +125,24 @@ describe('Session', () => {
     finishPrefill();
     await p;
   });
+
+  it('throws errors returned by Wasm', async () => {
+    const session = new Session(mockWasmSession, mockMutexes);
+    const prefillError = new Error('prefill failed');
+    mockWasmSession.runPrefill.and.returnValue(Promise.resolve(prefillError));
+    await expectAsync(session.runPrefill(['test']))
+        .toBeRejectedWith(prefillError);
+
+    const decodeError = new Error('decode failed');
+    mockWasmSession.runDecode.and.returnValue(Promise.resolve(decodeError));
+    await expectAsync(session.runDecode()).toBeRejectedWith(decodeError);
+
+    const cloneError = new Error('clone failed');
+    mockWasmSession.clone.and.returnValue(cloneError);
+    await expectAsync(session.clone()).toBeRejectedWith(cloneError);
+
+    // The session is not left busy.
+    mockWasmSession.runPrefill.and.returnValue(Promise.resolve());
+    await expectAsync(session.runPrefill(['test'])).toBeResolved();
+  });
 });

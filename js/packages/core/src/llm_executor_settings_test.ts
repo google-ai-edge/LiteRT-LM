@@ -19,6 +19,7 @@ import {LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core
 
 import {Cleanup} from './cleanup.js';
 import {createStreamingModelAssets} from './stream_utils.js';
+import {unwrapWasmResult} from './wasm_binding_types.js';
 
 describe('LlmExecutorSettings', () => {
   let liteRtLm: LiteRtLm;
@@ -36,8 +37,9 @@ describe('LlmExecutorSettings', () => {
     cleanup = new Cleanup();
     ({modelAssets} = await createStreamingModelAssets(
          new Blob([]), liteRtLm.liteRtLmWasm, cleanup));
-    engineSettings = await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-        modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+    engineSettings = unwrapWasmResult(
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
     llmExecutorSettings = engineSettings.getMutableMainExecutorSettings();
   });
 
@@ -76,15 +78,15 @@ describe('LlmExecutorSettings', () => {
     expect(llmExecutorSettings.getBackendConfigGpu()).toEqual(gpuConfig);
   });
 
-  it('throws error if getting CPU config when GPU config is set', () => {
+  it('returns an error if getting CPU config when GPU config is set', () => {
     const gpuConfig = {
       max_top_k: 42,
       external_tensor_mode: true,
     };
     llmExecutorSettings.setBackendConfigGpu(gpuConfig);
-    expect(() => {
-      llmExecutorSettings.getBackendConfigCpu();
-    }).toThrowError(/Backend config is not valid/);
+    const result = llmExecutorSettings.getBackendConfigCpu();
+    expect(result).toEqual(jasmine.any(Error));
+    expect((result as Error).message).toMatch(/Backend config is not valid/);
   });
 
   it('sets and gets sampler backend', () => {

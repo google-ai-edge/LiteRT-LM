@@ -236,27 +236,28 @@ export function wasmEngineSettingsToEngineSettings(
 
   let backendConfig: CpuConfig|GpuConfig|GpuArtisanConfig;
   let backend: Backend;
-  try {
-    // This isn't ideal, but there's no way to get what backend config is set.
-    backendConfig = wasmExecutorSettings.getBackendConfigCpu();
+  // This isn't ideal, but there's no way to get what backend config is set.
+  const cpuConfig = wasmExecutorSettings.getBackendConfigCpu();
+  if (!(cpuConfig instanceof Error)) {
+    backendConfig = cpuConfig;
     backend = Backend.CPU;
-  } catch (e) {
-    try {
-      backendConfig = wasmExecutorSettings.getBackendConfigGpu();
+  } else {
+    const gpuConfig = wasmExecutorSettings.getBackendConfigGpu();
+    if (!(gpuConfig instanceof Error)) {
+      backendConfig = gpuConfig;
       backend = Backend.GPU;
-    } catch (e) {
-      try {
-        const wasmGpuArtisanConfig =
-            wasmExecutorSettings.getBackendConfigGpuArtisan();
-        backendConfig = {
-          ...wasmGpuArtisanConfig,
-          supported_lora_ranks: consumeEmscriptenVectorToArray(
-              wasmGpuArtisanConfig.supported_lora_ranks),
-        };
-        backend = Backend.GPU_ARTISAN;
-      } catch (e) {
+    } else {
+      const wasmGpuArtisanConfig =
+          wasmExecutorSettings.getBackendConfigGpuArtisan();
+      if (wasmGpuArtisanConfig instanceof Error) {
         throw new Error('Unsupported backend config');
       }
+      backendConfig = {
+        ...wasmGpuArtisanConfig,
+        supported_lora_ranks: consumeEmscriptenVectorToArray(
+            wasmGpuArtisanConfig.supported_lora_ranks),
+      };
+      backend = Backend.GPU_ARTISAN;
     }
   }
 

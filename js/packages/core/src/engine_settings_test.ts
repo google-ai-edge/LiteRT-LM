@@ -19,6 +19,7 @@ import {Backend, fillWasmEngineSettingsFromEngineSettings, LiteRtLm, loadLiteRtL
 
 import {Cleanup} from './cleanup.js';
 import {createStreamingModelAssets} from './stream_utils.js';
+import {unwrapWasmResult} from './wasm_binding_types.js';
 
 describe('EngineSettings', () => {
   let liteRtLm: LiteRtLm;
@@ -38,17 +39,17 @@ describe('EngineSettings', () => {
   });
 
   it('creates EngineSettings', async () => {
-    const engineSettings =
+    const engineSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
     expect(engineSettings).toBeDefined();
     engineSettings.delete();
   });
 
   it('fills partial CPU backendConfig with defaults', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -58,8 +59,8 @@ describe('EngineSettings', () => {
           },
         },
         Backend.CPU, liteRtLm.liteRtLmWasm);
-    const cpuConfig =
-        wasmSettings.getMutableMainExecutorSettings().getBackendConfigCpu();
+    const cpuConfig = unwrapWasmResult(
+        wasmSettings.getMutableMainExecutorSettings().getBackendConfigCpu());
     expect(cpuConfig).toEqual({
       kv_increment_size: jasmine.any(Number),
       prefill_chunk_size: jasmine.any(Number),
@@ -69,9 +70,9 @@ describe('EngineSettings', () => {
   });
 
   it('fills partial GPU backendConfig with defaults', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -81,8 +82,8 @@ describe('EngineSettings', () => {
           },
         },
         Backend.GPU, liteRtLm.liteRtLmWasm);
-    const gpuConfig =
-        wasmSettings.getMutableMainExecutorSettings().getBackendConfigGpu();
+    const gpuConfig = unwrapWasmResult(
+        wasmSettings.getMutableMainExecutorSettings().getBackendConfigGpu());
     expect(gpuConfig).toEqual({
       max_top_k: 3,
       external_tensor_mode: jasmine.any(Boolean),
@@ -91,9 +92,9 @@ describe('EngineSettings', () => {
   });
 
   it('fills partial GPU_ARTISAN backendConfig with defaults', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -121,9 +122,9 @@ describe('EngineSettings', () => {
   });
 
   it('round-trips maxNumImages', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -138,10 +139,10 @@ describe('EngineSettings', () => {
   });
 
   it('round-trips multimodal vision settings', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(
             modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU,
-            liteRtLm.liteRtLmWasm.Backend.CPU, undefined);
+            liteRtLm.liteRtLmWasm.Backend.CPU, undefined));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -159,10 +160,10 @@ describe('EngineSettings', () => {
   });
 
   it('round-trips multimodal audio settings', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(
             modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU, undefined,
-            liteRtLm.liteRtLmWasm.Backend.CPU);
+            liteRtLm.liteRtLmWasm.Backend.CPU));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -178,9 +179,9 @@ describe('EngineSettings', () => {
 
   it('leaves vision and audio backends unset for text-only settings',
      async () => {
-       const wasmSettings =
+       const wasmSettings = unwrapWasmResult(
            await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-               modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
        const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
        expect(resolved.visionBackend).toBeUndefined();
        expect(resolved.audioBackend).toBeUndefined();
@@ -188,9 +189,9 @@ describe('EngineSettings', () => {
      });
 
   it('leaves the speculative decoding config unset by default', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {model: '/path/to/model', backend: Backend.GPU},
         Backend.GPU, liteRtLm.liteRtLmWasm);
@@ -203,9 +204,9 @@ describe('EngineSettings', () => {
   });
 
   it('resolves unset advanced settings to the C++ defaults', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
     expect(wasmSettings.getMutableMainExecutorSettings().getAdvancedSettings())
         .toBeUndefined();
     expect(wasmEngineSettingsToEngineSettings(
@@ -216,9 +217,9 @@ describe('EngineSettings', () => {
   });
 
   it('round-trips the speculative decoding config', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
     fillWasmEngineSettingsFromEngineSettings(
         wasmSettings, {
           model: '/path/to/model',
@@ -239,9 +240,9 @@ describe('EngineSettings', () => {
 
   it('keeps the speculative decoding config when advancedSettings are set',
      async () => {
-       const wasmSettings =
+       const wasmSettings = unwrapWasmResult(
            await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-               modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
        fillWasmEngineSettingsFromEngineSettings(
            wasmSettings, {
              model: '/path/to/model',
@@ -262,9 +263,9 @@ describe('EngineSettings', () => {
      });
 
   it('rejects an out-of-range lenience', async () => {
-    const wasmSettings =
+    const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
     expect(
         () => fillWasmEngineSettingsFromEngineSettings(
             wasmSettings, {
