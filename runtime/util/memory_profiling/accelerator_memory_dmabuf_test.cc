@@ -12,22 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The dma-buf reader on canned fdinfo files, so that it can run on Linux in CI;
-// the live check against a device is in accelerator_memory_android_test.cc.
-
 #include "runtime/util/memory_profiling/accelerator_memory_dmabuf.h"
 
-#include <sys/stat.h>
-
 #include <cstdint>
-#include <fstream>
-#include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/fake_proc_self.h"
 
 namespace litert::lm {
 namespace {
@@ -38,30 +31,6 @@ using ::testing::IsEmpty;
 using ::testing::Pair;
 
 constexpr uint64_t kMb = 1024 * 1024;
-
-// A fake /proc/self directory, private to the current test: `fdinfo/<fd>`
-// files with the given contents and no `fd/` directory, so inode lookups
-// through `fd/` fail the way they do on a kernel that does not expose them.
-class FakeProcSelf {
- public:
-  FakeProcSelf()
-      : dir_(absl::StrCat(
-            testing::TempDir(), "/proc_self_",
-            testing::UnitTest::GetInstance()->current_test_info()->name())) {
-    mkdir(dir_.c_str(), 0755);
-    mkdir(absl::StrCat(dir_, "/fdinfo").c_str(), 0755);
-  }
-
-  void AddFd(int fd, absl::string_view fdinfo) {
-    std::ofstream file(absl::StrCat(dir_, "/fdinfo/", fd));
-    file << fdinfo;
-  }
-
-  const std::string& dir() const { return dir_; }
-
- private:
-  std::string dir_;
-};
 
 TEST(ReadDmaBufSummaryTest, MissingDirectoryIsEmpty) {
   const DmaBufSummary summary =

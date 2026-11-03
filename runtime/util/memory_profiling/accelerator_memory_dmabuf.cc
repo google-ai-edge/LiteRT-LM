@@ -14,51 +14,43 @@
 
 #include "runtime/util/memory_profiling/accelerator_memory_dmabuf.h"
 
-#include <dirent.h>
 #include <sys/stat.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <fstream>
-#include <optional>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/strings/strip.h"  // from @com_google_absl
 #include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/fdinfo.h"
 
 namespace litert::lm {
 
 namespace {
 
-// Returns the value of an fdinfo line of the form "<key>:\t<value>" or
-// "<key>: <value>", or std::nullopt if `line` is not for `key`.
-std::optional<absl::string_view> FdinfoValue(absl::string_view line,
-                                             absl::string_view key) {
-  if (!absl::ConsumePrefix(&line, key) || !absl::ConsumePrefix(&line, ":")) {
-    return std::nullopt;
-  }
-  return absl::StripAsciiWhitespace(line);
+// The value of `key` parsed as an integer, or 0 if absent or malformed.
+uint64_t IntField(const FdinfoFields& fields, absl::string_view key) {
+  const auto it = fields.find(key);
+  uint64_t value = 0;
+  if (it != fields.end()) (void)absl::SimpleAtoi(it->second, &value);
+  return value;
+}
+
+std::string StringField(const FdinfoFields& fields, absl::string_view key) {
+  const auto it = fields.find(key);
+  return it == fields.end() ? std::string() : it->second;
 }
 
 }  // namespace
 
 DmaBufSummary ReadDmaBufSummary(absl::string_view proc_self_dir) {
-  DmaBufSummary summary;
-  const std::string fdinfo_dir = absl::StrCat(proc_self_dir, "/fdinfo");
-  DIR* dir = opendir(fdinfo_dir.c_str());
-  if (dir == nullptr) {
-    return summary;
-  }
-
   struct DmaBufItem {
     uint64_t size = 0;
     std::string name;
@@ -66,60 +58,38 @@ DmaBufSummary ReadDmaBufSummary(absl::string_view proc_self_dir) {
   };
   std::unordered_map<uint64_t, DmaBufItem> buffers;
 
-  struct dirent* de = nullptr;
-  while ((de = readdir(dir)) != nullptr) {
-    if (de->d_name[0] == '.') {
-      continue;
-    }
-    std::ifstream file(absl::StrCat(fdinfo_dir, "/", de->d_name));
-    if (!file.is_open()) {
-      continue;
-    }
+  ForEachFdinfo(proc_self_dir, [&](absl::string_view fd_name,
+                                   const FdinfoFields& fields) {
+    const uint64_t size = IntField(fields, "size");
+    const std::string exp_name = StringField(fields, "exp_name");
+    if (size == 0 || exp_name.empty()) return;  // Not a DMA-BUF.
 
-    uint64_t cur_ino = 0;
-    uint64_t cur_size = 0;
-    std::string cur_name;
-    std::string cur_exp;
-    std::string line;
-    while (std::getline(file, line)) {
-      if (const auto value = FdinfoValue(line, "size")) {
-        (void)absl::SimpleAtoi(*value, &cur_size);
-      } else if (const auto value = FdinfoValue(line, "ino")) {
-        (void)absl::SimpleAtoi(*value, &cur_ino);
-      } else if (const auto value = FdinfoValue(line, "exp_name")) {
-        cur_exp = std::string(*value);
-      } else if (const auto value = FdinfoValue(line, "name")) {
-        cur_name = std::string(*value);
-      }
-    }
-
-    if (cur_size == 0 || cur_exp.empty()) {
-      continue;  // Not a DMA-BUF.
-    }
-    if (cur_ino == 0) {
+    uint64_t inode = IntField(fields, "ino");
+    if (inode == 0) {
       // Older kernels do not list the inode in fdinfo; take it from the
       // descriptor itself, and as a last resort key by descriptor number.
       struct stat st;
-      if (stat(absl::StrCat(proc_self_dir, "/fd/", de->d_name).c_str(), &st) ==
+      if (stat(absl::StrCat(proc_self_dir, "/fd/", fd_name).c_str(), &st) ==
           0) {
-        cur_ino = st.st_ino;
+        inode = st.st_ino;
       } else {
-        (void)absl::SimpleAtoi(de->d_name, &cur_ino);
+        (void)absl::SimpleAtoi(fd_name, &inode);
       }
     }
-    buffers[cur_ino] = DmaBufItem{
-        .size = cur_size,
-        .name = cur_name.empty() ? cur_exp : cur_name,
-        .exp_name = cur_exp,
+    const std::string name = StringField(fields, "name");
+    buffers[inode] = DmaBufItem{
+        .size = size,
+        .name = name.empty() ? exp_name : name,
+        .exp_name = exp_name,
     };
-  }
-  closedir(dir);
+  });
 
+  DmaBufSummary summary;
   summary.entries.reserve(buffers.size());
-  for (const auto& [ino, item] : buffers) {
+  for (const auto& [inode, item] : buffers) {
     summary.total_bytes += item.size;
     summary.entries.push_back({
-        .inode = ino,
+        .inode = inode,
         .size_bytes = item.size,
         .name = item.name,
         .exp_name = item.exp_name,
