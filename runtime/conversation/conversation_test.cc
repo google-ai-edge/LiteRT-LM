@@ -582,9 +582,22 @@ TEST_P(ConversationTest, CountTokens) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*engine, config));
 
+  // Empty vector returns 0 tokens.
+  EXPECT_THAT(conversation->CountTokens({}), testing::status::IsOkAndHolds(0));
+
   Message user_message = {{"role", "user"}, {"content", "Hello"}};
-  ASSERT_OK_AND_ASSIGN(int tokens, conversation->CountTokens(user_message));
+  ASSERT_OK_AND_ASSIGN(int tokens, conversation->CountTokens({user_message}));
   EXPECT_GT(tokens, 0);
+
+  // Multi-message vector returns more tokens than a single message.
+  std::vector<Message> multi_messages = {
+      {{"role", "user"}, {"content", "Hello"}},
+      {{"role", "model"}, {"content", "Hi"}},
+      {{"role", "user"}, {"content", "How are you?"}},
+  };
+  ASSERT_OK_AND_ASSIGN(int multi_tokens,
+                       conversation->CountTokens(multi_messages));
+  EXPECT_GT(multi_tokens, tokens);
 
   // Verify that CountTokens did not mutate the conversation or prefill the
   // session.
@@ -592,21 +605,26 @@ TEST_P(ConversationTest, CountTokens) {
   EXPECT_EQ(current_tokens, 0);
   EXPECT_TRUE(conversation->GetHistory().empty());
 
-  // Message array input should fail
+  // Message array input (non-object Message) should fail.
   Message array_message = nlohmann::ordered_json::array({
       {{"role", "user"}, {"content", "Hello"}},
       {{"role", "model"}, {"content", "Hi"}},
       {{"role", "user"}, {"content", "How are you?"}},
   });
-  EXPECT_THAT(conversation->CountTokens(array_message),
+  EXPECT_THAT(conversation->CountTokens({array_message}),
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 
-  // Multi-turn history: send first turn and count prospective next turn
+  // Multi-turn history: send first turn and count prospective next turns
+  // on non-empty conversation history.
   ASSERT_OK(conversation->SendMessage(user_message).status());
   Message next_message = {{"role", "user"}, {"content", "Next question"}};
   ASSERT_OK_AND_ASSIGN(int next_tokens,
-                       conversation->CountTokens(next_message));
+                       conversation->CountTokens({next_message}));
   EXPECT_GT(next_tokens, 0);
+
+  ASSERT_OK_AND_ASSIGN(int next_multi_tokens,
+                       conversation->CountTokens(multi_messages));
+  EXPECT_GT(next_multi_tokens, next_tokens);
 }
 
 TEST_P(ConversationTest, CountTokensWithPreface) {
@@ -634,7 +652,7 @@ TEST_P(ConversationTest, CountTokensWithPreface) {
                        Conversation::Create(*engine, config));
 
   Message user_message = {{"role", "user"}, {"content", "Hello"}};
-  ASSERT_OK_AND_ASSIGN(int tokens, conversation->CountTokens(user_message));
+  ASSERT_OK_AND_ASSIGN(int tokens, conversation->CountTokens({user_message}));
   EXPECT_GT(tokens, 0);
 
   // When prefill_preface_on_init is enabled, the preface tokens were already
@@ -679,9 +697,9 @@ TEST_P(ConversationTest, CountTokensWithImage) {
        {{{"type", "text"}, {"text", "What is this?"}},
         {{"type", "image"}, {"path", GetTestdataPath(kTestImageFilePath)}}}}};
   ASSERT_OK_AND_ASSIGN(int text_tokens,
-                       conversation->CountTokens(text_message));
+                       conversation->CountTokens({text_message}));
   ASSERT_OK_AND_ASSIGN(int image_tokens,
-                       conversation->CountTokens(image_message));
+                       conversation->CountTokens({image_message}));
   // The image consumes kNumTokensPerImage tokens, plus a few tokens for the
   // delimiters around it.
   EXPECT_GE(image_tokens - text_tokens, kNumTokensPerImage);
@@ -694,7 +712,7 @@ TEST_P(ConversationTest, CountTokensWithImage) {
       {"content",
        {{{"type", "text"}, {"text", "What is this?"}},
         {{"type", "image"}, {"path", GetTestdataPath(kTestTokenizerPath)}}}}};
-  EXPECT_THAT(conversation->CountTokens(invalid_image_message),
+  EXPECT_THAT(conversation->CountTokens({invalid_image_message}),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -719,7 +737,7 @@ TEST_P(ConversationTest,
   optional_args.args = Gemma4DataProcessorArguments{.visual_token_budget = 300};
 
   EXPECT_THAT(
-      conversation->CountTokens(user_message, optional_args),
+      conversation->CountTokens({user_message}, optional_args),
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("Visual token budget (300) cannot be larger than the "
                          "engine's max vision tokens per image (200).")));
@@ -866,12 +884,12 @@ TEST_P(ConversationTest, SendMessageNotFittingInContextFails) {
   std::string long_text = "Hello";
   Message long_message = {{"role", "user"}, {"content", long_text}};
   ASSERT_OK_AND_ASSIGN(int long_message_tokens,
-                       conversation->CountTokens(long_message));
+                       conversation->CountTokens({long_message}));
   while (tokens_after_first_turn + long_message_tokens <= kMaxNumTokens) {
     absl::StrAppend(&long_text, " Hello");
     long_message = {{"role", "user"}, {"content", long_text}};
     ASSERT_OK_AND_ASSIGN(long_message_tokens,
-                         conversation->CountTokens(long_message));
+                         conversation->CountTokens({long_message}));
   }
   ASSERT_LT(long_message_tokens, kMaxNumTokens);
 

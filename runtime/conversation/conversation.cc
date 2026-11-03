@@ -1068,15 +1068,20 @@ absl::StatusOr<int> Conversation::GetTokenCount() const {
 }
 
 absl::StatusOr<int> Conversation::CountTokens(
-    const Message& message, const OptionalArgs& optional_args) const {
-  if (!message.is_object()) {
-    return absl::InvalidArgumentError("Message must be a JSON object.");
+    const std::vector<Message>& messages,
+    const OptionalArgs& optional_args) const {
+  for (const auto& message : messages) {
+    if (!message.is_object()) {
+      return absl::InvalidArgumentError("Message must be a JSON object.");
+    }
   }
   absl::MutexLock lock(history_mutex_);  // NOLINT
-  std::vector<Message> messages = {message};
 
   ABSL_RETURN_IF_ERROR(
       ValidateVisualTokenBudgetForEngine(optional_args, engine_));
+  if (messages.empty()) {
+    return 0;
+  }
 
   // Only what is needed to count the tokens of any media is computed, so the
   // expensive parts of media preprocessing are skipped.
