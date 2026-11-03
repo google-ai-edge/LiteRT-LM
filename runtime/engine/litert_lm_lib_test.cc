@@ -669,6 +669,31 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_CpuConfig) {
   EXPECT_EQ(cpu_config_or->prefill_chunk_size, 512);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_CustomBackendConfig) {
+  RegisterCustomBackend("custom_test_backend");
+  RegisterCustomBackend("other_custom_backend");
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "custom_test_backend";
+  settings.custom_backend_options = {{"custom_test_backend.num_threads", "64"},
+                                     {"custom_test_backend.max_clusters", "2"}};
+
+  auto engine_settings_or = CreateEngineSettings(settings);
+  ASSERT_OK(engine_settings_or.status());
+  const auto& main_settings = engine_settings_or->GetMainExecutorSettings();
+  EXPECT_EQ(main_settings.GetCustomBackendOption("num_threads"), "64");
+  EXPECT_EQ(main_settings.GetCustomBackendOption("max_clusters"), "2");
+  EXPECT_EQ(main_settings.GetCustomBackendOption("unset_key"), std::nullopt);
+
+  settings.custom_backend_options = {
+      {"other_custom_backend.num_threads", "64"}};
+  EXPECT_THAT(CreateEngineSettings(settings),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSettings_GpuConfig) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /

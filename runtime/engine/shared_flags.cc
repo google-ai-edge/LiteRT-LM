@@ -276,6 +276,10 @@ ABSL_FLAG(std::string, gpu_use_ir_model, "default",
           "Whether to use the IR model path on the GPU backend. One of "
           "\"enabled\", \"disabled\", or \"default\". \"default\" is currently "
           "disabled.");
+ABSL_FLAG(std::vector<std::string>, custom_backend_options, {},
+          "Comma-separated <backend>.<option>=<value> pairs forwarded to "
+          "custom executor backends (e.g., "
+          "--custom_backend_options=gemma_cpp.num_threads=64).");
 
 namespace litert::lm {
 

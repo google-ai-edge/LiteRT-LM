@@ -14,18 +14,23 @@
 
 #include "runtime/executor/llm_executor_settings.h"
 
+#include <cstddef>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
@@ -97,6 +102,40 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
   os << "use_lazy_warmup_for_npu: "
      << config.use_lazy_warmup_for_npu << "\n";
+  return os;
+}
+
+absl::Status CustomBackendConfig::SetOptionsFromStrings(
+    const std::vector<std::string>& key_value_pairs) {
+  for (absl::string_view entry : key_value_pairs) {
+    entry = absl::StripAsciiWhitespace(entry);
+    if (entry.empty()) {
+      continue;
+    }
+    const size_t eq_pos = entry.find('=');
+    if (eq_pos == absl::string_view::npos) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid custom backend option '", entry,
+                       "': expected 'key=value' format."));
+    }
+    const absl::string_view key =
+        absl::StripAsciiWhitespace(entry.substr(0, eq_pos));
+    const absl::string_view value =
+        absl::StripAsciiWhitespace(entry.substr(eq_pos + 1));
+    if (key.empty()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid custom backend option '", entry,
+                       "': key must not be empty."));
+    }
+    SetOption(key, value);
+  }
+  return absl::OkStatus();
+}
+
+std::ostream& operator<<(std::ostream& os, const CustomBackendConfig& config) {
+  for (const auto& [key, value] : config.options) {
+    os << key << ": " << value << "\n";
+  }
   return os;
 }
 
@@ -221,12 +260,14 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     ModelAssets model_assets, Backend backend,
     std::optional<Backend> sampler_backend) {
   LlmExecutorSettings settings(std::move(model_assets));
-  if (backend == Backend::CPU || IsCustomBackend(backend)) {
+  if (backend == Backend::CPU) {
     CpuConfig config;
     config.kv_increment_size = 16;
     config.prefill_chunk_size = -1;
     config.number_of_threads = 4;
     settings.SetBackendConfig(config);
+  } else if (IsCustomBackend(backend)) {
+    settings.SetBackendConfig(CustomBackendConfig());
   } else if (backend == Backend::GPU) {
     GpuConfig config;
     // Default max top k to 64 for GPU.
@@ -253,6 +294,78 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     settings.SetSamplerBackend(*sampler_backend);
   }
   return settings;
+}
+
+absl::Status LlmExecutorSettings::SetCustomBackendOption(
+    absl::string_view key, absl::string_view value) {
+  if (!IsCustomBackend(backend_)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Cannot set custom backend option '", key,
+                     "' on non-custom backend: ", GetBackendString(backend_)));
+  }
+  key = absl::StripAsciiWhitespace(key);
+  const size_t dot_pos = key.find('.');
+  if (dot_pos == absl::string_view::npos || dot_pos == 0 ||
+      dot_pos + 1 == key.size()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid custom backend option key '", key,
+        "': expected '<backend>.<option>' format (e.g. '",
+        absl::AsciiStrToLower(GetBackendString(backend_)), ".num_threads')."));
+  }
+  const absl::string_view backend_prefix =
+      absl::StripAsciiWhitespace(key.substr(0, dot_pos));
+  const absl::string_view option_name =
+      absl::StripAsciiWhitespace(key.substr(dot_pos + 1));
+  if (backend_prefix.empty() || option_name.empty()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid custom backend option key '", key,
+        "': expected '<backend>.<option>' format (e.g. '",
+        absl::AsciiStrToLower(GetBackendString(backend_)), ".num_threads')."));
+  }
+  auto option_backend = GetBackendFromString(backend_prefix);
+  if (!option_backend.ok() || *option_backend != backend_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Custom backend option '", key, "' is for backend '",
+                     backend_prefix, "', which does not match active backend '",
+                     GetBackendString(backend_), "'."));
+  }
+  if (!std::holds_alternative<CustomBackendConfig>(backend_config_)) {
+    backend_config_ = CustomBackendConfig();
+  }
+  std::get<CustomBackendConfig>(backend_config_).SetOption(option_name, value);
+  return absl::OkStatus();
+}
+
+absl::Status LlmExecutorSettings::SetCustomBackendOptionsFromStrings(
+    const std::vector<std::string>& key_value_pairs) {
+  CustomBackendConfig parsed;
+  ABSL_RETURN_IF_ERROR(parsed.SetOptionsFromStrings(key_value_pairs));
+  for (const auto& [key, value] : parsed.options) {
+    ABSL_RETURN_IF_ERROR(SetCustomBackendOption(key, value));
+  }
+  return absl::OkStatus();
+}
+
+std::optional<absl::string_view> LlmExecutorSettings::GetCustomBackendOption(
+    absl::string_view key) const {
+  if (!std::holds_alternative<CustomBackendConfig>(backend_config_)) {
+    return std::nullopt;
+  }
+  const auto& config = std::get<CustomBackendConfig>(backend_config_);
+  key = absl::StripAsciiWhitespace(key);
+  if (auto val = config.GetOption(key); val.has_value()) {
+    return val;
+  }
+  const size_t dot_pos = key.find('.');
+  if (dot_pos != absl::string_view::npos) {
+    auto option_backend = GetBackendFromString(
+        absl::StripAsciiWhitespace(key.substr(0, dot_pos)));
+    if (option_backend.ok() && *option_backend == backend_) {
+      return config.GetOption(
+          absl::StripAsciiWhitespace(key.substr(dot_pos + 1)));
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace litert::lm
