@@ -68,27 +68,59 @@ LiteRtLmStatusCode
 litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
     LiteRtLmEngine* engine, bool enable_metal_residency_set);
 
+// Sets whether to enable the AI Edge Debugger. Defaults to false.
+//
+// When enabled, the engine captures per-token traces (JSONL) and, on CPU/GPU
+// backends, intermediate activations (Safetensors) under
+// `<cache_dir>/litert_lm_debugger/<session_id>/`. A cache directory must be set
+// with `litert_lm_engine_settings_set_cache_dir` (not ":memory" or
+// ":nocache") and must be a writable directory; otherwise engine creation
+// fails. When weights are streamed, the setting is ignored with a warning and
+// nothing is captured. Use
+// `litert_lm_experimental_session_get_debug_info` to find the captures.
+//
+// Creating an engine with the debugger enabled deletes captures left in the
+// cache directory by earlier runs, so engines that run at the same time must
+// use different cache directories. Captures can grow large over long
+// sessions.
+//
+// WARNING: The captures contain user-derived data (decoded generated text and
+// activations computed from the prompt), stored unencrypted and kept until
+// deleted. Enable only for development or diagnostics, not for production
+// end-user traffic; delete them with
+// `litert_lm_experimental_engine_delete_debug_captures`.
+//
+// @param settings The engine settings.
+// @param enable_debugger Whether to enable the AI Edge Debugger.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
+    LiteRtLmEngineSettings* settings, bool enable_debugger);
+
+// Deletes all AI Edge Debugger captures of the engine, i.e. the
+// `<cache_dir>/litert_lm_debugger/` directory. Close every session and
+// conversation of the engine first. Succeeds without doing anything when the
+// debugger is not enabled for the engine.
+//
+// @param engine The engine whose captures to delete.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `engine`
+//   is NULL. kLiteRtLmStatusFailedPrecondition if a session of the engine is
+//   still open.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_engine_delete_debug_captures(
+    LiteRtLmEngine* engine);
+
 // Opaque pointer for session debug info.
 // Use `litert_lm_experimental_session_debug_info_delete` to free memory.
 //
 // Added in version 0.2.0.
 typedef struct LiteRtLmSessionDebugInfo LiteRtLmSessionDebugInfo;
-
-// Checks whether the LiteRT-LM runtime binary was built with the debugger
-// tracing backend enabled (LITERT_LM_DEBUGGER_ENABLED=1).
-//
-// @param out_enabled On success, receives true if the debugger is enabled at
-//   compile-time, false otherwise; not written on failure.
-// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
-//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
-//   `out_enabled` is NULL.
-//
-// Added in version 0.2.0.
-// Changed in version 1.0.0: returns a status code; the result is returned
-// through out_enabled.
-LITERT_LM_C_API_EXPORT
-LiteRtLmStatusCode litert_lm_experimental_is_debugger_enabled(
-    bool* out_enabled);
 
 // Gets debug info for the session. The caller is responsible for deleting the
 // returned object using `litert_lm_experimental_session_debug_info_delete`.

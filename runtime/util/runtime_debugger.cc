@@ -162,6 +162,12 @@ std::unique_ptr<RuntimeDebugger> RuntimeDebugger::Create(
       (std::filesystem::path{std::string(preferred_cache_dir)} /
        std::string(kDebuggerSubdir))
           .string();
+  std::error_code ec;
+  std::filesystem::remove_all(capture_dir, ec);
+  if (ec) {
+    ABSL_LOG(WARNING) << "Failed to delete earlier debugger captures under "
+                      << capture_dir << ": " << ec.message();
+  }
   return std::make_unique<RuntimeDebugger>(capture_dir);
 }
 
@@ -283,6 +289,24 @@ void RuntimeDebugger::UnregisterDebugSession(const int session_id) {
     }
     sessions_.erase(it);
   }
+}
+
+absl::Status RuntimeDebugger::DeleteAllCaptures() {
+  absl::MutexLock lock(mutex_);
+  if (!sessions_.empty()) {
+    return absl::FailedPreconditionError(
+        absl::StrCat(sessions_.size(),
+                     " debug session(s) are still open; release them before "
+                     "deleting debugger captures."));
+  }
+  std::error_code ec;
+  std::filesystem::remove_all(capture_dir_, ec);
+  if (ec) {
+    return absl::InternalError(
+        absl::StrCat("Failed to delete debugger captures under ", capture_dir_,
+                     ": ", ec.message()));
+  }
+  return absl::OkStatus();
 }
 
 void RuntimeDebugger::SetActiveDebugSession(const int session_id) {

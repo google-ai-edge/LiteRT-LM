@@ -43,12 +43,9 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/runtime_debugger.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "support/tokenizer/tokenizer.h"
-
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
-#include "runtime/util/runtime_debugger.h"
-#endif
 
 namespace litert::lm {
 namespace {
@@ -636,13 +633,14 @@ absl::StatusOr<int> SessionAdvanced::GetCurrentStep() const {
 }
 
 std::optional<SessionDebugInfo> SessionAdvanced::GetSessionDebugInfo() const {
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr ||
+      !execution_manager_lock->IsDebuggerEnabled()) {
+    return std::nullopt;
+  }
   SessionDebugInfo debug_info;
   debug_info.capture_dir = RuntimeDebugger::GetSessionCaptureDir(session_id_);
   return debug_info;
-#else
-  return std::nullopt;
-#endif
 }
 
 absl::StatusOr<const ::litert::Environment*> SessionAdvanced::GetEnvironment()

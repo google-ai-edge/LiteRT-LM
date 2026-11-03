@@ -27,8 +27,10 @@ import os
 import pathlib
 import sys
 from typing import Any
+import warnings
 
 from ._ffi import ActivationDataType
+from ._ffi import create_optional_checked
 from ._ffi import get_checked
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import SpeculativeDecodingMode
@@ -467,11 +469,19 @@ class AbstractEngine(abc.ABC):
         Image downscaling is currently only supported by Gemma4 models, whose
         budget options are 70, 140, 280, 560, or 1120. If None, use the model's
         default.
-      selected_signatures: Model signatures the main executor compiles and
-        runs, for example ["prefill_1024", "decode"]. To run complete token
-        generation, keep at least one prefill signature and "decode". When
-        MTP is enabled, make sure "verify" is also included. If None, every
+      selected_signatures: Model signatures the main executor compiles and runs,
+        for example ["prefill_1024", "decode"]. To run complete token
+        generation, keep at least one prefill signature and "decode". When MTP
+        is enabled, make sure "verify" is also included. If None, every
         signature of the model is used.
+      enable_debugger: Experimental. Whether to enable the AI Edge Debugger,
+        which captures per-token traces and, on CPU/GPU, intermediate
+        activations under `<cache_dir>/litert_lm_debugger/<session_id>/`.
+        Requires `cache_dir` set to a writable directory (not ":nocache" or
+        ":memory"); otherwise engine creation fails. Not supported when weights
+        are streamed. If None, use the native engine's default (off). Captures
+        hold unencrypted user data; enable only for development or diagnostics
+        and delete them with `Engine.delete_debug_captures()`.
   """
 
   model_path: str
@@ -489,6 +499,7 @@ class AbstractEngine(abc.ABC):
   enable_ynnpack: bool | None = None
   max_vision_tokens_per_image: int | None = None
   selected_signatures: collections.abc.Sequence[str] | None = None
+  enable_debugger: bool | None = None
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
@@ -1139,3 +1150,59 @@ class DebugArtifacts:
 
   tensor_paths: list[pathlib.Path]
   trace_log_path: pathlib.Path | None = None
+
+
+def get_debug_artifacts(
+    lib: Any,
+    ptr: Any,
+    engine: AbstractEngine | None,
+    get_debug_info_fn: str,
+) -> DebugArtifacts | None:
+  """Retrieves debug artifacts for a C session or conversation handle."""
+  if not engine:
+    return None
+
+  if not engine.enable_debugger:
+    warnings.warn(
+        "LiteRT-LM Debugger is disabled for this engine. To capture debug "
+        "artifacts, create the Engine with enable_debugger=True.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+    return None
+
+  if not ptr or not engine.cache_dir:
+    return None
+
+  debug_info_ptr = create_optional_checked(lib, get_debug_info_fn, ptr)
+  if not debug_info_ptr:
+    return None
+
+  try:
+    capture_dir_bytes = get_checked(
+        lib,
+        "litert_lm_experimental_session_debug_info_get_capture_dir",
+        ctypes.c_char_p,
+        debug_info_ptr,
+    )
+    if not capture_dir_bytes:
+      return None
+    capture_dir_str = capture_dir_bytes.decode("utf-8")
+  finally:
+    lib.litert_lm_experimental_session_debug_info_delete(debug_info_ptr)
+
+  if not capture_dir_str:
+    return None
+
+  session_dir = pathlib.Path(engine.cache_dir) / capture_dir_str
+  if not session_dir.exists() or not session_dir.is_dir():
+    return None
+
+  tensor_paths = sorted(session_dir.glob("*.safetensors"))
+  trace_log = session_dir / "generated_tokens.jsonl"
+  trace_log_path = trace_log if trace_log.exists() else None
+
+  return DebugArtifacts(
+      tensor_paths=tensor_paths,
+      trace_log_path=trace_log_path,
+  )

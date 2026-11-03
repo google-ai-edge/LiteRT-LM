@@ -17,15 +17,12 @@ from __future__ import annotations
 
 import collections.abc
 import ctypes
-import pathlib
 import queue
-import warnings
 
 from . import interfaces
 from ._ffi import call_checked
 from ._ffi import check_status
 from ._ffi import create_checked
-from ._ffi import create_optional_checked
 from ._ffi import get_checked
 from ._ffi import InputDataType
 from ._ffi import StatusCode
@@ -284,55 +281,9 @@ class Session(interfaces.AbstractSession):
 
   def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
     """See base class."""
-    if not get_checked(
-        self._lib, "litert_lm_experimental_is_debugger_enabled", ctypes.c_bool
-    ):
-      warnings.warn(
-          "LiteRT-LM Debugger is disabled in this runtime build. "
-          "To enable artifact tracing, re-compile using "
-          "'--define LITERT_LM_DEBUGGER_ENABLED=1'.",
-          RuntimeWarning,
-          stacklevel=2,
-      )
-      return None
-
-    if not self._engine or not self._engine.cache_dir:
-      return None
-
-    if not self._ptr:
-      return None
-
-    debug_info_ptr = create_optional_checked(
-        self._lib, "litert_lm_experimental_session_get_debug_info", self._ptr
-    )
-    if not debug_info_ptr:
-      return None
-
-    try:
-      capture_dir_bytes = get_checked(
-          self._lib,
-          "litert_lm_experimental_session_debug_info_get_capture_dir",
-          ctypes.c_char_p,
-          debug_info_ptr,
-      )
-      if not capture_dir_bytes:
-        return None
-      capture_dir_str = capture_dir_bytes.decode("utf-8")
-    finally:
-      self._lib.litert_lm_experimental_session_debug_info_delete(debug_info_ptr)
-
-    if not capture_dir_str:
-      return None
-
-    session_dir = pathlib.Path(self._engine.cache_dir) / capture_dir_str
-    if not session_dir.exists() or not session_dir.is_dir():
-      return None
-
-    tensor_paths = sorted(session_dir.glob("*.safetensors"))
-    trace_log = session_dir / "generated_tokens.jsonl"
-    trace_log_path = trace_log if trace_log.exists() else None
-
-    return interfaces.DebugArtifacts(
-        tensor_paths=tensor_paths,
-        trace_log_path=trace_log_path,
+    return interfaces.get_debug_artifacts(
+        self._lib,
+        self._ptr,
+        self._engine,
+        "litert_lm_experimental_session_get_debug_info",
     )

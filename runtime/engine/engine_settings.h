@@ -150,6 +150,15 @@ class EngineSettings {
   // false.
   void SetSingleThreadedExecution(bool single_threaded_execution);
 
+  // Experimental: whether the AI Edge Debugger is enabled. Defaults to false.
+  // Requires a real main-executor cache dir (`MaybeUpdateAndValidate()` fails
+  // otherwise). See
+  // `litert_lm_experimental_engine_settings_set_enable_debugger` in
+  // c/experimental.h for details.
+  bool GetEnableDebugger() const;
+  // Sets whether the AI Edge Debugger is enabled for the engine.
+  void SetEnableDebugger(bool enable_debugger);
+
   // Desired maximum number of vision tokens generated per image. If set,
   // the engine will automatically select vision encoder (and adapter)
   // signatures with capacity up to this length and the smallest signature that
@@ -210,6 +219,9 @@ class EngineSettings {
 
   // Whether the advanced engine should run tasks in a single thread.
   bool single_threaded_execution_ = false;
+
+  // Whether the AI Edge Debugger is enabled.
+  bool enable_debugger_ = false;
 
   // Desired maximum number of vision tokens generated per image.
   std::optional<int> max_vision_tokens_per_image_;

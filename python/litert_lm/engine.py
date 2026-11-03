@@ -78,6 +78,7 @@ class Engine(interfaces.AbstractEngine):
       enable_ynnpack: bool | None = None,
       max_vision_tokens_per_image: int | None = None,
       selected_signatures: collections.abc.Sequence[str] | None = None,
+      enable_debugger: bool | None = None,
       **kwargs,
   ):
     if isinstance(selected_signatures, str):
@@ -106,6 +107,7 @@ class Engine(interfaces.AbstractEngine):
         enable_ynnpack=enable_ynnpack,
         max_vision_tokens_per_image=max_vision_tokens_per_image,
         selected_signatures=selected_signatures,
+        enable_debugger=enable_debugger,
         **kwargs,
     )
 
@@ -249,6 +251,13 @@ class Engine(interfaces.AbstractEngine):
           settings,
           self.enable_ynnpack,
       )
+    if self.enable_debugger is not None:
+      call_checked(
+          lib,
+          "litert_lm_experimental_engine_settings_set_enable_debugger",
+          settings,
+          self.enable_debugger,
+      )
 
     lora_rank = (
         self.lora_rank_config.lora_rank if self.lora_rank_config else None
@@ -300,6 +309,25 @@ class Engine(interfaces.AbstractEngine):
 
   def __del__(self):
     self.close()
+
+  def delete_debug_captures(self) -> None:
+    """Deletes all AI Edge Debugger captures of this engine.
+
+    Removes `<cache_dir>/litert_lm_debugger/`. Close every session and
+    conversation of the engine first. Does nothing when the debugger is not
+    enabled.
+
+    Raises:
+      RuntimeError: If the engine is closed, a session or conversation of the
+        engine is still open, or the captures cannot be deleted.
+    """
+    if not self._engine_ptr:
+      raise RuntimeError("Engine is closed.")
+    call_checked(
+        self._lib,
+        "litert_lm_experimental_engine_delete_debug_captures",
+        self._engine_ptr,
+    )
 
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.close()

@@ -371,6 +371,69 @@ class EngineTest(LiteRtLmTestBase):
     )
     mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, False)
 
+  def test_engine_init_with_enable_debugger(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = lib.litert_lm_experimental_engine_settings_set_enable_debugger
+
+    mock_set_enable_debugger = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_experimental_engine_settings_set_enable_debugger",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    # Default should not call set_enable_debugger.
+    engine = litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    )
+    self.assertIsNone(engine.enable_debugger)
+    mock_set_enable_debugger.assert_not_called()
+
+    for enable_debugger in (True, False):
+      with self.subTest(enable_debugger=enable_debugger):
+        engine = litert_lm.Engine(
+            self.model_path,
+            backend=litert_lm.Backend.CPU(),
+            enable_debugger=enable_debugger,
+            cache_dir=self.create_tempdir().full_path,
+        )
+        self.assertEqual(engine.enable_debugger, enable_debugger)
+        mock_set_enable_debugger.assert_called_once_with(
+            mock.ANY, enable_debugger
+        )
+        mock_set_enable_debugger.reset_mock()
+
+  def test_delete_debug_captures(self):
+    cache_dir = self.create_tempdir().full_path
+    capture_root = os.path.join(cache_dir, "litert_lm_debugger")
+    engine = litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        enable_debugger=True,
+        cache_dir=cache_dir,
+    )
+    with engine.create_session():
+      self.assertTrue(os.path.exists(capture_root))
+      # A live session may still write captures, so deletion is refused.
+      with self.assertRaises(RuntimeError):
+        engine.delete_debug_captures()
+    engine.delete_debug_captures()
+    self.assertFalse(os.path.exists(capture_root))
+
+  def test_delete_debug_captures_on_closed_engine_raises(self):
+    engine = litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    )
+    engine.close()
+    with self.assertRaisesRegex(RuntimeError, "Engine is closed"):
+      engine.delete_debug_captures()
+
   def test_engine_init_with_max_vision_tokens_per_image(self):
     lib = litert_lm._ffi._get_lib()
     orig_fn = lib.litert_lm_engine_settings_set_max_vision_tokens_per_image

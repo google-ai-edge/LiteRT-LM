@@ -21,6 +21,7 @@
 
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -41,6 +42,8 @@ class RuntimeDebugger {
 
   // Creates and initializes a RuntimeDebugger instance under the given cache
   // directory, or returns nullptr if cache dir is invalid or in-memory.
+  // Captures left under `<cache_dir>/litert_lm_debugger/` by earlier runs are
+  // deleted, because session IDs restart at 0 and would otherwise mix them.
   static std::unique_ptr<RuntimeDebugger> Create(
       absl::string_view preferred_cache_dir = "");
 
@@ -66,6 +69,11 @@ class RuntimeDebugger {
 
   // Unregisters a session-specific capture directory.
   void UnregisterDebugSession(int session_id);
+
+  // Deletes all captures under `capture_dir()`. Fails with
+  // FailedPreconditionError while any debug session is still registered, so
+  // files that a live session may still write are never removed.
+  absl::Status DeleteAllCaptures();
 
   // Sets the active session for subsequent computation graph runs.
   void SetActiveDebugSession(int session_id);
