@@ -18,6 +18,7 @@
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "c/conversation.h"
 #include "c/conversation_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
@@ -27,6 +28,15 @@
 #include "c/experimental_internal.h"  // IWYU pragma: keep
 #include "runtime/conversation/conversation.h"
 #include "runtime/engine/engine.h"
+#include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/memory_monitor.h"
+
+struct LiteRtLmMemoryMonitor {
+  explicit LiteRtLmMemoryMonitor(int sampling_interval_ms)
+      : monitor(absl::Milliseconds(sampling_interval_ms)) {}
+
+  litert::lm::MemoryMonitor monitor;
+};
 
 extern "C" {
 
@@ -103,6 +113,79 @@ LiteRtLmStatusCode litert_lm_experimental_session_debug_info_get_capture_dir(
   *out_capture_dir = nullptr;
   LITERT_LM_C_RETURN_IF_NULL(debug_info);
   *out_capture_dir = debug_info->debug_info.capture_dir.c_str();
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_create(
+    int sampling_interval_ms, LiteRtLmMemoryMonitor** out_monitor) {
+  LITERT_LM_C_RETURN_IF_NULL(out_monitor);
+  *out_monitor = nullptr;
+  if (sampling_interval_ms <= 0) {
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        "sampling_interval_ms must be positive.");
+  }
+  *out_monitor = new LiteRtLmMemoryMonitor(sampling_interval_ms);
+  return kLiteRtLmStatusOk;
+}
+
+void litert_lm_experimental_memory_monitor_delete(
+    LiteRtLmMemoryMonitor* monitor) {
+  delete monitor;
+}
+
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_start(
+    LiteRtLmMemoryMonitor* monitor) {
+  LITERT_LM_C_RETURN_IF_NULL(monitor);
+  monitor->monitor.Start();
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_stop(
+    LiteRtLmMemoryMonitor* monitor) {
+  LITERT_LM_C_RETURN_IF_NULL(monitor);
+  monitor->monitor.Stop();
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_get_peak_memory_mb(
+    const LiteRtLmMemoryMonitor* monitor, float* out_mb) {
+  LITERT_LM_C_RETURN_IF_NULL(monitor);
+  LITERT_LM_C_RETURN_IF_NULL(out_mb);
+  const auto peaks = monitor->monitor.GetPeaks();
+  if (!peaks.resident_in_ram.has_value()) {
+    return kLiteRtLmStatusNotFound;
+  }
+  *out_mb = litert::lm::AcceleratorMemoryBytesToMb(
+      peaks.resident_in_ram->total_bytes);
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode
+litert_lm_experimental_memory_monitor_get_peak_private_memory_mb(
+    const LiteRtLmMemoryMonitor* monitor, float* out_mb) {
+  LITERT_LM_C_RETURN_IF_NULL(monitor);
+  LITERT_LM_C_RETURN_IF_NULL(out_mb);
+  const auto peaks = monitor->monitor.GetPeaks();
+  if (!peaks.attributed_by_os.has_value()) {
+    return kLiteRtLmStatusNotFound;
+  }
+  *out_mb = litert::lm::AcceleratorMemoryBytesToMb(
+      peaks.attributed_by_os->total_bytes);
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode
+litert_lm_experimental_memory_monitor_get_peak_accelerator_memory_mb(
+    const LiteRtLmMemoryMonitor* monitor, float* out_mb) {
+  LITERT_LM_C_RETURN_IF_NULL(monitor);
+  LITERT_LM_C_RETURN_IF_NULL(out_mb);
+  const auto peaks = monitor->monitor.GetPeaks();
+  if (!peaks.accelerator.has_value()) {
+    return kLiteRtLmStatusNotFound;
+  }
+  *out_mb = litert::lm::AcceleratorMemoryBytesToMb(
+      peaks.accelerator->total_bytes);
   return kLiteRtLmStatusOk;
 }
 

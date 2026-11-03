@@ -719,6 +719,22 @@ class EngineTest(LiteRtLmTestBase):
       self.assertGreater(result.last_prefill_tokens_per_second, 0)
       self.assertGreater(result.last_decode_token_count, 0)
       self.assertGreater(result.last_decode_tokens_per_second, 0)
+      self.assertIsNone(result.peak_mem_mb)
+      self.assertIsNone(result.peak_private_mb)
+      self.assertIsNone(result.peak_accelerator_mb)
+
+  def test_benchmark_reports_peak_memory_footprint(self):
+    with litert_lm.Benchmark(
+        self.model_path,
+        litert_lm.Backend.CPU(),
+        prefill_tokens=10,
+        decode_tokens=10,
+        cache_dir=":nocache",
+        report_peak_memory_footprint=True,
+    ) as benchmark:
+      result = benchmark.run()
+      self.assertGreater(result.peak_mem_mb, 0)
+      self.assertGreater(result.peak_private_mb, 0)
 
   def test_benchmark_reuses_engine_across_runs(self):
     lib = litert_lm._ffi._get_lib()

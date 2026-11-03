@@ -21,10 +21,14 @@ from . import interfaces
 from ._ffi import _get_lib
 from ._ffi import call_checked
 from ._ffi import create_checked
+from ._ffi import get_optional_checked
 from ._ffi import InputDataType
 from .utils import create_c_speculative_decoding_config
 from .utils import merge_speculative_decoding_config
 from .utils import warn_enable_speculative_decoding_deprecated
+
+# Same as the default sampling interval of the native MemoryMonitor.
+_MEMORY_CHECK_INTERVAL_MS = 50
 
 
 @dataclasses.dataclass
@@ -193,41 +197,89 @@ class Benchmark(interfaces.AbstractBenchmark):
       except Exception:  # pylint: disable=broad-exception-caught
         pass
 
+  def _run_session(
+      self, lib: ctypes.CDLL, engine_ptr: int
+  ) -> interfaces.BenchmarkInfo:
+    session_ptr = create_checked(
+        lib, "litert_lm_engine_create_session", engine_ptr, None
+    )
+    try:
+      prompt = self.prompt.encode("utf-8")
+      input_ptr = create_checked(
+          lib,
+          "litert_lm_input_data_create",
+          InputDataType.TEXT,
+          prompt,
+          len(prompt),
+      )
+      try:
+        inputs = (ctypes.c_void_p * 1)(input_ptr)
+        responses = create_checked(
+            lib, "litert_lm_session_generate_content", session_ptr, inputs, 1
+        )
+        lib.litert_lm_responses_delete(responses)
+        info_ptr = create_checked(
+            lib, "litert_lm_session_get_benchmark_info", session_ptr
+        )
+        try:
+          return interfaces.create_benchmark_info(lib, info_ptr)
+        finally:
+          lib.litert_lm_benchmark_info_delete(info_ptr)
+      finally:
+        lib.litert_lm_input_data_delete(input_ptr)
+    finally:
+      lib.litert_lm_session_delete(session_ptr)
+
   def run(self) -> interfaces.BenchmarkInfo:
     engine_ptr = self._get_or_create_engine()
     lib = self._lib
     assert lib is not None
 
+    monitor_ptr = None
     try:
-      session_ptr = create_checked(
-          lib, "litert_lm_engine_create_session", engine_ptr, None
-      )
-      try:
-        prompt = self.prompt.encode("utf-8")
-        input_ptr = create_checked(
+      if self.report_peak_memory_footprint:
+        if not hasattr(lib, "litert_lm_experimental_memory_monitor_create"):
+          raise RuntimeError(
+              "The loaded litert-lm library does not support peak memory"
+              " reporting."
+          )
+        monitor_ptr = create_checked(
             lib,
-            "litert_lm_input_data_create",
-            InputDataType.TEXT,
-            prompt,
-            len(prompt),
+            "litert_lm_experimental_memory_monitor_create",
+            _MEMORY_CHECK_INTERVAL_MS,
         )
-        try:
-          inputs = (ctypes.c_void_p * 1)(input_ptr)
-          responses = create_checked(
-              lib, "litert_lm_session_generate_content", session_ptr, inputs, 1
-          )
-          lib.litert_lm_responses_delete(responses)
-          info_ptr = create_checked(
-              lib, "litert_lm_session_get_benchmark_info", session_ptr
-          )
-          try:
-            return interfaces.create_benchmark_info(lib, info_ptr)
-          finally:
-            lib.litert_lm_benchmark_info_delete(info_ptr)
-        finally:
-          lib.litert_lm_input_data_delete(input_ptr)
-      finally:
-        lib.litert_lm_session_delete(session_ptr)
+        call_checked(
+            lib, "litert_lm_experimental_memory_monitor_start", monitor_ptr
+        )
+
+      info = self._run_session(lib, engine_ptr)
+
+      if monitor_ptr is not None:
+        # Stopped after the session is deleted, as litert_lm_advanced_main does.
+        call_checked(
+            lib, "litert_lm_experimental_memory_monitor_stop", monitor_ptr
+        )
+        info.peak_mem_mb = get_optional_checked(
+            lib,
+            "litert_lm_experimental_memory_monitor_get_peak_memory_mb",
+            ctypes.c_float,
+            monitor_ptr,
+        )
+        info.peak_private_mb = get_optional_checked(
+            lib,
+            "litert_lm_experimental_memory_monitor_get_peak_private_memory_mb",
+            ctypes.c_float,
+            monitor_ptr,
+        )
+        info.peak_accelerator_mb = get_optional_checked(
+            lib,
+            "litert_lm_experimental_memory_monitor_get_peak_accelerator_memory_mb",
+            ctypes.c_float,
+            monitor_ptr,
+        )
+      return info
     finally:
+      if monitor_ptr is not None:
+        lib.litert_lm_experimental_memory_monitor_delete(monitor_ptr)
       if not self._in_context:
         self.close()

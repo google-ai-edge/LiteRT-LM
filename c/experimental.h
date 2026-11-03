@@ -160,6 +160,99 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_experimental_session_debug_info_get_capture_dir(
     const LiteRtLmSessionDebugInfo* debug_info, const char** out_capture_dir);
 
+// Opaque pointer for a process memory monitor that samples the host and
+// accelerator memory usage of the current process on a background thread and
+// tracks the peaks, as `litert_lm_advanced_main --report_peak_memory_footprint`
+// does. Use `litert_lm_experimental_memory_monitor_delete` to free memory.
+typedef struct LiteRtLmMemoryMonitor LiteRtLmMemoryMonitor;
+
+// Creates a memory monitor. Sampling does not begin until
+// `litert_lm_experimental_memory_monitor_start` is called.
+//
+// @param sampling_interval_ms The sampling interval in milliseconds; must be
+//   positive.
+// @param out_monitor On success, receives the monitor, owned by the caller;
+//   release with `litert_lm_experimental_memory_monitor_delete`. Set to NULL on
+//   failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `out_monitor` is NULL or `sampling_interval_ms` is not positive.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_create(
+    int sampling_interval_ms, LiteRtLmMemoryMonitor** out_monitor);
+
+// Destroys a memory monitor, stopping it first if it is running.
+//
+// @param monitor The monitor to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_experimental_memory_monitor_delete(
+    LiteRtLmMemoryMonitor* monitor);
+
+// Starts sampling. A no-op if the monitor is already running.
+//
+// @param monitor The monitor to start.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `monitor` is NULL.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_start(
+    LiteRtLmMemoryMonitor* monitor);
+
+// Stops sampling. The peaks remain available after stopping. A no-op if the
+// monitor is not running.
+//
+// @param monitor The monitor to stop.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `monitor` is NULL.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_stop(
+    LiteRtLmMemoryMonitor* monitor);
+
+// Gets the peak memory resident in RAM of the process observed by the
+// monitor, in MB: the resident set size (RSS) or working set, plus accelerator
+// memory that is resident but not in it (e.g. dedicated GPU memory).
+//
+// @param monitor The monitor to query.
+// @param out_mb On success, receives the peak in MB; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `monitor` or `out_mb` is NULL. kLiteRtLmStatusNotFound if host memory
+//   tracking is unsupported on the platform or no sample was taken.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_memory_monitor_get_peak_memory_mb(
+    const LiteRtLmMemoryMonitor* monitor, float* out_mb);
+
+// Gets the peak memory the OS attributes to the process, as observed by the
+// monitor, in MB, plus accelerator memory the OS keeps no charge for. The
+// definition differs by OS, so do not compare it across them: the commit charge
+// on Windows, RSS plus swap on Linux and Android, and the physical footprint on
+// Apple platforms.
+//
+// @param monitor The monitor to query.
+// @param out_mb On success, receives the peak in MB; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `monitor` or `out_mb` is NULL. kLiteRtLmStatusNotFound if host memory
+//   tracking is unsupported on the platform or no sample was taken.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode
+litert_lm_experimental_memory_monitor_get_peak_private_memory_mb(
+    const LiteRtLmMemoryMonitor* monitor, float* out_mb);
+
+// Gets the peak accelerator (e.g. GPU) memory of the process observed by the
+// monitor, in MB. The two peaks above already include accelerator memory, so
+// do not add this to them.
+//
+// @param monitor The monitor to query.
+// @param out_mb On success, receives the peak in MB; not written on failure.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `monitor` or `out_mb` is NULL. kLiteRtLmStatusNotFound if accelerator
+//   memory tracking is unsupported on the platform or no sample was taken.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode
+litert_lm_experimental_memory_monitor_get_peak_accelerator_memory_mb(
+    const LiteRtLmMemoryMonitor* monitor, float* out_mb);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -51,6 +51,7 @@ def run_benchmark(
     enable_ynnpack: bool | None = None,
     runs: int = 1,
     skip_warmup: bool = False,
+    report_peak_memory_footprint: bool = False,
 ) -> None:
   """Benchmarks the model."""
   if not model_obj.exists():
@@ -62,6 +63,11 @@ def run_benchmark(
         )
     )
     return
+
+  if is_android and report_peak_memory_footprint:
+    raise click.UsageError(
+        "--report-peak-memory-footprint is not supported with --android."
+    )
 
   try:
     speculative_decoding = common.normalize_speculative_decoding(
@@ -123,6 +129,7 @@ def run_benchmark(
           activation_data_type=activation_data_type_val,
           use_ringbuffers_local_attention=ringbuffers_local_attention,
           enable_ynnpack=enable_ynnpack,
+          report_peak_memory_footprint=report_peak_memory_footprint,
       )
 
     click.echo(
@@ -185,6 +192,19 @@ def run_benchmark(
         f"Time to first token:  {avg_info.time_to_first_token_in_second:.4f} s"
     )
 
+    if report_peak_memory_footprint:
+      # Peaks over all measured iterations; None if unsupported.
+      for label, attr in (
+          ("Peak memory:         ", "peak_mem_mb"),
+          ("Peak private memory: ", "peak_private_mb"),
+          ("Peak accel. memory:  ", "peak_accelerator_mb"),
+      ):
+        values = [
+            getattr(i, attr) for i in info_list if getattr(i, attr) is not None
+        ]
+        value_str = f"{max(values):.2f} MB" if values else "N/A"
+        click.echo(f"{label} {value_str}")
+
   except Exception:  # pylint: disable=broad-exception-caught
     click.echo(click.style("An error occurred during benchmarking", fg="red"))
     traceback.print_exc()
@@ -202,7 +222,10 @@ def run_benchmark(
     litert-lm benchmark ./model.litertlm
 
     # Benchmark directly from a HuggingFace repository
-    litert-lm benchmark --from-huggingface-repo org/repo model.litertlm""",
+    litert-lm benchmark --from-huggingface-repo org/repo model.litertlm
+
+    # Also report the peak memory of the process
+    litert-lm benchmark my-model --report-peak-memory-footprint""",
 )
 @click.argument("model_reference", required=False)
 @click.option(
@@ -239,6 +262,15 @@ def run_benchmark(
     is_flag=True,
     help="Skip the warmup run before benchmarking.",
 )
+@click.option(
+    "--report-peak-memory-footprint",
+    is_flag=True,
+    help=(
+        "Report the peak resident, private and accelerator memory of the"
+        " process, as the maximum over the benchmark iterations. Not"
+        " supported with --android."
+    ),
+)
 @common.common_inference_options
 def benchmark(
     model_reference: str | None = None,
@@ -259,6 +291,7 @@ def benchmark(
     enable_ynnpack: bool | None = None,
     runs: int = 1,
     skip_warmup: bool = False,
+    report_peak_memory_footprint: bool = False,
 ) -> None:
   """Benchmarks a LiteRT-LM model.
 
@@ -287,6 +320,8 @@ def benchmark(
       before XNNPACK.
     runs: The number of benchmarking iterations to run and average.
     skip_warmup: Skip the warmup run before benchmarking.
+    report_peak_memory_footprint: Whether to report the peak memory of the
+      process during the benchmark iterations.
   """
   if verbose:
     litert_lm.set_min_log_severity(litert_lm.LogSeverity.VERBOSE)
@@ -334,6 +369,7 @@ def benchmark(
       enable_ynnpack=enable_ynnpack,
       runs=runs,
       skip_warmup=skip_warmup,
+      report_peak_memory_footprint=report_peak_memory_footprint,
   )
 
 

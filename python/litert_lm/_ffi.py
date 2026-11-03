@@ -1215,6 +1215,30 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_void_p),
   ]
+  # Absent from litert-lm libraries built before the memory monitor was added.
+  if hasattr(lib, "litert_lm_experimental_memory_monitor_create"):
+    lib.litert_lm_experimental_memory_monitor_create.restype = ctypes.c_int
+    lib.litert_lm_experimental_memory_monitor_create.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    lib.litert_lm_experimental_memory_monitor_delete.restype = None
+    lib.litert_lm_experimental_memory_monitor_delete.argtypes = [
+        ctypes.c_void_p
+    ]
+    for func in (
+        lib.litert_lm_experimental_memory_monitor_start,
+        lib.litert_lm_experimental_memory_monitor_stop,
+    ):
+      func.restype = ctypes.c_int
+      func.argtypes = [ctypes.c_void_p]
+    for func in (
+        lib.litert_lm_experimental_memory_monitor_get_peak_memory_mb,
+        lib.litert_lm_experimental_memory_monitor_get_peak_private_memory_mb,
+        lib.litert_lm_experimental_memory_monitor_get_peak_accelerator_memory_mb,
+    ):
+      func.restype = ctypes.c_int
+      func.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float)]
 
   # Loaded File / Model Info API
   lib.litert_lm_loaded_file_create.restype = ctypes.c_int

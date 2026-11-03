@@ -106,6 +106,8 @@ MODEL_INFO_DEPS = [
 
 EXPERIMENTAL_DEPS = [
     ":experimental_internal",
+    "//runtime/util/memory_profiling:accelerator_memory_monitor",
+    "//runtime/util/memory_profiling:memory_monitor",
 ]
 
 ENGINE_COMMON_DEPS = (
