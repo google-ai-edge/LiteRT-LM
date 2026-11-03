@@ -21,6 +21,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory_nvml.h"
 #include "runtime/util/memory_profiling/fake_proc_self.h"
 #include "runtime/util/memory_profiling/fdinfo.h"
 
@@ -215,6 +216,70 @@ TEST(AcceleratorMemoryUsageFromDrmClientsTest,
                   Pair("amdgpu 0000:03:00.0 client 17 (gtt)", 256 * kMb),
                   Pair("amdgpu 0000:03:00.0 client 18 (gtt)", 64 * kMb),
                   Pair("i915 0000:00:02.0 client 2 (system0)", 32 * kMb)));
+}
+
+TEST(AcceleratorMemoryUsageFromLinuxSourcesTest, WithoutNvmlIsJustDrm) {
+  // No NVIDIA driver: DRM's verdict stands, including "unsupported".
+  EXPECT_FALSE(AcceleratorMemoryUsageFromLinuxSources(
+                   {{.driver = "nouveau", .client_id = "4"}}, std::nullopt)
+                   .has_value());
+  const std::optional<AcceleratorMemoryUsage> usage =
+      AcceleratorMemoryUsageFromLinuxSources({}, std::nullopt);
+  ASSERT_TRUE(usage.has_value());
+  EXPECT_EQ(usage->total_bytes, 0);
+}
+
+TEST(AcceleratorMemoryUsageFromLinuxSourcesTest,
+     NvmlCoversDrmClientsWithoutStatistics) {
+  // nvidia-drm clients report no memory; with NVML available that is not
+  // "unsupported" but "ask NVML".
+  const std::vector<DrmClientMemory> drm = {
+      {.driver = "nvidia-drm", .pdev = "0000:01:00.0", .client_id = "5"}};
+  const std::vector<NvmlDeviceMemory> nvml = {
+      {.index = 0, .name = "NVIDIA H100 80GB HBM3", .used_bytes = 512 * kMb}};
+
+  const std::optional<AcceleratorMemoryUsage> usage =
+      AcceleratorMemoryUsageFromLinuxSources(drm, nvml);
+
+  ASSERT_TRUE(usage.has_value());
+  EXPECT_EQ(usage->total_bytes, 512 * kMb);
+  // NVML's one figure is both present and allocated; none of it in the
+  // host's figures.
+  EXPECT_EQ(usage->attributed_bytes, 512 * kMb);
+  EXPECT_EQ(usage->resident_counted_by_host_bytes, 0);
+  EXPECT_EQ(usage->attributed_counted_by_host_bytes, 0);
+  EXPECT_THAT(usage->breakdown, ElementsAre(Pair("vram", 512 * kMb)));
+  EXPECT_THAT(usage->allocations,
+              ElementsAre(Pair("NVIDIA H100 80GB HBM3 #0 (vram)", 512 * kMb)));
+}
+
+TEST(AcceleratorMemoryUsageFromLinuxSourcesTest, MergesNvidiaIntoDrmRegions) {
+  // An AMD iGPU through DRM and an NVIDIA dGPU through NVML in one machine;
+  // a second NVIDIA GPU the process does not use is omitted.
+  const std::vector<DrmClientMemory> drm = {
+      {.driver = "amdgpu",
+       .pdev = "0000:06:00.0",
+       .client_id = "3",
+       // 32 MB allocated in VRAM, half of it evicted.
+       .regions = {{"gtt", 64 * kMb, 64 * kMb}, {"vram", 32 * kMb, 16 * kMb}}}};
+  const std::vector<NvmlDeviceMemory> nvml = {
+      {.index = 0, .name = "NVIDIA RTX 4070", .used_bytes = 1024 * kMb},
+      {.index = 1, .name = "NVIDIA RTX 4070", .used_bytes = 0}};
+
+  const std::optional<AcceleratorMemoryUsage> usage =
+      AcceleratorMemoryUsageFromLinuxSources(drm, nvml);
+
+  ASSERT_TRUE(usage.has_value());
+  EXPECT_EQ(usage->total_bytes, (1024 + 64 + 16) * kMb);
+  EXPECT_EQ(usage->attributed_bytes, (1024 + 64 + 32) * kMb);
+  // NVIDIA framebuffer joins the "vram" region.
+  EXPECT_THAT(usage->breakdown,
+              ElementsAre(Pair("vram", 1040 * kMb), Pair("gtt", 64 * kMb)));
+  EXPECT_THAT(
+      usage->allocations,
+      ElementsAre(Pair("NVIDIA RTX 4070 #0 (vram)", 1024 * kMb),
+                  Pair("amdgpu 0000:06:00.0 client 3 (gtt)", 64 * kMb),
+                  Pair("amdgpu 0000:06:00.0 client 3 (vram)", 16 * kMb)));
 }
 
 TEST(GetProcessAcceleratorMemoryUsageTest, Linux_ReportsSomethingConsistent) {

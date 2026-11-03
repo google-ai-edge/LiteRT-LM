@@ -193,6 +193,7 @@ cc_library(
         "@platforms//os:linux": [
             "accelerator_memory_dmabuf.cc",
             "accelerator_memory_linux.cc",
+            "accelerator_memory_nvml.cc",
         ],
         "@platforms//os:windows": ["accelerator_memory_windows.cc"],
         "//conditions:default": ["accelerator_memory_unsupported.cc"],
@@ -202,6 +203,7 @@ cc_library(
         "@platforms//os:linux": [
             "accelerator_memory_dmabuf.h",
             "accelerator_memory_linux.h",
+            "accelerator_memory_nvml.h",
         ],
         "@platforms//os:windows": ["accelerator_memory_windows.h"],
         "//conditions:default": [],
@@ -212,6 +214,8 @@ cc_library(
             "dxgi.lib",
             "gdi32.lib",
         ],
+        # dlopen() of libnvidia-ml.so at run time.
+        "@platforms//os:linux": ["-ldl"],
         "//conditions:default": [],
     }),
     deps = [
@@ -318,6 +322,54 @@ cc_test(
         ":fake_proc_self",
         ":fdinfo",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_nvml_test",
+    srcs = ["accelerator_memory_nvml_test.cc"],
+    # The GPU-free part of the NVML reader (merging the per-process lists);
+    # runs on Linux in TAP. Tags as for accelerator_memory_linux_test.
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_nvidia_test",
+    srcs = ["accelerator_memory_nvidia_test.cc"],
+    # Needs an NVIDIA GPU: allocates framebuffer memory through the CUDA
+    # driver (dlopen()ed, no build dependency) and checks that NVML attributes
+    # it to this process. requires-gpu-sm90-full picks a whole H100, i.e. no
+    # MIG partitioning, which NVML accounts for differently. The no<os> tags
+    # keep the other TAP projects from requesting it explicitly (b/202306027).
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+        "requires-gpu-sm90-full",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
     ],
 )
 

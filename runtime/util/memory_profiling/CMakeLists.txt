@@ -63,6 +63,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS
     accelerator_memory_dmabuf.cc
     accelerator_memory_linux.cc
+    accelerator_memory_nvml.cc
     fdinfo.cc
   )
 elseif(WIN32)
@@ -93,6 +94,10 @@ if(WIN32)
   # the process's private memory footprint.
   target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
     PUBLIC dxgi gdi32)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # dlopen() of libnvidia-ml.so at run time.
+  target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
+    PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
 # ==============================================================================

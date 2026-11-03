@@ -27,6 +27,7 @@
 
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
+#include "runtime/util/memory_profiling/accelerator_memory_nvml.h"
 #include "runtime/util/memory_profiling/fdinfo.h"
 
 namespace litert::lm {
@@ -78,6 +79,17 @@ std::vector<DrmClientMemory> ReadDrmClients(absl::string_view proc_self_dir);
 // means no GPU in use, reported as zero.
 std::optional<AcceleratorMemoryUsage> AcceleratorMemoryUsageFromDrmClients(
     const std::vector<DrmClientMemory>& clients);
+
+// Combines the two Linux sources: DRM clients (every GPU driver but NVIDIA's)
+// and NVML devices (NVIDIA; std::nullopt when NVML is unavailable). NVIDIA
+// framebuffer memory is added under the region "vram", with one allocation
+// per GPU ("<name> #<index> (vram)"). Tracking is unsupported only when DRM
+// reports clients without memory statistics and NVML is unavailable, i.e.
+// a GPU is in use and nothing can measure it; DRM clients without statistics
+// next to an available NVML are taken to be NVIDIA's, which NVML covers.
+std::optional<AcceleratorMemoryUsage> AcceleratorMemoryUsageFromLinuxSources(
+    const std::vector<DrmClientMemory>& drm_clients,
+    const std::optional<std::vector<NvmlDeviceMemory>>& nvml_devices);
 
 }  // namespace litert::lm
 
