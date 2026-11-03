@@ -135,6 +135,7 @@ cc_test(
         ":executor_backend_registry",
         ":executor_settings_base",
         ":llm_executor",
+        ":llm_executor_io_types",
         ":llm_executor_settings",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",

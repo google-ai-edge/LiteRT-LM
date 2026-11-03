@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -27,9 +28,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -181,6 +184,48 @@ TEST(ModelResourcesRegistryTest, DynamicFileFormatRegistrationAndLookup) {
   ASSERT_OK_AND_ASSIGN(auto mm_resources,
                        ModelResourcesRegistry::Instance().Create(mm_assets));
   EXPECT_NE(mm_resources, nullptr);
+}
+
+class ValidatingStubExecutor : public LlmExecutor {
+ public:
+  absl::string_view ExecutorBackendName() const override {
+    return "ValidatingStubExecutor";
+  }
+  absl::Status Prefill(const ExecutorInputs&) override {
+    return absl::UnimplementedError("Stub");
+  }
+  absl::StatusOr<std::vector<std::vector<int>>> Decode() override {
+    return absl::UnimplementedError("Stub");
+  }
+  absl::Status ValidateConfig(
+      const LlmExecutorSettings& executor_settings) const override {
+    if (executor_settings.GetCustomBackendOption("valid_opt") == "bad") {
+      return absl::InvalidArgumentError("Invalid option value: bad");
+    }
+    return absl::OkStatus();
+  }
+};
+
+TEST(ExecutorBackendRegistryTest,
+     LlmExecutorBaseValidateConfigAndUpdateExecutorSettings) {
+  const Backend backend = RegisterCustomBackend("validating_stub_backend");
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create("dummy.sbs"));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, backend));
+
+  ValidatingStubExecutor executor;
+  ASSERT_OK(executor_settings.SetCustomBackendOption(
+      "validating_stub_backend.valid_opt", "ok"));
+  EXPECT_OK(executor.ValidateConfig(executor_settings));
+  EXPECT_OK(executor.UpdateExecutorSettings(executor_settings));
+
+  ASSERT_OK(executor_settings.SetCustomBackendOption(
+      "validating_stub_backend.valid_opt", "bad"));
+  EXPECT_THAT(executor.ValidateConfig(executor_settings),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(executor.UpdateExecutorSettings(executor_settings),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace
