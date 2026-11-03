@@ -276,7 +276,7 @@ TEST_F(TtsSessionTest, KokoroAndQwen3TtsRegisteredInOmniRegistry) {
                        OmniRegistry::Get().GetRegisteredModel("qwen3-tts"));
   EXPECT_EQ(qwen3_reg.model_remote_url,
             "https://huggingface.co/litert-community/"
-            "Qwen3-TTS-12Hz-0.6B-Base/resolve/main/qwen3_tts_int8.litertlm");
+            "Qwen3-TTS-12Hz-0.6B-Base/resolve/main/qwen3_tts_int8_v2.litertlm");
 
   OmniEngine::Settings settings;
   settings.model_path = "/nonexistent/tts_model_dir";
