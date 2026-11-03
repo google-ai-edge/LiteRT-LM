@@ -33,6 +33,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
 #include "c/engine_internal.h"
@@ -2528,10 +2529,17 @@ TEST(EngineCTest, Benchmark) {
   EXPECT_GT(GetOk<double>(litert_lm_benchmark_info_get_time_to_first_token,
                           benchmark_info.get()),
             0.0);
-  EXPECT_GT(
+  const double total_init_time_in_second =
       GetOk<double>(litert_lm_benchmark_info_get_total_init_time_in_second,
-                    benchmark_info.get()),
-      0.0);
+                    benchmark_info.get());
+  EXPECT_GT(total_init_time_in_second, 0.0);
+  // The engine creation time only: "Init Total" already contains the other
+  // engine creation phases, and session creation ("Init Session") is left out.
+  const auto& init_phases = benchmark_info->benchmark_info.GetInitPhases();
+  ASSERT_TRUE(init_phases.contains("Init Session"));
+  ASSERT_TRUE(init_phases.contains("Init Total"));
+  EXPECT_DOUBLE_EQ(total_init_time_in_second,
+                   absl::ToDoubleSeconds(init_phases.at("Init Total")));
   const size_t num_prefill_turns = GetOk<size_t>(
       litert_lm_benchmark_info_get_num_prefill_turns, benchmark_info.get());
   EXPECT_GT(num_prefill_turns, 0u);

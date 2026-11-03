@@ -1566,11 +1566,8 @@ LiteRtLmStatusCode litert_lm_benchmark_info_get_total_init_time_in_second(
     const LiteRtLmBenchmarkInfo* benchmark_info, double* out_seconds) {
   LITERT_LM_C_RETURN_IF_NULL(out_seconds);
   LITERT_LM_C_RETURN_IF_NULL(benchmark_info);
-  double total_init_time_ms = 0.0;
-  for (const auto& phase : benchmark_info->benchmark_info.GetInitPhases()) {
-    total_init_time_ms += absl::ToDoubleMilliseconds(phase.second);
-  }
-  *out_seconds = total_init_time_ms / 1000.0;
+  *out_seconds =
+      absl::ToDoubleSeconds(benchmark_info->benchmark_info.GetTotalInitTime());
   return kLiteRtLmStatusOk;
 }
 

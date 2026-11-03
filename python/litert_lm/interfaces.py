@@ -853,8 +853,9 @@ class BenchmarkInfo:
   """Results from a benchmark run.
 
   Attributes:
-      init_time_in_second: The time in seconds to initialize the engine and the
-        conversation.
+      init_time_in_second: The time in seconds to create the engine. Session
+        and conversation creation are not included. 0 if the engine didn't
+        report it.
       time_to_first_token_in_second: The time in seconds to the first token.
       last_prefill_token_count: The number of tokens in the last prefill.
       last_prefill_tokens_per_second: The number of tokens processed per second

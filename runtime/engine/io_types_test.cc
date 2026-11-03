@@ -450,6 +450,41 @@ TEST(BenchmarkInfoTests, GetTimeToFirstTokenValid) {
   EXPECT_GT(benchmark_info.GetTimeToFirstToken(), 0.104);
 }
 
+TEST(BenchmarkInfoTests, GetTotalInitTimeIsInitTotal) {
+  BenchmarkInfo benchmark_info(GetBenchmarkParams());
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kTotal,
+                                           absl::Milliseconds(800)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(
+      BenchmarkInfo::InitPhase::kModelAssets, absl::Milliseconds(2)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kExecutor,
+                                           absl::Milliseconds(790)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kTokenizer,
+                                           absl::Milliseconds(100)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kSession,
+                                           absl::Milliseconds(10)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(
+      BenchmarkInfo::InitPhase::kConversation, absl::Milliseconds(15)));
+  // The engine creation phases are inside "Init Total", and session and
+  // conversation creation are left out.
+  EXPECT_EQ(benchmark_info.GetTotalInitTime(), absl::Milliseconds(800));
+}
+
+TEST(BenchmarkInfoTests, GetTotalInitTimeWithoutInitTotalIsZero) {
+  BenchmarkInfo benchmark_info(GetBenchmarkParams());
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kExecutor,
+                                           absl::Milliseconds(790)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kTokenizer,
+                                           absl::Milliseconds(100)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(BenchmarkInfo::InitPhase::kSession,
+                                           absl::Milliseconds(10)));
+  EXPECT_OK(benchmark_info.InitPhaseRecord(
+      BenchmarkInfo::InitPhase::kConversation, absl::Milliseconds(15)));
+  // Without "Init Total" the result is zero, not the sum of the other phases:
+  // those can overlap (the tokenizer may load in parallel with the executor),
+  // and "Init Conversation" already contains "Init Session".
+  EXPECT_EQ(benchmark_info.GetTotalInitTime(), absl::ZeroDuration());
+}
+
 TEST(BenchmarkInfoTests, OperatorOutputWithData) {
   BenchmarkInfo benchmark_info(GetBenchmarkParams());
   EXPECT_OK(
