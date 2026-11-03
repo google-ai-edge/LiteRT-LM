@@ -45,7 +45,7 @@ export class Engine implements Deletable {
   ) {
     const wasmEngineSettings = engine.getEngineSettings();
     const settingsWithoutModel =
-        wasmEngineSettingsToEngineSettings(wasmEngineSettings);
+        wasmEngineSettingsToEngineSettings(wasmEngineSettings, wasm);
     this.settings = {
       ...settingsWithoutModel,
       model: modelSource,

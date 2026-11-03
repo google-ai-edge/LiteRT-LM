@@ -29,7 +29,7 @@ describe('Session', () => {
       'getMutableSamplerParams', 'getStopTokenIds', 'getStartTokenId',
       'getNumOutputCandidates', 'getSamplerBackend',
       'getApplyPromptTemplateInSession', 'getUseExternalSampler',
-      'getMaxOutputTokens'
+      'getMaxOutputTokens', 'getSpeculativeDecodingConfig'
     ]);
     mockWasmSessionConfig.getAudioModalityEnabled.and.returnValue(false);
     mockWasmSessionConfig.getVisionModalityEnabled.and.returnValue(false);
@@ -67,6 +67,8 @@ describe('Session', () => {
     mockWasmSessionConfig.getApplyPromptTemplateInSession.and.returnValue(false);
     mockWasmSessionConfig.getUseExternalSampler.and.returnValue(false);
     mockWasmSessionConfig.getMaxOutputTokens.and.returnValue(1024);
+    mockWasmSessionConfig.getSpeculativeDecodingConfig.and.returnValue(
+        {mode: undefined, lenience: undefined});
 
     mockWasmSession = jasmine.createSpyObj('WasmSession', [
       'getSessionConfig', 'runPrefill', 'runDecode', 'cancelProcess',

@@ -21,6 +21,8 @@
 #include <emscripten.h>
 #include <emscripten/bind.h>
 
+#include <optional>
+
 #include "research/drishti/app/pursuit/wasm/wasm_logging.h"
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "litert/js/packages/core/src/cpp/global_error_reporter.h"  // from @litert
@@ -37,7 +39,9 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/streamed_weights_manager.h"
@@ -83,6 +87,15 @@ struct JsBenchmarkInfo {
   double lastDecodeTokensPerSecond = 0.0;
   int lastDecodeTokenCount = 0;
   double timeToFirstTokenInSecond = 0.0;
+  // Speculative decoding (MTP) stats, accumulated over all decode turns since
+  // the first decode turn. All zero if speculative decoding was not used.
+  int mtpRounds = 0;
+  int mtpDraftedTokens = 0;
+  int mtpAcceptedTokens = 0;
+  int mtpEmittedTokens = 0;
+  // Number of plain (non-speculative) decode steps, including the steps that
+  // re-prime the MTP drafter.
+  int plainDecodeSteps = 0;
 };
 
 static litert::lm::EmbeddingOptions ParseEmbeddingOptions(
@@ -328,6 +341,20 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
               }),
           emscripten::return_value_policy::take_ownership());
 
+  emscripten::enum_<litert::lm::SpeculativeDecodingMode>(
+      "SpeculativeDecodingMode")
+      .value("OFF", litert::lm::SpeculativeDecodingMode::kOff)
+      .value("ON", litert::lm::SpeculativeDecodingMode::kOn)
+      .value("ADAPTIVE", litert::lm::SpeculativeDecodingMode::kAdaptive);
+  emscripten::register_optional<litert::lm::SpeculativeDecodingMode>();
+  emscripten::register_optional<float>();
+  // Unset fields are undefined in JS. Both fields must be present (possibly
+  // undefined) when passing this object to C++.
+  emscripten::value_object<litert::lm::SpeculativeDecodingConfig>(
+      "SpeculativeDecodingConfig")
+      .field("mode", &litert::lm::SpeculativeDecodingConfig::mode)
+      .field("lenience", &litert::lm::SpeculativeDecodingConfig::lenience);
+
   emscripten::class_<litert::lm::EngineSettings>("EngineSettings")
       .class_function(
           "createDefault",
@@ -400,6 +427,13 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 optional_override([](litert::lm::EngineSettings& settings) {
                   settings.GetMutableBenchmarkParams();
                 }))
+      .function(
+          "getSpeculativeDecodingConfig",
+          optional_override([](const litert::lm::EngineSettings& settings) {
+            return settings.GetSpeculativeDecodingConfig();
+          }))
+      .function("setSpeculativeDecodingConfig",
+                &litert::lm::EngineSettings::SetSpeculativeDecodingConfig)
       .function("getMutableMainExecutorSettings",
                 &litert::lm::EngineSettings::GetMutableMainExecutorSettings,
                 emscripten::return_value_policy::reference());
@@ -463,6 +497,9 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
              &litert::lm::AdvancedSettings::share_constant_tensors);
 
   emscripten::register_optional<litert::lm::AdvancedSettings>();
+  emscripten::function("createDefaultAdvancedSettings", optional_override([]() {
+                         return litert::lm::AdvancedSettings();
+                       }));
 
   emscripten::class_<litert::lm::ExecutorSettingsBase>("ExecutorSettingsBase")
       .function("getCacheDir", &litert::lm::ExecutorSettingsBase::GetCacheDir)
@@ -631,7 +668,13 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .function("getMaxOutputTokens",
                 &litert::lm::SessionConfig::GetMaxOutputTokens)
       .function("setMaxOutputTokens",
-                &litert::lm::SessionConfig::SetMaxOutputTokens);
+                &litert::lm::SessionConfig::SetMaxOutputTokens)
+      .function("getSpeculativeDecodingConfig",
+                optional_override([](const litert::lm::SessionConfig& config) {
+                  return config.GetSpeculativeDecodingConfig();
+                }))
+      .function("setSpeculativeDecodingConfig",
+                &litert::lm::SessionConfig::SetSpeculativeDecodingConfig);
 
   emscripten::class_<litert::lm::Engine::Session>("Session")
       // We intentionally copy this value since embind does not handle const
@@ -687,7 +730,12 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
              &JsBenchmarkInfo::lastDecodeTokensPerSecond)
       .field("lastDecodeTokenCount", &JsBenchmarkInfo::lastDecodeTokenCount)
       .field("timeToFirstTokenInSecond",
-             &JsBenchmarkInfo::timeToFirstTokenInSecond);
+             &JsBenchmarkInfo::timeToFirstTokenInSecond)
+      .field("mtpRounds", &JsBenchmarkInfo::mtpRounds)
+      .field("mtpDraftedTokens", &JsBenchmarkInfo::mtpDraftedTokens)
+      .field("mtpAcceptedTokens", &JsBenchmarkInfo::mtpAcceptedTokens)
+      .field("mtpEmittedTokens", &JsBenchmarkInfo::mtpEmittedTokens)
+      .field("plainDecodeSteps", &JsBenchmarkInfo::plainDecodeSteps);
 
   emscripten::class_<litert::lm::ConversationConfig>("ConversationConfig")
       .class_function(
@@ -842,6 +890,18 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                       js_info.lastDecodeTokenCount = decode_turn->num_tokens;
                   }
                   js_info.timeToFirstTokenInSecond = info.GetTimeToFirstToken();
+                  if (info.GetExecutorStats().has_value()) {
+                    const auto& stats = *info.GetExecutorStats();
+                    js_info.mtpRounds = static_cast<int>(stats.mtp_rounds());
+                    js_info.mtpDraftedTokens =
+                        static_cast<int>(stats.mtp_num_draft_tokens());
+                    js_info.mtpAcceptedTokens =
+                        static_cast<int>(stats.mtp_num_accepted_tokens());
+                    js_info.mtpEmittedTokens =
+                        static_cast<int>(stats.mtp_emitted_tokens());
+                    js_info.plainDecodeSteps =
+                        static_cast<int>(stats.plain_steps());
+                  }
                   return js_info;
                 }))
       .function("cancelProcess", &litert::lm::Conversation::CancelProcess)

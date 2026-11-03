@@ -15,8 +15,7 @@
  */
 
 import {Mutex} from './mutex.js';
-import {SessionConfig, wasmSessionConfigToSessionConfig} from './session_config.js';
-import {RecursiveRequired} from './types.js';
+import {ResolvedSessionConfig, wasmSessionConfigToSessionConfig} from './session_config.js';
 import {Responses as WasmResponses, Session as WasmSession} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
@@ -26,7 +25,7 @@ const BUSY_MESSAGE = 'Session is busy. An operation is already in progress.';
  * LiteRT-LM Session
  */
 export class Session {
-  readonly config: RecursiveRequired<SessionConfig>;
+  readonly config: ResolvedSessionConfig;
   private isBusy = false;
 
   constructor(private readonly session: WasmSession, private readonly mutexes: {

@@ -41,6 +41,32 @@ export const Backend = {
 export type Backend = (typeof Backend)[keyof typeof Backend];
 
 /**
+ * How speculative decoding (e.g. MTP) is used during decode.
+ */
+export const SpeculativeDecodingMode = {
+  // Ideally, we'd pull these from the Wasm module, but we want them to be
+  // available in JS before the Wasm module is loaded.
+  OFF: 0,
+  ON: 1,
+  ADAPTIVE: 2,
+} as const;
+
+/**
+ * A LiteRT-LM SpeculativeDecodingMode.
+ */
+export type SpeculativeDecodingMode =
+    (typeof SpeculativeDecodingMode)[keyof typeof SpeculativeDecodingMode];
+
+/**
+ * LiteRT-LM SpeculativeDecodingConfig. Unset fields are undefined, but must be
+ * present when passed to Wasm.
+ */
+export declare interface SpeculativeDecodingConfig {
+  mode: EmscriptenEnumElement<SpeculativeDecodingMode>|undefined;
+  lenience: number|undefined;
+}
+
+/**
  * An object that must be manually deleted to free its memory.
  */
 export declare interface Deletable {
@@ -163,6 +189,8 @@ export declare interface EngineSettings extends Deletable {
   getSingleThreadedExecution(): boolean;
   setSingleThreadedExecution(singleThreadedExecution: boolean): void;
   enableBenchmark(): void;
+  getSpeculativeDecodingConfig(): SpeculativeDecodingConfig;
+  setSpeculativeDecodingConfig(config: SpeculativeDecodingConfig): void;
 }
 
 /**
@@ -300,7 +328,8 @@ export declare interface LlmExecutorSettings extends ExecutorSettingsBase {
   setSamplerBackend(backend: EmscriptenEnumElement<Backend>): void;
   getSamplerBackend(): EmscriptenEnumElement<Backend>;
   setAdvancedSettings(advancedSettings: AdvancedSettings): void;
-  getAdvancedSettings(): AdvancedSettings;
+  /** Returns undefined if the advanced settings have not been set. */
+  getAdvancedSettings(): AdvancedSettings|undefined;
 }
 
 /**
@@ -400,6 +429,9 @@ export declare interface SessionConfig extends Deletable {
   setUseExternalSampler(useExternalSampler: boolean): void;
   getMaxOutputTokens(): number;
   setMaxOutputTokens(maxOutputTokens: number): void;
+  /** Unset fields inherit the engine's values. */
+  getSpeculativeDecodingConfig(): SpeculativeDecodingConfig;
+  setSpeculativeDecodingConfig(config: SpeculativeDecodingConfig): void;
 }
 
 /**
@@ -512,6 +544,22 @@ export declare interface BenchmarkInfo {
   lastDecodeTokensPerSecond: number;
   lastDecodeTokenCount: number;
   timeToFirstTokenInSecond: number;
+  /**
+   * Number of speculative decoding (MTP) rounds, accumulated over all decode
+   * turns since the first decode turn.
+   */
+  mtpRounds: number;
+  /** Number of tokens drafted by the MTP drafter. */
+  mtpDraftedTokens: number;
+  /** Number of drafted tokens accepted by the verifier. */
+  mtpAcceptedTokens: number;
+  /** Number of tokens emitted by MTP rounds. */
+  mtpEmittedTokens: number;
+  /**
+   * Number of plain (non-speculative) decode steps, including the steps that
+   * re-prime the MTP drafter.
+   */
+  plainDecodeSteps: number;
 }
 
 
@@ -645,7 +693,13 @@ export declare interface LiteRtLmWasm extends WasmModule {
   VectorFloat: VectorFloatConstructor;
   VectorEmbeddingResponse: VectorEmbeddingResponseConstructor;
   setupLogging(): void;
+  /** Returns an AdvancedSettings object with the C++ default values. */
+  createDefaultAdvancedSettings(): AdvancedSettings;
   Backend: BackendEnum;
+  SpeculativeDecodingMode: EmscriptenEnum<{
+    OFF: SpeculativeDecodingMode; ON: SpeculativeDecodingMode;
+    ADAPTIVE: SpeculativeDecodingMode;
+  }>;
   ModelAssets: ModelAssetsConstructor;
   EngineSettings: EngineSettingsConstructor;
   LlmExecutorSettings: LlmExecutorSettingsConstructor;

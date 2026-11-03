@@ -94,6 +94,11 @@ export class ConversationFake implements ChatInterface {
       lastDecodeTokensPerSecond: 0,
       lastDecodeTokenCount: 0,
       timeToFirstTokenInSecond: 0,
+      mtpRounds: 0,
+      mtpDraftedTokens: 0,
+      mtpAcceptedTokens: 0,
+      mtpEmittedTokens: 0,
+      plainDecodeSteps: 0,
     };
   }
 

@@ -16,6 +16,7 @@
 
 import {getGlobalLiteRtLm} from './global_litertlm.js';
 import {ModelInput} from './model_input.js';
+import {SpeculativeDecodingConfig, speculativeDecodingConfigToWasm, wasmSpeculativeDecodingConfigToConfig} from './speculative_decoding_config.js';
 import {RecursiveRequired} from './types.js';
 import {type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
@@ -87,10 +88,23 @@ export interface EngineSettings {
   audioBackend?: Backend;
   mainExecutorSettings?: LlmExecutorSettings;
   benchmarkEnabled?: boolean;
+  /**
+   * The default speculative decoding (e.g. Multi-Token Prediction (MTP))
+   * configuration of the engine's sessions. Each session can override any field
+   * with `SessionConfig.speculativeDecodingConfig`. Fields left unset use the
+   * runtime defaults (mode `SpeculativeDecodingMode.OFF`).
+   *
+   * Speculative decoding requires a model that contains a drafter, such as
+   * Gemma 4 with an MTP drafter, and only supports a single output candidate.
+   * Modes `ON` and `ADAPTIVE` load the drafter when the engine is created. If
+   * the mode is `OFF`, the drafter is not loaded, and sessions can not enable
+   * speculative decoding later.
+   */
+  speculativeDecodingConfig?: SpeculativeDecodingConfig;
 }
 
 type OptionalEngineSettingsKeys = 'visionBackend'|'maxVisionTokensPerImage'|
-    'minVisionTokensPerImage'|'audioBackend';
+    'minVisionTokensPerImage'|'audioBackend'|'speculativeDecodingConfig';
 
 /**
  * EngineSettings with all defaults resolved. Fields that have no default
@@ -187,10 +201,19 @@ export function fillWasmEngineSettingsFromEngineSettings(
       }
     }
     if (mainExecutorSettings.advancedSettings !== undefined) {
-      const defaultAdv = wasmExecutorSettings.getAdvancedSettings();
+      // The advanced settings are unset until the engine is created, so fall
+      // back to the C++ defaults.
+      const defaultAdv = wasmExecutorSettings.getAdvancedSettings() ??
+          wasm.createDefaultAdvancedSettings();
       const newAdv = {...defaultAdv, ...mainExecutorSettings.advancedSettings};
       wasmExecutorSettings.setAdvancedSettings(newAdv);
     }
+  }
+
+  if (engineSettings.speculativeDecodingConfig !== undefined) {
+    wasmEngineSettings.setSpeculativeDecodingConfig(
+        speculativeDecodingConfigToWasm(
+            engineSettings.speculativeDecodingConfig));
   }
 }
 
@@ -198,13 +221,15 @@ export function fillWasmEngineSettingsFromEngineSettings(
  * Converts a WasmEngineSettings to a EngineSettings.
  *
  * Fields are populated with the WASM object's values, which may be default
- * values if they were not set.
+ * values if they were not set. Advanced settings that have not been set yet
+ * (i.e. before the engine is created) are filled with the C++ defaults.
  *
  * The returned value omits the `model` field since its TS representation is a
  * URL or stream, which does not match what the WASM object holds.
  */
 export function wasmEngineSettingsToEngineSettings(
-    wasmEngineSettings: WasmEngineSettings):
+    wasmEngineSettings: WasmEngineSettings,
+    wasm = getGlobalLiteRtLm().liteRtLmWasm):
     Omit<ResolvedEngineSettings, 'model'> {
   const wasmExecutorSettings =
       wasmEngineSettings.getMutableMainExecutorSettings();
@@ -246,8 +271,11 @@ export function wasmEngineSettingsToEngineSettings(
       maxNumImages: wasmExecutorSettings.getMaxNumImages(),
       samplerBackend: wasmExecutorSettings.getSamplerBackend().value,
       backendConfig,
-      advancedSettings: wasmExecutorSettings.getAdvancedSettings(),
+      advancedSettings: wasmExecutorSettings.getAdvancedSettings() ??
+          wasm.createDefaultAdvancedSettings(),
     },
     benchmarkEnabled: false,
+    speculativeDecodingConfig: wasmSpeculativeDecodingConfigToConfig(
+        wasmEngineSettings.getSpeculativeDecodingConfig()),
   };
 }

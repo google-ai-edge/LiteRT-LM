@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Backend, fillWasmEngineSettingsFromEngineSettings, LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm, wasmEngineSettingsToEngineSettings} from '@litert-lm/core';
+import {Backend, fillWasmEngineSettingsFromEngineSettings, LiteRtLm, loadLiteRtLm, SpeculativeDecodingMode, unloadLiteRtLm, type Wasm, wasmEngineSettingsToEngineSettings} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
 import {Cleanup} from './cleanup.js';
@@ -186,5 +186,95 @@ describe('EngineSettings', () => {
        expect(resolved.audioBackend).toBeUndefined();
        wasmSettings.delete();
      });
+
+  it('leaves the speculative decoding config unset by default', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {model: '/path/to/model', backend: Backend.GPU},
+        Backend.GPU, liteRtLm.liteRtLmWasm);
+    expect(wasmSettings.getSpeculativeDecodingConfig())
+        .toEqual({mode: undefined, lenience: undefined});
+    expect(wasmEngineSettingsToEngineSettings(wasmSettings)
+               .speculativeDecodingConfig)
+        .toEqual({});
+    wasmSettings.delete();
+  });
+
+  it('resolves unset advanced settings to the C++ defaults', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+    expect(wasmSettings.getMutableMainExecutorSettings().getAdvancedSettings())
+        .toBeUndefined();
+    expect(wasmEngineSettingsToEngineSettings(
+               wasmSettings, liteRtLm.liteRtLmWasm)
+               .mainExecutorSettings.advancedSettings)
+        .toEqual(liteRtLm.liteRtLmWasm.createDefaultAdvancedSettings());
+    wasmSettings.delete();
+  });
+
+  it('round-trips the speculative decoding config', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {
+          model: '/path/to/model',
+          backend: Backend.GPU,
+          speculativeDecodingConfig: {
+            mode: SpeculativeDecodingMode.ADAPTIVE,
+            lenience: 0.5,
+          },
+        },
+        Backend.GPU, liteRtLm.liteRtLmWasm);
+    expect(wasmSettings.getSpeculativeDecodingConfig().mode)
+        .toBe(liteRtLm.liteRtLmWasm.SpeculativeDecodingMode.ADAPTIVE);
+    expect(wasmEngineSettingsToEngineSettings(wasmSettings)
+               .speculativeDecodingConfig)
+        .toEqual({mode: SpeculativeDecodingMode.ADAPTIVE, lenience: 0.5});
+    wasmSettings.delete();
+  });
+
+  it('keeps the speculative decoding config when advancedSettings are set',
+     async () => {
+       const wasmSettings =
+           await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+       fillWasmEngineSettingsFromEngineSettings(
+           wasmSettings, {
+             model: '/path/to/model',
+             backend: Backend.GPU,
+             speculativeDecodingConfig: {mode: SpeculativeDecodingMode.ON},
+             mainExecutorSettings: {
+               advancedSettings: {num_threads_to_upload: 2},
+             },
+           },
+           Backend.GPU, liteRtLm.liteRtLmWasm);
+       const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+       expect(resolved.speculativeDecodingConfig)
+           .toEqual({mode: SpeculativeDecodingMode.ON});
+       expect(resolved.mainExecutorSettings.advancedSettings
+                  .num_threads_to_upload)
+           .toBe(2);
+       wasmSettings.delete();
+     });
+
+  it('rejects an out-of-range lenience', async () => {
+    const wasmSettings =
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU);
+    expect(
+        () => fillWasmEngineSettingsFromEngineSettings(
+            wasmSettings, {
+              model: '/path/to/model',
+              backend: Backend.GPU,
+              speculativeDecodingConfig: {lenience: 1.5},
+            },
+            Backend.GPU, liteRtLm.liteRtLmWasm))
+        .toThrowError(/lenience must be in \[0, 1\]/);
+    wasmSettings.delete();
+  });
 });
 

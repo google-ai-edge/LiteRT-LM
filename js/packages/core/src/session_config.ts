@@ -15,6 +15,7 @@
  */
 
 import {getGlobalLiteRtLm} from './global_litertlm.js';
+import {SpeculativeDecodingConfig, speculativeDecodingConfigToWasm, wasmSpeculativeDecodingConfigToConfig} from './speculative_decoding_config.js';
 import {RecursiveRequired} from './types.js';
 import {Backend, SamplerType, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
@@ -52,7 +53,25 @@ export interface SessionConfig {
    * count towards this limit.
    */
   maxOutputTokens?: number;
+  /**
+   * The speculative decoding (e.g. MTP) configuration for this session, which
+   * overrides `EngineSettings.speculativeDecodingConfig`. Fields left unset
+   * inherit the engine's values. A session can only speculate if the engine's
+   * mode is `ON` or `ADAPTIVE`, since the drafter can't be loaded after the
+   * engine is created.
+   */
+  speculativeDecodingConfig?: SpeculativeDecodingConfig;
 }
+
+type OptionalSessionConfigKeys = 'speculativeDecodingConfig';
+
+/**
+ * SessionConfig with all defaults resolved. Fields that may inherit the
+ * engine's settings (e.g. those of speculativeDecodingConfig) remain optional.
+ */
+export type ResolvedSessionConfig =
+    RecursiveRequired<Omit<SessionConfig, OptionalSessionConfigKeys>>&
+    Pick<SessionConfig, OptionalSessionConfigKeys>;
 
 /**
  * Converts a SessionConfig to a WasmSessionConfig.
@@ -107,6 +126,11 @@ export function sessionConfigToWasmSessionConfig(
   if (sessionConfig.maxOutputTokens !== undefined) {
     wasmSessionConfig.setMaxOutputTokens(sessionConfig.maxOutputTokens);
   }
+  if (sessionConfig.speculativeDecodingConfig !== undefined) {
+    wasmSessionConfig.setSpeculativeDecodingConfig(
+        speculativeDecodingConfigToWasm(
+            sessionConfig.speculativeDecodingConfig));
+  }
   if (sessionConfig.stopTokenIds !== undefined) {
     const outerVec = new wasm.VectorVectorInt();
     for (const innerArr of sessionConfig.stopTokenIds) {
@@ -126,10 +150,11 @@ export function sessionConfigToWasmSessionConfig(
  * Converts a WasmSessionConfig to a SessionConfig.
  *
  * All fields will be populated with the WASM object's values, which may be
- * default values if they were not set.
+ * default values if they were not set. Fields without a default remain
+ * undefined if they were not set.
  */
 export function wasmSessionConfigToSessionConfig(
-    wasmSessionConfig: WasmSessionConfig): RecursiveRequired<SessionConfig> {
+    wasmSessionConfig: WasmSessionConfig): ResolvedSessionConfig {
   const samplerParams = wasmSessionConfig.getMutableSamplerParams();
 
   return {
@@ -152,5 +177,7 @@ export function wasmSessionConfigToSessionConfig(
         wasmSessionConfig.getApplyPromptTemplateInSession(),
     useExternalSampler: wasmSessionConfig.getUseExternalSampler(),
     maxOutputTokens: wasmSessionConfig.getMaxOutputTokens(),
+    speculativeDecodingConfig: wasmSpeculativeDecodingConfigToConfig(
+        wasmSessionConfig.getSpeculativeDecodingConfig()),
   };
 }
