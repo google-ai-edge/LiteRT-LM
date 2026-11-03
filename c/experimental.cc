@@ -48,17 +48,23 @@ litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
   return kLiteRtLmStatusOk;
 }
 
-// TODO(b/549220913): Migrate debugger from build-time macro to runtime
-// configuration in EngineSettings / SessionConfig.
-LiteRtLmStatusCode litert_lm_experimental_is_debugger_enabled(
-    bool* out_enabled) {
-  LITERT_LM_C_RETURN_IF_NULL(out_enabled);
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
-  *out_enabled = true;
-#else
-  *out_enabled = false;
-#endif
+LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
+    LiteRtLmEngineSettings* settings, bool enable_debugger) {
+  if (settings == nullptr || settings->settings == nullptr) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Invalid engine settings.");
+  }
+  settings->settings->SetEnableDebugger(enable_debugger);
   return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_experimental_engine_delete_debug_captures(
+    LiteRtLmEngine* engine) {
+  if (engine == nullptr || engine->engine == nullptr) {
+    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
+                                      "Engine is null.");
+  }
+  return litert::lm::c::ToCStatus(engine->engine->DeleteDebugCaptures());
 }
 
 LiteRtLmStatusCode litert_lm_experimental_session_get_debug_info(

@@ -116,11 +116,6 @@ cc_test(
     ],
 )
 
-alias(
-    name = "litert_lm_debugger_enabled",
-    actual = "//build_config:enable_debugger_setting",
-)
-
 cc_library(
     name = "runtime_debugger",
     srcs = ["runtime_debugger.cc"],
@@ -147,8 +142,10 @@ cc_test(
     srcs = ["runtime_debugger_test.cc"],
     deps = [
         ":runtime_debugger",
+        ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",

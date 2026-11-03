@@ -23,6 +23,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -32,6 +33,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/engine/io_types.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
@@ -54,6 +56,20 @@ TEST(RuntimeDebuggerTest, CreateHandlesValidAndInvalidCacheDirectories) {
   EXPECT_EQ(RuntimeDebugger::Create(""), nullptr);
   EXPECT_EQ(RuntimeDebugger::Create(":memory"), nullptr);
   EXPECT_EQ(RuntimeDebugger::Create(":nocache"), nullptr);
+}
+
+TEST(RuntimeDebuggerTest, CreateDeletesCapturesFromEarlierRuns) {
+  const std::filesystem::path cache_dir =
+      std::filesystem::path(testing::TempDir()) / "earlier_runs";
+  const std::filesystem::path stale_file =
+      cache_dir / "litert_lm_debugger" / "0" / "generated_tokens.jsonl";
+  std::filesystem::create_directories(stale_file.parent_path());
+  std::ofstream(stale_file) << "{}\n";
+  ASSERT_TRUE(std::filesystem::exists(stale_file));
+
+  auto debugger = RuntimeDebugger::Create(cache_dir.string());
+  ASSERT_NE(debugger, nullptr);
+  EXPECT_FALSE(std::filesystem::exists(stale_file));
 }
 
 TEST(RuntimeDebuggerTest, SessionLifecycleAndSwitching) {
@@ -81,6 +97,29 @@ TEST(RuntimeDebuggerTest, SessionLifecycleAndSwitching) {
   // Unregister session 0 and verify cleanup.
   debugger->SetActiveDebugSession(/*session_id=*/0);
   debugger->UnregisterDebugSession(/*session_id=*/0);
+}
+
+TEST(RuntimeDebuggerTest, DeleteAllCapturesRefusesWhileSessionsAreOpen) {
+  const std::string test_dir =
+      (std::filesystem::path(testing::TempDir()) / "delete_all_captures")
+          .string();
+  auto debugger = RuntimeDebugger::Create(test_dir);
+  ASSERT_NE(debugger, nullptr);
+  debugger->RegisterDebugSession(/*session_id=*/0);
+  debugger->SetActiveDebugSession(/*session_id=*/0);
+  Responses responses(TaskState::kDone, {"s0"}, {1.0f}, {1}, {{101}});
+  debugger->ObserveTokens(/*session_id=*/0, responses);
+  ASSERT_TRUE(std::filesystem::exists(debugger->capture_dir()));
+
+  EXPECT_THAT(debugger->DeleteAllCaptures(),
+              testing::status::StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_TRUE(std::filesystem::exists(debugger->capture_dir()));
+
+  debugger->UnregisterDebugSession(/*session_id=*/0);
+  EXPECT_OK(debugger->DeleteAllCaptures());
+  EXPECT_FALSE(std::filesystem::exists(debugger->capture_dir()));
+  // Deleting again when nothing is left succeeds.
+  EXPECT_OK(debugger->DeleteAllCaptures());
 }
 
 TEST(RuntimeDebuggerTest, GraphRunCallbacksReturnCallables) {

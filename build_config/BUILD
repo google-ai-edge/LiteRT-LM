@@ -429,7 +429,7 @@ selects.config_setting_group(
 )
 
 # ------------------------------------------------------------------------------
-# 4. Modalities & Observability
+# 4. Modalities
 # ------------------------------------------------------------------------------
 
 bool_flag(
@@ -478,31 +478,6 @@ selects.config_setting_group(
     match_any = [
         ":audio_disabled_by_flag",
         ":audio_disabled_by_define",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-bool_flag(
-    name = "enable_debugger",
-    build_setting_default = False,
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
-    name = "debugger_enabled_by_flag",
-    flag_values = {":enable_debugger": "true"},
-)
-
-config_setting(
-    name = "debugger_enabled_by_define",
-    define_values = {"LITERT_LM_DEBUGGER_ENABLED": "1"},
-)
-
-selects.config_setting_group(
-    name = "enable_debugger_setting",
-    match_any = [
-        ":debugger_enabled_by_flag",
-        ":debugger_enabled_by_define",
     ],
     visibility = ["//visibility:public"],
 )

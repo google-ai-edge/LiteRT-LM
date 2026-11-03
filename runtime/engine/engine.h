@@ -444,6 +444,12 @@ class EngineT {
         "UpdateGpuEnableMetalResidencySet not implemented.");
   }
 
+  // Deletes all AI Edge Debugger captures of this engine (see
+  // `EngineSettings::SetEnableDebugger`). Fails with FailedPreconditionError
+  // while any session of the engine is still open. Succeeds without doing
+  // anything when the debugger is not enabled or not supported by the engine.
+  virtual absl::Status DeleteDebugCaptures() { return absl::OkStatus(); }
+
   // Returns the LiteRT environment managed by the engine.
   // The returned pointer is non-owning and guaranteed valid for the lifetime
   // of this engine.

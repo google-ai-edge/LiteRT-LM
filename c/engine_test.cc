@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>  // NOLINT: Required for test directories.
 #include <functional>
 #include <limits>
 #include <memory>
@@ -3383,6 +3384,11 @@ AllEngineSettingsSetters() {
          return litert_lm_engine_settings_set_single_threaded_execution(s,
                                                                         true);
        }},
+      {"set_enable_debugger",
+       [](E* s) {
+         return litert_lm_experimental_engine_settings_set_enable_debugger(
+             s, true);
+       }},
       {"set_max_num_images",
        [](E* s) { return litert_lm_engine_settings_set_max_num_images(s, 2); }},
       {"set_max_vision_tokens_per_image",
@@ -4393,8 +4399,6 @@ TEST(EngineCErrorTest, ExperimentalNullArgumentsSetError) {
 TEST(EngineCErrorTest, ExperimentalNullOutParamsReturnInvalidArgument) {
   LiteRtLmSessionDebugInfo debug_info;
   const std::vector<std::pair<std::string, std::function<int()>>> calls = {
-      {"experimental_is_debugger_enabled",
-       [] { return litert_lm_experimental_is_debugger_enabled(nullptr); }},
       {"experimental_session_get_debug_info",
        [] {
          return litert_lm_experimental_session_get_debug_info(nullptr, nullptr);
@@ -4431,10 +4435,6 @@ TEST(EngineCTest, ExperimentalSessionDebugInfoGetCaptureDir) {
 }
 
 TEST(EngineCTest, ExperimentalDebugInfo) {
-  bool enabled = false;
-  ASSERT_EQ(litert_lm_experimental_is_debugger_enabled(&enabled),
-            kLiteRtLmStatusOk);
-
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
   EngineSettingsPtr settings(
@@ -4460,10 +4460,8 @@ TEST(EngineCTest, ExperimentalDebugInfo) {
                                                           &session_debug_info),
             kLiteRtLmStatusOk);
   EXPECT_NE(session_debug_info, kSentinelDebugInfo);
-  if (!enabled) {
-    // Debug info is absent when the debugger is disabled: success + NULL.
-    EXPECT_EQ(session_debug_info, nullptr);
-  }
+  // The debugger is off by default, so debug info is absent: success + NULL.
+  EXPECT_EQ(session_debug_info, nullptr);
   litert_lm_experimental_session_debug_info_delete(session_debug_info);
   session.reset();
 
@@ -4479,10 +4477,123 @@ TEST(EngineCTest, ExperimentalDebugInfo) {
                 conversation.get(), &conversation_debug_info),
             kLiteRtLmStatusOk);
   EXPECT_NE(conversation_debug_info, kSentinelDebugInfo);
-  if (!enabled) {
-    EXPECT_EQ(conversation_debug_info, nullptr);
-  }
+  EXPECT_EQ(conversation_debug_info, nullptr);
   litert_lm_experimental_session_debug_info_delete(conversation_debug_info);
+}
+
+TEST(EngineCTest, ExperimentalDebuggerWritesTokenTraceOnGenerate) {
+  const std::string cache_dir =
+      (std::filesystem::path(::testing::TempDir()) / "debugger_token_trace")
+          .string();
+  std::filesystem::remove_all(cache_dir);
+  std::filesystem::create_directories(cache_dir);
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+  ASSERT_EQ(litert_lm_engine_settings_set_cache_dir(settings.get(),
+                                                    cache_dir.c_str()),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_experimental_engine_settings_set_enable_debugger(
+                settings.get(), true),
+            kLiteRtLmStatusOk);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+  SessionPtr session(CreateSession(engine.get(), /*config=*/nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  InputDataPtr input_data(
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
+      &litert_lm_input_data_delete);
+  ASSERT_NE(input_data, nullptr);
+  const LiteRtLmInputData* inputs[] = {input_data.get()};
+  ResponsesPtr responses(GenerateContent(session.get(), inputs, 1),
+                         &litert_lm_responses_delete);
+  ASSERT_NE(responses, nullptr);
+
+  LiteRtLmSessionDebugInfo* debug_info = nullptr;
+  ASSERT_EQ(
+      litert_lm_experimental_session_get_debug_info(session.get(), &debug_info),
+      kLiteRtLmStatusOk);
+  ASSERT_NE(debug_info, nullptr);
+  const char* capture_dir = nullptr;
+  ASSERT_EQ(litert_lm_experimental_session_debug_info_get_capture_dir(
+                debug_info, &capture_dir),
+            kLiteRtLmStatusOk);
+  const std::filesystem::path trace_path =
+      std::filesystem::path(cache_dir) / capture_dir / "generated_tokens.jsonl";
+  litert_lm_experimental_session_debug_info_delete(debug_info);
+  EXPECT_TRUE(std::filesystem::exists(trace_path)) << trace_path;
+  session.reset();
+  engine.reset();
+  std::filesystem::remove_all(cache_dir);
+}
+
+TEST(EngineCTest, ExperimentalDeleteDebugCaptures) {
+  const std::string cache_dir =
+      (std::filesystem::path(::testing::TempDir()) / "delete_debug_captures")
+          .string();
+  std::filesystem::remove_all(cache_dir);
+  std::filesystem::create_directories(cache_dir);
+  const std::filesystem::path capture_root =
+      std::filesystem::path(cache_dir) / "litert_lm_debugger";
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+  ASSERT_EQ(litert_lm_engine_settings_set_cache_dir(settings.get(),
+                                                    cache_dir.c_str()),
+            kLiteRtLmStatusOk);
+  ASSERT_EQ(litert_lm_experimental_engine_settings_set_enable_debugger(
+                settings.get(), true),
+            kLiteRtLmStatusOk);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(CreateSession(engine.get(), /*config=*/nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+  EXPECT_TRUE(std::filesystem::exists(capture_root));
+  // A live session may still write captures, so deletion is refused.
+  EXPECT_EQ(litert_lm_experimental_engine_delete_debug_captures(engine.get()),
+            kLiteRtLmStatusFailedPrecondition);
+  EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("still open"));
+  EXPECT_TRUE(std::filesystem::exists(capture_root));
+
+  session.reset();
+  EXPECT_EQ(litert_lm_experimental_engine_delete_debug_captures(engine.get()),
+            kLiteRtLmStatusOk);
+  EXPECT_FALSE(std::filesystem::exists(capture_root));
+  engine.reset();
+  std::filesystem::remove_all(cache_dir);
+}
+
+TEST(EngineCTest, ExperimentalDeleteDebugCapturesIsNoOpWhenDebuggerDisabled) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+  EXPECT_EQ(litert_lm_experimental_engine_delete_debug_captures(engine.get()),
+            kLiteRtLmStatusOk);
 }
 
 // Asserts that `status` is `expected_code` and a thread-local last error
@@ -4541,6 +4652,15 @@ TEST(EngineCStatusTest, StatusFunctionsWithNullArgumentsReturnInvalidArgument) {
          return litert_lm_conversation_send_message_stream(
              nullptr, "{}", /*extra_context=*/nullptr,
              /*optional_args=*/nullptr, &StreamCallback, nullptr);
+       }},
+      {"experimental_engine_settings_set_enable_debugger",
+       [] {
+         return litert_lm_experimental_engine_settings_set_enable_debugger(
+             nullptr, true);
+       }},
+      {"experimental_engine_delete_debug_captures",
+       [] {
+         return litert_lm_experimental_engine_delete_debug_captures(nullptr);
        }},
       {"experimental_engine_update_gpu_enable_metal_residency_set",
        [] {

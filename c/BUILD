@@ -116,16 +116,6 @@ ENGINE_COMMON_DEPS = (
     EXPERIMENTAL_DEPS
 )
 
-# Preprocessor define map for runtime debugger tracing support.
-# Evaluates statically against the global `--define LITERT_LM_DEBUGGER_ENABLED=1` build flag,
-# and is safely inherited by all `:engine` and `:engine_lite` C-API variant targets.
-LITERT_LM_DEBUGGER_DEFINES = select({
-    "//runtime/util:litert_lm_debugger_enabled": [
-        "LITERT_LM_DEBUGGER_ENABLED=1",
-    ],
-    "//conditions:default": [],
-})
-
 # Header library defining the LiteRT LM C API export macro.
 cc_library(
     name = "api_export_headers",
@@ -318,7 +308,6 @@ cc_library(
         "engine.h",
         "error_reporter.h",
     ],
-    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
         "//runtime/engine:engine_impl_selected",
@@ -338,7 +327,6 @@ cc_library(
         "engine.h",
         "error_reporter.h",
     ],
-    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
         "//runtime/engine:engine_impl_cpu_only_selected",
@@ -392,7 +380,6 @@ cc_library(
         "experimental.h",
         "model_info.h",
     ],
-    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/engine:engine_impl_selected",
@@ -420,7 +407,6 @@ cc_library(
         "experimental.h",
         "model_info.h",
     ],
-    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/engine:engine_impl_cpu_only_selected",

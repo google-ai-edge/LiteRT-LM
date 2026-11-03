@@ -1189,9 +1189,16 @@ def _setup_lib_signatures(lib):
   ]
 
   # Experimental C API
-  lib.litert_lm_experimental_is_debugger_enabled.restype = ctypes.c_int
-  lib.litert_lm_experimental_is_debugger_enabled.argtypes = [
-      ctypes.POINTER(ctypes.c_bool)
+  lib.litert_lm_experimental_engine_settings_set_enable_debugger.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_experimental_engine_settings_set_enable_debugger.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+  lib.litert_lm_experimental_engine_delete_debug_captures.restype = ctypes.c_int
+  lib.litert_lm_experimental_engine_delete_debug_captures.argtypes = [
+      ctypes.c_void_p,
   ]
   lib.litert_lm_experimental_session_get_debug_info.restype = ctypes.c_int
   lib.litert_lm_experimental_session_get_debug_info.argtypes = [

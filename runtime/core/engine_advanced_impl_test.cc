@@ -537,6 +537,26 @@ TEST(EngineTest,
   EXPECT_NE(llm, nullptr);
 }
 
+#ifndef ENGINE_ADVANCED
+TEST(EngineTest, CreateEngine_EnableDebuggerIgnoredWithWarning) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(task_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine_settings,
+      EngineSettings::CreateDefault(model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.SetEnableDebugger(true);
+
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(engine_settings));
+  EXPECT_FALSE(llm->GetEngineSettings().GetEnableDebugger());
+}
+#endif  // ENGINE_ADVANCED
+
 #ifdef ENGINE_ADVANCED
 TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   auto model_path =
@@ -572,6 +592,27 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   ASSERT_OK(responses);
   EXPECT_EQ(responses->GetTexts().size(), 1);
   EXPECT_FALSE(responses->GetTexts()[0].empty());
+}
+
+TEST(EngineTest, CreateEngine_StreamedModelLoading_EnableDebuggerDisabled) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> file_stream,
+                       FileDataStream::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine_settings,
+      EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.SetEnableDebugger(true);
+
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(engine_settings));
+  EXPECT_FALSE(llm->GetEngineSettings().GetEnableDebugger());
 }
 
 TEST(EngineTest, CreateEngine_StreamedModelLoading_VisionWithoutVisionModel) {
