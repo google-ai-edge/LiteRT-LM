@@ -55,6 +55,7 @@ using ::litert::lm::LitertLmLoader;
 using ::litert::lm::ModelAssets;
 using ::litert::lm::ModelResourcesLitertLm;
 using ::litert::lm::VisionExecutorSettings;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 constexpr absl::string_view kTestLmModelPath =
@@ -180,6 +181,149 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
   EXPECT_THAT(VisionLiteRtCompiledModelExecutor::Create(
                   settings, env, std::shared_ptr<ModelResources>()),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest, EncodeWithCancellation) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestVisionModelWithAdapterPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(
+      auto vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+  std::vector<float> input_data(10 * 8, 1.0f);
+  RankedTensorType input_tensor_type(ElementType::Float32,
+                                     Layout(litert::Dimensions{1, 10, 8}));
+  ASSERT_OK_AND_ASSIGN(
+      auto input_buffer,
+      CreateTensorBuffer<float>(absl::MakeSpan(input_data), input_tensor_type));
+  ASSERT_OK_AND_ASSIGN(auto expected_output,
+                       vision_executor->Encode(input_buffer));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * expected_embeddings,
+                       expected_output.GetMutableEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto expected_vector,
+                       ReadTensorBuffer<float>(*expected_embeddings));
+
+  // Not cancelled: same output as without a cancellation callback.
+  ASSERT_OK_AND_ASSIGN(
+      auto output, vision_executor->Encode(input_buffer, [] { return false; }));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * embeddings,
+                       output.GetMutableEmbeddingsPtr());
+  EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
+              IsOkAndHolds(expected_vector));
+
+  // Cancelled before any input is copied: `should_cancel` is called once.
+  int num_checks = 0;
+  EXPECT_THAT(vision_executor->Encode(input_buffer,
+                                      [&] {
+                                        ++num_checks;
+                                        return true;
+                                      }),
+              StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 1);
+
+  // Cancelled at the check right before the vision encoder runs.
+  num_checks = 0;
+  EXPECT_THAT(
+      vision_executor->Encode(input_buffer, [&] { return ++num_checks == 2; }),
+      StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 2);
+
+  // Cancelled by a one-shot `should_cancel` during the runs (per-op checks):
+  // the cancellation is latched, and `should_cancel` is not called again.
+  num_checks = 0;
+  EXPECT_THAT(
+      vision_executor->Encode(input_buffer, [&] { return ++num_checks == 3; }),
+      StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 3);
+
+  // The executor is usable after a cancelled call, and produces the same
+  // output.
+  ASSERT_OK_AND_ASSIGN(output, vision_executor->Encode(input_buffer));
+  ASSERT_OK_AND_ASSIGN(embeddings, output.GetMutableEmbeddingsPtr());
+  EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
+              IsOkAndHolds(expected_vector));
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest, EncodeInputMapsWithCancellation) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestVisionModelWithAdapterPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(
+      auto vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+  std::vector<float> input_data(10 * 8, 1.0f);
+  RankedTensorType input_tensor_type(ElementType::Float32,
+                                     Layout(litert::Dimensions{1, 10, 8}));
+  ASSERT_OK_AND_ASSIGN(
+      auto input_buffer,
+      CreateTensorBuffer<float>(absl::MakeSpan(input_data), input_tensor_type));
+  absl::flat_hash_map<std::string, TensorBuffer> input_maps;
+  input_maps["images"] = std::move(input_buffer);
+
+  ASSERT_OK_AND_ASSIGN(auto expected_output,
+                       vision_executor->Encode(input_maps));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * expected_embeddings,
+                       expected_output.GetMutableEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto expected_vector,
+                       ReadTensorBuffer<float>(*expected_embeddings));
+
+  // Not cancelled: same output as without a cancellation callback.
+  ASSERT_OK_AND_ASSIGN(
+      auto output, vision_executor->Encode(input_maps, [] { return false; }));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * embeddings,
+                       output.GetMutableEmbeddingsPtr());
+  EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
+              IsOkAndHolds(expected_vector));
+
+  // Cancelled before any input is copied.
+  int num_checks = 0;
+  EXPECT_THAT(vision_executor->Encode(input_maps,
+                                      [&] {
+                                        ++num_checks;
+                                        return true;
+                                      }),
+              StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 1);
+
+  // Cancelled at the check right before the vision encoder runs.
+  num_checks = 0;
+  EXPECT_THAT(
+      vision_executor->Encode(input_maps, [&] { return ++num_checks == 2; }),
+      StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 2);
+
+  // Cancelled by a one-shot `should_cancel` during the runs.
+  num_checks = 0;
+  EXPECT_THAT(
+      vision_executor->Encode(input_maps, [&] { return ++num_checks == 3; }),
+      StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 3);
+
+  // The executor is usable after a cancelled call.
+  ASSERT_OK_AND_ASSIGN(output, vision_executor->Encode(input_maps));
+  ASSERT_OK_AND_ASSIGN(embeddings, output.GetMutableEmbeddingsPtr());
+  EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
+              IsOkAndHolds(expected_vector));
 }
 
 TEST(VisionLiteRtCompiledModelExecutorTest,

@@ -26,7 +26,9 @@
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -583,6 +585,7 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     LITERT_ASSIGN_OR_RETURN(
         auto encoder_outputs,
         vision_encoder_->GetCompiledModel().CreateOutputBuffers(0));
+    ABSL_RETURN_IF_ERROR(CheckNotCancelled());
     {
       ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
       LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
@@ -607,6 +610,7 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
   LITERT_ASSIGN_OR_RETURN(auto& encoder_outputs,
                           vision_encoder_->GetOrCreateOutputBuffers(0));
 
+  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
   {
     ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
     LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
@@ -614,6 +618,7 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
         /*output_buffers=*/encoder_outputs));
   }
 
+  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
   {
     ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
     LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
@@ -625,6 +630,75 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
 
   return ExecutorVisionData(std::move(output_tensor_buffers[0]),
                             /*per_layer_embeddings=*/std::nullopt);
+}
+
+bool VisionLiteRtCompiledModelExecutor::IsCancelled() const {
+  if (!cancelled_ && should_cancel_ != nullptr && (*should_cancel_)()) {
+    cancelled_ = true;
+  }
+  return cancelled_;
+}
+
+absl::Status VisionLiteRtCompiledModelExecutor::CheckNotCancelled() const {
+  if (IsCancelled()) {
+    return absl::CancelledError("Vision encoding was cancelled.");
+  }
+  return absl::OkStatus();
+}
+
+// static
+bool VisionLiteRtCompiledModelExecutor::CheckCancelled(void* data) {
+  return static_cast<const VisionLiteRtCompiledModelExecutor*>(data)
+      ->IsCancelled();
+}
+
+absl::StatusOr<ExecutorVisionData>
+VisionLiteRtCompiledModelExecutor::RunCancellable(
+    absl::FunctionRef<bool()> should_cancel,
+    absl::FunctionRef<absl::StatusOr<ExecutorVisionData>()> encode) {
+  should_cancel_ = &should_cancel;
+  cancelled_ = false;
+  // Register the per-op cancellation checks for the duration of this call only,
+  // so that calls without a cancellation callback do not pay for them.
+  vision_encoder_->GetMutableCompiledModel().SetCancellationFunction(
+      this, &CheckCancelled);
+  if (vision_adapter_ != nullptr) {
+    vision_adapter_->GetMutableCompiledModel().SetCancellationFunction(
+        this, &CheckCancelled);
+  }
+  absl::Cleanup end_cancellable_call = [this] {
+    vision_encoder_->GetMutableCompiledModel().SetCancellationFunction(
+        /*data=*/nullptr, /*check_cancelled_func=*/nullptr);
+    if (vision_adapter_ != nullptr) {
+      vision_adapter_->GetMutableCompiledModel().SetCancellationFunction(
+          /*data=*/nullptr, /*check_cancelled_func=*/nullptr);
+    }
+    should_cancel_ = nullptr;
+    cancelled_ = false;
+  };
+
+  // Check before copying any input.
+  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
+  absl::StatusOr<ExecutorVisionData> output = encode();
+  // An interrupted LiteRT run reports a generic error. Use the latched state
+  // rather than calling `should_cancel` again.
+  if (!output.ok() && cancelled_ && !absl::IsCancelled(output.status())) {
+    return absl::CancelledError("Vision encoding was cancelled.");
+  }
+  return output;
+}
+
+absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
+    const litert::TensorBuffer& input_image_tensor,
+    absl::FunctionRef<bool()> should_cancel) {
+  return RunCancellable(should_cancel,
+                        [&] { return Encode(input_image_tensor); });
+}
+
+absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
+    const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
+    absl::FunctionRef<bool()> should_cancel) {
+  return RunCancellable(should_cancel, [&] { return Encode(input_maps); });
 }
 
 absl::StatusOr<std::vector<int>>
@@ -738,6 +812,7 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
       auto& encoder_output_buffers,
       vision_encoder_->GetOrCreateOutputBuffers(encoder_signature_index));
 
+  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
   {
     ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
     LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
@@ -872,6 +947,7 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
               encoder_output_span));
     }
 
+    ABSL_RETURN_IF_ERROR(CheckNotCancelled());
     {
       ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
       LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(

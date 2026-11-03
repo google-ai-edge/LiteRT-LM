@@ -23,6 +23,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -98,6 +99,34 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
   absl::Status StartProfiling() override;
   absl::StatusOr<ExecutorStats> StopProfiling() override;
+
+  // Same as the Encode overloads above, but can be cancelled while they run.
+  //
+  // `should_cancel` is checked before any input is copied, before the vision
+  // encoder and the vision adapter run, and, for the duration of the call
+  // only, after every op executed by the LiteRT interpreter. Once it returns
+  // true, the call stops at the next check; `should_cancel` is not called again
+  // for this call. An op delegated to an accelerator (e.g. the NPU dispatch op
+  // running a whole compiled graph) cannot be interrupted, so cancellation
+  // takes effect at op boundaries. Calls without `should_cancel` do not pay the
+  // per-op check.
+  //
+  // Args:
+  //   input_image_tensor / input_maps: The image input, as for the overloads
+  //     above.
+  //   should_cancel: Returns true to request cancellation. Called on the thread
+  //     running this method.
+  //
+  // Returns:
+  //   The vision embeddings, a CancelledError if `should_cancel` returned true,
+  //   or the errors of the overloads above. The executor remains usable after a
+  //   cancelled call.
+  absl::StatusOr<ExecutorVisionData> Encode(
+      const litert::TensorBuffer& input_image_tensor,
+      absl::FunctionRef<bool()> should_cancel);
+  absl::StatusOr<ExecutorVisionData> Encode(
+      const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
+      absl::FunctionRef<bool()> should_cancel);
 
  private:
   // Caches the input and output buffers of each signature across Encode()
@@ -297,6 +326,24 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
         expected_input_dimension_(expected_input_dimension),
         vision_executor_properties_(vision_executor_properties) {}
 
+  // Returns true if the current cancellable call is cancelled. Once the
+  // cancellation callback returns true, the result is latched for the rest of
+  // the call and the callback is not called again.
+  bool IsCancelled() const;
+
+  // Returns a CancelledError if the current cancellable call is cancelled.
+  absl::Status CheckNotCancelled() const;
+
+  // LiteRT per-op cancellation callback; `data` is the executor.
+  static bool CheckCancelled(void* data);
+
+  // Runs `encode` as a cancellable call: sets up `should_cancel` and the
+  // per-op cancellation checks of the compiled models for the duration of the
+  // call.
+  absl::StatusOr<ExecutorVisionData> RunCancellable(
+      absl::FunctionRef<bool()> should_cancel,
+      absl::FunctionRef<absl::StatusOr<ExecutorVisionData>()> encode);
+
   // The VisionExecutorSettings for the vision encoder and vision adapter
   // models.
   VisionExecutorSettings vision_executor_settings_;
@@ -320,6 +367,13 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
   VisionExecutorProperties vision_executor_properties_;
 
   std::optional<ExecutorStats> latency_stats_;
+
+  // The cancellation callback of the call in progress, or nullptr. Only set for
+  // the duration of a cancellable call.
+  const absl::FunctionRef<bool()>* should_cancel_ = nullptr;
+
+  // Whether the call in progress was cancelled (latched).
+  mutable bool cancelled_ = false;
 };
 
 }  // namespace litert::lm

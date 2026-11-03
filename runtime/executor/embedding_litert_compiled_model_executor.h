@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -142,6 +143,30 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   absl::StatusOr<std::vector<float>> ComputeEmbeddingFromInputEmbeddings(
       absl::Span<const float> input_embeddings);
 
+  // Same as above, but can be cancelled while it runs.
+  //
+  // `should_cancel` is checked before the text encoder runs and, for the
+  // duration of this call only, after every op executed by the LiteRT
+  // interpreter. Once it returns true, the call stops at the next check;
+  // `should_cancel` is not called again for this call. An op delegated to an
+  // accelerator (e.g. the NPU dispatch op running a whole compiled graph)
+  // cannot be interrupted, so cancellation takes effect at op boundaries.
+  // Calls without `should_cancel` do not pay the per-op check.
+  //
+  // Args:
+  //   input_embeddings: `[sequence_length, embed_dim]` float input embeddings,
+  //     as for the overload above.
+  //   should_cancel: Returns true to request cancellation. Called on the thread
+  //     running this method.
+  //
+  // Returns:
+  //   The output embedding vector of the text encoder, a CancelledError if
+  //   `should_cancel` returned true, or the errors of the overload above. The
+  //   executor remains usable after a cancelled call.
+  absl::StatusOr<std::vector<float>> ComputeEmbeddingFromInputEmbeddings(
+      absl::Span<const float> input_embeddings,
+      absl::FunctionRef<bool()> should_cancel);
+
   // Returns the name of the hardware backend used by this executor.
   absl::string_view ExecutorBackendName() const override;
 
@@ -184,6 +209,14 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   absl::StatusOr<std::vector<float>> RunEncoderForTokens(
       absl::Span<const int32_t> tokens);
 
+  // Returns true if the current cancellable call is cancelled. Once the
+  // cancellation callback returns true, the result is latched for the rest of
+  // the call and the callback is not called again.
+  bool IsCancelled() const;
+
+  // LiteRT per-op cancellation callback; `data` is the executor.
+  static bool CheckCancelled(void* data);
+
   EmbeddingLiteRtCompiledModelExecutor(
       EmbeddingExecutorSettings executor_settings, litert::Environment& env,
       std::shared_ptr<ModelResources> resources,
@@ -219,6 +252,13 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       output_buffers_cache_;
 
   std::optional<ExecutorStats> latency_stats_;
+
+  // The cancellation callback of the call in progress, or nullptr. Only set for
+  // the duration of a cancellable call.
+  const absl::FunctionRef<bool()>* should_cancel_ = nullptr;
+
+  // Whether the call in progress was cancelled (latched).
+  mutable bool cancelled_ = false;
 };
 
 }  // namespace litert::lm
