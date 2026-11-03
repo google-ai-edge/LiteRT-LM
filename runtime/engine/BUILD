@@ -367,6 +367,7 @@ cc_binary(
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
         "//runtime/proto:litert_lm_metrics_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:logging",

@@ -839,6 +839,13 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     cpu_settings.prefill_chunk_size = settings.prefill_chunk_size;
     executor_settings.SetBackendConfig(cpu_settings);
   }
+  if (!settings.custom_backend_options.empty()) {
+    auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
+    for (const auto& [key, value] : settings.custom_backend_options) {
+      ABSL_RETURN_IF_ERROR(
+          executor_settings.SetCustomBackendOption(key, value));
+    }
+  }
   if (backend == Backend::GPU) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
     ABSL_ASSIGN_OR_RETURN(

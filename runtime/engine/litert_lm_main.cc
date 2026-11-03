@@ -155,6 +155,11 @@ absl::Status MainHelper(int argc, char** argv) {
     cpu_settings.enable_ynnpack = absl::GetFlag(FLAGS_enable_ynnpack);
     executor_settings.SetBackendConfig(cpu_settings);
   }
+  if (!absl::GetFlag(FLAGS_custom_backend_options).empty()) {
+    ABSL_RETURN_IF_ERROR(engine_settings.GetMutableMainExecutorSettings()
+                             .SetCustomBackendOptionsFromStrings(
+                                 absl::GetFlag(FLAGS_custom_backend_options)));
+  }
 
   // Create the engine.
   ABSL_ASSIGN_OR_RETURN(auto engine, litert::lm::EngineFactory::CreateDefault(

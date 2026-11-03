@@ -748,5 +748,63 @@ TEST(LlmExecutorConfigTest, SelectedSignatures) {
               testing::ElementsAre("llm_signature_1", "llm_signature_2"));
 }
 
+TEST(LlmExecutorConfigTest, CustomBackendConfigDefaultsAndOptions) {
+  const Backend custom_backend = RegisterCustomBackend("custom_test_backend");
+  RegisterCustomBackend("other_custom_backend");
+  auto assets = ModelAssets::Create("/path/to/model1");
+  ASSERT_OK(assets);
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(assets), custom_backend));
+
+  // Custom backends default to an empty CustomBackendConfig rather than
+  // CpuConfig so user-provided options are not shadowed by built-in defaults.
+  EXPECT_FALSE(settings.GetBackendConfig<CpuConfig>().ok());
+  ASSERT_OK_AND_ASSIGN(auto custom_config,
+                       settings.GetBackendConfig<CustomBackendConfig>());
+  EXPECT_TRUE(custom_config.options.empty());
+  EXPECT_EQ(settings.GetCustomBackendOption("num_threads"), std::nullopt);
+
+  ASSERT_OK(
+      settings.SetCustomBackendOption("custom_test_backend.num_threads", "64"));
+  EXPECT_EQ(settings.GetCustomBackendOption("num_threads"), "64");
+  EXPECT_EQ(settings.GetCustomBackendOption("custom_test_backend.num_threads"),
+            "64");
+
+  ASSERT_OK(settings.SetCustomBackendOptionsFromStrings(
+      {" custom_test_backend . max_clusters = 2 ",
+       "CUSTOM_TEST_BACKEND.mode=fast=1"}));
+
+  EXPECT_EQ(settings.GetCustomBackendOption("num_threads"), "64");
+  EXPECT_EQ(settings.GetCustomBackendOption("max_clusters"), "2");
+  EXPECT_EQ(settings.GetCustomBackendOption("mode"), "fast=1");
+
+  // Verify the stored keys in CustomBackendConfig are stripped of the
+  // `<backend>.` prefix after validation.
+  ASSERT_OK_AND_ASSIGN(auto stored_config,
+                       settings.GetBackendConfig<CustomBackendConfig>());
+  EXPECT_THAT(stored_config.options, testing::UnorderedElementsAre(
+                                         testing::Pair("max_clusters", "2"),
+                                         testing::Pair("mode", "fast=1"),
+                                         testing::Pair("num_threads", "64")));
+  std::stringstream oss;
+  oss << stored_config;
+  EXPECT_THAT(oss.str(),
+              testing::AllOf(testing::HasSubstr("max_clusters: 2\n"),
+                             testing::HasSubstr("mode: fast=1\n"),
+                             testing::HasSubstr("num_threads: 64\n")));
+
+  // Rejects unqualified keys, mismatched backend prefixes, and malformed pairs.
+  EXPECT_FALSE(settings.SetCustomBackendOption("num_threads", "32").ok());
+  EXPECT_FALSE(
+      settings.SetCustomBackendOption("custom_test_backend. ", "32").ok());
+  EXPECT_FALSE(
+      settings.SetCustomBackendOption("other_custom_backend.num_threads", "32")
+          .ok());
+  EXPECT_FALSE(
+      settings.SetCustomBackendOptionsFromStrings({"missing_equals"}).ok());
+  EXPECT_FALSE(
+      settings.SetCustomBackendOptionsFromStrings({"=empty_key"}).ok());
+}
+
 }  // namespace
 }  // namespace litert::lm

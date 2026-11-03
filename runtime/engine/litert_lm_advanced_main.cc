@@ -48,6 +48,7 @@
 #include "runtime/engine/litert_lm_lib.h"
 #include "runtime/engine/shared_flags.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/litert_lm_metrics.pb.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/metrics_util.h"
@@ -382,6 +383,10 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_use_lazy_warmup_for_npu);
   settings.disable_input_prompt_as_hint =
       absl::GetFlag(FLAGS_disable_input_prompt_as_hint);
+  litert::lm::CustomBackendConfig custom_backend_config;
+  ABSL_RETURN_IF_ERROR(custom_backend_config.SetOptionsFromStrings(
+      absl::GetFlag(FLAGS_custom_backend_options)));
+  settings.custom_backend_options = std::move(custom_backend_config.options);
 
   // Match the prefill signature to the benchmarked prefill length if not set on
   // benchmark mode. max_num_tokens (the KV cache size) is not derived from the
