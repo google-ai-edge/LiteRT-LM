@@ -18,6 +18,7 @@
 
 import {Engine} from './engine.js';
 import {loadLiteRtLm, unloadLiteRtLm} from './load_litertlm.js';
+import {waitForWebGpuAdapter} from './testing/webgpu.js';
 import {Backend} from './wasm_binding_types.js';
 
 const CPU_MODEL_PATH = '/models/tiny_gemma.litertlm';
@@ -43,18 +44,6 @@ async function servesLiteRtLmFile(path: string): Promise<boolean> {
   }
 }
 
-/** Returns whether the browser provides a WebGPU adapter. */
-async function hasWebGpuAdapter(): Promise<boolean> {
-  const gpu =
-      (navigator as Navigator & {gpu?: {requestAdapter(): Promise<unknown>}})
-          .gpu;
-  try {
-    return !!(await gpu?.requestAdapter());
-  } catch {
-    return false;
-  }
-}
-
 // Loads real engines from a fake Hugging Face Hub, whose files are served from
 // local models.
 describe('Engine with a hf:// model', () => {
@@ -73,8 +62,9 @@ describe('Engine with a hf:// model', () => {
     await loadLiteRtLm('/wasm');
     modelsAvailable = await servesLiteRtLmFile(CPU_MODEL_PATH) &&
         await servesLiteRtLmFile(GPU_ARTISAN_MODEL_PATH);
-    webGpuAvailable = await hasWebGpuAdapter();
-  });
+    // The browser's GPU process can take a while to come up on Forge.
+    webGpuAvailable = await waitForWebGpuAdapter();
+  }, 120_000);
 
   /**
    * Marks the current spec pending unless the local models, and WebGPU if
