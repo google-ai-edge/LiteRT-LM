@@ -232,8 +232,6 @@ py_test(
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:version.bzl", "VERSION")
-load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
-
 # Prebuilt shared libraries staged alongside liblitert-lm.{so,dylib} so they can
 # be resolved via $ORIGIN / @loader_path at runtime.
 _PREBUILT_LIBS = [
@@ -295,6 +293,27 @@ copy_file(
     name = "copy_dxcompiler_dll",
     src = "@directx_shader_compiler//:dxcompiler",
     out = "dxcompiler.dll",
+)
+
+copy_file(
+    name = "copy_litert_lm_dll",
+    src = select({
+        ":use_prebuilt_c_api": "//prebuilt/windows_x86_64:litert-lm.dll",
+        "//conditions:default": "//c:litert-lm",
+    }),
+    out = "litert-lm.dll",
+)
+
+copy_file(
+    name = "copy_webgpu_dawn_dll",
+    src = "//prebuilt/windows_x86_64:webgpu_dawn.dll",
+    out = "webgpu_dawn.dll",
+)
+
+copy_file(
+    name = "copy_gemma_constraint_provider_dll",
+    src = "//prebuilt/windows_x86_64:libGemmaModelConstraintProvider.dll",
+    out = "libGemmaModelConstraintProvider.dll",
 )
 
 copy_file(
@@ -364,13 +383,6 @@ genrule(
     """,
 )
 
-copy_file(
-    name = "copy_prebuilt_litert_lm_dll",
-    src = "//prebuilt/windows_x86_64:litert-lm.dll",
-    out = "litert-lm.dll",
-    tags = ["manual"],
-)
-
 filegroup(
     name = "prebuilt_litert_lm_lib",
     srcs = select({
@@ -378,7 +390,7 @@ filegroup(
         # no native binaries is built.
         ":wheel_platform_macos_arm64": [":copy_litert_lm_dylib"],
         ":wheel_platform_windows_x86_64": [
-            ":copy_prebuilt_litert_lm_dll",
+            ":copy_litert_lm_dll",
             ":copy_dxcompiler_dll",
             ":copy_dxil_dll",
             ":copy_openvino_dispatch_dll",
@@ -392,17 +404,14 @@ filegroup(
     }),
 )
 
-# On Windows, copy the .dll from runfiles to avoid the Bazel duplicated
-# labels.
-cc_runfiles(
-    name = "litert_lm_windows_runfiles",
-    cc_binary = "//c:litert-lm",
-)
-
 filegroup(
     name = "default_libs",
     srcs = select({
-        "@platforms//os:windows": [":litert_lm_windows_runfiles"],
+        "@platforms//os:windows": [
+            ":copy_litert_lm_dll",
+            ":copy_webgpu_dawn_dll",
+            ":copy_gemma_constraint_provider_dll",
+        ],
         "@platforms//os:macos": [":copy_litert_lm_dylib"],
         "//conditions:default": [":copy_litert_lm_so"],
     }) + select({
