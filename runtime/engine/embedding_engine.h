@@ -99,7 +99,11 @@ class EmbeddingEngine {
       const = 0;
 
   // Returns the selected text encoder signatures info if auto-selection was
-  // performed during engine creation, or nullopt otherwise.
+  // performed during engine creation, or nullopt otherwise. Includes both
+  // batch-size-1 signatures and any batched (`B > 1`) signatures in the
+  // selected length range (listed after the `B = 1` signatures; batched
+  // signatures may still be omitted at compile time if the backend falls back
+  // to `B = 1` only).
   virtual const std::optional<SelectedTextSignaturesInfo>&
   GetSelectedTextSignaturesInfo() const = 0;
 

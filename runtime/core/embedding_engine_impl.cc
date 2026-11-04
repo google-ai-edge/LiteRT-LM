@@ -400,6 +400,23 @@ proto::EmbeddingMetadata::TfLiteModelType ParseEmbeddingModelType(
   return model_type;
 }
 
+absl::Status ValidateOutputSize(std::optional<int> output_size,
+                                size_t default_output_size) {
+  if (!output_size.has_value()) {
+    return absl::OkStatus();
+  }
+  if (*output_size < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("output_size cannot be negative, got: ", *output_size));
+  }
+  if (static_cast<size_t>(*output_size) > default_output_size) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "output_size cannot be larger than default output embedding size (",
+        default_output_size, "), got: ", *output_size));
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 // static
@@ -1753,34 +1770,28 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
                         std::move(combined_audio_data));
 }
 
-absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
-    const ExecutorInputs& inputs, const EmbeddingOptions& options) {
+ComputeEmbeddingOptions EmbeddingEngineImpl::GetComputeEmbeddingOptions(
+    const EmbeddingOptions& options) const {
   ComputeEmbeddingOptions compute_options{
       .input_overflow_strategy = options.input_overflow_strategy,
   };
   if (options.insert_special_tokens && !special_tokens_.eos_token_ids.empty()) {
     compute_options.eos_token_ids = special_tokens_.eos_token_ids;
   }
-  LITERT_ASSIGN_OR_RETURN(
-      auto embedding_output,
-      embedding_executor_->ComputeEmbedding(inputs, compute_options));
+  return compute_options;
+}
 
+absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ToEmbeddingResponse(
+    EmbeddingOutput embedding_output, const EmbeddingOptions& options) {
   EmbeddingResponse response;
   response.embedding = std::move(embedding_output.embedding);
   response.input_length = embedding_output.input_length;
   response.truncated_length = embedding_output.truncated_length;
   response.num_chunks = embedding_output.num_chunks;
 
+  ABSL_RETURN_IF_ERROR(
+      ValidateOutputSize(options.output_size, response.embedding.size()));
   if (options.output_size.has_value()) {
-    if (*options.output_size < 0) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "output_size cannot be negative, got: ", *options.output_size));
-    }
-    if (*options.output_size > response.embedding.size()) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "output_size cannot be larger than default output embedding size (",
-          response.embedding.size(), "), got: ", *options.output_size));
-    }
     response.embedding.resize(*options.output_size);
   }
 
@@ -1788,6 +1799,14 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
     response.embedding = L2Norm(response.embedding);
   }
   return response;
+}
+
+absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
+    const ExecutorInputs& inputs, const EmbeddingOptions& options) {
+  LITERT_ASSIGN_OR_RETURN(auto embedding_output,
+                          embedding_executor_->ComputeEmbedding(
+                              inputs, GetComputeEmbeddingOptions(options)));
+  return ToEmbeddingResponse(std::move(embedding_output), options);
 }
 
 absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
@@ -1828,16 +1847,56 @@ EmbeddingEngineImpl::ComputeEmbeddingBatch(
     ABSL_RETURN_IF_ERROR(StartExecutorProfiling());
   }
 
-  std::vector<EmbeddingResponse> batch_responses;
-  batch_responses.reserve(contents.size());
-  uint64_t total_tokens = 0;
+  // Fail fast on an invalid output size instead of after running the batch.
+  if (options.output_size.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(int embedding_dimension,
+                          embedding_executor_->GetEmbeddingDimension());
+    if (embedding_dimension >= 0) {
+      ABSL_RETURN_IF_ERROR(ValidateOutputSize(
+          options.output_size, static_cast<size_t>(embedding_dimension)));
+    } else if (*options.output_size < 0) {
+      // A dynamic embedding dimension is only known once the encoder has run,
+      // so the upper bound is checked per response in ToEmbeddingResponse.
+      return absl::InvalidArgumentError(absl::StrCat(
+          "output_size cannot be negative, got: ", *options.output_size));
+    }
+  }
 
-  for (const auto& single_contents : contents) {
-    const std::vector<InputData>* contents_to_process = &single_contents;
+  std::vector<std::optional<EmbeddingResponse>> responses(contents.size());
+  // Text-only requests are deferred so that the executor can batch them, in
+  // windows of at most kMaxTextRequestsPerExecutorBatch requests so that the
+  // inputs held for them stay bounded. Requests with image or audio inputs run
+  // right away, so that their encoded multimodal embeddings are not held for
+  // the whole batch.
+  std::vector<ExecutorInputs> text_executor_inputs;
+  std::vector<size_t> text_indices;
+  uint64_t total_tokens = 0;
+  const ComputeEmbeddingOptions compute_options =
+      GetComputeEmbeddingOptions(options);
+
+  // Runs the deferred text-only requests.
+  auto flush_text_requests = [&]() -> absl::Status {
+    if (text_executor_inputs.empty()) return absl::OkStatus();
+    LITERT_ASSIGN_OR_RETURN(auto embedding_outputs,
+                            embedding_executor_->ComputeEmbeddingBatch(
+                                text_executor_inputs, compute_options));
+    RET_CHECK_EQ(embedding_outputs.size(), text_indices.size());
+    for (size_t j = 0; j < text_indices.size(); ++j) {
+      ABSL_ASSIGN_OR_RETURN(
+          responses[text_indices[j]],
+          ToEmbeddingResponse(std::move(embedding_outputs[j]), options));
+    }
+    text_executor_inputs.clear();
+    text_indices.clear();
+    return absl::OkStatus();
+  };
+
+  for (size_t i = 0; i < contents.size(); ++i) {
+    const std::vector<InputData>* contents_to_process = &contents[i];
     std::vector<InputData> expanded_contents;
     if (options.insert_special_tokens) {
       LITERT_ASSIGN_OR_RETURN(expanded_contents,
-                              InsertSpecialTokens(single_contents));
+                              InsertSpecialTokens(contents[i]));
       contents_to_process = &expanded_contents;
     }
     LITERT_ASSIGN_OR_RETURN(
@@ -1847,9 +1906,25 @@ EmbeddingEngineImpl::ComputeEmbeddingBatch(
       ABSL_ASSIGN_OR_RETURN(uint64_t num_tokens, GetNumTokens(executor_inputs));
       total_tokens += num_tokens;
     }
-    ABSL_ASSIGN_OR_RETURN(auto response,
-                          ComputeEmbeddingInternal(executor_inputs, options));
-    batch_responses.push_back(std::move(response));
+    if (executor_inputs.GetVisionDataPtr().ok() ||
+        executor_inputs.GetAudioDataPtr().ok()) {
+      ABSL_ASSIGN_OR_RETURN(responses[i],
+                            ComputeEmbeddingInternal(executor_inputs, options));
+    } else {
+      text_executor_inputs.push_back(std::move(executor_inputs));
+      text_indices.push_back(i);
+      if (text_executor_inputs.size() >= kMaxTextRequestsPerExecutorBatch) {
+        ABSL_RETURN_IF_ERROR(flush_text_requests());
+      }
+    }
+  }
+  ABSL_RETURN_IF_ERROR(flush_text_requests());
+
+  std::vector<EmbeddingResponse> batch_responses;
+  batch_responses.reserve(responses.size());
+  for (auto& response : responses) {
+    RET_CHECK(response.has_value());
+    batch_responses.push_back(*std::move(response));
   }
 
   if (benchmark_info_.has_value()) {
