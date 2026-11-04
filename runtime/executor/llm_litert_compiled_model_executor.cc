@@ -76,6 +76,8 @@
 #include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/llm_litert_verifier.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
+#include "runtime/executor/nvidia_token_table_support.h"
 #include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
@@ -322,6 +324,8 @@ absl::Status InitializeAuxiliaryExecutorComponents(
   if (embedding_lookup == nullptr && resources != nullptr) {
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
         lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup));
+    // The NVIDIA decode step that feeds itself reads the embedder's tables.
+    RegisterNvidiaTokenTables(lrt_env, *resources, executor_metadata);
   }
   return absl::OkStatus();
 }
@@ -1301,6 +1305,9 @@ LlmLiteRtCompiledModelExecutorBase::Decode() {
 absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
+  // The NVIDIA decode step that feeds itself runs no steps ahead past them.
+  TellNvidiaDecodeBudget(env_, executor_settings_.GetBackend(),
+                         decode_params.GetMaxNumTokensToEmit());
 
   // The drafter can only continue from its own last verified state if the
   // previous step was a successful MTP round. Invalidate the flag up front so
@@ -1724,10 +1731,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
 
   gpu_sampler_max_top_k_ = sampler_params.k();
 
-  ABSL_ASSIGN_OR_RETURN(
-      sampler_,
-      CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_, /*sequence_size=*/1, vocab_size, data_type));
+  ABSL_ASSIGN_OR_RETURN(sampler_,
+                        CreateNvidiaExecutorSampler(
+                            executor_settings_.GetBackend(), sampler_backend,
+                            output_heads, std::move(sampler_params), env_,
+                            /*sequence_size=*/1, vocab_size, data_type));
 
   // Disable GPU token copy for models that run embedding on the GPU.
   const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);

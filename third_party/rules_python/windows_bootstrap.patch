@@ -1,0 +1,76 @@
+--- a/python/private/python_bootstrap_template.txt
++++ b/python/private/python_bootstrap_template.txt
+@@ -559,6 +559,48 @@
+       print_verbose("pyprog head:" + str(f.read(50)))
+     raise
+ 
++def _materialize_manifest_runfiles(runfiles_root, main_rel_path, delete_dirs):
++  """Provides the normal runfiles layout without Windows symlink privilege."""
++  if not IS_WINDOWS or os.path.exists(join(runfiles_root, main_rel_path)):
++    return runfiles_root
++  manifest = runfiles_root + '_manifest'
++  if not os.path.isfile(manifest):
++    return runfiles_root
++  import tempfile
++  temporary = tempfile.mkdtemp(prefix='Bazel.runfiles_manifest_')
++  copied_root = join(temporary, 'runfiles')
++  os.makedirs(copied_root)
++  # Only this freshly created private directory is registered for cleanup.
++  delete_dirs.append(temporary)
++  with open(manifest, encoding='utf-8') as stream:
++    for line in stream:
++      line = line.rstrip('\n')
++      escaped = line.startswith(' ')
++      if escaped:
++        line = line[1:]
++      name, separator, target = line.partition(' ')
++      if not separator:
++        target = name
++      if escaped:
++        name = name.replace(r'\s', ' ').replace(r'\n', '\n').replace(r'\b', '\\')
++        target = target.replace(r'\n', '\n').replace(r'\b', '\\')
++      destination = abspath(join(copied_root, name))
++      if os.path.commonpath([copied_root, destination]) != copied_root:
++        raise ValueError('Runfiles entry escapes private root: ' + name)
++      os.makedirs(dirname(destination), exist_ok=True)
++      destination = get_windows_path_with_unc_prefix(destination)
++      if not target:
++        open(destination, 'wb').close()
++      elif os.path.isdir(get_windows_path_with_unc_prefix(target)):
++        shutil.copytree(get_windows_path_with_unc_prefix(target), destination, dirs_exist_ok=True)
++      else:
++        shutil.copyfile(get_windows_path_with_unc_prefix(target), destination)
++  os.environ.pop('RUNFILES_MANIFEST_FILE', None)
++  os.environ.pop('RUNFILES_MANIFEST_ONLY', None)
++  os.environ['RUNFILES_DIR'] = copied_root
++  return copied_root
++
++
+ def _symlink_exist_ok(*, from_, to):
+   try:
+     # On Windows, symlinks have to be told whether they're
+@@ -567,6 +609,16 @@
+     os.symlink(to, from_, target_is_directory=os.path.isdir(to))
+   except FileExistsError:
+     pass
++  except OSError as error:
++    if not IS_WINDOWS or getattr(error, 'winerror', None) != 1314:
++      raise
++    # Keep the same venv contents when this account cannot create symlinks.
++    source = get_windows_path_with_unc_prefix(to)
++    destination = get_windows_path_with_unc_prefix(from_)
++    if os.path.isdir(source):
++      shutil.copytree(source, destination, dirs_exist_ok=True)
++    else:
++      shutil.copyfile(source, destination)
+ 
+ 
+ def main():
+@@ -611,6 +663,7 @@
+     delete_dirs.append(dirname(runfiles_root))
+   else:
+     runfiles_root = find_runfiles_root(main_rel_path)
++    runfiles_root = _materialize_manifest_runfiles(runfiles_root, main_rel_path, delete_dirs)
+ 
+   print_verbose("runfiles root:", runfiles_root)
+ 

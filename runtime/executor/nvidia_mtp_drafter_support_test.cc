@@ -14,17 +14,24 @@
 
 #include "runtime/executor/nvidia_mtp_drafter_support.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <functional>
+#include <memory>
+#include <numeric>
 #include <optional>
+#include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -34,13 +41,22 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_opaque_options.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_requirements.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "litert/vendors/nvidia/cache_layout.h"  // from @litert
+#include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
+#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampling_cpu_util.h"
+#include "runtime/components/sampling_uniforms.h"
+#include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -326,12 +342,19 @@ TEST(NvidiaMtpDrafterSupportTest,
 
 TEST(NvidiaMtpDrafterSupportTest, RejectsMalformedMatchingLogitsShape) {
   for (const Dimensions& dims :
-       std::vector<Dimensions>{{4, 8}, {2, 4, 8}, {1, 0, 8}, {1, 4, -1}}) {
+       std::vector<Dimensions>{{4, 8}, {1, 0, 8}, {1, 4, -1}}) {
     EXPECT_THAT(SupportsNvidiaGreedySampler(
                     Backend::NPU, GreedyParameters(), kCudaBuffer,
                     RankedTensorType(ElementType::Float32, Layout(dims))),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
+  // A batch above one is not malformed: the host samples it.
+  ASSERT_OK_AND_ASSIGN(
+      const bool batched,
+      SupportsNvidiaGreedySampler(
+          Backend::NPU, GreedyParameters(), kCudaBuffer,
+          RankedTensorType(ElementType::Float32, Layout(Dimensions{2, 4, 8}))));
+  EXPECT_FALSE(batched);
 }
 
 TEST(NvidiaMtpDrafterSupportTest, AcceptsDenseStridesAndRejectsPaddedLogits) {
@@ -408,6 +431,558 @@ TEST(NvidiaMtpDrafterSupportTest, StillRequiresActualCudaBuffer) {
   EXPECT_EQ(sampler, nullptr);
 }
 #endif  // defined(__linux__)
+
+// The candidate path's policy, against the CPU sampler it reuses.
+
+struct Candidate {
+  int32_t id;
+  float value;
+};
+
+// The k largest by logit then index: what NVIDIA's dispatch selects.
+std::vector<Candidate> OrderedCandidates(const float* values, int vocab,
+                                         int k) {
+  std::vector<int32_t> order(vocab);
+  std::iota(order.begin(), order.end(), 0);
+  std::partial_sort(order.begin(), order.begin() + k, order.end(),
+                    [&](int32_t a, int32_t b) {
+                      if (values[a] != values[b]) return values[a] > values[b];
+                      return a < b;
+                    });
+  std::vector<Candidate> out;
+  for (int i = 0; i < k; ++i) out.push_back({order[i], values[order[i]]});
+  return out;
+}
+
+// The CPU sampler's own selection (TopKTokenIds in runtime/components/
+// sampling_cpu_util.cc), as candidates.
+std::vector<Candidate> HeapCandidates(const float* values, int vocab, int k) {
+  auto ids = TopKTokenIds(absl::MakeConstSpan(values, vocab), k, 1, 1);
+  EXPECT_TRUE(ids.ok()) << ids.status();
+  std::vector<Candidate> out;
+  for (int id : (*ids)[0]) out.push_back({id, values[id]});
+  return out;
+}
+
+bool CutoffIsUnique(const float* values, int vocab, int k) {
+  if (k >= vocab) return true;
+  std::vector<float> sorted(values, values + vocab);
+  std::partial_sort(sorted.begin(), sorted.begin() + k + 1, sorted.end(),
+                    std::greater<float>());
+  return sorted[k - 1] != sorted[k];
+}
+
+std::string EngineState(const std::default_random_engine& engine) {
+  std::ostringstream stream;
+  stream << engine;
+  return stream.str();
+}
+
+proto::SamplerParameters TopPParameters(int k, float p, float temperature,
+                                        int seed) {
+  proto::SamplerParameters params;
+  params.set_type(proto::SamplerParameters::TOP_P);
+  params.set_k(k);
+  params.set_p(p);
+  params.set_temperature(temperature);
+  params.set_seed(seed);
+  return params;
+}
+
+std::vector<int32_t> ReadIds(TensorBuffer& ids, int rows) {
+  std::vector<int32_t> out(rows);
+  EXPECT_TRUE(ids.Read<int32_t>(absl::MakeSpan(out)).HasValue());
+  return out;
+}
+
+std::vector<float> ReadScores(TensorBuffer& scores, int rows) {
+  std::vector<float> out(rows);
+  EXPECT_TRUE(scores.Read<float>(absl::MakeSpan(out)).HasValue());
+  return out;
+}
+
+TEST(NvidiaMtpDrafterSupportTest, PeekedDrawsAreTheSamplesDraws) {
+  // The draws peeked for the steps ahead are the uniforms the CPU sampler's
+  // top-k / top-p path draws next (DrawSamplingUniforms), in order, and the
+  // peek leaves the generator as it was: four candidates with probabilities
+  // 0.4, 0.3, 0.2 and 0.1 put a uniform u at the first candidate whose
+  // cumulative probability reaches u.
+  auto generator = std::make_shared<std::default_random_engine>(7);
+  const std::string state = EngineState(*generator);
+  const std::vector<double> draws = PeekStepDraws(*generator, 3);
+  ASSERT_EQ(draws.size(), 3u);
+  EXPECT_EQ(EngineState(*generator), state);
+  const std::vector<float> logits = {std::log(0.4f), std::log(0.3f),
+                                     std::log(0.2f), std::log(0.1f)};
+  const double boundaries[4] = {0.4, 0.7, 0.9, 1.0};
+  for (int round = 0; round < 3; ++round) {
+    int expected = 3;
+    for (int i = 0; i < 4; ++i) {
+      ASSERT_GT(std::fabs(draws[round] - boundaries[i]), 1e-4)
+          << "a draw on a boundary";
+      if (draws[round] < boundaries[i]) {
+        expected = i;
+        break;
+      }
+    }
+    std::vector<float> uniforms(1);
+    DrawSamplingUniforms(TopPParameters(4, 1.0f, 1.0f, 7), *generator,
+                         absl::MakeSpan(uniforms));
+    EXPECT_EQ(static_cast<double>(uniforms[0]), draws[round]);
+    std::vector<std::vector<float>> scores;
+    auto ids = TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/4,
+                                /*p=*/1.0f, /*temperature=*/1.0f, uniforms,
+                                /*batch_size=*/1, /*sequence_size=*/1, scores);
+    ASSERT_TRUE(ids.ok()) << ids.status();
+    EXPECT_EQ((*ids)[0][0], expected)
+        << "round " << round << " draw " << draws[round];
+  }
+  EXPECT_TRUE(PeekStepDraws(*generator, 0).empty());
+}
+
+// On every configuration the drafter can be given, the policy on the
+// device's candidates draws what TopPSampler draws on the full logits:
+// the same ids, the same scores, the same generator afterwards, twice over.
+TEST(NvidiaMtpDrafterSupportTest, CandidatePolicyIsTheCpuSamplerBitForBit) {
+  constexpr int kVocab = 4096;
+  std::mt19937 gen(20261027);
+  std::normal_distribution<float> dist(0.0f, 4.0f);
+  int configurations = 0;
+  for (int rows : {1, 4}) {
+    for (int k : {1, 7, 64, 1024}) {
+      for (float p : {0.0f, 0.3f, 0.95f, 1.0f}) {
+        for (float temperature : {0.0f, 0.7f, 1.0f}) {
+          SCOPED_TRACE(absl::StrCat("rows ", rows, " k ", k, " p ", p, " T ",
+                                    temperature));
+          std::vector<float> values(static_cast<size_t>(rows) * kVocab);
+          for (float& value : values) value = dist(gen);
+          for (int row = 0; row < rows; ++row) {
+            ASSERT_TRUE(
+                CutoffIsUnique(values.data() + row * kVocab, kVocab, k));
+          }
+          LITERT_ASSERT_OK_AND_ASSIGN(
+              auto logits, CreateTensorBuffer<float>({1, rows, kVocab}));
+          LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
+          const proto::SamplerParameters params =
+              TopPParameters(k, p, temperature, 7);
+          ASSERT_OK_AND_ASSIGN(
+              auto cpu, TopPSampler::Create(k, p, temperature, 1, rows, 7));
+          auto cpu_gen = std::make_shared<std::default_random_engine>(7);
+          ASSERT_OK(cpu->UpdateConfig(params, 1, cpu_gen));
+          std::vector<int32_t> candidate_ids;
+          std::vector<float> candidate_values;
+          for (int row = 0; row < rows; ++row) {
+            for (const Candidate& candidate :
+                 OrderedCandidates(values.data() + row * kVocab, kVocab, k)) {
+              candidate_ids.push_back(candidate.id);
+              candidate_values.push_back(candidate.value);
+            }
+          }
+          auto device_gen = std::make_shared<std::default_random_engine>(7);
+          for (int draw = 0; draw < 2; ++draw) {
+            LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_ids,
+                                        CreateTensorBuffer<int32_t>({1, rows}));
+            LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_scores,
+                                        CreateTensorBuffer<float>({1, rows}));
+            ASSERT_OK(
+                cpu->SampleToIdAndScoreBuffer(logits, cpu_ids, &cpu_scores));
+            LITERT_ASSERT_OK_AND_ASSIGN(auto ids,
+                                        CreateTensorBuffer<int32_t>({1, rows}));
+            LITERT_ASSERT_OK_AND_ASSIGN(auto scores,
+                                        CreateTensorBuffer<float>({1, rows}));
+            // The device path's uniforms, drawn as the CPU sampler draws them.
+            std::vector<float> uniforms(rows);
+            DrawSamplingUniforms(params, *device_gen, absl::MakeSpan(uniforms));
+            ASSERT_OK(SampleNvidiaCandidates(candidate_ids, candidate_values,
+                                             rows, k, p, temperature, uniforms,
+                                             ids, &scores));
+            EXPECT_EQ(ReadIds(ids, rows), ReadIds(cpu_ids, rows));
+            EXPECT_EQ(ReadScores(scores, rows), ReadScores(cpu_scores, rows));
+            EXPECT_EQ(EngineState(*device_gen), EngineState(*cpu_gen));
+          }
+          ++configurations;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(configurations, 96);
+}
+
+// Float16 logits tie often, and a constraint's mask leaves fewer tokens
+// than k at a finite logit: the ties among the masked tokens at the cutoff
+// are tokens of zero probability, and the draws still agree.
+TEST(NvidiaMtpDrafterSupportTest, CandidatePolicyWithFp16ValuesAndMasks) {
+  constexpr int kVocab = 8192;
+  constexpr int kRows = 4;
+  constexpr int kK = 64;
+  std::mt19937 gen(5);
+  std::normal_distribution<float> dist(0.0f, 4.0f);
+  std::vector<float> values(static_cast<size_t>(kRows) * kVocab);
+  for (float& value : values) {
+    value = static_cast<float>(static_cast<tflite::half>(dist(gen)));
+  }
+  ASSERT_OK_AND_ASSIGN(auto mask_runner,
+                       LiteRtLogitMaskRunner::CreateForHost());
+  LITERT_ASSERT_OK_AND_ASSIGN(auto logits,
+                              CreateTensorBuffer<float>({1, kRows, kVocab}));
+  LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
+  // Row 0: a bitmap that allows ten tokens. Row 1: one token. Row 2: a
+  // sparse bias on three tokens. Row 3: nothing.
+  std::vector<std::unique_ptr<LogitMask>> masks;
+  {
+    const std::vector<int> allowed = {3,    100,  101,  2000, 2001,
+                                      2002, 5000, 7000, 8000, 8191};
+    masks.push_back(BitmapLogitMask::CreateFromAllowedTokens(kVocab, allowed));
+  }
+  masks.push_back(BitmapLogitMask::CreateSingleAllowedToken(kVocab, 77));
+  masks.push_back(std::make_unique<SparseLogitMask>(
+      std::vector<SparseLogitMask::Entry>{{10, 1.0f, 30.0f, false},
+                                          {11, 0.5f, 0.0f, false},
+                                          {12, 1.0f, -100.0f, false}}));
+  masks.push_back(nullptr);
+  ASSERT_OK(mask_runner->ApplySequence(logits, masks));
+  std::vector<float> masked(values.size());
+  LITERT_ASSERT_OK(logits.Read<float>(absl::MakeSpan(masked)));
+  for (float p : {0.95f, 1.0f}) {
+    const proto::SamplerParameters params = TopPParameters(kK, p, 1.0f, 3);
+    ASSERT_OK_AND_ASSIGN(auto cpu,
+                         TopPSampler::Create(kK, p, 1.0f, 1, kRows, 3));
+    auto cpu_gen = std::make_shared<std::default_random_engine>(3);
+    ASSERT_OK(cpu->UpdateConfig(params, 1, cpu_gen));
+    std::vector<int32_t> candidate_ids;
+    std::vector<float> candidate_values;
+    for (int row = 0; row < kRows; ++row) {
+      for (const Candidate& candidate :
+           OrderedCandidates(masked.data() + row * kVocab, kVocab, kK)) {
+        candidate_ids.push_back(candidate.id);
+        candidate_values.push_back(candidate.value);
+      }
+    }
+    auto device_gen = std::make_shared<std::default_random_engine>(3);
+    for (int draw = 0; draw < 8; ++draw) {
+      LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_ids,
+                                  CreateTensorBuffer<int32_t>({1, kRows}));
+      LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_scores,
+                                  CreateTensorBuffer<float>({1, kRows}));
+      ASSERT_OK(cpu->SampleToIdAndScoreBuffer(logits, cpu_ids, &cpu_scores));
+      LITERT_ASSERT_OK_AND_ASSIGN(auto ids,
+                                  CreateTensorBuffer<int32_t>({1, kRows}));
+      LITERT_ASSERT_OK_AND_ASSIGN(auto scores,
+                                  CreateTensorBuffer<float>({1, kRows}));
+      std::vector<float> uniforms(kRows);
+      DrawSamplingUniforms(params, *device_gen, absl::MakeSpan(uniforms));
+      ASSERT_OK(SampleNvidiaCandidates(candidate_ids, candidate_values, kRows,
+                                       kK, p, 1.0f, uniforms, ids, &scores));
+      const std::vector<int32_t> got = ReadIds(ids, kRows);
+      // The tokens may differ only where the uniform lands on tied
+      // probabilities (see SampleNvidiaCandidates): such tokens share a logit.
+      const std::vector<int32_t> cpu_got = ReadIds(cpu_ids, kRows);
+      for (int row = 0; row < kRows; ++row) {
+        if (got[row] != cpu_got[row]) {
+          EXPECT_EQ(masked[row * kVocab + got[row]],
+                    masked[row * kVocab + cpu_got[row]])
+              << "p " << p << " draw " << draw << " row " << row;
+        }
+      }
+      EXPECT_EQ(ReadScores(scores, kRows), ReadScores(cpu_scores, kRows));
+      EXPECT_EQ(EngineState(*device_gen), EngineState(*cpu_gen));
+      EXPECT_EQ(got[1], 77);
+    }
+  }
+}
+
+// Where the k-th value is shared, the CPU's heap keeps a subset of the tied
+// tokens that its layout decides, and the device the lowest indices: the
+// two selections hold the same logits, and differ only in which tied
+// tokens, each with the smallest probability of the k, they carry.
+TEST(NvidiaMtpDrafterSupportTest, CutoffTiesFollowTheIndexRuleNotTheHeap) {
+  constexpr int kVocab = 16;
+  constexpr int kK = 4;
+  std::mt19937 gen(11);
+  std::uniform_int_distribution<int> level(0, 2);
+  int differing = 0;
+  for (int trial = 0; trial < 2000; ++trial) {
+    std::vector<float> values(kVocab);
+    for (float& value : values) value = static_cast<float>(level(gen));
+    const std::vector<Candidate> heap =
+        HeapCandidates(values.data(), kVocab, kK);
+    const std::vector<Candidate> device =
+        OrderedCandidates(values.data(), kVocab, kK);
+    ASSERT_EQ(heap.size(), device.size());
+    std::vector<float> heap_values, device_values;
+    for (int i = 0; i < kK; ++i) {
+      heap_values.push_back(heap[i].value);
+      device_values.push_back(device[i].value);
+    }
+    EXPECT_EQ(heap_values, device_values);
+    bool same = true;
+    for (int i = 0; i < kK; ++i) same = same && heap[i].id == device[i].id;
+    if (!same) {
+      ++differing;
+      // Every token the two selections disagree on carries the k-th value.
+      for (int i = 0; i < kK; ++i) {
+        if (heap[i].id != device[i].id) {
+          EXPECT_EQ(heap[i].value, device[kK - 1].value);
+          EXPECT_EQ(device[i].value, device[kK - 1].value);
+        }
+      }
+    }
+    if (CutoffIsUnique(values.data(), kVocab, kK)) {
+      EXPECT_TRUE(same);
+    }
+  }
+  EXPECT_GT(differing, 0) << "the exception exists, and is documented";
+}
+
+// The NPU route's sampler, given host logits, keeps the factory's
+// semantics across configuration updates: the recreation when k outgrows
+// the sampler, the seeds, the generators handed in and the ones kept.
+TEST(NvidiaMtpDrafterSupportTest, VerifierSamplerKeepsTheFactorySemantics) {
+  constexpr int kVocab = 512;
+  constexpr int kRows = 3;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  std::mt19937 gen(9);
+  std::normal_distribution<float> dist(0.0f, 3.0f);
+  std::vector<float> values(static_cast<size_t>(kRows) * kVocab);
+  for (float& value : values) value = dist(gen);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto logits,
+                              CreateTensorBuffer<float>({1, kRows, kVocab}));
+  LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
+  ASSERT_OK_AND_ASSIGN(
+      auto reference,
+      CreateSampler(Backend::CPU, 1, GreedyParameters(), std::cref(env), kRows,
+                    kVocab, ActivationDataType::FLOAT32));
+  ASSERT_OK_AND_ASSIGN(
+      auto npu, CreateMtpGreedySampler(Backend::NPU, 1, GreedyParameters(),
+                                       std::cref(env), kRows, kVocab,
+                                       ActivationDataType::FLOAT32));
+  int reference_max_k = 1;
+  int npu_max_k = 1;
+  const auto compare = [&](const char* what, int draws) {
+    for (int draw = 0; draw < draws; ++draw) {
+      LITERT_ASSERT_OK_AND_ASSIGN(auto ids_a,
+                                  CreateTensorBuffer<int32_t>({1, kRows}));
+      LITERT_ASSERT_OK_AND_ASSIGN(auto scores_a,
+                                  CreateTensorBuffer<float>({1, kRows}));
+      LITERT_ASSERT_OK_AND_ASSIGN(auto ids_b,
+                                  CreateTensorBuffer<int32_t>({1, kRows}));
+      LITERT_ASSERT_OK_AND_ASSIGN(auto scores_b,
+                                  CreateTensorBuffer<float>({1, kRows}));
+      ASSERT_OK(reference->SampleToIdAndScoreBuffer(logits, ids_a, &scores_a));
+      ASSERT_OK(npu->SampleToIdAndScoreBuffer(logits, ids_b, &scores_b));
+      EXPECT_EQ(ReadIds(ids_b, kRows), ReadIds(ids_a, kRows)) << what;
+      EXPECT_EQ(ReadScores(scores_b, kRows), ReadScores(scores_a, kRows))
+          << what;
+    }
+  };
+  const auto update = [&](const proto::SamplerParameters& params,
+                          std::shared_ptr<std::default_random_engine> a,
+                          std::shared_ptr<std::default_random_engine> b) {
+    ASSERT_OK(UpdateOrRecreateSampler(
+        reference, reference_max_k, Backend::CPU, 1, params, std::move(a),
+        std::cref(env), kRows, kVocab, ActivationDataType::FLOAT32));
+    ASSERT_OK(UpdateOrRecreateMtpVerifierSampler(
+        npu, npu_max_k, Backend::NPU, 1, params, std::move(b), std::cref(env),
+        kRows, kVocab, ActivationDataType::FLOAT32));
+    EXPECT_EQ(npu_max_k, reference_max_k);
+  };
+  compare("greedy", 2);
+  // k outgrows the sampler: recreated, seeded by the parameters. The drafter
+  // names the CPU as its session sampler's backend on the NPU route; the NPU
+  // route's sampler stays what it is.
+  Sampler* const npu_sampler = npu.get();
+  ASSERT_OK(UpdateOrRecreateSampler(reference, reference_max_k, Backend::CPU, 1,
+                                    TopPParameters(64, 0.95f, 1.0f, 3), nullptr,
+                                    std::cref(env), kRows, kVocab,
+                                    ActivationDataType::FLOAT32));
+  ASSERT_OK(UpdateOrRecreateMtpVerifierSampler(
+      npu, npu_max_k, Backend::CPU, 1, TopPParameters(64, 0.95f, 1.0f, 3),
+      nullptr, std::cref(env), kRows, kVocab, ActivationDataType::FLOAT32));
+  EXPECT_EQ(npu.get(), npu_sampler) << "the NPU route's sampler is kept";
+  EXPECT_EQ(npu_max_k, reference_max_k);
+  compare("k 64 seed 3", 3);
+  // A smaller k keeps the sampler and its generator; the seed is ignored.
+  update(TopPParameters(8, 0.5f, 0.8f, 99), nullptr, nullptr);
+  compare("k 8", 3);
+  // A generator handed in replaces the kept one.
+  update(TopPParameters(8, 0.5f, 0.8f, 99),
+         std::make_shared<std::default_random_engine>(11),
+         std::make_shared<std::default_random_engine>(11));
+  compare("k 8 generator 11", 3);
+  // k outgrows the sampler again, with a generator handed in.
+  update(TopPParameters(100, 0.9f, 1.0f, 5),
+         std::make_shared<std::default_random_engine>(13),
+         std::make_shared<std::default_random_engine>(13));
+  compare("k 100 generator 13", 3);
+  EXPECT_EQ(reference_max_k, 100);
+}
+
+// The generic factory returns no sampler for an unspecified type: the NPU
+// route's sampler refuses the update, as UpdateOrRecreateSampler does, and
+// keeps the sampler it had.
+TEST(NvidiaMtpDrafterSupportTest, AFactoryRefusalLeavesTheKeptSamplerUsable) {
+  constexpr int kVocab = 512;
+  constexpr int kRows = 3;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  std::mt19937 gen(21);
+  std::normal_distribution<float> dist(0.0f, 3.0f);
+  std::vector<float> values(static_cast<size_t>(kRows) * kVocab);
+  for (float& value : values) value = dist(gen);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto logits,
+                              CreateTensorBuffer<float>({1, kRows, kVocab}));
+  LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
+  ASSERT_OK_AND_ASSIGN(
+      auto reference,
+      CreateSampler(Backend::CPU, 1, GreedyParameters(), std::cref(env), kRows,
+                    kVocab, ActivationDataType::FLOAT32));
+  ASSERT_OK_AND_ASSIGN(
+      auto npu, CreateMtpGreedySampler(Backend::NPU, 1, GreedyParameters(),
+                                       std::cref(env), kRows, kVocab,
+                                       ActivationDataType::FLOAT32));
+  int reference_max_k = 1;
+  int npu_max_k = 1;
+  proto::SamplerParameters unspecified;
+  unspecified.set_k(8);
+  EXPECT_THAT(
+      UpdateOrRecreateSampler(reference, reference_max_k, Backend::CPU, 1,
+                              unspecified, nullptr, std::cref(env), kRows,
+                              kVocab, ActivationDataType::FLOAT32),
+      StatusIs(absl::StatusCode::kInternal));
+  EXPECT_THAT(UpdateOrRecreateMtpVerifierSampler(
+                  npu, npu_max_k, Backend::CPU, 1, unspecified, nullptr,
+                  std::cref(env), kRows, kVocab, ActivationDataType::FLOAT32),
+              StatusIs(absl::StatusCode::kInternal));
+  ASSERT_NE(npu, nullptr);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto ids_a,
+                              CreateTensorBuffer<int32_t>({1, kRows}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto ids_b,
+                              CreateTensorBuffer<int32_t>({1, kRows}));
+  ASSERT_OK(reference->SampleToIdAndScoreBuffer(logits, ids_a, nullptr));
+  ASSERT_OK(npu->SampleToIdAndScoreBuffer(logits, ids_b, nullptr));
+  EXPECT_EQ(ReadIds(ids_b, kRows), ReadIds(ids_a, kRows));
+}
+
+// The recreation arguments of an update reach the host sampler the NPU
+// route's sampler makes, as the factory's do; a refused update leaves the
+// caller's capacity as it was.
+TEST(NvidiaMtpDrafterSupportTest, VerifierUpdateTakesTheRecreationArguments) {
+  constexpr int kVocab = 512;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  std::mt19937 gen(31);
+  std::normal_distribution<float> dist(0.0f, 3.0f);
+  std::vector<float> values(static_cast<size_t>(3) * kVocab);
+  for (float& value : values) value = dist(gen);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto logits,
+                              CreateTensorBuffer<float>({1, 3, kVocab}));
+  LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
+  // Made for four rows, updated for three: the update's sequence size holds.
+  ASSERT_OK_AND_ASSIGN(
+      auto reference,
+      CreateSampler(Backend::CPU, 1, GreedyParameters(), std::cref(env), 4,
+                    kVocab, ActivationDataType::FLOAT32));
+  ASSERT_OK_AND_ASSIGN(
+      auto npu, CreateMtpGreedySampler(Backend::NPU, 1, GreedyParameters(),
+                                       std::cref(env), 4, kVocab,
+                                       ActivationDataType::FLOAT32));
+  int reference_max_k = 1;
+  int npu_max_k = 1;
+  ASSERT_OK(UpdateOrRecreateSampler(reference, reference_max_k, Backend::CPU, 1,
+                                    TopPParameters(64, 0.95f, 1.0f, 3), nullptr,
+                                    std::cref(env), 3, kVocab,
+                                    ActivationDataType::FLOAT32));
+  ASSERT_OK(UpdateOrRecreateMtpVerifierSampler(
+      npu, npu_max_k, Backend::CPU, 1, TopPParameters(64, 0.95f, 1.0f, 3),
+      nullptr, std::cref(env), 3, kVocab, ActivationDataType::FLOAT32));
+  EXPECT_EQ(npu_max_k, 64);
+  for (int draw = 0; draw < 3; ++draw) {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto ids_a,
+                                CreateTensorBuffer<int32_t>({1, 3}));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto ids_b,
+                                CreateTensorBuffer<int32_t>({1, 3}));
+    ASSERT_OK(reference->SampleToIdAndScoreBuffer(logits, ids_a, nullptr));
+    ASSERT_OK(npu->SampleToIdAndScoreBuffer(logits, ids_b, nullptr));
+    EXPECT_EQ(ReadIds(ids_b, 3), ReadIds(ids_a, 3)) << "draw " << draw;
+  }
+  // A refused update (no sampler for the type) leaves the capacity alone.
+  proto::SamplerParameters unspecified;
+  unspecified.set_k(100);
+  EXPECT_THAT(UpdateOrRecreateMtpVerifierSampler(
+                  npu, npu_max_k, Backend::CPU, 1, unspecified, nullptr,
+                  std::cref(env), 3, kVocab, ActivationDataType::FLOAT32),
+              StatusIs(absl::StatusCode::kInternal));
+  EXPECT_EQ(npu_max_k, 64);
+}
+
+TEST(NvidiaMtpDrafterSupportTest, TopKCandidateEligibility) {
+  const RankedTensorType fp16(ElementType::Float16,
+                              Layout(Dimensions{1, 4, 262144}));
+  ASSERT_OK_AND_ASSIGN(
+      bool supported,
+      SupportsNvidiaTopKCandidates(
+          Backend::NPU, TopPParameters(64, 0.95f, 1.0f, 1), kCudaBuffer, fp16));
+  EXPECT_TRUE(supported);
+  ASSERT_OK_AND_ASSIGN(
+      supported, SupportsNvidiaTopKCandidates(Backend::NPU, GreedyParameters(),
+                                              kCudaBuffer, fp16));
+  EXPECT_TRUE(supported) << "k=1 is a top-k configuration too";
+  for (const proto::SamplerParameters& params :
+       {TopPParameters(0, 0.95f, 1.0f, 1), TopPParameters(1025, 0.95f, 1.0f, 1),
+        TopPParameters(64, 1.5f, 1.0f, 1),
+        TopPParameters(64, 0.95f, -1.0f, 1)}) {
+    ASSERT_OK_AND_ASSIGN(
+        supported,
+        SupportsNvidiaTopKCandidates(Backend::NPU, params, kCudaBuffer, fp16));
+    EXPECT_FALSE(supported) << params.k() << " " << params.p();
+  }
+  proto::SamplerParameters top_k = TopPParameters(64, 0.95f, 1.0f, 1);
+  top_k.set_type(proto::SamplerParameters::TOP_K);
+  ASSERT_OK_AND_ASSIGN(supported, SupportsNvidiaTopKCandidates(
+                                      Backend::NPU, top_k, kCudaBuffer, fp16));
+  EXPECT_FALSE(supported);
+  ASSERT_OK_AND_ASSIGN(
+      supported,
+      SupportsNvidiaTopKCandidates(
+          Backend::GPU, TopPParameters(64, 0.95f, 1.0f, 1), kCudaBuffer, fp16));
+  EXPECT_FALSE(supported);
+  ASSERT_OK_AND_ASSIGN(supported,
+                       SupportsNvidiaTopKCandidates(
+                           Backend::NPU, TopPParameters(64, 0.95f, 1.0f, 1),
+                           TensorBufferType::kHostMemory, fp16));
+  EXPECT_FALSE(supported);
+  // A batch above one is the host's, not an error.
+  ASSERT_OK_AND_ASSIGN(
+      supported,
+      SupportsNvidiaTopKCandidates(
+          Backend::NPU, TopPParameters(64, 0.95f, 1.0f, 1), kCudaBuffer,
+          RankedTensorType(ElementType::Float16,
+                           Layout(Dimensions{2, 4, 262144}))));
+  EXPECT_FALSE(supported);
+  EXPECT_THAT(SupportsNvidiaTopKCandidates(
+                  Backend::NPU, TopPParameters(64, 0.95f, 1.0f, 1), kCudaBuffer,
+                  RankedTensorType(ElementType::Float16,
+                                   Layout(Dimensions{1, 0, 262144}))),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(NvidiaMtpDrafterSupportTest, CandidatePolicyRejectsMismatchedInputs) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto ids, CreateTensorBuffer<int32_t>({1, 2}));
+  const std::vector<float> uniforms = {0.25f, 0.75f};
+  const std::vector<int32_t> candidate_ids = {5, 6, 7, 8};
+  const std::vector<float> candidate_values = {3.0f, 2.0f, 1.0f, 0.0f};
+  EXPECT_THAT(SampleNvidiaCandidates(candidate_ids, candidate_values, 2, 3,
+                                     1.0f, 1.0f, uniforms, ids, nullptr),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(SampleNvidiaCandidates(candidate_ids, candidate_values, 2, 2,
+                                     1.0f, 1.0f, {0.5f}, ids, nullptr),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  ASSERT_OK(SampleNvidiaCandidates(candidate_ids, candidate_values, 2, 2, 0.0f,
+                                   1.0f, uniforms, ids, nullptr));
+  EXPECT_EQ(ReadIds(ids, 2), (std::vector<int32_t>{5, 7}))
+      << "p = 0 draws each row's first candidate";
+}
 
 }  // namespace
 }  // namespace litert::lm

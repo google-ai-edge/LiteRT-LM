@@ -249,7 +249,10 @@ cc_toolchain_deps()
 # Initialize hermetic Python
 load("@xla//third_party/py:python_init_rules.bzl", "python_init_rules")
 
-python_init_rules()
+python_init_rules(extra_patches = [
+    "@//third_party/rules_python:windows_runfiles.patch",
+    "@//third_party/rules_python:windows_bootstrap.patch",
+])
 
 load("@xla//third_party/py:python_init_repositories.bzl", "python_init_repositories")
 
@@ -383,7 +386,10 @@ kt_register_toolchains()  # to use the default toolchain, otherwise see toolchai
 # Rust (for HuggingFace Tokenizers)
 http_archive(
     name = "rules_rust",
-    patches = ["@//third_party/rules_rust:rules_rust.patch"],
+    patches = [
+        "@//third_party/rules_rust:rules_rust.patch",
+        "@//third_party/rules_rust:rules_rust_windows.patch",
+    ],
     sha256 = "53c1bac7ec48f7ce48c4c1c6aa006f27515add2aeb05725937224e6e00ec7cea",
     url = "https://github.com/bazelbuild/rules_rust/releases/download/0.61.0/rules_rust-0.61.0.tar.gz",
 )
@@ -517,6 +523,19 @@ http_archive(
     strip_prefix = "LiteRT-" + LITERT_REF,
     url = "https://github.com/google-ai-edge/LiteRT/archive/" + LITERT_REF + ".tar.gz",
 )
+
+# Local NVIDIA SDKs are also needed when building the plugins from this
+# workspace through @litert. The repository rules honor CUDA_HOME and
+# TENSORRT_RTX_ROOT and use the host SDK layout.
+load(
+    "@litert//third_party/nvidia_sdk:repositories.bzl",
+    "local_cuda_repository",
+    "local_tensorrt_rtx_repository",
+)
+
+local_cuda_repository(name = "local_cuda")
+
+local_tensorrt_rtx_repository(name = "local_tensorrt_rtx")
 
 # SafeInt. Same version that LiteRT uses.
 http_archive(

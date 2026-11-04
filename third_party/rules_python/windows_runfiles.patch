@@ -1,0 +1,19 @@
+diff --git a/python/private/py_executable.bzl b/python/private/py_executable.bzl
+--- a/python/private/py_executable.bzl
++++ b/python/private/py_executable.bzl
+@@ -2165,12 +2165,9 @@
+     # NOTE: This code runs in loading phase within the context of the caller.
+     # Label() must be used to resolve repo names within rules_python's
+     # context to avoid unknown repo name errors.
+-    default = select({
+-        labels.PLATFORMS_OS_WINDOWS: {
+-            labels.ENABLE_RUNFILES: "true",
+-        },
+-        "//conditions:default": {},
+-    })
++    # Preserve the command-line choice. Manifest-only runfiles are needed on
++    # Windows hosts without symlink privilege; do not force them back on.
++    default = {}
+ 
+     # Let user-provided settings have precedence
+     config_settings = default | config_settings
