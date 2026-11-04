@@ -19,6 +19,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -165,6 +167,35 @@ TEST(AudioExecutorSettingsTest, GetWeightCacheFile) {
       settings.GetWeightCacheFile(AudioExecutorSettings::kAdapterName));
   EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(result2),
             adapter_cache);
+}
+
+TEST(AudioExecutorSettingsTest, EncoderCacheFileServesAllEncoders) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
+  auto encoder_cache = std::make_shared<litert::ScopedFile>();
+  auto encoder_program = std::make_shared<litert::ScopedFile>();
+  settings.SetScopedEncoderCacheFile(encoder_cache);
+  settings.SetScopedEncoderProgramCacheFile(encoder_program);
+
+  for (absl::string_view encoder_name :
+       {AudioExecutorSettings::kStaticEncoderName,
+        AudioExecutorSettings::kStreamingEncoderName}) {
+    ASSERT_OK_AND_ASSIGN(
+        auto weight_cache,
+        settings.GetWeightCacheFile(absl::StrCat(
+            encoder_name, ExecutorSettingsBase::kXnnpackCacheSuffix)));
+    EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(weight_cache),
+              encoder_cache);
+    ASSERT_OK_AND_ASSIGN(
+        auto program_cache,
+        settings.GetProgramCacheFile(absl::StrCat(
+            encoder_name, ExecutorSettingsBase::kMlDriftCacheSuffix)));
+    EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(program_cache),
+              encoder_program);
+  }
 }
 
 TEST(AudioExecutorSettingsTest, GetProgramCacheFile) {

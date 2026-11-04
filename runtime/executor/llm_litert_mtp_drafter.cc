@@ -188,7 +188,8 @@ LlmLiteRtMtpDrafter::Create(
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
-  auto cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
+  auto cache_suffix = std::string(ExecutorSettingsBase::GetCacheModelName(
+      ExecutorSettingsBase::CacheModel::kMtpDrafter));
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,

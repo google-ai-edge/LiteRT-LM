@@ -20,7 +20,6 @@
 #include <ostream>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -44,8 +43,10 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
       const ModelAssets& model_assets, Backend encoder_backend,
       Backend adapter_backend);
 
-  static constexpr absl::string_view kEncoderName = ".vision_encoder";
-  static constexpr absl::string_view kAdapterName = ".vision_adapter";
+  static constexpr absl::string_view kEncoderName =
+      GetCacheModelName(CacheModel::kVisionEncoder);
+  static constexpr absl::string_view kAdapterName =
+      GetCacheModelName(CacheModel::kVisionAdapter);
 
   // Getter for encoder_backend.
   Backend GetEncoderBackend() const;
@@ -54,13 +55,15 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
 
   // Getter for scoped_encoder_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
-    return scoped_encoder_cache_file_;
+    return GetScopedCacheFile(CacheModel::kVisionEncoder,
+                              CacheFileKind::kWeight);
   }
 
   // Setter for scoped_encoder_cache_file.
   void SetScopedEncoderCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_encoder_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kVisionEncoder, CacheFileKind::kWeight,
+                       std::move(cache_file));
   }
 
   // Getter for adapter_backend.
@@ -80,37 +83,43 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
 
   // Getter for scoped_adapter_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterCacheFile() const {
-    return scoped_adapter_cache_file_;
+    return GetScopedCacheFile(CacheModel::kVisionAdapter,
+                              CacheFileKind::kWeight);
   }
 
   // Setter for scoped_adapter_cache_file.
   void SetScopedAdapterCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_adapter_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kVisionAdapter, CacheFileKind::kWeight,
+                       std::move(cache_file));
   }
 
   // Getter for scoped_encoder_program_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderProgramCacheFile()
       const {
-    return scoped_encoder_program_cache_file_;
+    return GetScopedCacheFile(CacheModel::kVisionEncoder,
+                              CacheFileKind::kProgram);
   }
 
   // Setter for scoped_encoder_program_cache_file.
   void SetScopedEncoderProgramCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_encoder_program_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kVisionEncoder, CacheFileKind::kProgram,
+                       std::move(cache_file));
   }
 
   // Getter for scoped_adapter_program_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterProgramCacheFile()
       const {
-    return scoped_adapter_program_cache_file_;
+    return GetScopedCacheFile(CacheModel::kVisionAdapter,
+                              CacheFileKind::kProgram);
   }
 
   // Setter for scoped_adapter_program_cache_file.
   void SetScopedAdapterProgramCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_adapter_program_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kVisionAdapter, CacheFileKind::kProgram,
+                       std::move(cache_file));
   }
 
   // Getter for encoder_selected_signatures.
@@ -135,18 +144,6 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
     adapter_selected_signatures_ = std::move(adapter_selected_signatures);
   }
 
-  using ExecutorSettingsBase::GetWeightCacheFile;
-  absl::StatusOr<
-      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-  GetWeightCacheFile(absl::string_view suffix,
-                     bool check_and_clean) const override;
-
-  using ExecutorSettingsBase::GetProgramCacheFile;
-  absl::StatusOr<
-      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-  GetProgramCacheFile(absl::string_view suffix,
-                      bool check_and_clean) const override;
-
  private:
   explicit VisionExecutorSettings(const ModelAssets& model_assets)
       : ExecutorSettingsBase(model_assets) {}
@@ -159,18 +156,6 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
 
   // The NPU options for both the vision encoder and vision adapter models.
   NpuOptions npu_options_;
-
-  // The cache file to use for the vision encoder model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;
-
-  // The cache file to use for the vision adapter model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_cache_file_;
-
-  // The program cache file to use for the vision encoder model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_program_cache_file_;
-
-  // The program cache file to use for the vision adapter model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_program_cache_file_;
 
   std::vector<std::string> encoder_selected_signatures_;
   std::vector<std::string> adapter_selected_signatures_;

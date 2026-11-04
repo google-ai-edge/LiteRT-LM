@@ -19,7 +19,6 @@
 #include <ostream>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -32,7 +31,8 @@ namespace litert::lm {
 // Settings for configuring an embedding executor.
 class EmbeddingExecutorSettings : public ExecutorSettingsBase {
  public:
-  static constexpr absl::string_view kEncoderName = ".text_encoder";
+  static constexpr absl::string_view kEncoderName =
+      GetCacheModelName(CacheModel::kTextEncoder);
 
   // Creates a default configuration for the embedding executor.
   //
@@ -71,25 +71,28 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
 
   // Getter for scoped_encoder_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
-    return scoped_encoder_cache_file_;
+    return GetScopedCacheFile(CacheModel::kTextEncoder, CacheFileKind::kWeight);
   }
 
   // Setter for scoped_encoder_cache_file.
   void SetScopedEncoderCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_encoder_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kTextEncoder, CacheFileKind::kWeight,
+                       std::move(cache_file));
   }
 
   // Getter for scoped_encoder_program_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderProgramCacheFile()
       const {
-    return scoped_encoder_program_cache_file_;
+    return GetScopedCacheFile(CacheModel::kTextEncoder,
+                              CacheFileKind::kProgram);
   }
 
   // Setter for scoped_encoder_program_cache_file.
   void SetScopedEncoderProgramCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_encoder_program_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kTextEncoder, CacheFileKind::kProgram,
+                       std::move(cache_file));
   }
 
   // Selected signatures APIs.
@@ -100,29 +103,11 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
     selected_signatures_ = std::move(selected_signatures);
   }
 
-  using ExecutorSettingsBase::GetWeightCacheFile;
-  absl::StatusOr<
-      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-  GetWeightCacheFile(absl::string_view suffix,
-                     bool check_and_clean) const override;
-
-  using ExecutorSettingsBase::GetProgramCacheFile;
-  absl::StatusOr<
-      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-  GetProgramCacheFile(absl::string_view suffix,
-                      bool check_and_clean) const override;
-
  private:
   int num_threads_ = 4;
 
   // The NPU options for the text encoder model.
   NpuOptions npu_options_;
-
-  // The cache file to use for the text encoder model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;
-
-  // The program cache file to use for the text encoder model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_program_cache_file_;
 
   std::vector<std::string> selected_signatures_;
 };

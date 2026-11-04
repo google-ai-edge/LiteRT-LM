@@ -14,18 +14,13 @@
 
 #include "runtime/executor/audio/audio_executor_settings.h"
 
-#include <memory>
 #include <ostream>
-#include <string>
-#include <variant>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -96,39 +91,6 @@ bool AudioExecutorSettings::GetBundledWithMainModel() const {
 void AudioExecutorSettings::SetBundledWithMainModel(
     bool bundled_with_main_model) {
   bundled_with_main_model_ = bundled_with_main_model;
-}
-
-absl::StatusOr<
-    std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-AudioExecutorSettings::GetWeightCacheFile(absl::string_view suffix,
-                                          bool check_and_clean) const {
-  if (absl::StrContains(suffix, kAdapterName) && GetScopedAdapterCacheFile()) {
-    return GetScopedAdapterCacheFile();
-  } else if ((absl::StrContains(suffix, kEncoderName) ||
-              absl::StrContains(suffix, kStaticEncoderName) ||
-              absl::StrContains(suffix, kStreamingEncoderName)) &&
-             GetScopedEncoderCacheFile()) {
-    return GetScopedEncoderCacheFile();
-  }
-
-  return ExecutorSettingsBase::GetWeightCacheFile(suffix, check_and_clean);
-}
-
-absl::StatusOr<
-    std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-AudioExecutorSettings::GetProgramCacheFile(absl::string_view suffix,
-                                           bool check_and_clean) const {
-  if (absl::StrContains(suffix, kAdapterName) &&
-      GetScopedAdapterProgramCacheFile()) {
-    return GetScopedAdapterProgramCacheFile();
-  } else if ((absl::StrContains(suffix, kEncoderName) ||
-              absl::StrContains(suffix, kStaticEncoderName) ||
-              absl::StrContains(suffix, kStreamingEncoderName)) &&
-             GetScopedEncoderProgramCacheFile()) {
-    return GetScopedEncoderProgramCacheFile();
-  }
-
-  return ExecutorSettingsBase::GetProgramCacheFile(suffix, check_and_clean);
 }
 
 }  // namespace litert::lm

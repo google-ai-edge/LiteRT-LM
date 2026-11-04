@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_EXECUTOR_SETTINGS_BASE_H_
 #define THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_EXECUTOR_SETTINGS_BASE_H_
 
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -257,6 +259,78 @@ class ExecutorSettingsBase {
     std::string gpu_weight_cache_suffix;  // For GPU (MlDrift) weight cache key
   };
 
+  // The kind of cache file. A cache saves work done on the first model load so
+  // that later loads can skip it.
+  enum class CacheFileKind {
+    // Weights converted to the backend's layout: XNNPACK packed weights on CPU,
+    // ML Drift weights on GPU.
+    kWeight,
+    // Compiled GPU programs (ML Drift shaders). Only the GPU backend uses it.
+    kProgram,
+  };
+
+  // The model a cache file belongs to: the main model or one of its
+  // sub-models. Each one needs its own cache file. The audio executor asks for
+  // kStaticAudioEncoder or kStreamingAudioEncoder, never kAudioEncoder; their
+  // scoped files default to kAudioEncoder's.
+  enum class CacheModel {
+    kMain,
+    kMtpDrafter,
+    kVisionEncoder,
+    kVisionAdapter,
+    kAudioEncoder,
+    kStaticAudioEncoder,
+    kStreamingAudioEncoder,
+    kAudioAdapter,
+    kTextEncoder,
+  };
+
+  // Returns the name `model` puts in front of the backend suffix in its cache
+  // suffixes, e.g. ".mtp_drafter" in ".mtp_drafter_mldrift_weight_cache.bin".
+  // The main model's name is empty. Cache file names are built from these, so
+  // they must not change.
+  static constexpr absl::string_view GetCacheModelName(CacheModel model) {
+    switch (model) {
+      case CacheModel::kMain:
+        return "";
+      case CacheModel::kMtpDrafter:
+        return ".mtp_drafter";
+      case CacheModel::kVisionEncoder:
+        return ".vision_encoder";
+      case CacheModel::kVisionAdapter:
+        return ".vision_adapter";
+      case CacheModel::kAudioEncoder:
+        return ".audio_encoder";
+      case CacheModel::kStaticAudioEncoder:
+        return ".static_audio_encoder";
+      case CacheModel::kStreamingAudioEncoder:
+        return ".streaming_audio_encoder";
+      case CacheModel::kAudioAdapter:
+        return ".audio_adapter";
+      case CacheModel::kTextEncoder:
+        return ".text_encoder";
+    }
+    return "";
+  }
+
+  // A cache file the engine needs. `suffix` is valid only during the
+  // `CacheFileProvider` call.
+  struct CacheFileRequest {
+    CacheFileKind kind;
+    CacheModel model;
+    // The full cache suffix, e.g. ".mtp_drafter_mldrift_weight_cache.bin".
+    // Hosts can use it to name the file.
+    absl::string_view suffix;
+  };
+
+  // Returns an open, writable cache file for a request, or NotFound to build
+  // that model without a cache. It runs on engine threads, possibly more than
+  // once per request (e.g. when the MTP drafter loads lazily), so it must be
+  // thread-safe and return the same file for the same request.
+  using CacheFileProvider =
+      std::function<absl::StatusOr<std::shared_ptr<litert::lm::ScopedFile>>(
+          const CacheFileRequest&)>;
+
   // Cache suffixes for different backend names. By default, the generate cache
   // file names will have the following format:
   //  XNNPACK: <model_path>.xnnpack_cache_<unique_id>
@@ -267,7 +341,11 @@ class ExecutorSettingsBase {
       "_mldrift_program_cache.bin";
   static constexpr absl::string_view kMlDriftWeightCacheSuffix =
       "_mldrift_weight_cache.bin";
-  static constexpr absl::string_view kMtpDrafterCacheSuffix = ".mtp_drafter";
+  // Suffixes used by `GetWeightCacheFile()` / `GetProgramCacheFile()` when no
+  // suffix is given.
+  static constexpr absl::string_view kDefaultWeightCacheSuffix = ".cache";
+  static constexpr absl::string_view kDefaultProgramCacheSuffix =
+      ".program_cache";
 
   // Dynamically generates cache suffix and keys systematically.
   // Args:
@@ -316,11 +394,15 @@ class ExecutorSettingsBase {
   }
 
   // Should be used by consumers who want to write to a single weight cache
-  // file. Returns, in order of preference:
-  //   1. an open file descriptor to the weight cache file,
-  //   2. the file path of the weight cache file, based on the given cache
+  // file. `suffix` is the model's name (see `GetCacheModelName()`) followed by
+  // the backend suffix. Returns, in order of preference:
+  //   1. the scoped cache file set for the model,
+  //   2. the file from the `CacheFileProvider`, if one is set,
+  //   3. the file path of the weight cache file, based on the given cache
   //      directory and/or model path. Will append `suffix`.
-  //   3. an error if a weight cache file could not be determined.
+  //   4. an error if a weight cache file could not be determined. A sub-model
+  //      with no file of its own gets NotFound if the main model has a scoped
+  //      file or a provider is set, rather than sharing the main model's file.
   virtual absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
   GetWeightCacheFile(absl::string_view suffix, bool check_and_clean) const;
@@ -328,7 +410,7 @@ class ExecutorSettingsBase {
   absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
   GetWeightCacheFile() const {
-    return GetWeightCacheFile(".cache", false);
+    return GetWeightCacheFile(kDefaultWeightCacheSuffix, false);
   }
 
   absl::StatusOr<
@@ -341,18 +423,14 @@ class ExecutorSettingsBase {
   const std::string& GetCacheDir() const { return cache_dir_; }
   // Prefer to use `GetWeightCacheFile()` if possible.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedCacheFile() const {
-    return scoped_cache_file_;
+    return GetScopedCacheFile(CacheModel::kMain, CacheFileKind::kWeight);
   }
   const std::string& GetLitertDispatchLibDir() const {
     return litert_dispatch_lib_dir_;
   }
 
   // Should be used by consumers who want to write to a single program cache
-  // file. Returns, in order of preference:
-  //   1. an open file descriptor to the program cache file,
-  //   2. the file path of the program cache file, based on the given cache
-  //      directory and/or model path. Will append `suffix`.
-  //   3. an error if a program cache file could not be determined.
+  // file. Same order of preference as `GetWeightCacheFile()`.
   virtual absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
   GetProgramCacheFile(absl::string_view suffix, bool check_and_clean) const;
@@ -360,7 +438,7 @@ class ExecutorSettingsBase {
   absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
   GetProgramCacheFile() const {
-    return GetProgramCacheFile(".program_cache", false);
+    return GetProgramCacheFile(kDefaultProgramCacheSuffix, false);
   }
 
   absl::StatusOr<
@@ -370,13 +448,18 @@ class ExecutorSettingsBase {
   }
   // Prefer to use `GetProgramCacheFile()` if possible.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedProgramCacheFile() const {
-    return scoped_program_cache_file_;
+    return GetScopedCacheFile(CacheModel::kMain, CacheFileKind::kProgram);
   }
+
+  // Returns the scoped cache file set for `model`, or nullptr.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedCacheFile(
+      CacheModel model, CacheFileKind kind) const;
 
   // Setter APIs.
   void SetCacheDir(const std::string& cache_dir) { cache_dir_ = cache_dir; }
   void SetScopedCacheFile(std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kMain, CacheFileKind::kWeight,
+                       std::move(cache_file));
   }
   void SetLitertDispatchLibDir(const std::string& litert_dispatch_lib_dir) {
     litert_dispatch_lib_dir_ = litert_dispatch_lib_dir;
@@ -384,8 +467,23 @@ class ExecutorSettingsBase {
 
   void SetScopedProgramCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_program_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kMain, CacheFileKind::kProgram,
+                       std::move(cache_file));
   }
+
+  // Sets an open, writable cache file for `model`, for hosts that can't let
+  // the engine create files (e.g. a sandboxed process). Each model needs its
+  // own file. nullptr clears it.
+  void SetScopedCacheFile(CacheModel model, CacheFileKind kind,
+                          std::shared_ptr<litert::lm::ScopedFile> cache_file);
+
+  // Sets where cache files come from for models with no scoped cache file.
+  // Lets the host open files on demand, for any model, including sub-models
+  // such as the MTP drafter. Takes precedence over the cache directory.
+  void SetCacheFileProvider(CacheFileProvider provider) {
+    cache_file_provider_ = std::move(provider);
+  }
+  bool HasCacheFileProvider() const { return cache_file_provider_ != nullptr; }
 
   void SetDisableWeightCache(bool disable) { disable_weight_cache_ = disable; }
   void SetDisableProgramCache(bool disable) {
@@ -419,13 +517,16 @@ class ExecutorSettingsBase {
   // Consumers should prefer to use the `cache_file_` if set.
   std::string cache_dir_;
 
-  // Open file for writing the weight cache to and later loading cache from.
-  // If set, this should be preferred over the `cache_dir_`.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_cache_file_;
+  // Open files for writing caches to and later loading them from, per model.
+  // If set, these are preferred over `cache_file_provider_` and `cache_dir_`.
+  absl::flat_hash_map<CacheModel, std::shared_ptr<litert::lm::ScopedFile>>
+      scoped_weight_cache_files_;
+  absl::flat_hash_map<CacheModel, std::shared_ptr<litert::lm::ScopedFile>>
+      scoped_program_cache_files_;
 
-  // Open file for writing the program cache to and later loading cache from.
-  // If set, this should be preferred over the `cache_dir_`.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_program_cache_file_;
+  // Supplies cache files for models with no scoped cache file. If set, this
+  // is preferred over `cache_dir_`.
+  CacheFileProvider cache_file_provider_;
 
   // Optional setting for specific activation data type. If not set, the
   // default activation data type for each OS & backend will be used. Setting

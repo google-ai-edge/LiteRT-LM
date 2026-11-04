@@ -2018,8 +2018,9 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithCache) {
   executor_settings.SetScopedProgramCacheFile(prog_file_ptr);
   executor_settings.SetScopedCacheFile(weight_file_ptr);
 
-  ASSERT_OK_AND_ASSIGN(auto cache_data,
-                       GetGpuModelCacheData(executor_settings, "test_cache"));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
 
   ASSERT_OK(cache_data.program_cache_file);
   ASSERT_OK(cache_data.weight_cache_file);
@@ -2034,7 +2035,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithCache) {
   ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
                        GetFileCacheIdentifier(model_path.string()));
   std::string expected_cache_key =
-      absl::StrCat("test_lm.task", "test_cache", "_", expected_metadata_id);
+      absl::StrCat("test_lm.task", "_", expected_metadata_id);
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 
@@ -2084,8 +2085,9 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithFd) {
   executor_settings.SetScopedProgramCacheFile(program_cache_file_ptr);
   executor_settings.SetScopedCacheFile(weight_cache_file_ptr);
 
-  ASSERT_OK_AND_ASSIGN(auto cache_data,
-                       GetGpuModelCacheData(executor_settings, "test_cache"));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
 
   ASSERT_OK(cache_data.program_cache_file);
   ASSERT_OK(cache_data.weight_cache_file);
@@ -2148,13 +2150,14 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   executor_settings.SetScopedCacheFile(
       std::make_shared<ScopedFile>(std::move(weight_cache_file)));
 
-  ASSERT_OK_AND_ASSIGN(auto cache_data,
-                       GetGpuModelCacheData(executor_settings, "test_cache"));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
 
   // The key falls back to the fd-based identifier while keeping the
   // (unresolvable) path's basename.
-  std::string expected_cache_key = absl::StrCat(
-      "virtual_model.task", "test_cache", "_", expected_metadata_id);
+  std::string expected_cache_key =
+      absl::StrCat("virtual_model.task", "_", expected_metadata_id);
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 
@@ -2221,13 +2224,14 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   executor_settings.SetScopedCacheFile(
       std::make_shared<ScopedFile>(std::move(weight_cache_file)));
 
-  ASSERT_OK_AND_ASSIGN(auto cache_data,
-                       GetGpuModelCacheData(executor_settings, "test_cache"));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
 
   ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
                        GetFileCacheIdentifier(model_path.string()));
   std::string expected_cache_key =
-      absl::StrCat("test_lm.task", "test_cache", "_", expected_metadata_id);
+      absl::StrCat("test_lm.task", "_", expected_metadata_id);
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 

@@ -122,7 +122,8 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
                                                decode_signature.OutputNames()));
     signatures = sigs;
   } else if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
-    cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
+    cache_suffix = std::string(ExecutorSettingsBase::GetCacheModelName(
+        ExecutorSettingsBase::CacheModel::kMtpDrafter));
   }
 
   ABSL_ASSIGN_OR_RETURN(

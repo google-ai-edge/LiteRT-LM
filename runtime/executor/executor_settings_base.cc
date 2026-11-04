@@ -14,6 +14,7 @@
 
 #include "runtime/executor/executor_settings_base.h"
 
+#include <initializer_list>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -33,6 +34,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/strip.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "runtime/util/data_stream.h"
@@ -60,6 +62,127 @@ struct CustomBackendNameTable {
 CustomBackendNameTable& GetCustomBackendNameTable() {
   static absl::NoDestructor<CustomBackendNameTable> table;
   return *table;
+}
+
+using CacheFileKind = ExecutorSettingsBase::CacheFileKind;
+using CacheModel = ExecutorSettingsBase::CacheModel;
+
+constexpr CacheModel kAllCacheModels[] = {
+    CacheModel::kMain,
+    CacheModel::kMtpDrafter,
+    CacheModel::kVisionEncoder,
+    CacheModel::kVisionAdapter,
+    CacheModel::kAudioEncoder,
+    CacheModel::kStaticAudioEncoder,
+    CacheModel::kStreamingAudioEncoder,
+    CacheModel::kAudioAdapter,
+    CacheModel::kTextEncoder,
+};
+
+// Returns the model a cache `suffix` belongs to, from the name in front of the
+// backend suffix, e.g. kMtpDrafter for ".mtp_drafter_mldrift_weight_cache.bin".
+// Returns std::nullopt if the name isn't a known model.
+std::optional<CacheModel> GetCacheModel(absl::string_view suffix,
+                                        CacheFileKind kind) {
+  const std::initializer_list<absl::string_view> backend_suffixes =
+      kind == CacheFileKind::kWeight
+          ? std::initializer_list<
+                absl::string_view>{ExecutorSettingsBase::kXnnpackCacheSuffix,
+                                   ExecutorSettingsBase::
+                                       kMlDriftWeightCacheSuffix,
+                                   ExecutorSettingsBase::
+                                       kDefaultWeightCacheSuffix}
+          : std::initializer_list<absl::string_view>{
+                ExecutorSettingsBase::kMlDriftCacheSuffix,
+                ExecutorSettingsBase::kDefaultProgramCacheSuffix};
+  for (absl::string_view backend_suffix : backend_suffixes) {
+    if (absl::ConsumeSuffix(&suffix, backend_suffix)) break;
+  }
+  for (CacheModel model : kAllCacheModels) {
+    if (suffix == ExecutorSettingsBase::GetCacheModelName(model)) {
+      return model;
+    }
+  }
+  return std::nullopt;
+}
+
+absl::string_view GetCacheFileKindName(CacheFileKind kind) {
+  return kind == CacheFileKind::kWeight ? "weight" : "program";
+}
+
+// Returns the scoped file set for `model`. The audio executor asks for the
+// static or streaming audio encoder, which use the audio encoder's file unless
+// they have their own.
+std::shared_ptr<ScopedFile> FindScopedCacheFile(
+    const ExecutorSettingsBase& settings, CacheModel model,
+    CacheFileKind kind) {
+  std::shared_ptr<ScopedFile> file = settings.GetScopedCacheFile(model, kind);
+  if (file == nullptr && (model == CacheModel::kStaticAudioEncoder ||
+                          model == CacheModel::kStreamingAudioEncoder)) {
+    return settings.GetScopedCacheFile(CacheModel::kAudioEncoder, kind);
+  }
+  return file;
+}
+
+// Returns the cache file the host supplies for `suffix`. If the model has no
+// file of its own but the main model has a scoped file or a provider is set,
+// returns an error, so the model neither shares the main model's file nor
+// bypasses the provider. Otherwise returns std::nullopt, so the caller uses
+// cache paths, which are unique per suffix.
+std::optional<absl::StatusOr<std::shared_ptr<ScopedFile>>> GetHostCacheFile(
+    const ExecutorSettingsBase& settings, CacheFileKind kind,
+    absl::string_view suffix, bool cache_disabled,
+    const ExecutorSettingsBase::CacheFileProvider& provider) {
+  const std::optional<CacheModel> model = GetCacheModel(suffix, kind);
+  std::shared_ptr<ScopedFile> scoped_file =
+      model ? FindScopedCacheFile(settings, *model, kind) : nullptr;
+  // Sub-model scoped files have always been used even when the cache is
+  // disabled. Keep that so existing hosts behave the same.
+  if (scoped_file != nullptr && *model != CacheModel::kMain) {
+    return scoped_file;
+  }
+  if (cache_disabled) {
+    return absl::InvalidArgumentError("Cache is explicitly disabled.");
+  }
+  if (scoped_file != nullptr) {
+    return scoped_file;
+  }
+
+  const absl::string_view kind_name = GetCacheFileKindName(kind);
+  const bool has_main_scoped_file =
+      settings.GetScopedCacheFile(CacheModel::kMain, kind) != nullptr;
+  if (!provider && !has_main_scoped_file) {
+    return std::nullopt;
+  }
+  if (!model.has_value()) {
+    ABSL_LOG(WARNING) << "Unknown " << kind_name << " cache suffix '" << suffix
+                      << "' has no cache file, so it is built without a cache.";
+    return absl::NotFoundError(
+        absl::StrCat("No cache file for unknown suffix: ", suffix));
+  }
+  if (provider) {
+    absl::StatusOr<std::shared_ptr<ScopedFile>> file =
+        provider({kind, *model, suffix});
+    if (file.ok() && *file == nullptr) {
+      file = absl::InternalError("CacheFileProvider returned a null file.");
+    }
+    if (!file.ok()) {
+      ABSL_LOG(WARNING) << "No " << kind_name << " cache file for model '"
+                        << ExecutorSettingsBase::GetCacheModelName(*model)
+                        << "' (" << file.status()
+                        << "), so it is built without a cache.";
+    }
+    return file;
+  }
+  // Only the main model has a scoped file. A file can't be namespaced by the
+  // suffix like a path can, so the sub-model must not share it.
+  ABSL_LOG(WARNING) << "No scoped " << kind_name << " cache file for model '"
+                    << ExecutorSettingsBase::GetCacheModelName(*model)
+                    << "', so it is built without a cache. Set one with "
+                       "SetScopedCacheFile() or SetCacheFileProvider().";
+  return absl::NotFoundError(
+      absl::StrCat("No scoped ", kind_name, " cache file for model: ",
+                   ExecutorSettingsBase::GetCacheModelName(*model)));
 }
 
 }  // namespace
@@ -441,18 +564,39 @@ ExecutorSettingsBase::GetCacheSuffix(Backend backend,
   return naming;
 }
 
+std::shared_ptr<ScopedFile> ExecutorSettingsBase::GetScopedCacheFile(
+    CacheModel model, CacheFileKind kind) const {
+  const auto& files = kind == CacheFileKind::kWeight
+                          ? scoped_weight_cache_files_
+                          : scoped_program_cache_files_;
+  auto it = files.find(model);
+  return it == files.end() ? nullptr : it->second;
+}
+
+void ExecutorSettingsBase::SetScopedCacheFile(
+    CacheModel model, CacheFileKind kind,
+    std::shared_ptr<ScopedFile> cache_file) {
+  auto& files = kind == CacheFileKind::kWeight ? scoped_weight_cache_files_
+                                               : scoped_program_cache_files_;
+  if (cache_file == nullptr) {
+    files.erase(model);
+  } else {
+    files[model] = std::move(cache_file);
+  }
+}
+
 absl::StatusOr<
     std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
 ExecutorSettingsBase::GetWeightCacheFile(absl::string_view suffix,
                                          bool check_and_clean) const {
-  // Cache is explicitly disabled.
-  if (GetCacheDir() == ":nocache" || disable_weight_cache_) {
-    return absl::InvalidArgumentError("Cache is explicitly disabled.");
-  }
-
-  // Prefer to use the scoped cache file if it's set.
-  if (GetScopedCacheFile()) {
-    return GetScopedCacheFile();
+  // Prefer a cache file supplied by the host.
+  if (auto host_file =
+          GetHostCacheFile(*this, CacheFileKind::kWeight, suffix,
+                           GetCacheDir() == ":nocache" || disable_weight_cache_,
+                           cache_file_provider_)) {
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<ScopedFile> file,
+                          *std::move(host_file));
+    return file;
   }
 
   const auto& model_path = GetModelAssets().GetPath().value_or("");
@@ -504,14 +648,14 @@ absl::StatusOr<
     std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
 ExecutorSettingsBase::GetProgramCacheFile(absl::string_view suffix,
                                           bool check_and_clean) const {
-  // Cache is explicitly disabled.
-  if (GetCacheDir() == ":nocache" || disable_program_cache_) {
-    return absl::InvalidArgumentError("Cache is explicitly disabled.");
-  }
-
-  // Prefer to use the scoped cache file if it's set.
-  if (GetScopedProgramCacheFile()) {
-    return GetScopedProgramCacheFile();
+  // Prefer a cache file supplied by the host.
+  if (auto host_file = GetHostCacheFile(
+          *this, CacheFileKind::kProgram, suffix,
+          GetCacheDir() == ":nocache" || disable_program_cache_,
+          cache_file_provider_)) {
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<ScopedFile> file,
+                          *std::move(host_file));
+    return file;
   }
 
   const auto& model_path = GetModelAssets().GetPath().value_or("");

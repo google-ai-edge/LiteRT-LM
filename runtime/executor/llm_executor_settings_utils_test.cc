@@ -19,11 +19,14 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
@@ -39,6 +42,7 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::StrEq;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;

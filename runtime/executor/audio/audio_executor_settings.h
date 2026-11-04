@@ -18,9 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <ostream>
-#include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -51,11 +49,13 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
 
   // Suffix constants
   static constexpr absl::string_view kStaticEncoderName =
-      ".static_audio_encoder";
+      GetCacheModelName(CacheModel::kStaticAudioEncoder);
   static constexpr absl::string_view kStreamingEncoderName =
-      ".streaming_audio_encoder";
-  static constexpr absl::string_view kAdapterName = ".audio_adapter";
-  static constexpr absl::string_view kEncoderName = ".audio_encoder";
+      GetCacheModelName(CacheModel::kStreamingAudioEncoder);
+  static constexpr absl::string_view kAdapterName =
+      GetCacheModelName(CacheModel::kAudioAdapter);
+  static constexpr absl::string_view kEncoderName =
+      GetCacheModelName(CacheModel::kAudioEncoder);
 
   // Getter for max_sequence_length.
   int GetMaxSequenceLength() const;
@@ -93,48 +93,58 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
 
   // Getter for scoped_encoder_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
-    return scoped_encoder_cache_file_;
+    return GetScopedCacheFile(CacheModel::kAudioEncoder,
+                              CacheFileKind::kWeight);
   }
 
-  // Setter for scoped_encoder_cache_file.
+  // Setter for scoped_encoder_cache_file. It serves both the static and the
+  // streaming audio encoder.
   void SetScopedEncoderCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_encoder_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kAudioEncoder, CacheFileKind::kWeight,
+                       std::move(cache_file));
   }
 
   // Getter for scoped_adapter_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterCacheFile() const {
-    return scoped_adapter_cache_file_;
+    return GetScopedCacheFile(CacheModel::kAudioAdapter,
+                              CacheFileKind::kWeight);
   }
 
   // Setter for scoped_adapter_cache_file.
   void SetScopedAdapterCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_adapter_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kAudioAdapter, CacheFileKind::kWeight,
+                       std::move(cache_file));
   }
 
   // Getter for scoped_encoder_program_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderProgramCacheFile()
       const {
-    return scoped_encoder_program_cache_file_;
+    return GetScopedCacheFile(CacheModel::kAudioEncoder,
+                              CacheFileKind::kProgram);
   }
 
-  // Setter for scoped_encoder_program_cache_file.
+  // Setter for scoped_encoder_program_cache_file. It serves both the static
+  // and the streaming audio encoder.
   void SetScopedEncoderProgramCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_encoder_program_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kAudioEncoder, CacheFileKind::kProgram,
+                       std::move(cache_file));
   }
 
   // Getter for scoped_adapter_program_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterProgramCacheFile()
       const {
-    return scoped_adapter_program_cache_file_;
+    return GetScopedCacheFile(CacheModel::kAudioAdapter,
+                              CacheFileKind::kProgram);
   }
 
   // Setter for scoped_adapter_program_cache_file.
   void SetScopedAdapterProgramCacheFile(
       std::shared_ptr<litert::lm::ScopedFile> cache_file) {
-    scoped_adapter_program_cache_file_ = std::move(cache_file);
+    SetScopedCacheFile(CacheModel::kAudioAdapter, CacheFileKind::kProgram,
+                       std::move(cache_file));
   }
 
   // Getter for audio_buffering_enabled.
@@ -147,18 +157,6 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   void SetAudioBufferingEnabled(bool buffer_audio_input) {
     audio_buffering_enabled_ = buffer_audio_input;
   }
-
-  using ExecutorSettingsBase::GetWeightCacheFile;
-  absl::StatusOr<
-      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-  GetWeightCacheFile(absl::string_view suffix,
-                     bool check_and_clean) const override;
-
-  using ExecutorSettingsBase::GetProgramCacheFile;
-  absl::StatusOr<
-      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
-  GetProgramCacheFile(absl::string_view suffix,
-                      bool check_and_clean) const override;
 
  private:
   explicit AudioExecutorSettings(const ModelAssets& model_assets,
@@ -174,18 +172,6 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   bool audio_buffering_enabled_ = false;
   uint32_t lora_rank_ = 0;
   std::vector<uint32_t> supported_lora_ranks_ = {};
-
-  // The cache file to use for the audio encoder model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;
-
-  // The cache file to use for the audio adapter model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_cache_file_;
-
-  // The program cache file to use for the audio encoder model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_program_cache_file_;
-
-  // The program cache file to use for the audio adapter model.
-  std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_program_cache_file_;
 };
 
 std::ostream& operator<<(std::ostream& os,
