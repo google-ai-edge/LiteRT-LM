@@ -26,7 +26,6 @@
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -61,6 +60,7 @@
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -572,6 +572,12 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const litert::TensorBuffer& input_image_tensor) {
+  return EncodeImageTensor(input_image_tensor, /*latch=*/nullptr);
+}
+
+absl::StatusOr<ExecutorVisionData>
+VisionLiteRtCompiledModelExecutor::EncodeImageTensor(
+    const litert::TensorBuffer& input_image_tensor, CancellationLatch* latch) {
   ScopedLatency scoped_total_latency(latency_stats_);
   LITERT_ASSIGN_OR_RETURN(auto& encoder_input_buffers,
                           vision_encoder_->GetOrCreateInputBuffers(0));
@@ -585,13 +591,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     LITERT_ASSIGN_OR_RETURN(
         auto encoder_outputs,
         vision_encoder_->GetCompiledModel().CreateOutputBuffers(0));
-    ABSL_RETURN_IF_ERROR(CheckNotCancelled());
-    {
-      ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
-      LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-          /*input_buffers=*/encoder_input_buffers,
-          /*output_buffers=*/encoder_outputs));
-    }
+    ABSL_RETURN_IF_ERROR(RunCompiledModel(
+        vision_encoder_->GetCompiledModel(), /*signature_index=*/0,
+        encoder_input_buffers, encoder_outputs, kVisionEncoderInferenceLatency,
+        latch));
     AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
     return ExecutorVisionData(std::move(encoder_outputs[0]),
                               /*per_layer_embeddings=*/std::nullopt);
@@ -610,21 +613,14 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
   LITERT_ASSIGN_OR_RETURN(auto& encoder_outputs,
                           vision_encoder_->GetOrCreateOutputBuffers(0));
 
-  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
-  {
-    ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-        /*input_buffers=*/encoder_input_buffers,
-        /*output_buffers=*/encoder_outputs));
-  }
-
-  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
-  {
-    ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
-    LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
-        /*input_buffers=*/encoder_outputs,
-        /*output_buffers=*/output_tensor_buffers));
-  }
+  ABSL_RETURN_IF_ERROR(RunCompiledModel(vision_encoder_->GetCompiledModel(),
+                                        /*signature_index=*/0,
+                                        encoder_input_buffers, encoder_outputs,
+                                        kVisionEncoderInferenceLatency, latch));
+  ABSL_RETURN_IF_ERROR(RunCompiledModel(vision_adapter_->GetCompiledModel(),
+                                        /*signature_index=*/0, encoder_outputs,
+                                        output_tensor_buffers,
+                                        kVisionAdapterInferenceLatency, latch));
 
   AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
 
@@ -632,73 +628,57 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
                             /*per_layer_embeddings=*/std::nullopt);
 }
 
-bool VisionLiteRtCompiledModelExecutor::IsCancelled() const {
-  if (!cancelled_ && should_cancel_ != nullptr && (*should_cancel_)()) {
-    cancelled_ = true;
-  }
-  return cancelled_;
-}
-
-absl::Status VisionLiteRtCompiledModelExecutor::CheckNotCancelled() const {
-  if (IsCancelled()) {
+absl::Status VisionLiteRtCompiledModelExecutor::RunCompiledModel(
+    const CompiledModel& compiled_model, size_t signature_index,
+    absl::Span<const litert::TensorBuffer> input_buffers,
+    absl::Span<const litert::TensorBuffer> output_buffers,
+    absl::string_view latency_metric, CancellationLatch* latch) {
+  if (latch != nullptr && latch->IsCancelled()) {
     return absl::CancelledError("Vision encoding was cancelled.");
   }
+  ScopedLatency scoped(latency_stats_, latency_metric);
+  auto result =
+      compiled_model.Run(signature_index, input_buffers, output_buffers);
+  // An interrupted run reports a generic error.
+  if (!result.HasValue() && latch != nullptr && latch->IsCancelled()) {
+    return absl::CancelledError("Vision encoding was cancelled.");
+  }
+  LITERT_RETURN_IF_ERROR(result);
   return absl::OkStatus();
-}
-
-// static
-bool VisionLiteRtCompiledModelExecutor::CheckCancelled(void* data) {
-  return static_cast<const VisionLiteRtCompiledModelExecutor*>(data)
-      ->IsCancelled();
 }
 
 absl::StatusOr<ExecutorVisionData>
 VisionLiteRtCompiledModelExecutor::RunCancellable(
     absl::FunctionRef<bool()> should_cancel,
-    absl::FunctionRef<absl::StatusOr<ExecutorVisionData>()> encode) {
-  should_cancel_ = &should_cancel;
-  cancelled_ = false;
-  // Register the per-op cancellation checks for the duration of this call only,
-  // so that calls without a cancellation callback do not pay for them.
-  vision_encoder_->GetMutableCompiledModel().SetCancellationFunction(
-      this, &CheckCancelled);
+    absl::FunctionRef<absl::StatusOr<ExecutorVisionData>(CancellationLatch*)>
+        encode) {
+  std::vector<CompiledModel*> compiled_models = {
+      &vision_encoder_->GetMutableCompiledModel()};
   if (vision_adapter_ != nullptr) {
-    vision_adapter_->GetMutableCompiledModel().SetCancellationFunction(
-        this, &CheckCancelled);
+    compiled_models.push_back(&vision_adapter_->GetMutableCompiledModel());
   }
-  absl::Cleanup end_cancellable_call = [this] {
-    vision_encoder_->GetMutableCompiledModel().SetCancellationFunction(
-        /*data=*/nullptr, /*check_cancelled_func=*/nullptr);
-    if (vision_adapter_ != nullptr) {
-      vision_adapter_->GetMutableCompiledModel().SetCancellationFunction(
-          /*data=*/nullptr, /*check_cancelled_func=*/nullptr);
-    }
-    should_cancel_ = nullptr;
-    cancelled_ = false;
-  };
-
+  CancellationLatch latch(should_cancel, compiled_models);
   // Check before copying any input.
-  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
-  absl::StatusOr<ExecutorVisionData> output = encode();
-  // An interrupted LiteRT run reports a generic error. Use the latched state
-  // rather than calling `should_cancel` again.
-  if (!output.ok() && cancelled_ && !absl::IsCancelled(output.status())) {
+  if (latch.IsCancelled()) {
     return absl::CancelledError("Vision encoding was cancelled.");
   }
-  return output;
+  return encode(&latch);
 }
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const litert::TensorBuffer& input_image_tensor,
     absl::FunctionRef<bool()> should_cancel) {
-  return RunCancellable(should_cancel,
-                        [&] { return Encode(input_image_tensor); });
+  return RunCancellable(should_cancel, [&](CancellationLatch* latch) {
+    return EncodeImageTensor(input_image_tensor, latch);
+  });
 }
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
     absl::FunctionRef<bool()> should_cancel) {
-  return RunCancellable(should_cancel, [&] { return Encode(input_maps); });
+  return RunCancellable(should_cancel, [&](CancellationLatch* latch) {
+    return EncodeInputMaps(input_maps, latch);
+  });
 }
 
 absl::StatusOr<std::vector<int>>
@@ -708,6 +688,13 @@ VisionLiteRtCompiledModelExecutor::GetExpectedInputDimension() const {
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps) {
+  return EncodeInputMaps(input_maps, /*latch=*/nullptr);
+}
+
+absl::StatusOr<ExecutorVisionData>
+VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
+    const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
+    CancellationLatch* latch) {
   ScopedLatency scoped_total_latency(latency_stats_);
 
   // Note: `positions_xy` is only required by transformer (ViT) encoders. Single
@@ -812,13 +799,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
       auto& encoder_output_buffers,
       vision_encoder_->GetOrCreateOutputBuffers(encoder_signature_index));
 
-  ABSL_RETURN_IF_ERROR(CheckNotCancelled());
-  {
-    ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-        encoder_signature_index, encoder_input_buffers,
-        encoder_output_buffers));
-  }
+  ABSL_RETURN_IF_ERROR(RunCompiledModel(
+      vision_encoder_->GetCompiledModel(), encoder_signature_index,
+      encoder_input_buffers, encoder_output_buffers,
+      kVisionEncoderInferenceLatency, latch));
 
   int num_patches = 0;
   auto mask_index = vision_encoder_->GetCompiledModel().FindOutputIndex(
@@ -947,14 +931,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
               encoder_output_span));
     }
 
-    ABSL_RETURN_IF_ERROR(CheckNotCancelled());
-    {
-      ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
-      LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
-          *adapter_signature_index,
-          /*input_buffers=*/adapter_input_buffers,
-          /*output_buffers=*/adapter_output_tensor_buffers));
-    }
+    ABSL_RETURN_IF_ERROR(RunCompiledModel(
+        vision_adapter_->GetCompiledModel(), *adapter_signature_index,
+        adapter_input_buffers, adapter_output_tensor_buffers,
+        kVisionAdapterInferenceLatency, latch));
 
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             adapter_output_tensor_buffers[0].TensorType());

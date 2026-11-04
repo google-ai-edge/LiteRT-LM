@@ -16,7 +16,9 @@
 
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,7 +26,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -252,6 +256,134 @@ TEST(VisionLiteRtCompiledModelExecutorTest, EncodeWithCancellation) {
   ASSERT_OK_AND_ASSIGN(embeddings, output.GetMutableEmbeddingsPtr());
   EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
               IsOkAndHolds(expected_vector));
+}
+
+// Tests that the cancellation state of a cancellable call (its
+// CancellationLatch and `should_cancel`) is scoped to the call: it is neither
+// used by nor leaked into the following calls, of both the vision encoder and
+// the vision adapter.
+class VisionCancellationScopeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    const std::string model_path =
+        (std::filesystem::path(::testing::SrcDir()) /
+         std::string(kTestVisionModelWithAdapterPath))
+            .string();
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create(model_path));
+    ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,
+                         VisionExecutorSettings::CreateDefault(
+                             model_assets,
+                             /*encoder_backend=*/Backend::CPU,
+                             /*adapter_backend=*/Backend::CPU));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        env_, Environment::Create(std::vector<Environment::Option>()));
+    ASSERT_OK_AND_ASSIGN(
+        executor_, VisionLiteRtCompiledModelExecutor::Create(settings, *env_));
+    RankedTensorType input_tensor_type(ElementType::Float32,
+                                       Layout(litert::Dimensions{1, 10, 8}));
+    ASSERT_OK_AND_ASSIGN(input_buffer_,
+                         CreateTensorBuffer<float>(absl::MakeSpan(input_data_),
+                                                   input_tensor_type));
+    ASSERT_OK_AND_ASSIGN(expected_output_, EncodeToVector(std::nullopt));
+  }
+
+  // Encodes the input, with `should_cancel` if set, and returns the
+  // embeddings.
+  absl::StatusOr<std::vector<float>> EncodeToVector(
+      std::optional<absl::FunctionRef<bool()>> should_cancel) {
+    ABSL_ASSIGN_OR_RETURN(
+        ExecutorVisionData output,
+        should_cancel.has_value()
+            ? executor_->Encode(*input_buffer_, *should_cancel)
+            : executor_->Encode(*input_buffer_));
+    ABSL_ASSIGN_OR_RETURN(TensorBuffer * embeddings,
+                          output.GetMutableEmbeddingsPtr());
+    return ReadTensorBuffer<float>(*embeddings);
+  }
+
+  // Checks that a plain call still works and produces the expected output.
+  void ExpectPlainCallWorks() {
+    EXPECT_THAT(EncodeToVector(std::nullopt), IsOkAndHolds(expected_output_));
+  }
+
+  std::optional<Environment> env_;
+  std::unique_ptr<VisionLiteRtCompiledModelExecutor> executor_;
+  std::vector<float> input_data_ = std::vector<float>(10 * 8, 1.0f);
+  std::optional<TensorBuffer> input_buffer_;
+  std::vector<float> expected_output_;
+};
+
+TEST_F(VisionCancellationScopeTest, LaterCallsDontUseTheCallback) {
+  bool cancel = false;
+  int num_checks = 0;
+  auto should_cancel = [&] {
+    ++num_checks;
+    return cancel;
+  };
+  EXPECT_THAT(EncodeToVector(should_cancel), IsOkAndHolds(expected_output_));
+  ASSERT_GT(num_checks, 0);
+  const int num_checks_after_call = num_checks;
+
+  // The callback, still alive, would now cancel. Neither the pre-run checks
+  // nor the per-op checks of the following plain calls call it.
+  cancel = true;
+  for (int i = 0; i < 3; ++i) {
+    ExpectPlainCallWorks();
+  }
+  EXPECT_EQ(num_checks, num_checks_after_call);
+}
+
+TEST_F(VisionCancellationScopeTest, CallbackCanBeDestroyedRightAfterTheCall) {
+  // Both after a completed and after a cancelled call. If the latch or the
+  // callback were still referenced (e.g. by the per-op checks registered with
+  // LiteRT), the following calls would use freed memory (caught by ASan).
+  for (const bool cancel_during_run : {false, true}) {
+    SCOPED_TRACE(cancel_during_run);
+    int num_checks = 0;
+    auto should_cancel = std::make_unique<std::function<bool()>>(
+        [&] { return ++num_checks > 2 && cancel_during_run; });
+    absl::StatusOr<std::vector<float>> result = EncodeToVector(*should_cancel);
+    if (cancel_during_run) {
+      EXPECT_THAT(result, StatusIs(absl::StatusCode::kCancelled));
+    } else {
+      EXPECT_THAT(result, IsOkAndHolds(expected_output_));
+    }
+    should_cancel.reset();
+
+    ExpectPlainCallWorks();
+    EXPECT_THAT(EncodeToVector([] { return false; }),
+                IsOkAndHolds(expected_output_));
+  }
+}
+
+TEST_F(VisionCancellationScopeTest, EachCallHasItsOwnLatch) {
+  // A call cancelled during the runs by a one-shot callback: its latch is
+  // cancelled.
+  int num_checks = 0;
+  EXPECT_THAT(EncodeToVector([&] { return ++num_checks == 3; }),
+              StatusIs(absl::StatusCode::kCancelled));
+
+  // The next call starts with a fresh latch, which calls its own callback
+  // (at entry and before the runs) instead of reporting the previous
+  // cancellation.
+  num_checks = 0;
+  EXPECT_THAT(EncodeToVector([&] {
+                ++num_checks;
+                return false;
+              }),
+              IsOkAndHolds(expected_output_));
+  EXPECT_GE(num_checks, 2);
+
+  // And a call cancelled at entry is cancelled by its own callback only.
+  num_checks = 0;
+  EXPECT_THAT(EncodeToVector([&] {
+                ++num_checks;
+                return true;
+              }),
+              StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 1);
+  ExpectPlainCallWorks();
 }
 
 TEST(VisionLiteRtCompiledModelExecutorTest, EncodeInputMapsWithCancellation) {

@@ -27,6 +27,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
@@ -66,6 +67,7 @@ using ::litert::lm::ExecutorInputs;
 using ::litert::lm::ExecutorTextData;
 using ::litert::lm::ModelAssets;
 using ::testing::HasSubstr;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 // Builds a minimal TFLite model FlatBuffer with given signature key and tensor
@@ -788,6 +790,130 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
                        embedding_executor->ComputeEmbeddingFromInputEmbeddings(
                            input_embeddings, [] { return false; }));
   EXPECT_EQ(cancellable_output, output);
+}
+
+// Tests that the cancellation state of a cancellable call (its
+// CancellationLatch and `should_cancel`) is scoped to the call: it is neither
+// used by nor leaked into the following calls.
+class TextEncoderCancellationScopeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    model_buffer_ = BuildDummyEncoderModelBuffer(
+        "encoder", /*embeddings_dims=*/{1, 4, 8}, /*mask_dims=*/{1, 4, 1},
+        /*output_dims=*/{1, 4, 8});
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        model_, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                    model_buffer_.data(), model_buffer_.size())));
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create("dummy_model_path"));
+    ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                         EmbeddingExecutorSettings::CreateDefault(
+                             model_assets, /*backend=*/Backend::CPU));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        env_, Environment::Create(std::vector<Environment::Option>()));
+    ASSERT_OK_AND_ASSIGN(
+        executor_,
+        EmbeddingLiteRtCompiledModelExecutor::Create(
+            settings, *env_,
+            std::make_unique<FakeEmbeddingModelResources>(nullptr, &*model_)));
+    ASSERT_OK_AND_ASSIGN(
+        expected_output_,
+        executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_));
+  }
+
+  // Checks that a plain call still works and produces the expected output.
+  void ExpectPlainCallWorks() {
+    EXPECT_THAT(
+        executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_),
+        IsOkAndHolds(expected_output_));
+  }
+
+  std::vector<uint8_t> model_buffer_;
+  std::optional<Model> model_;
+  std::optional<Environment> env_;
+  std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor> executor_;
+  std::vector<float> input_embeddings_ = std::vector<float>(2 * 8, 1.0f);
+  std::vector<float> expected_output_;
+};
+
+TEST_F(TextEncoderCancellationScopeTest, LaterCallsDontUseTheCallback) {
+  bool cancel = false;
+  int num_checks = 0;
+  auto should_cancel = [&] {
+    ++num_checks;
+    return cancel;
+  };
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                             should_cancel),
+              IsOkAndHolds(expected_output_));
+  ASSERT_GT(num_checks, 0);
+  const int num_checks_after_call = num_checks;
+
+  // The callback, still alive, would now cancel. Neither the pre-run checks
+  // nor the per-op checks of the following plain calls call it.
+  cancel = true;
+  for (int i = 0; i < 3; ++i) {
+    ExpectPlainCallWorks();
+  }
+  EXPECT_EQ(num_checks, num_checks_after_call);
+}
+
+TEST_F(TextEncoderCancellationScopeTest,
+       CallbackCanBeDestroyedRightAfterTheCall) {
+  // Both after a completed and after a cancelled call. If the latch or the
+  // callback were still referenced (e.g. by the per-op check registered with
+  // LiteRT), the following calls would use freed memory (caught by ASan).
+  for (const bool cancel_during_run : {false, true}) {
+    SCOPED_TRACE(cancel_during_run);
+    int num_checks = 0;
+    auto should_cancel = std::make_unique<std::function<bool()>>(
+        [&] { return ++num_checks > 2 && cancel_during_run; });
+    absl::StatusOr<std::vector<float>> result =
+        executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                       *should_cancel);
+    if (cancel_during_run) {
+      EXPECT_THAT(result, StatusIs(absl::StatusCode::kCancelled));
+    } else {
+      EXPECT_THAT(result, IsOkAndHolds(expected_output_));
+    }
+    should_cancel.reset();
+
+    ExpectPlainCallWorks();
+    EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(
+                    input_embeddings_, [] { return false; }),
+                IsOkAndHolds(expected_output_));
+  }
+}
+
+TEST_F(TextEncoderCancellationScopeTest, EachCallHasItsOwnLatch) {
+  // A call cancelled during the run by a one-shot callback: its latch is
+  // cancelled.
+  int num_checks = 0;
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(
+                  input_embeddings_, [&] { return ++num_checks == 3; }),
+              StatusIs(absl::StatusCode::kCancelled));
+
+  // The next call starts with a fresh latch, which calls its own callback (at
+  // entry and before the run) instead of reporting the previous cancellation.
+  num_checks = 0;
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                             [&] {
+                                                               ++num_checks;
+                                                               return false;
+                                                             }),
+              IsOkAndHolds(expected_output_));
+  EXPECT_GE(num_checks, 2);
+
+  // And a call cancelled at entry is cancelled by its own callback only.
+  num_checks = 0;
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                             [&] {
+                                                               ++num_checks;
+                                                               return true;
+                                                             }),
+              StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 1);
+  ExpectPlainCallWorks();
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,

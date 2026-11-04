@@ -1031,6 +1031,7 @@ cc_library(
     srcs = ["vision_litert_compiled_model_executor.cc"],
     hdrs = ["vision_litert_compiled_model_executor.h"],
     deps = [
+        ":cancellation_latch",
         ":executor_settings_base",
         ":executor_stats",
         ":litert_compiled_model_executor_utils",
@@ -1040,7 +1041,6 @@ cc_library(
         ":vision_executor_utils",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/log:absl_log",
@@ -1077,6 +1077,26 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "cancellation_latch",
+    srcs = ["cancellation_latch.cc"],
+    hdrs = ["cancellation_latch.h"],
+    deps = [
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+    ],
+)
+
+cc_test(
+    name = "cancellation_latch_test",
+    srcs = ["cancellation_latch_test.cc"],
+    deps = [
+        ":cancellation_latch",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_test(
     name = "vision_litert_compiled_model_executor_test",
     srcs = ["vision_litert_compiled_model_executor_test.cc"],
@@ -1087,7 +1107,9 @@ cc_test(
         ":vision_litert_compiled_model_executor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
@@ -1171,6 +1193,7 @@ cc_library(
     srcs = ["embedding_litert_compiled_model_executor.cc"],
     hdrs = ["embedding_litert_compiled_model_executor.h"],
     deps = [
+        ":cancellation_latch",
         ":embedding_executor_base",
         ":embedding_executor_settings",
         ":executor_settings_base",
@@ -1227,6 +1250,7 @@ cc_test(
         ":llm_executor_io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",

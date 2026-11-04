@@ -32,6 +32,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_stats.h"
@@ -203,19 +204,28 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Fills the input mask of `run`, runs the text encoder and returns its output
   // embedding vector. The embeddings (and per-layer embeddings, if any) inputs
   // of `run` must be filled.
+  //
+  // Args:
+  //   run: The text encoder run, with its embeddings inputs filled.
+  //   sequence_length: The number of input embeddings.
+  //   latch: The latch of a cancellable call, or nullptr. If set, the call is
+  //     cancelled before the run, and an interrupted run is reported as
+  //     cancelled.
+  //
+  // Returns:
+  //   The output embedding vector, or a CancelledError if `latch` is
+  //   cancelled.
   absl::StatusOr<std::vector<float>> FinishEncoderRun(const EncoderRun& run,
-                                                      size_t sequence_length);
+                                                      size_t sequence_length,
+                                                      CancellationLatch* latch);
+
+  // Implements ComputeEmbeddingFromInputEmbeddings(), cancellable with `latch`
+  // if not null (see FinishEncoderRun).
+  absl::StatusOr<std::vector<float>> EncodeInputEmbeddings(
+      absl::Span<const float> input_embeddings, CancellationLatch* latch);
 
   absl::StatusOr<std::vector<float>> RunEncoderForTokens(
       absl::Span<const int32_t> tokens);
-
-  // Returns true if the current cancellable call is cancelled. Once the
-  // cancellation callback returns true, the result is latched for the rest of
-  // the call and the callback is not called again.
-  bool IsCancelled() const;
-
-  // LiteRT per-op cancellation callback; `data` is the executor.
-  static bool CheckCancelled(void* data);
 
   EmbeddingLiteRtCompiledModelExecutor(
       EmbeddingExecutorSettings executor_settings, litert::Environment& env,
@@ -252,13 +262,6 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       output_buffers_cache_;
 
   std::optional<ExecutorStats> latency_stats_;
-
-  // The cancellation callback of the call in progress, or nullptr. Only set for
-  // the duration of a cancellable call.
-  const absl::FunctionRef<bool()>* should_cancel_ = nullptr;
-
-  // Whether the call in progress was cancelled (latched).
-  mutable bool cancelled_ = false;
 };
 
 }  // namespace litert::lm

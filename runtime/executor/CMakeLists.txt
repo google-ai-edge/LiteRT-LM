@@ -529,6 +529,27 @@ target_link_libraries(runtime_executor_magic_number_configs_helper
 
 
 # ==============================================================================
+# Cancellation Latch
+# ==============================================================================
+add_litertlm_library(runtime_executor_cancellation_latch STATIC
+  cancellation_latch.cc
+)
+add_library(LiteRTLM::Runtime::Executor::CancellationLatch
+  ALIAS runtime_executor_cancellation_latch)
+
+target_include_directories(runtime_executor_cancellation_latch
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_cancellation_latch
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Vision LiteRT Compiled Model Executor
 # ==============================================================================
 add_litertlm_library(runtime_executor_vision_litert_compiled_model_executor STATIC
@@ -546,6 +567,7 @@ target_include_directories(runtime_executor_vision_litert_compiled_model_executo
 
 target_link_libraries(runtime_executor_vision_litert_compiled_model_executor
   PUBLIC
+    LiteRTLM::Runtime::Executor::CancellationLatch
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::VisionExecutorSettings
@@ -736,6 +758,7 @@ target_include_directories(runtime_executor_embedding_litert_compiled_model_exec
 
 target_link_libraries(runtime_executor_embedding_litert_compiled_model_executor
   PUBLIC
+    LiteRTLM::Runtime::Executor::CancellationLatch
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Util

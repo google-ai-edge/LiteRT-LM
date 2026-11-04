@@ -26,6 +26,8 @@
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -33,6 +35,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -326,23 +329,39 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
         expected_input_dimension_(expected_input_dimension),
         vision_executor_properties_(vision_executor_properties) {}
 
-  // Returns true if the current cancellable call is cancelled. Once the
-  // cancellation callback returns true, the result is latched for the rest of
-  // the call and the callback is not called again.
-  bool IsCancelled() const;
+  // Implement the Encode() overloads, cancellable with `latch` if not null
+  // (see RunCompiledModel).
+  absl::StatusOr<ExecutorVisionData> EncodeImageTensor(
+      const litert::TensorBuffer& input_image_tensor, CancellationLatch* latch);
+  absl::StatusOr<ExecutorVisionData> EncodeInputMaps(
+      const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
+      CancellationLatch* latch);
 
-  // Returns a CancelledError if the current cancellable call is cancelled.
-  absl::Status CheckNotCancelled() const;
-
-  // LiteRT per-op cancellation callback; `data` is the executor.
-  static bool CheckCancelled(void* data);
-
-  // Runs `encode` as a cancellable call: sets up `should_cancel` and the
-  // per-op cancellation checks of the compiled models for the duration of the
-  // call.
+  // Runs `encode` as a cancellable call, with the latch of the call.
   absl::StatusOr<ExecutorVisionData> RunCancellable(
       absl::FunctionRef<bool()> should_cancel,
-      absl::FunctionRef<absl::StatusOr<ExecutorVisionData>()> encode);
+      absl::FunctionRef<absl::StatusOr<ExecutorVisionData>(CancellationLatch*)>
+          encode);
+
+  // Runs the signature `signature_index` of `compiled_model` and records its
+  // latency as `latency_metric`.
+  //
+  // Args:
+  //   compiled_model: The vision encoder or vision adapter compiled model.
+  //   signature_index: The signature to run.
+  //   input_buffers / output_buffers: The buffers of the signature.
+  //   latency_metric: The latency metric of the run.
+  //   latch: The latch of a cancellable call, or nullptr. If set, the call is
+  //     cancelled before the run, and an interrupted run is reported as
+  //     cancelled.
+  //
+  // Returns:
+  //   OK, a CancelledError if `latch` is cancelled, or the error of the run.
+  absl::Status RunCompiledModel(
+      const CompiledModel& compiled_model, size_t signature_index,
+      absl::Span<const litert::TensorBuffer> input_buffers,
+      absl::Span<const litert::TensorBuffer> output_buffers,
+      absl::string_view latency_metric, CancellationLatch* latch);
 
   // The VisionExecutorSettings for the vision encoder and vision adapter
   // models.
@@ -367,13 +386,6 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
   VisionExecutorProperties vision_executor_properties_;
 
   std::optional<ExecutorStats> latency_stats_;
-
-  // The cancellation callback of the call in progress, or nullptr. Only set for
-  // the duration of a cancellable call.
-  const absl::FunctionRef<bool()>* should_cancel_ = nullptr;
-
-  // Whether the call in progress was cancelled (latched).
-  mutable bool cancelled_ = false;
 };
 
 }  // namespace litert::lm

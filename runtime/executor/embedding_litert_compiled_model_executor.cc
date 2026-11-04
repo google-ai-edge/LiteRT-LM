@@ -59,6 +59,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -425,8 +426,8 @@ EmbeddingLiteRtCompiledModelExecutor::PrepareEncoderRun(
 }
 
 absl::StatusOr<std::vector<float>>
-EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(const EncoderRun& run,
-                                                       size_t sequence_length) {
+EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(
+    const EncoderRun& run, size_t sequence_length, CancellationLatch* latch) {
   std::vector<litert::TensorBuffer>& input_buffers = *run.input_buffers;
   std::vector<litert::TensorBuffer>& output_buffers = *run.output_buffers;
 
@@ -451,13 +452,18 @@ EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(const EncoderRun& run,
     }
   }
 
-  if (IsCancelled()) {
+  if (latch != nullptr && latch->IsCancelled()) {
     return absl::CancelledError("The text encoder run was cancelled.");
   }
   {
     ScopedLatency scoped(latency_stats_, kTextEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(compiled_model_->Run(run.signature_index,
-                                                input_buffers, output_buffers));
+    auto result = compiled_model_->Run(run.signature_index, input_buffers,
+                                       output_buffers);
+    // An interrupted run reports a generic error.
+    if (!result.HasValue() && latch != nullptr && latch->IsCancelled()) {
+      return absl::CancelledError("The text encoder run was cancelled.");
+    }
+    LITERT_RETURN_IF_ERROR(result);
   }
 
   std::vector<float> output_vector;
@@ -499,12 +505,18 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
         /*token_offset=*/0));
   }
 
-  return FinishEncoderRun(run, tokens.size());
+  return FinishEncoderRun(run, tokens.size(), /*latch=*/nullptr);
 }
 
 absl::StatusOr<std::vector<float>>
 EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
     absl::Span<const float> input_embeddings) {
+  return EncodeInputEmbeddings(input_embeddings, /*latch=*/nullptr);
+}
+
+absl::StatusOr<std::vector<float>>
+EmbeddingLiteRtCompiledModelExecutor::EncodeInputEmbeddings(
+    absl::Span<const float> input_embeddings, CancellationLatch* latch) {
   ScopedLatency scoped_total_latency(latency_stats_);
 
   if (expected_input_dimension_.empty() ||
@@ -562,20 +574,7 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
               embeddings_ptr + buffer_elements, 0.0f);
   }
 
-  return FinishEncoderRun(run, sequence_length);
-}
-
-bool EmbeddingLiteRtCompiledModelExecutor::IsCancelled() const {
-  if (!cancelled_ && should_cancel_ != nullptr && (*should_cancel_)()) {
-    cancelled_ = true;
-  }
-  return cancelled_;
-}
-
-// static
-bool EmbeddingLiteRtCompiledModelExecutor::CheckCancelled(void* data) {
-  return static_cast<const EmbeddingLiteRtCompiledModelExecutor*>(data)
-      ->IsCancelled();
+  return FinishEncoderRun(run, sequence_length, latch);
 }
 
 absl::StatusOr<std::vector<float>>
@@ -583,29 +582,11 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
     absl::Span<const float> input_embeddings,
     absl::FunctionRef<bool()> should_cancel) {
   RET_CHECK_NE(compiled_model_, nullptr) << "The text encoder is not compiled.";
-  should_cancel_ = &should_cancel;
-  cancelled_ = false;
-  // Register the per-op cancellation check for the duration of this call only,
-  // so that calls without a cancellation callback do not pay for it.
-  compiled_model_->SetCancellationFunction(this, &CheckCancelled);
-  absl::Cleanup end_cancellable_call = [this] {
-    compiled_model_->SetCancellationFunction(/*data=*/nullptr,
-                                             /*check_cancelled_func=*/nullptr);
-    should_cancel_ = nullptr;
-    cancelled_ = false;
-  };
-
-  if (IsCancelled()) {
+  CancellationLatch latch(should_cancel, {compiled_model_.get()});
+  if (latch.IsCancelled()) {
     return absl::CancelledError("The text encoder run was cancelled.");
   }
-  absl::StatusOr<std::vector<float>> output =
-      ComputeEmbeddingFromInputEmbeddings(input_embeddings);
-  // An interrupted LiteRT run reports a generic error. Use the latched state
-  // rather than calling `should_cancel` again.
-  if (!output.ok() && cancelled_ && !absl::IsCancelled(output.status())) {
-    return absl::CancelledError("The text encoder run was cancelled.");
-  }
-  return output;
+  return EncodeInputEmbeddings(input_embeddings, &latch);
 }
 
 absl::StatusOr<EmbeddingOutput>
