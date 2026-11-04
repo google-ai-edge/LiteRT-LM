@@ -25,6 +25,7 @@
 // kbase, Adreno KGSL) does not go through dma-buf and is invisible here, so the
 // result is a lower bound on accelerator memory rather than a complete measure.
 
+#include <cstdint>
 #include <optional>
 
 #include "runtime/util/memory_profiling/accelerator_memory_dmabuf.h"

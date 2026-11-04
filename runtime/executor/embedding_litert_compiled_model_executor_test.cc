@@ -27,6 +27,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
@@ -65,7 +66,9 @@ using ::litert::lm::EmbeddingExecutorSettings;
 using ::litert::lm::ExecutorInputs;
 using ::litert::lm::ExecutorTextData;
 using ::litert::lm::ModelAssets;
+using ::testing::ElementsAre;
 using ::testing::HasSubstr;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 // Builds a minimal TFLite model FlatBuffer with given signature key and tensor
@@ -677,6 +680,316 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   for (float value : output) {
     EXPECT_FLOAT_EQ(value, 3.0f);
   }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingFromInputEmbeddings_Cancellation) {
+  auto encoder_buf = BuildDummyEncoderModelBuffer(
+      "encoder", /*embeddings_dims=*/{1, 4, 8}, /*mask_dims=*/{1, 4, 1},
+      /*output_dims=*/{1, 4, 8});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+  std::vector<float> input_embeddings(2 * 8, 1.0f);
+
+  // Not cancelled.
+  EXPECT_OK(embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+      input_embeddings, [] { return false; }));
+
+  // Cancelled before the run.
+  EXPECT_THAT(embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                  input_embeddings, [] { return true; }),
+              StatusIs(absl::StatusCode::kCancelled));
+
+  // Cancelled before the run: `should_cancel` is called once, then the result
+  // is latched.
+  int num_checks = 0;
+  EXPECT_THAT(
+      embedding_executor->ComputeEmbeddingFromInputEmbeddings(input_embeddings,
+                                                              [&] {
+                                                                ++num_checks;
+                                                                return true;
+                                                              }),
+      StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 1);
+
+  // Cancelled during the run: the two checks before the run pass, then the
+  // LiteRT interpreter requests cancellation after an op. `should_cancel` is
+  // not called again once it returned true.
+  num_checks = 0;
+  auto result = embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+      input_embeddings, [&] { return ++num_checks > 2; });
+  EXPECT_THAT(result, StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 3);
+
+  // A one-shot (stateful) `should_cancel` that returns true only once, during
+  // the run, still cancels the call: the cancellation is latched.
+  num_checks = 0;
+  result = embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+      input_embeddings, [&] { return ++num_checks == 3; });
+  EXPECT_THAT(result, StatusIs(absl::StatusCode::kCancelled));
+
+  // The executor is usable after a cancelled run, and a call without a
+  // cancellation callback is not affected by the previous one.
+  ASSERT_OK_AND_ASSIGN(std::vector<float> output,
+                       embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                           input_embeddings));
+  EXPECT_EQ(output.size(), 4 * 8);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest, GetSupportedVariants) {
+  // Model with two signatures: encoder_12 and encoder_24.
+  auto encoder_buf = BuildDummyMultiSignatureEncoderModelBuffer(
+      {"encoder_24", "encoder_12"}, {24, 12}, 8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  // Sorted by ascending sequence length, regardless of the signature order in
+  // the model.
+  EXPECT_THAT(
+      embedding_executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 12},
+                  TextEncoderVariant{.batch_size = 1, .sequence_length = 24}));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     GetSupportedVariants_OnlyReportsSelectedSignatures) {
+  auto encoder_buf = BuildDummyMultiSignatureEncoderModelBuffer(
+      {"encoder_12", "encoder_24"}, {12, 24}, 8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  settings.SetSelectedSignatures({"encoder_24"});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  EXPECT_THAT(
+      embedding_executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 24}));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingFromInputEmbeddings_CancellationDoesNotLeakToOtherCalls) {
+  auto encoder_buf = BuildDummyEncoderModelBuffer(
+      "encoder", /*embeddings_dims=*/{1, 4, 8}, /*mask_dims=*/{1, 4, 1},
+      /*output_dims=*/{1, 4, 8});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+  std::vector<float> input_embeddings(2 * 8, 1.0f);
+
+  // A cancelled call ...
+  int num_checks = 0;
+  EXPECT_THAT(embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                  input_embeddings, [&] { return ++num_checks > 2; }),
+              StatusIs(absl::StatusCode::kCancelled));
+  const int num_checks_after_cancelled_call = num_checks;
+
+  // ... does not affect the following calls: the latched state is reset and
+  // the per-op check of the cancelled call is unregistered.
+  ASSERT_OK_AND_ASSIGN(std::vector<float> output,
+                       embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                           input_embeddings));
+  EXPECT_EQ(num_checks, num_checks_after_cancelled_call);
+  ASSERT_OK_AND_ASSIGN(std::vector<float> cancellable_output,
+                       embedding_executor->ComputeEmbeddingFromInputEmbeddings(
+                           input_embeddings, [] { return false; }));
+  EXPECT_EQ(cancellable_output, output);
+}
+
+// Tests that the cancellation state of a cancellable call (its
+// CancellationLatch and `should_cancel`) is scoped to the call: it is neither
+// used by nor leaked into the following calls.
+class TextEncoderCancellationScopeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    model_buffer_ = BuildDummyEncoderModelBuffer(
+        "encoder", /*embeddings_dims=*/{1, 4, 8}, /*mask_dims=*/{1, 4, 1},
+        /*output_dims=*/{1, 4, 8});
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        model_, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                    model_buffer_.data(), model_buffer_.size())));
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create("dummy_model_path"));
+    ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                         EmbeddingExecutorSettings::CreateDefault(
+                             model_assets, /*backend=*/Backend::CPU));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        env_, Environment::Create(std::vector<Environment::Option>()));
+    ASSERT_OK_AND_ASSIGN(
+        executor_,
+        EmbeddingLiteRtCompiledModelExecutor::Create(
+            settings, *env_,
+            std::make_unique<FakeEmbeddingModelResources>(nullptr, &*model_)));
+    ASSERT_OK_AND_ASSIGN(
+        expected_output_,
+        executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_));
+  }
+
+  // Checks that a plain call still works and produces the expected output.
+  void ExpectPlainCallWorks() {
+    EXPECT_THAT(
+        executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_),
+        IsOkAndHolds(expected_output_));
+  }
+
+  std::vector<uint8_t> model_buffer_;
+  std::optional<Model> model_;
+  std::optional<Environment> env_;
+  std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor> executor_;
+  std::vector<float> input_embeddings_ = std::vector<float>(2 * 8, 1.0f);
+  std::vector<float> expected_output_;
+};
+
+TEST_F(TextEncoderCancellationScopeTest, LaterCallsDontUseTheCallback) {
+  bool cancel = false;
+  int num_checks = 0;
+  auto should_cancel = [&] {
+    ++num_checks;
+    return cancel;
+  };
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                             should_cancel),
+              IsOkAndHolds(expected_output_));
+  ASSERT_GT(num_checks, 0);
+  const int num_checks_after_call = num_checks;
+
+  // The callback, still alive, would now cancel. Neither the pre-run checks
+  // nor the per-op checks of the following plain calls call it.
+  cancel = true;
+  for (int i = 0; i < 3; ++i) {
+    ExpectPlainCallWorks();
+  }
+  EXPECT_EQ(num_checks, num_checks_after_call);
+}
+
+TEST_F(TextEncoderCancellationScopeTest,
+       CallbackCanBeDestroyedRightAfterTheCall) {
+  // Both after a completed and after a cancelled call. If the latch or the
+  // callback were still referenced (e.g. by the per-op check registered with
+  // LiteRT), the following calls would use freed memory (caught by ASan).
+  for (const bool cancel_during_run : {false, true}) {
+    SCOPED_TRACE(cancel_during_run);
+    int num_checks = 0;
+    auto should_cancel = std::make_unique<std::function<bool()>>(
+        [&] { return ++num_checks > 2 && cancel_during_run; });
+    absl::StatusOr<std::vector<float>> result =
+        executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                       *should_cancel);
+    if (cancel_during_run) {
+      EXPECT_THAT(result, StatusIs(absl::StatusCode::kCancelled));
+    } else {
+      EXPECT_THAT(result, IsOkAndHolds(expected_output_));
+    }
+    should_cancel.reset();
+
+    ExpectPlainCallWorks();
+    EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(
+                    input_embeddings_, [] { return false; }),
+                IsOkAndHolds(expected_output_));
+  }
+}
+
+TEST_F(TextEncoderCancellationScopeTest, EachCallHasItsOwnLatch) {
+  // A call cancelled during the run by a one-shot callback: its latch is
+  // cancelled.
+  int num_checks = 0;
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(
+                  input_embeddings_, [&] { return ++num_checks == 3; }),
+              StatusIs(absl::StatusCode::kCancelled));
+
+  // The next call starts with a fresh latch, which calls its own callback (at
+  // entry and before the run) instead of reporting the previous cancellation.
+  num_checks = 0;
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                             [&] {
+                                                               ++num_checks;
+                                                               return false;
+                                                             }),
+              IsOkAndHolds(expected_output_));
+  EXPECT_GE(num_checks, 2);
+
+  // And a call cancelled at entry is cancelled by its own callback only.
+  num_checks = 0;
+  EXPECT_THAT(executor_->ComputeEmbeddingFromInputEmbeddings(input_embeddings_,
+                                                             [&] {
+                                                               ++num_checks;
+                                                               return true;
+                                                             }),
+              StatusIs(absl::StatusCode::kCancelled));
+  EXPECT_EQ(num_checks, 1);
+  ExpectPlainCallWorks();
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_NullCompiledTextEncoder_ReturnsError) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  EXPECT_THAT(
+      EmbeddingLiteRtCompiledModelExecutor::Create(
+          settings, env, /*resources=*/nullptr,
+          /*embedding_lookup=*/nullptr,
+          /*per_layer_embedding_lookup=*/nullptr, CompiledTextEncoderInfo{}),
+      StatusIs(absl::StatusCode::kInternal,
+               HasSubstr("The compiled text encoder is null.")));
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,

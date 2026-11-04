@@ -553,6 +553,15 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // ResourceManager executor lock (the executor is only ever driven through
   // `LockedLlmExecutor`).
   SpeculativeDecodingController speculative_decoding_controller_;
+
+ private:
+  // Initializes and fills global (and optional local) attention mask buffers
+  // in `input_buffers` for `[start_timestep, start_timestep + steps)`, unless
+  // causal host-mask filling can be skipped for the active GPU configuration.
+  absl::Status PrepareAttentionMasks(
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
+      int start_timestep, int steps,
+      RingBufferAttentionMaskMode local_mask_mode);
 };
 
 // The static executor for the prefill-decode compiled model.

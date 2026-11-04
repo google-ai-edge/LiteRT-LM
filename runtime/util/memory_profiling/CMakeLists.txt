@@ -49,19 +49,22 @@ target_link_libraries(runtime_util_memory_profiling_host_memory
 # ==============================================================================
 # accelerator_memory_monitor.cc is platform-neutral; exactly one
 # accelerator_memory_<os>.cc implements the platform contract for the target
-# OS. The dma-buf reader (accelerator_memory_dmabuf.cc) is Android's building
-# block; it is built on Linux too so that its test can run without a device.
-# Keep this in sync with the select() in BUILD.
+# OS. Linux and Android share the /proc/self/fdinfo reader (fdinfo.cc) and the
+# dma-buf reader built on it (accelerator_memory_dmabuf.cc). Keep this in sync
+# with the select() in BUILD.
 set(ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_monitor.cc)
 if(ANDROID)
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS
     accelerator_memory_android.cc
     accelerator_memory_dmabuf.cc
+    fdinfo.cc
   )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS
     accelerator_memory_dmabuf.cc
-    accelerator_memory_unsupported.cc
+    accelerator_memory_linux.cc
+    accelerator_memory_nvml.cc
+    fdinfo.cc
   )
 elseif(WIN32)
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_windows.cc)
@@ -91,6 +94,10 @@ if(WIN32)
   # the process's private memory footprint.
   target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
     PUBLIC dxgi gdi32)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # dlopen() of libnvidia-ml.so at run time.
+  target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
+    PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
 # ==============================================================================

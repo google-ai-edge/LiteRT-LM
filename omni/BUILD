@@ -241,7 +241,7 @@ cc_binary(
         "//omni/text2image:flux2_klein",  # build_cleaner: keep
         "//omni/text2speech:kokoro",  # build_cleaner: keep
         "//omni/text2speech:qwen3_tts",  # build_cleaner: keep
-        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:default_gpu_accelerator",
         "//runtime/proto:speech2text_session_config_cc_proto",
         "//runtime/proto:text2image_session_config_cc_proto",
         "//runtime/proto:text2speech_session_config_cc_proto",

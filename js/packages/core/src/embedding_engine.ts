@@ -23,7 +23,7 @@ import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {EngineModelInput, resolveModelInput} from './model_input.js';
 import {Mutex} from './mutex.js';
 import {createStreamingModelAssets} from './stream_utils.js';
-import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
+import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy, unwrapWasmResult} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
 export {
@@ -164,15 +164,17 @@ export class EmbeddingEngine implements Deletable {
       const {modelAssets, cleanupModelAssets} =
           await createStreamingModelAssets(model.model, wasm, cleanup);
 
-      const wasmSettings = wasm.EmbeddingEngineSettings.createDefaultMultimodal(
-          modelAssets, {value: backend},
-          settings.visionBackend !== undefined ?
-              {value: settings.visionBackend} :
-              undefined,  // Skip vision backend if not set.
-          settings.audioBackend !== undefined ?
-              {value: settings.audioBackend} :
-              undefined);  // Skip audio backend if not set.
+      const wasmSettingsResult =
+          wasm.EmbeddingEngineSettings.createDefaultMultimodal(
+              modelAssets, {value: backend},
+              settings.visionBackend !== undefined ?
+                  {value: settings.visionBackend} :
+                  undefined,  // Skip vision backend if not set.
+              settings.audioBackend !== undefined ?
+                  {value: settings.audioBackend} :
+                  undefined);  // Skip audio backend if not set.
       cleanupModelAssets();
+      const wasmSettings = unwrapWasmResult(wasmSettingsResult);
 
       const cleanupWasmSettings = cleanup.add(() => {
         wasmSettings.delete();
@@ -188,13 +190,14 @@ export class EmbeddingEngine implements Deletable {
           wasmSettings, settings);
 
       try {
-        engine = await wasm.EmbeddingEngine.createEngine(wasmSettings);
+        engine = unwrapWasmResult(
+            await wasm.EmbeddingEngine.createEngine(wasmSettings));
       } finally {
         if (resolvedBackend === Backend.GPU ||
             settings.visionBackend === Backend.GPU ||
             settings.audioBackend === Backend.GPU) {
           try {
-            await wasm.clearStoredWeightsStreams();
+            unwrapWasmResult(await wasm.clearStoredWeightsStreams());
           } catch (cleanupError) {
             console.error('Error clearing stored weights streams:', cleanupError);
           }
@@ -219,8 +222,8 @@ export class EmbeddingEngine implements Deletable {
   ): Promise<EmbeddingResponse> {
     const normalized = await normalizeInput(input);
     return this.mutex.acquireAndRun(async () => {
-      const wasmResponse =
-          await this.engine.computeEmbedding(normalized, toWasmEmbeddingOptions(options));
+      const wasmResponse = unwrapWasmResult(await this.engine.computeEmbedding(
+          normalized, toWasmEmbeddingOptions(options)));
       const embedding = consumeEmscriptenVectorToArray(wasmResponse.embedding);
       return {
         embedding,
@@ -237,8 +240,9 @@ export class EmbeddingEngine implements Deletable {
   ): Promise<EmbeddingResponse[]> {
     const normalizedBatch = await Promise.all(inputs.map(normalizeInput));
     return this.mutex.acquireAndRun(async () => {
-      const wasmResponses = await this.engine.computeEmbeddingBatch(
-          normalizedBatch, toWasmEmbeddingOptions(options));
+      const wasmResponses =
+          unwrapWasmResult(await this.engine.computeEmbeddingBatch(
+              normalizedBatch, toWasmEmbeddingOptions(options)));
       try {
         const responses: EmbeddingResponse[] = [];
         const count = wasmResponses.size();

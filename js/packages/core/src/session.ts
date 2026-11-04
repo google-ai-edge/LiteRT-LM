@@ -16,7 +16,7 @@
 
 import {Mutex} from './mutex.js';
 import {ResolvedSessionConfig, wasmSessionConfigToSessionConfig} from './session_config.js';
-import {Responses as WasmResponses, Session as WasmSession} from './wasm_binding_types.js';
+import {Responses as WasmResponses, Session as WasmSession, unwrapWasmResult} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
 const BUSY_MESSAGE = 'Session is busy. An operation is already in progress.';
@@ -43,7 +43,7 @@ export class Session {
     this.isBusy = true;
     try {
       await this.mutexes.executor.acquireAndRun(async () => {
-        await this.session.runPrefill(inputs);
+        unwrapWasmResult(await this.session.runPrefill(inputs));
       });
     } finally {
       this.isBusy = false;
@@ -57,7 +57,8 @@ export class Session {
     this.isBusy = true;
     try {
       return await this.mutexes.executor.acquireAndRun(async () => {
-        const wasmResponses: WasmResponses = await this.session.runDecode();
+        const wasmResponses: WasmResponses =
+            unwrapWasmResult(await this.session.runDecode());
         return new Responses(wasmResponses);
       });
     } finally {
@@ -83,7 +84,7 @@ export class Session {
     this.isBusy = true;
     try {
       return await this.mutexes.executor.acquireAndRun(() => {
-        const wasmClonedSession = this.session.clone();
+        const wasmClonedSession = unwrapWasmResult(this.session.clone());
         return new Session(wasmClonedSession, this.mutexes);
       });
     } finally {

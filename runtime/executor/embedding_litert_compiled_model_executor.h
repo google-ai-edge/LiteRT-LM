@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -31,6 +32,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_stats.h"
@@ -51,6 +53,23 @@ struct CompiledTextEncoderInfo {
       input_buffers_cache;
   absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
       output_buffers_cache;
+};
+
+// A variant of the text encoder, i.e. one of its loaded signatures.
+//
+// Both fields are always set, and positive, in the variants returned by
+// EmbeddingLiteRtCompiledModelExecutor::GetSupportedVariants(). The defaults
+// only matter for a default-constructed value: `batch_size` defaults to 1, the
+// batch size of a text encoder without a batch dimension, whereas
+// `sequence_length` has no meaningful default (it depends on the signatures of
+// the model), so its 0 default only denotes a value that has not been set.
+struct TextEncoderVariant {
+  // Number of sequences processed together.
+  int batch_size = 1;
+  // Number of input embeddings per sequence. Shorter inputs are padded.
+  int sequence_length = 0;
+
+  bool operator==(const TextEncoderVariant& other) const = default;
 };
 
 // EmbeddingLiteRtCompiledModelExecutor implements a two-stage embedding
@@ -142,6 +161,30 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   absl::StatusOr<std::vector<float>> ComputeEmbeddingFromInputEmbeddings(
       absl::Span<const float> input_embeddings);
 
+  // Same as above, but can be cancelled while it runs.
+  //
+  // `should_cancel` is checked before the text encoder runs and, for the
+  // duration of this call only, after every op executed by the LiteRT
+  // interpreter. Once it returns true, the call stops at the next check;
+  // `should_cancel` is not called again for this call. An op delegated to an
+  // accelerator (e.g. the NPU dispatch op running a whole compiled graph)
+  // cannot be interrupted, so cancellation takes effect at op boundaries.
+  // Calls without `should_cancel` do not pay the per-op check.
+  //
+  // Args:
+  //   input_embeddings: `[sequence_length, embed_dim]` float input embeddings,
+  //     as for the overload above.
+  //   should_cancel: Returns true to request cancellation. Called on the thread
+  //     running this method.
+  //
+  // Returns:
+  //   The output embedding vector of the text encoder, a CancelledError if
+  //   `should_cancel` returned true, or the errors of the overload above. The
+  //   executor remains usable after a cancelled call.
+  absl::StatusOr<std::vector<float>> ComputeEmbeddingFromInputEmbeddings(
+      absl::Span<const float> input_embeddings,
+      absl::FunctionRef<bool()> should_cancel);
+
   // Returns the name of the hardware backend used by this executor.
   absl::string_view ExecutorBackendName() const override;
 
@@ -152,6 +195,15 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Returns the dimension of the output embedding vector produced by the text
   // encoder model.
   absl::StatusOr<int> GetEmbeddingDimension() const override;
+
+  // Returns the variants of the loaded text encoder signatures. An input is run
+  // with the first variant whose sequence length fits it.
+  //
+  // Returns:
+  //   The variants, sorted by ascending sequence length (and therefore
+  //   ascending latency). Never empty, since the executor can't be created
+  //   without a text encoder signature.
+  std::vector<TextEncoderVariant> GetSupportedVariants() const;
 
   // Returns a pointer to the LiteRT environment used by this executor.
   litert::Environment* GetEnvironment() const override;
@@ -178,8 +230,25 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Fills the input mask of `run`, runs the text encoder and returns its output
   // embedding vector. The embeddings (and per-layer embeddings, if any) inputs
   // of `run` must be filled.
+  //
+  // Args:
+  //   run: The text encoder run, with its embeddings inputs filled.
+  //   sequence_length: The number of input embeddings.
+  //   latch: The latch of a cancellable call, or nullptr. If set, the call is
+  //     cancelled before the run, and an interrupted run is reported as
+  //     cancelled.
+  //
+  // Returns:
+  //   The output embedding vector, or a CancelledError if `latch` is
+  //   cancelled.
   absl::StatusOr<std::vector<float>> FinishEncoderRun(const EncoderRun& run,
-                                                      size_t sequence_length);
+                                                      size_t sequence_length,
+                                                      CancellationLatch* latch);
+
+  // Implements ComputeEmbeddingFromInputEmbeddings(), cancellable with `latch`
+  // if not null (see FinishEncoderRun).
+  absl::StatusOr<std::vector<float>> EncodeInputEmbeddings(
+      absl::Span<const float> input_embeddings, CancellationLatch* latch);
 
   absl::StatusOr<std::vector<float>> RunEncoderForTokens(
       absl::Span<const int32_t> tokens);

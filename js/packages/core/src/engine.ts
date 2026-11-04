@@ -26,7 +26,7 @@ import {Mutex} from './mutex.js';
 import {Session} from './session.js';
 import {SessionConfig, sessionConfigToWasmSessionConfig} from './session_config.js';
 import {createStreamingModelAssets} from './stream_utils.js';
-import {Backend, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
+import {Backend, Conversation as WasmConversation, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, SessionConfig as WasmSessionConfig, unwrapWasmResult, WasmResult} from './wasm_binding_types.js';
 
 /**
  * LiteRT-LM Engine
@@ -97,7 +97,7 @@ export class Engine implements Deletable {
       const {modelAssets, cleanupModelAssets} =
           await createStreamingModelAssets(model.model, wasm, cleanup);
 
-      const wasmEngineSettings =
+      const wasmEngineSettingsResult =
           visionBackend === undefined && audioBackend === undefined ?
           await wasm.EngineSettings.createDefault(
               modelAssets, {value: backend}) :
@@ -107,6 +107,7 @@ export class Engine implements Deletable {
               audioBackend === undefined ? undefined : {value: audioBackend});
       // Delete our copy of the ModelAssets object (not the underlying file).
       cleanupModelAssets();
+      const wasmEngineSettings = unwrapWasmResult(wasmEngineSettingsResult);
 
       const cleanupWasmEngineSettings = cleanup.add(() => {
         wasmEngineSettings.delete();
@@ -123,17 +124,17 @@ export class Engine implements Deletable {
 
       try {
         if (resolvedBackend === Backend.GPU_ARTISAN) {
-          engine = await wasm.Engine.createLegacyEngine(
-              wasmEngineSettings, inputPromptAsHint);
+          engine = unwrapWasmResult(await wasm.Engine.createLegacyEngine(
+              wasmEngineSettings, inputPromptAsHint));
         } else {
-          engine = await wasm.Engine.createEngine(
-              wasmEngineSettings, inputPromptAsHint);
+          engine = unwrapWasmResult(await wasm.Engine.createEngine(
+              wasmEngineSettings, inputPromptAsHint));
         }
       } finally {
         if (resolvedBackend === Backend.GPU || visionBackend === Backend.GPU ||
             audioBackend === Backend.GPU) {
           try {
-            await wasm.clearStoredWeightsStreams();
+            unwrapWasmResult(await wasm.clearStoredWeightsStreams());
           } catch (cleanupError) {
             console.error('Error clearing stored weights streams:', cleanupError);
           }
@@ -176,7 +177,7 @@ export class Engine implements Deletable {
 
       const wasmSession = this.engine.createSession(wasmSessionConfig);
       wasmSessionConfig.delete();
-      return new Session(wasmSession, this.mutexes);
+      return new Session(unwrapWasmResult(wasmSession), this.mutexes);
     });
   }
 
@@ -189,7 +190,7 @@ export class Engine implements Deletable {
       config = {filterChannelContentFromKvCache: true};
     }
     return this.mutexes.executor.acquireAndRun(async () => {
-      let wasmConfig: WasmConversationConfig;
+      let wasmConfigResult: WasmResult<WasmConversationConfig>;
       let wasmSessionConfig: WasmSessionConfig|undefined;
 
       if (config) {
@@ -205,20 +206,26 @@ export class Engine implements Deletable {
                     ?.use_autosized_ringbuffers);
         const filterChannelContentFromKvCache =
             config.filterChannelContentFromKvCache ?? usesAutosizedRingbuffers;
-        wasmConfig = this.wasm.ConversationConfig.createCustom(
+        wasmConfigResult = this.wasm.ConversationConfig.createCustom(
             this.engine, wasmSessionConfig, !!config.enableConstrainedDecoding,
             !!config.prefillPrefaceOnInit, filterChannelContentFromKvCache,
             prefaceJson);
       } else {
-        wasmConfig = this.wasm.ConversationConfig.createDefault(this.engine);
+        wasmConfigResult =
+            this.wasm.ConversationConfig.createDefault(this.engine);
       }
 
-      const wasmConversation =
-          await this.wasm.Conversation.create(this.engine, wasmConfig);
-
-      wasmConfig.delete();
-      if (wasmSessionConfig) {
-        wasmSessionConfig.delete();
+      let wasmConversation: WasmConversation;
+      try {
+        const wasmConfig = unwrapWasmResult(wasmConfigResult);
+        try {
+          wasmConversation = unwrapWasmResult(
+              await this.wasm.Conversation.create(this.engine, wasmConfig));
+        } finally {
+          wasmConfig.delete();
+        }
+      } finally {
+        wasmSessionConfig?.delete();
       }
 
       return new Conversation(

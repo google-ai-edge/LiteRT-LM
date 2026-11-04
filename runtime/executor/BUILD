@@ -135,6 +135,7 @@ cc_test(
         ":executor_backend_registry",
         ":executor_settings_base",
         ":llm_executor",
+        ":llm_executor_io_types",
         ":llm_executor_settings",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
@@ -321,6 +322,9 @@ selects.config_setting_group(
     ],
 )
 
+# Dynamic GPU accelerator shared libraries bundled as runtime data when
+# litert_runtime_link_mode=dynamic. Do not depend on this target directly; use
+# :default_gpu_accelerator instead.
 cc_library(
     name = "default_dynamic_gpu_accelerator",
     data = select({
@@ -345,10 +349,15 @@ cc_library(
         "//conditions:default": [],
     }),
     tags = ["manual"],
+    visibility = ["//visibility:private"],
 )
 
+# Statically linked GPU accelerator libraries used by default when
+# litert_runtime_link_mode is not dynamic. Do not depend on this target
+# directly; use :default_gpu_accelerator instead.
 cc_library(
     name = "default_static_gpu_accelerator",
+    visibility = ["//visibility:private"],
     deps = select({
         ":android_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator",
@@ -371,6 +380,9 @@ cc_library(
     }),
 )
 
+# Default GPU accelerator target for LiteRT-LM. Selects the dynamic GPU
+# accelerator shared library when litert_runtime_link_mode=dynamic and the
+# statically linked GPU accelerator otherwise.
 alias(
     name = "default_gpu_accelerator",
     actual = select({
@@ -835,6 +847,7 @@ cc_library(
         ":executor_settings_base",
         ":mtp_gating_policy",
         ":speculative_decoding_mode",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
@@ -857,6 +870,7 @@ cc_test(
         ":mtp_gating_policy",
         ":speculative_decoding_mode",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "//runtime/util:scoped_file",
@@ -1017,6 +1031,7 @@ cc_library(
     srcs = ["vision_litert_compiled_model_executor.cc"],
     hdrs = ["vision_litert_compiled_model_executor.h"],
     deps = [
+        ":cancellation_latch",
         ":executor_settings_base",
         ":executor_stats",
         ":litert_compiled_model_executor_utils",
@@ -1027,6 +1042,7 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -1061,6 +1077,26 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "cancellation_latch",
+    srcs = ["cancellation_latch.cc"],
+    hdrs = ["cancellation_latch.h"],
+    deps = [
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+    ],
+)
+
+cc_test(
+    name = "cancellation_latch_test",
+    srcs = ["cancellation_latch_test.cc"],
+    deps = [
+        ":cancellation_latch",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_test(
     name = "vision_litert_compiled_model_executor_test",
     srcs = ["vision_litert_compiled_model_executor_test.cc"],
@@ -1071,15 +1107,21 @@ cc_test(
         ":vision_litert_compiled_model_executor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+        "@flatbuffers//:runtime_cc",
+        "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/test:matchers",
@@ -1088,6 +1130,7 @@ cc_test(
         "//runtime/util:litert_lm_loader",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
@@ -1155,6 +1198,7 @@ cc_library(
     srcs = ["embedding_litert_compiled_model_executor.cc"],
     hdrs = ["embedding_litert_compiled_model_executor.h"],
     deps = [
+        ":cancellation_latch",
         ":embedding_executor_base",
         ":embedding_executor_settings",
         ":executor_settings_base",
@@ -1164,6 +1208,7 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -1210,6 +1255,7 @@ cc_test(
         ":llm_executor_io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
@@ -1492,6 +1538,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_layout",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_element_type",
@@ -1512,6 +1559,7 @@ cc_library(
         "@litert//litert/vendors/nvidia/dispatch:greedy_sampler_c_api",
         "//runtime/components:sampler",
         "//runtime/components:sampler_factory",
+        "//runtime/components:sampling_uniforms",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
     ],

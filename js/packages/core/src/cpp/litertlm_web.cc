@@ -24,10 +24,15 @@
 #include <optional>
 
 #include "research/drishti/app/pursuit/wasm/wasm_logging.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
-#include "litert/js/packages/core/src/cpp/global_error_reporter.h"  // from @litert
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "js/packages/core/src/cpp/readable_stream_data_stream.h"
-#include "js/packages/core/src/cpp/unwrap_statusor.h"
+#include "js/packages/core/src/cpp/status_to_val.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
@@ -160,7 +165,7 @@ static litert::lm::OptionalArgs MakeOptionalArgs(
   return optional_args;
 }
 
-static std::string ReadBytesFromVal(emscripten::val data_val) {
+static absl::StatusOr<std::string> ReadBytesFromVal(emscripten::val data_val) {
   if (data_val.isUndefined() || data_val.isNull()) {
     return "";
   }
@@ -182,7 +187,13 @@ static std::string ReadBytesFromVal(emscripten::val data_val) {
     memory_view.call<void>("set", uint8_array);
     return result;
   }
-  return data_val.as<std::string>();
+  if (data_val.isString()) {
+    return data_val.as<std::string>();
+  }
+  // Don't call `as<std::string>()` on other types: embind would throw a JS
+  // exception from C++.
+  return absl::InvalidArgumentError(
+      "Data must be a string, Uint8Array, or ArrayBuffer.");
 }
 
 static std::vector<uint8_t> ReadByteVectorFromVal(emscripten::val data_val) {
@@ -233,9 +244,22 @@ static absl::Status AttachBlobsToSingleMessage(nlohmann::ordered_json& message,
   return absl::OkStatus();
 }
 
+// Parses `json` without aborting on invalid input. This build has no C++
+// exception support, so nlohmann::json's throwing parse would abort.
+static absl::StatusOr<nlohmann::ordered_json> ParseJson(
+    const std::string& json, absl::string_view description) {
+  auto parsed = nlohmann::ordered_json::parse(json, /*cb=*/nullptr,
+                                              /*allow_exceptions=*/false);
+  if (parsed.is_discarded()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(description, " is not valid JSON."));
+  }
+  return parsed;
+}
+
 static absl::StatusOr<nlohmann::ordered_json> ParseMessageJsonWithBlobs(
     const std::string& message_json, emscripten::val blobs_val) {
-  auto message = nlohmann::ordered_json::parse(message_json);
+  ABSL_ASSIGN_OR_RETURN(auto message, ParseJson(message_json, "Message"));
   if (blobs_val.isUndefined() || blobs_val.isNull()) {
     return message;
   }
@@ -280,7 +304,7 @@ static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
                 absl::StrCat("Failed to decode base64 data for ", type, "."));
           }
         } else {
-          bytes = ReadBytesFromVal(data);
+          ABSL_ASSIGN_OR_RETURN(bytes, ReadBytesFromVal(data));
         }
         if (type == "image") {
           contents.push_back(litert::lm::InputImage(std::move(bytes)));
@@ -313,12 +337,14 @@ static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
 #define LITERTLM_EM_ASYNC
 #endif
 
+// Bindings that can fail return an `emscripten::val` holding either the result
+// or a JS Error (see status_to_val.h). They must never throw from C++.
 EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::function("setupLogging", &SetupLogging);
-  emscripten::function("setErrorReporter", &litert_web::SetErrorReporter);
-  emscripten::function("clearStoredWeightsStreams", optional_override([]() {
-                         UnwrapStatus(litert::lm::ClearStoredWeightsStreams());
-                       }) LITERTLM_EM_ASYNC);
+  emscripten::function(
+      "clearStoredWeightsStreams", optional_override([]() {
+        return StatusToVal(litert::lm::ClearStoredWeightsStreams());
+      }) LITERTLM_EM_ASYNC);
 
   emscripten::enum_<litert::lm::Backend>("Backend")
       .value("UNSPECIFIED", litert::lm::Backend::UNSPECIFIED)
@@ -336,10 +362,9 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           optional_override(
               [](std::shared_ptr<litert::lm::ReadableStreamDataStream>
                      data_stream) {
-                return UnwrapStatusOr(
+                return StatusOrToVal(
                     litert::lm::ModelAssets::Create(data_stream));
-              }),
-          emscripten::return_value_policy::take_ownership());
+              }));
 
   emscripten::enum_<litert::lm::SpeculativeDecodingMode>(
       "SpeculativeDecodingMode")
@@ -360,33 +385,35 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           "createDefault",
           optional_override([](litert::lm::ModelAssets model_assets,
                                litert::lm::Backend backend) {
-            return UnwrapStatusOr(litert::lm::EngineSettings::CreateDefault(
+            return StatusOrToVal(litert::lm::EngineSettings::CreateDefault(
                 std::move(model_assets), backend));
-          }),
-          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
+          }) LITERTLM_EM_ASYNC)
       .class_function(
           "createDefaultMultimodal",
           optional_override([](litert::lm::ModelAssets model_assets,
                                litert::lm::Backend backend,
                                emscripten::val vision_backend_val,
                                emscripten::val audio_backend_val) {
-            auto settings =
-                UnwrapStatusOr(litert::lm::EngineSettings::CreateDefault(
-                    std::move(model_assets), backend,
-                    OptionalBackendFromVal(vision_backend_val),
-                    OptionalBackendFromVal(audio_backend_val)));
-            // Caching is not supported in JS.
-            if (settings.GetVisionExecutorSettings().has_value()) {
-              settings.GetMutableVisionExecutorSettings()->SetCacheDir(
-                  ":nocache");
-            }
-            if (settings.GetAudioExecutorSettings().has_value()) {
-              settings.GetMutableAudioExecutorSettings()->SetCacheDir(
-                  ":nocache");
-            }
-            return settings;
-          }),
-          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
+            return StatusOrToVal(
+                [&]() -> absl::StatusOr<litert::lm::EngineSettings> {
+                  ABSL_ASSIGN_OR_RETURN(
+                      auto settings,
+                      litert::lm::EngineSettings::CreateDefault(
+                          std::move(model_assets), backend,
+                          OptionalBackendFromVal(vision_backend_val),
+                          OptionalBackendFromVal(audio_backend_val)));
+                  // Caching is not supported in JS.
+                  if (settings.GetVisionExecutorSettings().has_value()) {
+                    settings.GetMutableVisionExecutorSettings()->SetCacheDir(
+                        ":nocache");
+                  }
+                  if (settings.GetAudioExecutorSettings().has_value()) {
+                    settings.GetMutableAudioExecutorSettings()->SetCacheDir(
+                        ":nocache");
+                  }
+                  return settings;
+                }());
+          }) LITERTLM_EM_ASYNC)
       .function("getVisionBackend",
                 optional_override([](const litert::lm::EngineSettings& settings)
                                       -> emscripten::val {
@@ -520,7 +547,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .function("getBackendConfigCpu",
                 optional_override(
                     [](litert::lm::LlmExecutorSettings& executor_settings) {
-                      return UnwrapStatusOr(
+                      return StatusOrToVal(
                           executor_settings
                               .GetBackendConfig<litert::lm::CpuConfig>());
                     }))
@@ -533,7 +560,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .function("getBackendConfigGpu",
                 optional_override(
                     [](litert::lm::LlmExecutorSettings& executor_settings) {
-                      return UnwrapStatusOr(
+                      return StatusOrToVal(
                           executor_settings
                               .GetBackendConfig<litert::lm::GpuConfig>());
                     }))
@@ -547,7 +574,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           "getBackendConfigGpuArtisan",
           optional_override(
               [](litert::lm::LlmExecutorSettings& executor_settings) {
-                return UnwrapStatusOr(
+                return StatusOrToVal(
                     executor_settings
                         .GetBackendConfig<litert::lm::GpuArtisanConfig>());
               }))
@@ -572,37 +599,33 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           "createEngine",
           optional_override([](litert::lm::EngineSettings& engine_settings,
                                std::string input_prompt_as_hint = "") {
-            return UnwrapStatusOr(litert::lm::EngineFactory::Create(
+            return StatusOrToVal(litert::lm::EngineFactory::Create(
                 litert::lm::EngineFactory::EngineType::
                     kAdvancedLiteRTCompiledModel,
                 engine_settings, input_prompt_as_hint));
-          }),
-          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
+          }) LITERTLM_EM_ASYNC)
       .class_function(
           "createLegacyEngine",
           optional_override([](litert::lm::EngineSettings& engine_settings,
                                std::string input_prompt_as_hint = "") {
-            return UnwrapStatusOr(litert::lm::EngineFactory::Create(
+            return StatusOrToVal(litert::lm::EngineFactory::Create(
                 litert::lm::EngineFactory::EngineType::kAdvancedLegacyTfLite,
                 engine_settings, input_prompt_as_hint));
-          }),
-          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
+          }) LITERTLM_EM_ASYNC)
       // We intentionally copy this value since embind does not handle const
       // references well.
       .function("getEngineSettings", &litert::lm::Engine::GetEngineSettings)
       .function(
           "waitUntilDone", optional_override([](litert::lm::Engine& engine) {
-            UnwrapStatus(
+            return StatusToVal(
                 engine.WaitUntilDone(litert::lm::Engine::kDefaultTimeout));
           }) LITERTLM_EM_ASYNC)
       .function(
           "createSession",
           optional_override([](litert::lm::Engine& engine,
                                litert::lm::SessionConfig& session_config) {
-            return UnwrapStatusOr(engine.CreateSession(session_config));
-          }),
-          emscripten::return_value_policy::take_ownership());  // returns
-                                                               // unique ptr
+            return StatusOrToVal(engine.CreateSession(session_config));
+          }));
 
   emscripten::enum_<litert::lm::proto::SamplerParameters::Type>("SamplerType")
       .value("TYPE_UNSPECIFIED",
@@ -689,33 +712,32 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             // instead of a std::vector<std::variant<...>> and parse the
             // inputs manually.
             if (!val::global("Array").call<bool>("isArray", inputs_array)) {
-              litert_web::GetGlobalErrorReporter()->ReportAndThrowError(
-                  "inputs_array must be an Array");
+              return StatusToJsError(
+                  absl::InvalidArgumentError("inputs_array must be an Array"));
             }
             int size = inputs_array["length"].as<int>();
             std::vector<litert::lm::InputData> inputs;
             inputs.reserve(size);
             for (int i = 0; i < size; ++i) {
               if (!inputs_array[i].isString()) {
-                litert_web::GetGlobalErrorReporter()->ReportAndThrowError(
-                    absl::StrFormat("inputs_array[%d] must be a string", i));
+                return StatusToJsError(absl::InvalidArgumentError(
+                    absl::StrFormat("inputs_array[%d] must be a string", i)));
               }
               std::string input = inputs_array[i].as<std::string>();
               auto input_text = litert::lm::InputText(std::move(input));
               inputs.push_back(std::move(input_text));
             }
-            return UnwrapStatus(session.RunPrefill(inputs));
+            return StatusToVal(session.RunPrefill(inputs));
           }) LITERTLM_EM_ASYNC)
       .function("runDecode",
                 optional_override([](litert::lm::Engine::Session& session) {
-                  return UnwrapStatusOr(session.RunDecode());
+                  return StatusOrToVal(session.RunDecode());
                 }) LITERTLM_EM_ASYNC)
       .function("cancelProcess", &litert::lm::Engine::Session::CancelProcess)
       .function("clone",
                 optional_override([](litert::lm::Engine::Session& session) {
-                  return UnwrapStatusOr(session.Clone());
-                }),
-                emscripten::return_value_policy::take_ownership());
+                  return StatusOrToVal(session.Clone());
+                }));
 
   emscripten::register_vector<std::string>("VectorString");
 
@@ -752,9 +774,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 gpu_artisan_config->use_autosized_ringbuffers) {
               builder.SetEnableRewinding(false);
             }
-            return UnwrapStatusOr(builder.Build(engine));
-          }),
-          emscripten::return_value_policy::take_ownership())
+            return StatusOrToVal(builder.Build(engine));
+          }))
       .class_function(
           "createCustom",
           optional_override([](const litert::lm::Engine& engine,
@@ -763,62 +784,71 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                bool prefill_preface_on_init,
                                bool filter_channel_content_from_kv_cache,
                                std::string preface_json) {
-            litert::lm::ConversationConfig::Builder builder;
-            builder.SetSessionConfig(session_config);
-            builder.SetEnableConstrainedDecoding(enable_constrained_decoding);
-            builder.SetPrefillPrefaceOnInit(prefill_preface_on_init);
-            builder.SetFilterChannelContentFromKvCache(
-                filter_channel_content_from_kv_cache);
-            const auto& main_settings =
-                engine.GetEngineSettings().GetMainExecutorSettings();
-            auto gpu_artisan_config =
-                main_settings.GetBackendConfig<litert::lm::GpuArtisanConfig>();
-            if (main_settings.GetBackend() ==
-                    litert::lm::Backend::GPU_ARTISAN &&
-                gpu_artisan_config.ok() &&
-                gpu_artisan_config->use_autosized_ringbuffers) {
-              builder.SetEnableRewinding(false);
-            }
+            return StatusOrToVal(
+                [&]() -> absl::StatusOr<litert::lm::ConversationConfig> {
+                  litert::lm::ConversationConfig::Builder builder;
+                  builder.SetSessionConfig(session_config);
+                  builder.SetEnableConstrainedDecoding(
+                      enable_constrained_decoding);
+                  builder.SetPrefillPrefaceOnInit(prefill_preface_on_init);
+                  builder.SetFilterChannelContentFromKvCache(
+                      filter_channel_content_from_kv_cache);
+                  const auto& main_settings =
+                      engine.GetEngineSettings().GetMainExecutorSettings();
+                  auto gpu_artisan_config =
+                      main_settings
+                          .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+                  if (main_settings.GetBackend() ==
+                          litert::lm::Backend::GPU_ARTISAN &&
+                      gpu_artisan_config.ok() &&
+                      gpu_artisan_config->use_autosized_ringbuffers) {
+                    builder.SetEnableRewinding(false);
+                  }
 
-            if (!preface_json.empty()) {
-              auto json = nlohmann::ordered_json::parse(preface_json);
-              litert::lm::JsonPreface json_preface;
-              if (json.contains("messages")) {
-                json_preface.messages = json["messages"];
-              }
-              if (json.contains("tools")) {
-                json_preface.tools = json["tools"];
-              }
-              if (json.contains("extra_context")) {
-                json_preface.extra_context = json["extra_context"];
-              }
-              builder.SetPreface(litert::lm::Preface(json_preface));
-            }
-            return UnwrapStatusOr(builder.Build(engine));
-          }),
-          emscripten::return_value_policy::take_ownership());
+                  if (!preface_json.empty()) {
+                    ABSL_ASSIGN_OR_RETURN(auto json,
+                                          ParseJson(preface_json, "Preface"));
+                    litert::lm::JsonPreface json_preface;
+                    if (json.contains("messages")) {
+                      json_preface.messages = json["messages"];
+                    }
+                    if (json.contains("tools")) {
+                      json_preface.tools = json["tools"];
+                    }
+                    if (json.contains("extra_context")) {
+                      json_preface.extra_context = json["extra_context"];
+                    }
+                    builder.SetPreface(litert::lm::Preface(json_preface));
+                  }
+                  return builder.Build(engine);
+                }());
+          }));
 
   emscripten::class_<litert::lm::Conversation>("Conversation")
       .class_function(
           "create",
           optional_override([](litert::lm::Engine& engine,
                                const litert::lm::ConversationConfig& config) {
-            return UnwrapStatusOr(
+            return StatusOrToVal(
                 litert::lm::Conversation::Create(engine, config));
-          }),
-          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
-      .function(
-          "sendMessage",
-          optional_override([](litert::lm::Conversation& conversation,
-                               std::string message_json,
-                               emscripten::val blobs_val,
-                               int visual_token_budget) {
-            auto message = UnwrapStatusOr(
-                ParseMessageJsonWithBlobs(message_json, blobs_val));
-            auto result = conversation.SendMessage(
-                message, MakeOptionalArgs(conversation, visual_token_budget));
-            return UnwrapStatusOr(result).dump();
           }) LITERTLM_EM_ASYNC)
+      .function("sendMessage",
+                optional_override([](litert::lm::Conversation& conversation,
+                                     std::string message_json,
+                                     emscripten::val blobs_val,
+                                     int visual_token_budget) {
+                  return StatusOrToVal([&]() -> absl::StatusOr<std::string> {
+                    ABSL_ASSIGN_OR_RETURN(
+                        auto message,
+                        ParseMessageJsonWithBlobs(message_json, blobs_val));
+                    ABSL_ASSIGN_OR_RETURN(
+                        auto result,
+                        conversation.SendMessage(
+                            message, MakeOptionalArgs(conversation,
+                                                      visual_token_budget)));
+                    return result.dump();
+                  }());
+                }) LITERTLM_EM_ASYNC)
       .function(
           "sendMessageAsync",
           optional_override([](litert::lm::Conversation& conversation,
@@ -826,10 +856,14 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                emscripten::val blobs_val,
                                emscripten::val callback,
                                int visual_token_budget) {
-            auto message = UnwrapStatusOr(
-                ParseMessageJsonWithBlobs(message_json, blobs_val));
+            auto message = ParseMessageJsonWithBlobs(message_json, blobs_val);
+            if (!message.ok()) {
+              return StatusToJsError(message.status());
+            }
+            // `callback` must not throw. A JS exception thrown from it would
+            // unwind through C++ frames without running their destructors.
             auto status = conversation.SendMessageAsync(
-                message,
+                *message,
                 // Note: This capture is not thread-safe, but we're only using
                 // a single thread for now.
                 [callback](absl::StatusOr<litert::lm::Message> result) mutable {
@@ -846,7 +880,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   }
                 },
                 MakeOptionalArgs(conversation, visual_token_budget));
-            UnwrapStatus(status);
+            return StatusToVal(status);
           }) LITERTLM_EM_ASYNC)
       .function(
           "getHistory",
@@ -863,7 +897,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .function(
           "getTokenCount",
           optional_override([](const litert::lm::Conversation& conversation) {
-            return UnwrapStatusOr(conversation.GetTokenCount());
+            return StatusOrToVal(conversation.GetTokenCount());
           }))
       .function("getBenchmarkInfo",
                 optional_override([](litert::lm::Conversation& conversation) {
@@ -907,9 +941,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .function("cancelProcess", &litert::lm::Conversation::CancelProcess)
       .function("clone",
                 optional_override([](litert::lm::Conversation& conversation) {
-                  return UnwrapStatusOr(conversation.Clone());
-                }),
-                emscripten::return_value_policy::take_ownership());
+                  return StatusOrToVal(conversation.Clone());
+                }));
 
   emscripten::class_<litert::lm::DataStream>("DataStream");
   emscripten::class_<litert::lm::ReadableStreamDataStream,
@@ -962,36 +995,44 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           "createDefault",
           optional_override([](litert::lm::ModelAssets model_assets,
                                litert::lm::Backend backend) {
-            auto settings = UnwrapStatusOr(
-                litert::lm::EmbeddingEngineSettings::CreateDefault(
-                    std::move(model_assets), backend));
-            settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
-            return settings;
-          }),
-          emscripten::return_value_policy::take_ownership())
+            return StatusOrToVal(
+                [&]() -> absl::StatusOr<litert::lm::EmbeddingEngineSettings> {
+                  ABSL_ASSIGN_OR_RETURN(
+                      auto settings,
+                      litert::lm::EmbeddingEngineSettings::CreateDefault(
+                          std::move(model_assets), backend));
+                  settings.GetMutableMainExecutorSettings().SetCacheDir(
+                      ":nocache");
+                  return settings;
+                }());
+          }))
       .class_function(
           "createDefaultMultimodal",
           optional_override([](litert::lm::ModelAssets model_assets,
                                litert::lm::Backend backend,
                                emscripten::val vision_backend_val,
                                emscripten::val audio_backend_val) {
-            auto settings = UnwrapStatusOr(
-                litert::lm::EmbeddingEngineSettings::CreateDefault(
-                    std::move(model_assets), backend,
-                    OptionalBackendFromVal(vision_backend_val),
-                    OptionalBackendFromVal(audio_backend_val)));
-            settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
-            if (settings.GetVisionExecutorSettings().has_value()) {
-              settings.GetMutableVisionExecutorSettings()->SetCacheDir(
-                  ":nocache");
-            }
-            if (settings.GetAudioExecutorSettings().has_value()) {
-              settings.GetMutableAudioExecutorSettings()->SetCacheDir(
-                  ":nocache");
-            }
-            return settings;
-          }),
-          emscripten::return_value_policy::take_ownership())
+            return StatusOrToVal(
+                [&]() -> absl::StatusOr<litert::lm::EmbeddingEngineSettings> {
+                  ABSL_ASSIGN_OR_RETURN(
+                      auto settings,
+                      litert::lm::EmbeddingEngineSettings::CreateDefault(
+                          std::move(model_assets), backend,
+                          OptionalBackendFromVal(vision_backend_val),
+                          OptionalBackendFromVal(audio_backend_val)));
+                  settings.GetMutableMainExecutorSettings().SetCacheDir(
+                      ":nocache");
+                  if (settings.GetVisionExecutorSettings().has_value()) {
+                    settings.GetMutableVisionExecutorSettings()->SetCacheDir(
+                        ":nocache");
+                  }
+                  if (settings.GetAudioExecutorSettings().has_value()) {
+                    settings.GetMutableAudioExecutorSettings()->SetCacheDir(
+                        ":nocache");
+                  }
+                  return settings;
+                }());
+          }))
       .function("getMaxInputLength",
                 &litert::lm::EmbeddingEngineSettings::GetMaxInputLength)
       .function("setMaxInputLength",
@@ -1019,39 +1060,44 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .class_function(
           "createEngine",
           optional_override([](litert::lm::EmbeddingEngineSettings& settings) {
-            return UnwrapStatusOr(
+            return StatusOrToVal(
                 litert::lm::EmbeddingEngineImpl::Create(std::move(settings)));
-          }),
-          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
-      .function(
-          "computeEmbedding",
-          optional_override([](litert::lm::EmbeddingEngine& engine,
-                               emscripten::val input_val,
-                               emscripten::val options_val) {
-            auto options = ParseEmbeddingOptions(options_val);
-            auto contents = UnwrapStatusOr(ParseInputData(input_val));
-            return UnwrapStatusOr(engine.ComputeEmbedding(contents, options));
           }) LITERTLM_EM_ASYNC)
+      .function("computeEmbedding",
+                optional_override([](litert::lm::EmbeddingEngine& engine,
+                                     emscripten::val input_val,
+                                     emscripten::val options_val) {
+                  return StatusOrToVal(
+                      [&]() -> absl::StatusOr<litert::lm::EmbeddingResponse> {
+                        auto options = ParseEmbeddingOptions(options_val);
+                        ABSL_ASSIGN_OR_RETURN(auto contents,
+                                              ParseInputData(input_val));
+                        return engine.ComputeEmbedding(contents, options);
+                      }());
+                }) LITERTLM_EM_ASYNC)
       .function(
           "computeEmbeddingBatch",
           optional_override([](litert::lm::EmbeddingEngine& engine,
                                emscripten::val batch_val,
                                emscripten::val options_val) {
-            auto options = ParseEmbeddingOptions(options_val);
-            std::vector<std::vector<litert::lm::InputData>> batch_contents;
-            if (!batch_val.isArray()) {
-              auto contents = UnwrapStatusOr(ParseInputData(batch_val));
-              batch_contents.push_back(std::move(contents));
-            } else {
-              size_t length = batch_val["length"].as<size_t>();
-              batch_contents.reserve(length);
-              for (size_t i = 0; i < length; ++i) {
-                auto contents = UnwrapStatusOr(ParseInputData(batch_val[i]));
+            return StatusOrToVal([&]() -> absl::StatusOr<std::vector<
+                                           litert::lm::EmbeddingResponse>> {
+              auto options = ParseEmbeddingOptions(options_val);
+              std::vector<std::vector<litert::lm::InputData>> batch_contents;
+              if (!batch_val.isArray()) {
+                ABSL_ASSIGN_OR_RETURN(auto contents, ParseInputData(batch_val));
                 batch_contents.push_back(std::move(contents));
+              } else {
+                size_t length = batch_val["length"].as<size_t>();
+                batch_contents.reserve(length);
+                for (size_t i = 0; i < length; ++i) {
+                  ABSL_ASSIGN_OR_RETURN(auto contents,
+                                        ParseInputData(batch_val[i]));
+                  batch_contents.push_back(std::move(contents));
+                }
               }
-            }
-            return UnwrapStatusOr(
-                engine.ComputeEmbeddingBatch(batch_contents, options));
+              return engine.ComputeEmbeddingBatch(batch_contents, options);
+            }());
           }) LITERTLM_EM_ASYNC);
 }
 }  // namespace litertlm_web

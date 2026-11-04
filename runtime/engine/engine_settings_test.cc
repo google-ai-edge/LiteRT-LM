@@ -908,6 +908,36 @@ TEST(EngineSettingsTest, SingleThreadedExecution) {
   EXPECT_FALSE(settings->GetSingleThreadedExecution());
 }
 
+TEST(EngineSettingsTest, EnableDebuggerRequiresCacheDir) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  EXPECT_FALSE(settings->GetEnableDebugger());
+  settings->SetEnableDebugger(true);
+
+  for (const char* cache_dir : {"", ":nocache", ":memory"}) {
+    settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
+    EXPECT_THAT(settings->MaybeUpdateAndValidate(&tokenizer, nullptr),
+                StatusIs(absl::StatusCode::kInvalidArgument,
+                         ContainsRegex("AI Edge Debugger requires a cache "
+                                       "directory")))
+        << "cache_dir=" << cache_dir;
+  }
+  // Without the debugger, the same sentinel cache dir is accepted.
+  settings->SetEnableDebugger(false);
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, nullptr));
+  settings->SetEnableDebugger(true);
+
+  settings->GetMutableMainExecutorSettings().SetCacheDir(::testing::TempDir());
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, nullptr));
+}
+
 TEST(EngineSettingsTest, MaxVisionTokensPerImage) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);

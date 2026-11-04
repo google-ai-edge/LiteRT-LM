@@ -105,6 +105,7 @@ ABSL_DECLARE_FLAG(bool, use_lazy_warmup_for_npu);
 ABSL_DECLARE_FLAG(bool, disable_input_prompt_as_hint);
 ABSL_DECLARE_FLAG(bool, gpu_enable_metal_residency_set);
 ABSL_DECLARE_FLAG(std::string, gpu_use_ir_model);
+ABSL_DECLARE_FLAG(std::vector<std::string>, custom_backend_options);
 
 namespace litert::lm {
 

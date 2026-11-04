@@ -647,36 +647,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         static_cast<int32_t*>(prefill_input_pos_lock_and_addr.second);
 
     memset(prefill_input_pos_ptr, 0, prefill_input_pos_size);
-    const AttentionMaskParams prefill_attn_params =
-        GetAttentionMaskParams(executor_metadata_);
-    const TensorBuffer* prefill_attn_mask_buffer =
-        signatures_.input_attn_mask.has_value() &&
-                prefill_input_buffers.contains(*signatures_.input_attn_mask)
-            ? &prefill_input_buffers[*signatures_.input_attn_mask]
-            : nullptr;
-    const TensorBuffer* prefill_attn_mask_local_buffer =
-        signatures_.input_attn_mask_local.has_value() &&
-                prefill_input_buffers.contains(
-                    *signatures_.input_attn_mask_local)
-            ? &prefill_input_buffers[*signatures_.input_attn_mask_local]
-            : nullptr;
-    const bool skip_cpu_global_causal_mask =
-        ShouldSkipGlobalCausalAttentionMask(
-            executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
-            signatures_, prefill_attn_params, prefill_attn_mask_buffer,
-            prefill_attn_mask_local_buffer);
 
-    if (signatures_.input_attn_mask.has_value() &&
-        !skip_cpu_global_causal_mask) {
-      ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
-          prefill_input_buffers[signatures_.input_attn_mask.value()],
-          use_fp16_precision_));
-      if (signatures_.input_attn_mask_local.has_value()) {
-        ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
-            prefill_input_buffers[signatures_.input_attn_mask_local.value()],
-            use_fp16_precision_));
-      }
-    }
     // TODO(b/425396146): Add the unit tests for checking the prefill length.
     // We always hold one pending token in the input ids for the next
     // prefill or decode step.
@@ -811,30 +782,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
           }
         }
       }
-      if (signatures_.input_attn_mask.has_value() &&
-          !skip_cpu_global_causal_mask) {
-        const AttentionMaskParams& attn_params = prefill_attn_params;
-        auto tokens_copy = llm_context_->processed_context()
-                               .processed_tokens()
-                               .GetCopyOfTokens();
-        absl::Span<const int> token_ids_span =
-            tokens_copy.empty() ? absl::Span<const int>()
-                                : absl::MakeConstSpan(tokens_copy[0]);
-
-        ABSL_RETURN_IF_ERROR(FillAttentionMask(
-            prefill_input_buffers[signatures_.input_attn_mask.value()],
-            start_step,
-            /*steps=*/prefill_length + input_idx, attn_params.global_type,
-            token_ids_span));
-        if (signatures_.input_attn_mask_local.has_value()) {
-          ABSL_RETURN_IF_ERROR(FillAttentionMask(
-              prefill_input_buffers[signatures_.input_attn_mask_local.value()],
-              start_step,
-              /*steps=*/prefill_length + input_idx, attn_params.local_type,
-              token_ids_span, attn_params.sliding_window_size,
-              RingBufferAttentionMaskMode::kPrefill));
-        }
-      }
+      ABSL_RETURN_IF_ERROR(
+          PrepareAttentionMasks(prefill_input_buffers, start_step,
+                                /*steps=*/prefill_length + input_idx,
+                                RingBufferAttentionMaskMode::kPrefill));
       if (gpu_optimized_single_buffer_cache_) {
         LITERT_RETURN_IF_ERROR(signatures_.input_int32_param.has_value());
         ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
@@ -1139,51 +1090,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
     }
   }
 
-  const AttentionMaskParams decode_attn_params =
-      GetAttentionMaskParams(executor_metadata_);
-  const TensorBuffer* decode_attn_mask_buffer =
-      signatures_.input_attn_mask.has_value() &&
-              decode_input_buffers_.contains(*signatures_.input_attn_mask)
-          ? &decode_input_buffers_[*signatures_.input_attn_mask]
-          : nullptr;
-  const TensorBuffer* decode_attn_mask_local_buffer =
-      signatures_.input_attn_mask_local.has_value() &&
-              decode_input_buffers_.contains(*signatures_.input_attn_mask_local)
-          ? &decode_input_buffers_[*signatures_.input_attn_mask_local]
-          : nullptr;
-  const bool skip_cpu_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
-      executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
-      signatures_, decode_attn_params, decode_attn_mask_buffer,
-      decode_attn_mask_local_buffer);
-
-  if (signatures_.input_attn_mask.has_value() && !skip_cpu_global_causal_mask) {
-    ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
-        decode_input_buffers_[signatures_.input_attn_mask.value()],
-        use_fp16_precision_));
-    if (signatures_.input_attn_mask_local.has_value()) {
-      ABSL_RETURN_IF_ERROR(InitializeAttentionMask(
-          decode_input_buffers_[signatures_.input_attn_mask_local.value()],
-          use_fp16_precision_));
-    }
-    const AttentionMaskParams& attn_params = decode_attn_params;
-    auto tokens_copy =
-        llm_context_->processed_context().processed_tokens().GetCopyOfTokens();
-    absl::Span<const int> token_ids_span =
-        tokens_copy.empty() ? absl::Span<const int>()
-                            : absl::MakeConstSpan(tokens_copy[0]);
-
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(
-        decode_input_buffers_[signatures_.input_attn_mask.value()], step,
-        /*steps=*/1, attn_params.global_type, token_ids_span));
-    if (signatures_.input_attn_mask_local.has_value()) {
-      ABSL_RETURN_IF_ERROR(FillAttentionMask(
-          decode_input_buffers_[signatures_.input_attn_mask_local.value()],
-          step,
-          /*steps=*/1, attn_params.local_type, token_ids_span,
-          attn_params.sliding_window_size,
-          RingBufferAttentionMaskMode::kDecode));
-    }
-  }
+  ABSL_RETURN_IF_ERROR(
+      PrepareAttentionMasks(decode_input_buffers_, step, /*steps=*/1,
+                            RingBufferAttentionMaskMode::kDecode));
   if (gpu_optimized_single_buffer_cache_) {
     LITERT_RETURN_IF_ERROR(signatures_.input_int32_param.has_value());
     ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
@@ -1191,6 +1100,56 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
   }
 
   return BindTensorsAndRunDecode(&output_logits);
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareAttentionMasks(
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
+    int start_timestep, int steps,
+    RingBufferAttentionMaskMode local_mask_mode) {
+  const AttentionMaskParams attn_params =
+      GetAttentionMaskParams(executor_metadata_);
+  const TensorBuffer* attn_mask_buffer =
+      signatures_.input_attn_mask.has_value() &&
+              input_buffers.contains(*signatures_.input_attn_mask)
+          ? &input_buffers[*signatures_.input_attn_mask]
+          : nullptr;
+  const TensorBuffer* attn_mask_local_buffer =
+      signatures_.input_attn_mask_local.has_value() &&
+              input_buffers.contains(*signatures_.input_attn_mask_local)
+          ? &input_buffers[*signatures_.input_attn_mask_local]
+          : nullptr;
+  const bool skip_cpu_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
+      executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
+      signatures_, attn_params, attn_mask_buffer, attn_mask_local_buffer);
+  if (!signatures_.input_attn_mask.has_value() || skip_cpu_global_causal_mask) {
+    return absl::OkStatus();
+  }
+
+  const bool needs_token_ids =
+      attn_params.global_type ==
+          proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL ||
+      (signatures_.input_attn_mask_local.has_value() &&
+       attn_params.local_type ==
+           proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL);
+  std::vector<std::vector<int>> tokens_copy;
+  std::optional<absl::Span<const int>> token_ids_span = std::nullopt;
+  if (needs_token_ids) {
+    tokens_copy =
+        llm_context_->processed_context().processed_tokens().GetCopyOfTokens();
+    token_ids_span = tokens_copy.empty() ? absl::Span<const int>()
+                                         : absl::MakeConstSpan(tokens_copy[0]);
+  }
+
+  ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+      input_buffers[*signatures_.input_attn_mask], use_fp16_precision_,
+      start_timestep, steps, attn_params.global_type, token_ids_span));
+  if (signatures_.input_attn_mask_local.has_value()) {
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        input_buffers[*signatures_.input_attn_mask_local], use_fp16_precision_,
+        start_timestep, steps, attn_params.local_type, token_ids_span,
+        attn_params.sliding_window_size, local_mask_mode));
+  }
+  return absl::OkStatus();
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
@@ -1718,13 +1677,15 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
   }
 
-  // We can keep our kv cache buffers if this is the first step. This lets us
-  // restore from LlmContexts at step 0 with an empty kv cache.
+  // A context at step 0 has no state of its own: reset the state buffers
+  // instead of restoring them.
   if (llm_context_->runtime_state().current_step > 0) {
     auto restored_state = std::move(
         static_cast<LlmProcessedContext&>(llm_context_->processed_context())
             .state());
     ABSL_RETURN_IF_ERROR(RestoreState(std::move(restored_state)));
+  } else {
+    ABSL_RETURN_IF_ERROR(Reset());
   }
 
   force_prepare_needed_ = true;
@@ -1928,6 +1889,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
     llm_context_->runtime_state().current_step = new_step;
     return absl::OkStatus();
   }
+  if (new_step == 0) {
+    // Rewinding to the start begins a new sequence.
+    return Reset();
+  }
   RET_CHECK_LE(new_step, max_step).SetCode(absl::StatusCode::kInvalidArgument)
       << "New step cannot be greater than the max step: " << max_step;
   if (new_step < 0) {
@@ -1944,6 +1909,16 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
 absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
   llm_context_->runtime_state().current_step = 0;
   mtp_primed_ = false;
+  // Zero out every state buffer, so that a new sequence does not continue from
+  // the previous one. The KV cache alone could be kept, since its entries past
+  // the current step are masked by position, but a linear attention state is a
+  // running summary of every token processed so far.
+  if (state_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(state_->Clear());
+  }
+  if (decode_state_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(decode_state_->Clear());
+  }
   return absl::OkStatus();
 }
 

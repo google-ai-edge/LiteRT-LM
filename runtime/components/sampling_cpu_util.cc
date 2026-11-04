@@ -19,9 +19,7 @@
 #include <cstddef>
 #include <iterator>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <random>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
@@ -30,6 +28,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/components/sampling_uniforms.h"
 
 namespace litert::lm {
 
@@ -265,8 +264,8 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
 
 absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
     absl::Span<const float> logits, int k, float p, float temperature,
-    std::shared_ptr<std::default_random_engine> rng, int batch_size,
-    int sequence_size, std::vector<std::vector<float>>& sampled_scores) {
+    absl::Span<const float> uniforms, int batch_size, int sequence_size,
+    std::vector<std::vector<float>>& sampled_scores) {
   if (logits.empty()) {
     return absl::InvalidArgumentError("Logits vector cannot be empty.");
   }
@@ -282,8 +281,10 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
   if (p < 0.0 || p > 1.0) {
     return absl::InvalidArgumentError("p must be in the range [0.0, 1.0].");
   }
-  if (rng == nullptr) {
-    return absl::InvalidArgumentError("rng cannot be nullptr.");
+  if (absl::Status status =
+          ValidateUniforms(uniforms, batch_size * sequence_size);
+      !status.ok()) {
+    return status;
   }
   const int vocab_size = logits.size() / (batch_size * sequence_size);
   // Ensure k is not larger than the number of probabilities
@@ -365,9 +366,11 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
         continue;
       }
 
-      // O(final_sample_size) which is O(k) time complexity.
-      std::uniform_real_distribution<double> dist(0.0, cumulative_prob);
-      double random_sample = dist(*rng);
+      // Inverse transform sampling over the nucleus: O(final_sample_size),
+      // which is O(k) time complexity.
+      const double random_sample =
+          static_cast<double>(uniforms[b * sequence_size + s]) *
+          cumulative_prob;
       double current_cumulative = 0.0;
       for (int i = 0; i < final_sample_size; ++i) {
         current_cumulative += (*probabilities)[b][s * k + index_of_topk[i]];

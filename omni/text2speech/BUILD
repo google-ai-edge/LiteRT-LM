@@ -306,7 +306,7 @@ cc_binary(
         "//omni/base:io_types",
         "//omni/base:model_utils",
         "//omni/text2speech/qwen3_tts:common",
-        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:default_gpu_accelerator",
         "//runtime/proto:text2speech_metadata_cc_proto",
         "//runtime/proto:text2speech_model_type_cc_proto",
         "//runtime/proto:text2speech_session_config_cc_proto",

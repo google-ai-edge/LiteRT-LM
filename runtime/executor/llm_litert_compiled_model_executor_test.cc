@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <functional>
@@ -77,6 +78,9 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::Contains;
+using ::testing::Each;
+using ::testing::Ne;
 using ::testing::status::StatusIs;
 
 constexpr char kTestStaticModelPath[] =
@@ -1238,6 +1242,10 @@ class TfLiteModelResources : public ModelResources {
     with_mtp_drafter_ = with_mtp_drafter;
   }
 
+  void set_executor_metadata(proto::ExecutorMetadata executor_metadata) {
+    executor_metadata_ = std::move(executor_metadata);
+  }
+
   // ModelResources implementation:
   using ModelResources::HasTFLiteModel;
 
@@ -1278,6 +1286,9 @@ class TfLiteModelResources : public ModelResources {
 
   absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata()
       override {
+    if (executor_metadata_.has_value()) {
+      return &*executor_metadata_;
+    }
     return absl::UnimplementedError("GetExecutorMetadata not implemented.");
   }
 
@@ -1309,6 +1320,7 @@ class TfLiteModelResources : public ModelResources {
  private:
   Model model_;
   bool with_mtp_drafter_;
+  std::optional<proto::ExecutorMetadata> executor_metadata_;
 };
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
@@ -1945,6 +1957,261 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   EXPECT_EQ(step_and_token.step, 3);
   ASSERT_EQ(step_and_token.token.size(), 1);
   EXPECT_EQ(step_and_token.token[0]->id(), 6);
+}
+
+// Fills the tensor buffer `name` in `tensor_buffers` with `value`.
+void FillTensorBuffer(
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& tensor_buffers,
+    absl::string_view name, uint8_t value) {
+  ASSERT_TRUE(tensor_buffers.contains(name)) << name;
+  TensorBuffer& buffer = tensor_buffers[name];
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t size, buffer.PackedSize());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_addr,
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kWrite));
+  std::memset(lock_and_addr.second, value, size);
+}
+
+// Copies the contents of the tensor buffer `name` in `tensor_buffers` into
+// `contents`.
+void CopyTensorBufferContents(
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& tensor_buffers,
+    absl::string_view name, std::vector<uint8_t>& contents) {
+  ASSERT_TRUE(tensor_buffers.contains(name)) << name;
+  TensorBuffer& buffer = tensor_buffers[name];
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t size, buffer.PackedSize());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_addr,
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kRead));
+  const auto* data = static_cast<const uint8_t*>(lock_and_addr.second);
+  contents.assign(data, data + size);
+}
+
+// Tests that a new sequence (Reset(), a new context, or a rewind to step 0)
+// starts from zeroed state buffers, which a linear attention state needs. The
+// magic test models have one layer of KV cache: kv_cache_k_0 is
+// [1, batch, context_length, 64] and kv_cache_v_0 is
+// [1, batch, 64, context_length]. Most tests declare kv_cache_k_0 as a linear
+// attention state in the executor metadata. They check the contents of the
+// state buffers when the prefill graph runs.
+class LlmLiteRtCompiledModelExecutorLinearAttentionTest
+    : public ::testing::Test {
+ protected:
+  static constexpr absl::string_view kKeyCacheName = "kv_cache_k_0";
+  static constexpr absl::string_view kValueCacheName = "kv_cache_v_0";
+
+  void CreateExecutor(absl::string_view model_file,
+                      bool with_linear_attention_state) {
+    const std::filesystem::path model_path =
+        std::filesystem::path(::testing::SrcDir()) /
+        absl::StrCat("litert_lm/runtime/testdata/", model_file);
+    ASSERT_OK_AND_ASSIGN(auto model_assets,
+                         ModelAssets::Create(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                         LlmExecutorSettings::CreateDefault(model_assets));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto env, Environment::Create(std::vector<Environment::Option>()));
+    env_ = std::move(env);
+    ASSERT_OK_AND_ASSIGN(resources_,
+                         TfLiteModelResources::Create(model_assets));
+    if (with_linear_attention_state) {
+      proto::ExecutorMetadata executor_metadata;
+      AddStateBuffer(kKeyCacheName, proto::StateBuffer::TYPE_LINEAR_ATTENTION,
+                     executor_metadata);
+      AddStateBuffer(kValueCacheName,
+                     proto::StateBuffer::TYPE_GLOBAL_VALUE_CACHE,
+                     executor_metadata)
+          ->set_sequence_axis(3);
+      resources_->set_executor_metadata(std::move(executor_metadata));
+    }
+    ASSERT_OK_AND_ASSIGN(executor_,
+                         LlmLiteRtCompiledModelExecutorStatic::Create(
+                             std::move(executor_settings), *env_, *resources_));
+  }
+
+  // Prefills five tokens.
+  absl::Status Prefill() {
+    const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_tokens_buffer,
+        CopyToTensorBuffer<int>(absl::MakeConstSpan(input_tokens), {1, 5}));
+    ExecutorInputs inputs;
+    inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+    return executor_->Prefill(inputs);
+  }
+
+  // Fills the state buffers with a non-zero value before each graph run, to
+  // stand in for the state left by the tokens processed before.
+  void FillStateBuffersBeforeEachGraphRun() {
+    executor_->UpdatePreGraphRunCallback(
+        [](absl::string_view /*signature_name*/, int /*current_step*/,
+           absl::flat_hash_map<absl::string_view, TensorBuffer>&
+               tensor_buffers) {
+          FillTensorBuffer(tensor_buffers, kKeyCacheName, 7);
+          FillTensorBuffer(tensor_buffers, kValueCacheName, 7);
+        });
+  }
+
+  // Copies the contents of the state buffers into `key_cache_` and
+  // `value_cache_` before each graph run.
+  void RecordStateBuffersBeforeEachGraphRun() {
+    executor_->UpdatePreGraphRunCallback(
+        [this](absl::string_view /*signature_name*/, int /*current_step*/,
+               absl::flat_hash_map<absl::string_view, TensorBuffer>&
+                   tensor_buffers) {
+          CopyTensorBufferContents(tensor_buffers, kKeyCacheName, key_cache_);
+          CopyTensorBufferContents(tensor_buffers, kValueCacheName,
+                                   value_cache_);
+        });
+  }
+
+  std::optional<Environment> env_;
+  std::unique_ptr<TfLiteModelResources> resources_;
+  std::unique_ptr<LlmLiteRtCompiledModelExecutorStatic> executor_;
+  std::vector<uint8_t> key_cache_;
+  std::vector<uint8_t> value_cache_;
+
+ private:
+  // Adds the tensor `name` of the prefill and decode signatures as a state
+  // buffer of `type`.
+  static proto::StateBuffer* AddStateBuffer(
+      absl::string_view name, proto::StateBuffer::Type type,
+      proto::ExecutorMetadata& executor_metadata) {
+    proto::StateBuffer* state_buffer =
+        executor_metadata.mutable_llm_executor_metadata()->add_state_buffers();
+    const std::string tensor_name(name);
+    state_buffer->set_prefill_input_name(tensor_name);
+    state_buffer->set_prefill_output_name(tensor_name);
+    state_buffer->set_decode_input_name(tensor_name);
+    state_buffer->set_decode_output_name(tensor_name);
+    state_buffer->set_type(type);
+    return state_buffer;
+  }
+};
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       PrefillAfterResetStartsFromZeroState) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_none.tflite",
+                                         /*with_linear_attention_state=*/true));
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  ASSERT_OK(executor_->Decode());
+
+  ASSERT_OK(executor_->Reset());
+  RecordStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Each(0));
+  EXPECT_THAT(value_cache_, Each(0));
+}
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       PrefillInNewContextStartsFromZeroState) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_none.tflite",
+                                         /*with_linear_attention_state=*/true));
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  ASSERT_OK(executor_->Decode());
+
+  // A new conversation on a shared engine restores a new context at step 0.
+  ASSERT_OK_AND_ASSIGN(
+      auto context,
+      executor_->CreateNewContext(/*lora_id=*/std::nullopt, RuntimeConfig()));
+  ASSERT_OK(executor_->RestoreContext(std::move(context)));
+  RecordStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Each(0));
+  EXPECT_THAT(value_cache_, Each(0));
+}
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       RestoreContextAtStepZeroStartsFromZeroState) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_none.tflite",
+                                         /*with_linear_attention_state=*/true));
+  // A context saved before its first prefill is at step 0.
+  ASSERT_OK_AND_ASSIGN(auto context, executor_->CloneContext());
+  ASSERT_EQ(context->runtime_state().current_step, 0);
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  ASSERT_OK(executor_->Decode());
+
+  // The state buffers belong to the executor and still hold the sequence that
+  // just ran; restoring the context at step 0 must not continue from it.
+  ASSERT_OK(executor_->RestoreContext(std::move(context)));
+  RecordStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Each(0));
+  EXPECT_THAT(value_cache_, Each(0));
+}
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       PrefillAfterRewindToStepZeroStartsFromZeroState) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_none.tflite",
+                                         /*with_linear_attention_state=*/true));
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  ASSERT_OK(executor_->Decode());
+
+  ASSERT_OK(executor_->SetCurrentStep(0));
+  RecordStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Each(0));
+  EXPECT_THAT(value_cache_, Each(0));
+}
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       PrefillAtNonZeroStepKeepsLinearAttentionState) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_none.tflite",
+                                         /*with_linear_attention_state=*/true));
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  ASSERT_OK_AND_ASSIGN(int current_step, executor_->GetCurrentStep());
+  ASSERT_EQ(current_step, 5);
+
+  RecordStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Contains(Ne(0)));
+}
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       PrefillAfterResetStartsFromZeroKvCacheWithoutLinearAttentionState) {
+  ASSERT_NO_FATAL_FAILURE(
+      CreateExecutor("magic_test_none.tflite",
+                     /*with_linear_attention_state=*/false));
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  ASSERT_OK(executor_->Decode());
+
+  ASSERT_OK(executor_->Reset());
+  RecordStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Each(0));
+  EXPECT_THAT(value_cache_, Each(0));
+}
+
+TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
+       PrefillAfterResetStartsFromZeroStateWithDecodeBatch) {
+  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_decode_batch.tflite",
+                                         /*with_linear_attention_state=*/true));
+  FillStateBuffersBeforeEachGraphRun();
+  ASSERT_OK(Prefill());
+  // Decode runs on the decode state, with one batch entry per output head.
+  ASSERT_OK_AND_ASSIGN(auto output_tokens, executor_->Decode());
+  ASSERT_EQ(output_tokens.size(), kMaxDecodeBatchSize);
+
+  ASSERT_OK(executor_->Reset());
+  RecordStateBuffersBeforeEachGraphRun();
+  // The prefill copies the state of the first output head back from the decode
+  // state, which Reset() zeroed too.
+  ASSERT_OK(Prefill());
+
+  EXPECT_THAT(key_cache_, Each(0));
+  EXPECT_THAT(value_cache_, Each(0));
 }
 
 absl::StatusOr<

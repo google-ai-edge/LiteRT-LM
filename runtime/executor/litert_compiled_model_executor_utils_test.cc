@@ -941,6 +941,186 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bool) {
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeAndFillAttentionMask_Float32) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 4, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 40);
+  ASSERT_TRUE(mask_buffer);
+
+  // Pre-fill with unmasked values (0.0f) to verify masked entries are reset.
+  {
+    auto write_lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(write_lock);
+    float* mask_ptr = static_cast<float*>(write_lock->second);
+    for (int i = 0; i < 40; ++i) {
+      mask_ptr[i] = 0.0f;
+    }
+  }
+
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/false,
+                                           /*start_timestep=*/5, /*steps=*/2,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    float* mask_ptr = static_cast<float*>(lock->second);
+    float init_val = -0.7f * std::numeric_limits<float>::max();
+
+    for (int i = 0; i < 40; ++i) {
+      if ((i >= 0 && i <= 5) || (i >= 10 && i <= 16)) {
+        EXPECT_EQ(mask_ptr[i], 0.0f) << " at index " << i;
+      } else {
+        EXPECT_EQ(mask_ptr[i], init_val) << " at index " << i;
+      }
+    }
+  }
+
+  // Reuse the same buffer with a narrower range and is_f16 = true to verify
+  // stale unmasked entries from the prior step are reset to -45824.0f.
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/true,
+                                           /*start_timestep=*/2, /*steps=*/1,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    float* mask_ptr = static_cast<float*>(lock->second);
+
+    for (int i = 0; i < 40; ++i) {
+      if (i >= 0 && i <= 2) {
+        EXPECT_EQ(mask_ptr[i], 0.0f) << " at index " << i;
+      } else {
+        EXPECT_EQ(mask_ptr[i], -45824.0f) << " at index " << i;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeAndFillAttentionMask_Float16) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 4, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float16, std::move(layout));
+  auto mask_buffer = TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory, ranked_tensor_type,
+      sizeof(tflite::half) * 40);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/true,
+                                           /*start_timestep=*/5, /*steps=*/2,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    tflite::half* mask_ptr = static_cast<tflite::half*>(lock->second);
+
+    for (int i = 0; i < 40; ++i) {
+      if ((i >= 0 && i <= 5) || (i >= 10 && i <= 16)) {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), 0.0f)
+            << " at index " << i;
+      } else {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), -45824.0f)
+            << " at index " << i;
+      }
+    }
+  }
+
+  // Reuse the same buffer with a narrower range to verify stale 0.0f entries
+  // from the prior step are reset to -45824.0f.
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/true,
+                                           /*start_timestep=*/2, /*steps=*/1,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    tflite::half* mask_ptr = static_cast<tflite::half*>(lock->second);
+
+    for (int i = 0; i < 40; ++i) {
+      if (i >= 0 && i <= 2) {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), 0.0f)
+            << " at index " << i;
+      } else {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), -45824.0f)
+            << " at index " << i;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeAndFillAttentionMask_Bool) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 3, 1, 8}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 24);
+  ASSERT_TRUE(mask_buffer);
+
+  // Pre-fill with true since CreateManaged starts zeroed.
+  {
+    auto write_lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(write_lock);
+    bool* mask_ptr = static_cast<bool*>(write_lock->second);
+    for (int i = 0; i < 24; ++i) {
+      mask_ptr[i] = true;
+    }
+  }
+
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/false,
+                                           /*start_timestep=*/2, /*steps=*/3,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int i = 0; i < 24; ++i) {
+      if ((i >= 0 && i <= 2) || (i >= 8 && i <= 11) || (i >= 16 && i <= 20)) {
+        EXPECT_TRUE(mask_ptr[i]) << " at index " << i;
+      } else {
+        EXPECT_FALSE(mask_ptr[i]) << " at index " << i;
+      }
+    }
+  }
+
+  // Reuse the same buffer with a narrower range to verify stale true entries
+  // from the prior step are reset to false.
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/false,
+                                           /*start_timestep=*/1, /*steps=*/1,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int i = 0; i < 24; ++i) {
+      if (i >= 0 && i <= 1) {
+        EXPECT_TRUE(mask_ptr[i]) << " at index " << i;
+      } else {
+        EXPECT_FALSE(mask_ptr[i]) << " at index " << i;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      FillAttentionMask_Bool_MultipleBatches) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
   // Mask shape: [batch=1, seq_len=3, 1, max_kv_len=8]

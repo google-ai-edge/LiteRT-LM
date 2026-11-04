@@ -74,6 +74,24 @@ export declare interface Deletable {
 }
 
 /**
+ * The result of a Wasm binding that can fail: either the value or an `Error`.
+ *
+ * Bindings return errors instead of throwing them because throwing from C++
+ * leaks memory and Wasm stack. Use `unwrapWasmResult` to get the value.
+ */
+export type WasmResult<T> = T|Error;
+
+/**
+ * Returns the value of a `WasmResult`, or throws its error.
+ */
+export function unwrapWasmResult<T>(result: WasmResult<T>): T {
+  if (result instanceof Error) {
+    throw result;
+  }
+  return result;
+}
+
+/**
  * A C++ vector of elements.
  */
 export declare interface EmscriptenVector<T> extends Deletable {
@@ -133,7 +151,7 @@ declare interface ModelAssetsConstructor {
   // `ModelAssetsConstructor` as the class from which `ModelAssets` are
   // constructed, even though we don't use it.
   new(...args: never[]): ModelAssets;  // Do not call.
-  createStreaming(stream: ReadableStreamDataStream): ModelAssets;
+  createStreaming(stream: ReadableStreamDataStream): WasmResult<ModelAssets>;
 }
 
 declare const ModelAssetsBrand: unique symbol;
@@ -155,16 +173,15 @@ declare interface EngineSettingsConstructor {
   // constructed, even though we don't use it.
   new(...args: never[]): EngineSettings;  // Do not call.
   createDefault(
-      modelAssets: ModelAssets,
-      backend: EmscriptenEnumElement<Backend>): Promise<EngineSettings>;
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>):
+      Promise<WasmResult<EngineSettings>>;
   // Embind requires all arguments to be passed; use `undefined` to disable a
   // modality.
   createDefaultMultimodal(
-      modelAssets: ModelAssets,
-      backend: EmscriptenEnumElement<Backend>,
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>,
       visionBackend: EmscriptenEnumElement<Backend>|undefined,
-      audioBackend: EmscriptenEnumElement<Backend>|undefined):
-      Promise<EngineSettings>;
+      audioBackend: EmscriptenEnumElement<Backend>|
+      undefined): Promise<WasmResult<EngineSettings>>;
 }
 
 declare const EngineSettingsBrand: unique symbol;
@@ -322,9 +339,9 @@ export declare interface LlmExecutorSettings extends ExecutorSettingsBase {
   setBackendConfigCpu(cpuConfig: CpuConfig): void;
   setBackendConfigGpu(gpuConfig: GpuConfig): void;
   setBackendConfigGpuArtisan(gpuArtisanConfig: GpuArtisanConfig): void;
-  getBackendConfigCpu(): CpuConfig;
-  getBackendConfigGpu(): GpuConfig;
-  getBackendConfigGpuArtisan(): GpuArtisanConfig;
+  getBackendConfigCpu(): WasmResult<CpuConfig>;
+  getBackendConfigGpu(): WasmResult<GpuConfig>;
+  getBackendConfigGpuArtisan(): WasmResult<GpuArtisanConfig>;
   setSamplerBackend(backend: EmscriptenEnumElement<Backend>): void;
   getSamplerBackend(): EmscriptenEnumElement<Backend>;
   setAdvancedSettings(advancedSettings: AdvancedSettings): void;
@@ -341,9 +358,9 @@ declare interface EngineConstructor {
   // constructed, even though we don't use it.
   new(...args: never[]): Engine;  // Do not call.
   createEngine(engineSettings: EngineSettings, inputPromptAsHint: string):
-      Promise<Engine>;
+      Promise<WasmResult<Engine>>;
   createLegacyEngine(engineSettings: EngineSettings, inputPromptAsHint: string):
-      Promise<Engine>;
+      Promise<WasmResult<Engine>>;
 }
 
 declare const EngineBrand: unique symbol;
@@ -354,9 +371,9 @@ declare const EngineBrand: unique symbol;
 export declare interface Engine extends Deletable {
   // Prevent accidentally assigning other objects as Engine.
   [EngineBrand]: void;
-  createSession(sessionConfig: SessionConfig): Session;
+  createSession(sessionConfig: SessionConfig): WasmResult<Session>;
   getEngineSettings(): EngineSettings;
-  waitUntilDone(): Promise<void>;
+  waitUntilDone(): Promise<WasmResult<void>>;
 }
 
 /**
@@ -453,10 +470,10 @@ export declare interface Session extends Deletable {
   // Prevent accidentally assigning other objects as Session.
   [SessionBrand]: void;
   getSessionConfig(): SessionConfig;
-  runPrefill(inputs: string[]): Promise<void>;
-  runDecode(): Promise<Responses>;
+  runPrefill(inputs: string[]): Promise<WasmResult<void>>;
+  runDecode(): Promise<WasmResult<Responses>>;
   cancelProcess(): void;
-  clone(): Session;
+  clone(): WasmResult<Session>;
 }
 
 /**
@@ -485,12 +502,12 @@ export declare interface Responses extends Deletable {
  */
 declare interface ConversationConfigConstructor {
   new(...args: never[]): ConversationConfig;  // Do not call.
-  createDefault(engine: Engine): ConversationConfig;
+  createDefault(engine: Engine): WasmResult<ConversationConfig>;
   createCustom(
       engine: Engine, sessionConfig: SessionConfig,
       enableConstrainedDecoding: boolean, prefillPrefaceOnInit: boolean,
       filterChannelContentFromKvCache: boolean,
-      prefaceJson: string): ConversationConfig;
+      prefaceJson: string): WasmResult<ConversationConfig>;
 }
 
 declare const ConversationConfigBrand: unique symbol;
@@ -507,7 +524,8 @@ export declare interface ConversationConfig extends Deletable {
  */
 declare interface ConversationConstructor {
   new(...args: never[]): Conversation;  // Do not call.
-  create(engine: Engine, config: ConversationConfig): Promise<Conversation>;
+  create(engine: Engine, config: ConversationConfig):
+      Promise<WasmResult<Conversation>>;
 }
 
 declare const ConversationBrand: unique symbol;
@@ -524,17 +542,17 @@ export declare interface Conversation extends Deletable {
    */
   sendMessage(
       messageJson: string, blobs: Uint8Array[],
-      visualTokenBudget: number): Promise<string>;
+      visualTokenBudget: number): Promise<WasmResult<string>>;
   sendMessageAsync(
       messageJson: string, blobs: Uint8Array[],
       callback:
           (chunk: string|null, isDone: boolean, error: string|null) => void,
-      visualTokenBudget: number): Promise<void>;
+      visualTokenBudget: number): Promise<WasmResult<void>>;
   getHistory(): string;
-  getTokenCount(): number;
+  getTokenCount(): WasmResult<number>;
   getBenchmarkInfo(): BenchmarkInfo;
   cancelProcess(): void;
-  clone(): Conversation;
+  clone(): WasmResult<Conversation>;
 }
 
 /** Benchmark metadata for tracking decoding efficiency. */
@@ -637,13 +655,13 @@ export declare interface EmbeddingExecutorSettings extends ExecutorSettingsBase 
 declare interface EmbeddingEngineSettingsConstructor {
   new(...args: never[]): EmbeddingEngineSettings;  // Do not call.
   createDefault(
-      modelAssets: ModelAssets,
-      backend: EmscriptenEnumElement<Backend>): EmbeddingEngineSettings;
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>):
+      WasmResult<EmbeddingEngineSettings>;
   createDefaultMultimodal(
-      modelAssets: ModelAssets,
-      backend: EmscriptenEnumElement<Backend>,
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>,
       visionBackend?: EmscriptenEnumElement<Backend>,
-      audioBackend?: EmscriptenEnumElement<Backend>): EmbeddingEngineSettings;
+      audioBackend?: EmscriptenEnumElement<Backend>):
+      WasmResult<EmbeddingEngineSettings>;
 }
 
 declare const EmbeddingEngineSettingsBrand: unique symbol;
@@ -666,7 +684,8 @@ export declare interface EmbeddingEngineSettings extends Deletable {
 
 declare interface EmbeddingEngineConstructor {
   new(...args: never[]): EmbeddingEngine;  // Do not call.
-  createEngine(settings: EmbeddingEngineSettings): Promise<EmbeddingEngine>;
+  createEngine(settings: EmbeddingEngineSettings):
+      Promise<WasmResult<EmbeddingEngine>>;
 }
 
 declare const EmbeddingEngineBrand: unique symbol;
@@ -677,9 +696,9 @@ declare const EmbeddingEngineBrand: unique symbol;
 export declare interface EmbeddingEngine extends Deletable {
   [EmbeddingEngineBrand]: void;
   computeEmbedding(input: unknown, options: EmbeddingOptions):
-      Promise<WasmEmbeddingResponse>;
+      Promise<WasmResult<WasmEmbeddingResponse>>;
   computeEmbeddingBatch(inputs: unknown[], options: EmbeddingOptions):
-      Promise<EmscriptenVector<WasmEmbeddingResponse>>;
+      Promise<WasmResult<EmscriptenVector<WasmEmbeddingResponse>>>;
 }
 
 /**
@@ -710,5 +729,5 @@ export declare interface LiteRtLmWasm extends WasmModule {
   ReadableStreamDataStream: ReadableStreamDataStreamConstructor;
   ConversationConfig: ConversationConfigConstructor;
   Conversation: ConversationConstructor;
-  clearStoredWeightsStreams(): Promise<void>;
+  clearStoredWeightsStreams(): Promise<WasmResult<void>>;
 }

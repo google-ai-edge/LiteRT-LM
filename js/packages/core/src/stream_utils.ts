@@ -19,7 +19,7 @@ import {Cleanup} from './cleanup.js';
 import {resolveModelUrl} from './model-cache/model_source.js';
 import {ResolvedModel} from './model_input.js';
 import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
-import {LiteRtLmWasm, ModelAssets} from './wasm_binding_types.js';
+import {LiteRtLmWasm, ModelAssets, unwrapWasmResult} from './wasm_binding_types.js';
 
 /**
  * Converts a model source (URL string, `ModelSource`, Blob, or ReadableStream)
@@ -68,7 +68,8 @@ export async function createStreamingModelAssets(
     // still be holding a reference here.
     streamWrapper.close();
   });
-  const modelAssets = wasm.ModelAssets.createStreaming(dataStream);
+  const modelAssets =
+      unwrapWasmResult(wasm.ModelAssets.createStreaming(dataStream));
   const cleanupModelAssets = cleanup.add(() => {
     modelAssets.delete();
   });

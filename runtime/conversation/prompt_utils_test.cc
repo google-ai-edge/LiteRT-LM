@@ -95,7 +95,7 @@ TEST(PromptUtilsTest, RenderSingleTurnTemplate_DummyUserMessageNormalized) {
                        *processor, history, preface, Message(), prompt_template,
                        /*current_is_appending_message=*/false,
                        /*append_message=*/false));
-  EXPECT_EQ(result.text, "system:[text:System prompt]|user:[text:]|");
+  EXPECT_EQ(result.text, "system:[text:System prompt]|user:|");
 }
 
 }  // namespace

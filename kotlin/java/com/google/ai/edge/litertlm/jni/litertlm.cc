@@ -188,19 +188,17 @@ jobject CreateBenchmarkInfoJni(
   jmethodID benchmark_info_ctor = env->GetMethodID(
       benchmark_info_cls.get(), "<init>", "(DDIIDDLjava/util/Map;I)V");
 
-  double total_init_time_ms = 0.0;
   for (const auto& phase : benchmark_info.GetInitPhases()) {
     ABSL_VLOG(1) << "Init phase: " << phase.first << " took "
                  << absl::ToDoubleMilliseconds(phase.second) << " ms";
-    total_init_time_ms += absl::ToDoubleMilliseconds(phase.second);
   }
 
   return env->NewObject(
       benchmark_info_cls.get(), benchmark_info_ctor,
-      total_init_time_ms / 1000.0, benchmark_info.GetTimeToFirstToken(),
-      last_prefill_token_count, last_decode_token_count,
-      last_prefill_tokens_per_second, last_decode_tokens_per_second,
-      mark_durations_map.get(),
+      absl::ToDoubleSeconds(benchmark_info.GetTotalInitTime()),
+      benchmark_info.GetTimeToFirstToken(), last_prefill_token_count,
+      last_decode_token_count, last_prefill_tokens_per_second,
+      last_decode_tokens_per_second, mark_durations_map.get(),
       static_cast<jint>(benchmark_info.GetMaxNumTokens()));
 }
 

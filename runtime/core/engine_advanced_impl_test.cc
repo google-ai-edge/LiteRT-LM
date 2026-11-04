@@ -574,6 +574,27 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   EXPECT_FALSE(responses->GetTexts()[0].empty());
 }
 
+TEST(EngineTest, CreateEngine_StreamedModelLoading_EnableDebuggerDisabled) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> file_stream,
+                       FileDataStream::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      auto engine_settings,
+      EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.SetEnableDebugger(true);
+
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(engine_settings));
+  EXPECT_FALSE(llm->GetEngineSettings().GetEnableDebugger());
+}
+
 TEST(EngineTest, CreateEngine_StreamedModelLoading_VisionWithoutVisionModel) {
   auto model_path =
       std::filesystem::path(::testing::SrcDir()) /

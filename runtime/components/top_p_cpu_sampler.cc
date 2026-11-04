@@ -26,6 +26,7 @@
 
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -33,6 +34,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampling_cpu_util.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
@@ -161,24 +163,32 @@ absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
     return absl::InvalidArgumentError(
         absl::StrCat("Temperature must be >= 0, but got ", temperature));
   }
-  return absl::WrapUnique(new TopPSampler(
-      k, p, temperature, batch_size, sequence_size, seed,
-      compute_exact_log_probs));
+  return absl::WrapUnique(new TopPSampler(k, p, temperature, batch_size,
+                                          sequence_size, seed,
+                                          compute_exact_log_probs));
 }
 
 absl::Status TopPSampler::SampleToIdAndScoreBuffer(
     const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
     TensorBuffer* scores_tensor) {
-  auto status = ValidateTensor(logits_tensor, /*max_num_dims=*/3, batch_size_,
-                               "input logits");
-  if (!status.ok()) {
-    return status;
-  }
-  status =
-      ValidateTensor(ids_tensor, /*max_num_dims=*/2, batch_size_, "output ids");
-  if (!status.ok()) {
-    return status;
-  }
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(k_);
+  std::vector<float> uniforms(batch_size_ * sequence_size_);
+  DrawSamplingUniforms(sampler_params, *generator_, absl::MakeSpan(uniforms));
+  return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor,
+                                  uniforms);
+}
+
+absl::Status TopPSampler::SampleToIdAndScoreBuffer(
+    const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+    TensorBuffer* scores_tensor, absl::Span<const float> uniforms) {
+  ABSL_RETURN_IF_ERROR(
+      ValidateUniforms(uniforms, batch_size_ * sequence_size_));
+
+  ABSL_RETURN_IF_ERROR(ValidateTensor(logits_tensor, /*max_num_dims=*/3,
+                                      batch_size_, "input logits"));
+  ABSL_RETURN_IF_ERROR(ValidateTensor(ids_tensor, /*max_num_dims=*/2,
+                                      batch_size_, "output ids"));
 
   LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits_tensor.TensorType());
   absl::Span<float> logits_data_span;
@@ -206,25 +216,20 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
   }
 
   std::vector<std::vector<float>> sampled_scores;
-  auto sampled_ids =
-      TopKTopPSampling(logits_data_span, k_, p_, temperature_, generator_,
-                       batch_size_, sequence_size_, sampled_scores);
-  if (!sampled_ids.ok()) {
-    return sampled_ids.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto sampled_ids,
+      TopKTopPSampling(logits_data_span, k_, p_, temperature_, uniforms,
+                       batch_size_, sequence_size_, sampled_scores));
   std::vector<int> flat_sampled_ids(batch_size_ * sequence_size_);
   for (int i = 0; i < batch_size_; ++i) {
     for (int j = 0; j < sequence_size_; ++j) {
-      flat_sampled_ids[i * sequence_size_ + j] = (*sampled_ids)[i][j];
+      flat_sampled_ids[i * sequence_size_ + j] = sampled_ids[i][j];
     }
   }
   ids_tensor.Write(absl::MakeConstSpan(flat_sampled_ids));
   if (scores_tensor != nullptr) {
-    status = ValidateTensor(*scores_tensor, /*max_num_dims=*/2, batch_size_,
-                            "output scores");
-    if (!status.ok()) {
-      return status;
-    }
+    ABSL_RETURN_IF_ERROR(ValidateTensor(*scores_tensor, /*max_num_dims=*/2,
+                                        batch_size_, "output scores"));
     std::vector<float> scores(batch_size_ * sequence_size_);
     if (!compute_exact_log_probs_) {
       for (int i = 0; i < batch_size_; ++i) {
@@ -246,6 +251,9 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
 absl::Status TopPSampler::UpdateConfig(
     const proto::SamplerParameters& sampler_params, int batch_size,
     std::shared_ptr<std::default_random_engine> rand_gen) {
+  if (batch_size <= 0) {
+    return absl::InvalidArgumentError("batch_size must be positive.");
+  }
   k_ = sampler_params.k();
   p_ = sampler_params.p();
   temperature_ = sampler_params.temperature();

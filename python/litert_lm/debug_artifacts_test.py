@@ -48,7 +48,8 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
     self.mock_ptr = ctypes.c_void_p(12345)
     self.mock_engine = mock.MagicMock()
 
-    # Pre-condition: Assign an initial mockable temporary cache directory
+    # Pre-condition: the engine has the debugger enabled and a cache directory.
+    self.mock_engine.enable_debugger = True
     self.mock_engine.cache_dir = "/tmp/fake_cache_root"
 
     # Instantiate the target Session abstraction under test using positional
@@ -59,16 +60,9 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
         self.mock_engine,
     )
 
-  def test_get_debug_artifacts_with_warning_on_macro_disabled(self):
-    """Verifies that get_debug_artifacts triggers a RuntimeWarning.
-
-    Yields `None` if the shared library was compiled with
-    LITERT_LM_DEBUGGER_ENABLED elided.
-    """
-    # Simulate Macro elision (`LITERT_LM_DEBUGGER_ENABLED=0`)
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(False)
-    )
+  def test_get_debug_artifacts_warns_when_debugger_disabled(self):
+    """Verifies get_debug_artifacts warns and returns None when disabled."""
+    self.mock_engine.enable_debugger = None
 
     with warnings.catch_warnings(record=True) as captured_warnings:
       warnings.simplefilter("always")
@@ -78,16 +72,11 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
       self.assertIsNone(result)
       self.assertLen(captured_warnings, 1)
       self.assertTrue(issubclass(captured_warnings[0].category, RuntimeWarning))
-      self.assertIn(
-          "LiteRT-LM Debugger is disabled in this runtime build",
-          str(captured_warnings[0].message),
-      )
+      self.assertIn("enable_debugger=True", str(captured_warnings[0].message))
+    self.mock_lib.litert_lm_experimental_session_get_debug_info.assert_not_called()
 
   def test_get_debug_artifacts_invalid_session(self):
     """Asserts get_debug_artifacts returns `None` when debug info is absent."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(True)
-    )
     # Emulate absent debug info: the C API succeeds and writes a NULL handle.
     self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
         _writes_out(None)
@@ -99,9 +88,6 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_raises_on_debug_info_error(self):
     """Asserts a C API failure is surfaced with the last error message."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(True)
-    )
     self.mock_lib.litert_lm_experimental_session_get_debug_info.return_value = (
         _STATUS_INVALID_ARGUMENT
     )
@@ -114,9 +100,6 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_raises_on_capture_dir_error(self):
     """Asserts debug info is freed when reading the capture dir fails."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(True)
-    )
     self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
         _writes_out(12345)
     )
@@ -135,9 +118,6 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_empty_session_dir(self):
     """Tests traversal grace when the session directory does not exist."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(True)
-    )
     self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
         _writes_out(12345)
     )
@@ -159,9 +139,6 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_populated_session_dir_and_sorting(self):
     """Validates multi-session sandbox isolation and safetensors sorting."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(True)
-    )
     self.mock_lib.litert_lm_experimental_session_get_debug_info.side_effect = (
         _writes_out(12345)
     )
@@ -223,6 +200,7 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
     self.mock_lib = mock.MagicMock()
     self.mock_ptr = ctypes.c_void_p(67890)
     self.mock_engine = mock.MagicMock()
+    self.mock_engine.enable_debugger = True
     self.mock_engine.cache_dir = "/tmp/fake_cache_root"
 
     self.conversation = litert_lm.conversation.Conversation(
@@ -231,11 +209,9 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
         engine=self.mock_engine,
     )
 
-  def test_get_debug_artifacts_with_warning_on_macro_disabled(self):
-    """Verifies that get_debug_artifacts triggers a RuntimeWarning when disabled."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(False)
-    )
+  def test_get_debug_artifacts_warns_when_debugger_disabled(self):
+    """Verifies get_debug_artifacts warns and returns None when disabled."""
+    self.mock_engine.enable_debugger = False
 
     with warnings.catch_warnings(record=True) as captured_warnings:
       warnings.simplefilter("always")
@@ -246,15 +222,13 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
       self.assertLen(captured_warnings, 1)
       self.assertTrue(issubclass(captured_warnings[0].category, RuntimeWarning))
       self.assertIn(
-          "LiteRT-LM Debugger is disabled in this runtime build",
+          "enable_debugger=True",
           str(captured_warnings[0].message),
       )
+    self.mock_lib.litert_lm_experimental_conversation_get_session_debug_info.assert_not_called()
 
   def test_get_debug_artifacts_populated_dir(self):
     """Validates retrieval of debug artifacts through Conversation."""
-    self.mock_lib.litert_lm_experimental_is_debugger_enabled.side_effect = (
-        _writes_out(True)
-    )
     self.mock_lib.litert_lm_experimental_conversation_get_session_debug_info.side_effect = _writes_out(
         67890
     )

@@ -652,15 +652,15 @@ class Conversation {
   // non-callback thread) to observe the settled token count.
   absl::StatusOr<int> GetTokenCount() const;
 
-  // Returns the number of tokens the given message would consume if added
+  // Returns the number of tokens the given messages would consume if added
   // to the conversation, including template tokens and media (vision/audio)
   // soft tokens. This does not mutate the conversation or the KV cache.
   //
   // Args:
-  // - `message`: The message (a JSON object) to count tokens for.
+  // - `messages`: The messages (each a JSON object) to count tokens for.
   // - `optional_args`: Optional arguments for template rendering.
   absl::StatusOr<int> CountTokens(
-      const Message& message,
+      const std::vector<Message>& messages,
       const OptionalArgs& optional_args = OptionalArgs()) const;
 
   // Returns the benchmark info for the conversation. Under the hood, this

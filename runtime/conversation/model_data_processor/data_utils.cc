@@ -71,6 +71,9 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
 
 ordered_json NormalizeContent(const ordered_json& content) {
   if (content.is_string()) {
+    if (content.get<std::string>().empty()) {
+      return ordered_json::array();
+    }
     return ordered_json::array(
         {{{"type", "text"}, {"text", content.get<std::string>()}}});
   }

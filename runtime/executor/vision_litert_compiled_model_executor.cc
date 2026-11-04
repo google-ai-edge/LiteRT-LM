@@ -27,6 +27,7 @@
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -34,6 +35,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
@@ -59,6 +61,7 @@
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -136,6 +139,46 @@ absl::StatusOr<int> GetSignatureTokenLength(
       signature.Key()));
 }
 
+// Returns whether `signature` of a multi-signature vision model can be selected
+// to run an image, i.e. it has the `kVisionLengthPrefix` prefix and is one of
+// `selected_signatures` (if not empty).
+bool IsSelectableVitSignature(
+    const ::litert::SimpleSignature& signature,
+    const std::vector<std::string>& selected_signatures) {
+  return absl::StartsWith(signature.Key(), kVisionLengthPrefix) &&
+         (selected_signatures.empty() ||
+          absl::c_linear_search(selected_signatures, signature.Key()));
+}
+
+// Returns the maximum number of image patches accepted by `signature`, i.e.
+// dimension 1 of its `kImages` input, which must be a patchified
+// [batch, num_patches, patch_dim] tensor as read by Encode(). As in Encode(),
+// the input of a single-signature model may be unnamed, in which case input 0
+// is used. Returns an error for other inputs (e.g. a [batch, height, width,
+// channels] image), whose number of patches is unknown.
+absl::StatusOr<int> GetSignaturePatchCapacity(
+    const ::litert::SimpleSignature& signature, bool is_single_signature) {
+  ::litert::Expected<::litert::RankedTensorType> images_type =
+      signature.InputTensorType(kImages);
+  if (!images_type.HasValue() && is_single_signature) {
+    images_type = signature.InputTensorType(0);
+  }
+  if (!images_type.HasValue()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "No ", kImages, " input found in signature: ", signature.Key()));
+  }
+  const auto& dims = images_type->Layout().Dimensions();
+  if (dims.size() != 3 || dims[1] <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to determine the number of patches from the ", kImages,
+        " input of signature ", signature.Key(),
+        ": expected a [batch, num_patches, patch_dim] tensor with a positive "
+        "num_patches, got [",
+        absl::StrJoin(dims, ", "), "]"));
+  }
+  return dims[1];
+}
+
 // Returns the index of the signature that should be used for the given number
 // of patches. The signature is guaranteed to have at least as many tokens as
 // the given number of patches, or an error status if failed.
@@ -172,21 +215,18 @@ absl::StatusOr<int> GetVitSignatureIndex(
 
   for (int i = 0; i < model.GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(i));
-    if (absl::StartsWith(signature.Key(), kVisionLengthPrefix)) {
-      if (!selected_signatures.empty() &&
-          !absl::c_linear_search(selected_signatures, signature.Key())) {
-        continue;
-      }
-      found_any_signature = true;
-      LITERT_ASSIGN_OR_RETURN(int current_length,
-                              GetSignatureTokenLength(signature));
+    if (!IsSelectableVitSignature(signature, selected_signatures)) {
+      continue;
+    }
+    found_any_signature = true;
+    LITERT_ASSIGN_OR_RETURN(int current_length,
+                            GetSignatureTokenLength(signature));
 
-      max_available_length = std::max(max_available_length, current_length);
+    max_available_length = std::max(max_available_length, current_length);
 
-      if (current_length >= max_num_tokens && current_length < best_length) {
-        best_length = current_length;
-        best_signature_index = i;
-      }
+    if (current_length >= max_num_tokens && current_length < best_length) {
+      best_length = current_length;
+      best_signature_index = i;
     }
   }
 
@@ -215,6 +255,39 @@ bool AreBuffersReusable(const std::vector<TensorBuffer>& buffers) {
 }
 
 }  // namespace
+
+absl::StatusOr<std::vector<VisionEncoderVariant>> GetVisionEncoderVariants(
+    const ::litert::Model& model,
+    const std::vector<std::string>& selected_signatures) {
+  // Mirrors the signature selection of GetVitSignatureIndex(): the only
+  // signature of a single-signature model is always used, otherwise the
+  // selectable signatures are candidates.
+  const bool is_single_signature = model.GetNumSignatures() == 1;
+  std::vector<VisionEncoderVariant> variants;
+  for (int i = 0; i < model.GetNumSignatures(); ++i) {
+    LITERT_ASSIGN_OR_RETURN(::litert::SimpleSignature signature,
+                            model.GetSignature(i));
+    if (!is_single_signature &&
+        !IsSelectableVitSignature(signature, selected_signatures)) {
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        int max_num_patches,
+        GetSignaturePatchCapacity(signature, is_single_signature));
+    ABSL_ASSIGN_OR_RETURN(int num_soft_tokens,
+                          GetSignatureTokenLength(signature));
+    variants.push_back({
+        .signature_name = std::string(signature.Key()),
+        .max_num_patches = max_num_patches,
+        .num_soft_tokens = num_soft_tokens,
+    });
+  }
+  absl::c_stable_sort(variants, [](const VisionEncoderVariant& a,
+                                   const VisionEncoderVariant& b) {
+    return a.num_soft_tokens < b.num_soft_tokens;
+  });
+  return variants;
+}
 
 Expected<std::vector<TensorBuffer>&> VisionLiteRtCompiledModelExecutor::
     SignatureBufferCache::GetOrCreateInputBuffers(CompiledModel& compiled_model,
@@ -570,6 +643,12 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const litert::TensorBuffer& input_image_tensor) {
+  return EncodeImageTensor(input_image_tensor, /*latch=*/nullptr);
+}
+
+absl::StatusOr<ExecutorVisionData>
+VisionLiteRtCompiledModelExecutor::EncodeImageTensor(
+    const litert::TensorBuffer& input_image_tensor, CancellationLatch* latch) {
   ScopedLatency scoped_total_latency(latency_stats_);
   LITERT_ASSIGN_OR_RETURN(auto& encoder_input_buffers,
                           vision_encoder_->GetOrCreateInputBuffers(0));
@@ -583,12 +662,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     LITERT_ASSIGN_OR_RETURN(
         auto encoder_outputs,
         vision_encoder_->GetCompiledModel().CreateOutputBuffers(0));
-    {
-      ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
-      LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-          /*input_buffers=*/encoder_input_buffers,
-          /*output_buffers=*/encoder_outputs));
-    }
+    ABSL_RETURN_IF_ERROR(RunCompiledModel(
+        vision_encoder_->GetCompiledModel(), /*signature_index=*/0,
+        encoder_input_buffers, encoder_outputs, kVisionEncoderInferenceLatency,
+        latch));
     AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
     return ExecutorVisionData(std::move(encoder_outputs[0]),
                               /*per_layer_embeddings=*/std::nullopt);
@@ -607,24 +684,79 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
   LITERT_ASSIGN_OR_RETURN(auto& encoder_outputs,
                           vision_encoder_->GetOrCreateOutputBuffers(0));
 
-  {
-    ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-        /*input_buffers=*/encoder_input_buffers,
-        /*output_buffers=*/encoder_outputs));
-  }
-
-  {
-    ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
-    LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
-        /*input_buffers=*/encoder_outputs,
-        /*output_buffers=*/output_tensor_buffers));
-  }
+  ABSL_RETURN_IF_ERROR(RunCompiledModel(vision_encoder_->GetCompiledModel(),
+                                        /*signature_index=*/0,
+                                        encoder_input_buffers, encoder_outputs,
+                                        kVisionEncoderInferenceLatency, latch));
+  ABSL_RETURN_IF_ERROR(RunCompiledModel(vision_adapter_->GetCompiledModel(),
+                                        /*signature_index=*/0, encoder_outputs,
+                                        output_tensor_buffers,
+                                        kVisionAdapterInferenceLatency, latch));
 
   AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
 
   return ExecutorVisionData(std::move(output_tensor_buffers[0]),
                             /*per_layer_embeddings=*/std::nullopt);
+}
+
+absl::StatusOr<std::vector<VisionEncoderVariant>>
+VisionLiteRtCompiledModelExecutor::GetSupportedVariants() const {
+  return GetVisionEncoderVariants(
+      vision_encoder_->GetModel(),
+      vision_executor_settings_.GetEncoderSelectedSignatures());
+}
+
+absl::Status VisionLiteRtCompiledModelExecutor::RunCompiledModel(
+    const CompiledModel& compiled_model, size_t signature_index,
+    absl::Span<const litert::TensorBuffer> input_buffers,
+    absl::Span<const litert::TensorBuffer> output_buffers,
+    absl::string_view latency_metric, CancellationLatch* latch) {
+  if (latch != nullptr && latch->IsCancelled()) {
+    return absl::CancelledError("Vision encoding was cancelled.");
+  }
+  ScopedLatency scoped(latency_stats_, latency_metric);
+  auto result =
+      compiled_model.Run(signature_index, input_buffers, output_buffers);
+  // An interrupted run reports a generic error.
+  if (!result.HasValue() && latch != nullptr && latch->IsCancelled()) {
+    return absl::CancelledError("Vision encoding was cancelled.");
+  }
+  LITERT_RETURN_IF_ERROR(result);
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorVisionData>
+VisionLiteRtCompiledModelExecutor::RunCancellable(
+    absl::FunctionRef<bool()> should_cancel,
+    absl::FunctionRef<absl::StatusOr<ExecutorVisionData>(CancellationLatch*)>
+        encode) {
+  std::vector<CompiledModel*> compiled_models = {
+      &vision_encoder_->GetMutableCompiledModel()};
+  if (vision_adapter_ != nullptr) {
+    compiled_models.push_back(&vision_adapter_->GetMutableCompiledModel());
+  }
+  CancellationLatch latch(should_cancel, compiled_models);
+  // Check before copying any input.
+  if (latch.IsCancelled()) {
+    return absl::CancelledError("Vision encoding was cancelled.");
+  }
+  return encode(&latch);
+}
+
+absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
+    const litert::TensorBuffer& input_image_tensor,
+    absl::FunctionRef<bool()> should_cancel) {
+  return RunCancellable(should_cancel, [&](CancellationLatch* latch) {
+    return EncodeImageTensor(input_image_tensor, latch);
+  });
+}
+
+absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
+    const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
+    absl::FunctionRef<bool()> should_cancel) {
+  return RunCancellable(should_cancel, [&](CancellationLatch* latch) {
+    return EncodeInputMaps(input_maps, latch);
+  });
 }
 
 absl::StatusOr<std::vector<int>>
@@ -634,6 +766,13 @@ VisionLiteRtCompiledModelExecutor::GetExpectedInputDimension() const {
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps) {
+  return EncodeInputMaps(input_maps, /*latch=*/nullptr);
+}
+
+absl::StatusOr<ExecutorVisionData>
+VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
+    const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps,
+    CancellationLatch* latch) {
   ScopedLatency scoped_total_latency(latency_stats_);
 
   // Note: `positions_xy` is only required by transformer (ViT) encoders. Single
@@ -738,12 +877,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
       auto& encoder_output_buffers,
       vision_encoder_->GetOrCreateOutputBuffers(encoder_signature_index));
 
-  {
-    ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-        encoder_signature_index, encoder_input_buffers,
-        encoder_output_buffers));
-  }
+  ABSL_RETURN_IF_ERROR(RunCompiledModel(
+      vision_encoder_->GetCompiledModel(), encoder_signature_index,
+      encoder_input_buffers, encoder_output_buffers,
+      kVisionEncoderInferenceLatency, latch));
 
   int num_patches = 0;
   auto mask_index = vision_encoder_->GetCompiledModel().FindOutputIndex(
@@ -872,13 +1009,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
               encoder_output_span));
     }
 
-    {
-      ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
-      LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
-          *adapter_signature_index,
-          /*input_buffers=*/adapter_input_buffers,
-          /*output_buffers=*/adapter_output_tensor_buffers));
-    }
+    ABSL_RETURN_IF_ERROR(RunCompiledModel(
+        vision_adapter_->GetCompiledModel(), *adapter_signature_index,
+        adapter_input_buffers, adapter_output_tensor_buffers,
+        kVisionAdapterInferenceLatency, latch));
 
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             adapter_output_tensor_buffers[0].TensorType());

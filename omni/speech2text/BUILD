@@ -872,7 +872,7 @@ cc_binary(
         "//omni:omni_registry",
         "//omni:omni_session",
         "//omni/base:model_utils",
-        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:default_gpu_accelerator",
         "//runtime/proto:speech2text_session_config_cc_proto",
     ],
 )

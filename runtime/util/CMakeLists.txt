@@ -177,6 +177,49 @@ target_link_libraries(runtime_util_executor_data_util
 )
 
 # ==============================================================================
+# Safetensors Util
+# ==============================================================================
+add_litertlm_library(runtime_util_safetensors_util STATIC
+  safetensors_util.cc
+)
+add_library(LiteRTLM::Runtime::Util::SafetensorsUtil ALIAS runtime_util_safetensors_util)
+
+target_include_directories(runtime_util_safetensors_util
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_util_safetensors_util
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Runtime Debugger
+# ==============================================================================
+add_litertlm_library(runtime_util_runtime_debugger STATIC
+  runtime_debugger.cc
+)
+add_library(LiteRTLM::Runtime::Util::RuntimeDebugger ALIAS runtime_util_runtime_debugger)
+
+target_include_directories(runtime_util_runtime_debugger
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_util_runtime_debugger
+  PUBLIC
+    LiteRTLM::Runtime::Util::SafetensorsUtil
+    LiteRTLM::Runtime::Executor::LlmLitertCompiledModelCacheUtils
+    LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
+    LiteRTLM::Runtime::Engine::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LiteRT LM Loader
 # ==============================================================================
 add_litertlm_library(runtime_util_litert_lm_loader STATIC
@@ -513,6 +556,7 @@ target_link_libraries(runtime_util_libs INTERFACE
   LiteRTLM::Runtime::Util::MetricsUtil
   LiteRTLM::Runtime::Util::ModelAssetBundleResources
   LiteRTLM::Runtime::Util::ModelTypeUtils
+  LiteRTLM::Runtime::Util::SafetensorsUtil
   LiteRTLM::Runtime::Util::ScopedFile
   LiteRTLM::Runtime::Util::StreamedWeightsManager
   LiteRTLM::Runtime::Util::TensorBufferUtil

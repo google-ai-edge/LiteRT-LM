@@ -141,6 +141,7 @@ target_link_libraries(runtime_core_session_advanced
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
     LiteRTLM::Runtime::Util::ExecutorDataUtil
     LiteRTLM::Runtime::Util::ModelTypeUtils
+    LiteRTLM::Runtime::Util::RuntimeDebugger
     LiteRTLM::Runtime::Util::TensorBufferUtil
 
     LITERTLM_DEPS

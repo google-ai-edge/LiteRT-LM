@@ -116,11 +116,6 @@ cc_test(
     ],
 )
 
-alias(
-    name = "litert_lm_debugger_enabled",
-    actual = "//build_config:enable_debugger_setting",
-)
-
 cc_library(
     name = "runtime_debugger",
     srcs = ["runtime_debugger.cc"],

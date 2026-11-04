@@ -19,6 +19,7 @@ import {type EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddi
 
 import {Cleanup} from './cleanup.js';
 import {createStreamingModelAssets} from './stream_utils.js';
+import {unwrapWasmResult} from './wasm_binding_types.js';
 
 describe('EmbeddingEngineSettings', () => {
   let liteRtLm: LiteRtLm;
@@ -38,9 +39,9 @@ describe('EmbeddingEngineSettings', () => {
   });
 
   it('creates EmbeddingEngineSettings', () => {
-    const settings =
+    const settings = unwrapWasmResult(
         liteRtLm.liteRtLmWasm.EmbeddingEngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
     expect(settings).toBeDefined();
     settings.delete();
   });
@@ -48,9 +49,9 @@ describe('EmbeddingEngineSettings', () => {
   describe('input length bounds', () => {
     function fill(settings: Partial<EmbeddingEngineSettings>):
         Wasm.EmbeddingEngineSettings {
-      const wasmSettings =
+      const wasmSettings = unwrapWasmResult(
           liteRtLm.liteRtLmWasm.EmbeddingEngineSettings.createDefault(
-              modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+              modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
           wasmSettings, {...settings, model: '/path/to/model'});
       return wasmSettings;
@@ -81,9 +82,9 @@ describe('EmbeddingEngineSettings', () => {
   describe('vision token bounds', () => {
     function fill(settings: Partial<EmbeddingEngineSettings>):
         Wasm.EmbeddingEngineSettings {
-      const wasmSettings =
+      const wasmSettings = unwrapWasmResult(
           liteRtLm.liteRtLmWasm.EmbeddingEngineSettings.createDefault(
-              modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+              modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
           wasmSettings, {...settings, model: '/path/to/model'});
       return wasmSettings;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Device-only check of the Android implementation. The dma-buf reader it is
+// Device-only checks of the Android implementation. The dma-buf parser it is
 // built on is tested on Linux in accelerator_memory_dmabuf_test.cc.
 
 #include <gtest/gtest.h>

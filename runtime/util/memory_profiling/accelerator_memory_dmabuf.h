@@ -15,10 +15,10 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MEMORY_PROFILING_ACCELERATOR_MEMORY_DMABUF_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MEMORY_PROFILING_ACCELERATOR_MEMORY_DMABUF_H_
 
-// The DMA-BUF buffers a process holds, read from /proc/self/fdinfo. The
-// building block of the Android implementation of the platform contract in
-// accelerator_memory_monitor.h; built on Linux as well so that it can be tested
-// in CI without a device (accelerator_memory_dmabuf_test.cc). Internal to
+// The DMA-BUF buffers a process holds, read from the kernel's per-descriptor
+// information (fdinfo.h). The building block of the Android implementation of
+// the platform contract in accelerator_memory_monitor.h; built on Linux as
+// well so that it can be tested in CI without a device. Internal to
 // memory_profiling.
 
 #include <cstdint>

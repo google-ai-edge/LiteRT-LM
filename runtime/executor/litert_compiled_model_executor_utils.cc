@@ -677,23 +677,21 @@ GetOptimizedPrefillWorkGroups(
   return work_groups;
 }
 
-absl::Status InitializeAttentionMask(litert::TensorBuffer& mask, bool is_f16) {
-  LITERT_ASSIGN_OR_RETURN(auto mask_size, mask.PackedSize());
-  LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, mask.TensorType());
-  LITERT_ASSIGN_OR_RETURN(auto mask_lock_and_addr,
-                          litert::TensorBufferScopedLock::Create(
-                              mask, litert::TensorBuffer::LockMode::kWrite));
+namespace {
 
-  switch (mask_tensor_type.ElementType()) {
+absl::Status InitializeAttentionMaskBuffer(litert::ElementType element_type,
+                                           void* addr, size_t mask_size,
+                                           bool is_f16) {
+  switch (element_type) {
     case litert::ElementType::Bool:
       // Boolean mask: Default value = false.
-      memset(mask_lock_and_addr.second, 0, mask_size);
+      memset(addr, 0, mask_size);
       break;
     case litert::ElementType::Float32: {
       // Float mask: Default value is based on precision.
       // Default value reference:
       // third_party/odml/infra/genai/inference/ml_drift/llm/tasks/apply_attention_mask_test_util.cc
-      float* mask_ptr = static_cast<float*>(mask_lock_and_addr.second);
+      float* mask_ptr = static_cast<float*>(addr);
       std::fill(mask_ptr, mask_ptr + mask_size / sizeof(float),
                 is_f16 ? -45824 : -0.7f * std::numeric_limits<float>::max());
       break;
@@ -703,8 +701,7 @@ absl::Status InitializeAttentionMask(litert::TensorBuffer& mask, bool is_f16) {
       // This value is approximately -0.7 * MaxFloat16 (65504).
       // 0.7 * 65504 = 45852.8. Truncated to 45824.
       // It provides a margin of ~19680 before overflowing to -inf.
-      tflite::half* mask_ptr =
-          static_cast<tflite::half*>(mask_lock_and_addr.second);
+      tflite::half* mask_ptr = static_cast<tflite::half*>(addr);
       std::fill(mask_ptr, mask_ptr + mask_size / sizeof(tflite::half),
                 tflite::half(-45824.0f));
       break;
@@ -714,6 +711,19 @@ absl::Status InitializeAttentionMask(litert::TensorBuffer& mask, bool is_f16) {
           "Unsupported attention mask data type.");
   }
   return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::Status InitializeAttentionMask(litert::TensorBuffer& mask, bool is_f16) {
+  LITERT_ASSIGN_OR_RETURN(auto mask_size, mask.PackedSize());
+  LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, mask.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto mask_lock_and_addr,
+                          litert::TensorBufferScopedLock::Create(
+                              mask, litert::TensorBuffer::LockMode::kWrite));
+  return InitializeAttentionMaskBuffer(mask_tensor_type.ElementType(),
+                                       mask_lock_and_addr.second, mask_size,
+                                       is_f16);
 }
 
 absl::Status FillSingleBufferCacheParamTensor(
@@ -822,51 +832,9 @@ bool IsBidirectionalMaskType(proto::AttentionMaskType type) {
          type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
 }
 
-}  // namespace
-
-bool ShouldSkipGlobalCausalAttentionMask(
-    Backend backend, bool gpu_optimized_single_buffer_cache,
-    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
-    const ::litert::TensorBuffer* attn_mask_buffer,
-    const ::litert::TensorBuffer* attn_mask_local_buffer) {
-  if (backend != Backend::GPU || !gpu_optimized_single_buffer_cache ||
-      !signatures.input_attn_mask.has_value() ||
-      !signatures.input_int32_param.has_value() ||
-      IsBidirectionalMaskType(attn_params.global_type)) {
-    return false;
-  }
-  // When the GPU delegate consumes the attention mask, it registers GPU buffer
-  // requirements for `input_attn_mask`, so `CreateInputBuffer` allocates a
-  // device buffer (e.g., Metal, OpenCL, or WebGPU). When all SDPA nodes in the
-  // subgraph compute causal masking directly from `param_tensor` and prune the
-  // boolean mask consumer from the GPU graph, no GPU buffer requirement is
-  // registered and `CreateInputBuffer` falls back to `kHostMemory`.
-  //
-  // The fallback host buffer is still allocated (`posix_memalign`), but once
-  // this returns true the executor never locks, initializes, or fills it, and
-  // the GPU graph never reads it. Its pages are therefore never touched and do
-  // not become resident, so the cost is address space rather than physical
-  // memory. Previously the same buffer was zeroed and filled on every prefill
-  // chunk and decode step (e.g. 1024 x 32768 bytes = 32 MB per prefill call),
-  // which did commit it.
-  if (!IsPrunedBoolHostMask(attn_mask_buffer)) {
-    return false;
-  }
-  // Models without a local mask leave `input_attn_mask_local` unset and pass
-  // `attn_mask_local_buffer == nullptr`, which still skips the global mask.
-  // When `input_attn_mask_local` is present, the executor initializes and fills
-  // both masks under the same guard, so the local mask must also be causal and
-  // pruned from the GPU graph.
-  if (signatures.input_attn_mask_local.has_value()) {
-    return !IsBidirectionalMaskType(attn_params.local_type) &&
-           IsPrunedBoolHostMask(attn_mask_local_buffer);
-  }
-  return true;
-}
-
-absl::Status FillAttentionMask(
-    litert::TensorBuffer& mask, int start_timestep, int steps,
-    proto::AttentionMaskType attention_mask_type,
+absl::Status FillAttentionMaskImpl(
+    litert::TensorBuffer& mask, std::optional<bool> init_is_f16,
+    int start_timestep, int steps, proto::AttentionMaskType attention_mask_type,
     std::optional<absl::Span<const int>> token_ids,
     std::optional<int> sliding_window_size,
     std::optional<RingBufferAttentionMaskMode> mode) {
@@ -881,10 +849,18 @@ absl::Status FillAttentionMask(
                           litert::TensorBufferScopedLock::Create(
                               mask, litert::TensorBuffer::LockMode::kWrite));
 
+  if (init_is_f16.has_value()) {
+    ABSL_RETURN_IF_ERROR(InitializeAttentionMaskBuffer(
+        mask_tensor_type.ElementType(), mask_lock_and_addr.second, mask_size,
+        *init_is_f16));
+  }
+
   int batch_offset = mask_size / batch_size;
   if (mask_tensor_type.ElementType() == litert::ElementType::Bool) {
     batch_offset /= sizeof(bool);
-    std::memset(mask_lock_and_addr.second, 0, mask_size);
+    if (!init_is_f16.has_value()) {
+      std::memset(mask_lock_and_addr.second, 0, mask_size);
+    }
   } else if (mask_tensor_type.ElementType() == litert::ElementType::Float32) {
     batch_offset /= sizeof(float);
   } else if (mask_tensor_type.ElementType() == litert::ElementType::Float16) {
@@ -989,6 +965,70 @@ absl::Status FillAttentionMask(
     }
   }
   return absl::OkStatus();
+}
+
+}  // namespace
+
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer,
+    const ::litert::TensorBuffer* attn_mask_local_buffer) {
+  if (backend != Backend::GPU || !gpu_optimized_single_buffer_cache ||
+      !signatures.input_attn_mask.has_value() ||
+      !signatures.input_int32_param.has_value() ||
+      IsBidirectionalMaskType(attn_params.global_type)) {
+    return false;
+  }
+  // When the GPU delegate consumes the attention mask, it registers GPU buffer
+  // requirements for `input_attn_mask`, so `CreateInputBuffer` allocates a
+  // device buffer (e.g., Metal, OpenCL, or WebGPU). When all SDPA nodes in the
+  // subgraph compute causal masking directly from `param_tensor` and prune the
+  // boolean mask consumer from the GPU graph, no GPU buffer requirement is
+  // registered and `CreateInputBuffer` falls back to `kHostMemory`.
+  //
+  // The fallback host buffer is still allocated (`posix_memalign`), but once
+  // this returns true the executor never locks, initializes, or fills it, and
+  // the GPU graph never reads it. Its pages are therefore never touched and do
+  // not become resident, so the cost is address space rather than physical
+  // memory. Previously the same buffer was zeroed and filled on every prefill
+  // chunk and decode step (e.g. 1024 x 32768 bytes = 32 MB per prefill call),
+  // which did commit it.
+  if (!IsPrunedBoolHostMask(attn_mask_buffer)) {
+    return false;
+  }
+  // Models without a local mask leave `input_attn_mask_local` unset and pass
+  // `attn_mask_local_buffer == nullptr`, which still skips the global mask.
+  // When `input_attn_mask_local` is present, the executor initializes and fills
+  // both masks under the same guard, so the local mask must also be causal and
+  // pruned from the GPU graph.
+  if (signatures.input_attn_mask_local.has_value()) {
+    return !IsBidirectionalMaskType(attn_params.local_type) &&
+           IsPrunedBoolHostMask(attn_mask_local_buffer);
+  }
+  return true;
+}
+
+absl::Status FillAttentionMask(
+    litert::TensorBuffer& mask, int start_timestep, int steps,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids,
+    std::optional<int> sliding_window_size,
+    std::optional<RingBufferAttentionMaskMode> mode) {
+  return FillAttentionMaskImpl(mask, /*init_is_f16=*/std::nullopt,
+                               start_timestep, steps, attention_mask_type,
+                               token_ids, sliding_window_size, mode);
+}
+
+absl::Status InitializeAndFillAttentionMask(
+    litert::TensorBuffer& mask, bool is_f16, int start_timestep, int steps,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids,
+    std::optional<int> sliding_window_size,
+    std::optional<RingBufferAttentionMaskMode> mode) {
+  return FillAttentionMaskImpl(mask, /*init_is_f16=*/is_f16, start_timestep,
+                               steps, attention_mask_type, token_ids,
+                               sliding_window_size, mode);
 }
 
 absl::StatusOr<std::unique_ptr<ModelResources>>

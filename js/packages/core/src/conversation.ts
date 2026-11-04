@@ -17,7 +17,7 @@
 import {AudioContentPart, ContentPart, ImageContentPart, Message, MessageLike} from './conversation_config.js';
 import {Mutex} from './mutex.js';
 import {ChatInterface} from './orchestration/chat_interface.js';
-import {BenchmarkInfo, Conversation as WasmConversation, Engine as WasmEngine} from './wasm_binding_types.js';
+import {BenchmarkInfo, Conversation as WasmConversation, Engine as WasmEngine, unwrapWasmResult} from './wasm_binding_types.js';
 
 const BUSY_MESSAGE =
     'Conversation is busy. A generation is already in progress.';
@@ -47,8 +47,8 @@ export class Conversation implements ChatInterface {
     try {
       const {json, blobs} = await serializeMessage(message);
       return await this.mutexes.executor.acquireAndRun(async () => {
-        const resultStr = await this.conversation.sendMessage(
-            json, blobs, this.visualTokenBudget);
+        const resultStr = unwrapWasmResult(await this.conversation.sendMessage(
+            json, blobs, this.visualTokenBudget));
         return JSON.parse(resultStr) as Message;
       });
     } finally {
@@ -100,7 +100,7 @@ export class Conversation implements ChatInterface {
             // lazily executes tasks, we must queue the message and call
             // waitUntilDone to start the execution concurrently while holding
             // the mutex lock.
-            await this.engine.waitUntilDone();
+            unwrapWasmResult(await this.engine.waitUntilDone());
           });
 
           if (isCancelled || hasErrored) return;
@@ -138,7 +138,7 @@ export class Conversation implements ChatInterface {
 
   async getTokenCount(): Promise<number> {
     return this.mutexes.executor.acquireAndRun(() => {
-      return this.conversation.getTokenCount();
+      return unwrapWasmResult(this.conversation.getTokenCount());
     });
   }
 
@@ -159,7 +159,8 @@ export class Conversation implements ChatInterface {
     this.isBusy = true;
     try {
       return await this.mutexes.executor.acquireAndRun(() => {
-        const wasmClonedConversation = this.conversation.clone();
+        const wasmClonedConversation =
+            unwrapWasmResult(this.conversation.clone());
         return new Conversation(
             wasmClonedConversation, this.engine, this.mutexes,
             this.visualTokenBudget);

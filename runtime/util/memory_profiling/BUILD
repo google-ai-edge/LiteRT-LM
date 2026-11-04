@@ -29,10 +29,8 @@
 # header declares a platform contract, and each operating system contributes
 # one <side>_<os>.cc implementing it (plus an internal <side>_<os>.h when its
 # test needs the building blocks) and one <side>_<os>_test.cc that only runs
-# on that OS. Building blocks that can be tested without the OS go in their own
-# files (accelerator_memory_dmabuf.* is Android's, built on Linux too so that
-# its test runs in CI). <side>_unsupported.cc covers every other OS. To add an
-# OS, add its files and one entry to each select() below.
+# on that OS. <side>_unsupported.cc covers every other OS. To add an OS, add
+# its files and one entry to each select() below.
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
@@ -116,25 +114,97 @@ cc_test(
     ],
 )
 
+# Reader for /proc/self/fdinfo, shared by the Linux and Android accelerator
+# implementations (Android reads dma-buf buffers from it, Linux DRM clients).
+cc_library(
+    name = "fdinfo",
+    srcs = ["fdinfo.cc"],
+    hdrs = ["fdinfo.h"],
+    # Linux and Android only (/proc). The tags keep the other TAP projects from
+    # requesting it explicitly, which target_compatible_with alone turns into a
+    # build error (b/202306027).
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "fake_proc_self",
+    testonly = True,
+    hdrs = ["fake_proc_self.h"],
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_googletest//:gtest_for_library",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "fdinfo_test",
+    srcs = ["fdinfo_test.cc"],
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":fake_proc_self",
+        ":fdinfo",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
 cc_library(
     name = "accelerator_memory_monitor",
     srcs = ["accelerator_memory_monitor.cc"] + select({
+        # The dma-buf reader is Android's implementation; it is built on Linux
+        # too so that accelerator_memory_dmabuf_test can run in CI.
         "@platforms//os:android": [
             "accelerator_memory_android.cc",
             "accelerator_memory_dmabuf.cc",
         ],
-        # The dma-buf reader is Android's implementation; it is built on Linux
-        # too so that accelerator_memory_dmabuf_test can run in CI.
         "@platforms//os:linux": [
             "accelerator_memory_dmabuf.cc",
-            "accelerator_memory_unsupported.cc",
+            "accelerator_memory_linux.cc",
+            "accelerator_memory_nvml.cc",
         ],
         "@platforms//os:windows": ["accelerator_memory_windows.cc"],
         "//conditions:default": ["accelerator_memory_unsupported.cc"],
     }),
     hdrs = ["accelerator_memory_monitor.h"] + select({
         "@platforms//os:android": ["accelerator_memory_dmabuf.h"],
-        "@platforms//os:linux": ["accelerator_memory_dmabuf.h"],
+        "@platforms//os:linux": [
+            "accelerator_memory_dmabuf.h",
+            "accelerator_memory_linux.h",
+            "accelerator_memory_nvml.h",
+        ],
         "@platforms//os:windows": ["accelerator_memory_windows.h"],
         "//conditions:default": [],
     }),
@@ -144,6 +214,8 @@ cc_library(
             "dxgi.lib",
             "gdi32.lib",
         ],
+        # dlopen() of libnvidia-ml.so at run time.
+        "@platforms//os:linux": ["-ldl"],
         "//conditions:default": [],
     }),
     deps = [
@@ -155,10 +227,13 @@ cc_library(
         "@com_google_absl//absl/time",
     ] + select({
         "@platforms//os:android": [
+            ":fdinfo",
             "@com_google_absl//absl/container:flat_hash_map",
         ],
         "@platforms//os:linux": [
+            ":fdinfo",
             "@com_google_absl//absl/container:flat_hash_map",
+            "@com_google_absl//absl/container:flat_hash_set",
         ],
         "//conditions:default": [],
     }),
@@ -179,9 +254,7 @@ cc_test(
 cc_test(
     name = "accelerator_memory_dmabuf_test",
     srcs = ["accelerator_memory_dmabuf_test.cc"],
-    # The Android reader, tested on canned fdinfo; runs on Linux in TAP. The
-    # tags keep the other TAP projects from requesting it explicitly, which
-    # target_compatible_with alone turns into a build error (b/202306027).
+    # The Android reader, tested on canned fdinfo; runs on Linux in TAP.
     tags = [
         "noios",
         "nomacos",
@@ -194,6 +267,7 @@ cc_test(
     }),
     deps = [
         ":accelerator_memory_monitor",
+        ":fake_proc_self",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/strings",
     ],
@@ -204,11 +278,11 @@ cc_test(
     srcs = ["accelerator_memory_android_test.cc"],
     # Runs on an Android device only:
     #   bazel test --config=android_arm64 :accelerator_memory_android_test
-    # No TAP project can run it: TAP's Android project builds cc_test targets
-    # for the Linux host (--android_platforms only applies to android_* rules),
-    # and Tricorder's builder uses the default platform. The tags make them
-    # skip it; target_compatible_with alone is not enough, as an explicitly
-    # requested incompatible target is a build error (b/202306027).
+    # No TAP project can run it (TAP's Android project builds cc_test targets
+    # for the Linux host), and Tricorder's builder uses the default platform.
+    # The tags make them skip it; target_compatible_with alone is not enough,
+    # as an explicitly requested incompatible target is a build error
+    # (b/202306027).
     tags = [
         "noandroid",
         "nobuilder",
@@ -224,6 +298,78 @@ cc_test(
     deps = [
         ":accelerator_memory_monitor",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_linux_test",
+    srcs = ["accelerator_memory_linux_test.cc"],
+    # Canned DRM fdinfo, plus a live check that needs no GPU; runs on Linux in
+    # TAP. The tags keep the other TAP projects from requesting it explicitly
+    # (b/202306027).
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        ":fake_proc_self",
+        ":fdinfo",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_nvml_test",
+    srcs = ["accelerator_memory_nvml_test.cc"],
+    # The GPU-free part of the NVML reader (merging the per-process lists);
+    # runs on Linux in TAP. Tags as for accelerator_memory_linux_test.
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_nvidia_test",
+    srcs = ["accelerator_memory_nvidia_test.cc"],
+    # Needs an NVIDIA GPU: allocates framebuffer memory through the CUDA
+    # driver (dlopen()ed, no build dependency) and checks that NVML attributes
+    # it to this process. requires-gpu-sm90-full picks a whole H100, i.e. no
+    # MIG partitioning, which NVML accounts for differently. The no<os> tags
+    # keep the other TAP projects from requesting it explicitly (b/202306027).
+    tags = [
+        "noandroid",
+        "noios",
+        "nomacos",
+        "nowindows",
+        "requires-gpu-sm90-full",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
     ],
 )
 

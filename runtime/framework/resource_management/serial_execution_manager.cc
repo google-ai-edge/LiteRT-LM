@@ -64,12 +64,9 @@
 #include "runtime/framework/resource_management/resource_manager.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/executor_data_util.h"
+#include "runtime/util/runtime_debugger.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
-
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
-#include "runtime/util/runtime_debugger.h"
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
 namespace litert::lm {
 
@@ -235,11 +232,9 @@ absl::StatusOr<SessionId> SerialExecutionManager::RegisterNewSession(
     ABSL_RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
   }
   session_lookup_.insert({session_id, std::move(session_info)});
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
   if (runtime_debugger_ != nullptr) {
     runtime_debugger_->RegisterDebugSession(session_id);
   }
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
   return session_id;
 }
@@ -261,11 +256,9 @@ absl::Status SerialExecutionManager::ReleaseSession(SessionId session_id) {
   absl::erase_if(task_lookup_, [session_id](const auto& kv) {
     return kv.second.session_id == session_id;
   });
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
   if (runtime_debugger_ != nullptr) {
     runtime_debugger_->UnregisterDebugSession(session_id);
   }
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
   session_lookup_.erase(session_id);
   if (session_lookup_.empty()) {
     resource_manager_->ResetCurrentHandler();
@@ -823,14 +816,9 @@ absl::Status SerialExecutionManager::AddPrefillTask(
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
     if (runtime_debugger_ != nullptr) {
       runtime_debugger_->SetActiveDebugSession(session_id);
     }
-#else
-    // Suppress -Wunused-variable for non-debugger builds.
-    (void)session_id;
-#endif
 
     auto responses =
         Tasks::Prefill(*llm_executor.value(), *executor_inputs,
@@ -886,7 +874,6 @@ absl::Status SerialExecutionManager::AddDecodeTask(
     callback = [](absl::StatusOr<Responses>) {};
   }
 
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
   if (runtime_debugger_ != nullptr) {
     callback = [this, session_id, cb = std::move(callback)](
                    absl::StatusOr<Responses> responses) mutable {
@@ -896,7 +883,6 @@ absl::Status SerialExecutionManager::AddDecodeTask(
       cb(std::move(responses));
     };
   }
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
   auto task = [this, task_id, session_id,
                repetition_penalty_config = std::move(repetition_penalty_config),
@@ -946,14 +932,9 @@ absl::Status SerialExecutionManager::AddDecodeTask(
         decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
       }
 
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
     if (runtime_debugger_ != nullptr) {
       runtime_debugger_->SetActiveDebugSession(session_id);
     }
-#else
-    // Suppress -Wunused-variable for non-debugger builds.
-    (void)session_id;
-#endif
 
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,

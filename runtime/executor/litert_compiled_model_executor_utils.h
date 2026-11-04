@@ -254,6 +254,29 @@ absl::Status FillAttentionMask(
     std::optional<int> sliding_window_size = std::nullopt,
     std::optional<RingBufferAttentionMaskMode> mode = std::nullopt);
 
+// Initializes and fills the attention mask tensor for a given range of
+// timesteps in a single TensorBuffer lock scope.
+// The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
+// mask - The attention mask tensor to be initialized and filled.
+// is_f16 - Whether to use the FP16 mask floor (-45824) when initializing a
+//          Float32 mask tensor; ignored for Bool and Float16 masks.
+// start_timestep - The starting timestep to be filled at seq = 1.
+// steps - The number of steps to fill (the number of sequences to be filled).
+// attention_mask_type - The attention mask type.
+// token_ids - The token ids of the full context. Required for
+//             kVisionBidirectional attention mask type during prefill.
+// sliding_window_size - The sliding window size.
+// mode - Explicit operational mode for ring-buffer masks (prefill, decode, or
+//        verify).
+// Returns absl::OkStatus() on success, or an error status if locking the
+// buffer fails, the mask element type is unsupported, or filling fails.
+absl::Status InitializeAndFillAttentionMask(
+    ::litert::TensorBuffer& mask, bool is_f16, int start_timestep, int steps,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids = std::nullopt,
+    std::optional<int> sliding_window_size = std::nullopt,
+    std::optional<RingBufferAttentionMaskMode> mode = std::nullopt);
+
 // Fills the parameters used by single buffer cache update from
 // start_index to start_index + update_length.
 // Note that this parameter tensor is used by add_values_to_cache kernel and

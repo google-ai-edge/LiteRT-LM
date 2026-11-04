@@ -29,6 +29,7 @@
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -58,6 +59,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -353,6 +355,8 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
     CompiledTextEncoderInfo compiled_text_encoder_info) {
+  RET_CHECK_NE(compiled_text_encoder_info.compiled_model, nullptr)
+      << "The compiled text encoder is null.";
   return absl::WrapUnique(new EmbeddingLiteRtCompiledModelExecutor(
       std::move(executor_settings), env, std::move(resources),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
@@ -422,8 +426,8 @@ EmbeddingLiteRtCompiledModelExecutor::PrepareEncoderRun(
 }
 
 absl::StatusOr<std::vector<float>>
-EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(const EncoderRun& run,
-                                                       size_t sequence_length) {
+EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(
+    const EncoderRun& run, size_t sequence_length, CancellationLatch* latch) {
   std::vector<litert::TensorBuffer>& input_buffers = *run.input_buffers;
   std::vector<litert::TensorBuffer>& output_buffers = *run.output_buffers;
 
@@ -448,10 +452,18 @@ EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(const EncoderRun& run,
     }
   }
 
+  if (latch != nullptr && latch->IsCancelled()) {
+    return absl::CancelledError("The text encoder run was cancelled.");
+  }
   {
     ScopedLatency scoped(latency_stats_, kTextEncoderInferenceLatency);
-    LITERT_RETURN_IF_ERROR(compiled_model_->Run(run.signature_index,
-                                                input_buffers, output_buffers));
+    auto result = compiled_model_->Run(run.signature_index, input_buffers,
+                                       output_buffers);
+    // An interrupted run reports a generic error.
+    if (!result.HasValue() && latch != nullptr && latch->IsCancelled()) {
+      return absl::CancelledError("The text encoder run was cancelled.");
+    }
+    LITERT_RETURN_IF_ERROR(result);
   }
 
   std::vector<float> output_vector;
@@ -493,12 +505,18 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
         /*token_offset=*/0));
   }
 
-  return FinishEncoderRun(run, tokens.size());
+  return FinishEncoderRun(run, tokens.size(), /*latch=*/nullptr);
 }
 
 absl::StatusOr<std::vector<float>>
 EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
     absl::Span<const float> input_embeddings) {
+  return EncodeInputEmbeddings(input_embeddings, /*latch=*/nullptr);
+}
+
+absl::StatusOr<std::vector<float>>
+EmbeddingLiteRtCompiledModelExecutor::EncodeInputEmbeddings(
+    absl::Span<const float> input_embeddings, CancellationLatch* latch) {
   ScopedLatency scoped_total_latency(latency_stats_);
 
   if (expected_input_dimension_.empty() ||
@@ -556,7 +574,19 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
               embeddings_ptr + buffer_elements, 0.0f);
   }
 
-  return FinishEncoderRun(run, sequence_length);
+  return FinishEncoderRun(run, sequence_length, latch);
+}
+
+absl::StatusOr<std::vector<float>>
+EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingFromInputEmbeddings(
+    absl::Span<const float> input_embeddings,
+    absl::FunctionRef<bool()> should_cancel) {
+  RET_CHECK_NE(compiled_model_, nullptr) << "The text encoder is not compiled.";
+  CancellationLatch latch(should_cancel, {compiled_model_.get()});
+  if (latch.IsCancelled()) {
+    return absl::CancelledError("The text encoder run was cancelled.");
+  }
+  return EncodeInputEmbeddings(input_embeddings, &latch);
 }
 
 absl::StatusOr<EmbeddingOutput>
@@ -702,6 +732,25 @@ absl::string_view EmbeddingLiteRtCompiledModelExecutor::ExecutorBackendName()
 absl::StatusOr<std::vector<int>>
 EmbeddingLiteRtCompiledModelExecutor::GetExpectedInputDimension() const {
   return expected_input_dimension_;
+}
+
+std::vector<TextEncoderVariant>
+EmbeddingLiteRtCompiledModelExecutor::GetSupportedVariants() const {
+  // The input embeddings are [batch, seq_len, embed_dim] or [seq_len,
+  // embed_dim]. A dynamic (non-positive) batch dimension is run with a batch
+  // size of 1.
+  const int batch_size = (expected_input_dimension_.size() == 3 &&
+                          expected_input_dimension_[0] > 0)
+                             ? expected_input_dimension_[0]
+                             : 1;
+  std::vector<TextEncoderVariant> variants;
+  variants.reserve(encoder_signatures_.size());
+  // encoder_signatures_ is ordered by ascending sequence length.
+  for (const auto& [sequence_length, signature_index] : encoder_signatures_) {
+    variants.push_back(
+        {.batch_size = batch_size, .sequence_length = sequence_length});
+  }
+  return variants;
 }
 
 absl::StatusOr<int>
