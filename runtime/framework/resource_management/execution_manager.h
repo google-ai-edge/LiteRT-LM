@@ -295,6 +295,10 @@ class ExecutionManager {
   // Returns the vision executor properties.
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const = 0;
+
+  // Returns true if the AI Edge Debugger is active for this execution manager,
+  // i.e. it captures tensors and token traces for its sessions.
+  virtual bool IsDebuggerEnabled() const { return false; }
 };
 
 }  // namespace litert::lm

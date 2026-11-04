@@ -74,6 +74,7 @@
 #endif
 #include "runtime/util/litert_lm_streaming_loader.h"
 #include "runtime/util/litert_util.h"
+#include "runtime/util/runtime_debugger.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "runtime/util/streamed_weights_manager.h"
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -85,10 +86,6 @@
 #include "support/tokenizer/sentencepiece_tokenizer.h"
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/tokenizer.h"
-
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
-#include "runtime/util/runtime_debugger.h"
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
 namespace litert::lm {
 namespace {
@@ -539,14 +536,15 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
 
   std::unique_ptr<LlmExecutor> executor;
 
-  // Engine-scoped Debugger handle enabled via LITERT_LM_DEBUGGER_ENABLED=1.
-  // Defaults to nullptr for zero-overhead in standard production Release
-  // builds.
+  // Engine-scoped Debugger handle, enabled via
+  // `EngineSettings::SetEnableDebugger(true)`. Stays nullptr otherwise, so the
+  // debugger adds no graph callbacks or per-token work.
   std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr;
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
-  runtime_debugger =
-      RuntimeDebugger::Create(main_executor_settings.GetCacheDir());
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
+  if (engine_settings.GetEnableDebugger()) {
+    // MaybeUpdateAndValidate() already rejected unusable cache dirs.
+    runtime_debugger =
+        RuntimeDebugger::Create(main_executor_settings.GetCacheDir());
+  }
 
   switch (main_executor_settings.GetBackend()) {
     default: {
@@ -560,7 +558,6 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
       ABSL_ASSIGN_OR_RETURN(executor, CreateLlmLiteRtCompiledModelExecutor(
                                           main_executor_settings,
                                           owned_env->env, *model_resources));
-#if defined(LITERT_LM_DEBUGGER_ENABLED)
       if (main_executor_settings.GetBackend() == Backend::CPU ||
           main_executor_settings.GetBackend() == Backend::GPU) {
         if (auto* litert_executor =
@@ -574,7 +571,6 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
           }
         }
       }
-#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
     }
   };
 
@@ -662,6 +658,13 @@ absl::StatusOr<std::unique_ptr<Engine>>
 EngineAdvancedImpl::CreateStreamingWeights(
     EngineSettings engine_settings, absl::string_view input_prompt_as_hint) {
   ABSL_LOG(INFO) << "Constructing EngineAdvancedImpl from a weight stream...";
+  // The debugger is not supported with streamed weights. Turn it off before
+  // validation so its cache-dir requirement does not fail this path.
+  if (engine_settings.GetEnableDebugger()) {
+    ABSL_LOG(WARNING) << "AI Edge Debugger is not supported with streamed "
+                         "weights; debugger is disabled.";
+    engine_settings.SetEnableDebugger(false);
+  }
 
   std::optional<BenchmarkInfo> benchmark_info;
   if (engine_settings.IsBenchmarkEnabled()) {

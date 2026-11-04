@@ -55,6 +55,7 @@
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/runtime_debugger.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // NOLINT
@@ -340,7 +341,8 @@ class ExecutionManagerTest
   void CreateExecutionManager(
       std::unique_ptr<FakeLlmExecutor> fake_llm_executor,
       std::unique_ptr<AudioExecutorSettings> audio_executor_settings = nullptr,
-      std::unique_ptr<AudioExecutor> audio_executor = nullptr) {
+      std::unique_ptr<AudioExecutor> audio_executor = nullptr,
+      std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr) {
     // The objects are moved to execution_manager_ so we can't access them
     // after creation.
     if (GetParam() == ExecutionManagerType::kThreaded) {
@@ -352,7 +354,8 @@ class ExecutionManagerTest
               /*llm_executor=*/std::move(fake_llm_executor),
               /*vision_executor_settings=*/nullptr,
               std::move(audio_executor_settings),
-              /*litert_env=*/nullptr, std::move(audio_executor)));
+              /*litert_env=*/nullptr, std::move(audio_executor),
+              std::move(runtime_debugger)));
     } else {
       ASSERT_OK_AND_ASSIGN(
           execution_manager_,
@@ -362,7 +365,8 @@ class ExecutionManagerTest
               /*llm_executor=*/std::move(fake_llm_executor),
               /*vision_executor_settings=*/nullptr,
               std::move(audio_executor_settings),
-              /*litert_env=*/nullptr, std::move(audio_executor)));
+              /*litert_env=*/nullptr, std::move(audio_executor),
+              std::move(runtime_debugger)));
     }
   }
 
@@ -386,6 +390,21 @@ class ExecutionManagerTest
 
   std::unique_ptr<ExecutionManager> execution_manager_;
 };
+
+TEST_P(ExecutionManagerTest, IsDebuggerEnabledIsFalseWithoutRuntimeDebugger) {
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor());
+  EXPECT_FALSE(execution_manager_->IsDebuggerEnabled());
+}
+
+TEST_P(ExecutionManagerTest, IsDebuggerEnabledIsTrueWithRuntimeDebugger) {
+  std::shared_ptr<RuntimeDebugger> runtime_debugger =
+      RuntimeDebugger::Create(::testing::TempDir());
+  ASSERT_NE(runtime_debugger, nullptr);
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor(),
+                         /*audio_executor_settings=*/nullptr,
+                         /*audio_executor=*/nullptr, runtime_debugger);
+  EXPECT_TRUE(execution_manager_->IsDebuggerEnabled());
+}
 
 TEST_P(ExecutionManagerTest, CanGetMutableBenchmarkInfo) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());

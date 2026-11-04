@@ -67,14 +67,14 @@ THREADED_EXECUTION_MANAGER_COMMON_DEPS = [
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_macros",
     "@litert//litert/cc:litert_tensor_buffer",
-    "//runtime/components:model_resources",
-    "//runtime/components:sampler",
-    "//runtime/components:sampler_factory",
-    "//runtime/components:stop_token_detector",
     "//runtime/components/constrained_decoding:constraint",
     "//runtime/components/constrained_decoding:no_repeat_ngram_config",
     "//runtime/components/constrained_decoding:repetition_penalty_config",
     "//runtime/components/constrained_decoding:suppress_tokens_config",
+    "//runtime/components:model_resources",
+    "//runtime/components:sampler",
+    "//runtime/components:sampler_factory",
+    "//runtime/components:stop_token_detector",
     "//runtime/core:tasks",
     "//runtime/engine:engine_interface",
     "//runtime/engine:engine_settings",
@@ -90,6 +90,7 @@ THREADED_EXECUTION_MANAGER_COMMON_DEPS = [
     "//runtime/util:convert_tensor_buffer",
     "//runtime/util:executor_data_util",
     "//runtime/util:litert_status_util",
+    "//runtime/util:runtime_debugger",
     "//runtime/util:tensor_buffer_util",
 ]
 
@@ -97,20 +98,9 @@ cc_library(
     name = "threaded_execution_manager",
     srcs = ["threaded_execution_manager.cc"],
     hdrs = ["threaded_execution_manager.h"],
-    local_defines = select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "LITERT_LM_DEBUGGER_ENABLED=1",
-        ],
-        "//conditions:default": [],
-    }),
     deps = THREADED_EXECUTION_MANAGER_COMMON_DEPS + [
         ":resource_manager",
-    ] + select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "//runtime/util:runtime_debugger",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 # Lite variant of :threaded_execution_manager that links :resource_manager_lite
@@ -119,20 +109,9 @@ cc_library(
     name = "threaded_execution_manager_lite",
     srcs = ["threaded_execution_manager.cc"],
     hdrs = ["threaded_execution_manager.h"],
-    local_defines = select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "LITERT_LM_DEBUGGER_ENABLED=1",
-        ],
-        "//conditions:default": [],
-    }),
     deps = THREADED_EXECUTION_MANAGER_COMMON_DEPS + [
         ":resource_manager_lite",
-    ] + select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "//runtime/util:runtime_debugger",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 SERIAL_EXECUTION_MANAGER_COMMON_DEPS = [
@@ -152,14 +131,14 @@ SERIAL_EXECUTION_MANAGER_COMMON_DEPS = [
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_macros",
     "@litert//litert/cc:litert_tensor_buffer",
-    "//runtime/components:model_resources",
-    "//runtime/components:sampler",
-    "//runtime/components:sampler_factory",
-    "//runtime/components:stop_token_detector",
     "//runtime/components/constrained_decoding:constraint",
     "//runtime/components/constrained_decoding:no_repeat_ngram_config",
     "//runtime/components/constrained_decoding:repetition_penalty_config",
     "//runtime/components/constrained_decoding:suppress_tokens_config",
+    "//runtime/components:model_resources",
+    "//runtime/components:sampler",
+    "//runtime/components:sampler_factory",
+    "//runtime/components:stop_token_detector",
     "//runtime/core:tasks",
     "//runtime/engine:engine_settings",
     "//runtime/engine:io_types",
@@ -173,6 +152,7 @@ SERIAL_EXECUTION_MANAGER_COMMON_DEPS = [
     "//runtime/util:convert_tensor_buffer",
     "//runtime/util:executor_data_util",
     "//runtime/util:litert_status_util",
+    "//runtime/util:runtime_debugger",
     "//runtime/util:tensor_buffer_util",
 ]
 
@@ -180,20 +160,9 @@ cc_library(
     name = "serial_execution_manager",
     srcs = ["serial_execution_manager.cc"],
     hdrs = ["serial_execution_manager.h"],
-    local_defines = select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "LITERT_LM_DEBUGGER_ENABLED=1",
-        ],
-        "//conditions:default": [],
-    }),
     deps = SERIAL_EXECUTION_MANAGER_COMMON_DEPS + [
         ":resource_manager",
-    ] + select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "//runtime/util:runtime_debugger",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 # Lite variant of :serial_execution_manager that links :resource_manager_lite
@@ -202,20 +171,9 @@ cc_library(
     name = "serial_execution_manager_lite",
     srcs = ["serial_execution_manager.cc"],
     hdrs = ["serial_execution_manager.h"],
-    local_defines = select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "LITERT_LM_DEBUGGER_ENABLED=1",
-        ],
-        "//conditions:default": [],
-    }),
     deps = SERIAL_EXECUTION_MANAGER_COMMON_DEPS + [
         ":resource_manager_lite",
-    ] + select({
-        "//runtime/util:litert_lm_debugger_enabled": [
-            "//runtime/util:runtime_debugger",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 cc_test(
@@ -252,6 +210,7 @@ cc_test(
         "//runtime/proto:token_cc",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
+        "//runtime/util:runtime_debugger",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
         "//support/tokenizer",

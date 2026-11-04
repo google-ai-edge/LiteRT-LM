@@ -170,8 +170,15 @@ absl::Status MaybeOverrideActivationType(
   return absl::OkStatus();
 }
 
+// Returns true if `cache_dir` names a real directory rather than being unset
+// or one of the ":nocache" / ":memory" sentinels.
+bool IsPersistentCacheDir(absl::string_view cache_dir) {
+  return !cache_dir.empty() && cache_dir != ":nocache" &&
+         cache_dir != ":memory";
+}
+
 absl::Status ValidateCacheDir(absl::string_view cache_dir) {
-  if (cache_dir.empty() || cache_dir == ":nocache" || cache_dir == ":memory") {
+  if (!IsPersistentCacheDir(cache_dir)) {
     return absl::OkStatus();
   }
   if (!IsDirectoryWritable(cache_dir)) {
@@ -607,6 +614,15 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   }
 
   ABSL_RETURN_IF_ERROR(ValidateCacheDir(main_executor_settings_.GetCacheDir()));
+  if (enable_debugger_) {
+    const absl::string_view cache_dir = main_executor_settings_.GetCacheDir();
+    if (!IsPersistentCacheDir(cache_dir)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "The AI Edge Debugger requires a cache directory to write captures "
+          "to, but the cache dir is \"",
+          cache_dir, "\". Set a cache directory or disable the debugger."));
+    }
+  }
   if (vision_executor_settings_.has_value()) {
     ABSL_RETURN_IF_ERROR(
         ValidateCacheDir(vision_executor_settings_->GetCacheDir()));
@@ -734,6 +750,7 @@ std::ostream& operator<<(std::ostream& os, const EngineSettings& settings) {
      << settings.GetParallelFileSectionLoading() << std::endl;
   os << "  SingleThreadedExecution: " << settings.GetSingleThreadedExecution()
      << std::endl;
+  os << "  EnableDebugger: " << settings.GetEnableDebugger() << std::endl;
   return os;
 }
 
@@ -778,6 +795,12 @@ bool EngineSettings::GetSingleThreadedExecution() const {
 void EngineSettings::SetSingleThreadedExecution(
     bool single_threaded_execution) {
   single_threaded_execution_ = single_threaded_execution;
+}
+
+bool EngineSettings::GetEnableDebugger() const { return enable_debugger_; }
+
+void EngineSettings::SetEnableDebugger(bool enable_debugger) {
+  enable_debugger_ = enable_debugger;
 }
 
 SessionConfig SessionConfig::CreateDefault() {

@@ -277,6 +277,11 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const override;
 
+  // Returns true if a RuntimeDebugger was attached at creation.
+  bool IsDebuggerEnabled() const override {
+    return runtime_debugger_ != nullptr;
+  }
+
  private:
   ThreadedExecutionManager(
       Tokenizer* absl_nonnull tokenizer,
