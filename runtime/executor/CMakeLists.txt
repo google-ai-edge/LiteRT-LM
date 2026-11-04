@@ -451,6 +451,8 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
     LiteRTLM::Runtime::Executor::LlmLitertMtpDrafter
     LiteRTLM::Runtime::Executor::LlmLitertVerifier
     LiteRTLM::Runtime::Executor::MtpGatingPolicy
+    LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
+    LiteRTLM::Runtime::Executor::NvidiaTokenTableSupport
     LiteRTLM::Runtime::Executor::SpeculativeDecodingController
     LiteRTLM::Runtime::Executor::MagicNumberConfigsHelper
     LiteRTLM::Runtime::Components::ModelResourcesInterface
@@ -665,7 +667,33 @@ target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplingCpuUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
+    LiteRTLM::Generated::Protobuf
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# NVIDIA Token Table Support
+# ==============================================================================
+add_litertlm_library(runtime_executor_nvidia_token_table_support STATIC
+  nvidia_token_table_support.cc
+)
+add_library(LiteRTLM::Runtime::Executor::NvidiaTokenTableSupport
+  ALIAS runtime_executor_nvidia_token_table_support)
+
+target_include_directories(runtime_executor_nvidia_token_table_support
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_nvidia_token_table_support
+  PUBLIC
+    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
+    LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Generated::Protobuf
     LITERTLM_DEPS
 )

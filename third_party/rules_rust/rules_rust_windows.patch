@@ -1,0 +1,12 @@
+diff --git a/cargo/cargo_build_script_runner/cargo_manifest_dir.rs b/cargo/cargo_build_script_runner/cargo_manifest_dir.rs
+--- cargo/cargo_build_script_runner/cargo_manifest_dir.rs
++++ cargo/cargo_build_script_runner/cargo_manifest_dir.rs
+@@ -282,7 +282,7 @@
+     /// been copied into the runfiles directory.
+     fn drain_runfiles_dir_windows(&self) -> Result<(), String> {
+         for dest in self.runfiles.values() {
+-            if !self
++            if self
+                 .filename_suffixes_to_retain
+                 .iter()
+                 .any(|suffix| dest.ends_with(suffix))

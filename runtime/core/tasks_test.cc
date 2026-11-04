@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -338,6 +339,57 @@ TEST_F(TasksTest, DecodeSucceed) {
   EXPECT_EQ(task_responses.GetTokenIds().size(), 1);
   EXPECT_THAT(task_responses.GetTokenIds()[0],
               ElementsAre(224, 24, 8, 66, 246, 18, 2295));
+}
+
+// A fake executor that records the bound on the tokens the loop takes that
+// each decode step receives.
+class BoundFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  using FakeLlmExecutor::FakeLlmExecutor;
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
+    bounds_.push_back(decode_params.GetMaxNumTokensToEmit().value_or(-1));
+    return FakeLlmExecutor::Decode(decode_params);
+  }
+
+  std::vector<int> bounds_;
+};
+
+TEST_F(TasksTest, DecodeTellsEachStepTheTokensLeft) {
+  std::vector<std::vector<int>> prefill_tokens = {
+      {2, 90, 547, 58, 735, 210, 466, 2294}};
+  std::vector<std::vector<int>> decode_tokens = {{224}, {24}, {8},    {66},
+                                                 {246}, {18}, {2295}, {2294}};
+  std::vector<int> prefill_token_ids = {2, 90, 547, 58, 735, 210, 466, 2294};
+  // The output limit (4), then the context's (11 holds 8 prefilled and 3
+  // decoded): the tokens left before each step.
+  for (const auto& [max_num_tokens, max_output_tokens, bounds] :
+       std::vector<std::tuple<int, int, std::vector<int>>>{
+           {512, 4, {4, 3, 2, 1}}, {11, 100, {3, 2, 1}}}) {
+    BoundFakeLlmExecutor executor(tokenizer_->GetVocabSize(), prefill_tokens,
+                                  decode_tokens);
+    executor.GetMutableExecutorSettings().value()->SetMaxNumTokens(
+        max_num_tokens);
+    std::optional<BenchmarkInfo> benchmark_info;
+    ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                         tokenizer_->TokenIdsToTensorBuffer(prefill_token_ids));
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+    ASSERT_OK(Tasks::Prefill(executor, inputs, /*wait_for_completion=*/true,
+                             benchmark_info));
+    StopTokenDetector stop_token_detector(/*batch_size=*/1);
+    ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+    ASSERT_OK(Tasks::Decode(
+        executor, *tokenizer_, stop_token_detector, /*num_output_candidates=*/1,
+        benchmark_info, /*sampler=*/std::nullopt,
+        RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+        SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+        /*decoded_ids=*/std::nullopt, callback, /*cancelled=*/nullptr,
+        max_output_tokens));
+    EXPECT_EQ(executor.bounds_, bounds) << max_num_tokens;
+  }
 }
 
 // A fake executor that reports executor stats and counts stat resets.
