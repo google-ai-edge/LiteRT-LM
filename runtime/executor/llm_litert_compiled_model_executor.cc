@@ -365,6 +365,18 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> CreateMtpDrafter(
       executor_metadata, std::move(verify_pass_runner));
 }
 
+const TensorBuffer* FindBufferOrNull(
+    const absl::flat_hash_map<absl::string_view, TensorBuffer>& buffers,
+    const std::optional<std::string>& name) {
+  if (!name.has_value()) {
+    return nullptr;
+  }
+  if (const auto it = buffers.find(*name); it != buffers.end()) {
+    return &it->second;
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
@@ -378,77 +390,83 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
   };
   // Create input_token, positions and attn_mask buffers after determining
   // the prefill length.
-  if (!signatures_.input_tokens.empty()) {
-    ABSL_RETURN_IF_ERROR(dyn_shape_resolver(signatures_.input_tokens));
-    LITERT_ASSIGN_OR_RETURN(auto tokens_buffer,
-                            compiled_model_->CreateInputBuffer(
-                                prefill_signature, signatures_.input_tokens));
-    prefill_input_buffers[signatures_.input_tokens] = std::move(tokens_buffer);
+  if (!prefill_signatures_.input_tokens.empty()) {
+    ABSL_RETURN_IF_ERROR(dyn_shape_resolver(prefill_signatures_.input_tokens));
+    LITERT_ASSIGN_OR_RETURN(
+        auto tokens_buffer,
+        compiled_model_->CreateInputBuffer(prefill_signature,
+                                           prefill_signatures_.input_tokens));
+    prefill_input_buffers[prefill_signatures_.input_tokens] =
+        std::move(tokens_buffer);
   } else {
     // If input_tokens is empty, we must have input_embeddings.
-    if (!signatures_.input_embeddings.has_value()) {
+    if (!prefill_signatures_.input_embeddings.has_value()) {
       return absl::FailedPreconditionError(
           "Input tokens or embeddings must be provided.");
     }
     ABSL_RETURN_IF_ERROR(
-        dyn_shape_resolver(signatures_.input_embeddings.value()));
+        dyn_shape_resolver(prefill_signatures_.input_embeddings.value()));
     LITERT_ASSIGN_OR_RETURN(
         auto embeddings_buffer,
         compiled_model_->CreateInputBuffer(
-            prefill_signature, signatures_.input_embeddings.value()));
-    prefill_input_buffers[signatures_.input_embeddings.value()] =
+            prefill_signature, prefill_signatures_.input_embeddings.value()));
+    prefill_input_buffers[prefill_signatures_.input_embeddings.value()] =
         std::move(embeddings_buffer);
 
     // We may have per layer embedding as well.
-    if (signatures_.input_per_layer_embeddings.has_value()) {
-      ABSL_RETURN_IF_ERROR(
-          dyn_shape_resolver(signatures_.input_per_layer_embeddings.value()));
+    if (prefill_signatures_.input_per_layer_embeddings.has_value()) {
+      ABSL_RETURN_IF_ERROR(dyn_shape_resolver(
+          prefill_signatures_.input_per_layer_embeddings.value()));
       LITERT_ASSIGN_OR_RETURN(
           auto per_layer_embeddings_buffer,
           compiled_model_->CreateInputBuffer(
               prefill_signature,
-              signatures_.input_per_layer_embeddings.value()));
-      prefill_input_buffers[signatures_.input_per_layer_embeddings.value()] =
+              prefill_signatures_.input_per_layer_embeddings.value()));
+      prefill_input_buffers[prefill_signatures_.input_per_layer_embeddings
+                                .value()] =
           std::move(per_layer_embeddings_buffer);
     }
   }
-  ABSL_RETURN_IF_ERROR(dyn_shape_resolver(signatures_.input_positions));
-  LITERT_ASSIGN_OR_RETURN(auto positions_buffer,
-                          compiled_model_->CreateInputBuffer(
-                              prefill_signature, signatures_.input_positions));
-  prefill_input_buffers[signatures_.input_positions] =
+  ABSL_RETURN_IF_ERROR(dyn_shape_resolver(prefill_signatures_.input_positions));
+  LITERT_ASSIGN_OR_RETURN(
+      auto positions_buffer,
+      compiled_model_->CreateInputBuffer(prefill_signature,
+                                         prefill_signatures_.input_positions));
+  prefill_input_buffers[prefill_signatures_.input_positions] =
       std::move(positions_buffer);
 
-  if (signatures_.input_attn_mask.has_value()) {
-    ABSL_ASSIGN_OR_RETURN(bool is_attn_dyn,
-                          HasDynamicDim(*compiled_model_, prefill_signature,
-                                        signatures_.input_attn_mask.value()));
+  if (prefill_signatures_.input_attn_mask.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(
+        bool is_attn_dyn,
+        HasDynamicDim(*compiled_model_, prefill_signature,
+                      prefill_signatures_.input_attn_mask.value()));
     if (is_attn_dyn) {
       std::vector<int> new_shape = {1, 1, sequence_length, context_length};
       LITERT_RETURN_IF_ERROR(compiled_model_->ResizeInputTensor(
-          prefill_signature, signatures_.input_attn_mask.value(), new_shape));
+          prefill_signature, prefill_signatures_.input_attn_mask.value(),
+          new_shape));
     }
 
     LITERT_ASSIGN_OR_RETURN(
         auto attn_mask_buffer,
         compiled_model_->CreateInputBuffer(
-            prefill_signature, signatures_.input_attn_mask.value()));
-    prefill_input_buffers[signatures_.input_attn_mask.value()] =
+            prefill_signature, prefill_signatures_.input_attn_mask.value()));
+    prefill_input_buffers[prefill_signatures_.input_attn_mask.value()] =
         std::move(attn_mask_buffer);
-    if (signatures_.input_attn_mask_local.has_value()) {
+    if (prefill_signatures_.input_attn_mask_local.has_value()) {
       auto attn_mask_local_buffer = compiled_model_->CreateInputBuffer(
-          prefill_signature, signatures_.input_attn_mask_local.value());
-      prefill_input_buffers[signatures_.input_attn_mask_local.value()] =
+          prefill_signature, prefill_signatures_.input_attn_mask_local.value());
+      prefill_input_buffers[prefill_signatures_.input_attn_mask_local.value()] =
           std::move(*attn_mask_local_buffer);
     }
   }
-  if (signatures_.input_int32_param.has_value()) {
+  if (prefill_signatures_.input_int32_param.has_value()) {
     gpu_optimized_single_buffer_cache_ = true;
     LITERT_ASSIGN_OR_RETURN(
         auto param_tensor_buffer,
         compiled_model_->CreateInputBuffer(
-            prefill_signature, signatures_.input_int32_param.value()));
-    prefill_input_buffers[signatures_.input_int32_param.value()] =
+            prefill_signature, prefill_signatures_.input_int32_param.value()));
+    prefill_input_buffers[prefill_signatures_.input_int32_param.value()] =
         std::move(param_tensor_buffer);
   }
   return absl::OkStatus();
@@ -480,7 +498,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillOutputBuffers(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::FillInputBufferWithToken(
     const std::vector<std::shared_ptr<TokenData>>& unprocessed_token,
-    TensorBuffer& input_buffer, bool is_per_layer_embedding) {
+    TensorBuffer& input_buffer, bool is_per_layer_embedding,
+    bool write_token_id) {
   if (unprocessed_token.empty()) {
     return absl::InvalidArgumentError("Unprocessed token is null.");
   }
@@ -494,7 +513,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::FillInputBufferWithToken(
       static_cast<char*>(input_buffer_lock_and_addr.second);
   for (const auto& token : unprocessed_token) {
     size_t size_to_fill = 0;
-    if (token->embedding().empty()) {
+    if (write_token_id || token->embedding().empty()) {
       size_to_fill = sizeof(int32_t);
       RET_CHECK_GE(stride, size_to_fill);
       // If the token has no embedding, the input_buffer should takes token id.
@@ -520,7 +539,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::FillInputBufferWithToken(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::LookupPendingTokenEmbeddings(
     TokenData& token) {
-  if (!signatures_.input_tokens.empty()) {
+  if (!prefill_signatures_.input_tokens.empty()) {
     return absl::OkStatus();
   }
   // `FillInputBufferWithToken` writes the token ID into the embedding buffer
@@ -534,7 +553,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::LookupPendingTokenEmbeddings(
     ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
         token.id(), token.mutable_embedding()));
   }
-  if (signatures_.input_per_layer_embeddings.has_value() &&
+  if (prefill_signatures_.input_per_layer_embeddings.has_value() &&
       token.per_layer_embedding().empty()) {
     if (per_layer_embedding_lookup_ == nullptr) {
       return absl::FailedPreconditionError(
@@ -635,7 +654,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
   {
     // Fill the input buffers with scoped locks.
     auto& prefill_input_pos =
-        prefill_input_buffers[signatures_.input_positions];
+        prefill_input_buffers[prefill_signatures_.input_positions];
     LITERT_ASSIGN_OR_RETURN(auto prefill_input_pos_size,
                             prefill_input_pos.PackedSize());
     LITERT_ASSIGN_OR_RETURN(
@@ -646,7 +665,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         static_cast<int32_t*>(prefill_input_pos_lock_and_addr.second);
 
     memset(prefill_input_pos_ptr, 0, prefill_input_pos_size);
-
     // TODO(b/425396146): Add the unit tests for checking the prefill length.
     // We always hold one pending token in the input ids for the next
     // prefill or decode step.
@@ -661,9 +679,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     RET_CHECK_LE(pending_input_token.size(), 1);
     const int start_step = internal_start_step;
     const bool has_pending_input_token = !pending_input_token.empty();
-    const bool use_token_as_lookup = !signatures_.input_tokens.empty();
+    const bool use_token_as_lookup = !prefill_signatures_.input_tokens.empty();
     const bool use_per_layer_embedding =
-        signatures_.input_per_layer_embeddings.has_value();
+        prefill_signatures_.input_per_layer_embeddings.has_value();
     // If there is no pending input token and no input token to prefill, we can
     // skip the prefill by storing the token as a pending input token.
     bool skip_prefill = !has_pending_input_token && prefill_length == 0;
@@ -673,18 +691,20 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         if (use_token_as_lookup) {
           ABSL_RETURN_IF_ERROR(FillInputBufferWithToken(
               pending_input_token,
-              prefill_input_buffers[signatures_.input_tokens]));
+              prefill_input_buffers[prefill_signatures_.input_tokens],
+              /*is_per_layer_embedding=*/false, /*write_token_id=*/true));
         } else {
           ABSL_RETURN_IF_ERROR(
               LookupPendingTokenEmbeddings(*pending_input_token[0]));
           ABSL_RETURN_IF_ERROR(FillInputBufferWithToken(
               pending_input_token,
-              prefill_input_buffers[signatures_.input_embeddings.value()]));
+              prefill_input_buffers[prefill_signatures_.input_embeddings
+                                        .value()]));
           if (use_per_layer_embedding) {
             ABSL_RETURN_IF_ERROR(FillInputBufferWithToken(
                 pending_input_token,
-                prefill_input_buffers[signatures_.input_per_layer_embeddings
-                                          .value()],
+                prefill_input_buffers[prefill_signatures_
+                                          .input_per_layer_embeddings.value()],
                 /*is_per_layer_embedding=*/true));
           }
         }
@@ -709,7 +729,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
 
       if (use_token_as_lookup) {
         auto& prefill_input_buffer =
-            prefill_input_buffers[signatures_.input_tokens];
+            prefill_input_buffers[prefill_signatures_.input_tokens];
         LITERT_ASSIGN_OR_RETURN(
             auto prefill_input_lock_and_addr,
             TensorBufferScopedLock::Create(prefill_input_buffer,
@@ -734,7 +754,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
       } else {
         // If not using token as lookup, we must have input_embeddings.
         TensorBuffer* prefill_input_embeddings_buffer =
-            &(prefill_input_buffers[signatures_.input_embeddings.value()]);
+            &(prefill_input_buffers[prefill_signatures_.input_embeddings
+                                        .value()]);
         if (embedding_lookup_ != nullptr) {
           ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
               processed_input_tokens, prefill_input_embeddings_buffer,
@@ -755,10 +776,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         }
 
         // We may have per layer embedding as well.
-        if (signatures_.input_per_layer_embeddings) {
+        if (prefill_signatures_.input_per_layer_embeddings) {
           TensorBuffer* prefill_input_per_layer_embeddings_buffer =
-              &(prefill_input_buffers[signatures_.input_per_layer_embeddings
-                                          .value()]);
+              &(prefill_input_buffers[prefill_signatures_
+                                          .input_per_layer_embeddings.value()]);
           if (per_layer_embedding_lookup_ != nullptr) {
             ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
                 processed_input_tokens,
@@ -786,9 +807,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
                                 /*steps=*/prefill_length + input_idx,
                                 RingBufferAttentionMaskMode::kPrefill));
       if (gpu_optimized_single_buffer_cache_) {
-        LITERT_RETURN_IF_ERROR(signatures_.input_int32_param.has_value());
+        LITERT_RETURN_IF_ERROR(
+            prefill_signatures_.input_int32_param.has_value());
         ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
-            prefill_input_buffers[signatures_.input_int32_param.value()],
+            prefill_input_buffers[prefill_signatures_.input_int32_param
+                                      .value()],
             start_step, ids.size()));
       }
     }
@@ -1045,7 +1068,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
   // Fill the input buffers with scoped locks.
   if (use_token_as_lookup) {
     ABSL_RETURN_IF_ERROR(FillInputBufferWithToken(
-        token, decode_input_buffers_[signatures_.input_tokens]));
+        token, decode_input_buffers_[signatures_.input_tokens],
+        /*is_per_layer_embedding=*/false, /*write_token_id=*/true));
   } else {
     if (!signatures_.input_embeddings.has_value()) {
       return absl::InvalidArgumentError(
@@ -1105,29 +1129,27 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareAttentionMasks(
     absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
     int start_timestep, int steps,
     RingBufferAttentionMaskMode local_mask_mode) {
+  const ModelSignatures& signatures =
+      local_mask_mode == RingBufferAttentionMaskMode::kPrefill
+          ? prefill_signatures_
+          : signatures_;
   const AttentionMaskParams attn_params =
       GetAttentionMaskParams(executor_metadata_);
   const TensorBuffer* attn_mask_buffer =
-      signatures_.input_attn_mask.has_value() &&
-              input_buffers.contains(*signatures_.input_attn_mask)
-          ? &input_buffers[*signatures_.input_attn_mask]
-          : nullptr;
+      FindBufferOrNull(input_buffers, signatures.input_attn_mask);
   const TensorBuffer* attn_mask_local_buffer =
-      signatures_.input_attn_mask_local.has_value() &&
-              input_buffers.contains(*signatures_.input_attn_mask_local)
-          ? &input_buffers[*signatures_.input_attn_mask_local]
-          : nullptr;
+      FindBufferOrNull(input_buffers, signatures.input_attn_mask_local);
   const bool skip_cpu_global_causal_mask = ShouldSkipGlobalCausalAttentionMask(
       executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
-      signatures_, attn_params, attn_mask_buffer, attn_mask_local_buffer);
-  if (!signatures_.input_attn_mask.has_value() || skip_cpu_global_causal_mask) {
+      signatures, attn_params, attn_mask_buffer, attn_mask_local_buffer);
+  if (!signatures.input_attn_mask.has_value() || skip_cpu_global_causal_mask) {
     return absl::OkStatus();
   }
 
   const bool needs_token_ids =
       attn_params.global_type ==
           proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL ||
-      (signatures_.input_attn_mask_local.has_value() &&
+      (signatures.input_attn_mask_local.has_value() &&
        attn_params.local_type ==
            proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL);
   std::vector<std::vector<int>> tokens_copy;
@@ -1140,11 +1162,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareAttentionMasks(
   }
 
   ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
-      input_buffers[*signatures_.input_attn_mask], use_fp16_precision_,
+      input_buffers[*signatures.input_attn_mask], use_fp16_precision_,
       start_timestep, steps, attn_params.global_type, token_ids_span));
-  if (signatures_.input_attn_mask_local.has_value()) {
+  if (signatures.input_attn_mask_local.has_value()) {
     ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
-        input_buffers[*signatures_.input_attn_mask_local], use_fp16_precision_,
+        input_buffers[*signatures.input_attn_mask_local], use_fp16_precision_,
         start_timestep, steps, attn_params.local_type, token_ids_span,
         attn_params.sliding_window_size, local_mask_mode));
   }
@@ -1257,6 +1279,14 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::EnsureMtpDrafterLoaded() {
                        per_layer_embedding_lookup_.get(), executor_metadata_,
                        CreateVerifyPassRunner(),
                        /*compiled_mtp_drafter_model=*/nullptr));
+  // Speculative rounds sample and verify on their own, so the sampler must no
+  // longer start the next decode step by itself.
+  if (sampler_handles_input_) {
+    sampler_handles_input_ = false;
+    if (sampler_ != nullptr && sampler_->HandlesInput()) {
+      ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+    }
+  }
   return MaybeUpdateVerifierSamplerConfig();
 }
 
@@ -1593,6 +1623,39 @@ LlmLiteRtCompiledModelExecutorBase::GetPrefillSignatureKey() const {
   return prefill_signature_key;
 }
 
+// static
+ModelSignatures LlmLiteRtCompiledModelExecutorBase::GetPrefillModelSignatures(
+    const CompiledModel* compiled_model,
+    const ModelSignatures& decode_signatures) {
+  if (compiled_model == nullptr) {
+    return decode_signatures;
+  }
+  for (int i = 0; i < compiled_model->GetNumSignatures(); ++i) {
+    auto signature = compiled_model->GetSignature(i);
+    if (!signature ||
+        !absl::StartsWith(signature->Key(), kPrefillSignatureRunner)) {
+      continue;
+    }
+    auto prefill_signatures = GetModelSignaturesFromInputOutputNames(
+        signature->InputNames(), signature->OutputNames(), /*strict=*/false);
+    if (!prefill_signatures.ok() ||
+        (prefill_signatures->input_tokens.empty() &&
+         !prefill_signatures->input_embeddings.has_value())) {
+      return decode_signatures;
+    }
+    // Prefill has no logits output, and decode has the outputs the executor
+    // reads.
+    prefill_signatures->output_logits = decode_signatures.output_logits;
+    return *std::move(prefill_signatures);
+  }
+  return decode_signatures;
+}
+
+bool LlmLiteRtCompiledModelExecutorBase::DecodeTakesTokens() const {
+  return !signatures_.input_tokens.empty() &&
+         !signatures_.input_embeddings.has_value();
+}
+
 absl::StatusOr<std::unique_ptr<StateInterface>>
 LlmLiteRtCompiledModelExecutorBase::CloneState() const {
   int output_heads = 1;
@@ -1726,8 +1789,17 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
                     env_, /*sequence_size=*/1, vocab_size, data_type));
 
-  // Disable GPU token copy for models that run embedding on the GPU.
-  const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);
+  // The sampler can feed the sampled token straight into the next decode step
+  // only when the decode signature looks up the token embedding in the graph.
+  // Models whose prefill takes embeddings (e.g. for multimodal interleaving)
+  // still qualify as long as their decode signature takes tokens.
+  //
+  // Speculative decoding runs its own draft / verify passes after sampling,
+  // so it must not race with a decode step the sampler already started.
+  const bool speculative_decoding_off =
+      resources_ == nullptr ||
+      executor_settings_.GetEffectiveSpeculativeDecodingMode() ==
+          SpeculativeDecodingMode::kOff;
 
   // If the sampler can handle input, prepare the input tensors for it.
   bool sampler_handles_input = true;
@@ -1735,10 +1807,31 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
     sampler_handles_input =
         executor_settings_.GetAdvancedSettings()->sampler_handles_input;
   }
-  sampler_handles_input_ =
-      sampler_handles_input && sampler_->CanHandleInput() &&
-      runs_embedding_on_gpu && !signatures_.input_tokens.empty() &&
-      !signatures_.input_attn_mask_local.has_value();
+  const AttentionMaskParams sampler_attn_params =
+      GetAttentionMaskParams(executor_metadata_);
+  const TensorBuffer* decode_attn_mask_buffer =
+      FindBufferOrNull(decode_input_buffers_, signatures_.input_attn_mask);
+  const TensorBuffer* decode_attn_mask_local_buffer = FindBufferOrNull(
+      decode_input_buffers_, signatures_.input_attn_mask_local);
+  // True when the GPU graph computes the causal masks from `param_tensor`, so
+  // neither mask needs to be updated per step.
+  const bool skip_sampler_global_causal_mask =
+      ShouldSkipGlobalCausalAttentionMask(
+          executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
+          signatures_, sampler_attn_params, decode_attn_mask_buffer,
+          decode_attn_mask_local_buffer);
+  // The sampler cannot update a local (sliding window) mask, so it is allowed
+  // only when the GPU graph does not consume it.
+  const bool local_mask_ok = !signatures_.input_attn_mask_local.has_value() ||
+                             skip_sampler_global_causal_mask;
+  sampler_handles_input_ = sampler_handles_input &&
+                           sampler_->CanHandleInput() && DecodeTakesTokens() &&
+                           speculative_decoding_off && local_mask_ok;
+  ABSL_LOG(INFO) << "Sampler handles decode input: " << sampler_handles_input_
+                 << " (can_handle_input=" << sampler_->CanHandleInput()
+                 << ", decode_takes_tokens=" << DecodeTakesTokens()
+                 << ", speculative_decoding_off=" << speculative_decoding_off
+                 << ", local_mask_ok=" << local_mask_ok << ")";
   if (sampler_handles_input_) {
     ABSL_LOG(INFO) << "Sampler will handle decode input tensors.";
     if (!decode_prev_input_pos_) {
@@ -1747,17 +1840,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
           compiled_model_->CreateInputBuffer(kDecodeSignatureRunner,
                                              signatures_.input_positions));
     }
-    const AttentionMaskParams sampler_attn_params =
-        GetAttentionMaskParams(executor_metadata_);
-    const TensorBuffer* decode_attn_mask_buffer =
-        signatures_.input_attn_mask.has_value() &&
-                decode_input_buffers_.contains(*signatures_.input_attn_mask)
-            ? &decode_input_buffers_[*signatures_.input_attn_mask]
-            : nullptr;
-    const bool skip_sampler_global_causal_mask =
-        ShouldSkipGlobalCausalAttentionMask(
-            executor_settings_.GetBackend(), gpu_optimized_single_buffer_cache_,
-            signatures_, sampler_attn_params, decode_attn_mask_buffer);
     if (!decode_prev_mask_ && signatures_.input_attn_mask.has_value() &&
         !skip_sampler_global_causal_mask) {
       LITERT_ASSIGN_OR_RETURN(
@@ -2279,11 +2361,14 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                             clear_kv_cache_before_prefill));
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto prefill_runner_set,
-                        GetPrefillRunnerSetFromModel(
-                            *compiled_model, kPrefillSignatureRunner,
-                            /*input_positions_name=*/signatures.input_positions,
-                            executor_settings.GetSelectedSignatures()));
+  const ModelSignatures prefill_signatures =
+      GetPrefillModelSignatures(compiled_model.get(), signatures);
+  ABSL_ASSIGN_OR_RETURN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(
+          *compiled_model, kPrefillSignatureRunner,
+          /*input_positions_name=*/prefill_signatures.input_positions,
+          executor_settings.GetSelectedSignatures()));
   RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
   bool enable_profiling =
       executor_settings.GetAdvancedSettings() &&

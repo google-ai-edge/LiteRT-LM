@@ -2466,5 +2466,140 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest,
   EXPECT_EQ(step, 3);
 }
 
+struct PrefillSignaturesTestPeer : public LlmLiteRtCompiledModelExecutorBase {
+  using LlmLiteRtCompiledModelExecutorBase::GetPrefillModelSignatures;
+};
+
+TEST(LlmLiteRtCompiledModelExecutorDynamicTest,
+     GetPrefillModelSignaturesDerivesFromPrefillAndPreservesDecodeLogitsTest) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestDynamicModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compilation_options,
+      CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
+                               /*signatures=*/std::nullopt));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                       model_resources->GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  litert::BufferRef<uint8_t> model_buffer(
+      reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
+      model_buffer_view.size());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      CompiledModel::Create(env, model_buffer, compilation_options));
+
+  ModelSignatures decode_signatures;
+  decode_signatures.input_embeddings = "embeddings";
+  decode_signatures.input_positions = "decode_positions";
+  decode_signatures.output_logits = "custom_decode_logits";
+
+  const ModelSignatures fallback_signatures =
+      PrefillSignaturesTestPeer::GetPrefillModelSignatures(
+          /*compiled_model=*/nullptr, decode_signatures);
+  EXPECT_EQ(fallback_signatures.input_embeddings, "embeddings");
+  EXPECT_TRUE(fallback_signatures.input_tokens.empty());
+  EXPECT_EQ(fallback_signatures.output_logits, "custom_decode_logits");
+
+  const ModelSignatures prefill_signatures =
+      PrefillSignaturesTestPeer::GetPrefillModelSignatures(&compiled_model,
+                                                           decode_signatures);
+  EXPECT_FALSE(prefill_signatures.input_tokens.empty());
+  EXPECT_FALSE(prefill_signatures.input_embeddings.has_value());
+  EXPECT_EQ(prefill_signatures.output_logits, "custom_decode_logits");
+}
+
+TEST(LlmLiteRtCompiledModelExecutorDynamicTest,
+     DecodeAndPrefillWriteTokenIdWhenPendingTokenHasEmbeddingTest) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestDynamicModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  config.kv_increment_size = 8;
+  config.prefill_chunk_size = -1;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compilation_options,
+      CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
+                               /*signatures=*/std::nullopt));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                       model_resources->GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  litert::BufferRef<uint8_t> model_buffer(
+      reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
+      model_buffer_view.size());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      CompiledModel::Create(env, model_buffer, compilation_options));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto executor,
+      LlmLiteRtCompiledModelExecutorDynamic::Create(
+          executor_settings, env,
+          std::make_unique<CompiledModel>(std::move(compiled_model)),
+          model_resources.get()));
+
+  ASSERT_OK(executor->Prefill(MakeTextInputs({1, 7})));
+  auto pending =
+      executor->processed_tokens_for_testing().GetNextUnprocessedToken();
+  ASSERT_EQ(pending.token.size(), 1);
+  ASSERT_EQ(pending.token[0]->id(), 7);
+  // Simulate a pending token whose float embedding was populated for an
+  // embeddings-input prefill before running a tokens-input decode/prefill.
+  pending.token[0]->mutable_embedding() = {1.0f, 2.0f, 3.0f, 4.0f};
+
+  int captured_decode_token = -1;
+  int captured_prefill_first_token = -1;
+  executor->UpdatePreGraphRunCallback(
+      [&](absl::string_view signature_name, int current_step,
+          absl::flat_hash_map<absl::string_view, TensorBuffer>&
+              tensor_buffers) {
+        auto tokens_it = tensor_buffers.find("tokens");
+        ASSERT_NE(tokens_it, tensor_buffers.end());
+        auto tokens_span = ReferTensorBufferAsSpan<int32_t>(tokens_it->second);
+        ASSERT_TRUE(tokens_span);
+        ASSERT_FALSE(tokens_span->empty());
+        if (signature_name == "decode") {
+          captured_decode_token = (*tokens_span)[0];
+        } else {
+          captured_prefill_first_token = (*tokens_span)[0];
+        }
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto logits, executor->DecodeLogits(ExecutorInputs()));
+  EXPECT_EQ(captured_decode_token, 7);
+
+  ASSERT_OK(executor->Prefill(MakeTextInputs({9})));
+  pending = executor->processed_tokens_for_testing().GetNextUnprocessedToken();
+  ASSERT_EQ(pending.token.size(), 1);
+  ASSERT_EQ(pending.token[0]->id(), 9);
+  pending.token[0]->mutable_embedding() = {5.0f, 6.0f, 7.0f, 8.0f};
+
+  ASSERT_OK(executor->Prefill(MakeTextInputs({10, 11})));
+  EXPECT_EQ(captured_prefill_first_token, 9);
+}
+
 }  // namespace
 }  // namespace litert::lm

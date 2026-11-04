@@ -265,6 +265,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         state_(std::move(state)),
         decode_state_(std::move(decode_state)),
         signatures_(signatures),
+        prefill_signatures_(
+            GetPrefillModelSignatures(compiled_model_.get(), signatures)),
         weight_cache_path_(std::move(weight_cache_path)),
         embedding_lookup_(std::move(embedding_lookup)),
         per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
@@ -421,10 +423,26 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       absl::flat_hash_map<absl::string_view, TensorBuffer>&
           prefill_output_buffers);
 
-  // Fills the input buffer from the unprocessed token.
+  // Fills the input buffer from the unprocessed token. Writes the token ID
+  // when `write_token_id` is true or the token has no embedding, e.g. for a
+  // decode signature that takes tokens while the pending token still carries
+  // the embedding looked up for an embeddings-input prefill.
+  //
+  // args:
+  //   unprocessed_token: The per-batch unprocessed tokens to write into
+  //     `input_buffer`.
+  //   input_buffer: The target input tensor buffer to populate.
+  //   is_per_layer_embedding: Whether to write the per-layer embedding instead
+  //     of the token embedding when writing embeddings.
+  //   write_token_id: Whether to write the token ID even if `unprocessed_token`
+  //     already contains a pre-computed embedding.
+  // returns:
+  //   `absl::OkStatus()` on success, or an error status if `unprocessed_token`
+  //   is empty or locking/writing `input_buffer` fails.
   absl::Status FillInputBufferWithToken(
       const std::vector<std::shared_ptr<TokenData>>& unprocessed_token,
-      TensorBuffer& input_buffer, bool is_per_layer_embedding = false);
+      TensorBuffer& input_buffer, bool is_per_layer_embedding = false,
+      bool write_token_id = false);
 
   // Prepares the first prefill step possibly after decode.
   // When output_batch_size_ > 1, It selects only one set of KV cache buffers.
@@ -450,6 +468,28 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Gets the prefill signature key from the compiled model.
   absl::StatusOr<std::string> GetPrefillSignatureKey() const;
 
+  // Returns the signatures of the first prefill signature of `compiled_model`,
+  // or `decode_signatures` if `compiled_model` is null or has no prefill
+  // signature.
+  //
+  // args:
+  //   compiled_model: The compiled model, or null.
+  //   decode_signatures: The signatures derived from the decode signature.
+  // returns:
+  //   The prefill signatures.
+  static ModelSignatures GetPrefillModelSignatures(
+      const CompiledModel* compiled_model,
+      const ModelSignatures& decode_signatures);
+
+  // Returns whether the decode signature takes token IDs and looks up their
+  // embeddings in the graph, so that a GPU sampler can feed the sampled token
+  // straight into the next decode step.
+  //
+  // returns:
+  //   True if `signatures_.input_tokens` is non-empty and
+  //   `signatures_.input_embeddings` is not present.
+  bool DecodeTakesTokens() const;
+
   absl::StatusOr<litert::Profiler> GetProfiler() const;
 
   // Clones the KV cache state.
@@ -470,8 +510,15 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   std::unique_ptr<StateInterface> state_;
   std::unique_ptr<StateInterface> decode_state_;
 
-  // The signatures of the model.
+  // The signatures of the model, derived from the decode signature.
   ModelSignatures signatures_;
+
+  // The signatures of the prefill signatures. They differ from `signatures_`
+  // only when prefill and decode take different inputs, e.g. a model whose
+  // prefill takes `embeddings` (so that multimodal embeddings can be
+  // interleaved on the CPU) while decode takes `tokens` and looks up the
+  // embedding in the graph.
+  ModelSignatures prefill_signatures_;
 
   // The context of the executor, which contains
   // 1. The configuration settings.
