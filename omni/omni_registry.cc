@@ -34,20 +34,23 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
-#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #include "omni/base/model_cache.h"
 #include "omni/base/model_utils.h"
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/text2speech_metadata.pb.h"
@@ -228,15 +231,13 @@ absl::Status ConfigureLiteRtOptions(absl::string_view model_name,
     ABSL_RETURN_IF_ERROR(
         ConfigureGpuModelCache(model_name, cache, gpu_options));
   } else if (settings.backend == OmniEngine::Settings::Backend::kNpu) {
-    accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kNpu);
-    LITERT_ASSIGN_OR_RETURN(
-        auto& qnn_options,
-        options.GetOptions<::litert::qualcomm::QualcommOptions>());
-    qnn_options.SetHtpPerformanceMode(::litert::qualcomm::QualcommOptions::
-                                          HtpPerformanceMode::kHighPerformance);
+    accelerators |= static_cast<uint32_t>(HwAccelerators::kNpu);
+#if !defined(LITERT_DISABLE_NPU)
+    ABSL_RETURN_IF_ERROR(lm::SetNpuOptions(lm::NpuOptions{}, options));
+#endif  // !defined(LITERT_DISABLE_NPU)
   }
   LITERT_RETURN_IF_ERROR(options.SetHardwareAccelerators(
-      static_cast<::litert::HwAccelerators>(accelerators)));
+      static_cast<HwAccelerators>(accelerators)));
   return absl::OkStatus();
 }
 
@@ -514,10 +515,28 @@ OmniRegistry::CreateSessionFactory(
       MergeMetadata(lm_resources.get(), factory_key.metadata_proto_type_id,
                     metadata, merged_metadata);
 
-  LITERT_ASSIGN_OR_RETURN(::litert::Environment env,
-                          ::litert::Environment::Create({}));
-  LITERT_ASSIGN_OR_RETURN(::litert::Options options,
-                          ::litert::Options::Create());
+  // Must outlive `env_options` because `EnvironmentOptions::Option` stores an
+  // unowned `const char*` pointing into `library_dir`.
+  std::string library_dir;
+  std::vector<EnvironmentOptions::Option> env_options;
+  if (resolved_settings.backend == OmniEngine::Settings::Backend::kNpu) {
+    library_dir = !resolved_settings.litert_dispatch_lib_dir.empty()
+                      ? resolved_settings.litert_dispatch_lib_dir
+                      : std::filesystem::path(resolved_settings.model_path)
+                            .parent_path()
+                            .string();
+    if (!library_dir.empty()) {
+      env_options.push_back(
+          {EnvironmentOptions::Tag::kDispatchLibraryDir, library_dir.c_str()});
+      env_options.push_back({EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
+                             library_dir.c_str()});
+    }
+  }
+  LITERT_ASSIGN_OR_RETURN(
+      Environment env,
+      Environment::Create(
+          EnvironmentOptions(absl::MakeConstSpan(env_options))));
+  LITERT_ASSIGN_OR_RETURN(Options options, Options::Create());
   ABSL_RETURN_IF_ERROR(
       ConfigureLiteRtOptions(resolved_model_name, resolved_settings, options));
 

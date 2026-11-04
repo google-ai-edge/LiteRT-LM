@@ -20,6 +20,7 @@
 #include <ios>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -35,10 +36,16 @@
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#if !defined(LITERT_DISABLE_NPU)
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#endif  // !defined(LITERT_DISABLE_NPU)
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
@@ -564,6 +571,104 @@ TEST(OmniRegistryTest,
   EXPECT_EQ(captured_metadata.decode_stop_token_id(), 50257);
   EXPECT_THAT(captured_metadata.decode_start_token_ids(),
               ElementsAre(50258, 50259));
+}
+
+TEST(OmniRegistryTest, ConfiguresNpuEnvironmentAndCompilationOptions) {
+  auto& registry = OmniRegistry::Get();
+  std::string captured_dispatch_dir;
+  std::string captured_compiler_plugin_dir;
+  int captured_accelerators = 0;
+#if !defined(LITERT_DISABLE_NPU)
+  qualcomm::QualcommOptions::HtpPerformanceMode captured_qnn_perf =
+      qualcomm::QualcommOptions::HtpPerformanceMode::kDefault;
+  qualcomm::QualcommOptions::HtpPerfCtrlMode captured_qnn_ctrl =
+      qualcomm::QualcommOptions::HtpPerfCtrlMode::kAuto;
+  google_tensor::GoogleTensorOptions::PerformanceMode captured_gt_perf =
+      google_tensor::GoogleTensorOptions::PerformanceMode::kBalanced;
+#endif  // !defined(LITERT_DISABLE_NPU)
+
+  ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+      .model_names = {"npu-options-test-model"},
+      .get_session_factory =
+          [&](absl::string_view /*model_name*/,
+              const OmniEngine::Settings& /*settings*/,
+              const MessageLite* /*session_cfg*/,
+              const MessageLite* /*metadata*/, Environment& env,
+              Options& options,
+              std::shared_ptr<lm::ModelResources> /*lm_resources*/)
+          -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+        captured_dispatch_dir.clear();
+        captured_compiler_plugin_dir.clear();
+        captured_accelerators = 0;
+        if (auto env_opts = env.GetOptions(); env_opts.HasValue()) {
+          if (auto opt = env_opts->GetOption(
+                  EnvironmentOptions::Tag::kDispatchLibraryDir);
+              opt.HasValue() && std::holds_alternative<const char*>(*opt)) {
+            captured_dispatch_dir = std::get<const char*>(*opt);
+          }
+          if (auto opt = env_opts->GetOption(
+                  EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+              opt.HasValue() && std::holds_alternative<const char*>(*opt)) {
+            captured_compiler_plugin_dir = std::get<const char*>(*opt);
+          }
+        }
+        if (auto accel = options.GetHardwareAccelerators(); accel.HasValue()) {
+          captured_accelerators = *accel;
+        }
+#if !defined(LITERT_DISABLE_NPU)
+        if (auto qnn_opts = options.GetOptions<qualcomm::QualcommOptions>();
+            qnn_opts.HasValue()) {
+          captured_qnn_perf = qnn_opts->GetHtpPerformanceMode();
+          captured_qnn_ctrl = qnn_opts->GetHtpPerfCtrlMode();
+        }
+        if (auto gt_opts =
+                options.GetOptions<google_tensor::GoogleTensorOptions>();
+            gt_opts.HasValue()) {
+          captured_gt_perf = gt_opts->GetPerformanceMode();
+        }
+#endif  // !defined(LITERT_DISABLE_NPU)
+        return std::make_unique<FakeSessionFactory>();
+      },
+      .session_config_type_id = "Speech2Text",
+  }));
+  absl::Cleanup cleanup = [&] {
+    registry.UnregisterModel("npu-options-test-model");
+  };
+
+  // 1. When litert_dispatch_lib_dir is empty, library_dir defaults to the
+  // parent directory of the resolved model_path.
+  OmniEngine::Settings default_npu_settings{
+      .backend = OmniEngine::Settings::Backend::kNpu,
+      .cache_dir = ":nocache",
+      .model_path = "/data/local/tmp/npu_options_test_model.litertlm",
+  };
+  ASSERT_OK_AND_ASSIGN(auto factory1,
+                       registry.CreateSessionFactory("npu-options-test-model",
+                                                     default_npu_settings));
+  EXPECT_THAT(factory1, NotNull());
+  EXPECT_EQ(captured_dispatch_dir, "/data/local/tmp");
+  EXPECT_EQ(captured_compiler_plugin_dir, "/data/local/tmp");
+  EXPECT_EQ(captured_accelerators,
+            (HwAccelerators::kNpu | HwAccelerators::kCpu).value);
+#if !defined(LITERT_DISABLE_NPU)
+  EXPECT_EQ(captured_qnn_perf,
+            qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  EXPECT_EQ(captured_qnn_ctrl,
+            qualcomm::QualcommOptions::HtpPerfCtrlMode::kManual);
+  EXPECT_EQ(captured_gt_perf,
+            google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+#endif  // !defined(LITERT_DISABLE_NPU)
+
+  // 2. When litert_dispatch_lib_dir is explicitly set, it overrides the model
+  // parent directory.
+  OmniEngine::Settings explicit_npu_settings = default_npu_settings;
+  explicit_npu_settings.litert_dispatch_lib_dir = "/custom/dispatch/libs";
+  ASSERT_OK_AND_ASSIGN(auto factory2,
+                       registry.CreateSessionFactory("npu-options-test-model",
+                                                     explicit_npu_settings));
+  EXPECT_THAT(factory2, NotNull());
+  EXPECT_EQ(captured_dispatch_dir, "/custom/dispatch/libs");
+  EXPECT_EQ(captured_compiler_plugin_dir, "/custom/dispatch/libs");
 }
 
 }  // namespace

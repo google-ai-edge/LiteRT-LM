@@ -110,11 +110,12 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
                                  lm::Backend backend, int num_threads,
                                  ::litert::Environment& env,
                                  ModelResources& resources) {
-  // The acoustic model is slower on GPU than on CPU in practice, so a GPU
-  // engine backend still runs it on CPU unless explicitly configured; only the
-  // vocoder follows the engine backend.
-  const lm::Backend acoustic_backend = config.acoustic_backend.value_or(
-      backend == lm::Backend::GPU ? lm::Backend::CPU : backend);
+  // The acoustic model is slower on GPU/NPU than on CPU in practice (due to
+  // custom bidirectional_lstm ops), so a GPU or NPU engine backend still runs
+  // it on CPU unless explicitly configured; only the vocoder follows the
+  // engine backend.
+  const lm::Backend acoustic_backend =
+      config.acoustic_backend.value_or(lm::Backend::CPU);
   const lm::Backend vocoder_backend = config.vocoder_backend.value_or(backend);
 
   ModelOptions acoustic_options =

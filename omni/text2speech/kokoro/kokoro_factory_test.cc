@@ -159,6 +159,11 @@ TEST(KokoroFactoryTest, InitKokoroResourcesFailsWithNonexistentModels) {
                             1, *shared_env, resources);
     EXPECT_FALSE(gpu_status.ok());
   }
+
+  auto npu_status =
+      InitKokoroResources(config, "/tmp/invalid_path", "", lm::Backend::NPU, 1,
+                          *shared_env, resources);
+  EXPECT_FALSE(npu_status.ok());
 }
 
 TEST(KokoroFactoryTest, CreateKokoroComponentsRejectsMissingModels) {

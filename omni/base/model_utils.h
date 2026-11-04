@@ -77,7 +77,9 @@ struct ModelOptions {
   std::string model_dir;
   // Directory for storing backend cache (e.g., XNNPACK or GPU cache).
   std::string cache_dir;
-  // Execution backend (e.g., CPU, GPU).
+  // Directory containing LiteRT NPU dispatch / compiler plugin libraries.
+  std::string litert_dispatch_lib_dir;
+  // Execution backend (e.g., CPU, GPU, NPU).
   lm::Backend backend = lm::Backend::CPU;
   // Number of threads for CPU execution.
   int num_threads = 4;
@@ -194,6 +196,23 @@ std::string ResolveLitertLmPath(absl::string_view model_folder);
 //   failure.
 absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
     absl::string_view model_path);
+
+// Creates LiteRT compilation options from `options`.
+//
+// `model_path` is the file the model weights are read from; it only feeds the
+// on-disk cache key so caches are invalidated when that file changes.
+//
+// args
+// - options: ModelOptions containing cache_dir, backend, num_threads, etc.
+// - model_name: Logical model name used for cache naming.
+// - model_path: Filesystem path to the model weights file for cache key
+//   invalidation.
+//
+// returns
+// - Configured `Options` instance on success, or error status on failure.
+absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
+                                                 absl::string_view model_name,
+                                                 absl::string_view model_path);
 
 // Creates and compiles a LiteRT model from filesystem path.
 //
