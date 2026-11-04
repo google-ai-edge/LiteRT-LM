@@ -58,6 +58,8 @@ jobs:
       # androidndk rules to create symlinks.
       ANDROID_NDK_HOME:
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
+      PYTHONUTF8: 1
+      PYTHONIOENCODING: utf-8
     steps:
       - name: Install System Dependencies
         run: |
@@ -268,3 +270,12 @@ jobs:
         run: python -m pytest tools/pytest/ -v `
           --backend=cpu --dynamic `
           --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
+
+      - name: Run litert-lm CLI
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            run --config=github_actions_bazel_cache `
+            --action_env=TMP="$env:TMP" `
+            --action_env=TEMP="$env:TEMP" `
+            //python/litert_lm_cli:litert-lm -- `
+            run "$env:GITHUB_WORKSPACE/$env:MODEL_PATH/$env:MODEL_KEY" --prompt="Hello"
