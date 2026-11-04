@@ -403,19 +403,15 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
     auto& mask_buf =
         active_drafter_input_buffers_[*drafter_signatures_.input_attn_mask];
     ABSL_RETURN_IF_ERROR(
-        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(mask_buf,
-                                           /*start_timestep=*/position,
-                                           /*steps=*/1,
-                                           attn_params_.global_type));
+        InitializeAndFillAttentionMask(mask_buf, /*is_f16=*/false,
+                                       /*start_timestep=*/position,
+                                       /*steps=*/1, attn_params_.global_type));
   }
   if (drafter_signatures_.input_attn_mask_local.has_value()) {
     auto& mask_buf = active_drafter_input_buffers_[*drafter_signatures_
                                                         .input_attn_mask_local];
-    ABSL_RETURN_IF_ERROR(
-        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(
-        mask_buf,
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        mask_buf, /*is_f16=*/false,
         /*start_timestep=*/position,
         /*steps=*/1, attn_params_.local_type,
         /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,

@@ -709,17 +709,15 @@ absl::Status LlmLiteRtVerifier::Run(
   // Only the rows of the tokens attend to anything.
   if (signatures_.input_attn_mask.has_value()) {
     auto& mask_buf = active_input_buffers_[*signatures_.input_attn_mask];
-    ABSL_RETURN_IF_ERROR(InitializeAttentionMask(mask_buf, /*is_f16=*/false));
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(mask_buf,
-                                           /*start_timestep=*/position,
-                                           /*steps=*/num_tokens,
-                                           attn_params_.global_type));
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        mask_buf, /*is_f16=*/false,
+        /*start_timestep=*/position,
+        /*steps=*/num_tokens, attn_params_.global_type));
   }
   if (signatures_.input_attn_mask_local.has_value()) {
     auto& mask_buf = active_input_buffers_[*signatures_.input_attn_mask_local];
-    ABSL_RETURN_IF_ERROR(InitializeAttentionMask(mask_buf, /*is_f16=*/false));
-    ABSL_RETURN_IF_ERROR(FillAttentionMask(
-        mask_buf,
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        mask_buf, /*is_f16=*/false,
         /*start_timestep=*/position,
         /*steps=*/num_tokens, attn_params_.local_type,
         /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,
