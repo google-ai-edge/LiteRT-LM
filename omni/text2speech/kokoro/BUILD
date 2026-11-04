@@ -152,13 +152,16 @@ cc_test(
     name = "kokoro_acoustic_stage_test",
     srcs = ["kokoro_acoustic_stage_test.cc"],
     deps = [
+        ":common",
         ":kokoro_acoustic_stage",
         ":kokoro_model_config",
+        ":phonemizer",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
         "@litert//litert/cc:litert_environment",
         "//omni/base:model_resources",
-        "//omni/text2speech:stream_text_source",
+        "//omni/base:stage",
         "//support/util:test_utils",
     ],
 )

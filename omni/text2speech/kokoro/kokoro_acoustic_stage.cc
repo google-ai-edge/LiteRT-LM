@@ -15,6 +15,7 @@
 #include "omni/text2speech/kokoro/kokoro_acoustic_stage.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -180,6 +181,19 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
   ABSL_VLOG(2) << "[TRACE] Starting KokoroAcousticStage::ScheduleInternal";
 
+  if (pending_slices_.empty()) {
+    ABSL_RETURN_IF_ERROR(SliceNextTextChunk());
+  }
+  if (pending_slices_.empty()) {
+    return absl::OkStatus();
+  }
+  const kokoro::TokenSlice slice = std::move(pending_slices_.front());
+  pending_slices_.pop_front();
+  num_pending_slices_.store(pending_slices_.size(), std::memory_order_release);
+  return RunSlice(slice);
+}
+
+absl::Status KokoroAcousticStage::SliceNextTextChunk() {
   auto text = text_source_.GetOutput();
   if (absl::IsNotFound(text.status())) {
     return absl::OkStatus();
@@ -232,8 +246,19 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     slices.back().join_after = SliceJoin::kPunctuation;
   }
 
-  // Step 3: Process each phoneme chunk through unified acoustic prediction.
-  for (const auto& slice : slices) {
+  for (auto& slice : slices) {
+    pending_slices_.push_back(std::move(slice));
+  }
+  num_pending_slices_.store(pending_slices_.size(), std::memory_order_release);
+  return absl::OkStatus();
+}
+
+absl::Status KokoroAcousticStage::RunSlice(const kokoro::TokenSlice& slice) {
+  const int bucket_size = config_.target_bucket > 0
+                              ? std::min(config_.target_bucket, model_capacity_)
+                              : model_capacity_;
+  // Step 3: Run the slice through unified acoustic prediction.
+  {
     const std::vector<int>& token_ids = slice.token_ids;
     const int num_tokens = static_cast<int>(token_ids.size());
     const int seq_len = std::min(bucket_size, num_tokens);
@@ -258,6 +283,10 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     std::vector<int64_t> seq_len_vec = {static_cast<int64_t>(active_len)};
 
     // Step 4: Write input buffers for acoustic model inference.
+    if (acoustic_model_ == nullptr || acoustic_input_buffers_.empty()) {
+      return absl::FailedPreconditionError("Acoustic model not initialized");
+    }
+
     LITERT_RETURN_IF_ERROR(
         acoustic_input_buffers_[input_indices_.phoneme_ids].Write<int64_t>(
             absl::MakeConstSpan(ids_i64)));
