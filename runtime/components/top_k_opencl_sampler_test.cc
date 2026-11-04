@@ -348,10 +348,11 @@ TEST(TopKOpenClSamplerTest, UpdateConfigWorksEndToEnd) {
   sampler_params.set_temperature(1.0);
   sampler_params.set_seed(22000);
 
+  constexpr int kBatchSize = 1;
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<TopKOpenClSampler> sampler,
       TopKOpenClSampler::Create(
-          /*env=*/litert_env, /*batch_size=*/1, /*sequence_size=*/1, vocab_size,
+          /*env=*/litert_env, kBatchSize, /*sequence_size=*/1, vocab_size,
           /*activation_data_type=*/std::nullopt, sampler_params));
   ASSERT_NE(sampler, nullptr);
 
@@ -394,6 +395,14 @@ TEST(TopKOpenClSamplerTest, UpdateConfigWorksEndToEnd) {
   EXPECT_THAT(sampler->UpdateConfig(sampler_params, /*batch_size=*/1, nullptr),
               absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
   expect_always_argmax();
+
+  // A batch size outside [1, creation-time batch size] is rejected.
+  sampler_params.set_k(1);
+  for (const int batch_size : {0, kBatchSize + 1}) {
+    EXPECT_THAT(sampler->UpdateConfig(sampler_params, batch_size, nullptr),
+                absl_testing::StatusIs(absl::StatusCode::kInvalidArgument))
+        << "batch_size=" << batch_size;
+  }
 }
 
 TEST(TopKOpenClSamplerTest, MatchesCpuSampler) {
@@ -472,6 +481,126 @@ TEST(TopKOpenClSamplerTest, MatchesCpuSampler) {
   // Floating-point differences between the backends can only flip a draw that
   // lands right on a cumulative probability boundary, which should be rare.
   EXPECT_LE(num_mismatches, kNumSteps / 100);
+}
+
+TEST(TopKOpenClSamplerTest, MatchesCpuSamplerWithUniforms) {
+  ASSERT_OK_AND_ASSIGN(auto ret, CreateLiteRTResources());
+  auto [litert_model, litert_env, compiled_model] = std::move(ret);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer logits_tensor,
+      compiled_model.CreateOutputBuffer("decode", "logits"));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, logits_tensor.TensorType());
+  const int vocab_size = tensor_type.Layout().Dimensions()[2];
+
+  // Given the same caller-supplied uniforms, the GPU and CPU samplers pick
+  // the same tokens; their own random number generators (seeded differently
+  // here) are not used.
+  constexpr int kTopK = 8;
+  constexpr float kTopP = 0.8f;
+  constexpr float kTemperature = 0.7f;
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(kTopK);
+  sampler_params.set_p(kTopP);
+  sampler_params.set_temperature(kTemperature);
+  sampler_params.set_seed(1);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<TopKOpenClSampler> gpu_sampler,
+      TopKOpenClSampler::Create(litert_env, /*batch_size=*/1,
+                                /*sequence_size=*/1, vocab_size,
+                                ActivationDataType::FLOAT32, sampler_params));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<TopPSampler> cpu_sampler,
+      TopPSampler::Create(kTopK, kTopP, kTemperature, /*batch_size=*/1,
+                          /*sequence_size=*/1, /*seed=*/2));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer gpu_ids_tensor,
+      litert::TensorBuffer::CreateManaged(
+          litert_env, litert::TensorBufferType::kOpenClBuffer,
+          litert::RankedTensorType(litert::ElementType::Int32,
+                                   litert::Layout(litert::Dimensions({1}))),
+          /*buffer_size=*/sizeof(int32_t)));
+  const std::vector<int> initial_ids = {-1};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer cpu_ids_tensor,
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(initial_ids), {1}));
+
+  constexpr int kNumSteps = 200;
+  std::mt19937 generator(42);
+  std::uniform_real_distribution<float> logits_distribution(-2.0f, 2.0f);
+  std::uniform_real_distribution<float> uniform_distribution(0.0f, 1.0f);
+  std::vector<float> logits(vocab_size);
+  int num_mismatches = 0;
+  for (int step = 0; step < kNumSteps; ++step) {
+    for (float& logit : logits) {
+      logit = logits_distribution(generator);
+    }
+    const std::vector<float> uniforms = {uniform_distribution(generator)};
+    LITERT_ASSERT_OK(logits_tensor.Write(absl::MakeConstSpan(logits)));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        TensorBuffer cpu_logits_tensor,
+        CopyToTensorBuffer<float>(absl::MakeConstSpan(logits),
+                                  {1, 1, vocab_size}));
+
+    ASSERT_OK(gpu_sampler->SampleToIdAndScoreBuffer(
+        logits_tensor, gpu_ids_tensor, /*scores_tensor=*/nullptr, uniforms));
+    ASSERT_OK(cpu_sampler->SampleToIdAndScoreBuffer(
+        cpu_logits_tensor, cpu_ids_tensor, /*scores_tensor=*/nullptr,
+        uniforms));
+
+    std::vector<int> gpu_ids(1, -1);
+    LITERT_ASSERT_OK(gpu_ids_tensor.Read(absl::MakeSpan(gpu_ids)));
+    LITERT_ASSERT_OK_AND_ASSIGN(std::vector<int> cpu_ids,
+                                CopyFromTensorBuffer<int>(cpu_ids_tensor));
+    ASSERT_EQ(cpu_ids.size(), 1);
+    if (gpu_ids[0] != cpu_ids[0]) {
+      ++num_mismatches;
+    }
+  }
+  // The GPU computes the distribution in a different order and precision, so
+  // a uniform within rounding of a cumulative-probability boundary can pick a
+  // neighboring token (`MatchesCpuSampler` sees up to ~1.5% here). A sampler
+  // that ignored the supplied uniforms would mismatch on most steps.
+  EXPECT_LE(num_mismatches, kNumSteps / 20);
+}
+
+TEST(TopKOpenClSamplerTest, RejectsInvalidUniforms) {
+  ASSERT_OK_AND_ASSIGN(auto ret, CreateLiteRTResources());
+  auto [litert_model, litert_env, compiled_model] = std::move(ret);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer logits_tensor,
+      compiled_model.CreateOutputBuffer("decode", "logits"));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, logits_tensor.TensorType());
+  const int vocab_size = tensor_type.Layout().Dimensions()[2];
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(8);
+  sampler_params.set_p(1.0f);
+  sampler_params.set_temperature(1.0f);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<TopKOpenClSampler> sampler,
+      TopKOpenClSampler::Create(litert_env, /*batch_size=*/1,
+                                /*sequence_size=*/1, vocab_size,
+                                ActivationDataType::FLOAT32, sampler_params));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer ids_tensor,
+      litert::TensorBuffer::CreateManaged(
+          litert_env, litert::TensorBufferType::kOpenClBuffer,
+          litert::RankedTensorType(litert::ElementType::Int32,
+                                   litert::Layout(litert::Dimensions({1}))),
+          /*buffer_size=*/sizeof(int32_t)));
+
+  const std::vector<float> too_many = {0.1f, 0.2f};
+  EXPECT_THAT(
+      sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
+                                        /*scores_tensor=*/nullptr, too_many),
+      absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
+  const std::vector<float> out_of_range = {1.0f};
+  EXPECT_THAT(sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
+                                                /*scores_tensor=*/nullptr,
+                                                out_of_range),
+              absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(TopKOpenClSamplerTest, SamplingWorksAsExpectedWithFloat16) {

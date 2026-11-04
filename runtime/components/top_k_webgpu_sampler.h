@@ -24,6 +24,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "ml_drift/common/gpu_info.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model.h"  // from @ml_drift
 #include "ml_drift/common/model.h"  // from @ml_drift
@@ -95,6 +96,20 @@ SAMPLER_EXPORT int LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors(
     LiteRtTensorBuffer absl_nullable param_tensor,
     char** absl_nullable error_msg);
 
+// Same as `LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer()`, but picks the
+// tokens with the caller-supplied uniform values in [0, 1), one per (batch,
+// position) in batch-major order; see the uniforms overload of
+// `litert::lm::Sampler::SampleToIdAndScoreBuffer()`. `uniforms` points to
+// `num_uniforms` values. Returns 0 on success, or an absl::StatusCode value on
+// failure. This symbol was added after the others: loaders must treat it as
+// optional, since older libraries don't export it.
+SAMPLER_EXPORT int LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms(
+    LiteRtTopKWebGpuSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
+    LiteRtTensorBuffer ids_tensor,
+    const LiteRtTensorBuffer* absl_nullable scores_tensor,
+    const float* absl_nullable uniforms, int num_uniforms,
+    char** absl_nullable error_msg);
+
 }  // extern "C"
 
 namespace litert::lm {
@@ -113,9 +128,10 @@ class TopKWebGpuSampler : public TopKGpuSampler {
       proto::SamplerParameters sampler_params);
 
   // TopKGpuSampler implementation:
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override;
+  using TopKGpuSampler::SampleToIdAndScoreBuffer;
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override;
   absl::Status UpdateConfig(
       const proto::SamplerParameters& sampler_params, int batch_size,
       std::shared_ptr<std::default_random_engine> rand_gen) override;

@@ -22,6 +22,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "ml_drift/common/gpu_info.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model_builder.h"  // from @ml_drift
@@ -38,10 +39,17 @@ class TopKGpuSampler : public Sampler {
  public:
   virtual ~TopKGpuSampler() = default;
 
+  using Sampler::SampleToIdAndScoreBuffer;
+
+  // Draws the uniforms from the sampler's random number generator (see
+  // `DrawUniformsFromGenerator()`) and calls the uniforms overload, which the
+  // backends implement.
   absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
                                         TensorBuffer& ids_tensor,
                                         TensorBuffer* scores_tensor) override {
-    return absl::UnimplementedError("Not implemented yet.");
+    const std::vector<float> uniforms = DrawUniformsFromGenerator();
+    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor,
+                                    uniforms);
   }
 
   absl::Status UpdateConfig(
@@ -112,6 +120,11 @@ class TopKGpuSampler : public Sampler {
   absl::Status CheckTopKWithinMax(
       const proto::SamplerParameters& sampler_params) const;
 
+  // Returns an InvalidArgumentError unless `batch_size` is in [1, the batch
+  // size the sampler was created with]: the GPU buffers are sized for that
+  // many batches.
+  absl::Status CheckBatchSizeWithinMax(int batch_size) const;
+
   // Gets the descriptors for model tensor creation.
   ::ml_drift::TensorDescriptor GetParamsTensorDescriptor() const;
   ::ml_drift::TensorDescriptor GetTokensTensorDescriptor() const;
@@ -126,14 +139,19 @@ class TopKGpuSampler : public Sampler {
   // Creates the int params (mainly user input parameters) for the gpu models.
   LlmRuntimeParams CreateLlmRuntimeParams(
       const proto::SamplerParameters& sampler_params) const;
-  // Creates the float params (see FloatParams) for the gpu models. The random
-  // values are drawn from `rand_gen` exactly like the CPU sampler does (see
-  // TopKTopPSampling() in sampling_cpu_util.cc), so that both samplers pick
-  // the same tokens for the same seed and logits.
-  std::vector<float> CreateFloatParams(
+  // Creates the float params (see FloatParams) for the gpu models from the
+  // caller-supplied `uniforms` (see `Sampler::SampleToIdAndScoreBuffer()`),
+  // which must have one value in [0, 1) per (batch, position) of the
+  // `batch_size` of `UpdateConfig()`, in batch-major order. The params of the
+  // remaining batches of the model are 0.
+  absl::StatusOr<std::vector<float>> CreateFloatParams(
       const proto::SamplerParameters& sampler_params,
-      std::shared_ptr<std::default_random_engine> rand_gen,
-      int params_count) const;
+      absl::Span<const float> uniforms, int params_count) const;
+
+  // Draws the uniforms of a sampling call from `rand_gen_` like the CPU
+  // sampler does: one value per sampled token in batch-major order, and
+  // nothing (all zeros) for greedy sampling.
+  std::vector<float> DrawUniformsFromGenerator();
 
   // Creates the input handling model, and bind the input pointers to the model
   // inputs/output tensors.

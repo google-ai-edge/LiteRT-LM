@@ -23,3 +23,4 @@ EXPORTS
   LiteRtTopKWebGpuSampler_CanHandleInput
   LiteRtTopKWebGpuSampler_HandlesInput
   LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors
+  LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms

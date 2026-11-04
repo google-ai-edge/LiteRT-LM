@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +27,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/substitute.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "ml_drift/common/data_type.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model_builder.h"  // from @ml_drift
@@ -38,6 +38,7 @@
 #include "ml_drift/common/task/gpu_operation.h"  // from @ml_drift
 #include "ml_drift/common/task/tensor_desc.h"  // from @ml_drift
 #include "ml_drift/common/types.h"  // from @ml_drift
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -290,6 +291,16 @@ absl::Status TopKGpuSampler::CheckTopKWithinMax(
   return absl::OkStatus();
 }
 
+absl::Status TopKGpuSampler::CheckBatchSizeWithinMax(int batch_size) const {
+  if (batch_size <= 0 || batch_size > kv_cache_batch_size_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("batch_size=", batch_size, " is not in [1, ",
+                     kv_cache_batch_size_,
+                     "], the batch size the GPU sampler was created with."));
+  }
+  return absl::OkStatus();
+}
+
 TensorDescriptor TopKGpuSampler::GetParamsTensorDescriptor() const {
   TensorDescriptor td = TensorDescriptor{
       DataType::kInt32, TensorStorageType::kBuffer, Layout::kHWC};
@@ -312,26 +323,19 @@ TopKGpuSampler::LlmRuntimeParams TopKGpuSampler::CreateLlmRuntimeParams(
   };
 }
 
-std::vector<float> TopKGpuSampler::CreateFloatParams(
-    const SamplerParameters& sampler_params,
-    std::shared_ptr<std::default_random_engine> rand_gen,
+absl::StatusOr<std::vector<float>> TopKGpuSampler::CreateFloatParams(
+    const SamplerParameters& sampler_params, absl::Span<const float> uniforms,
     int params_count) const {
-  std::vector<float> params(params_count, 0.0f);
   const int random_values_count =
       params_count - FloatParams::kNonRandomParamsCount;
-  // Consume `rand_gen` like TopKTopPSampling() in sampling_cpu_util.cc does:
-  // one uniform double per sampled token in batch-major order, and nothing
-  // for greedy decoding.
-  if (std::min(sampler_params.k(), config_.vocab_size) > 1) {
-    std::uniform_real_distribution<double> distribution(0.0, 1.0);
-    const int batch_size = std::min(config_.batch_size, kv_cache_batch_size_);
-    const int sequence_size = random_values_count / kv_cache_batch_size_;
-    for (int b = 0; b < batch_size; ++b) {
-      for (int s = 0; s < sequence_size; ++s) {
-        // The sampling model reads the value of (b, s) at s * B + b.
-        params[s * kv_cache_batch_size_ + b] =
-            static_cast<float>(distribution(*rand_gen));
-      }
+  const int sequence_size = random_values_count / kv_cache_batch_size_;
+  const int batch_size = std::min(config_.batch_size, kv_cache_batch_size_);
+  ABSL_RETURN_IF_ERROR(ValidateUniforms(uniforms, batch_size * sequence_size));
+  std::vector<float> params(params_count, 0.0f);
+  for (int b = 0; b < batch_size; ++b) {
+    for (int s = 0; s < sequence_size; ++s) {
+      // The sampling model reads the value of (b, s) at s * B + b.
+      params[s * kv_cache_batch_size_ + b] = uniforms[b * sequence_size + s];
     }
   }
   params[random_values_count + FloatParams::kInvTemperatureOffset] =
@@ -339,6 +343,15 @@ std::vector<float> TopKGpuSampler::CreateFloatParams(
                       std::numeric_limits<float>::epsilon());
   params[random_values_count + FloatParams::kTopPOffset] = sampler_params.p();
   return params;
+}
+
+std::vector<float> TopKGpuSampler::DrawUniformsFromGenerator() {
+  const int batch_size = std::min(config_.batch_size, kv_cache_batch_size_);
+  std::vector<float> uniforms(batch_size * config_.sequence_size, 0.0f);
+  if (std::min(sampler_params_.k(), config_.vocab_size) > 1) {
+    DrawUniforms(*rand_gen_, absl::MakeSpan(uniforms));
+  }
+  return uniforms;
 }
 
 absl::StatusOr<GpuModel> TopKGpuSampler::CreateInputHandlingModel(

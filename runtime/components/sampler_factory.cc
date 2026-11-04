@@ -30,6 +30,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/internal/litert_shared_library.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -64,6 +65,12 @@ extern "C" int (*LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static)(
     LiteRtTopKSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
     LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
     char** error_msg) = nullptr;
+
+extern "C" int (
+    *LiteRtTopKOpenClSampler_SampleToIdAndScoreBufferWithUniforms_Static)(
+    LiteRtTopKSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
+    LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
+    const float* uniforms, int num_uniforms, char** error_msg) = nullptr;
 
 extern "C" int (*LiteRtTopKOpenClSampler_UpdateConfig_Static)(
     LiteRtTopKSampler_Sampler* sampler,
@@ -103,6 +110,12 @@ extern "C" int (*LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer_Static)(
     LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
     char** error_msg) = nullptr;
 
+extern "C" int (
+    *LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms_Static)(
+    LiteRtTopKSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
+    LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
+    const float* uniforms, int num_uniforms, char** error_msg) = nullptr;
+
 extern "C" int (*LiteRtTopKWebGpuSampler_UpdateConfig_Static)(
     LiteRtTopKSampler_Sampler* sampler,
     const LiteRtTopKSampler_SamplerParameters* sampler_params, int batch_size,
@@ -140,6 +153,12 @@ extern "C" int (*LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer_Static)(
     LiteRtTopKSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
     LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
     char** error_msg) = nullptr;
+
+extern "C" int (
+    *LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms_Static)(
+    LiteRtTopKSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
+    LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
+    const float* uniforms, int num_uniforms, char** error_msg) = nullptr;
 
 extern "C" int (*LiteRtTopKMetalSampler_UpdateConfig_Static)(
     LiteRtTopKSampler_Sampler* sampler,
@@ -192,6 +211,12 @@ class TopKCApiSampler : public Sampler {
               LiteRtTensorBuffer logits_tensor, LiteRtTensorBuffer ids_tensor,
               const LiteRtTensorBuffer* absl_nullable scores_tensor,
               char** absl_nullable error_msg);
+  using LiteRtTopKSampler_SampleToIdAndScoreBufferWithUniforms =
+      int (*)(LiteRtTopKSampler_Sampler* sampler,
+              LiteRtTensorBuffer logits_tensor, LiteRtTensorBuffer ids_tensor,
+              const LiteRtTensorBuffer* absl_nullable scores_tensor,
+              const float* absl_nullable uniforms, int num_uniforms,
+              char** absl_nullable error_msg);
   using LiteRtTopKSampler_UpdateConfig = int (*)(
       LiteRtTopKSampler_Sampler* sampler,
       const LiteRtTopKSampler_SamplerParameters* sampler_params, int batch_size,
@@ -221,6 +246,9 @@ class TopKCApiSampler : public Sampler {
     LiteRtTopKSampler_HandlesInput handles_input_func;
     LiteRtTopKSampler_SetInferenceFuncAndInputTensors
         set_inference_func_and_input_tensors_func;
+    // Optional; null if the library doesn't export it.
+    LiteRtTopKSampler_SampleToIdAndScoreBufferWithUniforms
+        sample_with_uniforms_func;
 
     TopKSamplerCApi(
         std::optional<SharedLibrary> lib, LiteRtTopKSampler_Create create_func,
@@ -230,7 +258,9 @@ class TopKCApiSampler : public Sampler {
         LiteRtTopKSampler_CanHandleInput can_handle_input_func = nullptr,
         LiteRtTopKSampler_HandlesInput handles_input_func = nullptr,
         LiteRtTopKSampler_SetInferenceFuncAndInputTensors
-            set_inference_func_and_input_tensors_func = nullptr)
+            set_inference_func_and_input_tensors_func = nullptr,
+        LiteRtTopKSampler_SampleToIdAndScoreBufferWithUniforms
+            sample_with_uniforms_func = nullptr)
         : lib(std::move(lib)),
           create_func(create_func),
           destroy_func(destroy_func),
@@ -239,7 +269,8 @@ class TopKCApiSampler : public Sampler {
           can_handle_input_func(can_handle_input_func),
           handles_input_func(handles_input_func),
           set_inference_func_and_input_tensors_func(
-              set_inference_func_and_input_tensors_func) {}
+              set_inference_func_and_input_tensors_func),
+          sample_with_uniforms_func(sample_with_uniforms_func) {}
   };
 
   ~TopKCApiSampler() override { capi_->destroy_func(sampler_); }
@@ -255,6 +286,29 @@ class TopKCApiSampler : public Sampler {
     int error_code = capi_->sample_func(
         sampler_, logits_tensor.Get(), ids_tensor.Get(),
         scores_tensor_capi ? &scores_tensor_capi : nullptr, &error_msg);
+    return CreateStatusAndFreeErrorMsg(error_code, error_msg);
+  }
+
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
+    if (capi_->sample_with_uniforms_func == nullptr) {
+      // Libraries built before the symbol was added sample with their own
+      // random number generator, from the same distribution.
+      ABSL_LOG_FIRST_N(WARNING, 1)
+          << "The loaded sampler library doesn't support caller-supplied "
+             "uniforms; sampling with its own random number generator.";
+      return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
+    }
+    char* error_msg = nullptr;
+    LiteRtTensorBuffer scores_tensor_capi = nullptr;
+    if (scores_tensor != nullptr) {
+      scores_tensor_capi = scores_tensor->Get();
+    }
+    int error_code = capi_->sample_with_uniforms_func(
+        sampler_, logits_tensor.Get(), ids_tensor.Get(),
+        scores_tensor_capi ? &scores_tensor_capi : nullptr, uniforms.data(),
+        static_cast<int>(uniforms.size()), &error_msg);
     return CreateStatusAndFreeErrorMsg(error_code, error_msg);
   }
 
@@ -317,7 +371,8 @@ class TopKCApiSampler : public Sampler {
       const char* update_config_func_name,
       const char* can_handle_input_func_name = nullptr,
       const char* handles_input_func_name = nullptr,
-      const char* set_inference_func_and_input_tensors_func_name = nullptr) {
+      const char* set_inference_func_and_input_tensors_func_name = nullptr,
+      const char* sample_with_uniforms_func_name = nullptr) {
     // Load Sampler C API library and get the symbols.
     LITERT_ASSIGN_OR_RETURN(
         auto lib, SharedLibrary::Load(lib_name, RtldFlags::Lazy().Local()));
@@ -370,11 +425,28 @@ class TopKCApiSampler : public Sampler {
           << set_inference_func_and_input_tensors_func_name;
     }
 
+    // Optional symbol: libraries built before it was added don't export it.
+    LiteRtTopKSampler_SampleToIdAndScoreBufferWithUniforms
+        sampler_sample_with_uniforms_func = nullptr;
+    if (sample_with_uniforms_func_name != nullptr) {
+      auto func = lib.LookupSymbol<
+          LiteRtTopKSampler_SampleToIdAndScoreBufferWithUniforms>(
+          sample_with_uniforms_func_name);
+      if (func) {
+        sampler_sample_with_uniforms_func = *func;
+      } else {
+        ABSL_LOG(INFO) << "Optional symbol " << sample_with_uniforms_func_name
+                       << " not found; the sampler ignores caller-supplied "
+                          "uniforms.";
+      }
+    }
+
     return std::make_unique<TopKSamplerCApi>(
         std::move(lib), sampler_create_func, sampler_destroy_func,
         sampler_sample_func, sampler_update_config_func,
         sampler_can_handle_input_func, sampler_handles_input_func,
-        sampler_set_inference_func_and_input_tensors_func);
+        sampler_set_inference_func_and_input_tensors_func,
+        sampler_sample_with_uniforms_func);
   }
 
   std::unique_ptr<TopKSamplerCApi> capi_;
@@ -407,7 +479,8 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
               "LiteRtTopKOpenClSampler_UpdateConfig",
               "LiteRtTopKOpenClSampler_CanHandleInput",
               "LiteRtTopKOpenClSampler_HandlesInput",
-              "LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors"));
+              "LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors",
+              "LiteRtTopKOpenClSampler_SampleToIdAndScoreBufferWithUniforms"));
       ABSL_VLOG(1) << "Dynamically loaded LiteRtTopKOpenClSampler C API.";
     }
 
@@ -450,7 +523,8 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
         LiteRtTopKOpenClSampler_UpdateConfig_Static,
         LiteRtTopKOpenClSampler_CanHandleInput_Static,
         LiteRtTopKOpenClSampler_HandlesInput_Static,
-        LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors_Static);
+        LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors_Static,
+        LiteRtTopKOpenClSampler_SampleToIdAndScoreBufferWithUniforms_Static);
   }
 };
 
@@ -479,15 +553,17 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
 #define SO_EXT ".so"
 #endif
       ABSL_ASSIGN_OR_RETURN(
-          capi, GetSamplerCApi(
-                    "libLiteRtTopKWebGpuSampler" SO_EXT,
-                    "LiteRtTopKWebGpuSampler_Create",
-                    "LiteRtTopKWebGpuSampler_Destroy",
-                    "LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer",
-                    "LiteRtTopKWebGpuSampler_UpdateConfig",
-                    "LiteRtTopKWebGpuSampler_CanHandleInput",
-                    "LiteRtTopKWebGpuSampler_HandlesInput",
-                    "LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors"));
+          capi,
+          GetSamplerCApi(
+              "libLiteRtTopKWebGpuSampler" SO_EXT,
+              "LiteRtTopKWebGpuSampler_Create",
+              "LiteRtTopKWebGpuSampler_Destroy",
+              "LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer",
+              "LiteRtTopKWebGpuSampler_UpdateConfig",
+              "LiteRtTopKWebGpuSampler_CanHandleInput",
+              "LiteRtTopKWebGpuSampler_HandlesInput",
+              "LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors",
+              "LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms"));
       ABSL_VLOG(1) << "Dynamically loaded LiteRtTopKWebGpuSampler C API.";
     }
 
@@ -530,7 +606,8 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
         LiteRtTopKWebGpuSampler_UpdateConfig_Static,
         LiteRtTopKWebGpuSampler_CanHandleInput_Static,
         LiteRtTopKWebGpuSampler_HandlesInput_Static,
-        LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static);
+        LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static,
+        LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms_Static);
   }
 };
 
@@ -563,7 +640,8 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
               "LiteRtTopKMetalSampler_UpdateConfig",
               "LiteRtTopKMetalSampler_CanHandleInput",
               "LiteRtTopKMetalSampler_HandlesInput",
-              "LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors"));
+              "LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors",
+              "LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms"));
       ABSL_VLOG(1) << "Dynamically loaded LiteRtTopKMetalSampler C API.";
     }
 
@@ -605,7 +683,8 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
         LiteRtTopKMetalSampler_UpdateConfig_Static,
         LiteRtTopKMetalSampler_CanHandleInput_Static,
         LiteRtTopKMetalSampler_HandlesInput_Static,
-        LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors_Static);
+        LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors_Static,
+        LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms_Static);
   }
 };
 

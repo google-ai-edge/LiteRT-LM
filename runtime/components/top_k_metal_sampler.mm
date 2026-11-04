@@ -29,6 +29,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "ml_drift/common/data_type.h"  // from @ml_drift
 #include "ml_drift/common/gpu_info.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model.h"  // from @ml_drift
@@ -390,8 +391,13 @@ absl::Status TopKMetalSampler::ExecuteUpdateParams(id<MTLCommandBuffer> command_
 
 absl::Status TopKMetalSampler::SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
                                                         TensorBuffer& ids_tensor,
-                                                        TensorBuffer* scores_tensor) {
+                                                        TensorBuffer* scores_tensor,
+                                                        absl::Span<const float> uniforms) {
   RET_CHECK_EQ(scores_tensor, nullptr) << "This backend does not support scoring for now.";
+  // Check the uniforms before any GPU work, so that invalid ones fail the call without side
+  // effects.
+  ABSL_ASSIGN_OR_RETURN(const std::vector<float> float_params,
+                        CreateFloatParams(sampler_params_, uniforms, params_f32_->Channels()));
 
   // Try direct Metal buffer access to avoid CPU roundtrip
   MetalSpatialTensor shared_logits_tensor;
@@ -440,9 +446,7 @@ absl::Status TopKMetalSampler::SampleToIdAndScoreBuffer(const TensorBuffer& logi
     // Update params
     ABSL_RETURN_IF_ERROR(ExecuteUpdateIntParams(command_buffer, text_params_,
                                                 CreateLlmRuntimeParams(sampler_params_)));
-    ABSL_RETURN_IF_ERROR(ExecuteUpdateParams(
-        command_buffer, params_f32_.get(),
-        CreateFloatParams(sampler_params_, rand_gen_, params_f32_->Channels())));
+    ABSL_RETURN_IF_ERROR(ExecuteUpdateParams(command_buffer, params_f32_.get(), float_params));
 
     // Execute sampling
     sampling_->EncodeWithCommandBuffer(command_buffer);
@@ -521,6 +525,7 @@ absl::Status TopKMetalSampler::UpdateConfig(const proto::SamplerParameters& samp
                                             int batch_size,
                                             std::shared_ptr<std::default_random_engine> rand_gen) {
   ABSL_RETURN_IF_ERROR(CheckTopKWithinMax(sampler_params));
+  ABSL_RETURN_IF_ERROR(CheckBatchSizeWithinMax(batch_size));
   sampler_params_ = sampler_params;
   if (rand_gen != nullptr) {
     rand_gen_ = rand_gen;
@@ -696,11 +701,17 @@ void LiteRtTopKMetalSampler_Destroy(LiteRtTopKMetalSampler_Sampler* sampler) {
   delete reinterpret_cast<litert::lm::TopKMetalSampler*>(sampler);
 }
 
-int LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer(LiteRtTopKMetalSampler_Sampler* sampler,
-                                                    LiteRtTensorBuffer logits_tensor,
-                                                    LiteRtTensorBuffer ids_tensor,
-                                                    const LiteRtTensorBuffer* scores_tensor,
-                                                    char** error_msg) {
+namespace {
+
+// Implements `LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer()` and, if `uniforms`
+// is set, `LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms()`.
+// `std::nullopt` makes the sampler draw the uniforms from its own random number
+// generator. A span, even an empty one, is passed on as the caller's uniforms.
+int SampleToIdAndScoreBufferImpl(LiteRtTopKMetalSampler_Sampler* sampler,
+                                 LiteRtTensorBuffer logits_tensor, LiteRtTensorBuffer ids_tensor,
+                                 const LiteRtTensorBuffer* scores_tensor,
+                                 std::optional<absl::Span<const float>> uniforms,
+                                 char** error_msg) {
   if (!sampler) {
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(absl::InvalidArgumentError("Sampler not provided."),
                                            error_msg);
@@ -724,11 +735,48 @@ int LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer(LiteRtTopKMetalSampler_Sampl
     cpp_scores_tensor =
         litert::TensorBuffer::WrapCObject(env_holder, *scores_tensor, litert::OwnHandle::kNo);
   }
-  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
-      cpp_sampler->SampleToIdAndScoreBuffer(cpp_logits_tensor, cpp_ids_tensor,
-                                            cpp_scores_tensor ? &*cpp_scores_tensor : nullptr),
-      error_msg);
+  litert::TensorBuffer* cpp_scores = cpp_scores_tensor ? &*cpp_scores_tensor : nullptr;
+  absl::Status sample_status;
+  if (uniforms.has_value()) {
+    sample_status = cpp_sampler->SampleToIdAndScoreBuffer(cpp_logits_tensor, cpp_ids_tensor,
+                                                          cpp_scores, *uniforms);
+  } else {
+    sample_status =
+        cpp_sampler->SampleToIdAndScoreBuffer(cpp_logits_tensor, cpp_ids_tensor, cpp_scores);
+  }
+  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(sample_status, error_msg);
   return 0;
+}
+
+}  // namespace
+
+int LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer(LiteRtTopKMetalSampler_Sampler* sampler,
+                                                    LiteRtTensorBuffer logits_tensor,
+                                                    LiteRtTensorBuffer ids_tensor,
+                                                    const LiteRtTensorBuffer* scores_tensor,
+                                                    char** error_msg) {
+  return SampleToIdAndScoreBufferImpl(sampler, logits_tensor, ids_tensor, scores_tensor,
+                                      /*uniforms=*/std::nullopt, error_msg);
+}
+
+int LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms(
+    LiteRtTopKMetalSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
+    LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor, const float* uniforms,
+    int num_uniforms, char** error_msg) {
+  if (num_uniforms < 0) {
+    SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
+        absl::InvalidArgumentError(
+            absl::StrCat("num_uniforms must not be negative, but got ", num_uniforms, ".")),
+        error_msg);
+  }
+  if (uniforms == nullptr && num_uniforms > 0) {
+    SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
+        absl::InvalidArgumentError(
+            absl::StrCat("uniforms is null, but num_uniforms is ", num_uniforms, ".")),
+        error_msg);
+  }
+  return SampleToIdAndScoreBufferImpl(sampler, logits_tensor, ids_tensor, scores_tensor,
+                                      absl::Span<const float>(uniforms, num_uniforms), error_msg);
 }
 
 int LiteRtTopKMetalSampler_UpdateConfig(
@@ -847,6 +895,11 @@ extern "C" int (*LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer_Static)(
     LiteRtTopKMetalSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
     LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor, char** error_msg);
 
+extern "C" int (*LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms_Static)(
+    LiteRtTopKMetalSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
+    LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor, const float* uniforms,
+    int num_uniforms, char** error_msg);
+
 extern "C" int (*LiteRtTopKMetalSampler_UpdateConfig_Static)(
     LiteRtTopKMetalSampler_Sampler* sampler,
     const LiteRtTopKMetalSampler_SamplerParameters* sampler_params, int batch_size,
@@ -876,6 +929,8 @@ class StaticMetalSamplerInitializer {
     LiteRtTopKMetalSampler_Destroy_Static = &LiteRtTopKMetalSampler_Destroy;
     LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer_Static =
         &LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer;
+    LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms_Static =
+        &LiteRtTopKMetalSampler_SampleToIdAndScoreBufferWithUniforms;
     LiteRtTopKMetalSampler_UpdateConfig_Static = &LiteRtTopKMetalSampler_UpdateConfig;
     LiteRtTopKMetalSampler_CanHandleInput_Static = &LiteRtTopKMetalSampler_CanHandleInput;
     LiteRtTopKMetalSampler_HandlesInput_Static = &LiteRtTopKMetalSampler_HandlesInput;

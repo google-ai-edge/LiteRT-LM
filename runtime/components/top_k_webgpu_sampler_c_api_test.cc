@@ -275,6 +275,88 @@ TEST(TopKWebGpuSamplerCApiTest, SamplingWorksAsExpectedWithDifferentSeeds) {
   EXPECT_EQ(ids[0], correct_index_2);
 }
 
+TEST(TopKWebGpuSamplerCApiTest, SamplingWithUniformsPicksTokensByUniform) {
+  ASSERT_OK_AND_ASSIGN(auto ret, CreateLiteRTResources());
+  auto [litert_model, litert_env, compiled_model] = std::move(ret);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer logits_tensor,
+      compiled_model.CreateOutputBuffer("decode", "logits"));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, logits_tensor.TensorType());
+  const int vocab_size = tensor_type.Layout().Dimensions()[2];
+
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(3);
+  // As above, only tokens 0 and 1 (probability ~0.5 each within the nucleus)
+  // can be sampled.
+  sampler_params.set_p(0.6);
+  sampler_params.set_temperature(1.0);
+  sampler_params.set_seed(0);
+
+  LiteRtTopKWebGpuSampler_Sampler* sampler = nullptr;
+  char* error_msg = nullptr;
+  auto [runtime_c_api, env_handle] = litert_env.GetHolderForCApi();
+  ASSERT_EQ(LiteRtTopKWebGpuSampler_Create(
+                runtime_c_api, env_handle, /*batch_size=*/1,
+                /*sequence_size=*/1, vocab_size,
+                /*activation_data_type=*/nullptr, &sampler_params, &sampler,
+                &error_msg),
+            0)
+      << error_msg;
+  ASSERT_NE(sampler, nullptr);
+
+  std::vector<float> logits_vec(vocab_size, 0.0f);
+  logits_vec[0] = 0.01f;
+  logits_vec[1] = 0.01f;
+  LITERT_ASSERT_OK(logits_tensor.Write(absl::MakeConstSpan(logits_vec)));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer ids_tensor,
+      litert::TensorBuffer::CreateManaged(
+          litert_env, litert::TensorBufferType::kWebGpuBuffer,
+          litert::RankedTensorType(litert::ElementType::Int32,
+                                   litert::Layout(litert::Dimensions({1}))),
+          /*buffer_size=*/sizeof(int32_t)));
+
+  for (const auto& [uniform, expected_id] :
+       std::vector<std::pair<float, int>>{{0.1f, 0}, {0.9f, 1}, {0.2f, 0}}) {
+    const float uniforms[] = {uniform};
+    ASSERT_EQ(LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms(
+                  sampler, logits_tensor.Get(), ids_tensor.Get(),
+                  /*scores_tensor=*/nullptr, uniforms, /*num_uniforms=*/1,
+                  &error_msg),
+              0)
+        << error_msg;
+    std::vector<int> ids(1, -1);
+    LITERT_ASSERT_OK(ids_tensor.Read(absl::MakeSpan(ids)));
+    EXPECT_EQ(ids[0], expected_id) << "uniform=" << uniform;
+  }
+
+  // The number of uniforms must match the batch size * sequence length.
+  const float two_uniforms[] = {0.1f, 0.2f};
+  EXPECT_EQ(LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms(
+                sampler, logits_tensor.Get(), ids_tensor.Get(),
+                /*scores_tensor=*/nullptr, two_uniforms, /*num_uniforms=*/2,
+                &error_msg),
+            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  free(error_msg);
+  error_msg = nullptr;
+  EXPECT_EQ(LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms(
+                sampler, logits_tensor.Get(), ids_tensor.Get(),
+                /*scores_tensor=*/nullptr, /*uniforms=*/nullptr,
+                /*num_uniforms=*/1, &error_msg),
+            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  free(error_msg);
+  error_msg = nullptr;
+  EXPECT_EQ(LiteRtTopKWebGpuSampler_SampleToIdAndScoreBufferWithUniforms(
+                sampler, logits_tensor.Get(), ids_tensor.Get(),
+                /*scores_tensor=*/nullptr, two_uniforms, /*num_uniforms=*/-1,
+                &error_msg),
+            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  free(error_msg);
+
+  LiteRtTopKWebGpuSampler_Destroy(sampler);
+}
+
 }  // namespace
 }  // namespace litert::lm
 #endif  // !MEMORY_SANITIZER && !THREAD_SANITIZER
