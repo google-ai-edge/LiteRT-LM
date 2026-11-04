@@ -1260,4 +1260,23 @@ SerialExecutionManager::GetVisionExecutorProperties() const {
   return resource_manager_->GetVisionExecutorProperties();
 }
 
+absl::Status SerialExecutionManager::DeleteSessionDebugCaptures(
+    SessionId session_id) {
+  const auto session_it = session_lookup_.find(session_id);
+  if (session_it == session_lookup_.end()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Session ", session_id, " not found in session list."));
+  }
+  if (!session_it->second->active_tasks.empty()) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Session ", session_id,
+        " has active tasks; wait until they finish before deleting debugger "
+        "captures."));
+  }
+  if (runtime_debugger_ == nullptr) {
+    return absl::OkStatus();
+  }
+  return runtime_debugger_->DeleteSessionCaptures(session_id);
+}
+
 }  // namespace litert::lm

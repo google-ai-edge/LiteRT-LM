@@ -302,6 +302,15 @@ class ExecutionManager {
   // Returns true if the AI Edge Debugger is active for this execution manager,
   // i.e. it captures tensors and token traces for its sessions.
   virtual bool IsDebuggerEnabled() const { return false; }
+
+  // Deletes all AI Edge Debugger captures of `session_id` while keeping the
+  // session open for subsequent turns. Fails with InvalidArgumentError if
+  // `session_id` is not found, or FailedPreconditionError while the session
+  // has active tasks. Succeeds without doing anything when the debugger is not
+  // enabled. Must not be called from inside a task callback.
+  virtual absl::Status DeleteSessionDebugCaptures(SessionId session_id) {
+    return absl::OkStatus();
+  }
 };
 
 }  // namespace litert::lm
