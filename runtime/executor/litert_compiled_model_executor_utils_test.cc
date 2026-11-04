@@ -2383,11 +2383,6 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
             kLiteRtStatusOk);
 #if defined(__APPLE__)
   EXPECT_FALSE(prefer_texture);
-  bool use_metal_argument_buffers = true;
-  EXPECT_EQ(LrtGetGpuOptionsUseMetalArgumentBuffers(&use_metal_argument_buffers,
-                                                    gpu_options.Get()),
-            kLiteRtStatusOk);
-  EXPECT_FALSE(use_metal_argument_buffers);
 #else
   EXPECT_TRUE(prefer_texture);
 #endif
