@@ -34,7 +34,7 @@
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
@@ -113,14 +113,17 @@ class LlmLiteRtMtpDrafter {
   //   activations: Activations corresponding to the token_id. This is only
   //    required for the first invocation of the drafter.
   //   state: The model's runtime KV cache state.
-  //   constraint: Optional decoding constraint to apply during drafting and
-  //    verification.
+  //   constrained_decoder: Optional decoder of the constraint to apply during
+  //    drafting and verification. Like a decode step, the round feeds it
+  //    `token_id` first, so its state must be the one `token_id` was sampled
+  //    under, with the mask computed. It leaves the decoder at the state after
+  //    the accepted draft tokens, which the next step feeds the bonus token to.
   // Outputs:
   //   The drafted tokens from the MTP drafter model with the shape:
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      StateInterface& state, const Constraint* constraint = nullptr);
+      StateInterface& state, ConstrainedDecoder* constrained_decoder = nullptr);
 
   // Reconfigures the verifier sampler to sample from `sampler_params` with the
   // shared random number generator `rand_gen` (typically the session sampler's
@@ -265,10 +268,6 @@ class LlmLiteRtMtpDrafter {
 
   // Attention mask params.
   AttentionMaskParams attn_params_;
-
-  // Active constraint and verified constraint state.
-  const Constraint* constraint_ = nullptr;
-  std::unique_ptr<Constraint::State> constraint_state_;
 
   std::unique_ptr<LiteRtLogitMaskRunner> drafter_mask_runner_;
 };

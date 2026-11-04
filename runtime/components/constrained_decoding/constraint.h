@@ -48,7 +48,8 @@ class Constraint {
   virtual int GetVocabularySize() const = 0;
 
   // Computes the next state given the current state and the latest decoded
-  // token.
+  // token. Callers compute the mask of `state` (`ComputeMask()`) before they
+  // advance it, so implementations may rely on that (LLGuidance does).
   virtual absl::StatusOr<std::unique_ptr<State>> ComputeNext(
       const State& state, int token) const = 0;
 

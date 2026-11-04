@@ -60,7 +60,6 @@
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #endif  // defined(__APPLE__)
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
-#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
@@ -1377,9 +1376,6 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
 
     ConstrainedDecoder* constrained_decoder =
         decode_params.GetConstrainedDecoder();
-    Constraint* constraint = constrained_decoder != nullptr
-                                 ? constrained_decoder->GetConstraint()
-                                 : nullptr;
 
     if (drafter_is_primed) {
       ABSL_ASSIGN_OR_RETURN(auto step_and_token,
@@ -1387,11 +1383,12 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
       ABSL_RETURN_IF_ERROR(
           ConsumePendingOrAddProcessedToken(step_and_token.token));
       // Output: [Batch, drafted and verified tokens]
-      LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
-                              mtp_drafter_->Draft(step_and_token.step,
-                                                  step_and_token.token[0]->id(),
-                                                  /*activations=*/std::nullopt,
-                                                  *active_state, constraint));
+      LITERT_ASSIGN_OR_RETURN(
+          output_tokens_vector,
+          mtp_drafter_->Draft(step_and_token.step,
+                              step_and_token.token[0]->id(),
+                              /*activations=*/std::nullopt, *active_state,
+                              constrained_decoder));
       RET_CHECK_EQ(output_tokens_vector.size(), 1);
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
@@ -1432,7 +1429,7 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens_vector,
           mtp_drafter_->Draft(llm_context_->runtime_state().current_step - 1,
                               token_id, std::move(activations), *active_state,
-                              constraint));
+                              constrained_decoder));
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
       output_tokens_vector[0].insert(output_tokens_vector[0].begin(), token_id);

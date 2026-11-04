@@ -443,7 +443,6 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
   TensorBuffer* activations_ptr =
       activations.has_value() ? &activations.value() : nullptr;
   for (int i = 0; i < num_draft_steps_; ++i) {
-    LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
     // Concat and lookup embeddings with previous activations.
     // Embedding lookup has shape [B = 1, T = 1, D = 1536]
     // Drafter output activation has shape [B = 1, T = 1, D = 1536]
@@ -463,6 +462,11 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
               embedding_vector, *verifier_activations,
               last_verified_token_id_idx_, *drafter_activations_buffer));
     }
+    // Only now clear the events of the output buffers: after the first step,
+    // the concatenation above reads the previous step's projected activations,
+    // and its lock waits on their event for the previous step to finish
+    // writing them.
+    LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
 
     bool async = true;
     LITERT_RETURN_IF_ERROR(mtp_drafter_model_.RunAsync(
@@ -497,7 +501,7 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
 
 absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
     int position, int token_id, std::optional<TensorBuffer> activations,
-    StateInterface& state, const Constraint* constraint) {
+    StateInterface& state, ConstrainedDecoder* constrained_decoder) {
   auto* litert_state = dynamic_cast<LitertState*>(&state);
   RET_CHECK(litert_state != nullptr);
   LITERT_ASSIGN_OR_RETURN(
@@ -507,24 +511,18 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   ABSL_RETURN_IF_ERROR(
       PrepareDrafterInputBuffers(position - 1, state_buffers.output_buffers));
 
-  // Initialize or reset constraint state when constraint changes or on first
-  // step of decode turn.
-  if (constraint == nullptr) {
-    constraint_ = nullptr;
-    constraint_state_.reset();
-  } else if (constraint != constraint_ || activations.has_value() ||
-             constraint_state_ == nullptr) {
-    constraint_ = constraint;
-    ABSL_ASSIGN_OR_RETURN(
-        constraint_state_,
-        AdvanceConstraintState(*constraint_, *constraint_->Start(), token_id));
-  }
   // The constraint states along the drafted tokens, which give the masks of
-  // the drafting steps and of the verify pass.
+  // the drafting steps and of the verify pass. Like a decode step, the round
+  // starts by feeding `token_id` to the decoder's state.
   std::optional<DraftConstraintStates> constraint_states;
-  if (constraint_ != nullptr) {
-    RET_CHECK(constraint_state_ != nullptr);
-    constraint_states.emplace(*constraint_, *constraint_state_);
+  if (constrained_decoder != nullptr) {
+    const Constraint& constraint = *constrained_decoder->GetConstraint();
+    ABSL_ASSIGN_OR_RETURN(const Constraint::State* decoder_state,
+                          constrained_decoder->GetState(0));
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<Constraint::State> start,
+        AdvanceConstraintState(constraint, *decoder_state, token_id));
+    constraint_states.emplace(constraint, std::move(start));
   }
   DraftConstraintStates* constraint_states_ptr =
       constraint_states.has_value() ? &*constraint_states : nullptr;
@@ -551,17 +549,11 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   const int bonus_token = *pass.outcome.next_token;
   last_verified_token_id_idx_ = num_correct_tokens;
 
-  // Update verified constraint state according to verified + bonus tokens.
-  if (constraint_ != nullptr) {
-    if (pass.constraint_state != nullptr) {
-      constraint_state_ = std::move(pass.constraint_state);
-    }
-    if (bonus_token >= 0) {
-      RET_CHECK(constraint_state_ != nullptr);
-      ABSL_ASSIGN_OR_RETURN(constraint_state_,
-                            AdvanceConstraintState(
-                                *constraint_, *constraint_state_, bonus_token));
-    }
+  // The decoder follows the accepted draft tokens. The bonus token is the new
+  // pending token, which the next step feeds to it.
+  if (constrained_decoder != nullptr) {
+    ABSL_RETURN_IF_ERROR(
+        constrained_decoder->SetState(0, std::move(pass.constraint_state)));
   }
 
   MTP_DRAFTER_LOG() << "drafted_tokens: "

@@ -486,7 +486,6 @@ cc_library(
         "//runtime/components:sampler",
         "//runtime/components:sampler_factory",
         "//runtime/components/constrained_decoding:constrained_decoder",
-        "//runtime/components/constrained_decoding:constraint",
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/executor/litert:state",
         "//runtime/proto:executor_metadata_cc_proto",
