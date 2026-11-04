@@ -17,12 +17,14 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
@@ -100,7 +102,8 @@ absl::StatusOr<DataProcessorConfig> CreateGemma3DataProcessorConfig(
 }
 
 absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
-    const proto::LlmModelType& model_type) {
+    const proto::LlmModelType& model_type,
+    const std::vector<Channel>& channels) {
   if (!model_type.has_gemma4()) {
     return absl::InvalidArgumentError(
         "Gemma4 LlmModelType is required to create "
@@ -182,6 +185,11 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
       default_gemma4.skip_mel_spectrogram_extraction()) {
     config.skip_mel_spectrogram_extraction =
         gemma4.skip_mel_spectrogram_extraction();
+  }
+  // As elsewhere, the first channel is the thinking channel.
+  if (!channels.empty()) {
+    config.channel_start = channels.front().start;
+    config.channel_end = channels.front().end;
   }
   return config;
 }

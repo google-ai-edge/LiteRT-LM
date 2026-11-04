@@ -167,23 +167,30 @@ class SessionInterface {
       const DecodeConfig& decode_config) = 0;
 
   // Scores the target text after the prefill process is done. This function
-  // will only run the decode process to fetch the decode output logits, which
-  // is used to calculate the target text's score and update the model memory
-  // using the target_text tokens.
-  // This function should be called after the prefill process is done.
-  // - target_text: The target text to score.
+  // only runs decode steps to fetch the output logits that are used to
+  // calculate the score of each target text.
+  // Every call changes the model memory: it consumes the pending input token,
+  // and for a multi-token target it also writes every target token except the
+  // last one. Rewind the session (for example to a checkpoint) before running
+  // further prefill or decode on it.
+  // - target_text: The target text to score. Pass one target text, or several
+  //   target texts that are each a single token; any other list returns
+  //   kInvalidArgument. Several targets are all scored from the logits of one
+  //   decode step and need a session with one output candidate.
   // - store_token_lengths: Whether to store the token lengths of the target
   //   texts in `Responses`.
-  // - returns: This function returns the score associated with the target
-  // text after the model has been prefilled. The returned score is the sum of
-  // the negative log probability of seeing the target text during decode.
+  // - returns: This function returns the score associated with each target
+  // text, in the order of `target_text`. Each score is the log likelihood of
+  // the target text given the prefilled context: the sum of the log
+  // probabilities of its tokens.
   virtual absl::StatusOr<Responses> RunTextScoring(
       const std::vector<absl::string_view>& target_text,
       bool store_token_lengths) = 0;
 
   // Similar to the above RunTextScoring function, but this is a not blocking
   // call and the function will return right away. The processing status will
-  // be signaled through the callback.
+  // be signaled through the callback. The same rules for `target_text` apply,
+  // and an invalid `target_text` is rejected before any work is queued.
   // - target_text: The target text to score.
   // - callback: Callback to receive the scoring results.
   // - store_token_lengths: Whether to store the token lengths of the target

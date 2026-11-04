@@ -237,6 +237,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_layout",
+        "//runtime/conversation:io_types",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/proto:token_cc_proto",

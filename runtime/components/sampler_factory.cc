@@ -15,11 +15,16 @@
 #include "runtime/components/sampler_factory.h"
 
 #include <cstdlib>
+#include <filesystem>  // NOLINT
 #include <functional>
 #include <memory>
 #include <optional>
 #include <random>
+#include <string_view>
+#include <system_error>  // NOLINT
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -33,8 +38,10 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/internal/litert_shared_library.h"  // from @litert
+#include "litert/cc/litert_any.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
@@ -183,15 +190,64 @@ extern "C" int (*LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors_Static)(
 
 namespace {
 
+#if defined(_WIN32)
+#define SO_EXT ".dll"
+#elif defined(__APPLE__)
+#define SO_EXT ".dylib"
+#else
+#define SO_EXT ".so"
+#endif
+
 absl::Status CreateStatus(int error_code, const char* error_msg) {
   absl::StatusCode code = static_cast<absl::StatusCode>(error_code);
-  return absl::Status(code, error_msg);
+  return absl::Status(code, error_msg != nullptr ? error_msg : "");
 }
 
 absl::Status CreateStatusAndFreeErrorMsg(int error_code, char* error_msg) {
   absl::Cleanup cleanup = [error_msg] { free(error_msg); };
   return error_code == 0 ? absl::OkStatus()
                          : CreateStatus(error_code, error_msg);
+}
+
+litert::Expected<SharedLibrary> LoadSamplerSharedLibrary(
+    const litert::Environment& env, const char* lib_name) {
+  litert::Expected<litert::EnvironmentOptions> env_options = env.GetOptions();
+  if (env_options.HasValue()) {
+    litert::Expected<const litert::LiteRtVariant> runtime_lib_dir_option =
+        env_options->GetOption(
+            litert::EnvironmentOptions::Tag::kRuntimeLibraryDir);
+    if (runtime_lib_dir_option.HasValue()) {
+      std::string_view dir_view;
+      std::visit(
+          [&dir_view](const auto& val) {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, const char*>) {
+              if (val != nullptr) {
+                dir_view = val;
+              }
+            } else if constexpr (std::is_convertible_v<T, std::string_view>) {
+              dir_view = val;
+            }
+          },
+          *runtime_lib_dir_option);
+      if (!dir_view.empty()) {
+        std::filesystem::path full_path =
+            std::filesystem::path(dir_view) / lib_name;
+        std::error_code ec;
+        if (std::filesystem::exists(full_path, ec) && !ec) {
+          litert::Expected<SharedLibrary> loaded_library = SharedLibrary::Load(
+              full_path.string(), RtldFlags::Lazy().Local());
+          if (loaded_library.HasValue()) {
+            return loaded_library;
+          }
+          ABSL_LOG(WARNING)
+              << "Found " << full_path.string()
+              << " but failed to load: " << loaded_library.Error().Message();
+        }
+      }
+    }
+  }
+  return SharedLibrary::Load(lib_name, RtldFlags::Lazy().Local());
 }
 
 // A base wrapper of TopK Sampler C API functions.
@@ -366,16 +422,16 @@ class TopKCApiSampler : public Sampler {
       : capi_(std::move(capi)), sampler_(sampler) {}
 
   static absl::StatusOr<std::unique_ptr<TopKSamplerCApi>> GetSamplerCApi(
-      const char* lib_name, const char* create_func_name,
-      const char* destroy_func_name, const char* sample_func_name,
-      const char* update_config_func_name,
+      const litert::Environment& env, const char* lib_name,
+      const char* create_func_name, const char* destroy_func_name,
+      const char* sample_func_name, const char* update_config_func_name,
       const char* can_handle_input_func_name = nullptr,
       const char* handles_input_func_name = nullptr,
       const char* set_inference_func_and_input_tensors_func_name = nullptr,
       const char* sample_with_uniforms_func_name = nullptr) {
-    // Load Sampler C API library and get the symbols.
-    LITERT_ASSIGN_OR_RETURN(
-        auto lib, SharedLibrary::Load(lib_name, RtldFlags::Lazy().Local()));
+    LITERT_ASSIGN_OR_RETURN(SharedLibrary lib,
+                            LoadSamplerSharedLibrary(env, lib_name));
+
     LITERT_ASSIGN_OR_RETURN(
         auto sampler_create_func,
         lib.LookupSymbol<LiteRtTopKSampler_Create>(create_func_name));
@@ -473,7 +529,8 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
       ABSL_ASSIGN_OR_RETURN(
           capi,
           GetSamplerCApi(
-              "libLiteRtTopKOpenClSampler.so", "LiteRtTopKOpenClSampler_Create",
+              env, "libLiteRtTopKOpenClSampler" SO_EXT,
+              "LiteRtTopKOpenClSampler_Create",
               "LiteRtTopKOpenClSampler_Destroy",
               "LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer",
               "LiteRtTopKOpenClSampler_UpdateConfig",
@@ -545,17 +602,10 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
       ABSL_VLOG(1) << "Static WebGPU sampler not available ("
                    << static_capi.status()
                    << "), falling back to dynamically loaded C API.";
-#if defined(_WIN32)
-#define SO_EXT ".dll"
-#elif defined(__APPLE__)
-#define SO_EXT ".dylib"
-#else
-#define SO_EXT ".so"
-#endif
       ABSL_ASSIGN_OR_RETURN(
           capi,
           GetSamplerCApi(
-              "libLiteRtTopKWebGpuSampler" SO_EXT,
+              env, "libLiteRtTopKWebGpuSampler" SO_EXT,
               "LiteRtTopKWebGpuSampler_Create",
               "LiteRtTopKWebGpuSampler_Destroy",
               "LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer",
@@ -634,7 +684,7 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
       ABSL_ASSIGN_OR_RETURN(
           capi,
           GetSamplerCApi(
-              "libLiteRtTopKMetalSampler.dylib",
+              env, "libLiteRtTopKMetalSampler.dylib",
               "LiteRtTopKMetalSampler_Create", "LiteRtTopKMetalSampler_Destroy",
               "LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer",
               "LiteRtTopKMetalSampler_UpdateConfig",
@@ -711,108 +761,113 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
     int batch_size, proto::SamplerParameters sampler_params,
     const litert::Environment& env, int sequence_size, int vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
-  // Check environment options to determine the preferred backend.
-  auto options_or = env.GetOptions();
+  litert::Expected<litert::EnvironmentOptions> env_options = env.GetOptions();
   bool use_metal = false;
   bool use_webgpu = false;
-  if (options_or.HasValue()) {
-    for (const auto& option : options_or->GetOptions()) {
+  bool use_opencl = false;
+  if (env_options.HasValue()) {
+    for (const litert::EnvironmentOptions::Option& option :
+         env_options->GetOptions()) {
       if (option.tag == litert::EnvironmentOptions::Tag::kMetalDevice) {
         use_metal = true;
       } else if (option.tag == litert::EnvironmentOptions::Tag::kWebGpuDevice) {
         use_webgpu = true;
+      } else if (option.tag ==
+                 litert::EnvironmentOptions::Tag::kOpenClDeviceId) {
+        use_opencl = true;
       }
     }
   }
+  const bool has_explicit_backend = use_metal || use_webgpu || use_opencl;
 
-#ifdef __ANDROID__
-  if (use_webgpu) {
-#if LITERT_HAS_WEBGPU_SUPPORT  // NOLINT(misc-include-cleaner)
-    auto webgpu_sampler = TopKWebGpuCApiSampler::Create(
-        env, batch_size, sequence_size, vocab_size, activation_data_type,
-        sampler_params);
-    if (webgpu_sampler.ok() ||
-        webgpu_sampler.status().code() != absl::StatusCode::kUnavailable) {
-      return webgpu_sampler;
-    }
-    ABSL_VLOG(1) << "WebGPU sampler explicitly requested but "
-                    "failed/unavailable, falling back.";
-#endif  // LITERT_HAS_WEBGPU_SUPPORT
-  }
-
-#if LITERT_HAS_OPENCL_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto opencl_sampler =
-      TopKOpenClCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
-  if (opencl_sampler.ok() ||
-      opencl_sampler.status().code() != absl::StatusCode::kUnavailable) {
-    return opencl_sampler;
-  }
-  ABSL_VLOG(1)
-      << "OpenCL sampler not available, falling back to other sampler options.";
-#endif  // LITERT_HAS_OPENCL_SUPPORT
-
-#if LITERT_HAS_WEBGPU_SUPPORT  // NOLINT(misc-include-cleaner)
-  if (!use_webgpu) {
-    auto webgpu_sampler = TopKWebGpuCApiSampler::Create(
-        env, batch_size, sequence_size, vocab_size, activation_data_type,
-        sampler_params);
-    if (webgpu_sampler.ok() ||
-        webgpu_sampler.status().code() != absl::StatusCode::kUnavailable) {
-      return webgpu_sampler;
-    }
-    ABSL_VLOG(1) << "WebGPU sampler not available, falling back to other "
-                    "sampler options.";
-  }
-#endif  // LITERT_HAS_WEBGPU_SUPPORT
-
-#else  // !__ANDROID__
 #if defined(__APPLE__)
+  // LiteRT's GpuEnvironment creates a default Metal device on Apple even when
+  // the WebGPU delegate is active (`use_webgpu == true`), so only select the
+  // Metal sampler when WebGPU is not active.
   if (use_metal && !use_webgpu) {
-    auto metal_sampler =
+    absl::StatusOr<std::unique_ptr<Sampler>> metal_sampler =
         TopKMetalCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
                                      activation_data_type, sampler_params);
-    if (metal_sampler.ok() ||
-        metal_sampler.status().code() != absl::StatusCode::kUnavailable) {
+    if (metal_sampler.ok() || !absl::IsUnavailable(metal_sampler.status())) {
       return metal_sampler;
     }
-    if (use_metal) {
-      ABSL_LOG(WARNING)
-          << "Metal sampler explicitly requested but failed/unavailable.";
-    } else {
-      ABSL_VLOG(1) << "Metal sampler not available, falling back to other "
-                      "sampler options.";
-    }
+    ABSL_LOG(WARNING)
+        << "Metal sampler explicitly requested but failed/unavailable.";
   }
 #endif  // __APPLE__
 
+  auto try_webgpu = [&]() -> absl::StatusOr<std::unique_ptr<Sampler>> {
 #if LITERT_HAS_WEBGPU_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto webgpu_sampler =
-      TopKWebGpuCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
-  if (webgpu_sampler.ok() ||
-      webgpu_sampler.status().code() != absl::StatusCode::kUnavailable) {
-    return webgpu_sampler;
-  }
-  ABSL_VLOG(1)
-      << "WebGPU sampler not available, falling back to other sampler options.";
-#endif                         // LITERT_HAS_WEBGPU_SUPPORT
+    if (use_webgpu || !has_explicit_backend) {
+      absl::StatusOr<std::unique_ptr<Sampler>> webgpu_sampler =
+          TopKWebGpuCApiSampler::Create(env, batch_size, sequence_size,
+                                        vocab_size, activation_data_type,
+                                        sampler_params);
+      if (webgpu_sampler.ok()) {
+        return webgpu_sampler;
+      }
+      if (absl::IsUnavailable(webgpu_sampler.status()) ||
+          (!use_webgpu && absl::IsNotFound(webgpu_sampler.status()))) {
+        ABSL_VLOG(1) << "WebGPU sampler not available, falling back to other "
+                        "sampler options.";
+      } else {
+        return webgpu_sampler;
+      }
+    }
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
+    return absl::UnavailableError("WebGPU sampler not available.");
+  };
 
+  auto try_opencl = [&]() -> absl::StatusOr<std::unique_ptr<Sampler>> {
 #if LITERT_HAS_OPENCL_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto opencl_sampler =
-      TopKOpenClCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
-  if (opencl_sampler.ok() ||
-      opencl_sampler.status().code() != absl::StatusCode::kUnavailable) {
-    return opencl_sampler;
+    // LiteRT's GpuEnvironment may co-populate a default kOpenClDeviceId even
+    // when the WebGPU delegate is active (`use_webgpu == true`), whereas the
+    // OpenCL delegate never sets kWebGpuDevice. Skip OpenCL when `use_webgpu`
+    // is set so the sampler backend matches the active WebGPU delegate.
+    if ((use_opencl && !use_webgpu) || !has_explicit_backend) {
+      absl::StatusOr<std::unique_ptr<Sampler>> opencl_sampler =
+          TopKOpenClCApiSampler::Create(env, batch_size, sequence_size,
+                                        vocab_size, activation_data_type,
+                                        sampler_params);
+      if (opencl_sampler.ok()) {
+        return opencl_sampler;
+      }
+      if (absl::IsUnavailable(opencl_sampler.status()) ||
+          (!use_opencl && absl::IsNotFound(opencl_sampler.status()))) {
+        ABSL_VLOG(1) << "OpenCL sampler not available, falling back to other "
+                        "sampler options.";
+      } else {
+        return opencl_sampler;
+      }
+    }
+#endif  // LITERT_HAS_OPENCL_SUPPORT
+    return absl::UnavailableError("OpenCL sampler not available.");
+  };
+
+#if defined(__ANDROID__)
+  if (absl::StatusOr<std::unique_ptr<Sampler>> sampler = try_opencl();
+      sampler.ok() || !absl::IsUnavailable(sampler.status())) {
+    return sampler;
   }
-  ABSL_VLOG(1)
-      << "OpenCL sampler not available, falling back to other sampler options.";
-#endif                         // LITERT_HAS_OPENCL_SUPPORT
-#endif                         // !__ANDROID__
+  if (absl::StatusOr<std::unique_ptr<Sampler>> sampler = try_webgpu();
+      sampler.ok() || !absl::IsUnavailable(sampler.status())) {
+    return sampler;
+  }
+#else
+  if (absl::StatusOr<std::unique_ptr<Sampler>> sampler = try_webgpu();
+      sampler.ok() || !absl::IsUnavailable(sampler.status())) {
+    return sampler;
+  }
+  if (absl::StatusOr<std::unique_ptr<Sampler>> sampler = try_opencl();
+      sampler.ok() || !absl::IsUnavailable(sampler.status())) {
+    return sampler;
+  }
+#endif
 
   return absl::UnavailableError("GPU sampler not available.");
 }
+
+#undef SO_EXT
 
 }  // namespace
 
@@ -828,13 +883,12 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
           << "LiteRT environment is needed for GPU sampling.";
       RET_CHECK(vocab_size.has_value())
           << "Vocabulary size is needed for GPU sampling.";
-      auto sampler_or = CreateGpuSampler(
+      absl::StatusOr<std::unique_ptr<Sampler>> gpu_sampler = CreateGpuSampler(
           batch_size, sampler_params, env.value().get(), sequence_size_value,
           vocab_size.value(), activation_data_type);
-      if (sampler_or.ok() ||
-          sampler_or.status().code() != absl::StatusCode::kUnavailable) {
+      if (gpu_sampler.ok() || !absl::IsUnavailable(gpu_sampler.status())) {
         // For a normal failure or success, return the result.
-        return sampler_or;
+        return gpu_sampler;
       }
       // For a failure due to GPU sampler unavailable, fall back to CPU.
       ABSL_LOG(WARNING)

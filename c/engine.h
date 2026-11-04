@@ -1488,6 +1488,17 @@ LiteRtLmStatusCode litert_lm_session_run_decode(
 
 // Scores the target text after the prefill process is done.
 //
+// Pass one target text, or several target texts that are each a single token.
+// Several targets are all scored from the logits of one decode step. Scores are
+// returned in the order of `target_text`; each one is the log likelihood of the
+// target text given the prefilled context.
+//
+// Every call changes the model memory: it consumes the session's pending input
+// token, and for a multi-token target it also writes every target token except
+// the last one. Rewind the session (for example with
+// `litert_lm_session_rewind_to_checkpoint`) before running further prefill or
+// decode on it.
+//
 // @param session The session to use.
 // @param target_text An array of target text strings to score.
 // @param num_targets The number of strings in the target_text array.
@@ -1497,12 +1508,15 @@ LiteRtLmStatusCode litert_lm_session_run_decode(
 //   caller; release with `litert_lm_responses_delete`. Set to NULL on failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
-//   `session`, `target_text` or `out_responses` is NULL or `num_targets` is 0;
-//   otherwise the runtime error.
+//   `session`, `target_text` or `out_responses` is NULL, `num_targets` is 0,
+//   or `num_targets` is greater than 1 and a target text is not a single
+//   token; otherwise the runtime error.
 //
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the result is returned
 // through out_responses.
+// Changed in version 1.1.0: accepts several target texts when each one is a
+// single token; previously only one target text was accepted.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_session_run_text_scoring(
     LiteRtLmSession* session, const char** target_text, size_t num_targets,

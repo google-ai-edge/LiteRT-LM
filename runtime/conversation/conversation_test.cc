@@ -4561,6 +4561,70 @@ TEST_P(ConversationTest,
           user_message, {.thinking_config = ThinkingConfig(true, 100)}));
 }
 
+// The prompt template opens a channel and no ThinkingConfig is set, e.g. the
+// Gemma 4 template after a tool response when only the extra context enables
+// thinking. With constrained decoding, the constraint applies only after the
+// model closes the channel, as when thinking is enabled.
+TEST_P(ConversationTest, SendMessageClosesChannelOpenedByPromptFirst) {
+  const bool enable_constrained_decoding =
+      GetParam().enable_constrained_decoding;
+  std::unique_ptr<MockSession> mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  std::unique_ptr<MockEngine> mock_engine =
+      CreateMockEngine(std::move(mock_session));
+
+  std::vector<Channel> channels = {{.channel_name = "thought",
+                                    .start = "<think>\n",
+                                    .end = "\n</think>"}};
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(
+              absl::StrCat(kTestJinjaPromptTemplate, "<think>\n")))
+          .SetChannels(channels)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding)
+          .Build(*mock_engine));
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillRepeatedly([](const std::vector<InputData>& contents,
+                         absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                             user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> expected_end_token_ids,
+                       tokenizer_->TextToTokenIds("\n</think>"));
+  // Without constrained decoding, nothing changes.
+  testing::Matcher<const DecodeConfig&> decode_config_matcher =
+      testing::Property(&DecodeConfig::GetThinkingTokenBudget,
+                        std::make_optional(0));
+  if (enable_constrained_decoding) {
+    decode_config_matcher = testing::AllOf(
+        testing::Property(&DecodeConfig::GetThinkingTokenBudget,
+                          std::make_optional(-1)),
+        testing::Property(&DecodeConfig::GetThinkingStartTokenIds,
+                          testing::Eq(std::vector<int>{})),
+        testing::Property(&DecodeConfig::GetThinkingEndTokenIds,
+                          testing::Eq(expected_end_token_ids)));
+  }
+  EXPECT_CALL(*mock_session_ptr,
+              RunDecodeAsync(testing::_, decode_config_matcher))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
+  ASSERT_OK_AND_ASSIGN(const Message response,
+                       conversation->SendMessage(user_message));
+}
+
 TEST(AppendMessageTest, Gemma3Sync) {
   // Set up mock Session.
   auto mock_session = std::make_unique<MockSession>();

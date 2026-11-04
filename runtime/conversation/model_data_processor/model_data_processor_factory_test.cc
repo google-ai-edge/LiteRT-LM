@@ -19,6 +19,7 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -345,6 +346,29 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessor) {
   EXPECT_EQ(gemma4_config.max_num_patches, 1280);
   EXPECT_EQ(gemma4_config.patch_width, 8);
   EXPECT_EQ(gemma4_config.patch_height, 8);
+  // Without channels, the tool call constraints don't accept a channel.
+  EXPECT_THAT(gemma4_config.channel_start, testing::IsEmpty());
+  EXPECT_THAT(gemma4_config.channel_end, testing::IsEmpty());
+}
+
+// The channel that the model may open at the start of its turn comes from the
+// channels, e.g. in the model metadata. The first one is the thinking channel.
+TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessorConfigChannels) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_gemma4();
+  const std::vector<Channel> channels = {
+      {.channel_name = "thought",
+       .start = "<|channel>thought\n",
+       .end = "<channel|>"},
+      {.channel_name = "other", .start = "<other>", .end = "</other>"}};
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       CreateDataProcessorConfigFromLlmModelType(
+                           llm_model_type, /*tool_call_config=*/std::nullopt,
+                           channels));
+  ASSERT_TRUE(std::holds_alternative<Gemma4DataProcessorConfig>(config));
+  const auto& gemma4_config = std::get<Gemma4DataProcessorConfig>(config);
+  EXPECT_EQ(gemma4_config.channel_start, "<|channel>thought\n");
+  EXPECT_EQ(gemma4_config.channel_end, "<channel|>");
 }
 
 TEST_F(ModelDataProcessorFactoryTest, CreateFastVlmDataProcessor) {

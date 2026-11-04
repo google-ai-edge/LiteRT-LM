@@ -17,9 +17,11 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
@@ -36,8 +38,12 @@ absl::Status ValidateVisualTokenBudget(const DataProcessorArguments& args,
 absl::StatusOr<DataProcessorConfig> CreateGemma3DataProcessorConfig(
     const proto::LlmModelType& model_type);
 
+// `channels` are the response channels, e.g. from the model metadata. The
+// first one is the channel that the model may open at the start of its turn,
+// e.g. to think.
 absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
-    const proto::LlmModelType& model_type);
+    const proto::LlmModelType& model_type,
+    const std::vector<Channel>& channels);
 
 absl::StatusOr<DataProcessorConfig> CreateGenericDataProcessorConfig(
     const proto::LlmModelType& model_type,
