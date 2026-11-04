@@ -183,15 +183,78 @@ cc_test(
 )
 
 cc_library(
+    name = "proc_mappings",
+    srcs = ["proc_mappings.cc"],
+    hdrs = ["proc_mappings.h"],
+    # Linux and Android only (/proc); see :fdinfo for the tags.
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = ["@com_google_absl//absl/strings"],
+)
+
+cc_test(
+    name = "proc_mappings_test",
+    srcs = ["proc_mappings_test.cc"],
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":fake_proc_self",
+        ":proc_mappings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "accelerator_memory_android_sources_test",
+    srcs = ["accelerator_memory_android_sources_test.cc"],
+    # The Android combination rule on canned inputs; runs on Linux in TAP.
+    tags = [
+        "noios",
+        "nomacos",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:android": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_monitor",
+        ":proc_mappings",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "accelerator_memory_monitor",
     srcs = ["accelerator_memory_monitor.cc"] + select({
-        # The dma-buf reader is Android's implementation; it is built on Linux
-        # too so that accelerator_memory_dmabuf_test can run in CI.
+        # The dma-buf reader and the Android combination rule are Android's
+        # implementation; both are built on Linux too so that
+        # accelerator_memory_dmabuf_test and
+        # accelerator_memory_android_sources_test can run in CI.
         "@platforms//os:android": [
             "accelerator_memory_android.cc",
+            "accelerator_memory_android_sources.cc",
             "accelerator_memory_dmabuf.cc",
         ],
         "@platforms//os:linux": [
+            "accelerator_memory_android_sources.cc",
             "accelerator_memory_dmabuf.cc",
             "accelerator_memory_linux.cc",
             "accelerator_memory_nvml.cc",
@@ -204,8 +267,12 @@ cc_library(
         "//conditions:default": ["accelerator_memory_unsupported.cc"],
     }),
     hdrs = ["accelerator_memory_monitor.h"] + select({
-        "@platforms//os:android": ["accelerator_memory_dmabuf.h"],
+        "@platforms//os:android": [
+            "accelerator_memory_android.h",
+            "accelerator_memory_dmabuf.h",
+        ],
         "@platforms//os:linux": [
+            "accelerator_memory_android.h",
             "accelerator_memory_dmabuf.h",
             "accelerator_memory_linux.h",
             "accelerator_memory_nvml.h",
@@ -233,10 +300,12 @@ cc_library(
     ] + select({
         "@platforms//os:android": [
             ":fdinfo",
+            ":proc_mappings",
             "@com_google_absl//absl/container:flat_hash_map",
         ],
         "@platforms//os:linux": [
             ":fdinfo",
+            ":proc_mappings",
             "@com_google_absl//absl/container:flat_hash_map",
             "@com_google_absl//absl/container:flat_hash_set",
         ],
@@ -332,7 +401,9 @@ cc_test(
     }),
     deps = [
         ":accelerator_memory_monitor",
+        ":proc_mappings",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_log",
     ],
 )
 

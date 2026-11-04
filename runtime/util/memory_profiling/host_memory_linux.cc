@@ -41,17 +41,20 @@
 //
 // A caution about accelerator memory. Whether GPU / NPU memory the process
 // allocated appears in these counters at all, and in which one, depends on
-// how the driver maps it into the process: shmem-backed buffers count under
-// RssShmem, pages a driver inserts with vm_insert_page() (Android's system
-// dma-buf heap, Adreno's KGSL) count under RssFile, and pages mapped by
-// physical frame number (Mali's kbase, many vendor heaps) are not counted in
-// RSS at all; buffers the process never maps on the CPU side are in no
-// counter regardless. Android's own tooling (`dumpsys meminfo`'s GL and Gfx
-// rows) therefore does not read /proc for this but the vendor memtrack HAL.
-// So VmRSS + VmSwap may or may not already include some accelerator memory,
-// varying by GPU vendor and allocation path. This file reports the host
-// counters as the OS gives them; working out how much accelerator memory they
-// already contain is the accelerator reader's job (accelerator_memory_*.cc).
+// how the driver maps it into the process (measured on a Pixel 9 Pro, Pixel
+// 10 Pro, Galaxy S25 and Exynos Galaxy S24+): shmem-backed buffers count
+// under RssShmem once the CPU touches them (Adreno's KGSL backs each
+// allocation with a shmem file); Mali's kbase maps by physical frame number
+// but adds every page of its pool to VmRSS, under RssFile, so that the
+// low-memory killer sees it; and pages mapped by physical frame number
+// without that courtesy (dma-buf heaps, PowerVR's and Xclipse's render
+// nodes) are in no RSS counter, whether or not the CPU touches them. Android's
+// own tooling (`dumpsys meminfo`'s GL and Gfx rows) therefore does not read
+// /proc for this but the vendor memtrack HAL. So VmRSS + VmSwap may or may
+// not already include some accelerator memory, varying by GPU vendor. This
+// file reports the host counters as the OS gives them; working out how much
+// accelerator memory they already contain is the accelerator reader's job
+// (accelerator_memory_*.cc).
 
 #include "runtime/util/memory_profiling/host_memory_linux.h"
 

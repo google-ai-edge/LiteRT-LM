@@ -46,6 +46,13 @@ class FakeProcSelf {
     file << fdinfo;
   }
 
+  // Writes a top-level file of the fake directory, e.g. "maps", "status" or
+  // "smaps_rollup".
+  void WriteFile(absl::string_view name, absl::string_view contents) {
+    std::ofstream file(absl::StrCat(dir_, "/", name));
+    file << contents;
+  }
+
   const std::string& dir() const { return dir_; }
 
  private:

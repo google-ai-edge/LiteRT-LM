@@ -50,21 +50,28 @@ target_link_libraries(runtime_util_memory_profiling_host_memory
 # accelerator_memory_monitor.cc is platform-neutral; exactly one
 # accelerator_memory_<os>.cc (.mm on Apple platforms) implements the platform
 # contract for the target OS. Linux and Android share the /proc/self/fdinfo
-# reader (fdinfo.cc) and the dma-buf reader built on it
-# (accelerator_memory_dmabuf.cc). Keep this in sync with the select() in BUILD.
+# reader (fdinfo.cc), the dma-buf reader built on it
+# (accelerator_memory_dmabuf.cc), the /proc/self/{maps,status,smaps_rollup}
+# readers (proc_mappings.cc) and the Android combination rule
+# (accelerator_memory_android_sources.cc). Keep this in sync with the select()
+# in BUILD.
 set(ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_monitor.cc)
 if(ANDROID)
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS
     accelerator_memory_android.cc
+    accelerator_memory_android_sources.cc
     accelerator_memory_dmabuf.cc
     fdinfo.cc
+    proc_mappings.cc
   )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS
+    accelerator_memory_android_sources.cc
     accelerator_memory_dmabuf.cc
     accelerator_memory_linux.cc
     accelerator_memory_nvml.cc
     fdinfo.cc
+    proc_mappings.cc
   )
 elseif(WIN32)
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_windows.cc)

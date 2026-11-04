@@ -111,17 +111,14 @@ AcceleratorMemoryUsage AcceleratorMemoryUsageFromDmaBuf(
   // not swappable), so present and charged are the same figure.
   usage.total_bytes = dmabuf.total_bytes;
   usage.attributed_bytes = dmabuf.total_bytes;
-  // Not measured yet, so reported as zero. The overlap between the dma-buf
-  // memory counted here and the host figures (VmRSS, VmRSS + VmSwap; see
-  // host_memory_linux.cc) is real but varies by GPU vendor and allocation
-  // path: a buffer the process maps on the CPU side may count in RSS
-  // (Android's system dma-buf heap, Adreno) or not (Mali, which maps by
-  // physical frame number), and a buffer it never maps counts in neither.
-  // Android's own tooling uses the vendor memtrack HAL rather than /proc for
-  // this reason. Until the overlap has been measured on the devices that
-  // matter, with buffers allocated through the real LiteRT paths, a snapshot
-  // on Android may count some accelerator memory twice, on the CPU side and
-  // on the accelerator side.
+  // None of this is in the host's own figures (VmRSS, VmRSS + VmSwap; see
+  // host_memory_linux.cc): dma-buf heaps map their pages into the process by
+  // physical frame number, which the kernel counts in no RSS counter, whether
+  // or not the CPU touches them (measured with a 256 MB AHardwareBuffer the
+  // CPU wrote and read back, on Mali, PowerVR, Adreno and Xclipse devices: no
+  // counter moved). The overlap the Android implementation does fill in
+  // (accelerator_memory_android_sources.cc) comes from the GPU driver pools,
+  // not from dma-bufs.
   usage.resident_counted_by_host_bytes = 0;
   usage.attributed_counted_by_host_bytes = 0;
 
