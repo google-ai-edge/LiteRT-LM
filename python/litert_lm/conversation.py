@@ -695,3 +695,24 @@ class Conversation(interfaces.AbstractConversation):
         self._engine,
         "litert_lm_experimental_conversation_get_session_debug_info",
     )
+
+  def delete_debug_captures(self) -> None:
+    """Deletes all AI Edge Debugger captures of this conversation's session.
+
+    Removes captured files under `<cache_dir>/litert_lm_debugger/<session_id>/`
+    while keeping the conversation open for subsequent turns. Waits for
+    in-flight tasks of the conversation (including a background KV-cache
+    refill) to finish before deleting. Does nothing when the debugger is not
+    enabled for this conversation.
+
+    Raises:
+      RuntimeError: If the conversation is closed, or if deleting the captures
+        fails.
+    """
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
+    call_checked(
+        self._lib,
+        "litert_lm_experimental_conversation_delete_debug_captures",
+        self._ptr,
+    )

@@ -4733,6 +4733,8 @@ TEST(EngineCTest, ExperimentalDebugInfo) {
   // The debugger is off by default, so debug info is absent: success + NULL.
   EXPECT_EQ(session_debug_info, nullptr);
   litert_lm_experimental_session_debug_info_delete(session_debug_info);
+  EXPECT_EQ(litert_lm_experimental_session_delete_debug_captures(session.get()),
+            kLiteRtLmStatusOk);
   session.reset();
 
   ConversationConfigPtr conversation_config(
@@ -4749,6 +4751,10 @@ TEST(EngineCTest, ExperimentalDebugInfo) {
   EXPECT_NE(conversation_debug_info, kSentinelDebugInfo);
   EXPECT_EQ(conversation_debug_info, nullptr);
   litert_lm_experimental_session_debug_info_delete(conversation_debug_info);
+  EXPECT_EQ(litert_lm_experimental_conversation_delete_debug_captures(
+                conversation.get()),
+            kLiteRtLmStatusOk);
+  conversation.reset();
 }
 
 TEST(EngineCTest, ExperimentalDebuggerWritesTokenTraceOnGenerate) {
@@ -4801,7 +4807,15 @@ TEST(EngineCTest, ExperimentalDebuggerWritesTokenTraceOnGenerate) {
       std::filesystem::path(cache_dir) / capture_dir / "generated_tokens.jsonl";
   litert_lm_experimental_session_debug_info_delete(debug_info);
   EXPECT_TRUE(std::filesystem::exists(trace_path)) << trace_path;
+
+  // Per-session deletion removes captured files while the session stays open;
+  // closing the empty session then removes the empty directories.
+  EXPECT_EQ(litert_lm_experimental_session_delete_debug_captures(session.get()),
+            kLiteRtLmStatusOk);
+  EXPECT_FALSE(std::filesystem::exists(trace_path));
   session.reset();
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(cache_dir) /
+                                       "litert_lm_debugger"));
   engine.reset();
   std::filesystem::remove_all(cache_dir);
 }
@@ -4867,6 +4881,15 @@ TEST(EngineCStatusTest, StatusFunctionsWithNullArgumentsReturnInvalidArgument) {
        [] {
          return litert_lm_experimental_engine_settings_set_enable_debugger(
              nullptr, true);
+       }},
+      {"experimental_session_delete_debug_captures",
+       [] {
+         return litert_lm_experimental_session_delete_debug_captures(nullptr);
+       }},
+      {"experimental_conversation_delete_debug_captures",
+       [] {
+         return litert_lm_experimental_conversation_delete_debug_captures(
+             nullptr);
        }},
       {"experimental_engine_update_gpu_enable_metal_residency_set",
        [] {

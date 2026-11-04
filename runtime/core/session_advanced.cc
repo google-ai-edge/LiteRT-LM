@@ -670,6 +670,18 @@ std::optional<SessionDebugInfo> SessionAdvanced::GetSessionDebugInfo() const {
   return debug_info;
 }
 
+absl::Status SessionAdvanced::DeleteDebugCaptures() {
+  // Holding `mutex_` blocks new tasks of this session from being created while
+  // its captures are being deleted.
+  absl::MutexLock lock(mutex_);
+  std::shared_ptr<ExecutionManager> execution_manager =
+      execution_manager_.lock();
+  if (execution_manager == nullptr) {
+    return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  return execution_manager->DeleteSessionDebugCaptures(session_id_);
+}
+
 absl::StatusOr<const ::litert::Environment*> SessionAdvanced::GetEnvironment()
     const {
   if (engine_ == nullptr) {
