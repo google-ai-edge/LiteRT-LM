@@ -15,6 +15,7 @@
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
 #include <memory>
@@ -30,12 +31,17 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
@@ -46,12 +52,16 @@
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
 
+using ::litert::BufferRef;
 using ::litert::ElementType;
+using ::litert::Environment;
 using ::litert::Layout;
+using ::litert::Model;
 using ::litert::RankedTensorType;
 using ::litert::TensorBuffer;
 using ::litert::lm::Backend;
@@ -59,6 +69,10 @@ using ::litert::lm::LitertLmLoader;
 using ::litert::lm::ModelAssets;
 using ::litert::lm::ModelResourcesLitertLm;
 using ::litert::lm::VisionExecutorSettings;
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
@@ -184,6 +198,196 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
 
   EXPECT_THAT(VisionLiteRtCompiledModelExecutor::Create(
                   settings, env, std::shared_ptr<ModelResources>()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest, GetSupportedVariants) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestVisionModelWithAdapterPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<VisionLiteRtCompiledModelExecutor> vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+  // The dummy vision encoder has a single signature with an input of
+  // [1, 10, 8] (10 patches) and an output of [1, 5, 5] (5 soft tokens).
+  ASSERT_OK_AND_ASSIGN(std::vector<VisionEncoderVariant> variants,
+                       vision_executor->GetSupportedVariants());
+  ASSERT_EQ(variants.size(), 1);
+  EXPECT_FALSE(variants[0].signature_name.empty());
+  EXPECT_EQ(variants[0].max_num_patches, 10);
+  EXPECT_EQ(variants[0].num_soft_tokens, 5);
+}
+
+// Builds a vision encoder model with one signature per entry of
+// `signature_keys`. Signature i maps an input named `image_input_names[i]` of
+// [1, num_tokens[i] * 4, 3] (patches), or `image_dims` if set, to a `features`
+// output of [1, num_tokens[i], 8] (soft tokens).
+std::vector<uint8_t> BuildDummyVisionEncoderBuffer(
+    const std::vector<std::string>& signature_keys,
+    const std::vector<int32_t>& num_tokens,
+    const std::vector<std::string>& image_input_names,
+    std::optional<std::vector<int32_t>> image_dims_override = std::nullopt) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto opcodes = builder.CreateVector(
+      {tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS)});
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> signature_defs;
+  for (size_t i = 0; i < signature_keys.size(); ++i) {
+    const std::vector<int32_t> image_dims = image_dims_override.value_or(
+        std::vector<int32_t>{1, num_tokens[i] * 4, 3});
+    const std::vector<int32_t> features_dims = {1, num_tokens[i], 8};
+    auto tensors = builder.CreateVector({
+        tflite::CreateTensor(builder, builder.CreateVector(image_dims),
+                             tflite::TensorType_FLOAT32, /*buffer=*/0,
+                             builder.CreateString(absl::StrCat("images_", i))),
+        tflite::CreateTensor(
+            builder, builder.CreateVector(features_dims),
+            tflite::TensorType_FLOAT32, /*buffer=*/0,
+            builder.CreateString(absl::StrCat("features_", i))),
+    });
+    const std::vector<int32_t> inputs = {0};
+    const std::vector<int32_t> outputs = {1};
+    auto ops = builder.CreateVector({tflite::CreateOperator(
+        builder, /*opcode_index=*/0, builder.CreateVector(inputs),
+        builder.CreateVector(outputs))});
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors, builder.CreateVector(inputs),
+        builder.CreateVector(outputs), ops,
+        builder.CreateString(absl::StrCat("subgraph_", i))));
+    auto input_map = builder.CreateVector({tflite::CreateTensorMap(
+        builder, builder.CreateString(image_input_names[i]), 0)});
+    auto output_map = builder.CreateVector({tflite::CreateTensorMap(
+        builder, builder.CreateString("features"), 1)});
+    signature_defs.push_back(tflite::CreateSignatureDef(
+        builder, input_map, output_map, builder.CreateString(signature_keys[i]),
+        /*subgraph_index=*/i));
+  }
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes, builder.CreateVector(subgraphs),
+      builder.CreateString("dummy_vision_encoder"),
+      builder.CreateVector({tflite::CreateBuffer(builder)}),
+      /*metadata_buffer=*/0, /*metadata=*/0,
+      builder.CreateVector(signature_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+class GetVisionEncoderVariantsTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        env_, Environment::Create(std::vector<Environment::Option>()));
+  }
+
+  // Creates a model from `buffer`, which must outlive the model.
+  absl::StatusOr<Model> CreateModel(const std::vector<uint8_t>& buffer) {
+    LITERT_ASSIGN_OR_RETURN(
+        Model model,
+        Model::CreateFromBuffer(
+            *env_, BufferRef<uint8_t>(buffer.data(), buffer.size())));
+    return model;
+  }
+
+  std::optional<Environment> env_;
+};
+
+TEST_F(GetVisionEncoderVariantsTest, MultiSignatureSortedBySoftTokens) {
+  // Signatures without the "vision_" prefix are never selected by Encode().
+  const std::vector<uint8_t> buffer = BuildDummyVisionEncoderBuffer(
+      {"vision_256", "vision_64", "serving_default", "vision_128"},
+      {256, 64, 32, 128}, {"images", "images", "images", "images"});
+  ASSERT_OK_AND_ASSIGN(Model model, CreateModel(buffer));
+
+  EXPECT_THAT(GetVisionEncoderVariants(model, /*selected_signatures=*/{}),
+              IsOkAndHolds(ElementsAre(
+                  VisionEncoderVariant{.signature_name = "vision_64",
+                                       .max_num_patches = 256,
+                                       .num_soft_tokens = 64},
+                  VisionEncoderVariant{.signature_name = "vision_128",
+                                       .max_num_patches = 512,
+                                       .num_soft_tokens = 128},
+                  VisionEncoderVariant{.signature_name = "vision_256",
+                                       .max_num_patches = 1024,
+                                       .num_soft_tokens = 256})));
+}
+
+TEST_F(GetVisionEncoderVariantsTest, MultiSignatureFilteredBySelection) {
+  const std::vector<uint8_t> buffer = BuildDummyVisionEncoderBuffer(
+      {"vision_256", "vision_64", "vision_128"}, {256, 64, 128},
+      {"images", "images", "images"});
+  ASSERT_OK_AND_ASSIGN(Model model, CreateModel(buffer));
+
+  EXPECT_THAT(GetVisionEncoderVariants(model, {"vision_256", "vision_64"}),
+              IsOkAndHolds(ElementsAre(
+                  VisionEncoderVariant{.signature_name = "vision_64",
+                                       .max_num_patches = 256,
+                                       .num_soft_tokens = 64},
+                  VisionEncoderVariant{.signature_name = "vision_256",
+                                       .max_num_patches = 1024,
+                                       .num_soft_tokens = 256})));
+  // A selected signature without the "vision_" prefix is not a candidate.
+  EXPECT_THAT(GetVisionEncoderVariants(model, {"serving_default"}),
+              IsOkAndHolds(IsEmpty()));
+}
+
+TEST_F(GetVisionEncoderVariantsTest, SingleSignatureIsAlwaysUsed) {
+  // Like Encode(), a single-signature model uses its only signature regardless
+  // of its name and of the selected signatures, and an unnamed image input.
+  const std::vector<uint8_t> buffer = BuildDummyVisionEncoderBuffer(
+      {"serving_default"}, {16}, {"pixel_values"});
+  ASSERT_OK_AND_ASSIGN(Model model, CreateModel(buffer));
+
+  const std::vector<VisionEncoderVariant> expected = {
+      {.signature_name = "serving_default",
+       .max_num_patches = 64,
+       .num_soft_tokens = 16}};
+  EXPECT_THAT(GetVisionEncoderVariants(model, /*selected_signatures=*/{}),
+              IsOkAndHolds(expected));
+  EXPECT_THAT(GetVisionEncoderVariants(model, {"vision_64"}),
+              IsOkAndHolds(expected));
+}
+
+TEST_F(GetVisionEncoderVariantsTest, NonPatchifiedImageInputFails) {
+  // The number of patches can only be read from a [batch, num_patches,
+  // patch_dim] input with a positive num_patches, not e.g. from a [batch,
+  // height, width, channels] image or a rank 2 tensor. The error reports the
+  // actual shape.
+  for (const auto& [image_dims, shape] :
+       std::vector<std::pair<std::vector<int32_t>, std::string>>{
+           {{1, 224, 224, 3}, "[1, 224, 224, 3]"},
+           {{64, 3}, "[64, 3]"},
+           {{1, 0, 3}, "[1, 0, 3]"},
+       }) {
+    SCOPED_TRACE(shape);
+    const std::vector<uint8_t> buffer = BuildDummyVisionEncoderBuffer(
+        {"serving_default"}, {16}, {"images"}, image_dims);
+    ASSERT_OK_AND_ASSIGN(Model model, CreateModel(buffer));
+    EXPECT_THAT(GetVisionEncoderVariants(model, /*selected_signatures=*/{}),
+                StatusIs(absl::StatusCode::kInvalidArgument,
+                         AllOf(HasSubstr("[batch, num_patches, patch_dim]"),
+                               HasSubstr(absl::StrCat("got ", shape)))));
+  }
+}
+
+TEST_F(GetVisionEncoderVariantsTest, MultiSignatureWithoutImagesInputFails) {
+  // Encode() feeds a multi-signature model by input name, so the patch input
+  // must be named `images`.
+  const std::vector<uint8_t> buffer = BuildDummyVisionEncoderBuffer(
+      {"vision_64", "vision_128"}, {64, 128}, {"images", "pixel_values"});
+  ASSERT_OK_AND_ASSIGN(Model model, CreateModel(buffer));
+
+  EXPECT_THAT(GetVisionEncoderVariants(model, /*selected_signatures=*/{}),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 

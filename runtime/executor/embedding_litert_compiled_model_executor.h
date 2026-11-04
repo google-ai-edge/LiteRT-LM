@@ -55,6 +55,23 @@ struct CompiledTextEncoderInfo {
       output_buffers_cache;
 };
 
+// A variant of the text encoder, i.e. one of its loaded signatures.
+//
+// Both fields are always set, and positive, in the variants returned by
+// EmbeddingLiteRtCompiledModelExecutor::GetSupportedVariants(). The defaults
+// only matter for a default-constructed value: `batch_size` defaults to 1, the
+// batch size of a text encoder without a batch dimension, whereas
+// `sequence_length` has no meaningful default (it depends on the signatures of
+// the model), so its 0 default only denotes a value that has not been set.
+struct TextEncoderVariant {
+  // Number of sequences processed together.
+  int batch_size = 1;
+  // Number of input embeddings per sequence. Shorter inputs are padded.
+  int sequence_length = 0;
+
+  bool operator==(const TextEncoderVariant& other) const = default;
+};
+
 // EmbeddingLiteRtCompiledModelExecutor implements a two-stage embedding
 // pipeline:
 // Stage 1 (EMBEDDER): Maps token IDs + multimodal soft tokens to sequence
@@ -178,6 +195,15 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Returns the dimension of the output embedding vector produced by the text
   // encoder model.
   absl::StatusOr<int> GetEmbeddingDimension() const override;
+
+  // Returns the variants of the loaded text encoder signatures. An input is run
+  // with the first variant whose sequence length fits it.
+  //
+  // Returns:
+  //   The variants, sorted by ascending sequence length (and therefore
+  //   ascending latency). Never empty, since the executor can't be created
+  //   without a text encoder signature.
+  std::vector<TextEncoderVariant> GetSupportedVariants() const;
 
   // Returns a pointer to the LiteRT environment used by this executor.
   litert::Environment* GetEnvironment() const override;

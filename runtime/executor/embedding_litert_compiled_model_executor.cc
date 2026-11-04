@@ -734,6 +734,25 @@ EmbeddingLiteRtCompiledModelExecutor::GetExpectedInputDimension() const {
   return expected_input_dimension_;
 }
 
+std::vector<TextEncoderVariant>
+EmbeddingLiteRtCompiledModelExecutor::GetSupportedVariants() const {
+  // The input embeddings are [batch, seq_len, embed_dim] or [seq_len,
+  // embed_dim]. A dynamic (non-positive) batch dimension is run with a batch
+  // size of 1.
+  const int batch_size = (expected_input_dimension_.size() == 3 &&
+                          expected_input_dimension_[0] > 0)
+                             ? expected_input_dimension_[0]
+                             : 1;
+  std::vector<TextEncoderVariant> variants;
+  variants.reserve(encoder_signatures_.size());
+  // encoder_signatures_ is ordered by ascending sequence length.
+  for (const auto& [sequence_length, signature_index] : encoder_signatures_) {
+    variants.push_back(
+        {.batch_size = batch_size, .sequence_length = sequence_length});
+  }
+  return variants;
+}
+
 absl::StatusOr<int>
 EmbeddingLiteRtCompiledModelExecutor::GetEmbeddingDimension() const {
   return embedding_dimension_;

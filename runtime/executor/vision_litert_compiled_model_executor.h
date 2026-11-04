@@ -44,6 +44,47 @@
 
 namespace litert::lm {
 
+// A variant of the vision encoder, i.e. one of its signatures that can be
+// selected to run an image.
+//
+// The numeric fields are always positive in the variants returned by
+// GetVisionEncoderVariants() and
+// VisionLiteRtCompiledModelExecutor::GetSupportedVariants(); the 0 defaults
+// only denote a value that has not been set.
+struct VisionEncoderVariant {
+  // Name of the vision encoder signature.
+  std::string signature_name;
+  // Maximum number of image patches accepted by the signature. Images with
+  // fewer patches are padded.
+  int max_num_patches = 0;
+  // Number of soft tokens (output embeddings) produced for an image.
+  int num_soft_tokens = 0;
+
+  bool operator==(const VisionEncoderVariant& other) const = default;
+};
+
+// Returns the variants of the vision encoder `model` that can be selected to
+// run an image, sorted by ascending number of soft tokens (and therefore
+// ascending latency).
+//
+// This follows the signature selection of the executor: a single-signature
+// model always uses its only signature; otherwise the candidates are the
+// signatures prefixed with "vision_" and, if `selected_signatures` is not
+// empty, listed in it.
+//
+// Args:
+//   model: The vision encoder model.
+//   selected_signatures: The signatures selected with
+//     VisionExecutorSettings::SetEncoderSelectedSignatures, or empty for all.
+//
+// Returns:
+//   The variants, or an InvalidArgumentError if the number of patches or soft
+//   tokens of a candidate signature can't be determined from its tensor shapes,
+//   e.g. if its patch input isn't a [batch, num_patches, patch_dim] tensor.
+absl::StatusOr<std::vector<VisionEncoderVariant>> GetVisionEncoderVariants(
+    const litert::Model& model,
+    const std::vector<std::string>& selected_signatures);
+
 // The Vision Executor that uses the LiteRT CompiledModel to run the vision
 // encoder and vision adapter models to encode the image tensor into vision
 // soft token embeddings.
@@ -102,6 +143,17 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
   absl::Status StartProfiling() override;
   absl::StatusOr<ExecutorStats> StopProfiling() override;
+
+  // Returns the variants of the vision encoder that Encode() can select from
+  // (see GetVisionEncoderVariants).
+  //
+  // Returns:
+  //   The variants, sorted by ascending number of soft tokens (and therefore
+  //   ascending latency), or an InvalidArgumentError if the number of patches
+  //   or soft tokens of a candidate signature can't be determined from its
+  //   tensor shapes (see GetVisionEncoderVariants).
+  absl::StatusOr<std::vector<VisionEncoderVariant>> GetSupportedVariants()
+      const;
 
   // Same as the Encode overloads above, but can be cancelled while they run.
   //

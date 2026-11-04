@@ -66,6 +66,7 @@ using ::litert::lm::EmbeddingExecutorSettings;
 using ::litert::lm::ExecutorInputs;
 using ::litert::lm::ExecutorTextData;
 using ::litert::lm::ModelAssets;
+using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
@@ -748,6 +749,62 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
                        embedding_executor->ComputeEmbeddingFromInputEmbeddings(
                            input_embeddings));
   EXPECT_EQ(output.size(), 4 * 8);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest, GetSupportedVariants) {
+  // Model with two signatures: encoder_12 and encoder_24.
+  auto encoder_buf = BuildDummyMultiSignatureEncoderModelBuffer(
+      {"encoder_24", "encoder_12"}, {24, 12}, 8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  // Sorted by ascending sequence length, regardless of the signature order in
+  // the model.
+  EXPECT_THAT(
+      embedding_executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 12},
+                  TextEncoderVariant{.batch_size = 1, .sequence_length = 24}));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     GetSupportedVariants_OnlyReportsSelectedSignatures) {
+  auto encoder_buf = BuildDummyMultiSignatureEncoderModelBuffer(
+      {"encoder_12", "encoder_24"}, {12, 24}, 8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  settings.SetSelectedSignatures({"encoder_24"});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  auto fake_resources =
+      std::make_unique<FakeEmbeddingModelResources>(nullptr, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  EXPECT_THAT(
+      embedding_executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 24}));
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,

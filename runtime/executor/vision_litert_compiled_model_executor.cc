@@ -35,6 +35,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
@@ -138,6 +139,46 @@ absl::StatusOr<int> GetSignatureTokenLength(
       signature.Key()));
 }
 
+// Returns whether `signature` of a multi-signature vision model can be selected
+// to run an image, i.e. it has the `kVisionLengthPrefix` prefix and is one of
+// `selected_signatures` (if not empty).
+bool IsSelectableVitSignature(
+    const ::litert::SimpleSignature& signature,
+    const std::vector<std::string>& selected_signatures) {
+  return absl::StartsWith(signature.Key(), kVisionLengthPrefix) &&
+         (selected_signatures.empty() ||
+          absl::c_linear_search(selected_signatures, signature.Key()));
+}
+
+// Returns the maximum number of image patches accepted by `signature`, i.e.
+// dimension 1 of its `kImages` input, which must be a patchified
+// [batch, num_patches, patch_dim] tensor as read by Encode(). As in Encode(),
+// the input of a single-signature model may be unnamed, in which case input 0
+// is used. Returns an error for other inputs (e.g. a [batch, height, width,
+// channels] image), whose number of patches is unknown.
+absl::StatusOr<int> GetSignaturePatchCapacity(
+    const ::litert::SimpleSignature& signature, bool is_single_signature) {
+  ::litert::Expected<::litert::RankedTensorType> images_type =
+      signature.InputTensorType(kImages);
+  if (!images_type.HasValue() && is_single_signature) {
+    images_type = signature.InputTensorType(0);
+  }
+  if (!images_type.HasValue()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "No ", kImages, " input found in signature: ", signature.Key()));
+  }
+  const auto& dims = images_type->Layout().Dimensions();
+  if (dims.size() != 3 || dims[1] <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to determine the number of patches from the ", kImages,
+        " input of signature ", signature.Key(),
+        ": expected a [batch, num_patches, patch_dim] tensor with a positive "
+        "num_patches, got [",
+        absl::StrJoin(dims, ", "), "]"));
+  }
+  return dims[1];
+}
+
 // Returns the index of the signature that should be used for the given number
 // of patches. The signature is guaranteed to have at least as many tokens as
 // the given number of patches, or an error status if failed.
@@ -174,21 +215,18 @@ absl::StatusOr<int> GetVitSignatureIndex(
 
   for (int i = 0; i < model.GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(i));
-    if (absl::StartsWith(signature.Key(), kVisionLengthPrefix)) {
-      if (!selected_signatures.empty() &&
-          !absl::c_linear_search(selected_signatures, signature.Key())) {
-        continue;
-      }
-      found_any_signature = true;
-      LITERT_ASSIGN_OR_RETURN(int current_length,
-                              GetSignatureTokenLength(signature));
+    if (!IsSelectableVitSignature(signature, selected_signatures)) {
+      continue;
+    }
+    found_any_signature = true;
+    LITERT_ASSIGN_OR_RETURN(int current_length,
+                            GetSignatureTokenLength(signature));
 
-      max_available_length = std::max(max_available_length, current_length);
+    max_available_length = std::max(max_available_length, current_length);
 
-      if (current_length >= max_num_tokens && current_length < best_length) {
-        best_length = current_length;
-        best_signature_index = i;
-      }
+    if (current_length >= max_num_tokens && current_length < best_length) {
+      best_length = current_length;
+      best_signature_index = i;
     }
   }
 
@@ -217,6 +255,39 @@ bool AreBuffersReusable(const std::vector<TensorBuffer>& buffers) {
 }
 
 }  // namespace
+
+absl::StatusOr<std::vector<VisionEncoderVariant>> GetVisionEncoderVariants(
+    const ::litert::Model& model,
+    const std::vector<std::string>& selected_signatures) {
+  // Mirrors the signature selection of GetVitSignatureIndex(): the only
+  // signature of a single-signature model is always used, otherwise the
+  // selectable signatures are candidates.
+  const bool is_single_signature = model.GetNumSignatures() == 1;
+  std::vector<VisionEncoderVariant> variants;
+  for (int i = 0; i < model.GetNumSignatures(); ++i) {
+    LITERT_ASSIGN_OR_RETURN(::litert::SimpleSignature signature,
+                            model.GetSignature(i));
+    if (!is_single_signature &&
+        !IsSelectableVitSignature(signature, selected_signatures)) {
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        int max_num_patches,
+        GetSignaturePatchCapacity(signature, is_single_signature));
+    ABSL_ASSIGN_OR_RETURN(int num_soft_tokens,
+                          GetSignatureTokenLength(signature));
+    variants.push_back({
+        .signature_name = std::string(signature.Key()),
+        .max_num_patches = max_num_patches,
+        .num_soft_tokens = num_soft_tokens,
+    });
+  }
+  absl::c_stable_sort(variants, [](const VisionEncoderVariant& a,
+                                   const VisionEncoderVariant& b) {
+    return a.num_soft_tokens < b.num_soft_tokens;
+  });
+  return variants;
+}
 
 Expected<std::vector<TensorBuffer>&> VisionLiteRtCompiledModelExecutor::
     SignatureBufferCache::GetOrCreateInputBuffers(CompiledModel& compiled_model,
@@ -626,6 +697,13 @@ VisionLiteRtCompiledModelExecutor::EncodeImageTensor(
 
   return ExecutorVisionData(std::move(output_tensor_buffers[0]),
                             /*per_layer_embeddings=*/std::nullopt);
+}
+
+absl::StatusOr<std::vector<VisionEncoderVariant>>
+VisionLiteRtCompiledModelExecutor::GetSupportedVariants() const {
+  return GetVisionEncoderVariants(
+      vision_encoder_->GetModel(),
+      vision_executor_settings_.GetEncoderSelectedSignatures());
 }
 
 absl::Status VisionLiteRtCompiledModelExecutor::RunCompiledModel(
