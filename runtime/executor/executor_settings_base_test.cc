@@ -95,6 +95,38 @@ TEST(LlmExecutorConfigTest, StringToBackend) {
   EXPECT_EQ(*backend, Backend::NPU);
 }
 
+TEST(LlmExecutorConfigTest, IsBackendAllowedByConstraint) {
+  EXPECT_TRUE(IsBackendAllowedByConstraint(std::nullopt, Backend::NPU));
+  EXPECT_TRUE(IsBackendAllowedByConstraint("", Backend::NPU));
+  EXPECT_TRUE(IsBackendAllowedByConstraint("cpu, NPU", Backend::NPU));
+  EXPECT_TRUE(IsBackendAllowedByConstraint("GPU", Backend::GPU));
+  EXPECT_FALSE(IsBackendAllowedByConstraint("cpu", Backend::NPU));
+  EXPECT_FALSE(IsBackendAllowedByConstraint("cpu,gpu", Backend::NPU));
+}
+
+TEST(LlmExecutorConfigTest, RestrictAcceleratorsToBackendConstraint) {
+  const ::litert::HwAcceleratorSet npu_and_cpu =
+      ::litert::HwAccelerators::kNpu | ::litert::HwAccelerators::kCpu;
+  const ::litert::HwAcceleratorSet cpu(::litert::HwAccelerators::kCpu);
+  const ::litert::HwAcceleratorSet gpu(::litert::HwAccelerators::kGpu);
+
+  EXPECT_EQ(
+      RestrictAcceleratorsToBackendConstraint(npu_and_cpu, std::nullopt).value,
+      npu_and_cpu.value);
+  EXPECT_EQ(RestrictAcceleratorsToBackendConstraint(npu_and_cpu, "cpu").value,
+            cpu.value);
+  EXPECT_EQ(RestrictAcceleratorsToBackendConstraint(npu_and_cpu, "npu").value,
+            npu_and_cpu.value);
+  EXPECT_EQ(
+      RestrictAcceleratorsToBackendConstraint(npu_and_cpu, "cpu,gpu,npu")
+          .value,
+      npu_and_cpu.value);
+  EXPECT_EQ(RestrictAcceleratorsToBackendConstraint(gpu, "cpu").value,
+            cpu.value);
+  EXPECT_EQ(RestrictAcceleratorsToBackendConstraint(cpu, "gpu").value,
+            cpu.value);
+}
+
 TEST(LlmExecutorConfigTest, StringToActivationDataType) {
   auto activation_data_type = GetActivationDataTypeFromString("float32");
   EXPECT_EQ(*activation_data_type, ActivationDataType::FLOAT32);

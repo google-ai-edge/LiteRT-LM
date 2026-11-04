@@ -45,6 +45,7 @@ target_include_directories(runtime_components_embedding_lookup_embedding_lookup_
 target_link_libraries(runtime_components_embedding_lookup_embedding_lookup_end_of_multi_modal
   PUBLIC
     LiteRTLM::Runtime::Components::EmbeddingLookup::Interface
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LITERTLM_DEPS
 )
 
@@ -115,6 +116,7 @@ target_include_directories(runtime_components_embedding_lookup_embedding_lookup_
 target_link_libraries(runtime_components_embedding_lookup_embedding_lookup_text
   PUBLIC
     LiteRTLM::Runtime::Components::EmbeddingLookup::Interface
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LITERTLM_DEPS
 )
 

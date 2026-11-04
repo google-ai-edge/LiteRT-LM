@@ -189,6 +189,8 @@ LlmLiteRtMtpDrafter::Create(
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
   auto cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
+  // The drafter runs on the base model's backend, so its own backend
+  // constraint is not applied to the accelerators.
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,

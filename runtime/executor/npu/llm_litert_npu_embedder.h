@@ -296,7 +296,9 @@ class NpuEmbedder {
           std::nullopt,
       std::optional<::litert::TensorBuffer> prefill_ple_buffer = std::nullopt,
       std::optional<::litert::TensorBuffer> decode_ple_buffer = std::nullopt,
-      std::optional<::litert::TensorBuffer> verify_ple_buffer = std::nullopt);
+      std::optional<::litert::TensorBuffer> verify_ple_buffer = std::nullopt,
+      std::optional<std::string> per_layer_embedder_backend_constraint =
+          std::nullopt);
 
   absl::Status RunVerifyEmbedder(absl::Span<const int> verify_ids);
   absl::Status WriteAndPadPleEmbeddings(::litert::Environment& env,
@@ -338,6 +340,7 @@ class NpuEmbedder {
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_manager_;
   const litert::Model* embedder_per_layer_model_ = nullptr;
+  std::optional<std::string> per_layer_embedder_backend_constraint_;
   HWPleParams ple_params_;
   std::optional<::litert::TensorBuffer> prefill_embeddings_buffer_;
   std::optional<::litert::TensorBuffer> decode_embeddings_buffer_;

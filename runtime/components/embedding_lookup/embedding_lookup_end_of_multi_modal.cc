@@ -19,6 +19,9 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -35,6 +38,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #if defined(__ANDROID__)
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
@@ -155,21 +159,24 @@ absl::Status EndOfMultiModalEmbedding::LookupPrefill(
 absl::StatusOr<std::unique_ptr<EndOfMultiModalEmbedding>>
 EndOfMultiModalEmbedding::Create(litert::Environment& env,
                                  const litert::Model* absl_nonnull model,
-                                 int special_token) {
+                                 int special_token,
+                                 std::optional<std::string> backend_constraint) {
   auto handler = std::unique_ptr<EndOfMultiModalEmbedding>(
-      new EndOfMultiModalEmbedding(env, model, special_token));
+      new EndOfMultiModalEmbedding(env, model, special_token,
+                                   std::move(backend_constraint)));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
 absl::Status EndOfMultiModalEmbedding::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+  litert::HwAcceleratorSet accelerators(litert::HwAccelerators::kCpu);
 #if defined(__ANDROID__)
-  options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                  litert::HwAccelerators::kCpu);
-#else
-  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  accelerators |= litert::HwAccelerators::kNpu;
 #endif
+  options.SetHardwareAccelerators(
+      RestrictAcceleratorsToBackendConstraint(accelerators,
+                                              backend_constraint_));
 #if defined(__ANDROID__)
   LITERT_ASSIGN_OR_RETURN(
       ::litert::qualcomm::QualcommOptions & qnn_opts,

@@ -44,6 +44,10 @@ class EmbeddingLookupManager {
   // corresponding embedding models. The special tokens are used to indicate
   // that the corresponding embedding model should be used.
   //
+  // The optional end_of_multi_modal_backend_constraints maps the same special
+  // tokens to the backend constraint of their embedding model. A token without
+  // an entry is not constrained.
+  //
   // If fully_supports_multi_modal is true, the EmbeddingLookupManager will
   // handle multimodal tokens via the multimodal embedding lookup. Otherwise, it
   // default any multi-modal tokens to the text embedding value of entry 0.
@@ -71,7 +75,10 @@ class EmbeddingLookupManager {
       std::optional<ScopedFile> external_weight_file = std::nullopt,
       litert::Options::ScopedWeightSectionMap external_weight_sections = {},
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map = nullptr,
+      std::optional<std::string> backend_constraint = std::nullopt,
+      const absl::flat_hash_map<int, std::string>*
+          end_of_multi_modal_backend_constraints = nullptr);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -81,14 +88,17 @@ class EmbeddingLookupManager {
       std::optional<ScopedFile> external_weight_file = std::nullopt,
       litert::Options::ScopedWeightSectionMap external_weight_sections = {},
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map = nullptr,
+      std::optional<std::string> backend_constraint = std::nullopt);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
       std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
       absl::flat_hash_map<int, const litert::Model*>&
           end_of_multi_modal_embedding_models,
-      bool fully_supports_multi_modal = true);
+      bool fully_supports_multi_modal = true,
+      const absl::flat_hash_map<int, std::string>*
+          end_of_multi_modal_backend_constraints = nullptr);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -155,14 +165,19 @@ class EmbeddingLookupManager {
       std::optional<ScopedFile> external_weight_file,
       litert::Options::ScopedWeightSectionMap external_weight_sections,
       const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-          weight_in_memory_map = nullptr);
+          weight_in_memory_map,
+      std::optional<std::string> backend_constraint,
+      const absl::flat_hash_map<int, std::string>*
+          end_of_multi_modal_backend_constraints);
 
   absl::Status Initialize(
       litert::Environment& env,
       std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
       absl::flat_hash_map<int, const litert::Model*>&
           end_of_multi_modal_embedding_models,
-      bool fully_supports_multi_modal);
+      bool fully_supports_multi_modal,
+      const absl::flat_hash_map<int, std::string>*
+          end_of_multi_modal_backend_constraints);
 
   std::unique_ptr<EmbeddingLookupText> text_embedding_lookup_;
   std::vector<std::unique_ptr<EmbeddingLookupMultiModal>>
