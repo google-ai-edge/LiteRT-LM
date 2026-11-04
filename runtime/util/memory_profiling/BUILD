@@ -460,10 +460,16 @@ cc_test(
     # it to this process. requires-gpu-sm90-full picks a whole H100, i.e. no
     # MIG partitioning, which NVML accounts for differently. The no<os> tags
     # keep the other TAP projects from requesting it explicitly (b/202306027).
+    # TSan and MSan abort while loading the NVIDIA driver's prebuilt NVML
+    # library: TSan reports an incompatible memory layout, and MSan reports
+    # uninitialized reads inside NVML, whose writes it cannot see
+    # (b/358526563).
     tags = [
         "noandroid",
         "noios",
         "nomacos",
+        "nomsan",
+        "notsan",
         "nowindows",
         "requires-gpu-sm90-full",
     ],
