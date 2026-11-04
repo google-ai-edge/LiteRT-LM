@@ -446,6 +446,49 @@ TEST_P(FakeLmDraftVerificationTest, VerifiesAfterDecode) {
   DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
 }
 
+TEST_P(FakeLmDraftVerificationTest,
+       VerifiesAfterMultimodalEndTokenOnEmbeddingInputModels) {
+  // Raw multimodal soft-token placeholders (`kSpecialToken`) cannot be looked
+  // up by the verifier and must be rejected on all models.
+  for (int special_token :
+       {ExecutorAudioData::kSpecialToken, ExecutorVisionData::kSpecialToken}) {
+    ASSERT_NO_FATAL_FAILURE(CreateExecutor(/*selected_signatures=*/{}));
+    ASSERT_OK(Prefill({3, 1, special_token}));
+    EXPECT_THAT(executor_->VerifyDraft({1, 2}, ExecutorDecodeParams()),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         HasSubstr("multimodal")));
+  }
+
+  // End-of-audio (`ExecutorAudioData::kEndToken`) and end-of-vision
+  // (`ExecutorVisionData::kEndToken`) sentinel tokens are resolved by
+  // `EmbeddingLookupManager::LookupPrefill` on embedding-input models (falling
+  // back to the default token-0 embedding in the fake embedder), whereas
+  // token-input models reject negative token IDs.
+  for (int end_token :
+       {ExecutorAudioData::kEndToken, ExecutorVisionData::kEndToken}) {
+    SCOPED_TRACE(::testing::Message() << "End token: " << end_token);
+    ASSERT_NO_FATAL_FAILURE(CreateExecutor(/*selected_signatures=*/{}));
+    ASSERT_OK(Prefill({3, 1, end_token}));
+    if (!GetParam().embedder_file.has_value()) {
+      EXPECT_THAT(executor_->VerifyDraft({1, 2}, ExecutorDecodeParams()),
+                  StatusIs(absl::StatusCode::kFailedPrecondition,
+                           HasSubstr("multimodal")));
+      continue;
+    }
+    // In `EmbeddingLookupText`, negative token IDs map to the default
+    // embedding (token 0), so the fake LM predicts as if context_ ended in 0.
+    context_.back() = 0;
+    const std::vector<int> continuation = FakeLmContinuation(4);
+    const std::vector<int> draft(continuation.begin(), continuation.end() - 1);
+    ASSERT_OK_AND_ASSIGN(DraftVerificationResult result, VerifyDraft(draft));
+    EXPECT_EQ(result.num_accepted, 3);
+    EXPECT_THAT(result.tokens,
+                ElementsAreArray(continuation.begin(),
+                                 continuation.begin() + result.tokens.size()));
+    DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
+  }
+}
+
 TEST_P(FakeLmDraftVerificationTest, FailsIfNoPassFits) {
   std::vector<int> tokens(62);
   for (int i = 0; i < tokens.size(); ++i) {

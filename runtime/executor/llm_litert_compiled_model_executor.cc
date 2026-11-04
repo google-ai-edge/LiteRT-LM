@@ -2370,7 +2370,20 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
     return absl::FailedPreconditionError(
         "Draft verification needs a pending token from a prefill or decode.");
   }
-  if (pending.token[0]->id() < 0) {
+  // On embedding-input models (`signatures_.input_embeddings.has_value()`),
+  // `LlmLiteRtVerifier::FillEmbeddings` looks up `[pending_token_id, draft...]`
+  // via `EmbeddingLookupManager::LookupPrefill`, which resolves text token IDs
+  // (>= 0) as well as the end-of-audio (`ExecutorAudioData::kEndToken`) and
+  // end-of-vision (`ExecutorVisionData::kEndToken`) sentinel tokens via
+  // `end_of_multi_modal_embedding_lookups_`, but cannot resolve raw multimodal
+  // soft-token placeholders (`kSpecialToken`). Token-input models write `ids`
+  // directly into an int32 token tensor and require `pending_id >= 0`.
+  const int pending_id = pending.token[0]->id();
+  const bool is_end_of_multimodal_token =
+      (pending_id == ExecutorAudioData::kEndToken ||
+       pending_id == ExecutorVisionData::kEndToken) &&
+      signatures_.input_embeddings.has_value();
+  if (pending_id < 0 && !is_end_of_multimodal_token) {
     return absl::FailedPreconditionError(
         "Draft verification can't follow multimodal input directly.");
   }
