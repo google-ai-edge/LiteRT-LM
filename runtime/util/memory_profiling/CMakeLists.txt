@@ -48,10 +48,10 @@ target_link_libraries(runtime_util_memory_profiling_host_memory
 # Accelerator Memory Monitor
 # ==============================================================================
 # accelerator_memory_monitor.cc is platform-neutral; exactly one
-# accelerator_memory_<os>.cc implements the platform contract for the target
-# OS. Linux and Android share the /proc/self/fdinfo reader (fdinfo.cc) and the
-# dma-buf reader built on it (accelerator_memory_dmabuf.cc). Keep this in sync
-# with the select() in BUILD.
+# accelerator_memory_<os>.cc (.mm on Apple platforms) implements the platform
+# contract for the target OS. Linux and Android share the /proc/self/fdinfo
+# reader (fdinfo.cc) and the dma-buf reader built on it
+# (accelerator_memory_dmabuf.cc). Keep this in sync with the select() in BUILD.
 set(ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_monitor.cc)
 if(ANDROID)
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS
@@ -68,6 +68,12 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   )
 elseif(WIN32)
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_windows.cc)
+elseif(APPLE)
+  # Objective-C++: it reads MTLDevice. The rest of the build is C / C++.
+  enable_language(OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD ${CMAKE_CXX_STANDARD})
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+  list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_apple.mm)
 else()
   list(APPEND ACCELERATOR_MEMORY_MONITOR_SRCS accelerator_memory_unsupported.cc)
 endif()
@@ -98,6 +104,10 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # dlopen() of libnvidia-ml.so at run time.
   target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
     PUBLIC ${CMAKE_DL_LIBS})
+elseif(APPLE)
+  # Metal: MTLDevice.currentAllocatedSize. Foundation: NSArray / NSString.
+  target_link_libraries(runtime_util_memory_profiling_accelerator_memory_monitor
+    PUBLIC "-framework Metal" "-framework Foundation")
 endif()
 
 # ==============================================================================

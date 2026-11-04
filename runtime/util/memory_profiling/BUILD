@@ -34,6 +34,7 @@
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+# [Google-internal load of `objc_library`]
 
 package(
     default_hdrs_check = "strict",
@@ -196,6 +197,10 @@ cc_library(
             "accelerator_memory_nvml.cc",
         ],
         "@platforms//os:windows": ["accelerator_memory_windows.cc"],
+        # macOS and iOS: accelerator_memory_apple.mm, Objective-C++, lives in
+        # the objc_library below and comes in through deps.
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
         "//conditions:default": ["accelerator_memory_unsupported.cc"],
     }),
     hdrs = ["accelerator_memory_monitor.h"] + select({
@@ -235,8 +240,38 @@ cc_library(
             "@com_google_absl//absl/container:flat_hash_map",
             "@com_google_absl//absl/container:flat_hash_set",
         ],
+        "@platforms//os:macos": [":accelerator_memory_apple"],
+        "@platforms//os:ios": [":accelerator_memory_apple"],
         "//conditions:default": [],
     }),
+)
+
+# The macOS / iOS implementation of the contract, Objective-C++ because it
+# reads MTLDevice. Part of :accelerator_memory_monitor (which selects it in on
+# Apple platforms), not a library in its own right; its header is public only
+# for its test. It takes accelerator_memory_monitor.h as a source, since the
+# contract it implements is declared there and the dependency runs the other
+# way.
+objc_library(
+    name = "accelerator_memory_apple",
+    srcs = [
+        "accelerator_memory_apple.mm",
+        "accelerator_memory_monitor.h",
+    ],
+    hdrs = ["accelerator_memory_apple.h"],
+    copts = ["-ObjC++"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+
+    ],
 )
 
 cc_test(
@@ -401,6 +436,99 @@ cc_test(
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
+    ],
+)
+
+# The Apple test: the merge rule on fixed inputs, and live checks with a Metal
+# buffer and with weights mapped from a file. Objective-C++, so an
+# objc_library wrapped in a cc_test. Runs in TAP's macOS project
+# (Forge-on-Mac has a Metal device; the live checks skip without one); the
+# tags keep the other TAP projects and Tricorder's builder from requesting it
+# explicitly (b/202306027).
+objc_library(
+    name = "accelerator_memory_apple_test_lib",
+    testonly = True,
+    srcs = ["accelerator_memory_apple_test.mm"],
+    copts = ["-ObjC++"],
+    tags = [
+        "noandroid",
+        "nobuilder",
+        "nolinux",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_apple",
+        ":accelerator_memory_monitor",
+        ":host_memory",
+        ":memory_snapshot",
+        "@com_google_googletest//:gtest",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "accelerator_memory_apple_test",
+    tags = [
+        "noandroid",
+        "nobuilder",
+        "nolinux",
+        "nowindows",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":accelerator_memory_apple_test_lib",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Measurement of how Metal allocations show up in the host figures on macOS;
+# the data the Apple implementation of the accelerator contract is based on.
+# Objective-C++, so it is an objc_library wrapped in a cc_test, like the other
+# Metal tests in the tree. Both targets are tagged manual: the test is meant to
+# be run by hand (see the file comment) and read, not to gate anything yet.
+objc_library(
+    name = "accelerator_memory_apple_metal_test_lib",
+    testonly = True,
+    srcs = ["accelerator_memory_apple_metal_test.mm"],
+    copts = ["-ObjC++"],
+    tags = [
+        "manual",
+        "nobuilder",
+        "notap",
+    ],
+    deps = [
+        ":host_memory",
+        "@com_google_googletest//:gtest",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "accelerator_memory_apple_metal_test",
+    tags = [
+        "manual",
+        "nobuilder",
+        "notap",
+    ],
+    deps = [
+        ":accelerator_memory_apple_metal_test_lib",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
