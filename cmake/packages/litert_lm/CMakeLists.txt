@@ -104,8 +104,13 @@ set(LITERTLM_STAGING_DIR "${CMAKE_BINARY_DIR}/../tmp/lib"
     CACHE PATH "")
 set(LITERTLM_THIRD_PARTY_DIR "${CMAKE_BINARY_DIR}/third_party"
     CACHE PATH "")
-set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${CMAKE_BINARY_DIR}/external"
-    CACHE PATH "LiteRT-LM: Root directory for external projects")
+if(NOT LITERTLM_CROSSCOMPILING AND DEFINED LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR)
+    set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}"
+        CACHE PATH "LiteRT-LM: Root directory for external projects" FORCE)
+else()
+    set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${CMAKE_BINARY_DIR}/external"
+        CACHE PATH "LiteRT-LM: Root directory for external projects")
+endif()
 set(LITERTLM_IMPORTED_SRC_DIR "${LITERTLM_CMAKE_DIR}/import/src" CACHE PATH "")
 set(LITERTLM_IMPORTED_LITERT_SRC_DIR "${LITERTLM_IMPORTED_SRC_DIR}/litert" )
 set(LITERTLM_INCLUDE_PATHS
@@ -238,6 +243,91 @@ add_compile_options("-fpermissive")
 
 # --- Optional
 option(_unverified_targets "Builds executables that are still in progress" OFF)
+
+# --- Centralized ExternalProject & FetchContent Optimizations ---
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+
+include(ExternalProject)
+
+file(READ "${CMAKE_ROOT}/Modules/ExternalProject.cmake" _ep_content)
+string(REPLACE "\${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_ROOT}/Modules" _ep_content "${_ep_content}")
+string(REPLACE "\${CMAKE_CURRENT_FUNCTION_LIST_DIR}" "${CMAKE_ROOT}/Modules" _ep_content "${_ep_content}")
+string(REPLACE "function(ExternalProject_Add " "function(_ExternalProject_Add " _ep_content "${_ep_content}")
+cmake_language(EVAL CODE "${_ep_content}")
+
+function(ExternalProject_Add name)
+    cmake_parse_arguments(PARSE_ARGV 1 _EP "" "GIT_REPOSITORY;GIT_TAG" "")
+
+    set(_call_args "[===[${name}]===]")
+    set(_skip_section FALSE)
+    set(_is_commit_sha FALSE)
+    if(_EP_GIT_REPOSITORY AND _EP_GIT_TAG)
+        string(LENGTH "${_EP_GIT_TAG}" _tag_len)
+        if(_tag_len EQUAL 40 AND _EP_GIT_TAG MATCHES "^[0-9a-fA-F]+$")
+            set(_is_commit_sha TRUE)
+        endif()
+    endif()
+
+    set(_ep_keywords
+        DEPENDS PREFIX LIST_SEPARATOR TMP_DIR STAMP_DIR DOWNLOAD_DIR
+        SOURCE_DIR SOURCE_SUBDIR BINARY_DIR INSTALL_DIR
+        DOWNLOAD_COMMAND URL URL_HASH URL_MD5 DOWNLOAD_NAME DOWNLOAD_NO_EXTRACT
+        GIT_REPOSITORY GIT_TAG GIT_REMOTE_NAME GIT_SUBMODULES GIT_SUBMODULES_RECURSE
+        GIT_SHALLOW GIT_PROGRESS GIT_CONFIG GIT_REMOTE_UPDATE_STRATEGY
+        UPDATE_COMMAND UPDATE_DISCONNECTED
+        PATCH_COMMAND
+        CONFIGURE_COMMAND CMAKE_COMMAND CMAKE_GENERATOR CMAKE_GENERATOR_PLATFORM
+        CMAKE_GENERATOR_TOOLSET CMAKE_GENERATOR_INSTANCE CMAKE_ARGS CMAKE_CACHE_ARGS
+        CMAKE_CACHE_DEFAULT_ARGS
+        BUILD_COMMAND BUILD_IN_SOURCE BUILD_ALWAYS BUILD_BYPRODUCTS
+        INSTALL_COMMAND
+        TEST_COMMAND TEST_BEFORE_INSTALL TEST_AFTER_INSTALL TEST_EXCLUDE_FROM_MAIN
+        LOG_DOWNLOAD LOG_UPDATE LOG_PATCH LOG_CONFIGURE LOG_BUILD LOG_INSTALL LOG_TEST
+        LOG_MERGED_STDOUTERR LOG_OUTPUT_ON_FAILURE
+        USES_TERMINAL_DOWNLOAD USES_TERMINAL_UPDATE USES_TERMINAL_PATCH
+        USES_TERMINAL_CONFIGURE USES_TERMINAL_BUILD USES_TERMINAL_INSTALL USES_TERMINAL_TEST
+        STEP_TARGETS INDEPENDENT_STEP_TARGETS
+    )
+
+    math(EXPR _last_idx "${ARGC} - 1")
+    foreach(_i RANGE 1 ${_last_idx})
+        set(_arg "${ARGV${_i}}")
+        if(_arg IN_LIST _ep_keywords)
+            if(_arg STREQUAL "UPDATE_COMMAND" OR _arg STREQUAL "GIT_SHALLOW")
+                set(_skip_section TRUE)
+            elseif(_is_commit_sha AND (_arg STREQUAL "GIT_REPOSITORY" OR _arg STREQUAL "GIT_TAG"))
+                set(_skip_section TRUE)
+            else()
+                set(_skip_section FALSE)
+                string(APPEND _call_args " [===[${_arg}]===]")
+            endif()
+        elseif(NOT _skip_section)
+            string(APPEND _call_args " [===[${_arg}]===]")
+        endif()
+    endforeach()
+
+    if(_EP_GIT_REPOSITORY)
+        if(_is_commit_sha)
+            string(APPEND _call_args
+                " DOWNLOAD_COMMAND [===[${CMAKE_COMMAND}]===]"
+                " [===[-DSRC_DIR=<SOURCE_DIR>]===]"
+                " [===[-DREPO_URL=${_EP_GIT_REPOSITORY}]===]"
+                " [===[-DTAG=${_EP_GIT_TAG}]===]"
+                " -P [===[${LITERTLM_SCRIPTS_DIR}/shallow_git_fetch.cmake]===]"
+                " UPDATE_COMMAND [===[]===]"
+            )
+        else()
+            string(APPEND _call_args
+                " GIT_SHALLOW TRUE"
+                " UPDATE_COMMAND [===[]===]"
+            )
+        endif()
+    endif()
+
+    cmake_language(EVAL CODE "_ExternalProject_Add(${_call_args})")
+endfunction()
 
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
 include("${LITERTLM_MODULES_DIR}/macros.cmake")
@@ -373,6 +463,17 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
         else()
             # Linux Linker (ELF)
             set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+            if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+                execute_process(
+                    COMMAND ${CMAKE_CXX_COMPILER} -fuse-ld=lld -Wl,--version
+                    OUTPUT_QUIET ERROR_QUIET
+                    RESULT_VARIABLE _LITERTLM_LLD_CHECK
+                )
+                if(_LITERTLM_LLD_CHECK EQUAL 0)
+                    message(STATUS "[LiteRTLM] Using LLD linker")
+                    set(_LITERTLM_LINK_MULTIDEF "-fuse-ld=lld ${_LITERTLM_LINK_MULTIDEF}")
+                endif()
+            endif()
             set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
             set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
             set(_LITERTLM_LINK_WHOLE_START "-Wl,--whole-archive")
