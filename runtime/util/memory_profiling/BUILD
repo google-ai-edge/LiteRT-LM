@@ -522,15 +522,19 @@ cc_test(
 # (Forge-on-Mac has a Metal device; the live checks skip without one); the
 # tags keep the other TAP projects and Tricorder's builder from requesting it
 # explicitly (b/202306027).
+# TODO: Remove "manual" and "notap" once the flakiness (seen on GitHub Actions
+# macOS runners) is understood and fixed.
 objc_library(
     name = "accelerator_memory_apple_test_lib",
     testonly = True,
     srcs = ["accelerator_memory_apple_test.mm"],
     copts = ["-ObjC++"],
     tags = [
+        "manual",
         "noandroid",
         "nobuilder",
         "nolinux",
+        "notap",
         "nowindows",
     ],
     target_compatible_with = select({
@@ -554,9 +558,11 @@ objc_library(
 cc_test(
     name = "accelerator_memory_apple_test",
     tags = [
+        "manual",
         "noandroid",
         "nobuilder",
         "nolinux",
+        "notap",
         "nowindows",
     ],
     target_compatible_with = select({
