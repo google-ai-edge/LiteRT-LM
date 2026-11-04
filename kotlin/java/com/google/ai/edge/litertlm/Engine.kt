@@ -103,6 +103,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           @OptIn(ExperimentalApi::class) ExperimentalFlags.useHwMaskingForNpu,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.useHwCacheUpdateForNpu,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.useHwPleForNpu,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.enableDebugger,
         )
     }
   }

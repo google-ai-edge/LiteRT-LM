@@ -752,6 +752,37 @@ class Conversation(
   }
 
   /**
+   * Returns debug info for the conversation's underlying session, or `null` if debugging is
+   * disabled or unsupported.
+   *
+   * @return The [SessionDebugInfo] for the conversation, or `null`.
+   * @throws IllegalStateException if the conversation is not alive.
+   */
+  @ExperimentalApi
+  fun getSessionDebugInfo(): SessionDebugInfo? {
+    checkIsAlive()
+    return LiteRtLmJni.nativeConversationGetSessionDebugInfo(handle)?.let { SessionDebugInfo(it) }
+  }
+
+  /**
+   * Deletes all AI Edge Debugger captures of this conversation's underlying session
+   * (`<cache_dir>/litert_lm_debugger/<session_id>/`) while keeping the conversation open for
+   * subsequent turns.
+   *
+   * Waits for in-flight tasks of the conversation (including a background KV-cache refill) to
+   * finish before deleting. Succeeds without doing anything when the debugger is not enabled for
+   * the conversation. Must not be called from inside a [MessageCallback].
+   *
+   * @throws IllegalStateException if the conversation is not alive.
+   * @throws LiteRtLmJniException if deletion fails.
+   */
+  @ExperimentalApi
+  fun deleteDebugCaptures() {
+    checkIsAlive()
+    LiteRtLmJni.nativeConversationDeleteDebugCaptures(handle)
+  }
+
+  /**
    * Gets the number of tokens in the conversation KV Cache (prefill + decode).
    *
    * @return The number of tokens.
