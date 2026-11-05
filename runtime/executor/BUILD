@@ -1841,19 +1841,6 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "llm_executor_interface",
-    hdrs = ["llm_executor_interface.h"],
-    deps = [
-        ":executor_settings_base",
-        ":llm_executor_io_types",
-        ":state_interface",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@litert//litert/cc:litert_tensor_buffer",
-    ],
-)
-
 # ==================================================================================================
 # Common Utils shared across all implementations
 # ==================================================================================================
