@@ -118,10 +118,12 @@ class LlgFcToolCallsTest : public testing::Test {
   }
 
   static const LlGuidanceConfig& GetConfig() {
+    // Gemma4DataProcessor makes the channel tokens special too.
     static const auto* const config = new LlGuidanceConfig{
         .eos_ids = {1, 50, 106},
         .special_tokens = {"<eos>", "<|tool_call>", "<tool_call|>",
-                           "<|tool_response>", "<tool_response|>", "<|\"|>"}};
+                           "<|tool_response>", "<tool_response|>", "<|\"|>",
+                           "<|channel>", "<channel|>"}};
     return *config;
   }
   static inline TestSentencePieceTokenizer* tokenizer_ = nullptr;
@@ -282,6 +284,66 @@ TEST_F(LlgFcToolCallsTest, TextOnlyMatchesCodeFenceLiterally) {
     ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, id));
   }
   EXPECT_TRUE(rejected);
+}
+
+// The model may open channels first, e.g. to think when thinking is enabled
+// only in the prompt, but a text-only answer must still follow them.
+TEST_F(LlgFcToolCallsTest, TextOnlyAllowsChannelBeforeAnswer) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {"name": "get_weather"}
+  ])json");
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextOnly);
+  options.channel_start = "<|channel>";
+  options.channel_end = "<channel|>";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "It is sunny.");
+  AssertAccepts(*constraint,
+                "<|channel>thought\nThe user asks about the weather.<channel|>"
+                "It is sunny.");
+  // Gemma 4 sometimes thinks in more than one block.
+  AssertAccepts(*constraint,
+                "<|channel>thought\nThe user asks about the weather.<channel|>"
+                "<|channel>thought\nI can't call tools.<channel|>It is sunny.");
+  // No visible answer.
+  AssertRejects(*constraint, "<|channel>thought\nIt is sunny.<channel|>");
+  AssertRejects(*constraint,
+                "<|channel>thought\nHmm.<channel|><|channel>thought\nIt is "
+                "sunny.<channel|>");
+  // Channels are only allowed at the start.
+  AssertRejects(*constraint, "It is sunny.<|channel>thought\nDone.<channel|>");
+}
+
+TEST_F(LlgFcToolCallsTest, TextAndOrFunctionCallsAllowsChannelFirst) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "name": "get_weather",
+      "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"]
+      }
+    }
+  ])json");
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+
+  // Without the channel options, the channel markup can't appear at all.
+  auto no_channel = CreateConstraint(tools, options);
+  ASSERT_NE(no_channel, nullptr);
+  AssertRejects(*no_channel, "<|channel>thought\nHmm.<channel|>It is sunny.");
+
+  options.channel_start = "<|channel>";
+  options.channel_end = "<channel|>";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+  AssertAccepts(*constraint, "<|channel>thought\nHmm.<channel|>It is sunny.");
+  AssertAccepts(*constraint,
+                R"(<|channel>thought
+Check the weather.<channel|><|tool_call>call:get_weather{location:<|"|>Paris<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(*constraint, "It is sunny.<|channel>thought\nDone.<channel|>");
 }
 
 TEST_F(LlgFcToolCallsTest, TextAndOrFunctionCalls) {

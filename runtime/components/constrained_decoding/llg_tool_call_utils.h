@@ -82,8 +82,15 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
 // e.g. "<|tool_call>" becomes "<\|tool_call>".
 std::string EscapeForLarkRegex(absl::string_view text);
 
+// Returns the `start` rule, which matches `body`. If `options` has channel
+// tokens, the model may also open channels (e.g. the thought channel) before
+// `body`.
+std::string GetStartRule(const LlgConstraintsOptions& options,
+                         absl::string_view body);
+
 // Returns the grammar for text-only answers, i.e. the "none" tool choice. The
-// answer can't contain the code fence, and it can't be empty.
+// answer can't contain the code fence, and it can't be empty, even after a
+// channel.
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options);
 
 std::string GetRuleForType(const std::string& type,

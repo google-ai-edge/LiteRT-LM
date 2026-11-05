@@ -368,7 +368,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     ABSL_ASSIGN_OR_RETURN(
         processor_config,
         CreateDataProcessorConfigFromLlmModelType(
-            session_config_copy.GetLlmModelType(), tool_call_config));
+            session_config_copy.GetLlmModelType(), tool_call_config, channels));
   }
 
   return ConversationConfig(
@@ -539,7 +539,31 @@ absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
       decode_config.SetThinkingEndTokenIds(std::move(end_token_ids));
     }
   } else {
-    decode_config.SetThinkingTokenBudget(0);
+    // If the prompt already opened a channel, e.g. Gemma 4's thought channel
+    // after a tool response when only the extra context enables thinking, hold
+    // the constraint back until the model closes it, as for thinking. The tool
+    // call constraints only accept channels that the model opens itself.
+    const Channel* open_channel = nullptr;
+    if (open_channel_name.has_value() &&
+        (decoding_constraint.has_value() ||
+         config_.constrained_decoding_enabled())) {
+      for (const Channel& channel : config_.GetChannels()) {
+        if (channel.channel_name == *open_channel_name) {
+          open_channel = &channel;
+          break;
+        }
+      }
+    }
+    if (open_channel != nullptr) {
+      decode_config.SetThinkingTokenBudget(-1);  // Unlimited.
+      decode_config.SetThinkingStartTokenIds({});
+      ABSL_ASSIGN_OR_RETURN(auto end_token_ids,
+                            const_cast<Tokenizer&>(engine_.GetTokenizer())
+                                .TextToTokenIds(open_channel->end));
+      decode_config.SetThinkingEndTokenIds(std::move(end_token_ids));
+    } else {
+      decode_config.SetThinkingTokenBudget(0);
+    }
   }
   if (decoding_constraint.has_value() && constraint_provider_ != nullptr) {
     ABSL_ASSIGN_OR_RETURN(constraint_,

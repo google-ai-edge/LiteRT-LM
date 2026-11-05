@@ -71,6 +71,14 @@ struct Gemma4DataProcessorConfig {
   std::string open_quote = "<|\"|>";
   std::string close_quote = "<|\"|>";
   std::string function_response_start = "<|tool_response>";
+  // The start and end of the channel that the model may open at the start of
+  // its turn, e.g. "<|channel>thought\n" and "<channel|>" for the thought
+  // channel. Set from the channels in the model metadata. With LLGuidance tool
+  // call constraints, the first token of each is a special token that text
+  // can't match, so with the "none" tool choice the model still has to give a
+  // visible answer after the channel. Empty disables this.
+  std::string channel_start;
+  std::string channel_end;
   // The syntax type of the tool call.
   std::string syntax_type = "fc";
   // Whether to escape the fence strings for regex matching.

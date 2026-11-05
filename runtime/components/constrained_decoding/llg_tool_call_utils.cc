@@ -220,17 +220,33 @@ std::string EscapeForLarkRegex(absl::string_view text) {
   return escaped;
 }
 
+std::string GetStartRule(const LlgConstraintsOptions& options,
+                         absl::string_view body) {
+  if (options.channel_start.empty() || options.channel_end.empty()) {
+    return absl::StrCat("start: ", body, "\n");
+  }
+  // The channel tokens are special tokens, so text can't match them. Only this
+  // rule can, and only before `body`. Gemma 4 sometimes thinks in more than one
+  // block, so any number of channels is allowed.
+  return absl::StrFormat(
+      R"(start: channel_block* %s
+channel_block: %s CHANNEL_TEXT? %s
+CHANNEL_TEXT: /(.|\n)+/
+)",
+      body, options.channel_start, options.channel_end);
+}
+
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options) {
   // The answer can't contain the code fence, so the model can't write a tool
   // call as text. It needs at least one character, so the model can't end the
   // turn without answering.
-  return absl::StrFormat(
-      R"(
+  return absl::StrCat(absl::StrFormat(
+                          R"(
 FORBIDDEN_CALL : /(.|\n)*%s(.|\n)*/
 SAFE_TEXT : /(.|\n)+/ & ~FORBIDDEN_CALL
-start : SAFE_TEXT
 )",
-      EscapeForLarkRegex(options.code_fence_start));
+                          EscapeForLarkRegex(options.code_fence_start)),
+                      GetStartRule(options, "SAFE_TEXT"));
 }
 
 std::string GetRuleForType(const std::string& type,
