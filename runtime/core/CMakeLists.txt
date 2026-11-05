@@ -45,40 +45,6 @@ target_link_libraries(runtime_core_tasks
 )
 
 # ==============================================================================
-# Pipeline
-# ==============================================================================
-add_litertlm_library(runtime_core_pipeline STATIC
-  pipeline.cc
-)
-add_library(LiteRTLM::Runtime::Core::Pipeline ALIAS runtime_core_pipeline)
-
-target_include_directories(runtime_core_pipeline
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_core_pipeline
-  PUBLIC
-    runtime_core_tasks
-    LiteRTLM::Runtime::Components::ScoringCpuUtil
-    LiteRTLM::Runtime::Components::StopTokenDetector
-    LiteRTLM::Runtime::Components::TokenIdUtil
-    LiteRTLM::Runtime::Components::TokenizerInterface
-    LiteRTLM::Runtime::Components::TopPCpuSampler
-    LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
-    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
-    LiteRTLM::Runtime::Engine::IoTypes
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LiteRTLM::Runtime::Executor::LlmExecutorInterface
-    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
-    LiteRTLM::Runtime::Executor::LlmExecutorSettings
-    LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
-    LiteRTLM::Runtime::Util::ConvertTensorBuffer
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
 # Session Utils
 # ==============================================================================
 add_litertlm_library(runtime_core_session_utils STATIC
@@ -116,7 +82,6 @@ target_include_directories(runtime_core_session_advanced
 
 target_link_libraries(runtime_core_session_advanced
   PUBLIC
-    LiteRTLM::Runtime::Core::Pipeline
     LiteRTLM::Runtime::Core::SessionUtils
     LiteRTLM::Runtime::Core::Tasks
 
@@ -296,7 +261,6 @@ add_library(LiteRTLM::Runtime::Core ALIAS runtime_core_libs)
 target_link_libraries(runtime_core_libs INTERFACE
   LiteRTLM::Runtime::Core::EngineAdvancedImpl
   LiteRTLM::Runtime::Core::EmbeddingEngineImpl
-  LiteRTLM::Runtime::Core::Pipeline
   LiteRTLM::Runtime::Core::SessionAdvanced
   LiteRTLM::Runtime::Core::AudioSessionAdvanced
   LiteRTLM::Runtime::Core::SessionUtils

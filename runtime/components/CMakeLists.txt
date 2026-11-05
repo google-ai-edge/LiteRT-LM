@@ -388,26 +388,6 @@ target_link_libraries(runtime_components_stop_token_detector
 )
 
 # ==============================================================================
-# Token ID Util
-# ==============================================================================
-add_litertlm_library(runtime_components_token_id_util STATIC
-  token_id_util.cc
-)
-add_library(LiteRTLM::Runtime::Components::TokenIdUtil
-  ALIAS runtime_components_token_id_util)
-
-target_include_directories(runtime_components_token_id_util
-  PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_components_token_id_util
-  PUBLIC
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
 # Top P CPU Sampler
 # ==============================================================================
 add_litertlm_library(runtime_components_top_p_cpu_sampler STATIC
@@ -458,6 +438,5 @@ target_link_libraries(runtime_components_libs INTERFACE
   LiteRTLM::Runtime::Components::SamplingUniforms
   LiteRTLM::Runtime::Components::ScoringCpuUtil
   LiteRTLM::Runtime::Components::StopTokenDetector
-  LiteRTLM::Runtime::Components::TokenIdUtil
   LiteRTLM::Runtime::Components::TopPCpuSampler
 )

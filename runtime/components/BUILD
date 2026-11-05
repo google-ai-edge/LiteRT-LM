@@ -173,29 +173,6 @@ cc_test(
 )
 
 cc_library(
-    name = "token_id_util",
-    srcs = ["token_id_util.cc"],
-    hdrs = ["token_id_util.h"],
-    deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_test(
-    name = "token_id_util_test",
-    srcs = ["token_id_util_test.cc"],
-    deps = [
-        ":token_id_util",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
-        "//runtime/util:test_utils",
-    ],
-)
-
-cc_library(
     name = "top_p_cpu_sampler",
     srcs = ["top_p_cpu_sampler.cc"],
     hdrs = ["top_p_cpu_sampler.h"],
