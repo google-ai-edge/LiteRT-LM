@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -57,6 +58,7 @@ namespace litert::lm {
 namespace {
 
 using ::testing::HasSubstr;
+using ::testing::status::IsOkAndHolds;
 
 constexpr absl::string_view kTestLmTaskPath =
     "litert_lm/runtime/testdata/test_lm.task";
@@ -353,6 +355,98 @@ TEST(TopKWebGpuSamplerCApiTest, SamplingWithUniformsPicksTokensByUniform) {
                 &error_msg),
             static_cast<int>(absl::StatusCode::kInvalidArgument));
   free(error_msg);
+
+  LiteRtTopKWebGpuSampler_Destroy(sampler);
+}
+
+TEST(TopKWebGpuSamplerCApiTest, UpdateConfigKeepsGeneratorUnlessGivenOne) {
+  ASSERT_OK_AND_ASSIGN(auto ret, CreateLiteRTResources());
+  auto [litert_model, litert_env, compiled_model] = std::move(ret);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer logits_tensor,
+      compiled_model.CreateOutputBuffer("decode", "logits"));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, logits_tensor.TensorType());
+  const int vocab_size = tensor_type.Layout().Dimensions()[2];
+
+  // As in `SamplingWorksAsExpectedWithDifferentSeeds`, the first draw of a
+  // generator seeded with 22000 picks token 1, and with 0 picks token 0.
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(3);
+  sampler_params.set_p(0.6);
+  sampler_params.set_temperature(1.0);
+  sampler_params.set_seed(22000);
+
+  LiteRtTopKWebGpuSampler_Sampler* sampler = nullptr;
+  char* error_msg = nullptr;
+  auto [runtime_c_api, env_handle] = litert_env.GetHolderForCApi();
+  ASSERT_EQ(LiteRtTopKWebGpuSampler_Create(
+                runtime_c_api, env_handle, /*batch_size=*/1,
+                /*sequence_size=*/1, vocab_size,
+                /*activation_data_type=*/nullptr, &sampler_params, &sampler,
+                &error_msg),
+            0)
+      << error_msg;
+  ASSERT_NE(sampler, nullptr);
+
+  std::vector<float> logits_vec(vocab_size, 0.0f);
+  logits_vec[0] = 0.01f;
+  logits_vec[1] = 0.01f;
+  LITERT_ASSERT_OK(logits_tensor.Write(absl::MakeConstSpan(logits_vec)));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer ids_tensor,
+      litert::TensorBuffer::CreateManaged(
+          litert_env, litert::TensorBufferType::kWebGpuBuffer,
+          litert::RankedTensorType(litert::ElementType::Int32,
+                                   litert::Layout(litert::Dimensions({1}))),
+          /*buffer_size=*/sizeof(int32_t)));
+  auto sample = [&]() -> absl::StatusOr<int> {
+    char* sample_error_msg = nullptr;
+    const int error_code = LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer(
+        sampler, logits_tensor.Get(), ids_tensor.Get(),
+        /*scores_tensor=*/nullptr, &sample_error_msg);
+    if (error_code != 0) {
+      absl::Status status = CreateStatus(error_code, sample_error_msg);
+      free(sample_error_msg);
+      return status;
+    }
+    std::vector<int> ids(1, -1);
+    LITERT_RETURN_IF_ERROR(ids_tensor.Read(absl::MakeSpan(ids)));
+    return ids[0];
+  };
+
+  // Neither no generator, nor a null one (what older runtimes pass when they
+  // have none), nor a failed update replaces the creation-seeded generator.
+  auto seed_0_rand_gen = std::make_shared<std::default_random_engine>(0);
+  std::shared_ptr<std::default_random_engine> null_rand_gen;
+  ASSERT_EQ(LiteRtTopKWebGpuSampler_UpdateConfig(
+                sampler, &sampler_params, /*batch_size=*/1,
+                /*rand_gen_shared_ptr=*/nullptr, &error_msg),
+            0)
+      << error_msg;
+  ASSERT_EQ(LiteRtTopKWebGpuSampler_UpdateConfig(sampler, &sampler_params,
+                                                 /*batch_size=*/1,
+                                                 &null_rand_gen, &error_msg),
+            0)
+      << error_msg;
+  proto::SamplerParameters too_large_k_params = sampler_params;
+  too_large_k_params.set_k(sampler_params.k() + 1);
+  EXPECT_EQ(LiteRtTopKWebGpuSampler_UpdateConfig(sampler, &too_large_k_params,
+                                                 /*batch_size=*/1,
+                                                 &seed_0_rand_gen, &error_msg),
+            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  free(error_msg);
+  error_msg = nullptr;
+  EXPECT_THAT(sample(), IsOkAndHolds(1));
+
+  // A non-null generator replaces it, and is shared with the caller.
+  ASSERT_EQ(LiteRtTopKWebGpuSampler_UpdateConfig(sampler, &sampler_params,
+                                                 /*batch_size=*/1,
+                                                 &seed_0_rand_gen, &error_msg),
+            0)
+      << error_msg;
+  EXPECT_THAT(sample(), IsOkAndHolds(0));
+  EXPECT_NE(*seed_0_rand_gen, std::default_random_engine(0));
 
   LiteRtTopKWebGpuSampler_Destroy(sampler);
 }

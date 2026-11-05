@@ -25,7 +25,6 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <system_error>  // NOLINT: Required for std::error_code used with std::filesystem.
 #include <tuple>
@@ -623,9 +622,9 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, DecodeTest) {
 
 class FakeInvalidTokenSampler : public Sampler {
  public:
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override {
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
     LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
                             TensorBufferScopedLock::Create(
                                 ids_tensor, TensorBuffer::LockMode::kWrite));
@@ -634,15 +633,8 @@ class FakeInvalidTokenSampler : public Sampler {
     return absl::OkStatus();
   }
 
-  absl::Status SampleToIdAndScoreBuffer(
-      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
-    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
-  }
-
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override {
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override {
     return absl::OkStatus();
   }
 };
@@ -672,9 +664,9 @@ class FakeSamplerWithInputHandling : public Sampler {
     return absl::OkStatus();
   }
 
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override {
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
     sample_count_++;
     LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
                             TensorBufferScopedLock::Create(
@@ -688,15 +680,8 @@ class FakeSamplerWithInputHandling : public Sampler {
     return absl::OkStatus();
   }
 
-  absl::Status SampleToIdAndScoreBuffer(
-      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
-    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
-  }
-
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override {
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override {
     return absl::OkStatus();
   }
 

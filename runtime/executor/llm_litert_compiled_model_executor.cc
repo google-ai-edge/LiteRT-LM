@@ -1316,13 +1316,18 @@ LlmLiteRtCompiledModelExecutorBase::GetVerifierSamplerConfig() {
           proto::SamplerParameters::TYPE_UNSPECIFIED) {
     sampler_params = llm_context_->runtime_config().sampler_params.value();
   }
-  std::shared_ptr<std::default_random_engine> rand_gen;
+  // The session sampler draws its uniforms from `runtime_state().rand_gen`
+  // (see `DrawSampleLogitsUniforms()`); share it with the verifier too so that
+  // plain and speculative steps consume a single random stream.
+  std::shared_ptr<std::default_random_engine> rand_gen =
+      llm_context_->runtime_state().rand_gen;
   if (rand_gen == nullptr) {
-    // The session sampler owns a generator seeded with the session seed. Give
-    // the verifiers an independent stream rather than a second generator with
-    // the same seed (which would correlate its draws with the session's), and
-    // the same one for all of them, so that the passes of different verify
-    // signatures and the MTP drafter's don't repeat each other's draws.
+    // `DrawSampleLogitsUniforms()` creates a generator seeded with the session
+    // seed. Give the verifiers an independent stream rather than a second
+    // generator with the same seed (which would correlate its draws with the
+    // session's), and the same one for all of them, so that the passes of
+    // different verify signatures and the MTP drafter's don't repeat each
+    // other's draws.
     constexpr int32_t kVerifierSeedSalt = 0x56455249;  // "VERI"
     sampler_params.set_seed(sampler_params.seed() ^ kVerifierSeedSalt);
     rand_gen = verifier_rand_gen_.Get(sampler_params.seed());

@@ -1066,7 +1066,7 @@ TEST_F(TasksTest, DecodeFailsIfTheDraftCantBeVerified) {
         std::unique_ptr<TopPSampler> unused_sampler,
         TopPSampler::Create(/*k=*/1, /*p=*/0.0f, /*temperature=*/1.0f,
                             test_case.num_output_candidates,
-                            /*sequence_size=*/1, /*seed=*/0));
+                            /*sequence_size=*/1));
     std::default_random_engine rng;
     const std::optional<Tasks::ExternalSampler> sampler =
         test_case.external_sampling ? std::make_optional(Tasks::ExternalSampler{
@@ -2191,9 +2191,8 @@ TEST_F(TasksCustomSamplingTest, PrefillTooLong) {
 
 TEST_F(TasksCustomSamplingTest, DecodeCustomSampling) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2266,7 +2265,7 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingWithConstrainedDecoding) {
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<TopPSampler> sampler,
       TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+                          /*batch_size=*/2, /*sequence_size=*/1));
 
   // Fake constraint that expects " How's it".
   std::vector<int> expected_token_ids = {224, 24, 8, 66, 0};
@@ -2334,10 +2333,9 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingWithConstrainedDecoding) {
 TEST_F(TasksCustomSamplingTest,
        DecodeCustomSamplingWithPartialBytePairEncodingTokens) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5,
-                          /*temperature=*/0.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5,
+                                        /*temperature=*/0.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   // <432, 416> --> "km²"
   // <432, 414> --> "°"
@@ -2585,9 +2583,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingReachMaxNumTokens) {
                            benchmark_info));
 
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2639,9 +2636,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingWithMaxOutputTokens) {
                            benchmark_info));
 
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2671,9 +2667,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingWithMaxOutputTokens) {
 
 TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingStreaming) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2768,9 +2763,8 @@ TEST_F(TasksCustomSamplingTest,
                            benchmark_info));
 
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2831,9 +2825,8 @@ TEST_F(TasksCustomSamplingTest,
                            benchmark_info));
 
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2871,9 +2864,8 @@ TEST_F(TasksCustomSamplingTest,
 
 TEST_F(TasksCustomSamplingTest, DecodeComplexStopTokenDetector) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -2977,9 +2969,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingStreamingWithCancellation) {
   delayed_executor.SetDecodeDelay(absl::Milliseconds(1000));
 
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -3027,9 +3018,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingStreamingWithCancellation) {
 TEST_F(TasksCustomSamplingTest,
        DecodeCustomSamplingStreamingWithConstrainedDecoding) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto decoded_ids = CreateTensorBuffer<int>({2, 1});
   ASSERT_TRUE(decoded_ids.HasValue());
@@ -3093,10 +3083,9 @@ TEST_F(TasksCustomSamplingTest,
 
 TEST_F(TasksCustomSamplingTest, DecodeStopTokenAndBPEDetector) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/1, /*p=*/0.5,
-                          /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5,
+                                        /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
 
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // batch 1: 224, 24, 8, 66

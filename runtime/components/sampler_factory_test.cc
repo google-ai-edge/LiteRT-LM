@@ -16,21 +16,16 @@
 
 #include <memory>
 #include <optional>
-#include <random>
 #include <utility>
-#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/sampler.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
-#include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -114,8 +109,8 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerCreatesMissingSampler) {
   std::unique_ptr<Sampler> sampler;
   int max_top_k = 0;
   ASSERT_OK(UpdateOrRecreateSampler(sampler, max_top_k, Backend::CPU,
-                                    /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
-                                    /*rand_gen=*/nullptr));
+                                    /*batch_size=*/1,
+                                    TopPParams(1, 0.0f, 1.0f)));
   EXPECT_NE(dynamic_cast<TopPSampler*>(sampler.get()), nullptr);
   EXPECT_EQ(max_top_k, 1);
 }
@@ -125,13 +120,12 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerRecreatesOnlyWhenTopKGrows) {
       std::unique_ptr<Sampler> sampler,
       CreateSampler(Backend::CPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f)));
   int max_top_k = 1;
-  auto rand_gen = std::make_shared<std::default_random_engine>(42);
 
   // A larger top-k recreates the sampler.
   const Sampler* original = sampler.get();
   ASSERT_OK(UpdateOrRecreateSampler(sampler, max_top_k, Backend::CPU,
                                     /*batch_size=*/1,
-                                    TopPParams(40, 0.95f, 1.0f), rand_gen));
+                                    TopPParams(40, 0.95f, 1.0f)));
   EXPECT_NE(sampler.get(), original);
   EXPECT_EQ(max_top_k, 40);
 
@@ -139,63 +133,9 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerRecreatesOnlyWhenTopKGrows) {
   const Sampler* recreated = sampler.get();
   ASSERT_OK(UpdateOrRecreateSampler(sampler, max_top_k, Backend::CPU,
                                     /*batch_size=*/1,
-                                    TopPParams(10, 0.9f, 0.7f), rand_gen));
+                                    TopPParams(10, 0.9f, 0.7f)));
   EXPECT_EQ(sampler.get(), recreated);
   EXPECT_EQ(max_top_k, 40);
-}
-
-absl::StatusOr<int> SampleOne(Sampler& sampler,
-                              const std::vector<float>& logits) {
-  auto logits_tensor =
-      CopyToTensorBuffer<float>(logits, {1, static_cast<int>(logits.size())});
-  if (!logits_tensor) {
-    return absl::InternalError("Failed to create the logits tensor.");
-  }
-  std::vector<int> ids_vector(1);
-  auto ids_tensor =
-      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
-  if (!ids_tensor) {
-    return absl::InternalError("Failed to create the ids tensor.");
-  }
-  ABSL_RETURN_IF_ERROR(sampler.SampleToIdAndScoreBuffer(
-      *logits_tensor, *ids_tensor, /*scores_tensor=*/nullptr));
-  auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
-  if (!ids) {
-    return absl::InternalError("Failed to read the ids tensor.");
-  }
-  return (*ids)[0];
-}
-
-TEST(SamplerFactoryTest, UpdateOrRecreateSamplerSharesRandomGenerator) {
-  // Samplers `a` and `b` share one generator, so alternating between them
-  // yields the same draws as a single sampler `c` with its own generator
-  // seeded identically.
-  const auto params = TopPParams(8, 1.0f, 1.0f);
-  auto shared = std::make_shared<std::default_random_engine>(7);
-  auto reference = std::make_shared<std::default_random_engine>(7);
-  std::unique_ptr<Sampler> a;
-  std::unique_ptr<Sampler> b;
-  std::unique_ptr<Sampler> c;
-  int max_top_k_a = 0;
-  int max_top_k_b = 0;
-  int max_top_k_c = 0;
-  ASSERT_OK(UpdateOrRecreateSampler(a, max_top_k_a, Backend::CPU,
-                                    /*batch_size=*/1, params, shared));
-  ASSERT_OK(UpdateOrRecreateSampler(b, max_top_k_b, Backend::CPU,
-                                    /*batch_size=*/1, params, shared));
-  ASSERT_OK(UpdateOrRecreateSampler(c, max_top_k_c, Backend::CPU,
-                                    /*batch_size=*/1, params, reference));
-
-  const std::vector<float> logits(8, 0.0f);  // Uniform over 8 tokens.
-  std::vector<int> alternating;
-  std::vector<int> single;
-  for (int i = 0; i < 64; ++i) {
-    ASSERT_OK_AND_ASSIGN(int id, SampleOne(i % 2 == 0 ? *a : *b, logits));
-    alternating.push_back(id);
-    ASSERT_OK_AND_ASSIGN(int ref_id, SampleOne(*c, logits));
-    single.push_back(ref_id);
-  }
-  EXPECT_EQ(alternating, single);
 }
 
 TEST(SamplerFactoryTest, UpdateOrRecreateSamplerFailsWithoutSampler) {
@@ -204,8 +144,7 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerFailsWithoutSampler) {
   proto::SamplerParameters unspecified;
   unspecified.set_k(1);
   EXPECT_THAT(UpdateOrRecreateSampler(sampler, max_top_k, Backend::CPU,
-                                      /*batch_size=*/1, unspecified,
-                                      /*rand_gen=*/nullptr),
+                                      /*batch_size=*/1, unspecified),
               StatusIs(absl::StatusCode::kInternal));
   EXPECT_EQ(max_top_k, 0);
 }

@@ -15,9 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_H_
 
-#include <memory>
-#include <random>
-
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -26,6 +23,12 @@
 namespace litert::lm {
 
 // A sampler that samples token ids from logits.
+//
+// A sampler owns no randomness: the sampled ids are a pure function of the
+// logits, the sampler parameters and the caller-supplied uniform values that
+// pick the tokens (see `SampleToIdAndScoreBuffer()`). Callers draw the
+// uniforms from their own random number generators, e.g. with
+// `DrawSamplingUniforms()` in `sampling_uniforms.h`.
 // Optionally, it may be able to handle input tensors. If so, the sampler can
 // fill input tensors by itself, e.g. input tokens from output tokens, input
 // positions with one-incremented from the previous step, then, runs inference
@@ -43,24 +46,19 @@ class Sampler {
   // sampled scores are also written to it (in the same shape as the
   // ids_tensor). The scores are the log of the probability of the sampled
   // token.
+  //
+  // The token of batch `b` and position `s` is picked with the uniform value
+  // `uniforms[b * sequence_size + s]` by inverse transform sampling.
+  // `uniforms` must have batch_size * sequence_size values in [0, 1).
+  // Samplers that sample deterministically (e.g. greedy sampling) ignore the
+  // values.
   virtual absl::Status SampleToIdAndScoreBuffer(
       const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-      TensorBuffer* scores_tensor) = 0;
-
-  // Same as above, but picks the token at (b, s) with
-  // `uniforms[b * sequence_size + s]` in [0, 1) instead of the sampler's
-  // generator. Returns `UnimplementedError` if unsupported.
-  virtual absl::Status SampleToIdAndScoreBuffer(
-      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) {
-    return absl::UnimplementedError(
-        "SampleToIdAndScoreBuffer with uniforms is not implemented.");
-  }
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) = 0;
 
   // Updates the configs of the sampler.
   virtual absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) = 0;
+      const proto::SamplerParameters& sampler_params, int batch_size) = 0;
 
   // Whether the sampler can handle inputs as well. If true, the sampler can
   // fill input tensors by itself, e.g. input tokens from output tokens,

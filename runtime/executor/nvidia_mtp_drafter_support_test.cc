@@ -215,8 +215,10 @@ TEST(NvidiaMtpDrafterSupportTest, GreedySamplerFallsBackOffNvidiaBuffers) {
                                 CreateTensorBuffer<float>({1, 1, 8}));
     LITERT_ASSERT_OK(logits.Write<float>(absl::MakeConstSpan(values)));
     LITERT_ASSERT_OK_AND_ASSIGN(auto ids, CreateTensorBuffer<int32_t>({1, 1}));
+    const std::vector<float> uniforms = {0.5f};
     for (int round = 0; round < 2; ++round) {
-      ASSERT_OK(sampler->SampleToIdAndScoreBuffer(logits, ids, nullptr));
+      ASSERT_OK(
+          sampler->SampleToIdAndScoreBuffer(logits, ids, nullptr, uniforms));
       std::vector<int32_t> id(1);
       LITERT_ASSERT_OK(ids.Read<int32_t>(absl::MakeSpan(id)));
       EXPECT_EQ(id[0], 2);

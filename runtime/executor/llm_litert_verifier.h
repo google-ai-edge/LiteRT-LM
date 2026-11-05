@@ -379,13 +379,13 @@ class LlmLiteRtVerifier {
       DraftConstraintStates* constraint_states, float lenience,
       absl::FunctionRef<double(int)> uniform);
 
-  // Reconfigures the sampler to sample from `sampler_params` with the random
-  // number generator `rand_gen` (typically the session sampler's), recreating
-  // it if its top-k capacity is too small. If `rand_gen` is null, the sampler
-  // uses the verifier's own generator, seeded with `sampler_params.seed()`
-  // and only reseeded when the seed changes. Returns the generator that the
-  // sampler uses from now on. On failure, the sampler, its parameters and its
-  // generator are left unchanged.
+  // Reconfigures the sampler to sample from `sampler_params`, with uniforms
+  // drawn from the random number generator `rand_gen` (typically the session
+  // sampler's), recreating it if its top-k capacity is too small. If
+  // `rand_gen` is null, the verifier uses its own generator, seeded with
+  // `sampler_params.seed()` and only reseeded when the seed changes. Returns
+  // the generator that the uniforms are drawn from. On failure, the sampler,
+  // its parameters and the generator are left unchanged.
   absl::StatusOr<std::shared_ptr<std::default_random_engine>>
   UpdateSamplerConfig(const proto::SamplerParameters& sampler_params,
                       std::shared_ptr<std::default_random_engine> rand_gen);

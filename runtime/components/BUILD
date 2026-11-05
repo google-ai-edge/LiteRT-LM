@@ -201,7 +201,6 @@ cc_test(
     name = "top_p_cpu_sampler_test",
     srcs = ["top_p_cpu_sampler_test.cc"],
     deps = [
-        ":sampling_uniforms",
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
@@ -289,12 +288,9 @@ cc_test(
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/types:span",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
     ],
 )
@@ -438,7 +434,6 @@ cc_library(
         "@ml_drift//ml_drift/common/task:buffer_desc",
         "@ml_drift//ml_drift/common/task:gpu_operation",
         "@ml_drift//ml_drift/common/task:tensor_desc",
-        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
     ],

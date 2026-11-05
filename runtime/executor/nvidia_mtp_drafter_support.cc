@@ -23,7 +23,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <utility>
 #include <variant>
@@ -273,9 +272,12 @@ class NvidiaGreedySampler final : public Sampler {
 
   ~NvidiaGreedySampler() override { destroy_(sampler_); }
 
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override {
+  // Greedy sampling is deterministic, so the uniforms are only validated, as
+  // the host sampler does.
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
+    ABSL_RETURN_IF_ERROR(ValidateUniforms(uniforms, rows_));
     if (scores_tensor != nullptr) {
       return absl::UnimplementedError(
           "NVIDIA greedy sampler returns token IDs, not probability scores");
@@ -309,18 +311,8 @@ class NvidiaGreedySampler final : public Sampler {
     return absl::OkStatus();
   }
 
-  // Greedy sampling is deterministic, so the uniforms are only validated, as
-  // the host sampler does.
-  absl::Status SampleToIdAndScoreBuffer(
-      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
-    ABSL_RETURN_IF_ERROR(ValidateUniforms(uniforms, rows_));
-    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
-  }
-
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> /*rand_gen*/) override {
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override {
     if (batch_size != 1 || !IsFixedGreedy(sampler_params)) {
       return absl::UnimplementedError(
           "NVIDIA MTP sampler supports only batch-1 TOP_P with k=1 and p=0");
@@ -439,14 +431,6 @@ class LazyNvidiaGreedySampler : public Sampler {
         sampler_params_(std::move(sampler_params)),
         host_(std::move(host)) {}
 
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override {
-    ABSL_ASSIGN_OR_RETURN(Sampler * sampler, ChooseSampler(logits_tensor));
-    return sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
-                                             scores_tensor);
-  }
-
   absl::Status SampleToIdAndScoreBuffer(
       const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
       TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
@@ -455,13 +439,12 @@ class LazyNvidiaGreedySampler : public Sampler {
                                              scores_tensor, uniforms);
   }
 
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override {
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override {
     sampler_params_ = sampler_params;
     decided_ = false;
     device_.reset();
-    return host_->UpdateConfig(sampler_params, batch_size, std::move(rand_gen));
+    return host_->UpdateConfig(sampler_params, batch_size);
   }
 
  private:

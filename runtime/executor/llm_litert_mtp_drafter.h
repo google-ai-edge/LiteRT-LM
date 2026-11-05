@@ -125,13 +125,14 @@ class LlmLiteRtMtpDrafter {
       int position, int token_id, std::optional<TensorBuffer> activations,
       StateInterface& state, ConstrainedDecoder* constrained_decoder = nullptr);
 
-  // Reconfigures the verifier sampler to sample from `sampler_params` with the
-  // shared random number generator `rand_gen` (typically the session sampler's
-  // configuration and generator), recreating it if its top-k capacity is too
-  // small. If `rand_gen` is null, the verifier uses its own generator seeded
-  // with `sampler_params.seed()`, which is only reseeded when the seed changes.
-  // The drafter sampler stays greedy, which keeps the exact-match acceptance
-  // lossless with respect to the verifier's distribution.
+  // Reconfigures the verifier sampler to sample from `sampler_params`, with
+  // uniforms drawn from the shared random number generator `rand_gen`
+  // (typically the session sampler's configuration and generator), recreating
+  // the sampler if its top-k capacity is too small. If `rand_gen` is null, the
+  // verifier uses its own generator seeded with `sampler_params.seed()`, which
+  // is only reseeded when the seed changes. The drafter sampler stays greedy,
+  // which keeps the exact-match acceptance lossless with respect to the
+  // verifier's distribution.
   absl::Status UpdateVerifierSamplerConfig(
       const proto::SamplerParameters& sampler_params,
       std::shared_ptr<std::default_random_engine> rand_gen);

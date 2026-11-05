@@ -21,7 +21,6 @@
 #include <cstring>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -148,7 +147,7 @@ void ConvertFp16ToFp32(absl::Span<const uint16_t> fp16_values,
 
 absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
     int k, float p, float temperature, int batch_size, int sequence_size,
-    int seed, bool compute_exact_log_probs) {
+    bool compute_exact_log_probs) {
   if (k <= 0) {
     return absl::InvalidArgumentError("k must be positive.");
   }
@@ -165,20 +164,8 @@ absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
     return absl::InvalidArgumentError(
         absl::StrCat("Temperature must be >= 0, but got ", temperature));
   }
-  return absl::WrapUnique(new TopPSampler(k, p, temperature, batch_size,
-                                          sequence_size, seed,
-                                          compute_exact_log_probs));
-}
-
-absl::Status TopPSampler::SampleToIdAndScoreBuffer(
-    const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-    TensorBuffer* scores_tensor) {
-  proto::SamplerParameters sampler_params;
-  sampler_params.set_k(k_);
-  std::vector<float> uniforms(batch_size_ * sequence_size_);
-  DrawSamplingUniforms(sampler_params, *generator_, absl::MakeSpan(uniforms));
-  return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor,
-                                  uniforms);
+  return absl::WrapUnique(new TopPSampler(
+      k, p, temperature, batch_size, sequence_size, compute_exact_log_probs));
 }
 
 absl::Status TopPSampler::SampleToIdAndScoreBuffer(
@@ -251,8 +238,7 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
 }
 
 absl::Status TopPSampler::UpdateConfig(
-    const proto::SamplerParameters& sampler_params, int batch_size,
-    std::shared_ptr<std::default_random_engine> rand_gen) {
+    const proto::SamplerParameters& sampler_params, int batch_size) {
   if (batch_size <= 0) {
     return absl::InvalidArgumentError("batch_size must be positive.");
   }
@@ -261,9 +247,6 @@ absl::Status TopPSampler::UpdateConfig(
   temperature_ = sampler_params.temperature();
   batch_size_ = batch_size;
   compute_exact_log_probs_ = sampler_params.compute_exact_log_probs();
-  if (rand_gen != nullptr) {
-    generator_ = rand_gen;
-  }
   return absl::OkStatus();
 }
 

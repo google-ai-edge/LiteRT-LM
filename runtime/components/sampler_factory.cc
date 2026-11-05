@@ -18,7 +18,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <random>
 #include <utility>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
@@ -275,35 +274,24 @@ class TopKCApiSampler : public Sampler {
 
   ~TopKCApiSampler() override { capi_->destroy_func(sampler_); }
 
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override {
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
     char* error_msg = nullptr;
     LiteRtTensorBuffer scores_tensor_capi = nullptr;
     if (scores_tensor != nullptr) {
       scores_tensor_capi = scores_tensor->Get();
     }
-    int error_code = capi_->sample_func(
-        sampler_, logits_tensor.Get(), ids_tensor.Get(),
-        scores_tensor_capi ? &scores_tensor_capi : nullptr, &error_msg);
-    return CreateStatusAndFreeErrorMsg(error_code, error_msg);
-  }
-
-  absl::Status SampleToIdAndScoreBuffer(
-      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
-      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
     if (capi_->sample_with_uniforms_func == nullptr) {
       // Libraries built before the symbol was added sample with their own
       // random number generator, from the same distribution.
       ABSL_LOG_FIRST_N(WARNING, 1)
           << "The loaded sampler library doesn't support caller-supplied "
              "uniforms; sampling with its own random number generator.";
-      return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
-    }
-    char* error_msg = nullptr;
-    LiteRtTensorBuffer scores_tensor_capi = nullptr;
-    if (scores_tensor != nullptr) {
-      scores_tensor_capi = scores_tensor->Get();
+      int error_code = capi_->sample_func(
+          sampler_, logits_tensor.Get(), ids_tensor.Get(),
+          scores_tensor_capi ? &scores_tensor_capi : nullptr, &error_msg);
+      return CreateStatusAndFreeErrorMsg(error_code, error_msg);
     }
     int error_code = capi_->sample_with_uniforms_func(
         sampler_, logits_tensor.Get(), ids_tensor.Get(),
@@ -312,12 +300,15 @@ class TopKCApiSampler : public Sampler {
     return CreateStatusAndFreeErrorMsg(error_code, error_msg);
   }
 
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override {
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override {
     char* error_msg = nullptr;
-    int error_code = capi_->update_config_func(
-        sampler_, &sampler_params, batch_size, &rand_gen, &error_msg);
+    // No generator: the uniforms come from the callers. Only the library's
+    // entry points without uniforms (used as a fallback above) use the
+    // generator of the library's sampler handle.
+    int error_code =
+        capi_->update_config_func(sampler_, &sampler_params, batch_size,
+                                  /*rand_gen_shared_ptr=*/nullptr, &error_msg);
     return CreateStatusAndFreeErrorMsg(error_code, error_msg);
   }
 
@@ -697,10 +688,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateCpuSampler(
                       "handles the sampling logic.";
       return nullptr;
     case proto::SamplerParameters::TOP_P:
-      return TopPSampler::Create(sampler_params.k(), sampler_params.p(),
-                                 sampler_params.temperature(), batch_size,
-                                 sequence_size, sampler_params.seed(),
-                                 sampler_params.compute_exact_log_probs());
+      return TopPSampler::Create(
+          sampler_params.k(), sampler_params.p(), sampler_params.temperature(),
+          batch_size, sequence_size, sampler_params.compute_exact_log_probs());
     default:
       return absl::UnimplementedError(absl::StrCat(
           "Sampler type: ", sampler_params.type(), " not implemented yet."));
@@ -858,7 +848,6 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
 absl::Status UpdateOrRecreateSampler(
     std::unique_ptr<Sampler>& sampler, int& max_top_k, Backend backend,
     int batch_size, const proto::SamplerParameters& sampler_params,
-    std::shared_ptr<std::default_random_engine> rand_gen,
     std::optional<std::reference_wrapper<const litert::Environment>> env,
     std::optional<int> sequence_size, std::optional<int> vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
@@ -872,7 +861,7 @@ absl::Status UpdateOrRecreateSampler(
     sampler = std::move(new_sampler);
     max_top_k = sampler_params.k();
   }
-  return sampler->UpdateConfig(sampler_params, batch_size, std::move(rand_gen));
+  return sampler->UpdateConfig(sampler_params, batch_size);
 }
 
 proto::SamplerParameters GreedySamplerParams() {

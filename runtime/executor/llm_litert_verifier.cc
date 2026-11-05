@@ -928,15 +928,13 @@ LlmLiteRtVerifier::UpdateSamplerConfig(
   // Staged, so that a failed update leaves the generators unchanged.
   SeededRandomEngine own_rand_gen = own_rand_gen_;
   if (rand_gen == nullptr) {
-    // The sampler ignores `sampler_params.seed()` unless it is recreated, so
-    // hand it a generator for the seed explicitly. It is shared by the
-    // uniforms drawn in `MaskAndSample()` and by the sampler's own entry
-    // points.
+    // Reused while the seed is unchanged, so that re-syncs (e.g. each turn)
+    // continue the verifier's stream instead of restarting it.
     rand_gen = own_rand_gen.Get(sampler_params.seed());
   }
   ABSL_RETURN_IF_ERROR(UpdateOrRecreateSampler(
       sampler_, sampler_max_top_k_, sampler_backend_,
-      /*batch_size=*/1, sampler_params, rand_gen, std::cref(env_),
+      /*batch_size=*/1, sampler_params, std::cref(env_),
       /*sequence_size=*/width_, vocab_size_, logits_data_type_));
   own_rand_gen_ = std::move(own_rand_gen);
   sampler_params_ = sampler_params;

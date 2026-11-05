@@ -16,7 +16,6 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_TOP_P_CPU_SAMPLER_H_
 
 #include <memory>
-#include <random>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -42,7 +41,7 @@ class TopPSampler : public Sampler {
   //   on CPU.
   static absl::StatusOr<std::unique_ptr<TopPSampler>> Create(
       int k, float p, float temperature, int batch_size, int sequence_size,
-      int seed, bool compute_exact_log_probs = false);
+      bool compute_exact_log_probs = false);
 
   // Given a batch of logits, samples a batch of token ids.
   // The expected shape of the logits is [batch_size, sequence_size,
@@ -50,22 +49,15 @@ class TopPSampler : public Sampler {
   // sequence_size]. The scores_tensor is optional. If it is not nullptr, the
   // sampled scores are also written to it (in the same shape as the
   // ids_tensor). The scores are the log of the probability of the sampled
-  // token. The tokens are picked with uniform values drawn from the sampler's
-  // random number generator.
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override;
-
-  // Same as above, but with caller-supplied uniform values. See
+  // token. The tokens are picked with the caller-supplied uniform values; see
   // `Sampler::SampleToIdAndScoreBuffer()`.
   absl::Status SampleToIdAndScoreBuffer(
       const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
       TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override;
 
   // Updates the configs of the sampler.
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override;
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override;
 
   // Sets whether to compute exact full-vocabulary token log-probabilities.
   void SetComputeExactLogProbs(bool compute_exact_log_probs) {
@@ -75,16 +67,13 @@ class TopPSampler : public Sampler {
 
  private:
   explicit TopPSampler(int k, float p, float temperature, int batch_size,
-                       int sequence_size, int seed,
-                       bool compute_exact_log_probs = false)
+                       int sequence_size, bool compute_exact_log_probs = false)
       : k_(k),
         p_(p),
         temperature_(temperature),
         batch_size_(batch_size),
         sequence_size_(sequence_size),
-        compute_exact_log_probs_(compute_exact_log_probs) {
-    generator_ = std::make_shared<std::default_random_engine>(seed);
-  }
+        compute_exact_log_probs_(compute_exact_log_probs) {}
 
   // The parameters for the sampler.
   int k_;
@@ -93,7 +82,6 @@ class TopPSampler : public Sampler {
   int batch_size_;
   int sequence_size_;
   bool compute_exact_log_probs_ = false;
-  std::shared_ptr<std::default_random_engine> generator_;
 
   // The logits data to be used for sampling. Having it as a member to avoid
   // re-allocating the vector for each sampling call.

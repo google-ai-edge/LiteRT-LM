@@ -17,7 +17,6 @@
 
 #include <memory>
 #include <optional>
-#include <random>
 #include <utility>
 #include <vector>
 
@@ -128,13 +127,11 @@ class TopKWebGpuSampler : public TopKGpuSampler {
       proto::SamplerParameters sampler_params);
 
   // TopKGpuSampler implementation:
-  using TopKGpuSampler::SampleToIdAndScoreBuffer;
   absl::Status SampleToIdAndScoreBuffer(
       const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
       TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override;
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override;
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override;
   bool CanHandleInput() const override;
   bool HandlesInput() const override;
   absl::Status SetInferenceFuncAndInputTensors(

@@ -134,10 +134,14 @@ TEST(TopKWebGpuSamplerTest, CanCreateSuccessfullyWithFloat16) {
   EXPECT_NE(sampler_or.value(), nullptr);
 }
 
+// Samples with uniforms drawn from `rng` the way the sampler used to draw
+// from its own generator (see `TopKGpuSampler::DrawLegacyUniforms()`), or from
+// a generator seeded with 0 if `rng` is null.
 absl::StatusOr<std::vector<int>> Sample(
     Environment* litert_env, TensorBuffer& logits_tensor,
     TopKWebGpuSampler& sampler, const std::vector<int>& correct_indices = {},
-    const std::vector<int>& incorrect_indices = {}) {
+    const std::vector<int>& incorrect_indices = {},
+    std::default_random_engine* rng = nullptr) {
   LITERT_ASSIGN_OR_RETURN(auto tensor_type, logits_tensor.TensorType());
   RET_CHECK_EQ(tensor_type.Layout().Rank(), 3);
   RET_CHECK_EQ(tensor_type.Layout().Dimensions()[0], 1);
@@ -164,8 +168,11 @@ absl::StatusOr<std::vector<int>> Sample(
                                    litert::Layout(litert::Dimensions({1}))),
           /*buffer_size=*/sizeof(int32_t)));
 
-  RET_CHECK_OK(sampler.SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
-                                                /*scores_tensor=*/nullptr));
+  std::default_random_engine fallback_rng(0);
+  const std::vector<float> uniforms =
+      sampler.DrawLegacyUniforms(rng != nullptr ? *rng : fallback_rng);
+  RET_CHECK_OK(sampler.SampleToIdAndScoreBuffer(
+      logits_tensor, ids_tensor, /*scores_tensor=*/nullptr, uniforms));
   std::vector<int> ids(1, -1);
   LITERT_RETURN_IF_ERROR(ids_tensor.Read(absl::MakeSpan(ids)));
 
@@ -189,8 +196,10 @@ absl::StatusOr<std::vector<int>> Sample(
       TopKWebGpuSampler::Create(
           *litert_env, /*batch_size=*/1, /*sequence_size=*/1, vocab_size,
           /*activation_data_type=*/std::nullopt, sampler_params));
+  // Seeded like the generator the sampler used to own.
+  std::default_random_engine rng(sampler_params.seed());
   return Sample(litert_env, logits_tensor, *sampler, correct_indices,
-                incorrect_indices);
+                incorrect_indices, &rng);
 }
 
 TEST(TopKWebGpuSamplerTest, SamplingWorksAsExpected) {
@@ -328,6 +337,9 @@ TEST(TopKWebGpuSamplerTest, UpdateConfigWorksEndToEnd) {
           /*activation_data_type=*/std::nullopt, sampler_params));
   ASSERT_NE(sampler, nullptr);
 
+  // Uniforms drawn like the sampler used to draw from its own generator.
+  std::default_random_engine rng(sampler_params.seed());
+
   std::vector<float> logits_vec(vocab_size, 0.0f);
   const int target_index = 4;
   logits_vec[target_index] = 0.01f;
@@ -346,8 +358,9 @@ TEST(TopKWebGpuSamplerTest, UpdateConfigWorksEndToEnd) {
   // only k=1 picks the target every time.
   auto expect_always_argmax = [&] {
     for (int i = 0; i < 20; ++i) {
-      ASSERT_OK(sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
-                                                  /*scores_tensor=*/nullptr));
+      ASSERT_OK(sampler->SampleToIdAndScoreBuffer(
+          logits_tensor, ids_tensor, /*scores_tensor=*/nullptr,
+          sampler->DrawLegacyUniforms(rng)));
       std::vector<int> ids(1, -1);
       LITERT_ASSERT_OK(ids_tensor.Read(absl::MakeSpan(ids)));
       EXPECT_EQ(ids[0], target_index);
@@ -355,104 +368,26 @@ TEST(TopKWebGpuSamplerTest, UpdateConfigWorksEndToEnd) {
   };
 
   // The creation-time k is accepted.
-  EXPECT_OK(sampler->UpdateConfig(sampler_params, /*batch_size=*/1, nullptr));
+  EXPECT_OK(sampler->UpdateConfig(sampler_params, /*batch_size=*/1));
 
   // Lowering k takes effect.
   sampler_params.set_k(1);
-  EXPECT_OK(sampler->UpdateConfig(sampler_params, /*batch_size=*/1, nullptr));
+  EXPECT_OK(sampler->UpdateConfig(sampler_params, /*batch_size=*/1));
   expect_always_argmax();
 
   // A k above the creation-time k is rejected and leaves the sampler on k=1.
   sampler_params.set_k(vocab_size);
-  EXPECT_THAT(sampler->UpdateConfig(sampler_params, /*batch_size=*/1, nullptr),
+  EXPECT_THAT(sampler->UpdateConfig(sampler_params, /*batch_size=*/1),
               absl_testing::StatusIs(absl::StatusCode::kInvalidArgument));
   expect_always_argmax();
 
   // A batch size outside [1, creation-time batch size] is rejected.
   sampler_params.set_k(1);
   for (const int batch_size : {0, kBatchSize + 1}) {
-    EXPECT_THAT(sampler->UpdateConfig(sampler_params, batch_size, nullptr),
+    EXPECT_THAT(sampler->UpdateConfig(sampler_params, batch_size),
                 absl_testing::StatusIs(absl::StatusCode::kInvalidArgument))
         << "batch_size=" << batch_size;
   }
-}
-
-TEST(TopKWebGpuSamplerTest, MatchesCpuSampler) {
-  ASSERT_OK_AND_ASSIGN(auto ret, CreateLiteRTResources(kTestLmTaskPath));
-  auto [litert_model, litert_env, compiled_model] = std::move(ret);
-
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      TensorBuffer logits_tensor,
-      compiled_model.CreateOutputBuffer("decode", "logits"));
-  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, logits_tensor.TensorType());
-  const int vocab_size = tensor_type.Layout().Dimensions()[2];
-
-  // The GPU sampler must implement the same top-k/top-p sampling as the CPU
-  // sampler and consume the random number generator in the same way, so that
-  // the same seed yields the same tokens on both backends.
-  constexpr int kTopK = 8;
-  constexpr float kTopP = 0.8f;
-  constexpr float kTemperature = 0.7f;
-  constexpr int kSeed = 1234;
-  proto::SamplerParameters sampler_params;
-  sampler_params.set_k(kTopK);
-  sampler_params.set_p(kTopP);
-  sampler_params.set_temperature(kTemperature);
-  sampler_params.set_seed(kSeed);
-  ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<TopKWebGpuSampler> gpu_sampler,
-      TopKWebGpuSampler::Create(litert_env, /*batch_size=*/1,
-                                /*sequence_size=*/1, vocab_size,
-                                ActivationDataType::FLOAT32, sampler_params));
-  ASSERT_OK_AND_ASSIGN(
-      std::unique_ptr<TopPSampler> cpu_sampler,
-      TopPSampler::Create(kTopK, kTopP, kTemperature, /*batch_size=*/1,
-                          /*sequence_size=*/1, kSeed));
-
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      TensorBuffer gpu_ids_tensor,
-      litert::TensorBuffer::CreateManaged(
-          litert_env, litert::TensorBufferType::kWebGpuBuffer,
-          litert::RankedTensorType(litert::ElementType::Int32,
-                                   litert::Layout(litert::Dimensions({1}))),
-          /*buffer_size=*/sizeof(int32_t)));
-  const std::vector<int> initial_ids = {-1};
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      TensorBuffer cpu_ids_tensor,
-      CopyToTensorBuffer<int>(absl::MakeConstSpan(initial_ids), {1}));
-
-  constexpr int kNumSteps = 200;
-  std::mt19937 logits_generator(42);
-  std::uniform_real_distribution<float> logits_distribution(-2.0f, 2.0f);
-  std::vector<float> logits(vocab_size);
-  int num_mismatches = 0;
-  for (int step = 0; step < kNumSteps; ++step) {
-    for (float& logit : logits) {
-      logit = logits_distribution(logits_generator);
-    }
-    LITERT_ASSERT_OK(logits_tensor.Write(absl::MakeConstSpan(logits)));
-    LITERT_ASSERT_OK_AND_ASSIGN(
-        TensorBuffer cpu_logits_tensor,
-        CopyToTensorBuffer<float>(absl::MakeConstSpan(logits),
-                                  {1, 1, vocab_size}));
-
-    ASSERT_OK(gpu_sampler->SampleToIdAndScoreBuffer(
-        logits_tensor, gpu_ids_tensor, /*scores_tensor=*/nullptr));
-    ASSERT_OK(cpu_sampler->SampleToIdAndScoreBuffer(
-        cpu_logits_tensor, cpu_ids_tensor, /*scores_tensor=*/nullptr));
-
-    std::vector<int> gpu_ids(1, -1);
-    LITERT_ASSERT_OK(gpu_ids_tensor.Read(absl::MakeSpan(gpu_ids)));
-    LITERT_ASSERT_OK_AND_ASSIGN(std::vector<int> cpu_ids,
-                                CopyFromTensorBuffer<int>(cpu_ids_tensor));
-    ASSERT_EQ(cpu_ids.size(), 1);
-    if (gpu_ids[0] != cpu_ids[0]) {
-      ++num_mismatches;
-    }
-  }
-  // Floating-point differences between the backends can only flip a draw that
-  // lands right on a cumulative probability boundary, which should be rare.
-  EXPECT_LE(num_mismatches, kNumSteps / 100);
 }
 
 TEST(TopKWebGpuSamplerTest, MatchesCpuSamplerWithUniforms) {
@@ -465,9 +400,7 @@ TEST(TopKWebGpuSamplerTest, MatchesCpuSamplerWithUniforms) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, logits_tensor.TensorType());
   const int vocab_size = tensor_type.Layout().Dimensions()[2];
 
-  // Given the same caller-supplied uniforms, the GPU and CPU samplers pick
-  // the same tokens; their own random number generators (seeded differently
-  // here) are not used.
+  // Given the same uniforms, the GPU and CPU samplers pick the same tokens.
   constexpr int kTopK = 8;
   constexpr float kTopP = 0.8f;
   constexpr float kTemperature = 0.7f;
@@ -484,7 +417,7 @@ TEST(TopKWebGpuSamplerTest, MatchesCpuSamplerWithUniforms) {
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<TopPSampler> cpu_sampler,
       TopPSampler::Create(kTopK, kTopP, kTemperature, /*batch_size=*/1,
-                          /*sequence_size=*/1, /*seed=*/2));
+                          /*sequence_size=*/1));
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       TensorBuffer gpu_ids_tensor,
@@ -532,8 +465,8 @@ TEST(TopKWebGpuSamplerTest, MatchesCpuSamplerWithUniforms) {
   }
   // The GPU computes the distribution in a different order and precision, so
   // a uniform within rounding of a cumulative-probability boundary can pick a
-  // neighboring token (`MatchesCpuSampler` sees up to ~1.5% here). A sampler
-  // that ignored the supplied uniforms would mismatch on most steps.
+  // neighboring token (up to ~1.5% of the steps here). A sampler that ignored
+  // the supplied uniforms would mismatch on most steps.
   EXPECT_LE(num_mismatches, kNumSteps / 20);
 }
 
@@ -618,8 +551,10 @@ TEST(TopKWebGpuSamplerTest, SamplingWorksAsExpectedWithFloat16) {
                                    litert::Layout(litert::Dimensions({1}))),
           /*buffer_size=*/sizeof(int32_t)));
 
-  ASSERT_OK(sampler->SampleToIdAndScoreBuffer(logits_tensor, ids_tensor,
-                                              /*scores_tensor=*/nullptr));
+  std::default_random_engine rng(sampler_params.seed());
+  ASSERT_OK(sampler->SampleToIdAndScoreBuffer(
+      logits_tensor, ids_tensor, /*scores_tensor=*/nullptr,
+      sampler->DrawLegacyUniforms(rng)));
   std::vector<int> ids(1, -1);
   LITERT_ASSERT_OK(ids_tensor.Read(absl::MakeSpan(ids)));
 

@@ -59,6 +59,7 @@
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/top_k_gpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "tflite/delegates/gpu/cl/opencl_wrapper.h"  // from @litert
@@ -464,14 +465,10 @@ absl::Status TopKOpenClSampler::SampleToIdAndScoreBuffer(
 }
 
 absl::Status TopKOpenClSampler::UpdateConfig(
-    const proto::SamplerParameters& sampler_params, int batch_size,
-    std::shared_ptr<std::default_random_engine> rand_gen) {
+    const proto::SamplerParameters& sampler_params, int batch_size) {
   ABSL_RETURN_IF_ERROR(CheckTopKWithinMax(sampler_params));
   ABSL_RETURN_IF_ERROR(CheckBatchSizeWithinMax(batch_size));
   sampler_params_ = sampler_params;
-  if (rand_gen != nullptr) {
-    rand_gen_ = rand_gen;
-  }
   config_.batch_size = batch_size;
   return absl::OkStatus();
 }
@@ -652,6 +649,18 @@ absl::Status TopKOpenClSampler::DownloadSampledIds(void* dst) {
 }  // namespace litert::lm
 
 // C API implementations for TopKOpenClSampler.
+
+namespace {
+
+using SamplerHandle =
+    litert::lm::TopKGpuSamplerCApiHandle<litert::lm::TopKOpenClSampler>;
+
+SamplerHandle* AsHandle(LiteRtTopKOpenClSampler_Sampler* sampler) {
+  return reinterpret_cast<SamplerHandle*>(sampler);
+}
+
+}  // namespace
+
 int LiteRtTopKOpenClSampler_Create(
     const struct LiteRtRuntimeCApiStruct* absl_nullable runtime_c_api,
     LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
@@ -707,27 +716,30 @@ int LiteRtTopKOpenClSampler_Create(
                     activation_data_type))
           : std::nullopt;
 
+  const int seed = cpp_sampler_params.seed();
   auto sampler = litert::lm::TopKOpenClSampler::Create(
       cpp_env, batch_size, sequence_size, vocab_size,
       std::move(cpp_activation_data_type), std::move(cpp_sampler_params));
   SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(sampler.status(), error_msg);
   *sampler_out =
-      reinterpret_cast<LiteRtTopKOpenClSampler_Sampler*>(sampler->release());
+      reinterpret_cast<LiteRtTopKOpenClSampler_Sampler*>(new SamplerHandle{
+          .sampler = *std::move(sampler),
+          .legacy_rand_gen =
+              std::make_shared<std::default_random_engine>(seed)});
   return 0;
 }
 
 void LiteRtTopKOpenClSampler_Destroy(LiteRtTopKOpenClSampler_Sampler* sampler) {
-  delete reinterpret_cast<litert::lm::TopKOpenClSampler*>(sampler);
+  delete AsHandle(sampler);
 }
 
 namespace {
 
-// Implements `LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer()` and, if
-// `uniforms` is set,
+// Implements `LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer()`, which draws
+// the uniforms from the handle's legacy generator, and, if `uniforms` is set,
 // `LiteRtTopKOpenClSampler_SampleToIdAndScoreBufferWithUniforms()`.
-// `std::nullopt` makes the sampler draw the uniforms from its own random
-// number generator. A span, even an empty one, is passed on as the
-// caller's uniforms.
+// `std::nullopt` makes it draw from that generator. A span, even an empty
+// one, is passed on as the caller's uniforms.
 int SampleToIdAndScoreBufferImpl(
     LiteRtTopKOpenClSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
     LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
@@ -738,7 +750,7 @@ int SampleToIdAndScoreBufferImpl(
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
         absl::InvalidArgumentError("Sampler not provided."), error_msg);
   }
-  auto cpp_sampler = reinterpret_cast<litert::lm::TopKOpenClSampler*>(sampler);
+  auto* cpp_sampler = AsHandle(sampler)->sampler.get();
   if (!logits_tensor) {
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
         absl::InvalidArgumentError("Input logits tensor not provided."),
@@ -761,15 +773,16 @@ int SampleToIdAndScoreBufferImpl(
   }
   litert::TensorBuffer* cpp_scores =
       cpp_scores_tensor ? &*cpp_scores_tensor : nullptr;
-  absl::Status sample_status;
-  if (uniforms.has_value()) {
-    sample_status = cpp_sampler->SampleToIdAndScoreBuffer(
-        cpp_logits_tensor, cpp_ids_tensor, cpp_scores, *uniforms);
-  } else {
-    sample_status = cpp_sampler->SampleToIdAndScoreBuffer(
-        cpp_logits_tensor, cpp_ids_tensor, cpp_scores);
+  std::vector<float> legacy_uniforms;
+  if (!uniforms.has_value()) {
+    legacy_uniforms =
+        cpp_sampler->DrawLegacyUniforms(*AsHandle(sampler)->legacy_rand_gen);
+    uniforms = legacy_uniforms;
   }
-  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(sample_status, error_msg);
+  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
+      cpp_sampler->SampleToIdAndScoreBuffer(cpp_logits_tensor, cpp_ids_tensor,
+                                            cpp_scores, *uniforms),
+      error_msg);
   return 0;
 }
 
@@ -816,7 +829,7 @@ int LiteRtTopKOpenClSampler_UpdateConfig(
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
         absl::InvalidArgumentError("Sampler not provided."), error_msg);
   }
-  auto cpp_sampler = reinterpret_cast<litert::lm::TopKOpenClSampler*>(sampler);
+  auto* cpp_sampler = AsHandle(sampler)->sampler.get();
   if (!sampler_params) {
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
         absl::InvalidArgumentError("Sampler params not provided."), error_msg);
@@ -824,15 +837,19 @@ int LiteRtTopKOpenClSampler_UpdateConfig(
   auto cpp_sampler_params =
       *reinterpret_cast<const litert::lm::proto::SamplerParameters*>(
           sampler_params);
-  std::shared_ptr<std::default_random_engine> cpp_rand_gen;
-  if (rand_gen_shared_ptr) {
-    cpp_rand_gen =
-        *reinterpret_cast<std::shared_ptr<std::default_random_engine>*>(
-            rand_gen_shared_ptr);
-  }
   SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
-      cpp_sampler->UpdateConfig(cpp_sampler_params, batch_size, cpp_rand_gen),
-      error_msg);
+      cpp_sampler->UpdateConfig(cpp_sampler_params, batch_size), error_msg);
+  // Only the C API entry point without uniforms uses the generator. Older
+  // runtimes pass a pointer to a null `std::shared_ptr` when they have no
+  // generator; keep the current one then.
+  if (rand_gen_shared_ptr != nullptr) {
+    const auto& rand_gen =
+        *static_cast<const std::shared_ptr<std::default_random_engine>*>(
+            rand_gen_shared_ptr);
+    if (rand_gen != nullptr) {
+      AsHandle(sampler)->legacy_rand_gen = rand_gen;
+    }
+  }
   return 0;
 }
 
@@ -841,7 +858,7 @@ int LiteRtTopKOpenClSampler_CanHandleInput(
   if (!sampler) {
     return 0;
   }
-  auto cpp_sampler = reinterpret_cast<litert::lm::TopKOpenClSampler*>(sampler);
+  auto* cpp_sampler = AsHandle(sampler)->sampler.get();
   return cpp_sampler->CanHandleInput() ? 1 : 0;
 }
 
@@ -850,7 +867,7 @@ int LiteRtTopKOpenClSampler_HandlesInput(
   if (!sampler) {
     return 0;
   }
-  auto cpp_sampler = reinterpret_cast<litert::lm::TopKOpenClSampler*>(sampler);
+  auto* cpp_sampler = AsHandle(sampler)->sampler.get();
   return cpp_sampler->HandlesInput() ? 1 : 0;
 }
 
@@ -911,7 +928,7 @@ int LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors(
     }
   }
 
-  auto cpp_sampler = reinterpret_cast<litert::lm::TopKOpenClSampler*>(sampler);
+  auto* cpp_sampler = AsHandle(sampler)->sampler.get();
   auto env_holder = cpp_sampler->GetEnvironment().GetHolder();
   std::optional<litert::TensorBuffer> cpp_ids_tensor;
   if (ids_tensor) {

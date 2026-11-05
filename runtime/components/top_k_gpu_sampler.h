@@ -27,7 +27,6 @@
 #include "ml_drift/common/gpu_model.h"  // from @ml_drift
 #include "ml_drift/common/gpu_model_builder.h"  // from @ml_drift
 #include "ml_drift/common/task/tensor_desc.h"  // from @ml_drift
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/proto/sampler_params.pb.h"
 
@@ -39,24 +38,18 @@ class TopKGpuSampler : public Sampler {
  public:
   virtual ~TopKGpuSampler() = default;
 
-  using Sampler::SampleToIdAndScoreBuffer;
-
-  // Draws the uniforms from the sampler's random number generator (see
-  // `DrawUniformsFromGenerator()`) and calls the uniforms overload, which the
-  // backends implement.
-  absl::Status SampleToIdAndScoreBuffer(const TensorBuffer& logits_tensor,
-                                        TensorBuffer& ids_tensor,
-                                        TensorBuffer* scores_tensor) override {
-    const std::vector<float> uniforms = DrawUniformsFromGenerator();
-    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor,
-                                    uniforms);
-  }
-
-  absl::Status UpdateConfig(
-      const proto::SamplerParameters& sampler_params, int batch_size,
-      std::shared_ptr<std::default_random_engine> rand_gen) override {
+  absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
+                            int batch_size) override {
     return absl::UnimplementedError("Not implemented yet.");
   }
+
+  // Draws the uniforms of a sampling call with the current parameters from
+  // `rng`: one value per (batch, position) of the `batch_size` of
+  // `UpdateConfig()` in batch-major order, all 0 without advancing `rng` for
+  // greedy sampling. This is how the samplers drew from their own generators
+  // before they took caller-supplied uniforms; the C API entry point without
+  // uniforms still samples this way (see `TopKGpuSamplerCApiHandle`).
+  std::vector<float> DrawLegacyUniforms(std::default_random_engine& rng) const;
 
  protected:
   struct LlmRuntimeParams {
@@ -93,10 +86,7 @@ class TopKGpuSampler : public Sampler {
         create_info_(std::move(create_info)),
         config_{batch_size, sequence_size, vocab_size, max_top_k},
         kv_cache_batch_size_(batch_size),
-        sampler_params_(std::move(sampler_params)) {
-    rand_gen_ =
-        std::make_shared<std::default_random_engine>(sampler_params_.seed());
-  }
+        sampler_params_(std::move(sampler_params)) {}
 
   // Initializes the gpu sampler.
   absl::Status Initialize();
@@ -148,11 +138,6 @@ class TopKGpuSampler : public Sampler {
       const proto::SamplerParameters& sampler_params,
       absl::Span<const float> uniforms, int params_count) const;
 
-  // Draws the uniforms of a sampling call from `rand_gen_` like the CPU
-  // sampler does: one value per sampled token in batch-major order, and
-  // nothing (all zeros) for greedy sampling.
-  std::vector<float> DrawUniformsFromGenerator();
-
   // Creates the input handling model, and bind the input pointers to the model
   // inputs/output tensors.
   absl::StatusOr<::ml_drift::GpuModel> CreateInputHandlingModel(
@@ -170,10 +155,6 @@ class TopKGpuSampler : public Sampler {
       ::ml_drift::GpuModelBuilder::TensorHandle* prev_param,
       ::ml_drift::GpuModelBuilder::TensorHandle* param);
 
-  // Random generator for sampling.
-  std::shared_ptr<std::default_random_engine> rand_gen_ =
-      std::make_shared<std::default_random_engine>(0);
-
   // Model builder for building the sampler model.
   ::ml_drift::GpuModelBuilder model_builder_;
 
@@ -185,6 +166,21 @@ class TopKGpuSampler : public Sampler {
   int kv_cache_batch_size_;
 
   proto::SamplerParameters sampler_params_;
+};
+
+// The object behind the opaque sampler handle of the GPU sampler C APIs
+// (`LiteRtTopK{OpenCl,WebGpu,Metal}Sampler_Sampler*`).
+template <typename SamplerT>
+struct TopKGpuSamplerCApiHandle {
+  std::unique_ptr<SamplerT> sampler;
+  // The random number generator of the C API entry point without uniforms
+  // (`..._SampleToIdAndScoreBuffer()`), which picks the tokens with
+  // `sampler->DrawLegacyUniforms(*legacy_rand_gen)`. Kept for callers that
+  // don't pass uniforms (e.g. runtimes built before the uniforms symbol was
+  // added); the sampler itself owns no randomness. Seeded from the creation
+  // parameters, and replaced by a successful `..._UpdateConfig()` whose
+  // `rand_gen_shared_ptr` points to a non-null generator, so never null.
+  std::shared_ptr<std::default_random_engine> legacy_rand_gen;
 };
 
 }  // namespace litert::lm

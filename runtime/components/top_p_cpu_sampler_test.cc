@@ -19,7 +19,6 @@
 #include <cstring>
 #include <limits>
 #include <memory>
-#include <random>
 #include <utility>
 #include <vector>
 
@@ -40,7 +39,6 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
-#include "runtime/components/sampling_uniforms.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -52,6 +50,12 @@ namespace {
 using ::absl_testing::StatusIs;
 using ::testing::ElementsAre;
 using ::testing::FloatNear;
+
+// Uniforms for `batch_size * sequence_size` tokens. Their values don't matter
+// for greedy sampling (k = 1).
+std::vector<float> ZeroUniforms(int batch_size, int sequence_size) {
+  return std::vector<float>(batch_size * sequence_size, 0.0f);
+}
 
 Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
                                               absl::Span<const int> dims) {
@@ -76,22 +80,20 @@ Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
 
 TEST(TopPSamplerTest, Create) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/1, /*sequence_size=*/1,
-                                        /*seed=*/1);
+                                        /*batch_size=*/1, /*sequence_size=*/1);
   EXPECT_TRUE(sampler_or.ok());
 }
 
 TEST(TopPSamplerTest, CreateWithZeroTemp) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/0.0,
-                                        /*batch_size=*/1, /*sequence_size=*/1,
-                                        /*seed=*/1);
+                                        /*batch_size=*/1, /*sequence_size=*/1);
   EXPECT_TRUE(sampler_or.ok());
 }
 
 TEST(TopPSamplerTest, CreateWithNegativeTemp) {
   auto sampler_or =
       TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/-1.0,
-                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1);
+                          /*batch_size=*/1, /*sequence_size=*/1);
   EXPECT_FALSE(sampler_or.ok());
   EXPECT_THAT(sampler_or.status().message(),
               testing::HasSubstr("Temperature must be >= 0"));
@@ -99,8 +101,7 @@ TEST(TopPSamplerTest, CreateWithNegativeTemp) {
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_IdsOnly_BatchSize2) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/2, /*sequence_size=*/1,
-                                        /*seed=*/1);
+                                        /*batch_size=*/2, /*sequence_size=*/1);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -111,7 +112,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_IdsOnly_BatchSize2) {
   auto ids_tensor =
       CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {2});
   auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  /*scores_tensor=*/nullptr);
+                                                  /*scores_tensor=*/nullptr,
+                                                  ZeroUniforms(2, 1));
   EXPECT_TRUE(status.ok());
 
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
@@ -122,8 +124,7 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_IdsOnly_BatchSize2) {
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/2, /*sequence_size=*/1,
-                                        /*seed=*/1);
+                                        /*batch_size=*/2, /*sequence_size=*/1);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -143,8 +144,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2) {
   auto scores_tensor =
       CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {2});
   ASSERT_TRUE(scores_tensor.HasValue());
-  auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  &(*scores_tensor));
+  auto status = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor, &(*scores_tensor), ZeroUniforms(2, 1));
   EXPECT_TRUE(status.ok());
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
   ASSERT_TRUE(ids.HasValue());
@@ -159,8 +160,7 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2) {
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2SequenceLength2) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/2, /*sequence_size=*/2,
-                                        /*seed=*/1);
+                                        /*batch_size=*/2, /*sequence_size=*/2);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -181,8 +181,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2SequenceLength2) {
   auto scores_tensor =
       CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {2, 2});
   ASSERT_TRUE(scores_tensor.HasValue());
-  auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  &(*scores_tensor));
+  auto status = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor, &(*scores_tensor), ZeroUniforms(2, 2));
   EXPECT_TRUE(status.ok());
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
   ASSERT_TRUE(ids.HasValue());
@@ -198,8 +198,7 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2SequenceLength2) {
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_IdsOnly_BatchSize2) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/2, /*sequence_size=*/1,
-                                        /*seed=*/1);
+                                        /*batch_size=*/2, /*sequence_size=*/1);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -211,7 +210,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_IdsOnly_BatchSize2) {
       CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {2});
   ASSERT_TRUE(ids_tensor.HasValue());
   auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  /*scores_tensor=*/nullptr);
+                                                  /*scores_tensor=*/nullptr,
+                                                  ZeroUniforms(2, 1));
   EXPECT_TRUE(status.ok());
 
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
@@ -222,8 +222,7 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_IdsOnly_BatchSize2) {
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/2, /*sequence_size=*/1,
-                                        /*seed=*/1);
+                                        /*batch_size=*/2, /*sequence_size=*/1);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -244,8 +243,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2) {
       CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {2});
   ASSERT_TRUE(scores_tensor.HasValue());
 
-  auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  &(*scores_tensor));
+  auto status = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor, &(*scores_tensor), ZeroUniforms(2, 1));
   EXPECT_TRUE(status.ok());
 
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
@@ -261,8 +260,7 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2) {
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2SequenceLength2) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/2, /*sequence_size=*/2,
-                                        /*seed=*/1);
+                                        /*batch_size=*/2, /*sequence_size=*/2);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -284,8 +282,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2SequenceLength2) {
       CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {2, 2});
   ASSERT_TRUE(scores_tensor.HasValue());
 
-  auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  &(*scores_tensor));
+  auto status = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor, &(*scores_tensor), ZeroUniforms(2, 2));
   EXPECT_TRUE(status.ok());
 
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
@@ -302,8 +300,7 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2SequenceLength2) {
 
 TEST(TopPSamplerTest, UpdateConfig) {
   auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                                        /*batch_size=*/1, /*sequence_size=*/1,
-                                        /*seed=*/2);
+                                        /*batch_size=*/1, /*sequence_size=*/1);
   ASSERT_TRUE(sampler_or.ok());
   auto sampler = *std::move(sampler_or);
 
@@ -312,8 +309,7 @@ TEST(TopPSamplerTest, UpdateConfig) {
   sampler_params.set_p(1.0);
   sampler_params.set_temperature(100.0);
 
-  auto status = sampler->UpdateConfig(sampler_params,
-                                      /*batch_size=*/1, nullptr);
+  auto status = sampler->UpdateConfig(sampler_params, /*batch_size=*/1);
   ASSERT_TRUE(status.ok());
 
   const std::vector<float> logits = {0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0};
@@ -325,7 +321,8 @@ TEST(TopPSamplerTest, UpdateConfig) {
   ASSERT_TRUE(ids_tensor.HasValue());
 
   status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, ids_tensor.Value(),
-                                             /*scores_tensor=*/nullptr);
+                                             /*scores_tensor=*/nullptr,
+                                             ZeroUniforms(1, 1));
   ASSERT_TRUE(status.ok());
 
   auto ids = CopyFromTensorBuffer<int>(ids_tensor.Value());
@@ -336,31 +333,33 @@ TEST(TopPSamplerTest, UpdateConfig) {
   // Update the config again.
   sampler_params.set_k(8);
 
-  status = sampler->UpdateConfig(sampler_params, /*batch_size=*/1, nullptr);
+  status = sampler->UpdateConfig(sampler_params, /*batch_size=*/1);
   ASSERT_TRUE(status.ok());
 
-  status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, ids_tensor.Value(),
-                                             /*scores_tensor=*/nullptr);
+  const std::vector<float> uniforms = {0.99f};
+  status =
+      sampler->SampleToIdAndScoreBuffer(*logits_tensor, ids_tensor.Value(),
+                                        /*scores_tensor=*/nullptr, uniforms);
   ASSERT_TRUE(status.ok());
 
   ids = CopyFromTensorBuffer<int>(ids_tensor.Value());
 
-  // With topk=8 and high temperature, it might pick a random token. With
-  // seed=2, it should consistently not pick 4.
+  // With topk=8 and high temperature, the distribution is nearly flat, so a
+  // uniform close to 1 picks a token other than the argmax.
   EXPECT_NE(ids.Value()[0], 4);
 }
 
 TEST(TopPSamplerTest, UpdateConfigRejectsNonPositiveBatchSize) {
-  ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
-                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1));
+  ASSERT_OK_AND_ASSIGN(auto sampler,
+                       TopPSampler::Create(
+                           /*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
+                           /*batch_size=*/1, /*sequence_size=*/1));
   proto::SamplerParameters sampler_params;
   sampler_params.set_k(3);
   sampler_params.set_p(1.0);
   sampler_params.set_temperature(1.0);
   for (int batch_size : {0, -1}) {
-    EXPECT_THAT(sampler->UpdateConfig(sampler_params, batch_size, nullptr),
+    EXPECT_THAT(sampler->UpdateConfig(sampler_params, batch_size),
                 StatusIs(absl::StatusCode::kInvalidArgument))
         << "batch_size=" << batch_size;
   }
@@ -374,14 +373,14 @@ TEST(TopPSamplerTest, UpdateConfigRejectsNonPositiveBatchSize) {
       CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
   ASSERT_TRUE(ids_tensor.HasValue());
   EXPECT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                              /*scores_tensor=*/nullptr));
+                                              /*scores_tensor=*/nullptr,
+                                              ZeroUniforms(1, 1)));
 }
 
 TEST(TopPSamplerTest,
      SampleToIdAndScoreBuffer_GreedyScoresTensorNullAndNonNull) {
-  auto sampler_or =
-      TopPSampler::Create(/*k=*/1, /*p=*/1.0, /*temperature=*/0.0,
-                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1);
+  auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/1.0, /*temperature=*/0.0,
+                                        /*batch_size=*/1, /*sequence_size=*/1);
   ASSERT_TRUE(sampler_or.ok());
   if (!sampler_or.ok()) {
     return;
@@ -402,7 +401,8 @@ TEST(TopPSamplerTest,
   ASSERT_TRUE(ids_tensor_fast.HasValue());
 
   auto status_fast = sampler->SampleToIdAndScoreBuffer(
-      *logits_tensor, *ids_tensor_fast, /*scores_tensor=*/nullptr);
+      *logits_tensor, *ids_tensor_fast, /*scores_tensor=*/nullptr,
+      ZeroUniforms(1, 1));
   EXPECT_TRUE(status_fast.ok());
 
   auto ids_fast = CopyFromTensorBuffer<int>(*ids_tensor_fast);
@@ -421,8 +421,9 @@ TEST(TopPSamplerTest,
       CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {1});
   ASSERT_TRUE(scores_tensor.HasValue());
 
-  auto status_scores = sampler->SampleToIdAndScoreBuffer(
-      *logits_tensor, *ids_tensor_scores, &(*scores_tensor));
+  auto status_scores =
+      sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor_scores,
+                                        &(*scores_tensor), ZeroUniforms(1, 1));
   EXPECT_TRUE(status_scores.ok());
 
   auto ids_scores = CopyFromTensorBuffer<int>(*ids_tensor_scores);
@@ -441,8 +442,9 @@ TEST(TopPSamplerTest,
   sampler->SetComputeExactLogProbs(true);
   EXPECT_TRUE(sampler->ComputeExactLogProbs());
 
-  status_scores = sampler->SampleToIdAndScoreBuffer(
-      *logits_tensor, *ids_tensor_scores, &(*scores_tensor));
+  status_scores =
+      sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor_scores,
+                                        &(*scores_tensor), ZeroUniforms(1, 1));
   EXPECT_TRUE(status_scores.ok());
 
   auto scores_exact = CopyFromTensorBuffer<float>(*scores_tensor);
@@ -451,10 +453,9 @@ TEST(TopPSamplerTest,
 }
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_ExactLogProbsViaCreate) {
-  auto sampler_or =
-      TopPSampler::Create(/*k=*/1, /*p=*/1.0, /*temperature=*/0.0,
-                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1,
-                          /*compute_exact_log_probs=*/true);
+  auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/1.0, /*temperature=*/0.0,
+                                        /*batch_size=*/1, /*sequence_size=*/1,
+                                        /*compute_exact_log_probs=*/true);
   ASSERT_TRUE(sampler_or.ok());
   if (!sampler_or.ok()) {
     return;
@@ -476,8 +477,8 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_ExactLogProbsViaCreate) {
       CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {1});
   ASSERT_TRUE(scores_tensor.HasValue());
 
-  auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                  &(*scores_tensor));
+  auto status = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor, &(*scores_tensor), ZeroUniforms(1, 1));
   EXPECT_TRUE(status.ok());
 
   auto scores = CopyFromTensorBuffer<float>(*scores_tensor);
@@ -490,11 +491,10 @@ std::vector<float> ThreeTokenLogits() {
   return {std::log(0.5f), std::log(0.3f), std::log(0.2f)};
 }
 
-TEST(TopPSamplerTest, SampleWithUniforms_PerPosition) {
+TEST(TopPSamplerTest, Sample_PerPosition) {
   ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/2, /*seed=*/1));
+      auto sampler, TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/2));
   std::vector<float> logits;
   for (int i = 0; i < 4; ++i) {
     const std::vector<float> row = ThreeTokenLogits();
@@ -515,46 +515,6 @@ TEST(TopPSamplerTest, SampleWithUniforms_PerPosition) {
   auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
   ASSERT_TRUE(ids.HasValue());
   EXPECT_THAT(*ids, ElementsAre(0, 1, 2, 0));
-}
-
-TEST(TopPSamplerTest, SampleWithoutUniforms_DrawsUniformsFromSeed) {
-  constexpr int kSeed = 123;
-  constexpr int kSteps = 32;
-  ASSERT_OK_AND_ASSIGN(
-      auto sampler,
-      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
-                          /*batch_size=*/1, /*sequence_size=*/1, kSeed));
-  ASSERT_OK_AND_ASSIGN(
-      auto reference,
-      TopPSampler::Create(/*k=*/3, /*p=*/1.0, /*temperature=*/1.0,
-                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/0));
-  auto logits_tensor = CopyToTensorBuffer<float>(ThreeTokenLogits(), {1, 3});
-  ASSERT_TRUE(logits_tensor.HasValue());
-  std::vector<int> ids_vector(1);
-  auto ids_tensor =
-      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
-  ASSERT_TRUE(ids_tensor.HasValue());
-  auto reference_ids_tensor =
-      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
-  ASSERT_TRUE(reference_ids_tensor.HasValue());
-
-  // The sampler's own generator yields the same tokens as uniforms drawn from
-  // a generator with the same seed.
-  std::default_random_engine rng(kSeed);
-  for (int step = 0; step < kSteps; ++step) {
-    std::vector<float> uniforms(1);
-    DrawUniforms(rng, absl::MakeSpan(uniforms));
-    EXPECT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
-                                                /*scores_tensor=*/nullptr));
-    EXPECT_OK(reference->SampleToIdAndScoreBuffer(
-        *logits_tensor, *reference_ids_tensor, /*scores_tensor=*/nullptr,
-        absl::MakeConstSpan(uniforms)));
-    auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
-    ASSERT_TRUE(ids.HasValue());
-    auto reference_ids = CopyFromTensorBuffer<int>(*reference_ids_tensor);
-    ASSERT_TRUE(reference_ids.HasValue());
-    EXPECT_EQ(*ids, *reference_ids) << "step=" << step;
-  }
 }
 
 // Member declaration order is load-bearing: `buffer` borrows `non_host_env`,
@@ -605,7 +565,7 @@ TEST(TopPSamplerTest,
   ASSERT_OK_AND_ASSIGN(
       auto sampler,
       TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
-                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+                          /*batch_size=*/2, /*sequence_size=*/1));
 
   // Step 1: batch 0 peaks at token 2, batch 1 peaks at token 1.
   const std::vector<float> step1_logits = {
@@ -627,15 +587,16 @@ TEST(TopPSamplerTest,
   auto scores_tensor = CopyToTensorBuffer<float>(zero_scores, {2, 1});
   ASSERT_TRUE(scores_tensor.HasValue());
 
-  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
-                                              *ids_tensor,
-                                              /*scores_tensor=*/nullptr));
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(
+      non_host_logits->buffer, *ids_tensor, /*scores_tensor=*/nullptr,
+      ZeroUniforms(2, 1)));
   auto step1_ids = CopyFromTensorBuffer<int>(*ids_tensor);
   ASSERT_TRUE(step1_ids.HasValue());
   EXPECT_THAT(*step1_ids, ElementsAre(2, 1));
 
-  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
-                                              *ids_tensor, &(*scores_tensor)));
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(
+      non_host_logits->buffer, *ids_tensor, &(*scores_tensor),
+      ZeroUniforms(2, 1)));
   auto step1_scores = CopyFromTensorBuffer<float>(*scores_tensor);
   ASSERT_TRUE(step1_scores.HasValue());
   EXPECT_THAT(*step1_scores, ElementsAre(0.0f, 0.0f));
@@ -649,8 +610,9 @@ TEST(TopPSamplerTest,
   ASSERT_TRUE(non_host_logits->buffer.Write<float>(step2_logits).HasValue());
   sampler->SetComputeExactLogProbs(true);
 
-  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
-                                              *ids_tensor, &(*scores_tensor)));
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(
+      non_host_logits->buffer, *ids_tensor, &(*scores_tensor),
+      ZeroUniforms(2, 1)));
   auto step2_ids = CopyFromTensorBuffer<int>(*ids_tensor);
   ASSERT_TRUE(step2_ids.HasValue());
   EXPECT_THAT(*step2_ids, ElementsAre(0, 3));
@@ -668,9 +630,9 @@ TEST(TopPSamplerTest,
       0.0f, 5.0f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f, 0.0f,
   };
   ASSERT_TRUE(non_host_logits->buffer.Write<float>(step3_logits).HasValue());
-  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
-                                              *ids_tensor,
-                                              /*scores_tensor=*/nullptr));
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(
+      non_host_logits->buffer, *ids_tensor, /*scores_tensor=*/nullptr,
+      ZeroUniforms(2, 1)));
   auto step3_ids = CopyFromTensorBuffer<int>(*ids_tensor);
   ASSERT_TRUE(step3_ids.HasValue());
   EXPECT_THAT(*step3_ids, ElementsAre(1, 2));

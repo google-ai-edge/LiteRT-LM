@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -345,11 +346,12 @@ absl::StatusOr<std::vector<float>> TopKGpuSampler::CreateFloatParams(
   return params;
 }
 
-std::vector<float> TopKGpuSampler::DrawUniformsFromGenerator() {
+std::vector<float> TopKGpuSampler::DrawLegacyUniforms(
+    std::default_random_engine& rng) const {
   const int batch_size = std::min(config_.batch_size, kv_cache_batch_size_);
   std::vector<float> uniforms(batch_size * config_.sequence_size, 0.0f);
   if (std::min(sampler_params_.k(), config_.vocab_size) > 1) {
-    DrawUniforms(*rand_gen_, absl::MakeSpan(uniforms));
+    DrawUniforms(rng, absl::MakeSpan(uniforms));
   }
   return uniforms;
 }
