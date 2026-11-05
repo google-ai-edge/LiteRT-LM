@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_SUPPORT_UTIL_CONVERT_TENSOR_BUFFER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_SUPPORT_UTIL_CONVERT_TENSOR_BUFFER_H_
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -112,34 +113,39 @@ template <typename T>
       size * sizeof(T));
 }
 
-// Copies a ::litert::TensorBuffer of arbitrary shape to a std::vector<T>.
+// Copies a ::litert::TensorBuffer of arbitrary shape into `output`, resizing
+// `output` to the number of elements. Unlike CopyFromTensorBuffer(), this
+// reuses the existing capacity of `output`, so repeated calls with buffers of
+// the same size do not allocate or zero-fill. On error, `output` is left
+// unchanged.
 template <typename T>
-::litert::Expected<std::vector<T>> CopyFromTensorBuffer(
-    const ::litert::TensorBuffer& tensor_buffer) {
-  if (auto type = tensor_buffer.TensorType();
-      !type.HasValue() || type->ElementType() != ElementTypeFor<T>::kType) {
+::litert::Expected<void> CopyFromTensorBufferInPlace(
+    const ::litert::TensorBuffer& tensor_buffer, std::vector<T>& output) {
+  LITERT_ASSIGN_OR_RETURN(auto tensor_type, tensor_buffer.TensorType());
+  if (tensor_type.ElementType() != ElementTypeFor<T>::kType) {
     return ::litert::Unexpected(
         ::litert::Status::kErrorInvalidArgument,
         "Element type is not compatible to the target type.");
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto tensor_type, tensor_buffer.TensorType());
   LITERT_ASSIGN_OR_RETURN(auto num_elements,
                           tensor_type.Layout().NumElements());
-  std::vector<T> copied_data(num_elements);
-  LITERT_ASSIGN_OR_RETURN(
-      auto lock_and_addr,
-      ::litert::TensorBufferScopedLock::Create(
-          *const_cast<::litert::TensorBuffer*>(&tensor_buffer),
-          TensorBuffer::LockMode::kRead));
-  // Note: std::vector of bool is specialized to require fewer bits per element
-  // and is not compatible with a direct memcpy.
-  if constexpr (std::is_same_v<T, bool>) {
-    auto* src = static_cast<const bool*>(lock_and_addr.second);
-    std::copy(src, src + num_elements, copied_data.begin());
-  } else {
-    std::memcpy(copied_data.data(), lock_and_addr.second,
-                num_elements * sizeof(T));
+  LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
+                          ::litert::TensorBufferScopedLock::Create<T>(
+                              tensor_buffer, TensorBuffer::LockMode::kRead));
+  const T* src = lock_and_addr.second;
+  output.assign(src, src + num_elements);
+  return {};
+}
+
+// Copies a ::litert::TensorBuffer of arbitrary shape to a std::vector<T>.
+template <typename T>
+::litert::Expected<std::vector<T>> CopyFromTensorBuffer(
+    const ::litert::TensorBuffer& tensor_buffer) {
+  std::vector<T> copied_data;
+  if (auto copied = CopyFromTensorBufferInPlace<T>(tensor_buffer, copied_data);
+      !copied.HasValue()) {
+    return copied.Error();
   }
   return copied_data;
 }

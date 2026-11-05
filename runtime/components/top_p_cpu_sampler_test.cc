@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <random>
 #include <utility>
 #include <vector>
@@ -27,12 +28,18 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/internal/litert_runtime_c_api.h"  // from @litert
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/cc/internal/litert_handle.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
@@ -548,6 +555,125 @@ TEST(TopPSamplerTest, SampleWithoutUniforms_DrawsUniformsFromSeed) {
     ASSERT_TRUE(reference_ids.HasValue());
     EXPECT_EQ(*ids, *reference_ids) << "step=" << step;
   }
+}
+
+// Member declaration order is load-bearing: `buffer` borrows `non_host_env`,
+// which borrows `custom_c_api` and `base_env`, so members must be destroyed in
+// reverse declaration order.
+struct NonHostFloatTensorBuffer {
+  Environment base_env;
+  std::unique_ptr<LiteRtRuntimeCApiStruct> custom_c_api;
+  Environment non_host_env;
+  TensorBuffer buffer;
+};
+
+// Creates a mappable Float32 TensorBuffer whose BufferType() reports non-host
+// memory (kAhwb) so ReferTensorBufferAsSpan<float>() declines zero-copy span
+// access and SampleToIdAndScoreBuffer() exercises the bulk-memcpy download path
+// on any host platform without requiring device-specific buffer drivers.
+Expected<NonHostFloatTensorBuffer> CreateNonHostFloatTensorBuffer(
+    absl::Span<const float> data, absl::Span<const int> dims) {
+  LITERT_ASSIGN_OR_RETURN(auto base_env, Environment::Create({}));
+  auto [base_c_api, env_handle] = base_env.GetHolderForCApi();
+  auto custom_c_api = std::make_unique<LiteRtRuntimeCApiStruct>(*base_c_api);
+  custom_c_api->litert_get_tensor_buffer_type =
+      [](LiteRtTensorBuffer /*tensor_buffer*/,
+         LiteRtTensorBufferType* buffer_type) -> LiteRtStatus {
+    *buffer_type = kLiteRtTensorBufferTypeAhwb;
+    return kLiteRtStatusOk;
+  };
+  Environment non_host_env =
+      Environment::WrapCObject(custom_c_api.get(), env_handle, OwnHandle::kNo);
+  LITERT_ASSIGN_OR_RETURN(
+      auto buffer,
+      TensorBuffer::CreateManaged(
+          non_host_env, TensorBufferType::kHostMemory,
+          RankedTensorType(ElementType::Float32,
+                           Layout(Dimensions(dims.begin(), dims.end()))),
+          data.size() * sizeof(float)));
+  LITERT_RETURN_IF_ERROR(buffer.Write<float>(data));
+  return NonHostFloatTensorBuffer{
+      std::move(base_env),
+      std::move(custom_c_api),
+      std::move(non_host_env),
+      std::move(buffer),
+  };
+}
+
+TEST(TopPSamplerTest,
+     SampleToIdAndScoreBuffer_NonHostFloat32ReusesBufferAcrossSteps) {
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler,
+      TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                          /*batch_size=*/2, /*sequence_size=*/1, /*seed=*/1));
+
+  // Step 1: batch 0 peaks at token 2, batch 1 peaks at token 1.
+  const std::vector<float> step1_logits = {
+      0.0f, 0.0f, 10.0f, 0.0f, 1.0f, 12.0f, 2.0f, 0.0f,
+  };
+  auto non_host_logits =
+      CreateNonHostFloatTensorBuffer(step1_logits, {2, 1, 4});
+  ASSERT_TRUE(non_host_logits.HasValue());
+  auto buffer_type = non_host_logits->buffer.BufferType();
+  ASSERT_TRUE(buffer_type.HasValue());
+  EXPECT_EQ(*buffer_type, TensorBufferType::kAhwb);
+  EXPECT_FALSE(
+      ReferTensorBufferAsSpan<float>(non_host_logits->buffer).HasValue());
+
+  const std::vector<int> zero_ids(2, 0);
+  auto ids_tensor = CopyToTensorBuffer<int>(zero_ids, {2, 1});
+  ASSERT_TRUE(ids_tensor.HasValue());
+  const std::vector<float> zero_scores(2, 0.0f);
+  auto scores_tensor = CopyToTensorBuffer<float>(zero_scores, {2, 1});
+  ASSERT_TRUE(scores_tensor.HasValue());
+
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
+                                              *ids_tensor,
+                                              /*scores_tensor=*/nullptr));
+  auto step1_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(step1_ids.HasValue());
+  EXPECT_THAT(*step1_ids, ElementsAre(2, 1));
+
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
+                                              *ids_tensor, &(*scores_tensor)));
+  auto step1_scores = CopyFromTensorBuffer<float>(*scores_tensor);
+  ASSERT_TRUE(step1_scores.HasValue());
+  EXPECT_THAT(*step1_scores, ElementsAre(0.0f, 0.0f));
+
+  // Step 2: overwrite the same non-host buffer and verify `logits_data_` is
+  // refreshed in place (batch 0 -> token 0, batch 1 -> token 3) with exact
+  // log-probabilities enabled.
+  const std::vector<float> step2_logits = {
+      9.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 2.0f, 3.0f,
+  };
+  ASSERT_TRUE(non_host_logits->buffer.Write<float>(step2_logits).HasValue());
+  sampler->SetComputeExactLogProbs(true);
+
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
+                                              *ids_tensor, &(*scores_tensor)));
+  auto step2_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(step2_ids.HasValue());
+  EXPECT_THAT(*step2_ids, ElementsAre(0, 3));
+
+  const float expected_batch0_log_prob =
+      -std::log(1.0f + std::exp(-8.0f) + 2.0f * std::exp(-9.0f));
+  auto step2_scores = CopyFromTensorBuffer<float>(*scores_tensor);
+  ASSERT_TRUE(step2_scores.HasValue());
+  EXPECT_THAT(*step2_scores,
+              ElementsAre(FloatNear(expected_batch0_log_prob, 1e-5f),
+                          FloatNear(-0.44018677f, 1e-5f)));
+
+  // Step 3: overwrite once more and sample without scores.
+  const std::vector<float> step3_logits = {
+      0.0f, 5.0f, 0.0f, 0.0f, 0.0f, 0.0f, 7.0f, 0.0f,
+  };
+  ASSERT_TRUE(non_host_logits->buffer.Write<float>(step3_logits).HasValue());
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(non_host_logits->buffer,
+                                              *ids_tensor,
+                                              /*scores_tensor=*/nullptr));
+  auto step3_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(step3_ids.HasValue());
+  EXPECT_THAT(*step3_ids, ElementsAre(1, 2));
 }
 
 }  // namespace

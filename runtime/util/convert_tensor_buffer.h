@@ -21,6 +21,7 @@ namespace litert::lm {
 using ::litert::support::ConvertAndCopyToTensorBuffer;
 using ::litert::support::CopyFromTensorBuffer;
 using ::litert::support::CopyFromTensorBuffer2D;
+using ::litert::support::CopyFromTensorBufferInPlace;
 using ::litert::support::CopyToTensorBuffer;
 using ::litert::support::CreateTensorBuffer;
 using ::litert::support::DropTokensfromTensorBuffer;

@@ -217,6 +217,85 @@ TEST(ConvertTensorBufferTest, CopyFromTensorBuffer_IncompatibleElementType) {
                       "Element type is not compatible to the target type."));
 }
 
+TEST(ConvertTensorBufferTest, CopyFromTensorBufferInPlace_ReusesOutputStorage) {
+  std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
+                              CopyToTensorBuffer<float>(data, {2, 3}));
+  const ::litert::TensorBuffer& const_tensor_buffer = tensor_buffer;
+
+  std::vector<float> output;
+  ASSERT_TRUE(CopyFromTensorBufferInPlace<float>(const_tensor_buffer, output)
+                  .HasValue());
+  EXPECT_THAT(output, ElementsAre(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f));
+  const float* output_data = output.data();
+
+  // A second copy of the same size overwrites the contents without
+  // reallocating.
+  std::vector<float> new_data = {6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f};
+  ASSERT_TRUE(
+      tensor_buffer.Write<float>(absl::MakeConstSpan(new_data)).HasValue());
+  ASSERT_TRUE(CopyFromTensorBufferInPlace<float>(const_tensor_buffer, output)
+                  .HasValue());
+  EXPECT_THAT(output, ElementsAre(6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f));
+  EXPECT_EQ(output.data(), output_data);
+}
+
+TEST(ConvertTensorBufferTest, CopyFromTensorBufferInPlace_ResizesOutput) {
+  std::vector<int32_t> data = {1, 2, 3, 4};
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
+                              CopyToTensorBuffer<int32_t>(data, {2, 2}));
+
+  std::vector<int32_t> output = {9, 9, 9, 9, 9, 9, 9, 9};
+  ASSERT_TRUE(
+      CopyFromTensorBufferInPlace<int32_t>(tensor_buffer, output).HasValue());
+  EXPECT_THAT(output, ElementsAre(1, 2, 3, 4));
+}
+
+TEST(ConvertTensorBufferTest, CopyFromTensorBufferInPlace_Bool) {
+  bool data[] = {true, false, true, true};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto tensor_buffer,
+      CopyToTensorBuffer<bool>(absl::MakeConstSpan(data), {4}));
+
+  std::vector<bool> output;
+  ASSERT_TRUE(
+      CopyFromTensorBufferInPlace<bool>(tensor_buffer, output).HasValue());
+  EXPECT_THAT(output, ElementsAre(true, false, true, true));
+}
+
+TEST(ConvertTensorBufferTest, CopyFromTensorBufferInPlace_ZeroElements) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
+                              CreateTensorBuffer<float>({0}));
+
+  // An output with no prior allocation stays empty.
+  std::vector<float> empty_output;
+  ASSERT_TRUE(CopyFromTensorBufferInPlace<float>(tensor_buffer, empty_output)
+                  .HasValue());
+  EXPECT_TRUE(empty_output.empty());
+
+  // A non-empty output is cleared.
+  std::vector<float> output = {1.0f, 2.0f};
+  ASSERT_TRUE(
+      CopyFromTensorBufferInPlace<float>(tensor_buffer, output).HasValue());
+  EXPECT_TRUE(output.empty());
+
+  EXPECT_THAT(CopyFromTensorBuffer<float>(tensor_buffer),
+              IsOkAndHolds(::testing::IsEmpty()));
+}
+
+TEST(ConvertTensorBufferTest,
+     CopyFromTensorBufferInPlace_IncompatibleElementTypeLeavesOutput) {
+  std::vector<int32_t> data = {1, 2, 3, 4};
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
+                              CopyToTensorBuffer<int32_t>(data, {2, 2}));
+
+  std::vector<float> output = {7.0f, 8.0f};
+  EXPECT_THAT(CopyFromTensorBufferInPlace<float>(tensor_buffer, output),
+              IsError(::litert::Status::kErrorInvalidArgument,
+                      "Element type is not compatible to the target type."));
+  EXPECT_THAT(output, ElementsAre(7.0f, 8.0f));
+}
+
 TEST(ConvertTensorBufferTest, CopyFromTensorBuffer2D_Success) {
   std::vector<int8_t> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
   LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,

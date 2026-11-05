@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -31,6 +32,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampling_cpu_util.h"
@@ -195,8 +197,8 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
   if (logits_tensor_type.ElementType() == ElementType::Float32) {
     auto logits_data_or = ReferTensorBufferAsSpan<float>(logits_tensor);
     if (!logits_data_or) {  // Download the data if it is not in host memory.
-      LITERT_ASSIGN_OR_RETURN(logits_data_,
-                              CopyFromTensorBuffer<float>(logits_tensor));
+      LITERT_RETURN_IF_ERROR(
+          CopyFromTensorBufferInPlace<float>(logits_tensor, logits_data_));
       logits_data_span = absl::MakeSpan(logits_data_);
     } else {
       logits_data_span = *logits_data_or;
