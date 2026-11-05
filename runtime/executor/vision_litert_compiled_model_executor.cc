@@ -549,9 +549,13 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
 absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
 litert::lm::VisionLiteRtCompiledModelExecutor::Create(
     const VisionExecutorSettings& vision_executor_settings, Environment& env) {
+  const bool enable_file_backed_model_loading =
+      vision_executor_settings.GetEncoderBackend() == Backend::NPU ||
+      vision_executor_settings.GetAdapterBackend() == Backend::NPU;
   LITERT_ASSIGN_OR_RETURN(auto resources,
                           BuildLiteRtCompiledModelResources(
-                              vision_executor_settings.GetModelAssets()));
+                              vision_executor_settings.GetModelAssets(),
+                              enable_file_backed_model_loading));
   return Create(vision_executor_settings, env, std::move(resources));
 }
 
