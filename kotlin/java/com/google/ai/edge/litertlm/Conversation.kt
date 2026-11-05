@@ -310,6 +310,8 @@ class Conversation(
         suppressTokensConfig,
         maxOutputToken,
         responseFormat,
+        extraContextJsonString,
+        thinkingConfig,
       )
     LiteRtLmJni.nativeSendMessageAsync(
       handle,
@@ -593,6 +595,10 @@ class Conversation(
     private val suppressTokensConfig: SuppressTokensConfig? = null,
     private val maxOutputToken: Int? = null,
     private val responseFormat: ResponseFormat? = null,
+    // Reused when sending tool responses, so the whole turn renders with the same context and
+    // thinking settings (e.g. enable_thinking) as the original message.
+    private val extraContextJsonString: String = "{}",
+    private val thinkingConfig: ThinkingConfig? = null,
   ) : LiteRtLmJni.JniMessageCallback {
 
     /** The tool response to be returned back */
@@ -625,24 +631,29 @@ class Conversation(
     override fun onDone() {
       val localToolResponse = pendingToolResponseJSONMessage
       if (localToolResponse != null) {
-        val activeResponseFormat = resolveResponseFormat(localToolResponse, responseFormat)
-        // If there is pending tool response message, send the message.
-        LiteRtLmJni.nativeSendMessageAsync(
-          handle,
-          localToolResponse.toString(),
-          "{}",
-          this@JniMessageCallbackImpl,
-          @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,
-          repetitionPenaltyConfig,
-          noRepeatNgramConfig,
-          suppressTokensConfig?.suppressTokens?.toIntArray(),
-          maxOutputToken ?: -1,
-          null,
-          activeResponseFormat?.type?.value ?: 0,
-          activeResponseFormat?.schemaOrPattern,
-        )
-
-        pendingToolResponseJSONMessage = null // Clear after sending
+        pendingToolResponseJSONMessage = null // Clear before sending
+        // This runs on the native callback thread, so an exception thrown here would crash the
+        // app. Report it to the caller instead.
+        try {
+          val activeResponseFormat = resolveResponseFormat(localToolResponse, responseFormat)
+          // If there is pending tool response message, send the message.
+          LiteRtLmJni.nativeSendMessageAsync(
+            handle,
+            localToolResponse.toString(),
+            extraContextJsonString,
+            this@JniMessageCallbackImpl,
+            @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,
+            repetitionPenaltyConfig,
+            noRepeatNgramConfig,
+            suppressTokensConfig?.suppressTokens?.toIntArray(),
+            maxOutputToken ?: -1,
+            thinkingConfig,
+            activeResponseFormat?.type?.value ?: 0,
+            activeResponseFormat?.schemaOrPattern,
+          )
+        } catch (e: Exception) {
+          callback.onError(e)
+        }
       } else {
         // If no pending action, then call onDone to the original user callback.
         callback.onDone()
