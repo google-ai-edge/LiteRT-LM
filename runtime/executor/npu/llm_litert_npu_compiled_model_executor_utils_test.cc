@@ -29,7 +29,9 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
@@ -1365,6 +1367,157 @@ TEST_F(ExecutorUtilsTest, ResolveGraphLayout_MaskTypesDefaultToCausal) {
   NpuGraphLayout layout = NpuGraphLayout::Resolve(128, 1024, buffers, nullptr);
   EXPECT_EQ(layout.global_mask_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
   EXPECT_EQ(layout.local_mask_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+}
+
+void SetFirstFloat(TensorBuffer& buffer, float value) {
+  auto lock =
+      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kWrite);
+  ABSL_CHECK(lock.HasValue());
+  static_cast<float*>(lock->second)[0] = value;
+}
+
+float GetFirstFloat(const TensorBuffer& buffer) {
+  return *static_cast<const float*>(HostAddressOf(buffer));
+}
+
+}  // namespace
+
+// Gives the tests access to the private warm-up functions of
+// LlmLiteRtNpuCompiledModelExecutor.
+class LlmLiteRtNpuWarmupTest : public DrafterContextTest {
+ protected:
+  static absl::Status WarmupInference(
+      ::litert::CompiledModel& text_decoder_compiled_model,
+      std::vector<NpuContextGroup>& context_groups,
+      ::litert::CompiledModel& compiled_model_auxiliary) {
+    InferenceContext rope_inference_context;
+    InferenceContext mask_inference_context;
+    InferenceContext cache_update_inference_context;
+    return LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
+        text_decoder_compiled_model, context_groups, compiled_model_auxiliary,
+        rope_inference_context, mask_inference_context,
+        cache_update_inference_context);
+  }
+
+  static absl::Status WarmupDrafterInference(
+      DrafterContext& drafter_context, DrafterAuxContext& drafter_aux_context,
+      absl::Span<const NpuContextGroup> context_groups) {
+    return LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
+        drafter_context, drafter_aux_context, context_groups);
+  }
+};
+
+namespace {
+
+TEST_F(LlmLiteRtNpuWarmupTest, WarmupInferenceOnlyRunsFirstContextGroup) {
+  // The text decoder only has the signatures of the 640 context group: running
+  // any of the 1024 context group's signatures would fail.
+  const std::vector<uint8_t> decoder_buffer = BuildDrafterModelBuffer(
+      {{"prefill_640", 640}, {"decode_640", 640}});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto decoder, ::litert::CompiledModel::Create(
+                        *env_,
+                        ::litert::BufferRef<uint8_t>(decoder_buffer.data(),
+                                                     decoder_buffer.size()),
+                        ::litert::HwAccelerators::kCpu));
+  const std::vector<uint8_t> aux_buffer = BuildMtpAuxModelBuffer({});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto aux, ::litert::CompiledModel::Create(
+                    *env_,
+                    ::litert::BufferRef<uint8_t>(aux_buffer.data(),
+                                                 aux_buffer.size()),
+                    ::litert::HwAccelerators::kCpu));
+
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+  groups[0].prefill_signatures.prefill = "prefill_640";
+  groups[0].decode_signature = "decode_640";
+  groups[1].prefill_signatures.prefill = "prefill_1024";
+  groups[1].decode_signature = "decode_1024";
+  // The auxiliary model has none of the groups' auxiliary signatures, so their
+  // warm-up is skipped.
+  for (NpuContextGroup& group : groups) {
+    const std::string suffix = absl::StrCat("_", group.context_size);
+    group.prefill_signatures.rope = absl::StrCat("prefill_rope", suffix);
+    group.prefill_signatures.mask = absl::StrCat("prefill_mask", suffix);
+    group.prefill_signatures.cache_update =
+        absl::StrCat("prefill_cache_update", suffix);
+    group.decode_aux_signatures.rope = absl::StrCat("decode_rope", suffix);
+    group.decode_aux_signatures.mask = absl::StrCat("decode_mask", suffix);
+    group.decode_aux_signatures.cache_update =
+        absl::StrCat("decode_cache_update", suffix);
+    group.verify_signature = absl::StrCat("verify", suffix);
+  }
+  ASSERT_FALSE(decoder.FindSignature(groups[1].prefill_signatures.prefill));
+  ASSERT_FALSE(decoder.FindSignature(groups[1].decode_signature));
+
+  InferenceContext& context = groups[0].text_decoder_inference_context;
+  for (absl::string_view name : {"activations", "input_pos", "mask_local"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(context.prefill_input_buffers[name],
+                                decoder.CreateInputBuffer("prefill_640", name));
+    LITERT_ASSERT_OK_AND_ASSIGN(context.decode_input_buffers[name],
+                                decoder.CreateInputBuffer("decode_640", name));
+  }
+  for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.prefill_input_buffers[name],
+        groups[0].input_kv_cache_buffers.at(name).Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        context.decode_input_buffers[name],
+        groups[0].input_kv_cache_buffers.at(name).Duplicate());
+  }
+  LITERT_ASSERT_OK_AND_ASSIGN(context.prefill_output_buffers["logits"],
+                              decoder.CreateOutputBuffer("prefill_640",
+                                                         "logits"));
+  LITERT_ASSERT_OK_AND_ASSIGN(context.decode_output_buffers["logits"],
+                              decoder.CreateOutputBuffer("decode_640",
+                                                         "logits"));
+  SetFirstFloat(context.prefill_input_buffers.at("activations"), -2.0f);
+  SetFirstFloat(context.decode_input_buffers.at("activations"), -3.0f);
+
+  ASSERT_OK(WarmupInference(decoder, groups, aux));
+
+  // The 640 context group's prefill and decode signatures ran.
+  EXPECT_EQ(GetFirstFloat(context.prefill_output_buffers.at("logits")), 2.0f);
+  EXPECT_EQ(GetFirstFloat(context.decode_output_buffers.at("logits")), 3.0f);
+}
+
+TEST_F(LlmLiteRtNpuWarmupTest, WarmupDrafterInferenceOnlyRunsFirstContextGroup) {
+  ::litert::Model drafter_model = LoadModel(BuildDrafterModelBuffer(
+      {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
+  ::litert::Model aux_model = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask_cache_640", 640}, {"mask_cache_1024", 1024}}));
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+  ASSERT_OK_AND_ASSIGN(
+      DrafterAuxContext drafter_aux_context,
+      DrafterAuxContext::Create(*env_, aux_model, drafter_context, groups,
+                                MaskUpdateMethod::kModel));
+
+  // The mask signatures write the time step into the drafter's mask input of
+  // their context group.
+  SetFirstFloat(
+      drafter_context.context_bindings[0].input_buffers.at("mask_local"), -1);
+  SetFirstFloat(
+      drafter_context.context_bindings[1].input_buffers.at("mask_local"), -1);
+  ASSERT_OK(drafter_aux_context.drafter_mask.SetDecodeInput(7, 0));
+
+  ASSERT_OK(WarmupDrafterInference(drafter_context, drafter_aux_context,
+                                   groups));
+
+  // Only the 640 context group's mask ran, and the drafter stays bound to it.
+  EXPECT_EQ(GetFirstFloat(drafter_context.context_bindings[0].input_buffers.at(
+                "mask_local")),
+            7.0f);
+  EXPECT_EQ(GetFirstFloat(drafter_context.context_bindings[1].input_buffers.at(
+                "mask_local")),
+            -1.0f);
+  EXPECT_EQ(drafter_context.signature, "mtp_drafter_cache_640");
+  EXPECT_EQ(drafter_aux_context.mask_signature, "mask_cache_640");
 }
 
 }  // namespace

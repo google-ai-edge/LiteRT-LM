@@ -180,7 +180,6 @@ struct LiteRtLmSettings {
   bool use_hw_cache_update_for_npu = true;
   bool use_hw_ple_for_npu = true;
   bool enable_npu_debug_logging = false;
-  bool use_lazy_warmup_for_npu = false;
   bool disable_input_prompt_as_hint = false;
   absl::flat_hash_map<std::string, std::string> custom_backend_options;
 };
