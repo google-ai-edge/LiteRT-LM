@@ -22,6 +22,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -53,6 +54,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/framework/resource_management/serial_execution_manager.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/runtime_debugger.h"
@@ -1041,6 +1043,73 @@ TEST_P(ExecutionManagerTest, AddDecodeTaskWithExternalSampler) {
                           TaskState::kProcessing, TaskState::kDone));
 
   EXPECT_THAT(responses_texts, ElementsAre("4", "5"));
+}
+
+TEST_P(ExecutionManagerTest, ExternalSamplerGeneratorFollowsTheSessionSeed) {
+  constexpr int kSeed = 42;
+  CreateExecutionManager(std::make_unique<ContextSwitchingFakeLlmExecutor>(
+      kVocabSize,
+      /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
+      /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {6}}));
+
+  // k > 1 makes every decode step draw uniforms from the session's generator.
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig(
+                                                /*use_external_sampler=*/true));
+  session_config.GetMutableSamplerParams().set_type(
+      proto::SamplerParameters::TOP_P);
+  session_config.GetMutableSamplerParams().set_k(2);
+  session_config.GetMutableSamplerParams().set_p(1.0f);
+  session_config.GetMutableSamplerParams().set_seed(kSeed);
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+  EXPECT_EQ(session_info->sampler_rng, std::default_random_engine(kSeed));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_task_id, std::move(inputs),
+      /*dependency_task_ids=*/{},
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      /*callback=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(const TaskId decode_task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddDecodeTask(
+      session_id, decode_task_id,
+      /*dependency_task_ids=*/{prefill_task_id},
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      /*callback=*/nullptr));
+  ASSERT_OK(
+      execution_manager_->WaitUntilDone(decode_task_id, absl::Seconds(3)));
+  EXPECT_NE(session_info->sampler_rng, std::default_random_engine(kSeed));
+
+  // A clone restarts the generator from the original session's seed, not from
+  // its own registration seed or the original's advanced state.
+  session_config.GetMutableSamplerParams().set_seed(kSeed + 1);
+  ASSERT_OK_AND_ASSIGN(const SessionId cloned_session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const TaskId clone_task_id,
+                       execution_manager_->GetNewTaskId());
+  absl::Status clone_status;
+  ASSERT_OK(execution_manager_->AddCloneSessionTask(
+      session_id, clone_task_id, /*dep_tasks=*/{}, cloned_session_id,
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      [&clone_status](absl::StatusOr<Responses> responses) {
+        clone_status = responses.status();
+      }));
+  ASSERT_OK(execution_manager_->WaitUntilDone(clone_task_id, absl::Seconds(3)));
+  ASSERT_OK(clone_status);
+  ASSERT_OK_AND_ASSIGN(auto cloned_session_info,
+                       execution_manager_->GetSessionInfo(cloned_session_id));
+  EXPECT_EQ(cloned_session_info->sampler_rng,
+            std::default_random_engine(kSeed));
 }
 
 TEST_P(ExecutionManagerTest, CreateAndRunDependentTasks) {

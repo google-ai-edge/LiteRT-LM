@@ -481,9 +481,11 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
           active_drafter_output_buffers_["logits"], mask));
     }
 
+    // The drafter samples greedily, which ignores the uniforms.
+    constexpr float kDrafterUniforms[] = {0.0f};
     ABSL_RETURN_IF_ERROR(drafter_sampler_->SampleToIdAndScoreBuffer(
         active_drafter_output_buffers_["logits"], drafter_id_tensor_,
-        /*scores_tensor=*/nullptr));
+        /*scores_tensor=*/nullptr, kDrafterUniforms));
     LITERT_ASSIGN_OR_RETURN(auto id_vector,
                             CopyFromTensorBuffer<int32_t>(drafter_id_tensor_));
     RET_CHECK_EQ(id_vector.size(), 1);

@@ -384,7 +384,8 @@ class LlmLiteRtVerifier {
   // it if its top-k capacity is too small. If `rand_gen` is null, the sampler
   // uses the verifier's own generator, seeded with `sampler_params.seed()`
   // and only reseeded when the seed changes. Returns the generator that the
-  // sampler uses from now on.
+  // sampler uses from now on. On failure, the sampler, its parameters and its
+  // generator are left unchanged.
   absl::StatusOr<std::shared_ptr<std::default_random_engine>>
   UpdateSamplerConfig(const proto::SamplerParameters& sampler_params,
                       std::shared_ptr<std::default_random_engine> rand_gen);
@@ -487,6 +488,17 @@ class LlmLiteRtVerifier {
 
   // The sampler's generator when no shared generator is supplied.
   SeededRandomEngine own_rand_gen_;
+
+  // The parameters of `sampler_` from `UpdateSamplerConfig()` (default
+  // parameters are greedy).
+  proto::SamplerParameters sampler_params_;
+
+  // The generator that `sampler_` uses from `UpdateSamplerConfig()`, or null
+  // before the first call.
+  std::shared_ptr<std::default_random_engine> rand_gen_;
+
+  // The uniforms of the current sampling call, one per row.
+  std::vector<float> uniforms_;
 
   // Applies the logit masks of `MaskAndSample()` to all rows of the logits.
   std::unique_ptr<LiteRtLogitMaskRunner> mask_runner_;

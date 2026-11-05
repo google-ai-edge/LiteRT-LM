@@ -19,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,7 +39,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
-#include "runtime/components/sampler.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/engine/io_types.h"
@@ -1061,8 +1062,15 @@ TEST_F(TasksTest, DecodeFailsIfTheDraftCantBeVerified) {
     ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
     // The check doesn't use the sampler.
-    const std::optional<Sampler*> sampler =
-        test_case.external_sampling ? std::make_optional<Sampler*>(nullptr)
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<TopPSampler> unused_sampler,
+        TopPSampler::Create(/*k=*/1, /*p=*/0.0f, /*temperature=*/1.0f,
+                            test_case.num_output_candidates,
+                            /*sequence_size=*/1, /*seed=*/0));
+    std::default_random_engine rng;
+    const std::optional<Tasks::ExternalSampler> sampler =
+        test_case.external_sampling ? std::make_optional(Tasks::ExternalSampler{
+                                          unused_sampler.get(), &rng})
                                     : std::nullopt;
 
     EXPECT_THAT(
@@ -2057,6 +2065,8 @@ class TasksCustomSamplingTest : public testing::Test {
 
   std::unique_ptr<Tokenizer> tokenizer_;
   std::unique_ptr<Tokenizer> gemma3_tokenizer_;
+  // Supplies the uniforms of the custom sampler's sampling calls.
+  std::default_random_engine sampler_rng_;
 };
 
 TEST_F(TasksCustomSamplingTest, PrefillSucceed) {
@@ -2147,7 +2157,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSampling) {
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(),
@@ -2165,6 +2176,15 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSampling) {
   EXPECT_EQ(task_responses.GetScores().size(), 2);
   EXPECT_EQ(task_responses.GetScores()[0], 0.0f);
   EXPECT_EQ(task_responses.GetScores()[1], 0.0f);
+
+  // Each of the 9 decode steps drew one uniform per candidate from the
+  // caller's generator.
+  std::default_random_engine expected_rng;
+  std::vector<float> uniforms(2);
+  for (int step = 0; step < 9; ++step) {
+    DrawUniforms(expected_rng, absl::MakeSpan(uniforms));
+  }
+  EXPECT_EQ(sampler_rng_, expected_rng);
 }
 
 TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingWithConstrainedDecoding) {
@@ -2220,7 +2240,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingWithConstrainedDecoding) {
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(), constraint.get(),
@@ -2276,7 +2297,8 @@ TEST_F(TasksCustomSamplingTest,
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *gemma3_tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(),
@@ -2501,7 +2523,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingReachMaxNumTokens) {
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(),
@@ -2568,7 +2591,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingStreaming) {
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(),
@@ -2633,7 +2657,8 @@ TEST_F(TasksCustomSamplingTest,
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(),
@@ -2700,7 +2725,8 @@ TEST_F(TasksCustomSamplingTest, DecodeComplexStopTokenDetector) {
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer_, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(),
@@ -2782,7 +2808,8 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingStreamingWithCancellation) {
     task_responses = Tasks::Decode(
         delayed_executor, *tokenizer_, stop_token_detector,
 
-        /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+        /*num_output_candidates=*/2, benchmark_info,
+        Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
         RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
         SuppressTokensConfig::Default(),
         /*constraint=*/nullptr, std::move(decoded_ids.Value()),
@@ -2855,7 +2882,8 @@ TEST_F(TasksCustomSamplingTest,
       auto task_responses,
       Tasks::Decode(
           executor, *tokenizer_, stop_token_detector,
-          /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+          /*num_output_candidates=*/2, benchmark_info,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
           RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
           SuppressTokensConfig::Default(),
           /*constraint=*/constraint.get(), std::move(decoded_ids.Value()),
@@ -2926,7 +2954,8 @@ TEST_F(TasksCustomSamplingTest, DecodeStopTokenAndBPEDetector) {
   ASSERT_OK_AND_ASSIGN(
       auto task_responses,
       Tasks::Decode(executor, *tokenizer, stop_token_detector,
-                    /*num_output_candidates=*/2, benchmark_info, sampler.get(),
+                    /*num_output_candidates=*/2, benchmark_info,
+                    Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
                     RepetitionPenaltyConfig::Default(),
                     NoRepeatNgramConfig::Default(),
                     SuppressTokensConfig::Default(), /*constraint=*/nullptr,

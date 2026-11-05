@@ -356,6 +356,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status SampleLogits(const TensorBuffer& logits,
                             TensorBuffer& ids_tensor);
 
+  // Draws the uniforms of a `SampleLogits()` call from the session's random
+  // number generator, or returns zeros without advancing it for
+  // greedy sampling. The span is valid until the next call.
+  absl::Span<const float> DrawSampleLogitsUniforms();
+
   // Prefill internal implementation, for one prefill call to the Interpreter
   // with a certain length synchronously or asynchronously.
   absl::Status PrefillInternal(
@@ -538,6 +543,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Sampler for internal sampling.
   std::unique_ptr<Sampler> sampler_;
+  // The uniforms of the current `SampleLogits()` call.
+  std::vector<float> sampling_uniforms_;
   int gpu_sampler_max_top_k_ = 0;
   bool sampler_handles_input_ = true;
 

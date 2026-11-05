@@ -48,6 +48,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/constrained_decoding/thinking_budget_constraint.h"
 #include "runtime/components/sampler.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/components/scoring_cpu_util.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/engine_defaults.h"
@@ -250,7 +251,7 @@ class DecodeOneStep {
                 Tokenizer* absl_nonnull tokenizer, int num_output_candidates,
                 const StopTokenDetector& stop_token_detector,
                 std::optional<BenchmarkInfo>& benchmark_info,
-                std::optional<Sampler*> sampler,
+                std::optional<ExternalSampler> sampler,
                 std::unique_ptr<CompositeConstraint> composite_constraint,
                 std::unique_ptr<ConstrainedDecoder> constrained_decoder,
                 std::optional<litert::TensorBuffer> scores_tensor,
@@ -282,7 +283,7 @@ class DecodeOneStep {
       LlmExecutor* absl_nonnull executor, Tokenizer* absl_nonnull tokenizer,
       int num_output_candidates, const StopTokenDetector& stop_token_detector,
       std::optional<BenchmarkInfo>& benchmark_info,
-      std::optional<Sampler*> sampler,
+      std::optional<ExternalSampler> sampler,
       RepetitionPenaltyConfig repetition_penalty_config,
       NoRepeatNgramConfig no_repeat_ngram_config,
       SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -532,8 +533,12 @@ class DecodeOneStep {
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
-      ABSL_RETURN_IF_ERROR(sampler_.value()->SampleToIdAndScoreBuffer(
-          output_logits, decoded_ids.value(), &scores_tensor_));
+      // One uniform per output candidate. Drawn even for greedy sampling,
+      // which ignores them; the generator is only used by this sampler.
+      uniforms_.resize(num_output_candidates_);
+      DrawUniforms(*sampler_->rng, absl::MakeSpan(uniforms_));
+      ABSL_RETURN_IF_ERROR(sampler_->sampler->SampleToIdAndScoreBuffer(
+          output_logits, decoded_ids.value(), &scores_tensor_, uniforms_));
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
@@ -583,7 +588,9 @@ class DecodeOneStep {
   Tokenizer& tokenizer_;
   litert::support::BufferedStreamingDetokenizer detokenizer_;
   const int num_output_candidates_;
-  std::optional<Sampler*> sampler_;
+  std::optional<ExternalSampler> sampler_;
+  // The uniforms of the current external sampling call.
+  std::vector<float> uniforms_;
   std::unique_ptr<CompositeConstraint> composite_constraint_;
   std::unique_ptr<ConstrainedDecoder> constrained_decoder_;
   std::optional<BenchmarkInfo> benchmark_info_;
@@ -738,7 +745,7 @@ absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     std::optional<BenchmarkInfo>& benchmark_info,
-    std::optional<Sampler*> sampler,
+    std::optional<ExternalSampler> sampler,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,

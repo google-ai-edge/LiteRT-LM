@@ -63,6 +63,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/common_utils.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -1941,8 +1942,34 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
   }
 
   ABSL_RETURN_IF_ERROR(sampler_->SampleToIdAndScoreBuffer(
-      logits, ids_tensor, /*scores_tensor=*/nullptr));
+      logits, ids_tensor, /*scores_tensor=*/nullptr,
+      DrawSampleLogitsUniforms()));
   return absl::OkStatus();
+}
+
+absl::Span<const float>
+LlmLiteRtCompiledModelExecutorBase::DrawSampleLogitsUniforms() {
+  // Default parameters sample greedily, as in `InitializeSampler()`.
+  proto::SamplerParameters sampler_params = GreedySamplerParams();
+  if (llm_context_->runtime_config().sampler_params.has_value() &&
+      llm_context_->runtime_config().sampler_params->type() !=
+          proto::SamplerParameters::TYPE_UNSPECIFIED) {
+    sampler_params = llm_context_->runtime_config().sampler_params.value();
+  }
+  std::shared_ptr<std::default_random_engine>& rand_gen =
+      llm_context_->runtime_state().rand_gen;
+  if (rand_gen == nullptr) {
+    // Seeded like the generator of a context from `CreateNewContext()`.
+    rand_gen =
+        std::make_shared<std::default_random_engine>(sampler_params.seed());
+  }
+  const int output_heads =
+      llm_context_->runtime_config().output_heads.value_or(1);
+  // One uniform per output head; `SampleLogits()` samples one position.
+  sampling_uniforms_.resize(output_heads);
+  DrawSamplingUniforms(sampler_params, *rand_gen,
+                       absl::MakeSpan(sampling_uniforms_));
+  return absl::MakeConstSpan(sampling_uniforms_);
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(

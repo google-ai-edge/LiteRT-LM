@@ -207,6 +207,7 @@ cc_test(
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/proto:sampler_params_cc_proto",
         "//runtime/proto:token_cc",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",

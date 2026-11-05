@@ -19,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,6 +39,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/components/top_p_cpu_sampler.h"
+#include "runtime/core/tasks.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -845,6 +847,8 @@ class PipelineCustomSamplingTest : public testing::Test {
                                store_token_lengths);
   }
 
+  // Supplies the uniforms of the custom sampler's sampling calls.
+  std::default_random_engine sampler_rng_;
   std::unique_ptr<Tokenizer> tokenizer_;
 };
 
@@ -939,9 +943,10 @@ TEST_F(PipelineCustomSamplingTest, DecodeCustomSampling) {
       auto responses,
       DecodeCustomSampling(
           executor, *tokenizer_, stop_token_detector,
-          /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-          RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-          SuppressTokensConfig::Default(),
+          /*num_output_candidates=*/2,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+          std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
           /*constraint=*/nullptr, benchmark_info));
   EXPECT_EQ(responses.GetTexts().size(), 2);
   // First candidate: " How's it going?!".
@@ -1011,9 +1016,10 @@ TEST_F(PipelineCustomSamplingTest,
       auto responses,
       DecodeCustomSampling(
           executor, *tokenizer_, stop_token_detector,
-          /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-          RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-          SuppressTokensConfig::Default(),
+          /*num_output_candidates=*/2,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+          std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
           /*constraint=*/constraint.get(), benchmark_info));
   EXPECT_EQ(responses.GetTexts().size(), 2);
   // First candidate: " How's it".
@@ -1171,9 +1177,10 @@ TEST_F(PipelineCustomSamplingTest, DecodeCustomSamplingReachMaxNumTokens) {
       auto responses,
       DecodeCustomSampling(
           executor, *tokenizer_, stop_token_detector,
-          /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-          RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-          SuppressTokensConfig::Default(),
+          /*num_output_candidates=*/2,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+          std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
           /*constraint=*/nullptr, benchmark_info));
   EXPECT_EQ(responses.GetTexts().size(), 2);
   // First candidate truncated at max number of tokens: " How's".
@@ -1220,9 +1227,10 @@ TEST_F(PipelineCustomSamplingTest, DecodeCustomSamplingWithMaxOutputTokens) {
       auto responses,
       DecodeCustomSampling(
           executor, *tokenizer_, stop_token_detector,
-          /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-          RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-          SuppressTokensConfig::Default(),
+          /*num_output_candidates=*/2,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+          std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
           /*constraint=*/nullptr, benchmark_info, /*cancelled=*/nullptr,
           /*max_output_tokens=*/3));
   EXPECT_EQ(responses.GetTexts().size(), 2);
@@ -1283,9 +1291,10 @@ TEST_F(PipelineCustomSamplingTest, DecodeCustomSamplingStreaming) {
 
   EXPECT_OK(DecodeCustomSamplingStreaming(
       executor, *tokenizer_, stop_token_detector,
-      /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-      SuppressTokensConfig::Default(),
+      /*num_output_candidates=*/2,
+      Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+      std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
       /*constraint=*/nullptr, benchmark_info,
       CreateTestCallback(responses, status, done)));
   // First candidate: " How's it going" - ("?!") are stop tokens that is not
@@ -1340,9 +1349,10 @@ TEST_F(PipelineCustomSamplingTest,
   bool done = false;
   EXPECT_OK(DecodeCustomSamplingStreaming(
       executor, *tokenizer_, stop_token_detector,
-      /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-      SuppressTokensConfig::Default(),
+      /*num_output_candidates=*/2,
+      Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+      std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
       /*constraint=*/nullptr, benchmark_info,
       CreateTestCallback(responses, status, done)));
   // First candidate truncated at max number of tokens: " How's".
@@ -1394,9 +1404,10 @@ TEST_F(PipelineCustomSamplingTest,
   bool done = false;
   EXPECT_OK(DecodeCustomSamplingStreaming(
       executor, *tokenizer_, stop_token_detector,
-      /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-      SuppressTokensConfig::Default(),
+      /*num_output_candidates=*/2,
+      Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+      std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
       /*constraint=*/nullptr, benchmark_info,
       CreateTestCallback(responses, status, done),
       /*cancelled=*/nullptr,
@@ -1458,9 +1469,10 @@ TEST_F(PipelineCustomSamplingTest, DecodeComplexStopTokenDetector) {
       auto responses,
       DecodeCustomSampling(
           executor, *tokenizer_, stop_token_detector,
-          /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-          RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-          SuppressTokensConfig::Default(),
+          /*num_output_candidates=*/2,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+          std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
           /*constraint=*/nullptr, benchmark_info));
   // Expect two output candidates.
   EXPECT_EQ(responses.GetTexts().size(), 2);
@@ -1533,9 +1545,10 @@ TEST_F(PipelineCustomSamplingTest,
   ASSERT_OK(pool.Schedule([&]() {
     status = DecodeCustomSamplingStreaming(
         delayed_executor, *tokenizer_, stop_token_detector,
-        /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-        RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-        SuppressTokensConfig::Default(),
+        /*num_output_candidates=*/2,
+        Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+        std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+        NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
         /*constraint=*/nullptr, benchmark_info,
         CreateTestCallback(responses, callback_status, done,
                            /*delay_on_next=*/true),
@@ -1603,9 +1616,10 @@ TEST_F(PipelineCustomSamplingTest,
   EXPECT_OK(stop_token_detector.AddStopTokenSequence({0}));
   EXPECT_OK(DecodeCustomSamplingStreaming(
       executor, *tokenizer_, stop_token_detector,
-      /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-      SuppressTokensConfig::Default(),
+      /*num_output_candidates=*/2,
+      Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+      std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
       /*constraint=*/constraint.get(), benchmark_info,
       CreateTestCallback(responses, callback_status, done)));
   EXPECT_EQ(responses[0], "Hello World");
@@ -1673,9 +1687,10 @@ TEST_F(PipelineCustomSamplingTest, DecodeStopTokenAndBPEDetector) {
       auto responses,
       DecodeCustomSampling(
           executor, *tokenizer, stop_token_detector,
-          /*num_output_candidates=*/2, *sampler, std::move(decoded_ids.Value()),
-          RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
-          SuppressTokensConfig::Default(),
+          /*num_output_candidates=*/2,
+          Tasks::ExternalSampler{sampler.get(), &sampler_rng_},
+          std::move(decoded_ids.Value()), RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
           /*constraint=*/nullptr, benchmark_info));
 
   EXPECT_EQ(responses.GetTexts().size(), 2);

@@ -503,6 +503,27 @@ TEST_P(LlmLiteRtVerifierFakeLmTest,
               IsOkAndHolds(Ne(first)));
 }
 
+TEST_P(LlmLiteRtVerifierFakeLmTest,
+       FailedSamplerConfigUpdateKeepsTheGenerator) {
+  ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
+  auto rand_gen = std::make_shared<std::default_random_engine>(7);
+  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0), rand_gen));
+  // A larger k recreates the sampler, which rejects p > 1.
+  proto::SamplerParameters invalid_params = SampledParams(/*seed=*/0);
+  invalid_params.set_k(kFakeLmVocabSize + 1);
+  invalid_params.set_p(2.0f);
+  auto rejected_rand_gen = std::make_shared<std::default_random_engine>(7);
+  EXPECT_THAT(verifier->UpdateSamplerConfig(invalid_params, rejected_rand_gen),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // The uniforms still come from the generator of the last successful update.
+  ASSERT_OK(RunPass(*verifier, {3, 1, 4, 1}, /*position=*/0, kVerifyWidth));
+  const std::default_random_engine before_sampling = *rand_gen;
+  ASSERT_OK(verifier->MaskAndSample({}));
+  EXPECT_THAT(*rand_gen, Ne(before_sampling));
+  EXPECT_EQ(*rejected_rand_gen, std::default_random_engine(7));
+}
+
 TEST_P(LlmLiteRtVerifierFakeLmTest, GreedySamplerConfigKeepsExactPredictions) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
   ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0), nullptr));

@@ -61,7 +61,6 @@ target_include_directories(runtime_core_pipeline
 target_link_libraries(runtime_core_pipeline
   PUBLIC
     runtime_core_tasks
-    LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::ScoringCpuUtil
     LiteRTLM::Runtime::Components::StopTokenDetector
     LiteRTLM::Runtime::Components::TokenIdUtil

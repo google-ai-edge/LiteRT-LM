@@ -458,6 +458,7 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
     LiteRTLM::Runtime::Components::ModelResourcesTask
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
     LiteRTLM::Runtime::Util::FileUtil
@@ -694,6 +695,7 @@ target_link_libraries(runtime_executor_llm_litert_verifier
     LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner

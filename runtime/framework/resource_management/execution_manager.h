@@ -19,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -50,6 +51,7 @@ using TaskId = int;
 // - session_config: The config of the session.
 // - context_handler: The context handler of the session.
 // - sampler: The sampler of the session.
+// - sampler_rng: The random number generator of the sampler.
 // - last_prefill_token_id: The last prefill token ID of the session.
 // - stop_token_detector: The stop token detector of the session.
 // - benchmark_info: The benchmark info of the session.
@@ -58,6 +60,7 @@ struct SessionInfo {
   SessionConfig session_config;
   std::shared_ptr<ContextHandler> context_handler;
   std::unique_ptr<Sampler> sampler;
+  std::default_random_engine sampler_rng;
   int last_prefill_token_id = 0;
   std::unique_ptr<StopTokenDetector> stop_token_detector;
   std::optional<BenchmarkInfo> benchmark_info = std::nullopt;

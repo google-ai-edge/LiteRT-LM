@@ -31,8 +31,8 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
-#include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
+#include "runtime/core/tasks.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -103,7 +103,8 @@ absl::Status DecodeStreaming(
 // - tokenizer: The tokenizer to decode the token ids into text.
 // - stop_token_ids: The token ids to stop the decoding process.
 // - num_output_candidates: The number of output candidates to generate.
-// - sampler: The sampler to sample the token ids from the logits.
+// - sampler: The sampler to sample the token ids from the logits, with the
+//   random number generator for the uniform values of its sampling calls.
 // - repetition_penalty_config: The repetition penalty config to penalize
 //   repetitive tokens during decoding.
 // - no_repeat_ngram_config: The no repeat ngram config to ban repetitive
@@ -119,7 +120,7 @@ absl::Status DecodeStreaming(
 absl::StatusOr<Responses> DecodeCustomSampling(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
-    Sampler& sampler, litert::TensorBuffer decoded_ids,
+    Tasks::ExternalSampler sampler, litert::TensorBuffer decoded_ids,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -136,7 +137,7 @@ absl::StatusOr<Responses> DecodeCustomSampling(
 absl::Status DecodeCustomSamplingStreaming(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
-    Sampler& sampler, litert::TensorBuffer decoded_ids,
+    Tasks::ExternalSampler sampler, litert::TensorBuffer decoded_ids,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,

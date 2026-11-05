@@ -634,6 +634,12 @@ class FakeInvalidTokenSampler : public Sampler {
     return absl::OkStatus();
   }
 
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
+    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
+  }
+
   absl::Status UpdateConfig(
       const proto::SamplerParameters& sampler_params, int batch_size,
       std::shared_ptr<std::default_random_engine> rand_gen) override {
@@ -680,6 +686,12 @@ class FakeSamplerWithInputHandling : public Sampler {
       inference_called_count_++;
     }
     return absl::OkStatus();
+  }
+
+  absl::Status SampleToIdAndScoreBuffer(
+      const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
+      TensorBuffer* scores_tensor, absl::Span<const float> uniforms) override {
+    return SampleToIdAndScoreBuffer(logits_tensor, ids_tensor, scores_tensor);
   }
 
   absl::Status UpdateConfig(

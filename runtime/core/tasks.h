@@ -18,8 +18,10 @@
 #include <atomic>
 #include <limits>
 #include <optional>
+#include <random>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -41,6 +43,15 @@ namespace litert::lm::Tasks {
 
 using ::litert::support::Tokenizer;
 
+// A sampler that the caller runs on the logits returned by the executor
+// (external sampling), with the random number generator that supplies the
+// uniform values of its sampling calls. The caller owns both, so that the
+// random sequence continues across calls.
+struct ExternalSampler {
+  Sampler* absl_nonnull sampler;
+  std::default_random_engine* absl_nonnull rng;
+};
+
 absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
                                   bool wait_for_completion,
                                   std::optional<BenchmarkInfo>& benchmark_info);
@@ -49,7 +60,7 @@ absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     std::optional<BenchmarkInfo>& benchmark_info,
-    std::optional<Sampler*> sampler,
+    std::optional<ExternalSampler> sampler,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,

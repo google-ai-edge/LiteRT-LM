@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -159,11 +160,14 @@ absl::StatusOr<SessionId> ThreadedExecutionManager::RegisterNewSession(
       ABSL_LOG(ERROR) << "Failed to add stop token sequence: " << status;
     }
   }
+  // Read before `session_config` is moved into the session info.
+  const int sampler_seed = session_config.GetSamplerParams().seed();
   SessionId session_id = next_session_id_.fetch_add(1);
   auto session_info = std::make_shared<SessionInfo>(SessionInfo{
       .session_config = std::move(session_config),
       .context_handler = std::move(context_handler),
       .sampler = std::move(sampler),
+      .sampler_rng = std::default_random_engine(sampler_seed),
       .stop_token_detector = std::move(stop_token_detector),
       .benchmark_info = std::move(benchmark_info),
   });
@@ -1041,10 +1045,12 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
     auto num_output_candidates =
         session_info->session_config.GetNumOutputCandidates();
     session_info->stop_token_detector->ResetBatch(num_output_candidates);
-    std::optional<Sampler*> optional_sampler = std::nullopt;
+    std::optional<Tasks::ExternalSampler> optional_sampler = std::nullopt;
     std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
       if (session_info->sampler != nullptr) {
-        optional_sampler = session_info->sampler.get();
+        optional_sampler =
+            Tasks::ExternalSampler{.sampler = session_info->sampler.get(),
+                                   .rng = &session_info->sampler_rng};
         std::vector<int> decoded_ids(num_output_candidates,
                                      session_info->last_prefill_token_id);
         auto decoded_ids_buffer_or =
@@ -1176,6 +1182,10 @@ absl::Status ThreadedExecutionManager::AddCloneSessionTask(
             std::move(cloned_context_handler_or.value());
         session_lookup_.at(cloned_session_id)->sampler =
             std::move(cloned_sampler);
+        session_lookup_.at(cloned_session_id)
+            ->sampler_rng.seed(
+                original_session_info->session_config.GetSamplerParams()
+                    .seed());
         session_lookup_.at(cloned_session_id)->last_prefill_token_id =
             original_session_info->last_prefill_token_id;
         session_lookup_.at(cloned_session_id)->stop_token_detector =

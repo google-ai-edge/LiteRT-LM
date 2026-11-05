@@ -53,6 +53,7 @@
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -811,8 +812,16 @@ absl::StatusOr<std::vector<int>> LlmLiteRtVerifier::MaskAndSample(
   if (!masks.empty()) {
     ABSL_RETURN_IF_ERROR(mask_runner_->ApplySequence(logits->second, masks));
   }
+  // One uniform per row, from the sampler's generator (typically the
+  // session's, see `UpdateSamplerConfig()`); zeros for the default greedy
+  // sampler.
+  uniforms_.resize(width_);
+  if (rand_gen_ == nullptr) {
+    rand_gen_ = own_rand_gen_.Get(sampler_params_.seed());
+  }
+  DrawSamplingUniforms(sampler_params_, *rand_gen_, absl::MakeSpan(uniforms_));
   ABSL_RETURN_IF_ERROR(sampler_->SampleToIdAndScoreBuffer(
-      logits->second, id_tensor_, /*scores_tensor=*/nullptr));
+      logits->second, id_tensor_, /*scores_tensor=*/nullptr, uniforms_));
   LITERT_ASSIGN_OR_RETURN(auto id_vector,
                           CopyFromTensorBuffer<int32_t>(id_tensor_));
   RET_CHECK_EQ(static_cast<int>(id_vector.size()), width_);
@@ -916,15 +925,22 @@ absl::StatusOr<std::shared_ptr<std::default_random_engine>>
 LlmLiteRtVerifier::UpdateSamplerConfig(
     const proto::SamplerParameters& sampler_params,
     std::shared_ptr<std::default_random_engine> rand_gen) {
+  // Staged, so that a failed update leaves the generators unchanged.
+  SeededRandomEngine own_rand_gen = own_rand_gen_;
   if (rand_gen == nullptr) {
     // The sampler ignores `sampler_params.seed()` unless it is recreated, so
-    // hand it a generator for the seed explicitly.
-    rand_gen = own_rand_gen_.Get(sampler_params.seed());
+    // hand it a generator for the seed explicitly. It is shared by the
+    // uniforms drawn in `MaskAndSample()` and by the sampler's own entry
+    // points.
+    rand_gen = own_rand_gen.Get(sampler_params.seed());
   }
   ABSL_RETURN_IF_ERROR(UpdateOrRecreateSampler(
       sampler_, sampler_max_top_k_, sampler_backend_,
       /*batch_size=*/1, sampler_params, rand_gen, std::cref(env_),
       /*sequence_size=*/width_, vocab_size_, logits_data_type_));
+  own_rand_gen_ = std::move(own_rand_gen);
+  sampler_params_ = sampler_params;
+  rand_gen_ = rand_gen;
   return rand_gen;
 }
 

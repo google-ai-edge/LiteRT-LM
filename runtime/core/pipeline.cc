@@ -31,7 +31,6 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
-#include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/core/tasks.h"
 #include "runtime/engine/io_types.h"
@@ -109,7 +108,7 @@ absl::Status DecodeStreaming(
 absl::StatusOr<Responses> DecodeCustomSampling(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
-    Sampler& sampler, litert::TensorBuffer decoded_ids,
+    Tasks::ExternalSampler sampler, litert::TensorBuffer decoded_ids,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -118,7 +117,7 @@ absl::StatusOr<Responses> DecodeCustomSampling(
   absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
   return Tasks::Decode(
       executor, tokenizer, stop_token_detector, num_output_candidates,
-      benchmark_info, &sampler, std::move(repetition_penalty_config),
+      benchmark_info, sampler, std::move(repetition_penalty_config),
       std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
       constraint, std::move(decoded_ids),
       /*callback=*/callback, cancelled, max_output_tokens);
@@ -127,7 +126,7 @@ absl::StatusOr<Responses> DecodeCustomSampling(
 absl::Status DecodeCustomSamplingStreaming(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
-    Sampler& sampler, litert::TensorBuffer decoded_ids,
+    Tasks::ExternalSampler sampler, litert::TensorBuffer decoded_ids,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -140,7 +139,7 @@ absl::Status DecodeCustomSamplingStreaming(
   }
   absl::StatusOr<Responses> task_respones = Tasks::Decode(
       executor, tokenizer, stop_token_detector, num_output_candidates,
-      benchmark_info, &sampler, std::move(repetition_penalty_config),
+      benchmark_info, sampler, std::move(repetition_penalty_config),
       std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
       constraint, std::move(decoded_ids), callback, cancelled,
       max_output_tokens);
