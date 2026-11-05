@@ -134,6 +134,7 @@ fun benchmark(
       maxNumTokens ?: -1,
       speculativeDecodingConfig?.mode?.value,
       speculativeDecodingConfig?.lenience,
+      ExperimentalFlags.gpuUseIrModel,
     )
 
   try {

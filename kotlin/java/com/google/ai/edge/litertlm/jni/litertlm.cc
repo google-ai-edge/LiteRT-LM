@@ -533,6 +533,26 @@ void ApplyOptionalSpeculativeLenience(JNIEnv* env, jobject lenience_obj,
   config.SetSpeculativeDecodingConfig(speculative_decoding_config);
 }
 
+// Experimental. Sets whether the GPU backend uses the IrModel initialization
+// pipeline on the main, vision and audio executors of `settings` from the
+// optional `gpu_use_ir_model_obj` (boxed Boolean). Leaves `settings` unchanged
+// when it is null. Only executors on the GPU backend read the value.
+void ApplyOptionalGpuUseIrModel(JNIEnv* env, jobject gpu_use_ir_model_obj,
+                                EngineSettings& settings) {
+  std::optional<bool> gpu_use_ir_model =
+      GetOptionalBoolean(env, gpu_use_ir_model_obj);
+  if (!gpu_use_ir_model.has_value()) return;
+  settings.GetMutableMainExecutorSettings().SetUseIrModel(gpu_use_ir_model);
+  if (auto& vision_settings = settings.GetMutableVisionExecutorSettings();
+      vision_settings.has_value()) {
+    vision_settings->SetUseIrModel(gpu_use_ir_model);
+  }
+  if (auto& audio_settings = settings.GetMutableAudioExecutorSettings();
+      audio_settings.has_value()) {
+    audio_settings->SetUseIrModel(gpu_use_ir_model);
+  }
+}
+
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
     JNIEnv* env, Conversation* conversation, jobject visual_token_budget_obj) {
   std::optional<int> budget = GetOptionalInt(env, visual_token_budget_obj);
@@ -610,7 +630,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jint main_backend_num_threads, jint audio_backend_num_threads,
     jint max_vision_tokens_per_image, jint activation_data_type,
     jobject enable_ynnpack, jobject speculative_decoding_mode,
-    jobject speculative_lenience) {
+    jobject speculative_lenience, jobject gpu_use_ir_model) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -794,6 +814,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     }
   }
 
+  ApplyOptionalGpuUseIrModel(env, gpu_use_ir_model, *settings);
+
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
@@ -811,7 +833,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jobject enable_speculative_decoding, jobject enable_ynnpack,
     jint max_num_tokens, jobject speculative_decoding_mode,
-    jobject speculative_lenience) {
+    jobject speculative_lenience, jobject gpu_use_ir_model) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -946,6 +968,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
       settings->GetMutableMainExecutorSettings().SetBackendConfig(*cpu_config);
     }
   }
+
+  ApplyOptionalGpuUseIrModel(env, gpu_use_ir_model, *settings);
 
   auto& benchmark_params = settings->GetMutableBenchmarkParams();
   benchmark_params.set_num_prefill_tokens(prefill_tokens);

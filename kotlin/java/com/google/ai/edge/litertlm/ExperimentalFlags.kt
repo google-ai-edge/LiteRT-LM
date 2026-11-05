@@ -126,6 +126,21 @@ object ExperimentalFlags {
    * version might not have it.
    */
   var enableYnnpack: Boolean? = null
+
+  /**
+   * Experimental: whether the GPU backend initializes models with the IrModel pipeline instead of
+   * the legacy GraphFloat32 pipeline.
+   *
+   * This flag is experimental and may change or be removed without notice. It only affects
+   * executors (main, vision and audio) that run on [Backend.GPU]; it is ignored by other backends.
+   *
+   * If null, use the engine's default (currently disabled). If true, force enable the IrModel
+   * pipeline. If false, force disable it.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var gpuUseIrModel: Boolean? = null
 }
 
 // Mark this annotation itself as requiring opt-in

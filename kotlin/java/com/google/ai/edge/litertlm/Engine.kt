@@ -98,6 +98,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           @OptIn(ExperimentalApi::class) ExperimentalFlags.enableYnnpack,
           engineConfig.speculativeDecodingConfig?.mode?.value,
           engineConfig.speculativeDecodingConfig?.lenience,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.gpuUseIrModel,
         )
     }
   }

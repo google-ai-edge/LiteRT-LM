@@ -56,6 +56,8 @@ internal object LiteRtLmJni {
    *   speculative decoding config, or null to leave unset.
    * @param speculativeLenience The lenience of the engine's default speculative decoding config, or
    *   null to leave unset.
+   * @param gpuUseIrModel Experimental. Whether the GPU backend uses the IrModel initialization
+   *   pipeline. Only affects executors on the GPU backend. When null, use the engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -78,6 +80,7 @@ internal object LiteRtLmJni {
     enableYnnpack: Boolean? = null,
     speculativeDecodingMode: Int? = null,
     speculativeLenience: Float? = null,
+    gpuUseIrModel: Boolean? = null,
   ): Long
 
   /**
@@ -104,6 +107,8 @@ internal object LiteRtLmJni {
    *   speculative decoding config, or null to leave unset.
    * @param speculativeLenience The lenience of the engine's default speculative decoding config, or
    *   null to leave unset.
+   * @param gpuUseIrModel Experimental. Whether the GPU backend uses the IrModel initialization
+   *   pipeline. Only affects executors on the GPU backend. When null, use the engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateBenchmark(
@@ -122,6 +127,7 @@ internal object LiteRtLmJni {
     maxNumTokens: Int = -1,
     speculativeDecodingMode: Int? = null,
     speculativeLenience: Float? = null,
+    gpuUseIrModel: Boolean? = null,
   ): Long
 
   /**
