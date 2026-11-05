@@ -302,5 +302,59 @@ TEST_F(LitertStateTest, CopyContentsFromRejectsMismatchedNumEntries) {
 }
 #endif  // !_WIN32
 
+// `SetUpKV` compiles on CPU (`kHostMemory`), so this test verifies that
+// `CloneInternal` preserves `kPingPong` bank ordering and buffer isolation;
+// device-to-host snapshot conversion and in-place hardware restoration are
+// covered on GPU in
+// `RestoreHostStateSnapshotIntoGpuExecutorPreservesGpuBuffers`.
+TEST_F(LitertStateTest, DeepCopyToHostMemoryPreservesPingPongBanksAndContents) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kPingPong,
+                                  /*batch_size=*/1));
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto step,
+        kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    ASSERT_FALSE(step.input_buffers.empty());
+    ASSERT_FALSE(step.output_buffers.empty());
+    for (auto& [_, buffer] : step.input_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 3));
+    }
+    for (auto& [_, buffer] : step.output_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 11));
+    }
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LitertState> host_copy,
+                       kv_cache_->DeepCopyToHostMemoryForTesting());
+  ASSERT_NE(host_copy, nullptr);
+  EXPECT_TRUE(host_copy->IsHostMemory());
+  EXPECT_EQ(host_copy->GetBatchSize(), kv_cache_->GetBatchSize());
+  EXPECT_EQ(host_copy->GetNumEntries(), kv_cache_->GetNumEntries());
+
+  // Mutate original buffers after snapshot to verify deep-copy isolation.
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto mutated,
+        kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    for (auto& [_, buffer] : mutated.input_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 99));
+    }
+    for (auto& [_, buffer] : mutated.output_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 99));
+    }
+  }
+
+  ASSERT_OK_AND_ASSIGN(
+      auto copy_step,
+      host_copy->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  for (auto& [name, buffer] : copy_step.input_buffers) {
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 11)) << name;
+  }
+  for (auto& [name, buffer] : copy_step.output_buffers) {
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 3)) << name;
+  }
+}
+
 }  // namespace
 }  // namespace litert::lm

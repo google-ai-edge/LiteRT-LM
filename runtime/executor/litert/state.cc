@@ -196,22 +196,6 @@ absl::Status BroadcastAndCopyBuffer(TensorBuffer& dst, int dst_batch_size,
   return absl::OkStatus();
 }
 
-// Copies the contents of `src` into `dst`. Both buffers must have the same
-// packed size, but may have different buffer types.
-absl::Status CopyBufferContents(TensorBuffer& dst, const TensorBuffer& src) {
-  LITERT_ASSIGN_OR_RETURN(size_t src_size, src.PackedSize());
-  LITERT_ASSIGN_OR_RETURN(size_t dst_size, dst.PackedSize());
-  RET_CHECK_EQ(src_size, dst_size);
-  LITERT_ASSIGN_OR_RETURN(
-      auto src_lock_and_addr,
-      TensorBufferScopedLock::Create(src, TensorBuffer::LockMode::kRead));
-  LITERT_ASSIGN_OR_RETURN(
-      auto dst_lock_and_addr,
-      TensorBufferScopedLock::Create(dst, TensorBuffer::LockMode::kWrite));
-  memcpy(dst_lock_and_addr.second, src_lock_and_addr.second, dst_size);
-  return absl::OkStatus();
-}
-
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<LitertState>> LitertState::Create(
@@ -269,31 +253,50 @@ absl::Status LitertState::BroadcastAndCopyFrom(StateInterface& other) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<StateInterface>> LitertState::DeepCopy() const {
-  absl::flat_hash_map<std::string, StateBuffer> bank_1_state_buffers;
-  for (const auto& [name, state_buffer] : bank_1_state_buffers_) {
-    LITERT_ASSIGN_OR_RETURN(auto buf_copy,
-                            CopyTensorBuffer(env_, state_buffer.buffer));
-    bank_1_state_buffers[name] = StateBuffer{
+bool LitertState::ShouldSnapshotToHostMemory(TensorBufferType buffer_type) {
+  switch (buffer_type) {
+    case TensorBufferType::kAhwb:
+    case TensorBufferType::kIon:
+    case TensorBufferType::kDmaBuf:
+    case TensorBufferType::kFastRpc:
+      return true;
+    default:
+      return false;
+  }
+}
+
+absl::StatusOr<std::unique_ptr<LitertState>> LitertState::CloneInternal(
+    bool force_host_memory) const {
+  auto clone_state_buffer =
+      [this, force_host_memory](
+          const StateBuffer& state_buffer) -> absl::StatusOr<StateBuffer> {
+    LITERT_ASSIGN_OR_RETURN(TensorBufferType buffer_type,
+                            state_buffer.buffer.BufferType());
+    const bool to_host =
+        force_host_memory || ShouldSnapshotToHostMemory(buffer_type);
+    ABSL_ASSIGN_OR_RETURN(
+        TensorBuffer buf_copy,
+        to_host ? CopyTensorBufferToHostMemory(env_, state_buffer.buffer)
+                : CopyTensorBuffer(env_, state_buffer.buffer));
+    return StateBuffer{
         .buffer = std::move(buf_copy),
         .type = state_buffer.type,
         .dynamic_dim = state_buffer.dynamic_dim,
     };
+  };
+
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_state_buffers;
+  for (const auto& [name, state_buffer] : bank_1_state_buffers_) {
+    ABSL_ASSIGN_OR_RETURN(bank_1_state_buffers[name],
+                          clone_state_buffer(state_buffer));
   }
 
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_state_buffers;
   if (bank_2_state_buffers_.has_value()) {
-    bank_2_state_buffers.emplace();
-    auto& map = *bank_2_state_buffers;
+    auto& map = bank_2_state_buffers.emplace();
     for (const auto& [name, state_buffer] : *bank_2_state_buffers_) {
-      LITERT_ASSIGN_OR_RETURN(auto buf_copy,
-                              CopyTensorBuffer(env_, state_buffer.buffer));
-      map[name] = StateBuffer{
-          .buffer = std::move(buf_copy),
-          .type = state_buffer.type,
-          .dynamic_dim = state_buffer.dynamic_dim,
-      };
+      ABSL_ASSIGN_OR_RETURN(map[name], clone_state_buffer(state_buffer));
     }
   }
 
@@ -304,6 +307,15 @@ absl::StatusOr<std::unique_ptr<StateInterface>> LitertState::DeepCopy() const {
   copy->verified_gpu_inplace_signatures_ = verified_gpu_inplace_signatures_;
 
   return copy;
+}
+
+absl::StatusOr<std::unique_ptr<StateInterface>> LitertState::DeepCopy() const {
+  return CloneInternal();
+}
+
+absl::StatusOr<std::unique_ptr<LitertState>>
+LitertState::DeepCopyToHostMemoryForTesting() const {
+  return CloneInternal(/*force_host_memory=*/true);
 }
 
 bool LitertState::IsHostMemory() const {
@@ -341,7 +353,7 @@ absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
       auto it = src.find(name);
       RET_CHECK(it != src.end()) << "Missing state buffer: " << name;
       ABSL_RETURN_IF_ERROR(
-          CopyBufferContents(state_buffer.buffer, it->second.buffer));
+          CopyTensorBufferContents(state_buffer.buffer, it->second.buffer));
     }
     return absl::OkStatus();
   };

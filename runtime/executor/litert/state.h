@@ -28,6 +28,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/executor_metadata.pb.h"
 
@@ -76,6 +77,12 @@ class LitertState : public StateInterface {
 
   absl::StatusOr<std::unique_ptr<StateInterface>> DeepCopy() const override;
 
+  // Creates a deep copy of this state with all state buffers backed by host
+  // memory (`TensorBufferType::kHostMemory`), preserving allocation policy,
+  // metadata, and ping-pong bank state.
+  absl::StatusOr<std::unique_ptr<LitertState>> DeepCopyToHostMemoryForTesting()
+      const;
+
   bool Contains(absl::string_view tensor_name) const override;
 
   absl::Status Clear() override;
@@ -87,12 +94,8 @@ class LitertState : public StateInterface {
   // the ping-pong bank index from `other` into this state's existing buffers,
   // without reallocating them. `other` must have the same allocation policy,
   // batch size, number of entries and set of state buffers. The buffer types
-  // may differ (e.g. restoring a host memory snapshot into GPU buffers).
-  //
-  // This is currently used to restore host memory snapshots of Metal state
-  // buffers, which costs a full host -> device copy per restore.
-  // TODO: b/572018960 - Revisit once LiteRT supports keeping Metal snapshots
-  // in device memory so that restores can swap buffers instead of copying.
+  // may differ (e.g. restoring a host memory snapshot into NPU or GPU buffers
+  // in place without replacing bound hardware buffer handles).
   absl::Status CopyContentsFrom(const LitertState& other);
 
   // Resizes the KV cache to the given number of entries (sequence length).
@@ -121,6 +124,17 @@ class LitertState : public StateInterface {
     proto::StateBuffer::Type type = proto::StateBuffer::TYPE_UNSPECIFIED;
     std::optional<int> dynamic_dim;
   };
+
+  // Returns true if `DeepCopy()` snapshots buffers of `buffer_type` into host
+  // memory (`TensorBufferType::kHostMemory`) instead of allocating new hardware
+  // buffers of the same type.
+  static bool ShouldSnapshotToHostMemory(TensorBufferType buffer_type);
+
+  // Deep copies all state buffers. Buffers are snapshotted into host memory if
+  // `force_host_memory` is true or `ShouldSnapshotToHostMemory()` returns true
+  // for their buffer type.
+  absl::StatusOr<std::unique_ptr<LitertState>> CloneInternal(
+      bool force_host_memory = false) const;
 
   absl::Status SyncShapes(CompiledModel& compiled_model,
                           absl::string_view signature_name);

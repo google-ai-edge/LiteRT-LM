@@ -1684,11 +1684,21 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
   // batched `decode_state_` (`GetBatchSize() == output_heads`) which
   // `CloneState()` snapshots; single-head decoding (`output_heads == 1`) leaves
   // `decode_state_` null and shares `state_` across prefill and decode.
-  if (state->GetBatchSize() > 1) {
-    decode_state_ = std::move(state);
-  } else {
-    state_ = std::move(state);
+  std::unique_ptr<StateInterface>& target =
+      state->GetBatchSize() > 1 ? decode_state_ : state_;
+
+  // `CloneState()` snapshots shared NPU/DMA state buffers (`Ahwb`, `Ion`,
+  // `DmaBuf`, `FastRpc`) into host memory via `LitertState::DeepCopy()`. Copy
+  // such snapshots back into the existing bound hardware buffers in place so
+  // hardware delegates do not lose their bound device buffer handles.
+  auto* current = dynamic_cast<LitertState*>(target.get());
+  auto* restored = dynamic_cast<LitertState*>(state.get());
+  if (current != nullptr && restored != nullptr && !current->IsHostMemory() &&
+      restored->IsHostMemory()) {
+    return current->CopyContentsFrom(*restored);
   }
+
+  target = std::move(state);
   return absl::OkStatus();
 }
 
