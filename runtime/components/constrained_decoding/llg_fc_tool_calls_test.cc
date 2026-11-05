@@ -241,6 +241,49 @@ TEST_F(LlgFcToolCallsTest, TextOnlyRejectsEmptyAnswer) {
   AssertAccepts(*constraint, "A");
 }
 
+// The code fence is matched literally. The `|` in "<|tool_call>" isn't an
+// alternation, so answers that end with "<" or start with "tool_call>" are
+// fine. Text that only looks like a call isn't one, since only the fence starts
+// a call.
+TEST_F(LlgFcToolCallsTest, TextOnlyMatchesCodeFenceLiterally) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {"name": "get_weather"}
+  ])json");
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "1 <");
+  AssertAccepts(*constraint, "tool_call> starts the answer.");
+  AssertAccepts(*constraint, "call:get_weather{city:Paris}");
+
+  // The fence written with ordinary tokens is still the fence, because the
+  // parser reads the text.
+  std::vector<int> ids;
+  const std::vector<std::string> pieces = {"Sure ", "<",    "|", "tool",
+                                           "_",     "call", ">"};
+  for (const std::string& piece : pieces) {
+    ASSERT_OK_AND_ASSIGN(TokenIds piece_ids,
+                         tokenizer_->TextToTokenIds(piece));
+    ids.insert(ids.end(), piece_ids.begin(), piece_ids.end());
+  }
+  ASSERT_OK_AND_ASSIGN(
+      std::string text,
+      tokenizer_->TokenIdsToText(ids, /*skip_special_tokens=*/false));
+  ASSERT_EQ(text, "Sure <|tool_call>");
+  auto state = constraint->Start();
+  bool rejected = false;
+  for (int id : ids) {
+    ASSERT_OK_AND_ASSIGN(auto bitmap, constraint->ComputeBitmap(*state));
+    if (!bitmap->Get(id)) {
+      rejected = true;
+      break;
+    }
+    ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, id));
+  }
+  EXPECT_TRUE(rejected);
+}
+
 TEST_F(LlgFcToolCallsTest, TextAndOrFunctionCalls) {
   nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
     "name": "get_weather",

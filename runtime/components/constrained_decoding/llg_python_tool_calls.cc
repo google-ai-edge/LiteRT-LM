@@ -149,7 +149,10 @@ python_call: (%s) "\n"?
 std::string GetTextAndFunctionBlockRules(
     const std::vector<std::string>& tool_call_cases,
     absl::string_view code_fence_start) {
-  const std::string escaped_fence =
+  // Unlike the string literal, the regex has to escape the regex characters in
+  // the fence too, so that it matches the fence literally.
+  const std::string fence_regex = EscapeForLarkRegex(code_fence_start);
+  const std::string fence_literal =
       absl::StrReplaceAll(code_fence_start, {{"\n", "\\n"}});
   return absl::StrFormat(
       R"(
@@ -159,7 +162,7 @@ TEXT_AND_FENCE: SAFE_TEXT "%s"
 TEXT_CONTENT: /(.|\n)+/ & ~FORBIDDEN_CALL
 function_block: %s
 )",
-      escaped_fence, escaped_fence,
+      fence_regex, fence_literal,
       GetPythonFunctionBlock(tool_call_cases, "TEXT_AND_FENCE",
                              /*require_call=*/false));
 }

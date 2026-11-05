@@ -320,6 +320,36 @@ get_weather(location="Mountain View")
 ```)");
 }
 
+// "none": the answer can't contain the tool_code fence, and it can't be empty.
+// Text that only looks like a call isn't one, since only the fence starts a
+// call.
+TEST_F(LlgPythonToolCallsTest, TextOnlyRejectsCodeFence) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kTextOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "I can't check the weather right now.");
+  AssertAccepts(*constraint, "The get_weather tool can tell you.");
+  AssertAccepts(*constraint, R"(get_weather(location="Paris"))");
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="Paris")
+```)");
+  AssertRejects(*constraint, "");
+}
+
 // Gemma 3 uses this mode by default. The tool_code fence is plain text, so a
 // malformed call inside a tool_code block must not be accepted as free text.
 TEST_F(LlgPythonToolCallsTest, PythonTextAndFunctionCallsRejectsMalformedCall) {
@@ -389,6 +419,50 @@ get_weather(location="Rome")
 ```python
 print("hello")
 ```)");
+}
+
+// The code fence is matched literally, even if it has regex characters. As a
+// regex, "[TOOL_CALLS]" would match any one of its letters, so text like "OK"
+// would be rejected.
+TEST_F(LlgPythonToolCallsTest, TextAndFunctionCallsMatchCodeFenceLiterally) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  options.code_fence_start = "[TOOL_CALLS]";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "OK, it's sunny.");
+  AssertAccepts(*constraint, R"(OK.[TOOL_CALLS]get_weather(location="Paris")
+```)");
+  AssertRejects(*constraint, "OK.[TOOL_CALLS]Paris is sunny.");
+}
+
+// LLGuidance accepts every escape in the code fence, and the fence still
+// matches literally.
+TEST_F(LlgPythonToolCallsTest, TextOnlyEscapesEveryRegexCharacterInCodeFence) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {"name": "get_weather"}
+  ])json");
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextOnly);
+  options.code_fence_start = "\\/.^$|?*+()[]{}#&-~\r\t\n";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "Plain text.");
+  AssertRejects(*constraint, absl::StrCat("Text ", options.code_fence_start));
 }
 
 TEST_F(LlgPythonToolCallsTest, PythonQuotes) {

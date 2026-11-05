@@ -78,6 +78,12 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
                      const ToolFormatConfig& config,
                      std::vector<std::string>& tool_blocks);
 
+// Returns `text` escaped so that a Lark regex (`/.../`) matches it literally,
+// e.g. "<|tool_call>" becomes "<\|tool_call>".
+std::string EscapeForLarkRegex(absl::string_view text);
+
+// Returns the grammar for text-only answers, i.e. the "none" tool choice. The
+// answer can't contain the code fence, and it can't be empty.
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options);
 
 std::string GetRuleForType(const std::string& type,

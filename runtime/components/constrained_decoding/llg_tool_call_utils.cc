@@ -22,7 +22,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
-#include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
@@ -176,18 +175,62 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
   }
 }
 
+std::string EscapeForLarkRegex(absl::string_view text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (const char c : text) {
+    switch (c) {
+      case '\n':
+        escaped.append("\\n");
+        break;
+      case '\r':
+        escaped.append("\\r");
+        break;
+      case '\t':
+        escaped.append("\\t");
+        break;
+      // The regex_syntax meta characters, as escaped by regex_syntax::escape,
+      // and the `/` that ends a Lark regex.
+      case '\\':
+      case '/':
+      case '.':
+      case '^':
+      case '$':
+      case '|':
+      case '?':
+      case '*':
+      case '+':
+      case '(':
+      case ')':
+      case '[':
+      case ']':
+      case '{':
+      case '}':
+      case '#':
+      case '&':
+      case '-':
+      case '~':
+        escaped.push_back('\\');
+        escaped.push_back(c);
+        break;
+      default:
+        escaped.push_back(c);
+    }
+  }
+  return escaped;
+}
+
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options) {
-  std::string escaped_fence =
-      absl::StrReplaceAll(options.code_fence_start, {{"\n", "\\n"}});
-  // The answer needs at least one character, so the model can't end the turn
-  // without answering.
+  // The answer can't contain the code fence, so the model can't write a tool
+  // call as text. It needs at least one character, so the model can't end the
+  // turn without answering.
   return absl::StrFormat(
       R"(
 FORBIDDEN_CALL : /(.|\n)*%s(.|\n)*/
 SAFE_TEXT : /(.|\n)+/ & ~FORBIDDEN_CALL
 start : SAFE_TEXT
 )",
-      escaped_fence);
+      EscapeForLarkRegex(options.code_fence_start));
 }
 
 std::string GetRuleForType(const std::string& type,

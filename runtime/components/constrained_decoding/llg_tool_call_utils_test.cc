@@ -127,10 +127,12 @@ TEST(LlgToolCallUtilsTest, AppendOptionalProperties) {
 
 TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
   LlgConstraintsOptions options;
-  options.code_fence_start = "```";
+  options.code_fence_start = "<|tool_call>";
 
   std::string block = GetTextOnlyBlock(options);
   EXPECT_THAT(block, testing::HasSubstr("SAFE_TEXT : /(.|\\n)+/"));
+  // The fence is escaped, so it matches literally.
+  EXPECT_THAT(block, testing::HasSubstr(R"(/(.|\n)*<\|tool_call>(.|\n)*/)"));
 }
 
 TEST(LlgToolCallUtilsTest, SanitizeLarkRuleName) {
@@ -150,6 +152,14 @@ TEST(LlgToolCallUtilsTest, SanitizeLarkRuleName) {
                          SanitizeLarkRuleName("b")),
             absl::StrCat(SanitizeLarkRuleName("a"), "-req-",
                          SanitizeLarkRuleName("req_b")));
+}
+
+TEST(LlgToolCallUtilsTest, EscapeForLarkRegex) {
+  EXPECT_EQ(EscapeForLarkRegex("```tool_code\n"), "```tool_code\\n");
+  EXPECT_EQ(EscapeForLarkRegex("<|tool_call>"), "<\\|tool_call>");
+  EXPECT_EQ(EscapeForLarkRegex("\r\t"), "\\r\\t");
+  EXPECT_EQ(EscapeForLarkRegex(R"(\/.^$|?*+()[]{}#&-~)"),
+            R"(\\\/\.\^\$\|\?\*\+\(\)\[\]\{\}\#\&\-\~)");
 }
 
 }  // namespace
