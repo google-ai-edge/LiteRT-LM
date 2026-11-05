@@ -626,6 +626,108 @@ class ConversationTests: XCTestCase {
     XCTAssertFalse(response.contents.isEmpty)
   }
 
+  private static let allToolChoices: [ToolChoice] = [
+    .auto(),
+    .none(),
+    .required(),
+    .forcedFunction(name: "get_weather"),
+    .allowedTools(names: ["get_weather"]),
+    .allowedTools(names: ["get_weather"], required: true),
+  ]
+
+  private func functionReferenceJson(_ name: String) -> [String: Any] {
+    return ["type": "function", "function": ["name": name]]
+  }
+
+  private func parseJsonObject(
+    _ jsonString: String, file: StaticString = #filePath, line: UInt = #line
+  ) throws -> NSDictionary {
+    let data = try XCTUnwrap(jsonString.data(using: .utf8), file: file, line: line)
+    return try XCTUnwrap(
+      JSONSerialization.jsonObject(with: data) as? NSDictionary, file: file, line: line)
+  }
+
+  func testToolChoiceJsonString() throws {
+    XCTAssertEqual(try ToolChoice.auto().jsonString(), "\"auto\"")
+    XCTAssertEqual(try ToolChoice.none().jsonString(), "\"none\"")
+    XCTAssertEqual(try ToolChoice.required().jsonString(), "\"required\"")
+    XCTAssertEqual(
+      try parseJsonObject(ToolChoice.forcedFunction(name: "get_weather").jsonString()),
+      functionReferenceJson("get_weather") as NSDictionary)
+
+    let allowedTools: [String: Any] = [
+      "mode": "auto",
+      "tools": [functionReferenceJson("get_weather"), functionReferenceJson("get_time")],
+    ]
+    XCTAssertEqual(
+      try parseJsonObject(
+        ToolChoice.allowedTools(names: ["get_weather", "get_time"]).jsonString()),
+      ["type": "allowed_tools", "allowed_tools": allowedTools] as NSDictionary)
+
+    let requiredAllowedTools: [String: Any] = [
+      "mode": "required",
+      "tools": [functionReferenceJson("get_weather")],
+    ]
+    XCTAssertEqual(
+      try parseJsonObject(
+        ToolChoice.allowedTools(names: ["get_weather"], required: true).jsonString()),
+      ["type": "allowed_tools", "allowed_tools": requiredAllowedTools] as NSDictionary)
+  }
+
+  func testToolChoiceNoneIsNotOptionalNone() {
+    // `.none()` can't be `Optional.none`, which isn't callable.
+    let toolChoice: ToolChoice? = .none()
+    XCTAssertEqual(toolChoice, ToolChoice.none())
+  }
+
+  func testSendMessageWithToolChoice() async throws {
+    // Without tools, the tool choice is not used, but it is still passed to the native layer.
+    for toolChoice in Self.allToolChoices {
+      let conversation = try await self.engine.createConversation(with: ConversationConfig())
+      let response = try await conversation.sendMessage(Message("Hello"), toolChoice: toolChoice)
+      XCTAssertFalse(response.contents.isEmpty, "toolChoice: \(toolChoice)")
+    }
+  }
+
+  func testSendMessageStreamWithToolChoice() async throws {
+    // Without tools, the tool choice is not used, but it is still passed to the native layer.
+    for toolChoice in Self.allToolChoices {
+      let conversation = try await self.engine.createConversation(with: ConversationConfig())
+      var chunkCount = 0
+      for try await _ in conversation.sendMessageStream(Message("Hello"), toolChoice: toolChoice) {
+        chunkCount += 1
+      }
+      XCTAssertGreaterThan(chunkCount, 0, "toolChoice: \(toolChoice)")
+    }
+  }
+
+  func testSendMessageWithInvalidToolChoiceThrows() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    do {
+      _ = try await conversation.sendMessage(
+        Message("Hello"), toolChoice: .forcedFunction(name: ""))
+      XCTFail("Expected an error for a forced function without a name.")
+    } catch LiteRTLMError.conversation(.invalidResponse(let details)) {
+      XCTAssertTrue(
+        details.contains("litert_lm_conversation_optional_args_set_tool_choice"), details)
+    }
+  }
+
+  func testSendMessageStreamWithInvalidToolChoiceThrows() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    do {
+      for try await _ in conversation.sendMessageStream(
+        Message("Hello"), toolChoice: .allowedTools(names: []))
+      {
+        XCTFail("Expected an error for allowed tools without names, but got a chunk.")
+      }
+      XCTFail("Expected an error for allowed tools without names.")
+    } catch LiteRTLMError.conversation(.invalidResponse(let details)) {
+      XCTAssertTrue(
+        details.contains("litert_lm_conversation_optional_args_set_tool_choice"), details)
+    }
+  }
+
   func testConversationTeardownAndEngineRetentionDoesNotCrash() async throws {
     // swift-format-ignore
     let modelResource =

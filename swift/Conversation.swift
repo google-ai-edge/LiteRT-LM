@@ -134,6 +134,9 @@ public final class Conversation: Sendable {
   /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
+  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for
+  ///   this message. It is only used if the conversation has tools and was created with
+  ///   `ExperimentalFlags.enableConversationConstrainedDecoding` set to true.
   /// - Returns: The model's response message.
   /// - Throws: A `LiteRTLMError` if sending the message fails or the model
   ///   returns an invalid response.
@@ -145,7 +148,8 @@ public final class Conversation: Sendable {
     suppressTokensConfig: SuppressTokensConfig? = nil,
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
-    responseFormat: ResponseFormat? = nil
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil
   ) async throws -> Message {
     let handle = try checkIsAlive()
 
@@ -165,7 +169,10 @@ public final class Conversation: Sendable {
         suppressTokensConfig: suppressTokensConfig,
         maxOutputTokens: maxOutputTokens,
         thinkingConfig: i == 0 ? thinkingConfig : nil,
-        responseFormat: responseFormat
+        responseFormat: responseFormat,
+        // The tool choice applies to the first message only, to avoid endless recursive tool
+        // calls (e.g. with `.required()`). For finer control, disable automatic tool calling.
+        toolChoice: i == 0 ? toolChoice : nil
       )
 
       guard let toolCalls = responseJson["tool_calls"] as? [[String: Any]] else {
@@ -193,7 +200,8 @@ public final class Conversation: Sendable {
     suppressTokensConfig: SuppressTokensConfig? = nil,
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
-    responseFormat: ResponseFormat? = nil
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil
   ) throws
     -> (responseJson: [String: Any], responseString: String)
   {
@@ -215,7 +223,8 @@ public final class Conversation: Sendable {
       suppressTokensConfig: suppressTokensConfig,
       maxOutputTokens: maxOutputTokens,
       thinkingConfig: thinkingConfig,
-      responseFormat: responseFormat
+      responseFormat: responseFormat,
+      toolChoice: toolChoice
     )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
 
@@ -257,6 +266,7 @@ public final class Conversation: Sendable {
   ///   - maxOutputTokens: Optional maximum number of output tokens.
   ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
   ///   - responseFormat: Optional response format for constrained decoding.
+  ///   - toolChoice: Optional choice of whether and which tools the model may call.
   /// - Returns: The native optional args handle. The caller must delete it with
   ///   `litert_lm_conversation_optional_args_delete`.
   /// - Throws: A `LiteRTLMError` if creating the optional args or any native setter fails. The
@@ -268,7 +278,8 @@ public final class Conversation: Sendable {
     suppressTokensConfig: SuppressTokensConfig?,
     maxOutputTokens: Int?,
     thinkingConfig: ThinkingConfig?,
-    responseFormat: ResponseFormat?
+    responseFormat: ResponseFormat?,
+    toolChoice: ToolChoice?
   ) throws -> OpaquePointer {
     let optionalArgsError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
     let optionalArgs = try LiteRTLMError.create(
@@ -399,6 +410,12 @@ public final class Conversation: Sendable {
             optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern),
           "litert_lm_conversation_optional_args_set_constraint", optionalArgsError)
       }
+      if let toolChoice = toolChoice {
+        let toolChoiceJson = try toolChoice.jsonString()
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_tool_choice(optionalArgs, toolChoiceJson),
+          "litert_lm_conversation_optional_args_set_tool_choice", optionalArgsError)
+      }
       return optionalArgs
     } catch {
       litert_lm_conversation_optional_args_delete(optionalArgs)
@@ -451,6 +468,9 @@ public final class Conversation: Sendable {
   /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
+  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for
+  ///   this message. It is only used if the conversation has tools and was created with
+  ///   `ExperimentalFlags.enableConversationConstrainedDecoding` set to true.
   /// - Returns: An async throwing stream of `Message` chunks.
   public func sendMessageStream(
     _ message: Message,
@@ -460,7 +480,8 @@ public final class Conversation: Sendable {
     suppressTokensConfig: SuppressTokensConfig? = nil,
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
-    responseFormat: ResponseFormat? = nil
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil
   ) -> AsyncThrowingStream<Message, Error> {
     return AsyncThrowingStream { continuation in
       do {
@@ -476,7 +497,9 @@ public final class Conversation: Sendable {
           noRepeatNgramConfig: noRepeatNgramConfig,
           suppressTokensConfig: suppressTokensConfig,
           maxOutputTokens: maxOutputTokens,
-          responseFormat: responseFormat
+          responseFormat: responseFormat,
+          extraContext: extraContext,
+          thinkingConfig: thinkingConfig
         )
 
         try self.sendToStream(
@@ -489,6 +512,7 @@ public final class Conversation: Sendable {
           maxOutputTokens: maxOutputTokens,
           thinkingConfig: thinkingConfig,
           responseFormat: responseFormat,
+          toolChoice: toolChoice,
           context: context
         )
       } catch {
@@ -509,6 +533,7 @@ public final class Conversation: Sendable {
   ///   - repetitionPenaltyConfig: Optional configuration for repetition penalty.
   ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
   ///   - maxOutputTokens: Optional maximum number of output tokens.
+  ///   - toolChoice: Optional choice of whether and which tools the model may call.
   ///   - context: The `StreamContext` containing the `AsyncThrowingStream.Continuation`
   ///     and other state for the streaming process.
   /// - Throws: A `LiteRTLMError` if the message fails to send or the response is invalid.
@@ -523,6 +548,7 @@ public final class Conversation: Sendable {
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
     responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil,
     context: StreamContext
   ) throws {
     let messageData = try JSONSerialization.data(withJSONObject: messageJson)
@@ -544,7 +570,8 @@ public final class Conversation: Sendable {
       suppressTokensConfig: suppressTokensConfig,
       maxOutputTokens: maxOutputTokens,
       thinkingConfig: thinkingConfig,
-      responseFormat: responseFormat
+      responseFormat: responseFormat,
+      toolChoice: toolChoice
     )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
 
@@ -817,6 +844,10 @@ public final class Conversation: Sendable {
     let suppressTokensConfig: SuppressTokensConfig?
     let maxOutputTokens: Int?
     let responseFormat: ResponseFormat?
+    // Reused when sending tool responses, so the whole turn renders with the same context and
+    // thinking settings (e.g. enable_thinking) as the original message.
+    let extraContext: [String: Any]?
+    let thinkingConfig: ThinkingConfig?
 
     init(
       continuation: AsyncThrowingStream<Message, Error>.Continuation,
@@ -825,7 +856,9 @@ public final class Conversation: Sendable {
       noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
       suppressTokensConfig: SuppressTokensConfig? = nil,
       maxOutputTokens: Int? = nil,
-      responseFormat: ResponseFormat? = nil
+      responseFormat: ResponseFormat? = nil,
+      extraContext: [String: Any]? = nil,
+      thinkingConfig: ThinkingConfig? = nil
     ) {
       self.continuation = continuation
       self.conversation = conversation
@@ -834,6 +867,8 @@ public final class Conversation: Sendable {
       self.suppressTokensConfig = suppressTokensConfig
       self.maxOutputTokens = maxOutputTokens
       self.responseFormat = responseFormat
+      self.extraContext = extraContext
+      self.thinkingConfig = thinkingConfig
     }
   }
 }
@@ -919,13 +954,17 @@ private func streamCallback(
       Task {
         do {
           let toolResponseJson = try await context.conversation.handleToolCalls(toolCalls)
+          // The tool choice applies to the first message only, to avoid endless recursive tool
+          // calls. For finer control, disable automatic tool calling.
           try context.conversation.sendToStream(
             handle: context.conversation.checkIsAlive(),
             messageJson: toolResponseJson,
+            extraContext: context.extraContext,
             repetitionPenaltyConfig: context.repetitionPenaltyConfig,
             noRepeatNgramConfig: context.noRepeatNgramConfig,
             suppressTokensConfig: context.suppressTokensConfig,
             maxOutputTokens: context.maxOutputTokens,
+            thinkingConfig: context.thinkingConfig,
             responseFormat: context.responseFormat,
             context: context
           )

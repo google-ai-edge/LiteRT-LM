@@ -35,6 +35,7 @@ LITERT_LM_SWIFT_SRCS = [
     "ModelInfo.swift",
     "ResponseFormat.swift",
     "Tool.swift",
+    "ToolChoice.swift",
     "ToolManager.swift",
 ]
 
