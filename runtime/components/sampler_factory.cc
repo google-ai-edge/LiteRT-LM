@@ -886,7 +886,8 @@ proto::SamplerParameters GreedySamplerParams() {
 }
 
 bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
-                             const std::optional<proto::SamplerParameters>& b) {
+                             const std::optional<proto::SamplerParameters>& b,
+                             bool ignore_seed) {
   const auto is_default = [](const std::optional<proto::SamplerParameters>& p) {
     return !p.has_value() ||
            p->type() == proto::SamplerParameters::TYPE_UNSPECIFIED;
@@ -897,7 +898,8 @@ bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
     return a_is_default == b_is_default;
   }
   return a->type() == b->type() && a->k() == b->k() && a->p() == b->p() &&
-         a->temperature() == b->temperature() && a->seed() == b->seed() &&
+         a->temperature() == b->temperature() &&
+         (ignore_seed || a->seed() == b->seed()) &&
          a->backend() == b->backend() &&
          a->compute_exact_log_probs() == b->compute_exact_log_probs();
 }

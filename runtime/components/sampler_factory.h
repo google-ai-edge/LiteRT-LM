@@ -83,12 +83,15 @@ proto::SamplerParameters GreedySamplerParams();
 // parameters and parameters with type `TYPE_UNSPECIFIED` both select the
 // default sampler, so they compare equal to each other whatever their other
 // fields hold. Otherwise all fields are compared; an unset `seed` equals seed
-// 0, which is how the samplers read it.
+// 0, which is how the samplers read it. `ignore_seed` skips the seed, which
+// only picks the random stream, not the sampled distribution or the sampler's
+// cost.
 //
 // Note: the fields are compared one by one; update this function when a field
 // is added to `SamplerParameters`.
 bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
-                             const std::optional<proto::SamplerParameters>& b);
+                             const std::optional<proto::SamplerParameters>& b,
+                             bool ignore_seed = false);
 
 }  // namespace litert::lm
 

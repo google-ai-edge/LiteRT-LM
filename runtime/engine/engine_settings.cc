@@ -15,6 +15,7 @@
 #include "runtime/engine/engine_settings.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -80,6 +81,24 @@ absl::Status ValidateSpeculativeDecodingConfig(
       !(*config.lenience >= 0.0f && *config.lenience <= 1.0f)) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Speculative lenience must be in [0, 1], but got: ", *config.lenience));
+  }
+  return absl::OkStatus();
+}
+
+// Returns an InvalidArgument error if `sampler_params` holds a `p` outside
+// [0, 1] or a `temperature` that is negative or not finite (NaN included).
+// `k` is not checked because it is 0 for sampler types that ignore it.
+absl::Status ValidateSamplerParams(
+    const proto::SamplerParameters& sampler_params) {
+  const float p = sampler_params.p();
+  if (!(p >= 0.0f && p <= 1.0f)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Sampler top-p must be in [0, 1], but got: ", p));
+  }
+  const float temperature = sampler_params.temperature();
+  if (!(temperature >= 0.0f && std::isfinite(temperature))) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Sampler temperature must be finite and >= 0, but got: ", temperature));
   }
   return absl::OkStatus();
 }
@@ -913,6 +932,8 @@ absl::Status SessionConfig::MaybeUpdateAndValidate(
         "Number of output candidates need to be at least 1, but got: ",
         num_output_candidates_));
   }
+  // Runs after the merge above so that it also covers the model's defaults.
+  ABSL_RETURN_IF_ERROR(ValidateSamplerParams(sampler_params_));
   const Backend main_backend =
       engine_settings.GetMainExecutorSettings().GetBackend();
   const auto registered_traits =

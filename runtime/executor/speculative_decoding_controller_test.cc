@@ -81,12 +81,16 @@ proto::SamplerParameters TopP(int k) {
 // Runs `num_steps` adaptive steps in which a speculative round costs 50 ms and
 // emits a single token while a plain step costs 10 ms, so that speculation does
 // not pay off. Returns the number of regime changes reported by `Observe()`.
-int64_t RunUnprofitableAdaptiveSteps(SpeculativeDecodingController& controller,
-                                     FakeDrafter& drafter, int num_steps) {
+int64_t RunUnprofitableAdaptiveSteps(
+    SpeculativeDecodingController& controller, FakeDrafter& drafter,
+    int num_steps,
+    const std::optional<proto::SamplerParameters>& sampler_params =
+        std::nullopt) {
   int64_t reported_switches = 0;
   for (int i = 0; i < num_steps; ++i) {
     absl::StatusOr<Decision> decision =
-        Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter);
+        Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter,
+               sampler_params);
     if (!decision.ok()) {
       ADD_FAILURE() << decision.status();
       break;
@@ -344,6 +348,38 @@ TEST(SpeculativeDecodingControllerTest, ResetsEstimatesOnlyOnSamplerChange) {
   EXPECT_EQ(controller.gating_policy()->stats().estimate_resets, 1);
   decide(TopP(/*k=*/1));
   EXPECT_EQ(controller.gating_policy()->stats().estimate_resets, 2);
+
+  // The seed only picks the random stream, so sessions that differ only in
+  // their seed share the estimates, even when their steps interleave.
+  proto::SamplerParameters seeded = TopP(/*k=*/1);
+  for (const int seed : {1, 2, 1}) {
+    seeded.set_seed(seed);
+    decide(seeded);
+  }
+  EXPECT_EQ(controller.gating_policy()->stats().estimate_resets, 2);
+}
+
+// Hosts such as Chrome give each session a fresh random seed. A new session
+// drops the previous conversation's yield estimate but must keep the round
+// cost, which depends only on the device and the model (b/578987294).
+TEST(SpeculativeDecodingControllerTest, NewSessionSeedKeepsRoundCostEstimate) {
+  SpeculativeDecodingController controller;
+  FakeDrafter drafter;
+  proto::SamplerParameters params = TopP(/*k=*/40);
+  params.set_seed(1);
+  EXPECT_EQ(RunUnprofitableAdaptiveSteps(controller, drafter, 40, params), 1);
+  ASSERT_NE(controller.gating_policy(), nullptr);
+  const double round_ms = controller.gating_policy()->stats().ema_round_ms;
+  ASSERT_GT(round_ms, 0);
+
+  controller.OnPrefill(/*new_conversation=*/true);
+  params.set_seed(2);
+  ASSERT_OK(
+      Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter, params));
+  const MtpGatingStats stats = controller.gating_policy()->stats();
+  EXPECT_EQ(stats.estimate_resets, 0);
+  EXPECT_EQ(stats.conversation_resets, 1);
+  EXPECT_EQ(stats.ema_round_ms, round_ms);
 }
 
 TEST(SpeculativeDecodingControllerTest, OnPrefillNotifiesPolicy) {

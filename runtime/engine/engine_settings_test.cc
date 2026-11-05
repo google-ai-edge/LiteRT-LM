@@ -1752,6 +1752,58 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateChecksSpeculativeLenience) {
   }
 }
 
+TEST(SessionConfigTest, MaybeUpdateAndValidateRejectsInvalidSamplerParams) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  struct InvalidParams {
+    float p;
+    float temperature;
+  };
+  const InvalidParams invalid_params[] = {
+      {.p = kNan, .temperature = 1.0f},   {.p = -0.1f, .temperature = 1.0f},
+      {.p = 1.1f, .temperature = 1.0f},   {.p = 0.95f, .temperature = kNan},
+      {.p = 0.95f, .temperature = -1.0f}, {.p = 0.95f, .temperature = kInf},
+  };
+
+  for (const InvalidParams& invalid : invalid_params) {
+    SCOPED_TRACE(
+        absl::StrCat("p: ", invalid.p, ", temperature: ", invalid.temperature));
+    // Invalid params set on the session.
+    auto settings = EngineSettings::CreateDefault(*model_assets);
+    ASSERT_OK(settings);
+    proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+    ASSERT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+    SessionConfig session_config = SessionConfig::CreateDefault();
+    proto::SamplerParameters& params = session_config.GetMutableSamplerParams();
+    params.set_type(proto::SamplerParameters::TOP_P);
+    params.set_k(40);
+    params.set_p(invalid.p);
+    params.set_temperature(invalid.temperature);
+    EXPECT_THAT(session_config.MaybeUpdateAndValidate(*settings),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+
+    // Invalid params inherited from the model's default sampler parameters.
+    auto model_settings = EngineSettings::CreateDefault(*model_assets);
+    ASSERT_OK(model_settings);
+    proto::LlmMetadata invalid_metadata = CreateLlmMetadata();
+    invalid_metadata.mutable_sampler_params()->set_p(invalid.p);
+    invalid_metadata.mutable_sampler_params()->set_temperature(
+        invalid.temperature);
+    ASSERT_OK(
+        model_settings->MaybeUpdateAndValidate(&tokenizer, &invalid_metadata));
+    SessionConfig default_config = SessionConfig::CreateDefault();
+    EXPECT_THAT(default_config.MaybeUpdateAndValidate(*model_settings),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+}
+
 TEST(SessionConfigTest,
      MaybeUpdateAndValidatePromptTemplates_NoSessionTemplate) {
   auto model_assets = ModelAssets::Create("test_model_path_1");

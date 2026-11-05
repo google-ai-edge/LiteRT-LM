@@ -91,9 +91,11 @@ SpeculativeDecodingController::DecideAdaptive(
     ABSL_LOG(INFO) << "Adaptive speculative decoding enabled with "
                    << gating_policy_->config();
     gating_sampler_params_ = sampler_params;
-  } else if (!SamplerParamsEquivalent(sampler_params, gating_sampler_params_)) {
+  } else if (!SamplerParamsEquivalent(sampler_params, gating_sampler_params_,
+                                      /*ignore_seed=*/true)) {
     // The speculative estimates are only kept while the sampler configuration
-    // is unchanged (e.g. across turns of the same session).
+    // is unchanged (e.g. across turns of the same session, or across sessions
+    // that differ only in their seed).
     gating_policy_->ResetEstimates();
     gating_sampler_params_ = sampler_params;
   }

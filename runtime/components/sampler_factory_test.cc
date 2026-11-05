@@ -271,5 +271,24 @@ TEST(SamplerFactoryTest, SamplerParamsEquivalentComparesEveryField) {
   EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
 }
 
+TEST(SamplerFactoryTest, SamplerParamsEquivalentCanIgnoreSeed) {
+  proto::SamplerParameters base;
+  base.set_type(proto::SamplerParameters::TOP_P);
+  base.set_k(40);
+  base.set_p(0.95f);
+  base.set_temperature(1.0f);
+  base.set_seed(7);
+
+  proto::SamplerParameters changed = base;
+  changed.set_seed(8);
+  EXPECT_TRUE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
+  changed.clear_seed();
+  EXPECT_TRUE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
+
+  // The other fields are still compared.
+  changed.set_k(10);
+  EXPECT_FALSE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
+}
+
 }  // namespace
 }  // namespace litert::lm

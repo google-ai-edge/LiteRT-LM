@@ -78,8 +78,8 @@ class SpeculativeDecodingController {
   //   drafter and it is not loaded yet.
   // - `sampler_params`: the session's sampler parameters. The sampler affects
   //   the cost and acceptance of speculative rounds, so the adaptive policy's
-  //   speculative estimates are reset when they change (see
-  //   `SamplerParamsEquivalent()`).
+  //   speculative estimates are reset when they change. The seed is ignored
+  //   (see `SamplerParamsEquivalent()`).
   // - `constrained`: whether a decoding constraint is active. The constraint
   //   state is not carried across plain and speculative steps, so
   //   `SpeculativeDecodingMode::kAdaptive` does not gate constrained steps and
