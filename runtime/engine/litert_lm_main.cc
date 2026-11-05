@@ -68,6 +68,7 @@ using ::litert::lm::EngineSettings;
 using ::litert::lm::InputData;
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
+using ::litert::lm::OptionalArgs;
 using ::nlohmann::json;
 
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
@@ -181,11 +182,18 @@ absl::Status MainHelper(int argc, char** argv) {
   std::cout << "input_prompt: " << input_prompt << std::endl;
   content_list.push_back({{"type", "text"}, {"text", input_prompt}});
 
+  // Limit the number of decoded tokens when --max_output_tokens is positive.
+  OptionalArgs optional_args;
+  const int max_output_tokens = absl::GetFlag(FLAGS_max_output_tokens);
+  if (max_output_tokens > 0) {
+    optional_args.max_output_tokens = max_output_tokens;
+  }
+
   // Send the message and wait for the response, asynchronously log the
   // response.
   ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
       json::object({{"role", "user"}, {"content", content_list}}),
-      CreateMessageCallback()));
+      CreateMessageCallback(), std::move(optional_args)));
   ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(absl::Minutes(10)));
 
   // Print the benchmark info.
