@@ -747,6 +747,7 @@ class AbstractConversation(abc.ABC):
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
       response_format: ResponseFormat | None = None,
+      tool_choice: str | collections.abc.Mapping[str, Any] | None = None,
   ) -> Message:
     """Sends a message and returns the response.
 
@@ -767,6 +768,13 @@ class AbstractConversation(abc.ABC):
         thinking_config: Configuration for thinking/reasoning generation.
         response_format: The expected format of the response. If provided, the
           response will be constrained to this format.
+        tool_choice: Controls which (if any) tool the model calls for this
+          message. One of "auto", "none", "required", a forced function like
+          {"type": "function", "function": {"name": ...}}, or allowed tools like
+          {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools":
+          [...]}}. Only used when constrained decoding is enabled and the
+          conversation has tools. With automatic tool calling, it doesn't apply
+          to the tool responses sent back to the model.
 
     Returns:
         A Message containing the model's response.
@@ -783,6 +791,7 @@ class AbstractConversation(abc.ABC):
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
       response_format: ResponseFormat | None = None,
+      tool_choice: str | collections.abc.Mapping[str, Any] | None = None,
   ) -> collections.abc.Iterator[Message]:
     """Sends a message and streams the response.
 
@@ -803,6 +812,13 @@ class AbstractConversation(abc.ABC):
         thinking_config: Configuration for thinking/reasoning generation.
         response_format: The expected format of the response. If provided, the
           response will be constrained to this format.
+        tool_choice: Controls which (if any) tool the model calls for this
+          message. One of "auto", "none", "required", a forced function like
+          {"type": "function", "function": {"name": ...}}, or allowed tools like
+          {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools":
+          [...]}}. Only used when constrained decoding is enabled and the
+          conversation has tools. With automatic tool calling, it doesn't apply
+          to the tool responses sent back to the model.
 
     Returns:
         An iterator yielding Message chunks of the model's response.

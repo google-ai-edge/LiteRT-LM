@@ -201,6 +201,7 @@ def _handle_chat_completions(
     max_completion_tokens: int | None = None,
     stream_options: dict[str, Any] | None = None,
     response_format: litert_lm.ResponseFormat | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
   """Generates responses for the OpenAI Chat Completions endpoint.
 
@@ -226,6 +227,8 @@ def _handle_chat_completions(
     max_completion_tokens: The maximum number of tokens to generate.
     stream_options: Options for streaming, such as include_usage.
     response_format: Optional response format for constrained decoding.
+    tool_choice: Optional OpenAI `tool_choice` for this request: "auto", "none",
+      "required", a function object, or an allowed_tools object.
 
   Returns:
     The generated LiteRT-LM assistant message dictionary on success, or None if
@@ -239,6 +242,7 @@ def _handle_chat_completions(
         prompt,
         max_output_tokens=max_completion_tokens,
         response_format=response_format,
+        tool_choice=tool_choice,
     ):
       if chunk.channels:
         reasoning_tokens += 1
@@ -312,6 +316,7 @@ def _handle_chat_completions(
       max_completion_tokens=max_completion_tokens,
       include_usage=include_usage,
       response_format=response_format,
+      tool_choice=tool_choice,
   )
 
 
@@ -473,6 +478,7 @@ def handle_post_chat_completions(handler: Any) -> None:
           max_completion_tokens=max_completion_tokens,
           stream_options=stream_options,
           response_format=response_format,
+          tool_choice=body.get("tool_choice"),
       )
       save_assistant(assistant_message)
   except Exception as e:  # pylint: disable=broad-exception-caught

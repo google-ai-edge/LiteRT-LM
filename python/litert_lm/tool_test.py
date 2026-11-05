@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Sequence
+import json
 import os
 import pathlib
 from unittest import mock
@@ -309,6 +310,17 @@ class ToolTest(parameterized.TestCase):
       engine.create_conversation(tools=[MalformedTool()])
 
 
+# The model calls `my_tool`, then answers after the tool response.
+_TOOL_CALL_RESPONSE = {
+    "role": "assistant",
+    "tool_calls": [{"function": {"name": "my_tool", "arguments": {}}}],
+}
+_ANSWER_RESPONSE = {
+    "role": "assistant",
+    "content": [{"type": "text", "text": "It is sunny."}],
+}
+
+
 class ConversationToolHandlingTest(absltest.TestCase):
 
   def setUp(self):
@@ -426,6 +438,92 @@ class ConversationToolHandlingTest(absltest.TestCase):
 
     self.mock_tool.execute.assert_not_called()
     self.assertIsNone(tool_responses)
+
+  def _create_conversation_with_lib(self):
+    return litert_lm.conversation.Conversation(
+        lib=mock.MagicMock(),
+        conv_ptr=1,
+        tools_map={"my_tool": self.mock_tool},
+    )
+
+  def test_send_message_applies_tool_choice_only_to_first_turn(self):
+    conv = self._create_conversation_with_lib()
+    create_optional_args = self.enter_context(
+        mock.patch.object(conv, "_create_optional_args", return_value=None)
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation, "create_checked", return_value=1
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation,
+            "get_checked",
+            side_effect=[
+                json.dumps(_TOOL_CALL_RESPONSE).encode(),
+                json.dumps(_ANSWER_RESPONSE).encode(),
+            ],
+        )
+    )
+
+    conv.send_message("What's the weather?", tool_choice="required")
+
+    # The tool response is sent without the tool choice, so the model can
+    # answer instead of having to call a tool again.
+    self.mock_tool.execute.assert_called_once_with({})
+    self.assertEqual(
+        [c.kwargs["tool_choice"] for c in create_optional_args.call_args_list],
+        ["required", None],
+    )
+
+  def test_send_message_async_applies_tool_choice_only_to_first_turn(self):
+    conv = self._create_conversation_with_lib()
+    chunks = iter([
+        json.dumps(_TOOL_CALL_RESPONSE).encode(),
+        json.dumps(_ANSWER_RESPONSE).encode(),
+    ])
+
+    def send_message_stream(conv_ptr, message, context, args, callback, data):
+      del conv_ptr, message, context, args  # Unused.
+      callback(data, 1)  # Each turn has one final chunk.
+      return 0
+
+    def get_checked(lib, name, restype, chunk_ptr):
+      del lib, restype, chunk_ptr  # Unused.
+      if name == "litert_lm_stream_chunk_get_text":
+        return next(chunks)
+      if name == "litert_lm_stream_chunk_is_final":
+        return True
+      return None  # No error.
+
+    conv._lib.litert_lm_conversation_send_message_stream.side_effect = (
+        send_message_stream
+    )
+    create_optional_args = self.enter_context(
+        mock.patch.object(conv, "_create_optional_args", return_value=None)
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation, "get_checked", side_effect=get_checked
+        )
+    )
+    # Calls the callback directly instead of through ctypes.
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation,
+            "STREAM_CALLBACK_TYPE",
+            side_effect=lambda callback: callback,
+        )
+    )
+
+    list(conv.send_message_async("What's the weather?", tool_choice="required"))
+
+    self.mock_tool.execute.assert_called_once_with({})
+    self.assertEqual(
+        [c.kwargs["tool_choice"] for c in create_optional_args.call_args_list],
+        ["required", None],
+    )
 
 
 if __name__ == "__main__":

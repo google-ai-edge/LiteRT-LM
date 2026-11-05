@@ -95,6 +95,7 @@ class OpenAIHandler(util.CORSRequestHandler):
       max_completion_tokens: int | None = None,
       include_usage: bool = False,
       response_format: litert_lm.ResponseFormat | None = None,
+      tool_choice: str | dict[str, Any] | None = None,
   ) -> dict[str, Any] | None:
     """Streams server-sent events using the provided formatter.
 
@@ -105,6 +106,7 @@ class OpenAIHandler(util.CORSRequestHandler):
       max_completion_tokens: The maximum number of tokens to generate.
       include_usage: Whether to emit a token usage chunk right before [DONE].
       response_format: Optional response format for constrained decoding.
+      tool_choice: Optional OpenAI `tool_choice` for this request.
 
     Returns:
       The accumulated LiteRT-LM assistant message dictionary on success, or None
@@ -128,6 +130,7 @@ class OpenAIHandler(util.CORSRequestHandler):
           prompt,
           max_output_tokens=max_completion_tokens,
           response_format=response_format,
+          tool_choice=tool_choice,
       ):
         if chunk.channels:
           reasoning_tokens += 1
@@ -197,6 +200,7 @@ class OpenAIHandler(util.CORSRequestHandler):
       max_completion_tokens: int | None = None,
       include_usage: bool = False,
       response_format: litert_lm.ResponseFormat | None = None,
+      tool_choice: str | dict[str, Any] | None = None,
   ) -> dict[str, Any] | None:
     """Streams server-sent events using the provided formatter."""
     return self._stream_response(
@@ -206,6 +210,7 @@ class OpenAIHandler(util.CORSRequestHandler):
         max_completion_tokens=max_completion_tokens,
         include_usage=include_usage,
         response_format=response_format,
+        tool_choice=tool_choice,
     )
 
   def do_GET(self) -> None:  # pylint: disable=invalid-name

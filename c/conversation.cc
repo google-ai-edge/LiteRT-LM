@@ -33,6 +33,7 @@
 #include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
@@ -137,8 +138,97 @@ litert::lm::OptionalArgs CreateOptionalArgs(
     if (optional_args->thinking_config.has_value()) {
       litert_lm_optional_args.thinking_config = *optional_args->thinking_config;
     }
+    if (optional_args->tool_choice.has_value()) {
+      litert_lm_optional_args.tool_choice = optional_args->tool_choice;
+    }
   }
   return litert_lm_optional_args;
+}
+
+// Returns the name in an OpenAI function reference
+// ({"type": "function", "function": {"name": "..."}}), or nullptr if `json`
+// isn't one or the name is empty.
+const std::string* GetFunctionName(const nlohmann::ordered_json& json) {
+  if (!json.is_object()) {
+    return nullptr;
+  }
+  const auto type = json.find("type");
+  const auto function = json.find("function");
+  if (type == json.end() || *type != "function" || function == json.end() ||
+      !function->is_object()) {
+    return nullptr;
+  }
+  const auto name = function->find("name");
+  if (name == function->end() || !name->is_string() ||
+      name->get_ref<const std::string&>().empty()) {
+    return nullptr;
+  }
+  return &name->get_ref<const std::string&>();
+}
+
+// Returns the tools in an OpenAI allowed_tools tool choice
+// ({"type": "allowed_tools", "allowed_tools": {"mode": "auto" or "required",
+// "tools": [<function references>]}}), or nullopt if `json` isn't one.
+std::optional<litert::lm::ToolChoice::AllowedTools> GetAllowedTools(
+    const nlohmann::ordered_json& json) {
+  if (!json.is_object()) {
+    return std::nullopt;
+  }
+  const auto type = json.find("type");
+  const auto allowed_tools = json.find("allowed_tools");
+  if (type == json.end() || *type != "allowed_tools" ||
+      allowed_tools == json.end() || !allowed_tools->is_object()) {
+    return std::nullopt;
+  }
+  const auto mode = allowed_tools->find("mode");
+  const auto tools = allowed_tools->find("tools");
+  if (mode == allowed_tools->end() ||
+      (*mode != "auto" && *mode != "required") ||
+      tools == allowed_tools->end() || !tools->is_array() || tools->empty()) {
+    return std::nullopt;
+  }
+  litert::lm::ToolChoice::AllowedTools result{.required = *mode == "required"};
+  for (const auto& tool : *tools) {
+    const std::string* name = GetFunctionName(tool);
+    if (name == nullptr) {
+      return std::nullopt;
+    }
+    result.names.push_back(*name);
+  }
+  return result;
+}
+
+// Parses an OpenAI tool_choice: "auto", "none", "required",
+// {"type": "function", "function": {"name": "..."}}, or
+// {"type": "allowed_tools", "allowed_tools": {...}}.
+absl::StatusOr<litert::lm::ToolChoice> ParseToolChoice(
+    const nlohmann::ordered_json& json) {
+  using ::litert::lm::ToolChoice;
+  if (json.is_string()) {
+    const std::string& mode = json.get_ref<const std::string&>();
+    if (mode == "auto") {
+      return ToolChoice{.choice = ToolChoice::Auto{}};
+    }
+    if (mode == "none") {
+      return ToolChoice{.choice = ToolChoice::None{}};
+    }
+    if (mode == "required") {
+      return ToolChoice{.choice = ToolChoice::Required{}};
+    }
+  } else if (const std::string* name = GetFunctionName(json)) {
+    return ToolChoice{.choice = ToolChoice::ForcedFunction{.name = *name}};
+  } else if (std::optional<ToolChoice::AllowedTools> allowed_tools =
+                 GetAllowedTools(json)) {
+    return ToolChoice{.choice = *std::move(allowed_tools)};
+  }
+  return absl::InvalidArgumentError(absl::StrFormat(
+      "Unsupported tool_choice: %s. Expected \"auto\", \"none\", "
+      "\"required\", {\"type\": \"function\", \"function\": "
+      "{\"name\": \"...\"}} or {\"type\": \"allowed_tools\", "
+      "\"allowed_tools\": {\"mode\": \"auto\" or \"required\", \"tools\": "
+      "[...]}}.",
+      json.dump(/*indent=*/-1, /*indent_char=*/' ', /*ensure_ascii=*/false,
+                nlohmann::ordered_json::error_handler_t::replace)));
 }
 
 bool IsValidConstraintType(LiteRtLmConstraintType type) {
@@ -415,6 +505,26 @@ LiteRtLmStatusCode litert_lm_conversation_optional_args_set_constraint(
   } else {
     optional_args->constraint_string.clear();
   }
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_conversation_optional_args_set_tool_choice(
+    LiteRtLmConversationOptionalArgs* optional_args,
+    const char* tool_choice_json) {
+  LITERT_LM_C_RETURN_IF_NULL(optional_args);
+  if (tool_choice_json == nullptr) {
+    optional_args->tool_choice = std::nullopt;
+    return kLiteRtLmStatusOk;
+  }
+  auto json = nlohmann::ordered_json::parse(tool_choice_json, nullptr, false);
+  if (json.is_discarded()) {
+    return litert::lm::c::ReturnError(
+        absl::StatusCode::kInvalidArgument,
+        absl::StrFormat("tool_choice_json is not valid JSON: %s",
+                        tool_choice_json));
+  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(optional_args->tool_choice,
+                               ParseToolChoice(json));
   return kLiteRtLmStatusOk;
 }
 

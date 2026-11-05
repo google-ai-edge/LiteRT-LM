@@ -23,6 +23,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
@@ -40,6 +41,7 @@ struct LiteRtLmConversationOptionalArgs {
   std::optional<litert::lm::ThinkingConfig> thinking_config;
   LiteRtLmConstraintType constraint_type = kLiteRtLmConstraintTypeNone;
   std::string constraint_string;
+  std::optional<litert::lm::ToolChoice> tool_choice;
 };
 
 struct LiteRtLmConversation {
