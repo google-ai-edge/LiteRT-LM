@@ -150,6 +150,44 @@ class EngineTest(LiteRtLmTestBase):
     ):
       litert_lm._ffi.check_status(lib, "some_function", 1234)
 
+  def test_register_windows_dll_dir_posix_noop(self):
+    orig_dirs = list(litert_lm._ffi._DLL_DIRS)
+    with mock.patch.object(os, "name", "posix"):
+      with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+        litert_lm._ffi._register_windows_dll_dir("/path/to/liblitert-lm.so")
+        self.assertEqual(os.environ["PATH"], "/usr/bin")
+        self.assertEqual(litert_lm._ffi._DLL_DIRS, orig_dirs)
+
+  def test_register_windows_dll_dir_nt(self):
+    fake_handle = object()
+    mock_add_dll_dir = mock.Mock(return_value=fake_handle)
+    test_lib_path = r"C:\fake\dir\litert-lm.dll"
+    expected_dir = os.path.dirname(os.path.abspath(test_lib_path))
+
+    with mock.patch.object(os, "name", "nt"):
+      with mock.patch.object(
+          os, "add_dll_directory", mock_add_dll_dir, create=True
+      ):
+        with mock.patch.dict(
+            os.environ, {"PATH": r"C:\Windows\system32"}, clear=True
+        ):
+          with mock.patch.object(litert_lm._ffi, "_DLL_DIRS", []):
+            litert_lm._ffi._register_windows_dll_dir(test_lib_path)
+            mock_add_dll_dir.assert_called_once_with(expected_dir)
+            self.assertEqual(litert_lm._ffi._DLL_DIRS, [fake_handle])
+            self.assertEqual(
+                os.environ["PATH"],
+                f"{expected_dir}{os.pathsep}C:\\Windows\\system32",
+            )
+
+            # Calling again with the same directory should not duplicate it in
+            # PATH.
+            litert_lm._ffi._register_windows_dll_dir(test_lib_path)
+            self.assertEqual(
+                os.environ["PATH"],
+                f"{expected_dir}{os.pathsep}C:\\Windows\\system32",
+            )
+
   def test_engine_init_setter_failure_raises_and_frees_settings(self):
     lib = litert_lm._ffi._get_lib()
     orig_delete = lib.litert_lm_engine_settings_delete

@@ -170,6 +170,21 @@ class StatusCode(enum.IntEnum):
 
 
 _LIB: ctypes.CDLL | None = None
+_DLL_DIRS: list[Any] = []
+
+
+def _register_windows_dll_dir(lib_path: str) -> None:
+  """Registers the shared library's directory for Windows DLL resolution."""
+  if os.name != "nt":
+    return
+  dll_dir = os.path.dirname(os.path.abspath(lib_path))
+  _DLL_DIRS.append(
+      os.add_dll_directory(dll_dir)  # pyrefly: ignore[missing-attribute]
+  )
+  path_env = os.environ.get("PATH", "")
+  path_parts = path_env.split(os.pathsep) if path_env else []
+  if dll_dir.lower() not in {p.lower() for p in path_parts}:
+    os.environ["PATH"] = os.pathsep.join([dll_dir] + path_parts)
 
 
 def _get_lib() -> ctypes.CDLL:
@@ -190,6 +205,7 @@ def _get_lib() -> ctypes.CDLL:
     ref = resources.files(__package__) / lib_name
     with resources.as_file(ref) as path:
       if path.exists():
+        _register_windows_dll_dir(str(path))
         _LIB = ctypes.CDLL(str(path))
   except (ImportError, FileNotFoundError, TypeError):
     pass
@@ -198,6 +214,7 @@ def _get_lib() -> ctypes.CDLL:
   if _LIB is None:
     path = os.path.join(os.path.dirname(__file__), "../../c", lib_name)
     if os.path.exists(path):
+      _register_windows_dll_dir(path)
       _LIB = ctypes.CDLL(path)
 
   if _LIB is None:
