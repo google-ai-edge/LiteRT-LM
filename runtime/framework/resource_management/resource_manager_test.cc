@@ -26,10 +26,13 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_settings.h"
+#include "runtime/framework/resource_management/context_handler/context_handler.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -159,6 +162,70 @@ TEST(ResourceManagerTest, ExecutorsDontVerifyDraftsByDefault) {
   EXPECT_THAT(
       executor.LlmExecutor::VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
       StatusIs(absl::StatusCode::kUnimplemented));
+}
+
+// How the resource manager has installed contexts into an executor.
+struct ContextSwitchCounts {
+  int restored_contexts = 0;
+  int updated_runtime_states = 0;
+};
+
+// A fake executor that counts context installs.
+class ContextSwitchFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  explicit ContextSwitchFakeLlmExecutor(ContextSwitchCounts* counts)
+      : FakeLlmExecutor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
+                        /*decode_tokens_set=*/{}),
+        counts_(counts) {}
+
+  using FakeLlmExecutor::RestoreContext;
+  absl::Status RestoreContext(
+      std::unique_ptr<LlmContext> llm_context) override {
+    ++counts_->restored_contexts;
+    return absl::OkStatus();
+  }
+  absl::StatusOr<RuntimeConfig> GetRuntimeConfig() const override {
+    return RuntimeConfig();
+  }
+  absl::StatusOr<RuntimeState> GetRuntimeState() const override {
+    return RuntimeState();
+  }
+  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override {
+    ++counts_->updated_runtime_states;
+    return absl::OkStatus();
+  }
+
+ private:
+  ContextSwitchCounts* counts_;
+};
+
+// Clones share the processed context of the session they were cloned from, so
+// the resource manager switches between them with `UpdateRuntimeState()`
+// rather than `RestoreContext()`. Executors that keep per-context state must
+// treat both as a context switch (b/578989824).
+TEST(ResourceManagerTest, SwitchesToClonesByUpdatingRuntimeState) {
+  ContextSwitchCounts counts;
+  ASSERT_OK_AND_ASSIGN(
+      auto resource_manager,
+      ResourceManager::Create(
+          /*model_resources=*/nullptr,
+          std::make_unique<ContextSwitchFakeLlmExecutor>(&counts),
+          /*vision_executor_settings=*/nullptr,
+          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ContextHandler> root,
+      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
+  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(root));
+  EXPECT_EQ(counts.restored_contexts, 1);
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ContextHandler> clone_1,
+                       resource_manager->CloneContextHandler(root));
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ContextHandler> clone_2,
+                       resource_manager->CloneContextHandler(root));
+  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(clone_1));
+  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(clone_2));
+  EXPECT_EQ(counts.restored_contexts, 1);
+  EXPECT_EQ(counts.updated_runtime_states, 2);
 }
 
 }  // namespace

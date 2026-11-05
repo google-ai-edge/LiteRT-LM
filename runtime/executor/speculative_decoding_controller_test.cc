@@ -408,5 +408,76 @@ TEST(SpeculativeDecodingControllerTest, OnPrefillNotifiesPolicy) {
   EXPECT_EQ(controller.gating_policy()->stats().conversation_resets, 1);
 }
 
+// An app prefills a shared prompt once and clones the session per request.
+// The clones' prefills land after the shared prefix (not a new conversation),
+// so without `OnContextSwitch()` a clone that turned speculation off would
+// keep it off for its siblings (b/578989824).
+TEST(SpeculativeDecodingControllerTest, ContextSwitchStartsNewConversation) {
+  SpeculativeDecodingController controller;
+  FakeDrafter drafter;
+  EXPECT_EQ(RunUnprofitableAdaptiveSteps(controller, drafter, 40), 1);
+  ASSERT_NE(controller.gating_policy(), nullptr);
+  const double round_ms = controller.gating_policy()->stats().ema_round_ms;
+  ASSERT_GT(round_ms, 0);
+
+  // A new turn of the same context keeps speculation off.
+  controller.OnPrefill(/*new_conversation=*/false);
+  ASSERT_OK_AND_ASSIGN(
+      Decision decision,
+      Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter));
+  EXPECT_FALSE(decision.speculate);
+
+  // A sibling's first turn speculates again and keeps the round cost.
+  controller.OnContextSwitch();
+  controller.OnPrefill(/*new_conversation=*/false);
+  ASSERT_OK_AND_ASSIGN(
+      decision,
+      Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter));
+  EXPECT_TRUE(decision.speculate);
+  const MtpGatingStats stats = controller.gating_policy()->stats();
+  EXPECT_EQ(stats.conversation_resets, 1);
+  EXPECT_EQ(stats.estimate_resets, 0);
+  EXPECT_EQ(stats.ema_round_ms, round_ms);
+}
+
+TEST(SpeculativeDecodingControllerTest,
+     ContextSwitchWithoutPrefillStartsNewConversation) {
+  SpeculativeDecodingController controller;
+  FakeDrafter drafter;
+  EXPECT_EQ(RunUnprofitableAdaptiveSteps(controller, drafter, 40), 1);
+
+  // A context that resumes decoding without a prefill. Steps that the policy
+  // does not decide keep the switch pending.
+  controller.OnContextSwitch();
+  ASSERT_OK(Decide(controller, SpeculativeDecodingMode::kOff, drafter));
+  ASSERT_OK(Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter,
+                   /*sampler_params=*/std::nullopt, /*constrained=*/true));
+  EXPECT_EQ(controller.gating_policy()->stats().conversation_resets, 0);
+  ASSERT_OK_AND_ASSIGN(
+      const Decision decision,
+      Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter));
+  EXPECT_TRUE(decision.speculate);
+  EXPECT_EQ(controller.gating_policy()->stats().conversation_resets, 1);
+}
+
+TEST(SpeculativeDecodingControllerTest, ContextSwitchIsCountedOnce) {
+  SpeculativeDecodingController controller;
+  FakeDrafter drafter;
+  // A switch before the policy exists does not reset the new policy.
+  controller.OnContextSwitch();
+  ASSERT_OK(Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter));
+  ASSERT_NE(controller.gating_policy(), nullptr);
+  controller.OnPrefill(/*new_conversation=*/false);
+  EXPECT_EQ(controller.gating_policy()->stats().conversation_resets, 0);
+
+  // Switching to a new session (prefilled from step 0), possibly through
+  // several switches, starts a single new conversation.
+  controller.OnContextSwitch();
+  controller.OnContextSwitch();
+  controller.OnPrefill(/*new_conversation=*/true);
+  ASSERT_OK(Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter));
+  EXPECT_EQ(controller.gating_policy()->stats().conversation_resets, 1);
+}
+
 }  // namespace
 }  // namespace litert::lm

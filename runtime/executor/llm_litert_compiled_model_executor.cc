@@ -638,6 +638,13 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
   return absl::OkStatus();
 }
 
+void LlmLiteRtCompiledModelExecutorBase::OnContextSwitch() {
+  // The drafter's activations and the adaptive policy's content estimates come
+  // from the previous context's decode steps.
+  mtp_primed_ = false;
+  speculative_decoding_controller_.OnContextSwitch();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     absl::string_view prefill_signature,
     absl::flat_hash_map<absl::string_view, TensorBuffer>& prefill_input_buffers,
@@ -1742,7 +1749,7 @@ LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   llm_context_ = std::move(context_data);
-  mtp_primed_ = false;
+  OnContextSwitch();
   if (sampler_ != nullptr && sampler_->HandlesInput()) {
     ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
   }

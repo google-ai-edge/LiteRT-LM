@@ -1451,6 +1451,13 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   executor->set_mtp_primed_for_testing(true);
   ASSERT_OK(executor->Reset());
   EXPECT_FALSE(executor->mtp_primed_for_testing());
+
+  // Switching to a session that shares the processed context (e.g. a clone of
+  // the current one) installs its runtime state, even at the same step.
+  ASSERT_OK_AND_ASSIGN(RuntimeState runtime_state, executor->GetRuntimeState());
+  executor->set_mtp_primed_for_testing(true);
+  ASSERT_OK(executor->UpdateRuntimeState(runtime_state));
+  EXPECT_FALSE(executor->mtp_primed_for_testing());
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,

@@ -148,9 +148,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
     return llm_context_->runtime_state();
   }
 
-  // Updates the runtime state.
+  // Updates the runtime state. The resource manager calls this, instead of
+  // `RestoreContext()`, to switch to a session that shares the processed
+  // context of the current one (e.g. a clone of it).
   absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override {
     llm_context_->runtime_state() = runtime_state;
+    OnContextSwitch();
     return absl::OkStatus();
   }
 
@@ -447,6 +450,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Prepares the first prefill step possibly after decode.
   // When output_batch_size_ > 1, It selects only one set of KV cache buffers.
   absl::Status PrepareFirstPrefillAfterDecode(int token_index_to_reduce);
+
+  // Drops the executor state that belongs to the previous context, when
+  // `RestoreContext()` or `UpdateRuntimeState()` switches to another one.
+  void OnContextSwitch();
 
   // Prepares the first decode step.
   // When output_batch_size_ > 1, It broadcasts KV cache buffers to

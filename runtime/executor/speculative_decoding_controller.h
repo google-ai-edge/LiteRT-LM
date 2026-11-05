@@ -100,15 +100,24 @@ class SpeculativeDecodingController {
   // `decision.adaptive`.
   //
   // Returns the number of regime changes (speculation turned on or off) that
-  // the policy decided on this step. The re-enables that `OnPrefill()` or a
-  // sampler change force are not gating decisions and are never counted.
+  // the policy decided on this step. The re-enables that `OnPrefill()`,
+  // `OnContextSwitch()` or a sampler change force are not gating decisions and
+  // are never counted.
   int64_t Observe(const Decision& decision, int tokens_emitted,
                   absl::Duration elapsed);
 
   // Signals a prefill. `new_conversation` is true for a prefill into an empty
   // KV cache (a new session, or a session that was reset): the policy then
-  // drops the previous conversation's content-dependent estimates.
+  // drops the previous conversation's content-dependent estimates. A prefill
+  // after `OnContextSwitch()` also starts a new conversation.
   void OnPrefill(bool new_conversation);
+
+  // Signals that the executor switched to another context (another session,
+  // or a clone of one). The policy is shared by all contexts, so its
+  // content-dependent estimates belong to the previous one. The next prefill
+  // or adaptive step starts a new conversation, which keeps the device and
+  // model cost estimates.
+  void OnContextSwitch() { context_switched_ = true; }
 
   // Returns the adaptive gating policy, or nullptr if no step has been decided
   // by it yet.
@@ -136,6 +145,9 @@ class SpeculativeDecodingController {
 
   // Set when `SpeculativeDecodingMode::kAdaptive` failed to load the drafter.
   bool drafter_unavailable_ = false;
+
+  // Set by `OnContextSwitch()` until the next prefill or adaptive step.
+  bool context_switched_ = false;
 };
 
 }  // namespace litert::lm

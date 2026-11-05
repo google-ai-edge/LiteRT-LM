@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -91,13 +92,22 @@ SpeculativeDecodingController::DecideAdaptive(
     ABSL_LOG(INFO) << "Adaptive speculative decoding enabled with "
                    << gating_policy_->config();
     gating_sampler_params_ = sampler_params;
-  } else if (!SamplerParamsEquivalent(sampler_params, gating_sampler_params_,
-                                      /*ignore_seed=*/true)) {
-    // The speculative estimates are only kept while the sampler configuration
-    // is unchanged (e.g. across turns of the same session, or across sessions
-    // that differ only in their seed).
-    gating_policy_->ResetEstimates();
-    gating_sampler_params_ = sampler_params;
+    // A new policy has no previous conversation to drop.
+    context_switched_ = false;
+  } else {
+    if (std::exchange(context_switched_, false)) {
+      // The context was switched with no prefill since (e.g. a session that
+      // resumes decoding).
+      gating_policy_->OnNewConversation();
+    }
+    if (!SamplerParamsEquivalent(sampler_params, gating_sampler_params_,
+                                 /*ignore_seed=*/true)) {
+      // The speculative estimates are only kept while the sampler
+      // configuration is unchanged (e.g. across turns of the same session, or
+      // across sessions that differ only in their seed).
+      gating_policy_->ResetEstimates();
+      gating_sampler_params_ = sampler_params;
+    }
   }
   return Decision{.speculate = gating_policy_->ShouldSpeculate(),
                   .adaptive = true};
@@ -120,6 +130,11 @@ int64_t SpeculativeDecodingController::Observe(const Decision& decision,
 }
 
 void SpeculativeDecodingController::OnPrefill(bool new_conversation) {
+  // Consume a pending switch even without a policy: a policy created later
+  // starts fresh anyway.
+  if (std::exchange(context_switched_, false)) {
+    new_conversation = true;
+  }
   if (gating_policy_ == nullptr) {
     return;
   }

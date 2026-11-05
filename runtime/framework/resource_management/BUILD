@@ -292,10 +292,13 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+        "//runtime/engine:engine_settings",
         "//runtime/executor:executor_stats",
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor",
         "//runtime/executor:llm_executor_io_types",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/framework/resource_management/context_handler",
         "//runtime/util:test_utils",
     ],
 )
