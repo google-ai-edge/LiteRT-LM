@@ -43,13 +43,15 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     const std::vector<std::vector<int>>& stop_token_ids = {},
     bool enable_constrained_decoding = false);
 
-// Creates data processor config from the given LlmModelType and optional
-// ToolCallConfig. The DataProcessorConfig has default values if the
-// corresponding fields are not set in the LlmModelType.
+// Creates data processor config from the given LlmModelType, optional
+// ToolCallConfig and response channels, e.g. from the model metadata. The
+// DataProcessorConfig has default values if the corresponding fields are not
+// set in the LlmModelType.
 absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     const proto::LlmModelType& llm_model_type,
     const std::optional<proto::ToolCallConfig>& tool_call_config =
-        std::nullopt);
+        std::nullopt,
+    const std::vector<Channel>& channels = {});
 
 absl::Status ValidateVisualTokenBudget(const DataProcessorArguments& args,
                                        int max_vision_tokens_per_image);

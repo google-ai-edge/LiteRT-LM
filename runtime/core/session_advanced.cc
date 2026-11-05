@@ -52,6 +52,37 @@ namespace {
 
 using TaskController = SessionInterface::TaskController;
 
+// Text scoring takes one target, or several targets that are each a single
+// token, which are all scored from the same decode step. Several targets need a
+// session with one output candidate, so that the decode step has one row.
+absl::Status ValidateScoringTargets(
+    const std::vector<absl::string_view>& target_text,
+    support::Tokenizer& tokenizer, int num_output_candidates) {
+  if (target_text.empty()) {
+    return absl::InvalidArgumentError("Target text must not be empty.");
+  }
+  if (target_text.size() == 1) {
+    return absl::OkStatus();
+  }
+  if (num_output_candidates != 1) {
+    return absl::InvalidArgumentError(
+        "Scoring several target texts requires num_output_candidates == 1.");
+  }
+  const bool all_single_token =
+      std::all_of(target_text.begin(), target_text.end(),
+                  [&tokenizer](absl::string_view text) {
+                    absl::StatusOr<support::TokenIds> token_ids =
+                        tokenizer.TextToTokenIds(text);
+                    return token_ids.ok() && token_ids->size() == 1;
+                  });
+  if (!all_single_token) {
+    return absl::InvalidArgumentError(
+        "Target text size should be 1 unless every target text is a single "
+        "token.");
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 // static
@@ -323,10 +354,6 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
 absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
     const std::vector<absl::string_view>& target_text,
     bool store_token_lengths) {
-  if (target_text.size() != 1) {
-    // Batch scoring is not supported yet.
-    return absl::InvalidArgumentError("Target text size should be 1.");
-  }
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -352,9 +379,9 @@ SessionAdvanced::RunTextScoringAsync(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     bool store_token_lengths) {
   absl::MutexLock lock(mutex_);
-  if (target_text.size() != 1) {
-    return absl::InvalidArgumentError("Target text size should be 1.");
-  }
+  ABSL_RETURN_IF_ERROR(ValidateScoringTargets(
+      target_text, *tokenizer_,
+      session_info_->session_config.GetNumOutputCandidates()));
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");

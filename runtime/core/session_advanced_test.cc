@@ -16,6 +16,7 @@
 
 #include <array>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -2613,7 +2614,7 @@ TEST_F(SessionAdvancedTest, RunTextScoringEmptyTargetTextFailure) {
   EXPECT_THAT(session->RunTextScoring(target_text,
                                       /*store_token_lengths=*/false),
               StatusIs(absl::StatusCode::kInvalidArgument,
-                       "Target text size should be 1."));
+                       "Target text must not be empty."));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringMultipleTargetTextFailure) {
@@ -2624,7 +2625,70 @@ TEST_F(SessionAdvancedTest, RunTextScoringMultipleTargetTextFailure) {
   EXPECT_THAT(
       session->RunTextScoring(target_text, /*store_token_lengths=*/false),
       StatusIs(absl::StatusCode::kInvalidArgument,
-               "Target text size should be 1."));
+               "Target text size should be 1 unless every target text is a "
+               "single token."));
+}
+
+TEST_F(SessionAdvancedTest, RunTextScoringMixedTokenLengthTargetsFailure) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  std::vector<absl::string_view> target_text = {"How", "How are you?"};
+  EXPECT_THAT(
+      session->RunTextScoring(target_text, /*store_token_lengths=*/false),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Target text size should be 1 unless every target text is a "
+               "single token."));
+}
+
+TEST_F(SessionAdvancedTest,
+       RunTextScoringSeveralTargetsWithMultipleOutputCandidatesFailure) {
+  const std::vector<std::vector<int>> stop_token_ids = {{2294}};
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.GetMutableSamplerParams() = sampler_params_;
+  session_config.GetMutableStopTokenIds() = stop_token_ids;
+  session_config.SetStartTokenId(2);
+  session_config.SetNumOutputCandidates(2);
+  auto executor = CreateFakeLlmExecutor(
+      // "Hello World!"
+      /*prefill_tokens=*/{{2, 90, 547, 58, 735, 210, 466, 2294}},
+      /*decode_tokens=*/{{224, 224}});
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ExecutionManager> execution_manager,
+      ThreadedExecutionManager::Create(tokenizer_.get(), model_resources_.get(),
+                                       std::move(executor),
+                                       /*vision_executor_settings=*/nullptr,
+                                       /*audio_executor_settings=*/nullptr,
+                                       /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      SessionAdvanced::Create(execution_manager, tokenizer_.get(),
+                              session_config, /*benchmark_info=*/std::nullopt));
+  // All targets are single tokens, but a two-candidate session decodes two rows
+  // per step, so the targets cannot share one decode step. The call is rejected
+  // before any work is queued.
+  std::vector<absl::string_view> target_texts = {"How", "it", "How"};
+  EXPECT_THAT(
+      session->RunTextScoring(target_texts, /*store_token_lengths=*/true),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Scoring several target texts requires "
+               "num_output_candidates == 1."));
+}
+
+TEST_F(SessionAdvancedTest, RunTextScoringSingleTokenTargetsSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  EXPECT_OK(session->RunPrefill(inputs));
+  // The first decode step puts all of the probability on "How", and the fake
+  // executor checks that the targets don't take more decode steps.
+  std::vector<absl::string_view> target_texts = {"How", "it"};
+  ASSERT_OK_AND_ASSIGN(
+      const auto responses,
+      session->RunTextScoring(target_texts, /*store_token_lengths=*/true));
+  EXPECT_THAT(
+      responses.GetScores(),
+      testing::ElementsAre(0.0f, -std::numeric_limits<float>::infinity()));
+  EXPECT_THAT(responses.GetTokenLengths(),
+              testing::Optional(testing::ElementsAre(1, 1)));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringWithoutTokenLengthsSuccess) {
@@ -2667,8 +2731,9 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncEmptyTargetTextFailure) {
   auto controller = session->RunTextScoringAsync(
       target_text, [](absl::StatusOr<Responses> r) {},
       /*store_token_lengths=*/false);
-  EXPECT_THAT(controller.status(), StatusIs(absl::StatusCode::kInvalidArgument,
-                                            "Target text size should be 1."));
+  EXPECT_THAT(controller.status(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Target text must not be empty."));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringAsyncMultipleTargetTextFailure) {
@@ -2679,8 +2744,11 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncMultipleTargetTextFailure) {
   auto controller = session->RunTextScoringAsync(
       target_text, [](absl::StatusOr<Responses> r) {},
       /*store_token_lengths=*/false);
-  EXPECT_THAT(controller.status(), StatusIs(absl::StatusCode::kInvalidArgument,
-                                            "Target text size should be 1."));
+  EXPECT_THAT(
+      controller.status(),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Target text size should be 1 unless every target text is a "
+               "single token."));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithoutTokenLengthsSuccess) {
@@ -2753,6 +2821,42 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
   EXPECT_TRUE(responses->GetTokenLengths().has_value());
   EXPECT_EQ(responses->GetTokenLengths()->size(), 1);
   EXPECT_EQ((*responses->GetTokenLengths())[0], 7);
+}
+
+TEST_F(SessionAdvancedTest, RunTextScoringAsyncSingleTokenTargetsSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  EXPECT_OK(session->RunPrefill(inputs));
+  // The first decode step puts all of the probability on "How", and the fake
+  // executor checks that the targets don't take more decode steps.
+  std::vector<absl::string_view> target_texts = {"How", "it"};
+
+  absl::Status status;
+  std::optional<Responses> responses;
+  ASSERT_OK_AND_ASSIGN(auto controller,
+                       session->RunTextScoringAsync(
+                           target_texts,
+                           [&](absl::StatusOr<Responses> r) {
+                             if (!r.ok()) {
+                               status = r.status();
+                               return;
+                             }
+                             if (IsTaskEndState(r->GetTaskState())) {
+                               responses.emplace(*std::move(r));
+                             }
+                           },
+                           /*store_token_lengths=*/true));
+
+  EXPECT_OK(controller->WaitUntilDone(absl::Seconds(10)));
+
+  EXPECT_OK(status);
+  ASSERT_TRUE(responses.has_value());
+  EXPECT_THAT(
+      responses->GetScores(),
+      testing::ElementsAre(0.0f, -std::numeric_limits<float>::infinity()));
+  EXPECT_THAT(responses->GetTokenLengths(),
+              testing::Optional(testing::ElementsAre(1, 1)));
 }
 
 class FakeEngineForEnvironmentTest : public Engine {

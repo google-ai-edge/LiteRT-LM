@@ -535,6 +535,12 @@ CachedSession::RunTextScoringAsync(
     const std::vector<absl::string_view>& target_text,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     bool store_token_lengths) {
+  // Several targets are scored from the same decode step, which leaves no
+  // single target to append to `prefix_cache_`.
+  if (target_text.size() > 1) {
+    return absl::InvalidArgumentError(
+        "CachedSession does not support scoring several target texts.");
+  }
   std::vector<std::string> target_text_copies;
   target_text_copies.reserve(target_text.size());
   for (absl::string_view text : target_text) {

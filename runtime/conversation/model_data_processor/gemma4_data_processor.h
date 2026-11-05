@@ -92,12 +92,15 @@ class Gemma4DataProcessor
       const Gemma4DataProcessorConfig& config = Gemma4DataProcessorConfig(),
       std::optional<Preface> preface = std::nullopt,
       std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
-      std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
+      std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr,
+      std::string channel_start_token = "", std::string channel_end_token = "")
       : constraint_provider_(std::move(constraint_provider)),
         config_(config),
         preface_(preface),
         image_preprocessor_(std::move(image_preprocessor)),
-        audio_preprocessor_(std::move(audio_preprocessor)) {}
+        audio_preprocessor_(std::move(audio_preprocessor)),
+        channel_start_token_(std::move(channel_start_token)),
+        channel_end_token_(std::move(channel_end_token)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
@@ -113,6 +116,11 @@ class Gemma4DataProcessor
   std::optional<Preface> preface_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
   std::unique_ptr<AudioPreprocessor> audio_preprocessor_;
+  // The first tokens of the channel start and end in `config_`, e.g.
+  // "<|channel>" and "<channel|>". Empty if the tool call constraints don't
+  // accept channels.
+  std::string channel_start_token_;
+  std::string channel_end_token_;
 };
 
 }  // namespace litert::lm

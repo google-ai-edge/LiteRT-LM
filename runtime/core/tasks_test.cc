@@ -2384,6 +2384,34 @@ TEST_F(TasksCustomSamplingTest,
               testing::Each(0.0f));
 }
 
+TEST_F(TasksCustomSamplingTest, ScoreSingleTokenTargetsInOneDecodeStep) {
+  ASSERT_OK_AND_ASSIGN(std::vector<int> how_ids,
+                       tokenizer_->TextToTokenIds("How"));
+  ASSERT_OK_AND_ASSIGN(std::vector<int> it_ids,
+                       tokenizer_->TextToTokenIds("it"));
+  ASSERT_EQ(how_ids.size(), 1);
+  ASSERT_EQ(it_ids.size(), 1);
+
+  // The fake executor allows a single decode step, which puts all of the
+  // probability on "How".
+  ASSERT_OK_AND_ASSIGN(
+      const Responses responses,
+      ApplyScore(/*prefill_tokens=*/{{2}}, /*decode_tokens=*/{{how_ids[0]}},
+                 /*vocab_size=*/2560, /*batch_size=*/1,
+                 /*target_texts=*/{"How", "it"},
+                 /*store_token_lengths=*/true));
+  EXPECT_EQ(responses.GetTaskState(), TaskState::kDone);
+  EXPECT_THAT(responses.GetScores(),
+              ElementsAre(0.0f, -std::numeric_limits<float>::infinity()));
+  EXPECT_THAT(responses.GetTokenLengths(),
+              testing::Optional(ElementsAre(1, 1)));
+  ASSERT_TRUE(responses.GetTokenScores().has_value());
+  EXPECT_THAT(
+      *responses.GetTokenScores(),
+      ElementsAre(ElementsAre(0.0f),
+                  ElementsAre(-std::numeric_limits<float>::infinity())));
+}
+
 TEST_F(TasksCustomSamplingTest, ScoreCustomSamplingMultiBatchWithTokenLengths) {
   const auto task_responses_with_token_lengths = ApplyScore(
       /*prefill_tokens=*/{{2}},

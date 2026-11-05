@@ -14,11 +14,28 @@
 
 #include "runtime/components/sampler_factory.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <random>
 #include <utility>
 #include <vector>
+
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <atomic>
+#include <filesystem>  // NOLINT
+#include <fstream>
+#include <ios>
+#include <string>
+#include <system_error>  // NOLINT
+
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
+#endif  // defined(__linux__) && !defined(__ANDROID__)
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -289,6 +306,570 @@ TEST(SamplerFactoryTest, SamplerParamsEquivalentCanIgnoreSeed) {
   changed.set_k(10);
   EXPECT_FALSE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
 }
+
+#if defined(__linux__) && !defined(__ANDROID__)
+#define SO_EXT ".so"
+
+using ::testing::status::IsOkAndHolds;
+
+class DynamicSamplerFactoryTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    static std::atomic<int> counter{0};
+    test_dir_ = std::filesystem::path(::testing::TempDir()) /
+                absl::StrCat("dynamic_sampler_factory_test_",
+                             ::testing::UnitTest::GetInstance()->random_seed(),
+                             "_", counter++);
+    std::error_code ec;
+    std::filesystem::create_directories(test_dir_, ec);
+
+    webgpu_fake_runfile_ = FindRunfile("fake_top_k_webgpu_sampler.so");
+    opencl_fake_runfile_ = FindRunfile("fake_top_k_opencl_sampler.so");
+  }
+
+  void TearDown() override {
+    if (!test_dir_.empty()) {
+      std::error_code ec;
+      std::filesystem::remove_all(test_dir_, ec);
+    }
+  }
+
+  const std::filesystem::path& test_dir() const { return test_dir_; }
+
+  static std::filesystem::path FindRunfile(absl::string_view filename) {
+    constexpr absl::string_view kTestComponentsDir =
+        "litert_lm/runtime/components/";
+    std::filesystem::path internal_runfile_path =
+        std::filesystem::path(::testing::SrcDir()) / kTestComponentsDir /
+        filename;
+    if (std::filesystem::exists(internal_runfile_path)) {
+      return internal_runfile_path;
+    }
+
+    std::filesystem::path workspace_relative_path =
+        std::filesystem::path(::testing::SrcDir()) / "runtime/components" /
+        filename;
+    if (std::filesystem::exists(workspace_relative_path)) {
+      return workspace_relative_path;
+    }
+
+    std::filesystem::path oss_runfile_path =
+        std::filesystem::path(::testing::SrcDir()) /
+        "litert_lm/runtime/components" / filename;
+    if (std::filesystem::exists(oss_runfile_path)) {
+      return oss_runfile_path;
+    }
+
+    return "";
+  }
+
+  absl::Status InstallFake(const std::filesystem::path& fake_runfile,
+                           absl::string_view backend_label,
+                           absl::string_view target_filename) {
+    if (test_dir_.empty()) {
+      return absl::InternalError("test_dir_ was not initialized");
+    }
+    std::error_code ec;
+    if (fake_runfile.empty() || !std::filesystem::exists(fake_runfile, ec) ||
+        ec) {
+      return absl::NotFoundError(absl::StrCat(
+          backend_label, " fake runfile not found: ", fake_runfile.string()));
+    }
+    std::filesystem::copy_file(
+        fake_runfile, test_dir() / std::string(target_filename),
+        std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) {
+      return absl::InternalError(ec.message());
+    }
+    return absl::OkStatus();
+  }
+
+  absl::Status InstallWebGpuFake() {
+    return InstallFake(webgpu_fake_runfile_, "WebGPU",
+                       "libLiteRtTopKWebGpuSampler" SO_EXT);
+  }
+
+  absl::Status InstallOpenClFake() {
+    return InstallFake(opencl_fake_runfile_, "OpenCL",
+                       "libLiteRtTopKOpenClSampler" SO_EXT);
+  }
+
+  std::filesystem::path test_dir_;
+  std::filesystem::path webgpu_fake_runfile_;
+  std::filesystem::path opencl_fake_runfile_;
+};
+
+TEST_F(DynamicSamplerFactoryTest,
+       LoadsWebGpuSamplerFromRuntimeLibraryDirAndSamples) {
+  ASSERT_OK(InstallWebGpuFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(litert::EnvironmentOptions({opt})));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  EXPECT_TRUE(sampler->CanHandleInput());
+  EXPECT_TRUE(sampler->HandlesInput());
+  EXPECT_OK(sampler->UpdateConfig(TopPParams(10, 0.9f, 0.7f), /*batch_size=*/1,
+                                  /*rand_gen=*/nullptr));
+
+  // Test basic SampleOne (token ID 42 from fake WebGPU sampler).
+  const std::vector<float> logits(201, 0.0f);
+  EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(42));
+
+  // Test SampleToIdAndScoreBuffer with uniforms.
+  auto logits_tensor =
+      CopyToTensorBuffer<float>(logits, {1, static_cast<int>(logits.size())});
+  ASSERT_TRUE(logits_tensor.HasValue());
+  std::vector<int> ids_vector(1);
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
+  ASSERT_TRUE(ids_tensor.HasValue());
+  const float uniforms[] = {0.5f};
+  EXPECT_OK(sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor, /*scores_tensor=*/nullptr, uniforms));
+  litert::Expected<std::vector<int>> ids =
+      CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(ids.HasValue());
+  EXPECT_EQ((*ids)[0], 42);
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       SelectsBackendBasedOnEnvironmentDeviceOptions) {
+  ASSERT_OK(InstallWebGpuFake());
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+
+  const std::vector<float> logits(201, 0.0f);
+
+  // 1. Explicit kWebGpuDevice selects WebGPU (id 42).
+  {
+    litert::EnvironmentOptions::Option dev_opt(
+        litert::EnvironmentOptions::Tag::kWebGpuDevice,
+        static_cast<int64_t>(1));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        litert::Environment env,
+        litert::Environment::Create(
+            litert::EnvironmentOptions({dir_opt, dev_opt})));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<Sampler> sampler,
+        CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                      env, /*sequence_size=*/1, /*vocab_size=*/201,
+                      /*activation_data_type=*/std::nullopt));
+    EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(42));
+  }
+
+  // 2. Explicit kOpenClDeviceId selects OpenCL (id 99).
+#if !defined(LITERT_DISABLE_OPENCL_SUPPORT)
+  {
+    litert::EnvironmentOptions::Option dev_opt(
+        litert::EnvironmentOptions::Tag::kOpenClDeviceId,
+        static_cast<int64_t>(1));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        litert::Environment env,
+        litert::Environment::Create(
+            litert::EnvironmentOptions({dir_opt, dev_opt})));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<Sampler> sampler,
+        CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                      env, /*sequence_size=*/1, /*vocab_size=*/201,
+                      /*activation_data_type=*/std::nullopt));
+    EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(99));
+  }
+#endif
+
+  // 3. Blank device option prefers WebGPU (id 42) by default.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        litert::Environment env,
+        litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<Sampler> sampler,
+        CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                      env, /*sequence_size=*/1, /*vocab_size=*/201,
+                      /*activation_data_type=*/std::nullopt));
+    EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(42));
+  }
+}
+
+TEST_F(
+    DynamicSamplerFactoryTest,
+    FallsBackToCpuWhenRequestedBackendIsUnavailableEvenIfOtherBackendPresent) {
+  // Only install OpenCL fake; WebGPU is absent.
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option dev_opt(
+      litert::EnvironmentOptions::Tag::kWebGpuDevice, static_cast<int64_t>(1));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(
+          litert::EnvironmentOptions({dir_opt, dev_opt})));
+
+  // Requested WebGPU explicitly, which is absent. Should fall back to CPU
+  // rather than using mismatched OpenCL!
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  TopPSampler* top_p_sampler = dynamic_cast<TopPSampler*>(sampler.get());
+  EXPECT_NE(top_p_sampler, nullptr);
+}
+
+TEST_F(DynamicSamplerFactoryTest, LoadsWebGpuSamplerUsingStringViewOption) {
+  ASSERT_OK(InstallWebGpuFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir,
+      litert::StringView(dir_str.data(), dir_str.size()));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(litert::EnvironmentOptions({opt})));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  const std::vector<float> logits(201, 0.0f);
+  EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(42));
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       FallsBackToCpuWhenOpenClRequestedAndUnavailable) {
+  ASSERT_FALSE(test_dir_.empty());
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option dev_opt(
+      litert::EnvironmentOptions::Tag::kOpenClDeviceId,
+      static_cast<int64_t>(1));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(
+          litert::EnvironmentOptions({dir_opt, dev_opt})));
+
+  // Requested OpenCL explicitly, which is absent in test_dir_. Should fall back
+  // to CPU.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  TopPSampler* top_p_sampler = dynamic_cast<TopPSampler*>(sampler.get());
+  EXPECT_NE(top_p_sampler, nullptr);
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       FallsThroughToOpenClWhenWebGpuReturnsNotFoundAndNoExplicitBackend) {
+  ASSERT_OK(InstallWebGpuFake());
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+
+  // vocab_size = 404 triggers NotFoundError in fake WebGPU sampler.
+  // With no explicit backend requested, it falls through to OpenCL (id 99).
+#if !defined(LITERT_DISABLE_OPENCL_SUPPORT)
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/404,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  const std::vector<float> logits(404, 0.0f);
+  EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(99));
+#endif
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       PropagatesNotFoundErrorWhenWebGpuExplicitlyRequested) {
+  ASSERT_OK(InstallWebGpuFake());
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option dev_opt(
+      litert::EnvironmentOptions::Tag::kWebGpuDevice, static_cast<int64_t>(1));
+
+  litert::EnvironmentOptions env_options({dir_opt, dev_opt});
+  LITERT_ASSERT_OK_AND_ASSIGN(litert::Environment env,
+                              litert::Environment::Create(env_options));
+
+  // vocab_size = 404 triggers NotFound in fake WebGPU sampler.
+  // Since WebGPU was explicitly requested, NotFound must be propagated.
+  EXPECT_THAT(
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/404,
+                    /*activation_data_type=*/std::nullopt),
+      StatusIs(absl::StatusCode::kNotFound));
+}
+
+#if !defined(LITERT_DISABLE_OPENCL_SUPPORT)
+TEST_F(DynamicSamplerFactoryTest,
+       PropagatesNotFoundErrorWhenOpenClExplicitlyRequested) {
+  ASSERT_OK(InstallWebGpuFake());
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option dev_opt(
+      litert::EnvironmentOptions::Tag::kOpenClDeviceId,
+      static_cast<int64_t>(1));
+
+  litert::EnvironmentOptions env_options({dir_opt, dev_opt});
+  LITERT_ASSERT_OK_AND_ASSIGN(litert::Environment env,
+                              litert::Environment::Create(env_options));
+
+  // vocab_size = 405 triggers NotFound in fake OpenCL sampler.
+  // Since OpenCL was explicitly requested, NotFound must be propagated.
+  EXPECT_THAT(
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/405,
+                    /*activation_data_type=*/std::nullopt),
+      StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       FallsBackToCpuWhenOpenClReturnsNotFoundAndNoExplicitBackend) {
+  // Only install OpenCL fake; WebGPU is absent.
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+
+  // vocab_size = 405 triggers NotFound in fake OpenCL sampler.
+  // With no explicit backend requested and WebGPU absent, NotFound from
+  // OpenCL falls back cleanly to CPU sampling.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/405,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  EXPECT_NE(dynamic_cast<TopPSampler*>(sampler.get()), nullptr);
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       PropagatesOpenClNonFallbackErrorWithoutFallingThrough) {
+  // Only install OpenCL fake; WebGPU is absent.
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+
+  // vocab_size = 401 triggers InvalidArgument in fake OpenCL sampler.
+  // Even with no explicit backend requested, a non-fallback error (like
+  // InvalidArgument) must be returned immediately rather than falling back to
+  // CPU.
+  EXPECT_THAT(
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/401,
+                    /*activation_data_type=*/std::nullopt),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+#endif  // !defined(LITERT_DISABLE_OPENCL_SUPPORT)
+
+TEST_F(DynamicSamplerFactoryTest,
+       SelectsWebGpuWhenWebGpuAndOpenClCoPopulatedInOptions) {
+  ASSERT_OK(InstallWebGpuFake());
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option webgpu_opt(
+      litert::EnvironmentOptions::Tag::kWebGpuDevice, static_cast<int64_t>(1));
+  litert::EnvironmentOptions::Option opencl_opt(
+      litert::EnvironmentOptions::Tag::kOpenClDeviceId,
+      static_cast<int64_t>(1));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(
+          litert::EnvironmentOptions({dir_opt, webgpu_opt, opencl_opt})));
+
+  // When both WebGPU and OpenCL device options are populated (e.g. default
+  // devices created by GpuEnvironment), WebGPU is selected.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  const std::vector<float> logits(201, 0.0f);
+  EXPECT_THAT(SampleOne(*sampler, logits), IsOkAndHolds(42));
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       FallsBackToCpuWhenWebGpuAndOpenClCoPopulatedAndWebGpuPluginAbsent) {
+  // Only install OpenCL fake; WebGPU is absent.
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option webgpu_opt(
+      litert::EnvironmentOptions::Tag::kWebGpuDevice, static_cast<int64_t>(1));
+  litert::EnvironmentOptions::Option opencl_opt(
+      litert::EnvironmentOptions::Tag::kOpenClDeviceId,
+      static_cast<int64_t>(1));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(
+          litert::EnvironmentOptions({dir_opt, webgpu_opt, opencl_opt})));
+
+  // WebGPU is active, but its plugin is absent. Even though OpenCL is also
+  // present in options and on disk, it must fall back to CPU rather than
+  // selecting the mismatched OpenCL backend.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  TopPSampler* top_p_sampler = dynamic_cast<TopPSampler*>(sampler.get());
+  EXPECT_NE(top_p_sampler, nullptr);
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       FallsBackWhenPluginInRuntimeLibraryDirFailsToLoad) {
+  ASSERT_FALSE(test_dir_.empty());
+  // Write invalid non-ELF bytes to libLiteRtTopKWebGpuSampler.so so that
+  // std::filesystem::exists(full_path) is true, but SharedLibrary::Load fails.
+  std::filesystem::path corrupt_lib =
+      test_dir() / ("libLiteRtTopKWebGpuSampler" SO_EXT);
+  {
+    std::ofstream ofs(corrupt_lib, std::ios::binary);
+    ofs << "NOT_AN_ELF_BINARY";
+  }
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+  litert::EnvironmentOptions::Option dev_opt(
+      litert::EnvironmentOptions::Tag::kWebGpuDevice, static_cast<int64_t>(1));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(
+          litert::EnvironmentOptions({dir_opt, dev_opt})));
+
+  // The corrupt plugin fails to load, logs a warning, falls back to loading
+  // by library name (which is also absent), and finally falls back to CPU
+  // TopPSampler.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Sampler> sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/201,
+                    /*activation_data_type=*/std::nullopt));
+  ASSERT_NE(sampler, nullptr);
+  TopPSampler* top_p_sampler = dynamic_cast<TopPSampler*>(sampler.get());
+  EXPECT_NE(top_p_sampler, nullptr);
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       PropagatesNonFallbackErrorWithoutFallingThrough) {
+  ASSERT_OK(InstallWebGpuFake());
+  ASSERT_OK(InstallOpenClFake());
+
+  std::string dir_str = test_dir().string();
+  litert::EnvironmentOptions::Option dir_opt(
+      litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, dir_str.c_str());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      litert::Environment env,
+      litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+
+  // vocab_size = 400 triggers InvalidArgumentError in fake WebGPU sampler.
+  // Even without an explicit backend requested, a non-fallback error (like
+  // InvalidArgument) must be returned immediately rather than falling
+  // through to OpenCL.
+  EXPECT_THAT(
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    env, /*sequence_size=*/1, /*vocab_size=*/400,
+                    /*activation_data_type=*/std::nullopt),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(DynamicSamplerFactoryTest,
+       FallsBackCleanlyWhenRuntimeLibraryDirIsEmptyOrNonExistent) {
+  // 1. Empty kRuntimeLibraryDir string.
+  {
+    litert::EnvironmentOptions::Option dir_opt(
+        litert::EnvironmentOptions::Tag::kRuntimeLibraryDir, "");
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        litert::Environment env,
+        litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<Sampler> sampler,
+        CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                      env, /*sequence_size=*/1,
+                      /*vocab_size=*/201,
+                      /*activation_data_type=*/std::nullopt));
+    ASSERT_NE(sampler, nullptr);
+    EXPECT_NE(dynamic_cast<TopPSampler*>(sampler.get()), nullptr);
+  }
+
+  // 2. Non-existent kRuntimeLibraryDir path.
+  {
+    litert::EnvironmentOptions::Option dir_opt(
+        litert::EnvironmentOptions::Tag::kRuntimeLibraryDir,
+        "/nonexistent/litert_lm_runtime_dir");
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        litert::Environment env,
+        litert::Environment::Create(litert::EnvironmentOptions({dir_opt})));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<Sampler> sampler,
+        CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                      env, /*sequence_size=*/1,
+                      /*vocab_size=*/201,
+                      /*activation_data_type=*/std::nullopt));
+    ASSERT_NE(sampler, nullptr);
+    EXPECT_NE(dynamic_cast<TopPSampler*>(sampler.get()), nullptr);
+  }
+}
+
+#undef SO_EXT
+#endif  // defined(__linux__) && !defined(__ANDROID__)
 
 }  // namespace
 }  // namespace litert::lm

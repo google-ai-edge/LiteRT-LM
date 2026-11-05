@@ -41,6 +41,12 @@
 #include "runtime/util/test_utils.h"  // NOLINT
 #include "support/tokenizer/tokenizer.h"
 
+#if !defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "runtime/components/constrained_decoding/bitmap.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#endif  // !LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+
 namespace litert::lm {
 namespace {
 

@@ -27,18 +27,14 @@ cc_binary(
     linkshared = 1,
     deps = [
         ":jni_utils",
-        "@com_google_absl//absl/base:log_severity",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/log:globals",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
-        "@litert//litert/c/internal:litert_logging",
         "@litert//litert/cc/internal:scoped_file",
         "//c:engine",
         "//c:model_info_headers",
@@ -65,8 +61,6 @@ cc_binary(
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_util",
         "//runtime/util:logging",
-        "//schema/core:litertlm_header_schema",
-        "@litert//tflite:minimal_logging",
     ] + select({
         "@platforms//os:android": [],
         "//conditions:default": [
@@ -79,7 +73,6 @@ cc_binary(
         "//runtime/engine:embedding_engine",
         "//runtime/engine:embedding_engine_settings",
         "//runtime/engine:engine_impl_selected",  # buildcleaner: keep
-        "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],
 )

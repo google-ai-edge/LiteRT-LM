@@ -318,7 +318,8 @@ absl::StatusOr<DataProcessorConfig> CreateMiniCpmVDataProcessorConfig(
 
 absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     const proto::LlmModelType& model_type,
-    const std::optional<proto::ToolCallConfig>& tool_call_config) {
+    const std::optional<proto::ToolCallConfig>& tool_call_config,
+    const std::vector<Channel>& channels) {
   if (tool_call_config.has_value() && !model_type.has_generic_model()) {
     return absl::InvalidArgumentError(
         "tool_call_config is only supported for generic_model.");
@@ -334,7 +335,7 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     case proto::LlmModelType::kMinicpmv4:
       return CreateMiniCpmVDataProcessorConfig(model_type);
     case proto::LlmModelType::kGemma4:
-      return CreateGemma4DataProcessorConfig(model_type);
+      return CreateGemma4DataProcessorConfig(model_type, channels);
     case proto::LlmModelType::kQwen3:
     case proto::LlmModelType::kQwen2P5:
       return CreateQwen3DataProcessorConfig(model_type);

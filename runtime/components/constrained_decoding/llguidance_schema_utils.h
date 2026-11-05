@@ -53,6 +53,15 @@ struct LlgConstraintsOptions {
   std::string close_quote;
   std::string function_response_start;
 
+  // If both are set, the start and end of a channel, e.g. "<|channel>" and
+  // "<channel|>" for the thought channel. Both must be special tokens. In
+  // kTextOnly, and in kTextAndOrFunctionCalls with the FC format, the model may
+  // open channels at the start of its turn, e.g. to think when thinking is
+  // enabled only in the prompt. kTextOnly still needs a visible answer after
+  // them.
+  std::string channel_start;
+  std::string channel_end;
+
   // If non-empty, tool calls can only use these functions, which must be in
   // the provided tools. If empty, all provided tools are available. Applies to
   // every mode that allows tool calls; kTextOnly ignores it.

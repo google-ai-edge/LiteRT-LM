@@ -35,6 +35,9 @@
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
 #elif !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
+#include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constraint_provider.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/constrained_decoding/llg_constraint_provider.h"
@@ -55,6 +58,56 @@
 
 namespace litert::lm {
 
+#if !defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS) && \
+    !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
+namespace {
+
+// Returns whether Lark grammars can refer to `token` as a special token.
+// LLGuidance only accepts "<...>" without "<", ">" or whitespace inside.
+bool IsLarkSpecialToken(absl::string_view token) {
+  if (token.size() < 3 || token.front() != '<' || token.back() != '>') {
+    return false;
+  }
+  for (const char c : token.substr(1, token.size() - 2)) {
+    if (c == '<' || c == '>' || absl::ascii_isspace(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Returns the first token of `text` if Lark grammars can refer to it as a
+// special token, e.g. "<|channel>" for "<|channel>thought\n", but not "\n" for
+// "\n</think>".
+absl::StatusOr<std::string> GetFirstSpecialToken(const Tokenizer& tokenizer,
+                                                 absl::string_view text) {
+  Tokenizer& mutable_tokenizer = const_cast<Tokenizer&>(tokenizer);
+  ABSL_ASSIGN_OR_RETURN(std::vector<int> ids,
+                        mutable_tokenizer.TextToTokenIds(text));
+  if (ids.empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("\"", text, "\" has no tokens."));
+  }
+  for (size_t length = 1; length <= text.size(); ++length) {
+    const absl::string_view token = text.substr(0, length);
+    absl::StatusOr<int> id = mutable_tokenizer.TokenToId(token);
+    if (id.ok() && *id == ids.front()) {
+      if (!IsLarkSpecialToken(token)) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("The first token of \"", absl::CEscape(text),
+                         "\" isn't a special token like \"<|channel>\"."));
+      }
+      return std::string(token);
+    }
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("The first token of \"", text, "\" is not a prefix of it."));
+}
+
+}  // namespace
+#endif  // !LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS &&
+        // !LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED
+
 absl::StatusOr<std::unique_ptr<Gemma4DataProcessor>>
 Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
                             std::optional<Preface> preface,
@@ -69,6 +122,8 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
           litert::support::AudioPreprocessorConfig::CreateDefaultGemma4Config(
               config.skip_mel_spectrogram_extraction)));
 
+  std::string channel_start_token;
+  std::string channel_end_token;
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
   ConstraintProviderPtr constraint_provider(
       nullptr, &LiteRtLmGemmaModelConstraintProvider_Destroy);
@@ -134,6 +189,25 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
         config.open_quote,
         config.close_quote,
     };
+    // As special tokens, the channel markup can't be matched as text, only as
+    // the channels the constraints allow at the start of the turn. So the model
+    // can't hide its whole answer in a channel.
+    if (!config.channel_start.empty() && !config.channel_end.empty()) {
+      absl::StatusOr<std::string> start_token =
+          GetFirstSpecialToken(*tokenizer, config.channel_start);
+      absl::StatusOr<std::string> end_token =
+          GetFirstSpecialToken(*tokenizer, config.channel_end);
+      if (start_token.ok() && end_token.ok()) {
+        channel_start_token = *std::move(start_token);
+        channel_end_token = *std::move(end_token);
+        llg_config.special_tokens.push_back(channel_start_token);
+        llg_config.special_tokens.push_back(channel_end_token);
+      } else {
+        ABSL_LOG(WARNING) << "The tool call constraints won't accept channels: "
+                          << (start_token.ok() ? end_token.status()
+                                               : start_token.status());
+      }
+    }
     auto provider_or =
         LlgConstraintProvider::Create(*tokenizer, std::move(llg_config));
     if (provider_or.ok()) {
@@ -147,7 +221,8 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
 
   return absl::WrapUnique(new Gemma4DataProcessor(
       std::move(constraint_provider), config, preface,
-      ImagePreprocessor::Create(), std::move(audio_preprocessor)));
+      ImagePreprocessor::Create(), std::move(audio_preprocessor),
+      std::move(channel_start_token), std::move(channel_end_token)));
 }
 
 absl::StatusOr<std::vector<InputData>>
@@ -274,6 +349,8 @@ Gemma4DataProcessor::CreateConstraint(
   options.open_quote = config_.open_quote;
   options.close_quote = config_.close_quote;
   options.function_response_start = config_.function_response_start;
+  options.channel_start = channel_start_token_;
+  options.channel_end = channel_end_token_;
   options.allowed_function_names = config_.allowed_function_names;
 
   switch (config_.constraint_mode) {

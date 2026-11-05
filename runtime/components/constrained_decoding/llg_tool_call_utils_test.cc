@@ -135,6 +135,21 @@ TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
   EXPECT_THAT(block, testing::HasSubstr(R"(/(.|\n)*<\|tool_call>(.|\n)*/)"));
 }
 
+TEST(LlgToolCallUtilsTest, GetStartRule) {
+  LlgConstraintsOptions options;
+  EXPECT_EQ(GetStartRule(options, "SAFE_TEXT"), "start: SAFE_TEXT\n");
+
+  // Both channel tokens are needed.
+  options.channel_start = "<|channel>";
+  EXPECT_EQ(GetStartRule(options, "SAFE_TEXT"), "start: SAFE_TEXT\n");
+
+  options.channel_end = "<channel|>";
+  const std::string rule = GetStartRule(options, "SAFE_TEXT");
+  EXPECT_THAT(rule, testing::HasSubstr("start: channel_block* SAFE_TEXT\n"));
+  EXPECT_THAT(rule, testing::HasSubstr(
+                        "channel_block: <|channel> CHANNEL_TEXT? <channel|>"));
+}
+
 TEST(LlgToolCallUtilsTest, SanitizeLarkRuleName) {
   EXPECT_EQ(SanitizeLarkRuleName("get_weather"), "get_weather");
   EXPECT_EQ(SanitizeLarkRuleName("get_Weather"), "get_-uweather");

@@ -260,8 +260,10 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_any",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_expected",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc/internal:litert_shared_library",
@@ -296,9 +298,77 @@ cc_library(
     }),
 )
 
+cc_library(
+    name = "fake_top_k_webgpu_sampler_lib",
+    testonly = 1,
+    srcs = ["fake_top_k_webgpu_sampler.cc"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/c/internal:litert_runtime_c_api",
+    ],
+    alwayslink = 1,
+)
+
+cc_shared_library(
+    name = "fake_top_k_webgpu_sampler_so",
+    testonly = 1,
+    shared_lib_name = "fake_top_k_webgpu_sampler.so",
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":fake_top_k_webgpu_sampler_lib"],
+)
+
+cc_library(
+    name = "fake_top_k_opencl_sampler_lib",
+    testonly = 1,
+    srcs = ["fake_top_k_opencl_sampler.cc"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/c/internal:litert_runtime_c_api",
+    ],
+    alwayslink = 1,
+)
+
+cc_shared_library(
+    name = "fake_top_k_opencl_sampler_so",
+    testonly = 1,
+    shared_lib_name = "fake_top_k_opencl_sampler.so",
+    tags = ["manual"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":fake_top_k_opencl_sampler_lib"],
+)
+
 cc_test(
     name = "sampler_factory_test",
     srcs = ["sampler_factory_test.cc"],
+    data = select({
+        "@platforms//os:linux": [
+            ":fake_top_k_opencl_sampler_so",
+            ":fake_top_k_webgpu_sampler_so",
+        ],
+        "//conditions:default": [],
+    }) + [
+    ],
     deps = [
         ":sampler",
         ":sampler_factory",
@@ -312,7 +382,17 @@ cc_test(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
-    ],
+    ] + select({
+        "@platforms//os:linux": [
+            "@com_google_absl//absl/strings",
+            "@com_google_absl//absl/strings:string_view",
+            "@litert//litert/cc:litert_environment",
+            "@litert//litert/cc:litert_environment_options",
+            "@litert//litert/cc:litert_expected",
+            "@litert//litert/test:matchers",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(
@@ -1069,6 +1149,11 @@ cc_test(
 
 cc_shared_library(
     name = "top_k_webgpu_sampler_so",
+    additional_linker_inputs = select({
+        "@platforms//os:android": [":webgpu_exported_symbols_linux.lds"],
+        "@platforms//os:linux": [":webgpu_exported_symbols_linux.lds"],
+        "//conditions:default": [],
+    }),
     shared_lib_name = "libLiteRtTopKWebGpuSampler.so",
     tags = ["manual"],
     target_compatible_with = select({
@@ -1080,15 +1165,21 @@ cc_shared_library(
         "@platforms//os:android": [
             "-landroid",
             "-Wl,-soname=libLiteRtTopKWebGpuSampler.so",
+            "-Wl,--version-script=$(execpath :webgpu_exported_symbols_linux.lds)",
+            "-Wl,--gc-sections",
+            "-Wl,--strip-all",
             # Align PT_LOAD segments and pad GNU_RELRO to a 16 KB boundary.
             # See https://developer.android.com/guide/practices/page-sizes#relro-flag.
             "-Wl,-z,max-page-size=16384",
             "-Wl,-z,common-page-size=16384",
         ],
-        "@platforms//os:ios": [],
-        "@platforms//os:macos": [],
-        "@platforms//os:windows": [],
-        "//conditions:default": ["-Wl,-soname=libLiteRtTopKWebGpuSampler.so"],
+        "@platforms//os:linux": [
+            "-Wl,-soname=libLiteRtTopKWebGpuSampler.so",
+            "-Wl,--version-script=$(execpath :webgpu_exported_symbols_linux.lds)",
+            "-Wl,--gc-sections",
+            "-Wl,--strip-all",
+        ],
+        "//conditions:default": [],
     }),
     deps = [":top_k_webgpu_sampler_runtimecapi"],
 )
@@ -1181,19 +1272,6 @@ alias(
     name = "top_k_webgpu_sampler_dll",
     actual = ":libLiteRtTopKWebGpuSampler",
     visibility = ["//visibility:private"],
-)
-
-cc_library(
-    name = "top_k_webgpu_sampler_shared_lib",
-    srcs = [":top_k_webgpu_sampler_so"],
-    linkstatic = 1,
-    tags = ["manual"],
-    target_compatible_with = select({
-        "@platforms//os:android": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    alwayslink = 1,
 )
 
 # Need extra flag to run this test: --define=litert_runtime_link_mode=dynamic.
