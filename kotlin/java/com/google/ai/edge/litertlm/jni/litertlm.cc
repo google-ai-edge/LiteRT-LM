@@ -43,6 +43,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/prompt_template.h"
@@ -105,6 +106,7 @@ using litert::lm::SessionConfig;
 using litert::lm::proto::SamplerParameters;
 
 using litert::lm::jni::GetJniEnvAndAttach;
+using litert::lm::jni::JStringToString;
 using litert::lm::jni::NewStringStandardUTF;
 using litert::lm::jni::ScopedLocalRef;
 
@@ -415,6 +417,50 @@ litert::lm::SuppressTokensConfig CreateSuppressTokensConfigFromJni(
     env->ReleaseIntArrayElements(suppress_tokens_array, elements, JNI_ABORT);
   }
   return litert::lm::SuppressTokensConfig(std::move(suppress_tokens));
+}
+
+// Converts the tool choice from `toNativeType` and `toNativeNames` in
+// ToolChoice.kt. Returns nullopt for type 0 (no tool choice).
+absl::StatusOr<std::optional<litert::lm::ToolChoice>> CreateToolChoiceFromJni(
+    JNIEnv* env, jint tool_choice_type, jobjectArray tool_choice_names) {
+  using ::litert::lm::ToolChoice;
+  std::vector<std::string> names;
+  if (tool_choice_names != nullptr) {
+    const jsize num_names = env->GetArrayLength(tool_choice_names);
+    names.reserve(num_names);
+    for (jsize i = 0; i < num_names; ++i) {
+      ScopedLocalRef<jstring> name(
+          env, static_cast<jstring>(
+                   env->GetObjectArrayElement(tool_choice_names, i)));
+      names.push_back(JStringToString(env, name.get()));
+    }
+  }
+  switch (tool_choice_type) {
+    case 0:
+      return std::nullopt;
+    case 1:
+      return ToolChoice{.choice = ToolChoice::Auto{}};
+    case 2:
+      return ToolChoice{.choice = ToolChoice::None{}};
+    case 3:
+      return ToolChoice{.choice = ToolChoice::Required{}};
+    case 4:
+      if (names.size() != 1) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("A forced function tool choice needs one name, got ",
+                         names.size(), "."));
+      }
+      return ToolChoice{
+          .choice = ToolChoice::ForcedFunction{.name = std::move(names[0])}};
+    case 5:  // AllowedTools with required = false.
+    case 6:  // AllowedTools with required = true.
+      return ToolChoice{
+          .choice = ToolChoice::AllowedTools{
+              .names = std::move(names), .required = tool_choice_type == 6}};
+    default:
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unsupported tool choice type: ", tool_choice_type));
+  }
 }
 
 nlohmann::ordered_json GetExtraContextJson(JNIEnv* env,
@@ -1478,7 +1524,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     jobject visual_token_budget, jobject repetition_penalty_config_obj,
     jobject no_repeat_ngram_config_obj, jintArray suppress_tokens_array,
     jint max_output_token, jobject thinking_config_obj, jint constraint_type,
-    jstring constraint_string) {
+    jstring constraint_string, jint tool_choice_type,
+    jobjectArray tool_choice_names) {
   JavaVM* jvm = nullptr;
   if (env->GetJavaVM(&jvm) != JNI_OK) {
     ThrowLiteRtLmJniException(env, "Failed to get JavaVM");
@@ -1545,6 +1592,16 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     }
     optional_args.decoding_constraint = constraint_arg;
   }
+
+  auto tool_choice =
+      CreateToolChoiceFromJni(env, tool_choice_type, tool_choice_names);
+  if (!tool_choice.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to start nativeSendMessageAsync: ",
+                          tool_choice.status().ToString()));
+    return;
+  }
+  optional_args.tool_choice = *std::move(tool_choice);
 
   jobject callback_global = env->NewGlobalRef(callback);
   jclass callback_class = env->GetObjectClass(callback_global);
@@ -1632,7 +1689,8 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     jobject visual_token_budget, jobject repetition_penalty_config_obj,
     jobject no_repeat_ngram_config_obj, jintArray suppress_tokens_array,
     jint max_output_token, jobject thinking_config_obj, jint constraint_type,
-    jstring constraint_string) {
+    jstring constraint_string, jint tool_choice_type,
+    jobjectArray tool_choice_names) {
   Conversation* conversation =
       reinterpret_cast<Conversation*>(conversation_pointer);
 
@@ -1693,6 +1751,16 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     }
     optional_args.decoding_constraint = constraint_arg;
   }
+
+  auto tool_choice =
+      CreateToolChoiceFromJni(env, tool_choice_type, tool_choice_names);
+  if (!tool_choice.ok()) {
+    ThrowLiteRtLmJniException(env,
+                              absl::StrCat("Failed to call nativeSendMessage: ",
+                                           tool_choice.status().ToString()));
+    return nullptr;
+  }
+  optional_args.tool_choice = *std::move(tool_choice);
 
   auto response =
       conversation->SendMessage(json_message, std::move(optional_args));

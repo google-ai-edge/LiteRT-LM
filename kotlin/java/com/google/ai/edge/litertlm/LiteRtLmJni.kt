@@ -335,6 +335,9 @@ internal object LiteRtLmJni {
    *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
    *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
+   * @param toolChoiceType The tool choice type from [toNativeType], or 0 for no tool choice.
+   *   [ToolChoice.AllowedTools] is 6 if [ToolChoice.AllowedTools.required] is true, else 5.
+   * @param toolChoiceNames The function names of the tool choice from [toNativeNames].
    */
   external fun nativeSendMessageAsync(
     conversationPointer: Long,
@@ -349,6 +352,8 @@ internal object LiteRtLmJni {
     thinkingConfig: ThinkingConfig?,
     constraintType: Int,
     constraintString: String?,
+    toolChoiceType: Int,
+    toolChoiceNames: Array<String>?,
   )
 
   /**
@@ -367,6 +372,9 @@ internal object LiteRtLmJni {
    *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
    *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
+   * @param toolChoiceType The tool choice type from [toNativeType], or 0 for no tool choice.
+   *   [ToolChoice.AllowedTools] is 6 if [ToolChoice.AllowedTools.required] is true, else 5.
+   * @param toolChoiceNames The function names of the tool choice from [toNativeNames].
    * @return The response message in JSON string format.
    */
   external fun nativeSendMessage(
@@ -381,6 +389,8 @@ internal object LiteRtLmJni {
     thinkingConfig: ThinkingConfig?,
     constraintType: Int,
     constraintString: String?,
+    toolChoiceType: Int,
+    toolChoiceNames: Array<String>?,
   ): String
 
   /**

@@ -48,6 +48,7 @@ cc_binary(
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
         "//runtime/conversation:thinking_config",

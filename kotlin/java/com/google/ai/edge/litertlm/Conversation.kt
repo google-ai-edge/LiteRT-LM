@@ -107,6 +107,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
@@ -122,6 +125,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ): Message {
     if (responseFormat != null && !enableResponseFormat) {
       throw IllegalArgumentException(
@@ -136,6 +140,9 @@ class Conversation(
 
     for (i in 0..<RECURRING_TOOL_CALL_LIMIT) {
       val activeResponseFormat = resolveResponseFormat(currentMessageJson, responseFormat)
+      // The tool choice applies to the first message only, to avoid endless recursive tool calls
+      // (e.g. with ToolChoice.Required). For finer control, disable automatic tool calling.
+      val activeToolChoice = if (i == 0) toolChoice else null
       val responseJsonString =
         LiteRtLmJni.nativeSendMessage(
           handle,
@@ -149,6 +156,8 @@ class Conversation(
           if (i == 0) thinkingConfig else null,
           activeResponseFormat?.type?.value ?: 0,
           activeResponseFormat?.schemaOrPattern,
+          activeToolChoice.toNativeType(),
+          activeToolChoice.toNativeNames(),
         )
 
       val responseJsonObject = JsonParser.parseString(responseJsonString).asJsonObject
@@ -185,6 +194,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
@@ -200,6 +212,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ): Message {
     return sendMessage(
       Message.user(contents),
@@ -210,6 +223,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
   }
 
@@ -230,6 +244,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
@@ -245,6 +262,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ): Message =
     sendMessage(
       Contents.of(text),
@@ -255,6 +273,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
 
   /**
@@ -275,6 +294,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -289,6 +311,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ) {
     if (responseFormat != null && !enableResponseFormat) {
       throw IllegalArgumentException(
@@ -326,6 +349,8 @@ class Conversation(
       thinkingConfig,
       activeResponseFormat?.type?.value ?: 0,
       activeResponseFormat?.schemaOrPattern,
+      toolChoice.toNativeType(),
+      toolChoice.toNativeNames(),
     )
   }
 
@@ -347,6 +372,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -361,7 +389,8 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
-  ) =
+    toolChoice: ToolChoice? = null,
+  ) {
     sendMessageAsync(
       Message.user(contents),
       callback,
@@ -372,7 +401,9 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
+  }
 
   /**
    * Send a text to the model and returns the response async with a callback.
@@ -392,6 +423,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -406,7 +440,8 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
-  ) =
+    toolChoice: ToolChoice? = null,
+  ) {
     sendMessageAsync(
       Contents.of(text),
       callback,
@@ -417,7 +452,9 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
+  }
 
   /**
    * Sends a message to the model and returns the response async as a [Flow].
@@ -435,6 +472,9 @@ class Conversation(
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
    *   step.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -449,6 +489,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ): Flow<Message> = callbackFlow {
     sendMessageAsync(
       message,
@@ -472,6 +513,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
     awaitClose {}
   }
@@ -492,6 +534,9 @@ class Conversation(
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
    *   step.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -506,6 +551,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ): Flow<Message> =
     sendMessageAsync(
       Message.user(contents),
@@ -516,6 +562,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
 
   /**
@@ -534,6 +581,9 @@ class Conversation(
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
    *   step.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param toolChoice Optional choice of whether and which tools the model may call for this
+   *   message. It is only used if the conversation has tools and was created with
+   *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -548,6 +598,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    toolChoice: ToolChoice? = null,
   ): Flow<Message> =
     sendMessageAsync(
       Contents.of(text),
@@ -558,6 +609,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      toolChoice,
     )
 
   private fun handleToolCalls(toolCallsJsonObject: JsonObject): JsonObject {
@@ -650,6 +702,10 @@ class Conversation(
             thinkingConfig,
             activeResponseFormat?.type?.value ?: 0,
             activeResponseFormat?.schemaOrPattern,
+            // The tool choice applies to the first message only, to avoid endless recursive tool
+            // calls. For finer control, disable automatic tool calling.
+            toolChoiceType = 0,
+            toolChoiceNames = null,
           )
         } catch (e: Exception) {
           callback.onError(e)
