@@ -37,6 +37,14 @@ export const SettingsSchema = z.object({
   topP: z.number().min(0).max(1),
   topK: z.number().int().nonnegative(),
   enableThinking: z.boolean(),
+  /**
+   * Whether to use speculative decoding (e.g. MTP) with models that support
+   * it.
+   */
+  enableSpeculativeDecoding: z.boolean(),
+  systemPrompt: z.string(),
+  /** Names of the tools in `CHAT_TOOLS` that the model can't use. */
+  disabledTools: z.array(z.string()),
   customModels: z.array(CustomModelSchema).default([]),
   localDirModels: z.array(CustomModelSchema).default([]),
 });
@@ -51,7 +59,29 @@ export type Settings = z.infer<typeof SettingsSchema>;
 export type ModelSettings = Pick<
     Settings,
     'selectedModelPath' | 'contextLength' | 'maxOutputTokens' | 'samplerType' |
-    'temperature' | 'topP' | 'topK' | 'enableThinking'>;
+    'temperature' | 'topP' | 'topK' | 'enableThinking' |
+    'enableSpeculativeDecoding' | 'systemPrompt' | 'disabledTools'>;
+
+/** The settings in the "Model Config" tab, which can be reset together. */
+const DEFAULT_MODEL_CONFIG = {
+  contextLength: 4096,
+  maxOutputTokens: 2048,
+  samplerType: 'greedy',
+  temperature: 1.0,
+  topP: 0.95,
+  topK: 64,
+  enableThinking: true,
+  enableSpeculativeDecoding: false,
+};
+
+/** The settings in the "System Prompt" tab, which can be reset together. */
+const DEFAULT_SYSTEM_PROMPT_CONFIG = {
+  systemPrompt: '',
+  disabledTools: [] as string[],
+};
+
+/** A group of settings that can be reset to their defaults together. */
+export type SettingsGroup = 'modelConfig'|'systemPrompt';
 
 /**
  * List of supported default models available for selection.
@@ -118,13 +148,16 @@ export function migrateModelPath(path: string): string {
 export class SettingsStore implements Settings {
   // Active model configuration parameters
   selectedModelPath = MODELS[0]!.path;
-  contextLength = 4096;
-  maxOutputTokens = 2048;
-  samplerType = 'greedy';
-  temperature = 1.0;
-  topP = 0.95;
-  topK = 64;
-  enableThinking = true;
+  contextLength = DEFAULT_MODEL_CONFIG.contextLength;
+  maxOutputTokens = DEFAULT_MODEL_CONFIG.maxOutputTokens;
+  samplerType = DEFAULT_MODEL_CONFIG.samplerType;
+  temperature = DEFAULT_MODEL_CONFIG.temperature;
+  topP = DEFAULT_MODEL_CONFIG.topP;
+  topK = DEFAULT_MODEL_CONFIG.topK;
+  enableThinking = DEFAULT_MODEL_CONFIG.enableThinking;
+  enableSpeculativeDecoding = DEFAULT_MODEL_CONFIG.enableSpeculativeDecoding;
+  systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
+  disabledTools: string[] = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
   customModels: CustomModel[] = [];
   localDirModels: CustomModel[] = [];
 
@@ -138,6 +171,9 @@ export class SettingsStore implements Settings {
       topP: this.topP,
       topK: this.topK,
       enableThinking: this.enableThinking,
+      enableSpeculativeDecoding: this.enableSpeculativeDecoding,
+      systemPrompt: this.systemPrompt,
+      disabledTools: [...this.disabledTools],
     };
   }
 
@@ -165,6 +201,10 @@ export class SettingsStore implements Settings {
           this.topP = validated.topP ?? this.topP;
           this.topK = validated.topK ?? this.topK;
           this.enableThinking = validated.enableThinking ?? this.enableThinking;
+          this.enableSpeculativeDecoding = validated.enableSpeculativeDecoding ??
+              this.enableSpeculativeDecoding;
+          this.systemPrompt = validated.systemPrompt ?? this.systemPrompt;
+          this.disabledTools = validated.disabledTools ?? this.disabledTools;
           this.customModels = validated.customModels ?? [];
           this.localDirModels = validated.localDirModels ?? [];
         } else {
@@ -189,6 +229,9 @@ export class SettingsStore implements Settings {
         topP: this.topP,
         topK: this.topK,
         enableThinking: this.enableThinking,
+        enableSpeculativeDecoding: this.enableSpeculativeDecoding,
+        systemPrompt: this.systemPrompt,
+        disabledTools: this.disabledTools,
         customModels: this.customModels,
         localDirModels: this.localDirModels,
       };
@@ -199,18 +242,33 @@ export class SettingsStore implements Settings {
     }
   }
 
-  resetDefaults() {
-    const confirmReset = confirm(
-        'Are you sure you want to reset all inference settings to their defaults?');
-    if (!confirmReset) return false;
-
-    this.contextLength = 4096;
-    this.maxOutputTokens = 2048;
-    this.samplerType = 'greedy';
-    this.temperature = 1.0;
-    this.topP = 0.95;
-    this.topK = 64;
-    this.enableThinking = true;
+  /**
+   * Resets a group of settings to their defaults, if the user confirms.
+   * Returns whether they were reset.
+   */
+  resetDefaults(group: SettingsGroup = 'modelConfig') {
+    switch (group) {
+      case 'modelConfig':
+        if (!confirm(
+                'Are you sure you want to reset all inference settings to their defaults?')) {
+          return false;
+        }
+        Object.assign(this, DEFAULT_MODEL_CONFIG);
+        break;
+      case 'systemPrompt':
+        if (!confirm(
+                'Are you sure you want to reset the system prompt and tools to their defaults?')) {
+          return false;
+        }
+        this.systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
+        this.disabledTools = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
+        break;
+      default: {
+        // Fails to compile if a group isn't handled.
+        const unhandled: never = group;
+        throw new Error(`Unknown settings group: ${unhandled}`);
+      }
+    }
 
     this.saveSettings();
     return true;

@@ -69,6 +69,9 @@ describe('litert-lm-chat-app', () => {
     mockSettings.topK = 40;
     mockSettings.samplerType = 'greedy';
     mockSettings.enableThinking = false;
+    mockSettings.enableSpeculativeDecoding = false;
+    mockSettings.systemPrompt = '';
+    mockSettings.disabledTools = [];
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 

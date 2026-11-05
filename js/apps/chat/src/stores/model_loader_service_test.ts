@@ -14,11 +14,24 @@
  * limitations under the License.
  */
 
-import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel} from '@litert-lm/core';
+import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
 import {getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
+
+/** Returns a fake cache that has a 3-byte model. */
+function fakeCache(): Cache {
+  return {
+    match: jasmine.createSpy().and.callFake(async () => ({
+                                              headers: new Headers(
+                                                  {'content-length': '3'}),
+                                              body: new Blob([
+                                                new Uint8Array([1, 2, 3])
+                                              ]).stream(),
+                                            })),
+  } as unknown as Cache;
+}
 
 describe('ModelLoaderService', () => {
   let settingsStore: SettingsStore;
@@ -689,6 +702,51 @@ describe('ModelLoaderService', () => {
 
       settingsStore.topK = 64;
       expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+  });
+
+  describe('engine settings', () => {
+    let createEngine: jasmine.Spy<typeof Engine.create>;
+
+    beforeEach(() => {
+      createEngine = jasmine.createSpy('createEngine')
+                         .and.callFake(
+                             async (settings, hint) =>
+                                 await EngineFake.create(settings, hint));
+      modelLoader = new ModelLoaderService(
+          () => {}, () => {}, undefined, createEngine, fakeLoadWasm);
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+    });
+
+    async function load() {
+      spyOn(window.caches, 'open').and.resolveTo(fakeCache());
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+    }
+
+    it('enables speculative decoding if it is enabled', async () => {
+      settingsStore.enableSpeculativeDecoding = true;
+      await load();
+
+      expect(createEngine.calls.mostRecent().args[0].speculativeDecodingConfig)
+          .toEqual({mode: SpeculativeDecodingMode.ADAPTIVE});
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+          .toBeFalse();
+
+      settingsStore.enableSpeculativeDecoding = false;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+          .toBeTrue();
+    });
+
+    it('does not enable speculative decoding if it is disabled', async () => {
+      await load();
+
+      expect(createEngine.calls.mostRecent().args[0].speculativeDecodingConfig)
+          .toBeUndefined();
+
+      settingsStore.enableSpeculativeDecoding = true;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+          .toBeTrue();
     });
   });
 

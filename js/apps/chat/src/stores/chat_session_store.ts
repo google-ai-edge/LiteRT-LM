@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {AutoToolChat, ChatInterface, ContentPart, JsonValue, MessageLike, SamplerType, ToolProgressEvent, ToolWithImplementation} from '@litert-lm/core';
+import {AutoToolChat, ChatInterface, ContentPart, Message, MessageLike, SamplerType, ToolProgressEvent} from '@litert-lm/core';
 import {z} from 'zod';
 
 import {CodeSandbox} from '../components/code_sandbox.js';
@@ -22,6 +22,7 @@ import {createObjectUrl} from '../components/util.js';
 
 import {ModelLoaderService} from './model_loader_service.js';
 import {migrateModelPath, ModelSettings, SettingsStore} from './settings_store.js';
+import {createEnabledTools} from './tools.js';
 
 const ConversationMetaSchema = z.object({
   id: z.string(),
@@ -119,6 +120,13 @@ function trimPromptParts(parts: PromptPart[]): PromptPart[] {
   const last = trimmed[trimmed.length - 1];
   if (last?.type === 'text') last.text = last.text.trimEnd();
   return trimmed.filter(p => p.type === 'media' || p.text.length > 0);
+}
+
+/** Whether two arrays have the same elements, in any order. */
+function haveSameElements(a: readonly string[], b: readonly string[]): boolean {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  return setA.size === setB.size && [...setA].every(item => setB.has(item));
 }
 
 /** Represents a saved conversation in the sidebar history index. */
@@ -322,32 +330,15 @@ export class ChatSessionStore {
       this.activeConversation = null;
     }
 
-    const jsTool: ToolWithImplementation = {
-      type: 'function',
-      function: {
-        name: 'run_javascript',
-        description:
-            'Executes Javascript code in a sandbox and returns the result and console output. VERY useful for doing math, text manipulation, and other algorithmic operations.',
-        parameters: {
-          type: 'object',
-          properties: {
-            code: {
-              type: 'string',
-              description:
-                  'The Javascript code to execute. Can use console.log to output data, or return a value.'
-            }
-          },
-          required: ['code']
-        }
-      },
-      execute: async (args: Record<string, JsonValue>) => {
-        const code = args['code'] as string;
-        if (typeof code !== 'string') {
-          return {error: 'Expected string parameter "code"'};
-        }
-        return await this.codeSandbox.run(code);
-      }
-    };
+    const prefaceMessages: Message[] = [];
+    const systemPrompt = this.settings.systemPrompt.trim();
+    if (systemPrompt) {
+      prefaceMessages.push({role: 'system', content: systemPrompt});
+    }
+    // Media in the history are replayed as text placeholders (e.g.
+    // `[image: name]`); only media in new messages reach the model.
+    prefaceMessages.push(
+        ...this.messages.map(msg => ({role: msg.role, content: msg.text})));
 
     this.activeConversation = new AutoToolChat({
       engine: this.modelLoader.engine,
@@ -362,17 +353,14 @@ export class ChatSessionStore {
           }
         },
         preface: {
-          // Media in the history are replayed as text placeholders (e.g.
-          // `[image: name]`); only media in new messages reach the model.
-          messages: this.messages.length > 0 ?
-              this.messages.map(msg => ({role: msg.role, content: msg.text})) :
-              undefined,
+          messages: prefaceMessages.length > 0 ? prefaceMessages : undefined,
           extra_context: {
             'enable_thinking': this.settings.enableThinking,
           }
         },
       },
-      tools: [jsTool],
+      tools: createEnabledTools(
+          this.settings.disabledTools, {codeSandbox: this.codeSandbox}),
       onToolProgress: (e: ToolProgressEvent) => {
         if (e.status === 'started') {
           this.updateStatus(`Running ${e.name}...`);
@@ -397,7 +385,10 @@ export class ChatSessionStore {
            this.activeModelSettings.temperature !== settings.temperature ||
            this.activeModelSettings.topP !== settings.topP ||
            this.activeModelSettings.topK !== settings.topK ||
-           this.activeModelSettings.enableThinking !== settings.enableThinking;
+           this.activeModelSettings.enableThinking !== settings.enableThinking ||
+           this.activeModelSettings.systemPrompt !== settings.systemPrompt ||
+           !haveSameElements(
+               this.activeModelSettings.disabledTools, settings.disabledTools);
   }
 
   /**

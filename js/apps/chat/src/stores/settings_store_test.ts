@@ -42,6 +42,41 @@ describe('SettingsStore', () => {
     expect(store.topP).toBe(0.95);
     expect(store.topK).toBe(64);
     expect(store.enableThinking).toBe(true);
+    expect(store.enableSpeculativeDecoding).toBe(false);
+    expect(store.systemPrompt).toBe('');
+    expect(store.disabledTools).toEqual([]);
+  });
+
+  it('saves and loads the system prompt and model config', () => {
+    const store = new SettingsStore(mockUpdateCallback);
+    store.systemPrompt = 'Be concise.';
+    store.disabledTools = ['run_javascript'];
+    store.enableSpeculativeDecoding = true;
+    store.saveSettings();
+
+    const loaded = new SettingsStore(mockUpdateCallback);
+    expect(loaded.systemPrompt).toBe('Be concise.');
+    expect(loaded.disabledTools).toEqual(['run_javascript']);
+    expect(loaded.enableSpeculativeDecoding).toBeTrue();
+    expect(loaded.modelSettings).toEqual(jasmine.objectContaining({
+      systemPrompt: 'Be concise.',
+      disabledTools: ['run_javascript'],
+      enableSpeculativeDecoding: true,
+    }));
+  });
+
+  it('resets only the system prompt and tools', () => {
+    const store = new SettingsStore(mockUpdateCallback);
+    store.systemPrompt = 'Be concise.';
+    store.disabledTools = ['run_javascript'];
+    store.temperature = 0.1;
+    spyOn(window, 'confirm').and.returnValue(true);
+
+    expect(store.resetDefaults('systemPrompt')).toBeTrue();
+
+    expect(store.systemPrompt).toBe('');
+    expect(store.disabledTools).toEqual([]);
+    expect(store.temperature).toBe(0.1);
   });
 
   it('saves settings to localStorage', () => {
@@ -102,6 +137,8 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(mockUpdateCallback);
     store.temperature = 0.1;
     store.contextLength = 1024;
+    store.enableSpeculativeDecoding = true;
+    store.systemPrompt = 'Be concise.';
 
     // Auto-mock window.confirm to bypass browser blocking prompt
     spyOn(window, 'confirm').and.returnValue(true);
@@ -111,6 +148,9 @@ describe('SettingsStore', () => {
     expect(wasReset).toBeTrue();
     expect(store.temperature).toBe(1.0);
     expect(store.contextLength).toBe(4096);
+    expect(store.enableSpeculativeDecoding).toBeFalse();
+    // The system prompt is reset separately.
+    expect(store.systemPrompt).toBe('Be concise.');
     expect(mockCallbackCount).toBe(1);  // the reset triggers a save callback
   });
 

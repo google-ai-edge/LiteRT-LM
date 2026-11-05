@@ -382,4 +382,80 @@ describe('ChatSessionStore', () => {
     expect(modelLoader.loadModelWeights).toHaveBeenCalled();
     expect(chatSessionStore.createConversationSession).toHaveBeenCalled();
   });
+
+  describe('system prompt and tools', () => {
+    async function sendAndGetConfig() {
+      const createConversation =
+          spyOn(fakeEngine, 'createConversation').and.callThrough();
+      await chatSessionStore.sendMessage('Hello');
+      return createConversation.calls.mostRecent().args[0]!;
+    }
+
+    it('does not add a system message if the system prompt is empty',
+       async () => {
+         const config = await sendAndGetConfig();
+
+         expect(config.preface?.messages).toBeUndefined();
+       });
+
+    it('starts the conversation with the system prompt', async () => {
+      settingsStore.systemPrompt = '  You are a pirate.  ';
+      chatSessionStore.messages = [
+        {role: 'user', text: 'Hi', senderName: 'User'},
+        {role: 'assistant', text: 'Ahoy', senderName: 'Assistant'},
+      ];
+
+      const config = await sendAndGetConfig();
+
+      const expectedMessages: Message[] = [
+        {role: 'system', content: 'You are a pirate.'},
+        {role: 'user', content: 'Hi'},
+        {role: 'assistant', content: 'Ahoy'},
+      ];
+      expect(config.preface?.messages as unknown).toEqual(expectedMessages);
+    });
+
+    it('gives the model the enabled tools', async () => {
+      const config = await sendAndGetConfig();
+
+      expect(config.preface?.tools?.map(
+                 tool => (tool as {function: {name: string}}).function.name))
+          .toEqual(['run_javascript']);
+    });
+
+    it('does not give the model disabled tools', async () => {
+      settingsStore.disabledTools = ['run_javascript'];
+
+      const config = await sendAndGetConfig();
+
+      expect(config.preface?.tools).toBeUndefined();
+    });
+
+    it('creates a new session when the system prompt or tools change',
+       async () => {
+         await chatSessionStore.createConversationSession();
+         const session = chatSessionStore.activeConversation;
+
+         settingsStore.systemPrompt = 'Be concise.';
+         await chatSessionStore.sendMessage('Hello');
+         const sessionWithPrompt = chatSessionStore.activeConversation;
+         expect(sessionWithPrompt).not.toBe(session);
+
+         settingsStore.disabledTools = ['run_javascript'];
+         await chatSessionStore.sendMessage('Hello again');
+         expect(chatSessionStore.activeConversation).not.toBe(sessionWithPrompt);
+       });
+
+    it('keeps the session if the disabled tools are only reordered',
+       async () => {
+         settingsStore.disabledTools = ['tool_a', 'tool_b'];
+         await chatSessionStore.createConversationSession();
+         const session = chatSessionStore.activeConversation;
+
+         settingsStore.disabledTools = ['tool_b', 'tool_a'];
+         await chatSessionStore.sendMessage('Hello');
+
+         expect(chatSessionStore.activeConversation).toBe(session);
+       });
+  });
 });

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel} from '@litert-lm/core';
+import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
@@ -152,7 +152,9 @@ export class ModelLoaderService {
     if (!this.engine || !this.loadedSettings) return true;
     return this.loadedSettings.selectedModelPath !== settings.selectedModelPath ||
            this.loadedSettings.contextLength !== settings.contextLength ||
-           this.loadedSettings.topK !== settings.topK;
+           this.loadedSettings.topK !== settings.topK ||
+           this.loadedSettings.enableSpeculativeDecoding !==
+               settings.enableSpeculativeDecoding;
   }
 
   async deleteModelFromCache(modelPath: string): Promise<boolean> {
@@ -385,6 +387,14 @@ export class ModelLoaderService {
         // Always enable audio input. On GPU, the audio encoder's weights are
         // released from the wasm heap after they are uploaded.
         audioBackend: Backend.GPU,
+        // The drafter can only be loaded when the engine is created, so this
+        // can't be changed per session. ADAPTIVE only speculates while it's
+        // faster than decoding normally. Models without a drafter can't use
+        // speculative decoding.
+        ...(settings.enableSpeculativeDecoding ? {
+          speculativeDecodingConfig: {mode: SpeculativeDecodingMode.ADAPTIVE}
+        } :
+                                     {}),
         benchmarkEnabled: true
       });
 

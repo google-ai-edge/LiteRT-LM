@@ -59,6 +59,9 @@ describe('litert-sidebar', () => {
     mockSettings.topK = 40;
     mockSettings.samplerType = 'top_k';
     mockSettings.enableThinking = false;
+    mockSettings.enableSpeculativeDecoding = false;
+    mockSettings.systemPrompt = '';
+    mockSettings.disabledTools = [];
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 
@@ -355,43 +358,156 @@ describe('litert-sidebar', () => {
     });
   });
 
-  it('updates settings on slider/number input changes', async () => {
-    // 1. Context Length
-    const contextInput = element.shadowRoot!.querySelector('#context-length') as HTMLInputElement;
-    contextInput.value = '4096';
-    contextInput.dispatchEvent(new Event('input'));
-    expect(mockSettings.contextLength).toBe(4096);
-    expect(mockSettings.saveSettings).toHaveBeenCalled();
+  async function toggleSettingsPage(id: string) {
+    element.shadowRoot!.querySelector<HTMLButtonElement>(`#tab-${id}`)!.click();
+    await element.updateComplete;
+  }
 
-    // 2. Max Gen
-    const maxGenInput = element.shadowRoot!.querySelector('#max-output-tokens') as HTMLInputElement;
-    maxGenInput.value = '1024';
-    maxGenInput.dispatchEvent(new Event('input'));
-    expect(mockSettings.maxOutputTokens).toBe(1024);
+  describe('settings pages', () => {
+    it('show the model config above the conversations by default', () => {
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#conversations-list'))
+          .toBeTruthy();
+      const toggle = element.shadowRoot!.querySelector('#tab-model-config')!;
+      expect(toggle.classList).toContain('active');
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    });
 
-    // 3. Sampler Select
-    const samplerSelect = element.shadowRoot!.querySelector('#sampler-type') as HTMLSelectElement;
-    samplerSelect.value = 'greedy';
-    samplerSelect.dispatchEvent(new Event('change'));
-    expect(mockSettings.samplerType).toBe('greedy');
+    it('switch to another page', async () => {
+      await toggleSettingsPage('system-prompt');
 
-    // 4. Temp
-    const tempInput = element.shadowRoot!.querySelector('#temperature') as HTMLInputElement;
-    tempInput.value = '1.2';
-    tempInput.dispatchEvent(new Event('input'));
-    expect(mockSettings.temperature).toBe(1.2);
+      expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#conversations-list'))
+          .toBeTruthy();
+    });
 
-    // 5. Thinking Checkbox
-    const thinkingCheckbox = element.shadowRoot!.querySelector('#enable-thinking') as HTMLInputElement;
-    thinkingCheckbox.checked = true;
-    thinkingCheckbox.dispatchEvent(new Event('change'));
-    expect(mockSettings.enableThinking).toBeTrue();
+    it('hide when the shown page is clicked again', async () => {
+      await toggleSettingsPage('model-config');
+
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#tab-model-config')!
+                 .getAttribute('aria-expanded'))
+          .toBe('false');
+      expect(element.shadowRoot!.querySelector('#conversations-list'))
+          .toBeTruthy();
+
+      await toggleSettingsPage('model-config');
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeTruthy();
+    });
   });
 
-  it('resets defaults on reset button click', () => {
-    const resetBtn = element.shadowRoot!.querySelector('#btn-reset-settings') as HTMLButtonElement;
-    resetBtn.click();
-    expect(mockSettings.resetDefaults).toHaveBeenCalled();
+  describe('model config page', () => {
+    it('updates settings on number input changes', async () => {
+      // 1. Context Length
+      const contextInput = element.shadowRoot!.querySelector('#context-length') as HTMLInputElement;
+      contextInput.value = '4096';
+      contextInput.dispatchEvent(new Event('input'));
+      expect(mockSettings.contextLength).toBe(4096);
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+
+      // 2. Max Gen
+      const maxGenInput = element.shadowRoot!.querySelector('#max-output-tokens') as HTMLInputElement;
+      maxGenInput.value = '1024';
+      maxGenInput.dispatchEvent(new Event('input'));
+      expect(mockSettings.maxOutputTokens).toBe(1024);
+
+      // 3. Sampler Select
+      const samplerSelect = element.shadowRoot!.querySelector('#sampler-type') as HTMLSelectElement;
+      samplerSelect.value = 'greedy';
+      samplerSelect.dispatchEvent(new Event('change'));
+      expect(mockSettings.samplerType).toBe('greedy');
+
+      // 4. Temp
+      const tempInput = element.shadowRoot!.querySelector('#temperature') as HTMLInputElement;
+      tempInput.value = '1.2';
+      tempInput.dispatchEvent(new Event('input'));
+      expect(mockSettings.temperature).toBe(1.2);
+
+      // 5. Thinking Checkbox
+      const thinkingCheckbox = element.shadowRoot!.querySelector('#enable-thinking') as HTMLInputElement;
+      thinkingCheckbox.checked = true;
+      thinkingCheckbox.dispatchEvent(new Event('change'));
+      expect(mockSettings.enableThinking).toBeTrue();
+
+      // 6. Top-P
+      const topPInput = element.shadowRoot!.querySelector('#top-p') as HTMLInputElement;
+      topPInput.value = '0.5';
+      topPInput.dispatchEvent(new Event('input'));
+      expect(mockSettings.topP).toBe(0.5);
+    });
+
+    it('toggles speculative decoding', () => {
+      const toggle = element.shadowRoot!.querySelector<HTMLInputElement>(
+          '#enable-speculative-decoding')!;
+      expect(toggle.checked).toBeFalse();
+
+      toggle.checked = true;
+      toggle.dispatchEvent(new Event('change'));
+
+      expect(mockSettings.enableSpeculativeDecoding).toBeTrue();
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+    });
+
+    it('resets defaults on reset button click', () => {
+      const resetBtn = element.shadowRoot!.querySelector('#btn-reset-settings') as HTMLButtonElement;
+      resetBtn.click();
+      expect(mockSettings.resetDefaults).toHaveBeenCalledWith('modelConfig');
+    });
+  });
+
+  describe('system prompt page', () => {
+    beforeEach(async () => {
+      await toggleSettingsPage('system-prompt');
+    });
+
+    it('is shown when selected', () => {
+      expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#tab-system-prompt')!.classList)
+          .toContain('active');
+    });
+
+    it('updates the system prompt', () => {
+      const textarea =
+          element.shadowRoot!.querySelector<HTMLTextAreaElement>(
+              '#system-prompt')!;
+      textarea.value = 'You are a pirate.';
+      textarea.dispatchEvent(new Event('change'));
+
+      expect(mockSettings.systemPrompt).toBe('You are a pirate.');
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+    });
+
+    it('toggles tools', async () => {
+      const toggle = element.shadowRoot!.querySelector<HTMLInputElement>(
+          '#tool-run_javascript')!;
+      expect(toggle.checked).toBeTrue();
+
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event('change'));
+      expect(mockSettings.disabledTools).toEqual(['run_javascript']);
+
+      toggle.checked = true;
+      toggle.dispatchEvent(new Event('change'));
+      expect(mockSettings.disabledTools).toEqual([]);
+    });
+
+    it('resets the system prompt and tools', () => {
+      element.shadowRoot!
+          .querySelector<HTMLButtonElement>('#btn-reset-system-prompt')!
+          .click();
+      expect(mockSettings.resetDefaults).toHaveBeenCalledWith('systemPrompt');
+    });
   });
 
   it('renders conversations list and triggers selection', async () => {

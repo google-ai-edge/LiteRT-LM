@@ -20,12 +20,16 @@ import {customElement, property, query, state} from 'lit/decorators.js';
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
 import {CustomModel, MODELS, PartialSettingsSchema, selectCustomModel, Settings} from '../stores/settings_store.js';
+import {CHAT_TOOLS} from '../stores/tools.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
 import './custom_dropdown';
 import type {CustomDropdown} from './custom_dropdown.js';
 
 /* tslint:disable:no-new-decorators */
+
+/** The settings pages that can be shown under the model selection. */
+type SettingsPage = 'model-config'|'system-prompt';
 
 /** Returns the label for a model that isn't cached. */
 function getDownloadLabel(model: CustomModel): string {
@@ -50,6 +54,9 @@ export class LitertSidebar extends LitElement {
 
   /** Whether a model that's being added is being looked up. */
   @state() private isLookingUpModel = false;
+
+  /** The settings page that's shown, or null if they're all hidden. */
+  @state() private openSettingsPage: SettingsPage|null = 'model-config';
 
   static override styles = [
     sharedStyles, css`
@@ -241,6 +248,109 @@ export class LitertSidebar extends LitElement {
 
       .clear-all-btn:hover {
         background-color: rgba(239, 68, 68, 0.1);
+      }
+
+      .settings-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--border);
+      }
+      .settings-tab {
+        flex: 1;
+        background: none;
+        border: none;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        padding: 8px 4px;
+        color: var(--text-muted);
+        font-family: inherit;
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s;
+      }
+      .settings-tab:hover {
+        color: var(--text);
+      }
+      .settings-tab.active {
+        color: var(--teal);
+        border-bottom-color: var(--teal);
+      }
+
+      .settings-page {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding-top: 8px;
+      }
+
+      .setting-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .setting-row > label {
+        font-size: 0.65rem;
+      }
+      .toggle-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .toggle-row label {
+        margin: 0;
+        cursor: pointer;
+        text-transform: none;
+        letter-spacing: normal;
+        font-size: 0.78rem;
+        font-weight: 500;
+        color: var(--text);
+      }
+      .setting-hint {
+        font-size: 0.62rem;
+        color: var(--text-muted);
+        line-height: 1.4;
+      }
+
+      .toggle-row input[type="checkbox"] {
+        flex-shrink: 0;
+        width: 14px;
+        height: 14px;
+        margin: 0;
+        accent-color: var(--teal);
+        cursor: pointer;
+      }
+
+      #system-prompt {
+        width: 100%;
+        min-height: 100px;
+        resize: vertical;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        padding: 8px;
+      }
+
+      .tools-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .tool-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .tab-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      .tab-actions .btn {
+        font-size: 0.7rem;
+        padding: 4px 8px;
+        height: 22px;
+        line-height: 1;
       }
 
       @media (max-width: 768px) {
@@ -462,8 +572,9 @@ export class LitertSidebar extends LitElement {
     }
   }
 
-  private handleSliderInput(e: Event, prop: keyof Settings) {
-    const target = e.target as HTMLInputElement | HTMLSelectElement;
+  private handleSettingInput(e: Event, prop: keyof Settings) {
+    const target =
+        e.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
     let val: unknown;
 
     if (target instanceof HTMLInputElement) {
@@ -476,7 +587,12 @@ export class LitertSidebar extends LitElement {
       val = target.value;
     }
 
-    const parseResult = PartialSettingsSchema.safeParse({[prop]: val});
+    this.updateSettings({[prop]: val});
+  }
+
+  /** Validates and saves changes to the settings. */
+  private updateSettings(changes: Record<string, unknown>) {
+    const parseResult = PartialSettingsSchema.safeParse(changes);
     if (parseResult.success) {
       Object.assign(this.state.settings, parseResult.data);
       this.state.settings.saveSettings();
@@ -485,11 +601,215 @@ export class LitertSidebar extends LitElement {
     }
   }
 
+  private handleToolToggle(e: Event, toolName: string) {
+    const enabled = (e.target as HTMLInputElement).checked;
+    const disabledTools =
+        this.state.settings.disabledTools.filter(name => name !== toolName);
+    if (!enabled) disabledTools.push(toolName);
+    this.updateSettings({disabledTools});
+  }
+
   private dismissSidebar() {
     this.dispatchEvent(new CustomEvent('close', {
       bubbles: true,
       composed: true,
     }));
+  }
+
+  /**
+   * Renders the buttons that show and hide the settings pages. They look like
+   * tabs, but clicking the shown page's button hides it.
+   */
+  private renderSettingsToggles() {
+    const pages: Array<{id: SettingsPage, label: string}> = [
+      {id: 'model-config', label: 'Model Config'},
+      {id: 'system-prompt', label: 'System Prompt'},
+    ];
+    return html`
+      <div class="settings-tabs">
+        ${pages.map(page => {
+      const isOpen = this.openSettingsPage === page.id;
+      return html`
+          <button
+            id="tab-${page.id}"
+            class="settings-tab ${isOpen ? 'active' : ''}"
+            aria-expanded=${isOpen ? 'true' : 'false'}
+            aria-controls="panel-${page.id}"
+            title=${isOpen ? `Hide ${page.label}` : `Show ${page.label}`}
+            @click=${() => {
+        this.openSettingsPage = isOpen ? null : page.id;
+      }}>${page.label}</button>
+        `;
+    })}
+      </div>
+    `;
+  }
+
+  private renderConversationsList() {
+    return html`
+      <!-- Saved Conversations List -->
+      <div id="conversations-list" class="conversations-list" style="padding-top: 10px; ${
+        this.openSettingsPage ? 'border-top: 1px solid var(--border);' : ''}">
+        <!-- ➕ New Chat dashed list header -->
+        <div class="conv-item new-chat-item ${
+        this.state.chatSession.activeSavedConvId === null ?
+            'active' :
+            ''}" @click=${() => this.state.chatSession.startNewConversation()}>
+          <!-- SVG large plus icon for new chat -->
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          <span class="conv-title">New Chat</span>
+        </div>
+
+        <!-- Saved index loop -->
+        ${
+        this.state.chatSession.conversationsList.map(
+            conv => html`
+          <div class="conv-item ${
+                this.state.chatSession.activeSavedConvId === conv.id ?
+                    'active' :
+                    ''}" @click=${
+                () => this.state.chatSession.selectConversation(conv.id)}>
+            <span class="conv-title" title="${conv.title}">${conv.title}</span>
+            <button class="btn-delete-conv" aria-label="Delete Conversation" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; padding: 4px;" @click=${
+                (e: Event) => {
+                  e.stopPropagation();
+                  this.state.chatSession.deleteConversation(conv.id);
+                }}>✕</button>
+          </div>
+        `)}
+      </div>
+    `;
+  }
+
+  private renderModelConfigPage() {
+    return html`
+      <div id="panel-model-config" class="settings-page" role="region" aria-labelledby="tab-model-config">
+        <!-- Side-by-side Context & Max Gen Row -->
+        <div style="display: flex; gap: 10px; margin-bottom: 6px;">
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <label for="context-length" style="font-size: 0.65rem;">Context Length</label>
+            <input type="number" id="context-length" .value=${
+        String(
+            this.state.settings
+                .contextLength)} min="256" step="256" style="padding: 8px 4px; font-size: 0.72rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
+        (e: Event) => this.handleSettingInput(e, 'contextLength')}>
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <label for="max-output-tokens" style="font-size: 0.65rem;">Max Gen</label>
+            <input type="number" id="max-output-tokens" .value=${
+        String(
+            this.state.settings
+                .maxOutputTokens)} min="128" step="64" style="padding: 8px 4px; font-size: 0.72rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
+        (e: Event) => this.handleSettingInput(e, 'maxOutputTokens')}>
+          </div>
+        </div>
+
+        <!-- Side-by-side Samplers Row -->
+        <div style="display: flex; gap: 6px; align-items: flex-end;">
+          <div style="flex: 1.2; display: flex; flex-direction: column; gap: 4px;">
+            <label for="sampler-type" style="font-size: 0.65rem;">Sampler</label>
+            <select id="sampler-type" .value=${
+        this.state.settings
+            .samplerType} style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box;" @change=${
+        (e: Event) => this.handleSettingInput(e, 'samplerType')}>
+              <option value="greedy">Greedy</option>
+              <option value="top_k">Top-K</option>
+              <option value="top_p">Top-P</option>
+            </select>
+          </div>
+          <div style="flex: 0.9; display: flex; flex-direction: column; gap: 4px;">
+            <label for="temperature" style="font-size: 0.65rem;">Temp</label>
+            <input type="number" id="temperature" .value=${
+        String(
+            this.state.settings
+                .temperature)} min="0.0" max="2.0" step="0.1" style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
+        (e: Event) => this.handleSettingInput(e, 'temperature')}>
+          </div>
+          <div style="flex: 0.9; display: flex; flex-direction: column; gap: 4px;">
+            <label for="top-p" style="font-size: 0.65rem;">Top-P</label>
+            <input type="number" id="top-p" .value=${
+        String(
+            this.state.settings
+                .topP)} min="0.0" max="1.0" step="0.05" style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
+        (e: Event) => this.handleSettingInput(e, 'topP')}>
+          </div>
+          <div style="flex: 0.9; display: flex; flex-direction: column; gap: 4px;">
+            <label for="top-k" style="font-size: 0.65rem;">Top-K</label>
+            <input type="number" id="top-k" .value=${
+        String(
+            this.state.settings
+                .topK)} min="1" max="128" step="1" style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
+        (e: Event) => this.handleSettingInput(e, 'topK')}>
+          </div>
+        </div>
+
+        <div style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center; width: 100%;">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="enable-thinking" .checked=${
+        this.state.settings
+            .enableThinking} style="width: 14px; height: 14px; accent-color: var(--teal); cursor: pointer;" @change=${
+        (e: Event) => this.handleSettingInput(e, 'enableThinking')}>
+              <label for="enable-thinking" style="margin: 0; cursor: pointer; text-transform: none; font-size: 0.78rem; color: var(--text);">Thinking</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;" title="Speculative decoding requires a model with a drafter, e.g. MTP. Changing it reloads the model when the next message is sent.">
+              <input type="checkbox" id="enable-speculative-decoding" .checked=${
+        this.state.settings
+            .enableSpeculativeDecoding} style="width: 14px; height: 14px; accent-color: var(--teal); cursor: pointer;" @change=${
+        (e: Event) => this.handleSettingInput(e, 'enableSpeculativeDecoding')}>
+              <label for="enable-speculative-decoding" style="margin: 0; cursor: pointer; text-transform: none; font-size: 0.78rem; color: var(--text);">Speculative decoding</label>
+            </div>
+          </div>
+          <button id="btn-reset-settings" class="btn btn-secondary" style="font-size: 0.7rem; padding: 4px 8px; height: 22px; line-height: 1;" @click=${
+        () => this.state.settings.resetDefaults('modelConfig')}>Reset</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderSystemPromptPage() {
+    const settings = this.state.settings;
+    return html`
+      <div id="panel-system-prompt" class="settings-page" role="region" aria-labelledby="tab-system-prompt">
+        <textarea
+          id="system-prompt"
+          aria-label="System prompt"
+          placeholder="Enter system instructions (e.g., &quot;You are a versatile assistant. Provide accurate, context-aware responses in a professional tone.&quot;)"
+          .value=${settings.systemPrompt}
+          @change=${(e: Event) => {
+      this.handleSettingInput(e, 'systemPrompt');
+    }}></textarea>
+
+        <div class="setting-row">
+          <label>Tools</label>
+          <div class="tools-list">
+            ${
+        CHAT_TOOLS.map(
+            tool => html`
+              <div class="toggle-row">
+                <div class="tool-text">
+                  <label for="tool-${tool.name}">${tool.label}</label>
+                  <span class="setting-hint">${tool.summary}</span>
+                </div>
+                <input type="checkbox" id="tool-${
+                tool.name}" .checked=${
+                !settings.disabledTools.includes(tool.name)} @change=${
+                (e: Event) => {
+                  this.handleToolToggle(e, tool.name);
+                }}>
+              </div>
+            `)}
+          </div>
+        </div>
+
+        <span class="setting-hint">Changes apply to the next message.</span>
+
+        <div class="tab-actions">
+          <button id="btn-reset-system-prompt" class="btn btn-secondary" @click=${
+        () => this.state.settings.resetDefaults('systemPrompt')}>Restore defaults</button>
+        </div>
+      </div>
+    `;
   }
 
   override render() {
@@ -614,111 +934,19 @@ export class LitertSidebar extends LitElement {
         </div>
       </div>
 
-      <!-- Static Inference Config Group -->
-      <div class="control-group" style="border-top: 1px solid var(--border); padding-top: 8px;">
-        <!-- Side-by-side Context & Max Gen Row -->
-        <div style="display: flex; gap: 10px; margin-bottom: 6px;">
-          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
-            <label for="context-length" style="font-size: 0.65rem;">Context Length</label>
-            <input type="number" id="context-length" .value=${
-        String(
-            this.state.settings
-                .contextLength)} min="256" step="256" style="padding: 8px 4px; font-size: 0.72rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
-        (e: Event) => this.handleSliderInput(e, 'contextLength')}>
-          </div>
-          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
-            <label for="max-output-tokens" style="font-size: 0.65rem;">Max Gen</label>
-            <input type="number" id="max-output-tokens" .value=${
-        String(
-            this.state.settings
-                .maxOutputTokens)} min="128" step="64" style="padding: 8px 4px; font-size: 0.72rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
-        (e: Event) => this.handleSliderInput(e, 'maxOutputTokens')}>
-          </div>
-        </div>
-
-        <!-- Side-by-side Samplers Row -->
-        <div style="display: flex; gap: 6px; align-items: flex-end;">
-          <div style="flex: 1.2; display: flex; flex-direction: column; gap: 4px;">
-            <label for="sampler-type" style="font-size: 0.65rem;">Sampler</label>
-            <select id="sampler-type" .value=${
-        this.state.settings
-            .samplerType} style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box;" @change=${
-        (e: Event) => this.handleSliderInput(e, 'samplerType')}>
-              <option value="greedy">Greedy</option>
-              <option value="top_k">Top-K</option>
-              <option value="top_p">Top-P</option>
-            </select>
-          </div>
-          <div style="flex: 0.9; display: flex; flex-direction: column; gap: 4px;">
-            <label for="temperature" style="font-size: 0.65rem;">Temp</label>
-            <input type="number" id="temperature" .value=${
-        String(
-            this.state.settings
-                .temperature)} min="0.0" max="2.0" step="0.1" style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
-        (e: Event) => this.handleSliderInput(e, 'temperature')}>
-          </div>
-          <div style="flex: 0.9; display: flex; flex-direction: column; gap: 4px;">
-            <label for="top-p" style="font-size: 0.65rem;">Top-P</label>
-            <input type="number" id="top-p" .value=${
-        String(
-            this.state.settings
-                .topP)} min="0.0" max="1.0" step="0.05" style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
-        (e: Event) => this.handleSliderInput(e, 'topP')}>
-          </div>
-          <div style="flex: 0.9; display: flex; flex-direction: column; gap: 4px;">
-            <label for="top-k" style="font-size: 0.65rem;">Top-K</label>
-            <input type="number" id="top-k" .value=${
-        String(
-            this.state.settings
-                .topK)} min="1" max="128" step="1" style="padding: 8px 2px; font-size: 0.7rem; width: 100%; box-sizing: border-box; text-align: center;" @input=${
-        (e: Event) => this.handleSliderInput(e, 'topK')}>
-          </div>
-        </div>
-
-        <div style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center; width: 100%;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <input type="checkbox" id="enable-thinking" ?checked=${
-        this.state.settings
-            .enableThinking} style="width: 14px; height: 14px; accent-color: var(--teal); cursor: pointer;" @change=${
-        (e: Event) => this.handleSliderInput(e, 'enableThinking')}>
-            <label for="enable-thinking" style="margin: 0; cursor: pointer; text-transform: none; font-size: 0.78rem; color: var(--text);">Thinking</label>
-          </div>
-          <button id="btn-reset-settings" class="btn btn-secondary" style="font-size: 0.7rem; padding: 4px 8px; height: 22px; line-height: 1;" @click=${
-        () => this.state.settings.resetDefaults()}>Reset</button>
-        </div>
+      <!-- Settings Page Toggles -->
+      <div class="control-group" style="border-top: 1px solid var(--border); padding-top: 4px; gap: 0;">
+        ${this.renderSettingsToggles()}
       </div>
 
-      <!-- Saved Conversations List -->
-      <div id="conversations-list" class="conversations-list" style="border-top: 1px solid var(--border); padding-top: 10px;">
-        <!-- ➕ New Chat dashed list header -->
-        <div class="conv-item new-chat-item ${
-        this.state.chatSession.activeSavedConvId === null ?
-            'active' :
-            ''}" @click=${() => this.state.chatSession.startNewConversation()}>
-          <!-- SVG large plus icon for new chat -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-          <span class="conv-title">New Chat</span>
-        </div>
+      ${
+        this.openSettingsPage === 'model-config' ?
+            this.renderModelConfigPage() :
+        this.openSettingsPage === 'system-prompt' ?
+            this.renderSystemPromptPage() :
+            nothing}
 
-        <!-- Saved index loop -->
-        ${
-        this.state.chatSession.conversationsList.map(
-            conv => html`
-          <div class="conv-item ${
-                this.state.chatSession.activeSavedConvId === conv.id ?
-                    'active' :
-                    ''}" @click=${
-                () => this.state.chatSession.selectConversation(conv.id)}>
-            <span class="conv-title" title="${conv.title}">${conv.title}</span>
-            <button class="btn-delete-conv" aria-label="Delete Conversation" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; padding: 4px;" @click=${
-                (e: Event) => {
-                  e.stopPropagation();
-                  this.state.chatSession.deleteConversation(conv.id);
-                }}>✕</button>
-          </div>
-        `)}
-      </div>
-
+      ${this.renderConversationsList()}
       <!-- Anchored Sidebar Status Footer -->
       <div class="sidebar-status-footer">
         <div class="status-card" style="background-color: var(--slate-bubble-bot); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px;">
