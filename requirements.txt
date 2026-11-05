@@ -2,7 +2,7 @@ annotated-doc==0.0.4
 anyio==4.13.0
 certifi==2026.10.23
 click==8.3.2
-filelock==3.28.0
+filelock==4.2.1
 fsspec[http]==2026.2.0
 h11==0.16.0
 hf-xet==1.4.3
