@@ -348,11 +348,13 @@ cc_library(
         ":constraint_provider_config",
         ":llg_constraint",
         ":llg_constraint_config",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/types:span",
         "//support/tokenizer",
         "@crate_index__llguidance-1.9.1//:llguidance_cc"
     ] + select({
@@ -488,16 +490,23 @@ cc_test(
 cc_test(
     name = "llg_constraint_provider_test",
     srcs = ["llg_constraint_provider_test.cc"],
+    data = ["//runtime/components/testdata"],
     deps = [
+        ":constraint",
+        ":constraint_provider",
         ":llg_constraint_config",
         ":llg_constraint_provider",
+        ":logit_mask",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
-        "//support/tokenizer",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
+        "//support/tokenizer:sentencepiece_tokenizer",
         "@crate_index__llguidance-1.9.1//:llguidance_cc"
     ],
 )
