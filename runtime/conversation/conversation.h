@@ -596,10 +596,13 @@ class Conversation {
   // Note also that the function will NOT apply any additional prompt template
   // to the target text as the goal is to get the score of the raw target text.
   // Args:
-  //   - target_text: The target text to score.
+  //   - target_text: The target text to score. Pass one target text, or
+  //     several target texts that are each a single token; several targets
+  //     are all scored from the logits of one decode step and need a session
+  //     with one output candidate.
   //   - returns: This function returns the score associated with each of the
-  //     target texts. The scores are the log likelihood of the target text
-  //     given the existing context history.
+  //     target texts, in the order of `target_text`. The scores are the log
+  //     likelihood of the target text given the existing context history.
   absl::StatusOr<Responses> RunTextScoring(
       const std::vector<absl::string_view>& target_text,
       OptionalArgs optional_args = OptionalArgs());

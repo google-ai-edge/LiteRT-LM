@@ -1081,6 +1081,18 @@ TEST_F(CachedSessionTest, RunTextScoring) {
   EXPECT_GT(cached_session.GetPrefixCache().TokenLength(), 0);
 }
 
+TEST_F(CachedSessionTest, RunTextScoringRejectsMultipleTargets) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  EXPECT_CALL(*mock_session_ptr, RunTextScoringAsync).Times(0);
+  std::vector<absl::string_view> targets = {"hello", "world"};
+  auto responses = cached_session.RunTextScoring(targets, true);
+  EXPECT_EQ(responses.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(cached_session.GetPrefixCache().TokenLength(), 0);
+}
+
 TEST_F(CachedSessionTest, RunTextScoringAsync) {
   auto mock_session = std::make_unique<MockSession>();
   MockSession* mock_session_ptr = mock_session.get();
