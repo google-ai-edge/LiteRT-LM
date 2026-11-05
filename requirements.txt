@@ -28,7 +28,7 @@ typing-extensions==4.15.0
 wcwidth==0.6.0
 # Below are dependencies of lm-eval
 absl-py==2.4.0
-aiohappyeyeballs==2.6.1
+aiohappyeyeballs==2.7.1
 aiohttp==3.13.5
 aiosignal==1.4.0
 attrs==26.1.0
