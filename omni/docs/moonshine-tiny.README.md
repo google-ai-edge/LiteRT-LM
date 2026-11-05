@@ -1,15 +1,24 @@
 ---
 license: mit
-library_name: litert
-base_model:
-- UsefulSensors/moonshine-tiny
-base_model_relation: quantized
+library_name: litert-lm
 pipeline_tag: automatic-speech-recognition
+base_model: UsefulSensors/moonshine-tiny
+base_model_relation: quantized
+language:
+  - en
 tags:
-- audio
-- automatic-speech-recognition
-- litert
-- tflite
+  - litert
+  - litert-lm
+  - tflite
+  - asr
+  - automatic-speech-recognition
+  - speech-to-text
+  - on-device
+  - android
+  - ios
+  - moonshine
+  - int8
+  - npu
 ---
 
 <!-- mdformat off(Hugging Face model card GFM) -->
@@ -19,49 +28,234 @@ tags:
 <!-- disableFinding(SNIPPET_INVALID_LANGUAGE) -->
 <!-- disableFinding(WHITESPACE_LINES) -->
 
-# Moonshine Tiny — LiteRT
+# Moonshine-Tiny for LiteRT-LM
 
-[Moonshine Tiny](https://huggingface.co/UsefulSensors/moonshine-tiny) is a
-27M-parameter encoder-decoder speech-recognition model from Moonshine AI
-(formerly Useful Sensors), introduced in
-[Moonshine: Speech Recognition for Live Transcription and Voice Commands](https://arxiv.org/abs/2410.15608).
-It transcribes English speech and is designed for fast on-device inference.
+Ultra-lightweight (~30 MB), fully on-device English speech-to-text in a single
+file.
 
-This repository packages the model for [LiteRT](https://ai.google.dev/edge/litert):
-a float32 model, an int8 model (dynamic-range-quantized decoder with a
-float32 encoder), and ahead-of-time compiled variants for a range of MediaTek
-and Qualcomm SoCs so the model can run on the device NPU.
+This is
+[UsefulSensors/moonshine-tiny](https://huggingface.co/UsefulSensors/moonshine-tiny)
+(27M-parameter encoder-decoder speech recognition transformer from Moonshine AI,
+formerly Useful Sensors, introduced in
+[Moonshine: Speech Recognition for Live Transcription and Voice Commands](https://arxiv.org/abs/2410.15608))
+packaged as a self-contained `.litertlm` bundle for
+[LiteRT-LM Omni](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni),
+Google's open-source on-device inference runtime across Android, iOS, macOS,
+Linux, and C++, alongside standalone `.tflite` and AOT-compiled NPU variants for
+[LiteRT](https://github.com/google-ai-edge/LiteRT). Everything needed to
+transcribe English speech with punctuation and capitalization is inside the one
+`.litertlm` file: INT8 encoder-decoder transformer with an in-graph raw-waveform
+convolutional front-end, 32,768-token Hugging Face BPE tokenizer, and
+`Speech2TextMetadata` — no Python and no network required.
 
-## Model description
+-   **Languages:** English (`en`) with automatic punctuation and capitalization
+-   **Footprint:** **29.7 MB** `.litertlm` bundle (smallest speech-to-text model
+    in LiteRT-LM Omni)
+-   **Audio front-end:** Raw 16 kHz waveform input (`[1, 80000]` float32 per 5 s
+    window) — the convolutional audio stem is built directly into the TFLite
+    `encode` graph, so no external STFT or mel-spectrogram computation is needed
+-   **Streaming:** 5-second sliding windows with configurable overlap
+    (`overlap_ratio` of `0.4` to `0.75`) and cross-window seam alignment for
+    arbitrary-length audio
 
-Each `.tflite` file contains two signatures that together form the
-transcription loop:
+## Which file should I use?
+
+| File | Size | Backend | Recommended for |
+|---|---:|---|---|
+| **`moonshine_tiny_5s_i8.litertlm`** ⭐ | 29.7 MB | CPU / GPU (`--backend=cpu` recommended) | **[LiteRT-LM Omni](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni) (`OmniEngine` / `omni_runner`) across Android, iOS, macOS, Linux, and C++.** All-in-one `.litertlm` bundle with INT8 encoder-decoder model, bundled 32,768-token tokenizer, and `Speech2TextMetadata`. |
+| `moonshine_tiny_5s_i8.tflite` | 51.9 MB | CPU | Standalone [LiteRT](https://ai.google.dev/edge/litert) `.tflite` model (FP32 encoder + dynamic-range INT8 decoder; see [Standalone `.tflite` usage](#standalone-tflite-usage-python-litert) below). |
+| `moonshine_tiny_5s_f32.tflite` | 109 MB | CPU / GPU | Unquantized FP32 standalone `.tflite` model (`encode` and `decode` signatures). |
+| `moonshine_tiny_5s_f32_<SoC>.tflite` | 77–102 MB | NPU + CPU | Standalone LiteRT NPU pipelines AOT-compiled for a specific mobile SoC (see below). |
+
+How the variants differ:
+
+-   **`.litertlm` vs. `.tflite`** — the `.litertlm` file bundles the `.tflite`
+    graph together with the compressed Hugging Face `tokenizer.json` and
+    `Speech2TextMetadata` protobuf in one self-contained archive for
+    [LiteRT-LM Omni](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni)'s
+    `OmniEngine` and `omni_runner`. Standalone `.tflite` files contain only the
+    neural network graph and require loading `tokenizer.json` from the upstream
+    repository.
+-   **AOT-compiled NPU `.tflite` files (`_<SoC>.tflite`)** — pre-compiled for
+    on-device NPU accelerators via the LiteRT NeuroPilot / QNN compilers:
+
+| SoC family | Available `<SoC>` suffixes |
+|---|---|
+| **Qualcomm Snapdragon** | `Qualcomm_SM8450` (8 Gen 1), `SM8550` (8 Gen 2), `SM8650` (8 Gen 3), `SM8750` (8 Elite), `SM8850` (8 Elite Gen 5), `SA8255`, `SA8295` |
+| **MediaTek Dimensity** | `MediaTek_MT6877`, `MT6878`, `MT6879`, `MT6897`, `MT6983` (9000), `MT6985` (9200), `MT6989` (9300), `MT6991` (9400), `MT6993`, `MT8171`, `MT8188`, `MT8189` |
+
+## Download
+
+```sh
+pip install -U huggingface_hub
+
+# Recommended: INT8 .litertlm bundle (29.7 MB, English)
+hf download litert-community/moonshine-tiny \
+    moonshine_tiny_5s_i8.litertlm --local-dir .
+```
+
+---
+
+## Usage with LiteRT-LM Omni (`omni_runner` & C++)
+
+All commands below accept mono or multi-channel WAV files at any sample rate
+(automatically resampled to 16 kHz mono) and stream confirmed and unconfirmed
+transcript segments to stdout (or `--output_path`). Prerequisites (Bazel,
+Android NDK) are in the LiteRT-LM
+[build guide](https://github.com/google-ai-edge/LiteRT-LM/blob/main/docs/getting-started/build-and-run.md)
+and the
+[LiteRT-LM Omni documentation](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni).
+
+### 1. Download a model
+
+```sh
+pip install -U huggingface_hub
+hf download litert-community/moonshine-tiny \
+    moonshine_tiny_5s_i8.litertlm --local-dir .
+```
+
+> [!TIP]
+> If you omit `--model_path` and pass `--model_name=moonshine-tiny`,
+> `omni_runner` automatically downloads `moonshine_tiny_5s_i8.litertlm` into
+> `--cache_dir` on first run.
+
+### 2. Build the runner
+
+```sh
+git clone https://github.com/google-ai-edge/LiteRT-LM.git && cd LiteRT-LM
+bazel build -c opt //omni:omni_runner                            # Linux / macOS
+bazel build -c opt --config=android_arm64 //omni:omni_runner     # Android (needs ANDROID_NDK_HOME)
+```
+
+### 3. Transcribe speech
+
+**On Linux or macOS (CPU):**
+
+```sh
+bazel-bin/omni/omni_runner --model_name=moonshine-tiny \
+    --model_path=/path/to/moonshine_tiny_5s_i8.litertlm \
+    --audio_path=runtime/components/testdata/audio_sample.wav
+```
+
+**On an Android phone (CPU, recommended):**
+
+```sh
+DEVICE_DIR=/data/local/tmp/omni
+adb shell mkdir -p $DEVICE_DIR
+adb push bazel-bin/omni/omni_runner prebuilt/android_arm64/*.so \
+         /path/to/moonshine_tiny_5s_i8.litertlm \
+         runtime/components/testdata/audio_sample.wav $DEVICE_DIR
+
+adb shell LD_LIBRARY_PATH=$DEVICE_DIR $DEVICE_DIR/omni_runner \
+    --model_name=moonshine-tiny \
+    --backend=cpu --cache_dir=$DEVICE_DIR/cache \
+    --model_path=$DEVICE_DIR/moonshine_tiny_5s_i8.litertlm \
+    --audio_path=$DEVICE_DIR/audio_sample.wav
+```
+
+**On an Android phone (GPU):**
+
+```sh
+adb shell LD_LIBRARY_PATH=$DEVICE_DIR $DEVICE_DIR/omni_runner \
+    --model_name=moonshine-tiny \
+    --backend=gpu --cache_dir=$DEVICE_DIR/cache \
+    --model_path=$DEVICE_DIR/moonshine_tiny_5s_i8.litertlm \
+    --audio_path=$DEVICE_DIR/audio_sample.wav
+```
+
+> `--model_name=moonshine-tiny` (or alias `moonshine`) tells the runner which
+> model family the file is (it is inferred automatically when the file is named
+> `moonshine-tiny.litertlm`). XNNPACK weight packs and compiled GPU kernels are
+> cached in `--cache_dir` so subsequent runs start fast.
+
+The full list of flags and the C++ `OmniEngine` / `OmniSession` streaming API
+are documented in the
+[LiteRT-LM Omni README](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni).
+
+### Use from C++ (`OmniEngine`)
+
+```cpp
+#include "omni/omni_engine.h"
+#include "omni/omni_session.h"
+#include "runtime/proto/speech2text_session_config.pb.h"
+
+using ::litert::omni::OmniEngine;
+using ::litert::omni::OmniSession;
+using ::litert::omni::PushInputSource;
+
+OmniEngine::Settings settings{
+    .backend = OmniEngine::Settings::Backend::kCpu,
+    .cache_dir = "/data/local/tmp/omni/cache",
+    .model_path = "/data/local/tmp/omni/moonshine_tiny_5s_i8.litertlm",
+};
+litert::lm::proto::Speech2TextSessionConfig asr_config;
+asr_config.set_overlap_ratio(0.4f);
+
+ABSL_ASSIGN_OR_RETURN(
+    auto engine,
+    OmniEngine::Create("moonshine-tiny", settings, &asr_config));
+auto input_source = std::make_unique<PushInputSource>();
+PushInputSource* input = input_source.get();
+ABSL_ASSIGN_OR_RETURN(auto session,
+                      engine->CreateSession(std::move(input_source)));
+
+// Push input audio metadata once, followed by one or more PCM float chunks.
+ABSL_RETURN_IF_ERROR(input->PushInput(
+    OmniSession::AudioInputMetadata{.sample_rate_hz = 16000, .num_channels = 1}));
+ABSL_RETURN_IF_ERROR(input->PushInput(
+    OmniSession::AudioInput{.pcm_samples = std::move(pcm_chunk)}));
+input->Finish();
+// Pull OmniSession::TextOutput updates (confirmed_text + unconfirmed_text)
+// with session->ProcessNext() until OutOfRange or NotFound, then call session->Flush().
+```
+
+In your `BUILD` file, link only the Moonshine target
+(`//omni/speech2text:moonshine`) to avoid pulling in other speech, TTS, or image
+generation models:
+
+```python
+cc_binary(
+    name = "my_asr_app",
+    srcs = ["my_asr_app.cc"],
+    deps = [
+        "//omni:omni_engine",
+        "//omni:omni_session",
+        "//omni/speech2text:moonshine",
+    ],
+)
+```
+
+---
+
+## Standalone `.tflite` Usage (Python LiteRT)
+
+If you are using the standalone `.tflite` files (`moonshine_tiny_5s_f32.tflite`
+or `moonshine_tiny_5s_i8.tflite`) directly with the Python
+[LiteRT](https://ai.google.dev/edge/litert) `CompiledModel` API instead of
+LiteRT-LM Omni:
+
+### Model signatures
+
+Each `.tflite` file contains two signatures that together form the transcription
+loop:
 
 | Signature | Inputs | Output |
 |---|---|---|
 | `encode` | raw audio `[1, 80000]` float32 (5 s at 16 kHz, zero-padded) | encoder states `[1, 207, 288]` float32 |
 | `decode` | states `[1, 207, 288]`, tokens `[1, 64]` int32, additive causal mask `[1, 1, 64, 64]` float32 | logits `[1, 64, 32768]` float32 |
 
-- The audio frontend is inside the graph: the model takes a raw 16 kHz
-  waveform in `[-1, 1]` — no mel-spectrogram extraction is needed.
-- The window is fixed at 5 seconds. Longer audio is transcribed in
-  consecutive 5 s windows; shorter audio is zero-padded.
-- Decoding is greedy: start token `1`, EOS token `2`, at most 64 tokens per
-  window. The decoder re-scores the full token buffer each step (no KV
-  cache), so decode time grows with the number of emitted tokens.
-- The tokenizer is not duplicated in this repository — load `tokenizer.json`
-  from the base model repository (see the script below).
+-   The audio frontend is inside the graph: the model takes a raw 16 kHz
+    waveform in `[-1, 1]` — no mel-spectrogram extraction is needed.
+-   The window is fixed at 5 seconds. Longer audio is transcribed in consecutive
+    5 s windows; shorter audio is zero-padded.
+-   Decoding is greedy: start token `1`, EOS token `2`, at most 64 tokens per
+    window. The decoder re-scores the full token buffer each step (no KV cache),
+    so decode time grows with the number of emitted tokens.
+-   When using the standalone `.tflite` files directly, load `tokenizer.json`
+    from the base model repository (`UsefulSensors/moonshine-tiny`), as shown
+    below (the `.litertlm` bundle already embeds `tokenizer.json`).
 
-### Files
-
-| File | Description |
-|---|---|
-| `moonshine_tiny_5s_f32.tflite` | float32 model (109 MB) |
-| `moonshine_tiny_5s_i8.tflite` | int8 model (52 MB): float32 encoder + dynamic-range int8 decoder |
-| `moonshine_tiny_5s_f32_MediaTek_*.tflite` | float32 AOT-compiled for MediaTek NPUs (per SoC) |
-| `moonshine_tiny_5s_f32_Qualcomm_*.tflite` | float32 AOT-compiled for Qualcomm NPUs (per SoC) |
-
-## How to use
+### Run with Python `ai-edge-litert`
 
 **1. Install dependencies**
 
@@ -185,11 +379,11 @@ python transcribe.py --wav sample.wav
 
 ### Android sample app
 
-For an on-device Android demo that runs Moonshine (and other ASR models) with
-hardware acceleration, see the LiteRT
+For an on-device Android demo that runs standalone `.tflite` Moonshine models
+with hardware acceleration, see the LiteRT
 [speech recognition sample](https://github.com/google-ai-edge/litert-samples/tree/main/samples/litert/speech_recognition).
 
-## Performance
+## Performance (Standalone `.tflite`)
 
 Measured on one 5 s window of continuous speech (11 output tokens), CPU
 inference, median of 10 runs. The macOS and Raspberry Pi rows use the Python
@@ -251,11 +445,55 @@ For the source model's quality, the
 Tiny matches Whisper tiny.en word error rates across standard evaluation
 datasets at about 5x less compute.
 
-## License and attribution
+## What's in the file
 
-The original Moonshine Tiny model is released by Moonshine AI under the MIT
-license; these converted artifacts inherit it. If you use this model, please
-cite:
+Inside `moonshine_tiny_5s_i8.litertlm`:
+
+| Component | Details |
+|---|---|
+| **Audio front-end** | Self-contained C++ resampler + `DummyPreprocessor` (`Speech2TextMetadata`): resamples any input audio rate to 16 kHz mono and zero-pads short final chunks to 80,000 samples (5.0 s). The convolutional waveform front-end runs inside the TFLite `encode` graph. |
+| **Encoder-decoder (`tf_lite_encoder_decoder`)** | 27M-parameter Moonshine Tiny transformer (`~29.1 MB`, INT8 weights) with two signatures: `encode` (raw waveform `[1, 80000]` float32 → encoder hidden states `[1, 207, 288]` float32) and `decode` (encoder states `[1, 207, 288]`, token IDs `[1, 64]` int32, additive causal mask `[1, 1, 64, 64]` float32 → logits `[1, 64, 32768]` float32). |
+| **Decoder (`StatelessDecoder`)** | Greedy autoregressive decoding from start token `1` (`<s>`) until stop token `2` (`</s>`) or 64 tokens per 5 s window, with automatic trailing repetition truncation. |
+| **Tokenizer (`HF_Tokenizer_Zlib`)** | Zlib-compressed Hugging Face `tokenizer.json` (32,768-token BPE vocabulary with punctuation and capitalization). |
+| **Text merger** | Cross-window overlap seam alignment across consecutive 5 s windows (`overlap_ratio = 0.4` in `omni_runner`). |
+| **Output** | Streaming `OmniSession::TextOutput` chunks (`confirmed_text` + `unconfirmed_text`). |
+
+The models were exported from the upstream PyTorch checkpoint
+(`UsefulSensors/moonshine-tiny`) with
+[litert-torch](https://github.com/google-ai-edge/litert-torch) and quantized
+with the AI Edge Quantizer. No retraining or fine-tuning was done.
+
+## Limitations
+
+-   **English only:** Moonshine Tiny is trained on English speech only. For
+    multilingual speech recognition, use
+    [`litert-community/parakeet-tdt-0.6b-v3`](https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3)
+    (25 European languages),
+    [`litert-community/Qwen3-ASR-0.6B`](https://huggingface.co/litert-community/Qwen3-ASR-0.6B)
+    (52 languages and dialects), or
+    [`litert-community/whisper-tiny`](https://huggingface.co/litert-community/whisper-tiny)
+    (99 languages).
+-   **Fixed 5-second encoder window (max 64 tokens per window):** Longer audio
+    is processed in overlapping 5-second windows. Because `decode` re-evaluates
+    the 64-token buffer at each step without a stateful KV cache, `--backend=cpu`
+    is recommended for lowest end-to-end latency.
+-   **SoC-specific NPU files are standalone `.tflite` graphs:** The pre-compiled
+    `moonshine_tiny_5s_f32_<SoC>.tflite` files target the standalone LiteRT NPU
+    C++/Kotlin APIs rather than `.litertlm` bundles.
+
+## License & acknowledgements
+
+-   **Weights & tokenizer:** [MIT](https://opensource.org/licenses/MIT),
+    inherited from
+    [UsefulSensors/moonshine-tiny](https://huggingface.co/UsefulSensors/moonshine-tiny)
+    by Moonshine AI (formerly Useful Sensors).
+-   **Conversion & runtime:**
+    [litert-torch](https://github.com/google-ai-edge/litert-torch),
+    [LiteRT](https://github.com/google-ai-edge/LiteRT), and
+    [LiteRT-LM Omni](https://github.com/google-ai-edge/LiteRT-LM/tree/main/omni)
+    (Apache-2.0).
+
+If you use this model, please cite:
 
 ```bibtex
 @misc{jeffries2024moonshinespeechrecognitionlive,
