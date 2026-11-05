@@ -120,6 +120,7 @@ struct LiteRtLmSettings {
   int num_logits_to_print_after_decode = 0;
   std::optional<std::string> score_target_text = std::nullopt;
   bool gpu_madvise_original_shared_tensors = true;
+  bool prefetch_embedding_rows = false;
   bool gpu_enable_metal_residency_set = false;
   // std::nullopt means "default", which is currently disabled.
   std::optional<bool> gpu_use_ir_model = std::nullopt;

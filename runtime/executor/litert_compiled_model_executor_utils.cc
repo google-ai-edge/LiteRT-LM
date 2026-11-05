@@ -1483,10 +1483,26 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
   return absl::OkStatus();
 }
 
+namespace {
+
+// Enables LiteRT row prefetch on `manager`'s text lookup. Advisory: failures
+// only log.
+void MaybeEnableRowPrefetch(EmbeddingLookupManager& manager) {
+  if (EmbeddingLookupText* text = manager.GetTextEmbeddingLookup();
+      text != nullptr) {
+    if (absl::Status status = text->EnableRowPrefetch(); !status.ok()) {
+      ABSL_LOG(INFO) << "Embedding row prefetch disabled: " << status;
+    }
+  }
+}
+
+}  // namespace
+
 absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
-    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup) {
+    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup,
+    bool prefetch_embedding_rows) {
   absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
   if (resources.HasTFLiteModel(proto::LlmMetadata::TF_LITE_END_OF_AUDIO)) {
     ABSL_ASSIGN_OR_RETURN(
@@ -1566,6 +1582,9 @@ absl::Status InitializeEmbeddingLookups(
 #endif
     ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,
                           std::move(status_or_per_layer_embedding_lookup));
+    if (prefetch_embedding_rows) {
+      MaybeEnableRowPrefetch(*per_layer_embedding_lookup);
+    }
   }
 
   return absl::OkStatus();

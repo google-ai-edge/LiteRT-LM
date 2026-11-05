@@ -368,6 +368,16 @@ struct AdvancedSettings {
   // `MtpGatingConfig` defaults.
   std::optional<MtpGatingConfig> mtp_gating_config;
 
+  // If true, the per-layer embedding lookup passes the token IDs of each
+  // prefill batch to LiteRT via `litert::Options::SetPrefetchEmbeddingTokenIds`
+  // on the first valid token's `CompiledModel::Run` call so LiteRT issues an
+  // advisory OS page-cache readahead hint (`madvise(MADV_WILLNEED)` on
+  // Linux/Android, `PrefetchVirtualMemory` on Windows; no-op on Apple
+  // platforms yet). Helps while the per-layer embedding tables are
+  // memory-mapped and cold; no effect once resident or when the signature has
+  // no CPU `EMBEDDING_LOOKUP` op (e.g. GPU/NPU); never changes results.
+  bool prefetch_embedding_rows = false;
+
   bool operator==(const AdvancedSettings& other) const = default;
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

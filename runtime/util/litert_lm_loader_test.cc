@@ -35,6 +35,7 @@
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/any2any_metadata.pb.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/text2speech_metadata.pb.h"
@@ -42,11 +43,13 @@
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
+#include "support/util/test_utils.h"
 
 namespace litert::lm {
 
 namespace {
 
+using ::litert::support::MappingProtection;
 using ::testing::status::StatusIs;
 
 void WriteDummyModelFile(
@@ -104,6 +107,40 @@ void WriteDummyModelFile(const std::string& path,
                sizeof(large_decompression_size));
   }
   file.close();
+}
+
+// Writes a model file with one TFLiteModel section per entry of
+// `model_types`, each kSectionSize bytes long and starting on its own
+// mapping-alignment boundary so the loader maps every section separately.
+// Returns the file path.
+std::string WriteModelFileWithTfLiteSections(
+    const std::string& file_name, const std::vector<std::string>& model_types) {
+  constexpr uint64_t kSectionSize = 64;
+  const uint64_t alignment = MemoryMappedFile::GetOffsetAlignment();
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) / file_name;
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections;
+  for (size_t i = 0; i < model_types.size(); ++i) {
+    auto model_type =
+        schema::CreateKeyValuePair(builder, "model_type", model_types[i]);
+    auto items = builder.CreateVector(
+        std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+    const uint64_t begin = (i + 1) * alignment;
+    sections.push_back(
+        schema::CreateSectionObject(builder, items, begin, begin + kSectionSize,
+                                    schema::AnySectionDataType_TFLiteModel));
+  }
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  // Pad the file so every section lies inside it.
+  std::ofstream file(test_file_path.string(), std::ios::binary | std::ios::app);
+  const std::string padding((model_types.size() + 1) * alignment, '\0');
+  file.write(padding.data(), padding.size());
+  return test_file_path.string();
 }
 
 TEST(LitertLmLoaderTest, InitializeWithInvalidOffsets) {
@@ -526,6 +563,69 @@ TEST(LitertLmLoaderTest, ZeroByteSectionTreatedAsAbsent) {
   EXPECT_THAT(loader->GetSectionBuffer(per_layer_key),
               StatusIs(absl::StatusCode::kNotFound));
 }
+
+TEST(LitertLmLoaderTest, ReadOnlySectionModelTypesMatchWireNames) {
+  // MapSection maps these sections read-only by wire name; LlmMetadata and
+  // EmbeddingMetadata share the names.
+  EXPECT_EQ(TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_EMBEDDER),
+            "tf_lite_embedder");
+  EXPECT_EQ(TfLiteModelTypeToWireString(
+                proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+            "tf_lite_per_layer_embedder");
+  EXPECT_EQ(
+      TfLiteModelTypeToWireString(proto::EmbeddingMetadata::TF_LITE_EMBEDDER),
+      "tf_lite_embedder");
+  EXPECT_EQ(TfLiteModelTypeToWireString(
+                proto::EmbeddingMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+            "tf_lite_per_layer_embedder");
+}
+
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+TEST(LitertLmLoaderTest, MapsEmbeddingLookupSectionsReadOnly) {
+  const std::string model_path = WriteModelFileWithTfLiteSections(
+      "section_protection.litertlm",
+      {TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+       TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_EMBEDDER),
+       TfLiteModelTypeToWireString(
+           proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)});
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+
+  // Only the two embedding lookup graphs are mapped read-only; the main model
+  // stays copy-on-write because LiteRT rewrites its flatbuffer in place.
+  auto prefill =
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  ASSERT_EQ(prefill.Size(), 64);
+  EXPECT_EQ(MappingProtection(prefill.Data()), "rw-");
+  auto embedder = loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER);
+  ASSERT_EQ(embedder.Size(), 64);
+  EXPECT_EQ(MappingProtection(embedder.Data()), "r--");
+  auto per_layer_embedder =
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  ASSERT_EQ(per_layer_embedder.Size(), 64);
+  EXPECT_EQ(MappingProtection(per_layer_embedder.Data()), "r--");
+}
+
+TEST(LitertLmLoaderTest, WholeFileMappingKeepsEverySectionWritable) {
+  // Sections served from a caller-provided mapping keep its protection; the
+  // loader cannot change individual sections there.
+  const std::string model_path = WriteModelFileWithTfLiteSections(
+      "section_protection_mmap.litertlm",
+      {TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+       TfLiteModelTypeToWireString(
+           proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)});
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  auto per_layer_embedder =
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  ASSERT_EQ(per_layer_embedder.Size(), 64);
+  EXPECT_EQ(MappingProtection(per_layer_embedder.Data()), "rw-");
+}
+#endif  // defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 
 TEST(LitertLmLoaderTest, LoadCapabilityText2SpeechMetadataAndNamedSections) {
   auto test_file_path = std::filesystem::path(::testing::TempDir()) /

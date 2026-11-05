@@ -36,9 +36,11 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/core/options.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 
 #ifndef EXPECT_OK
@@ -742,6 +744,212 @@ TEST_F(EmbeddingLookupTextTest, CreateFromCompiledModel) {
   std::vector<float> output_vector(4 * 32);
   int32_t token = 1;
   EXPECT_OK(embedding->LookupDecode(token, output_vector));
+}
+
+TEST_F(EmbeddingLookupTextTest, LookupPrefillWithRowPrefetchIsIdentical) {
+  std::unique_ptr<EmbeddingLookupText> embedding = GetEmbeddingLookupText();
+  ASSERT_NE(embedding, nullptr);
+
+  Dimensions dimensions({1, 4, 4, 32});
+  std::vector<int> tokens = {-1, 1, 2, 3};
+  absl::Span<const int> tokens_span(tokens);
+
+  // Baseline without prefetch.
+  EXPECT_FALSE(embedding->row_prefetch_enabled());
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer without_prefetch,
+                              GetTensorBuffer(dimensions));
+  ASSERT_OK(embedding->LookupPrefill(tokens_span, &without_prefetch, 0));
+
+  // With prefetch enabled.
+  ASSERT_OK(embedding->EnableRowPrefetch());
+  EXPECT_TRUE(embedding->row_prefetch_enabled());
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer with_prefetch,
+                              GetTensorBuffer(dimensions));
+  ASSERT_OK(embedding->LookupPrefill(tokens_span, &with_prefetch, 0));
+  EXPECT_TRUE(embedding->row_prefetch_enabled());
+
+  // Prefetch is still enabled.
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer with_prefetch_again,
+                              GetTensorBuffer(dimensions));
+  ASSERT_OK(embedding->LookupPrefill(tokens_span, &with_prefetch_again, 0));
+  EXPECT_TRUE(embedding->row_prefetch_enabled());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto without_prefetch_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(
+          without_prefetch, ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto with_prefetch_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(
+          with_prefetch, ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto with_prefetch_again_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(
+          with_prefetch_again, ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t size, without_prefetch.Size());
+  EXPECT_EQ(memcmp(without_prefetch_lock_and_addr.second,
+                   with_prefetch_lock_and_addr.second, size),
+            0);
+  EXPECT_EQ(memcmp(without_prefetch_lock_and_addr.second,
+                   with_prefetch_again_lock_and_addr.second, size),
+            0);
+
+  auto output_tensor_ptr =
+      reinterpret_cast<float*>(with_prefetch_lock_and_addr.second);
+  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+    int token = tokens[idx0];
+    for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+      for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+        float expected_value;
+        if (token < 0) {
+          expected_value = 10000.0 * 0 + 100.0 * idx2 + idx3;
+        } else {
+          expected_value = 10000.0 * token + 100.0 * idx2 + idx3;
+        }
+        size_t offset =
+            idx0 * dimensions[2] * dimensions[3] + idx2 * dimensions[3] + idx3;
+        EXPECT_NEAR(output_tensor_ptr[offset], expected_value, 1e-5);
+      }
+    }
+  }
+}
+
+TEST_F(EmbeddingLookupTextTest, EnableRowPrefetchOnPrebuiltCompiledModel) {
+  auto model_path = std::filesystem::path(::testing::SrcDir()) / kTestdataDir /
+                    "dummy_embedding_cpu_model.tflite";
+  auto compiled_model_res = CompiledModel::Create(*env_, model_path.string(),
+                                                  litert::HwAccelerators::kCpu);
+  ASSERT_TRUE(compiled_model_res.HasValue());
+  auto compiled_model = std::move(compiled_model_res.Value());
+  ASSERT_OK_AND_ASSIGN(auto embedding, EmbeddingLookupText::Create(
+                                           *env_, std::move(compiled_model)));
+  EXPECT_FALSE(embedding->row_prefetch_enabled());
+  EXPECT_OK(embedding->EnableRowPrefetch());
+  EXPECT_TRUE(embedding->row_prefetch_enabled());
+
+  Dimensions dimensions({1, 4, 4, 32});
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer output_tensor,
+                              GetTensorBuffer(dimensions));
+  std::vector<int> tokens = {-1, 1, 2, 3};
+  absl::Span<const int> tokens_span(tokens);
+  ASSERT_OK(embedding->LookupPrefill(tokens_span, &output_tensor, 0));
+  EXPECT_TRUE(embedding->row_prefetch_enabled());
+
+  auto output_tensor_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
+      output_tensor, ::litert::TensorBuffer::LockMode::kRead);
+  auto output_tensor_ptr =
+      reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
+  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+    int token = tokens[idx0];
+    for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+      for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+        float expected_value;
+        if (token < 0) {
+          expected_value = 10000.0 * 0 + 100.0 * idx2 + idx3;
+        } else {
+          expected_value = 10000.0 * token + 100.0 * idx2 + idx3;
+        }
+        size_t offset =
+            idx0 * dimensions[2] * dimensions[3] + idx2 * dimensions[3] + idx3;
+        EXPECT_NEAR(output_tensor_ptr[offset], expected_value, 1e-5);
+      }
+    }
+  }
+}
+
+namespace {
+
+class RecordingEmbeddingLookupText : public EmbeddingLookupText {
+ public:
+  struct CallRecord {
+    int token = 0;
+    bool has_run_options = false;
+    std::vector<int32_t> prefetch_ids;
+  };
+
+  static absl::StatusOr<std::unique_ptr<RecordingEmbeddingLookupText>> Create(
+      litert::Environment& env, const litert::Model* model) {
+    auto instance = std::unique_ptr<RecordingEmbeddingLookupText>(
+        new RecordingEmbeddingLookupText(env, model));
+    auto status = instance->Initialize();
+    if (!status.ok()) {
+      return status;
+    }
+    return instance;
+  }
+
+  const std::vector<CallRecord>& calls() const { return calls_; }
+  void clear_calls() { calls_.clear(); }
+
+ protected:
+  RecordingEmbeddingLookupText(litert::Environment& env,
+                               const litert::Model* model)
+      : EmbeddingLookupText(env, model, /*signature_key=*/std::nullopt,
+                            /*external_weight_file=*/std::nullopt,
+                            /*external_weight_sections=*/{}) {}
+
+  absl::Status LookupInternal(int token, absl::Span<uint8_t> buffer,
+                              litert::Options* run_options) override {
+    CallRecord rec;
+    rec.token = token;
+    rec.has_run_options = (run_options != nullptr);
+    if (run_options != nullptr) {
+      auto built = ::litert::internal::LiteRtOptionsPtrBuilder::Build(
+          *run_options, env_.GetHolder());
+      if (built.HasValue() && *built != nullptr) {
+        rec.prefetch_ids = (*built)->prefetch_embedding_token_ids;
+      }
+    }
+    calls_.push_back(std::move(rec));
+    return EmbeddingLookupText::LookupInternal(token, buffer, run_options);
+  }
+
+ private:
+  std::vector<CallRecord> calls_;
+};
+
+}  // namespace
+
+TEST_F(EmbeddingLookupTextTest,
+       LookupPrefillPassesOptionsOnlyOnFirstValidToken) {
+  ASSERT_OK(CreateModelFromFile());
+  ASSERT_TRUE(model_.has_value());
+  ASSERT_OK_AND_ASSIGN(auto embedding,
+                       RecordingEmbeddingLookupText::Create(*env_, &*model_));
+  embedding->clear_calls();
+
+  Dimensions dimensions({1, 4, 4, 32});
+  std::vector<int> tokens = {-1, 1, 2, 3};
+  absl::Span<const int> tokens_span(tokens);
+
+  // Without EnableRowPrefetch(), no call receives run_options.
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer out_without,
+                              GetTensorBuffer(dimensions));
+  ASSERT_OK(embedding->LookupPrefill(tokens_span, &out_without, 0));
+  ASSERT_EQ(embedding->calls().size(), 4);
+  for (const auto& call : embedding->calls()) {
+    EXPECT_FALSE(call.has_run_options);
+  }
+
+  // With EnableRowPrefetch(), negative tokens (token=-1) receive nullptr, the
+  // first non-negative token (token=1) receives run_options with the batch's
+  // token IDs, and subsequent tokens in the same batch receive nullptr.
+  embedding->clear_calls();
+  ASSERT_OK(embedding->EnableRowPrefetch());
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer out_with,
+                              GetTensorBuffer(dimensions));
+  ASSERT_OK(embedding->LookupPrefill(tokens_span, &out_with, 0));
+  ASSERT_EQ(embedding->calls().size(), 4);
+  EXPECT_EQ(embedding->calls()[0].token, -1);
+  EXPECT_FALSE(embedding->calls()[0].has_run_options);
+  EXPECT_EQ(embedding->calls()[1].token, 1);
+  EXPECT_TRUE(embedding->calls()[1].has_run_options);
+  EXPECT_THAT(embedding->calls()[1].prefetch_ids,
+              testing::ElementsAre(-1, 1, 2, 3));
+  EXPECT_EQ(embedding->calls()[2].token, 2);
+  EXPECT_FALSE(embedding->calls()[2].has_run_options);
+  EXPECT_EQ(embedding->calls()[3].token, 3);
+  EXPECT_FALSE(embedding->calls()[3].has_run_options);
 }
 
 }  // namespace litert::lm

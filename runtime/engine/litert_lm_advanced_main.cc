@@ -224,6 +224,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--num_logits_to_print_after_decode=<num_logits_to_print>] "
            "[--score_target_text=<target_text>] "
            "[--gpu_madvise_original_shared_tensors=<true|false>] "
+           "[--prefetch_embedding_rows=<true|false>] "
            "[--gpu_enable_metal_residency_set=<true|false>] "
            "[--gpu_use_ir_model=<enabled|disabled|default>] "
            "[--preferred_device_substr=<device_substr>] "
@@ -311,6 +312,8 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.score_target_text = absl::GetFlag(FLAGS_score_target_text);
   settings.gpu_madvise_original_shared_tensors =
       absl::GetFlag(FLAGS_gpu_madvise_original_shared_tensors);
+  settings.prefetch_embedding_rows =
+      absl::GetFlag(FLAGS_prefetch_embedding_rows);
   settings.gpu_enable_metal_residency_set =
       absl::GetFlag(FLAGS_gpu_enable_metal_residency_set);
   ABSL_ASSIGN_OR_RETURN(settings.gpu_use_ir_model,

@@ -122,6 +122,7 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> CreateImpl(
   DWORD protect;
   switch (access) {
     case MemoryMappedFile::Access::kRead:
+    case MemoryMappedFile::Access::kReadOnly:
       win_access = FILE_MAP_READ;
       protect = PAGE_READONLY;
       break;

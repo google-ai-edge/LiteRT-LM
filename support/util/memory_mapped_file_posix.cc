@@ -129,8 +129,13 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
     length = file_size - offset;
   }
 
-  void* data =
-      mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, file, offset);
+  // kReadOnly maps the file PROT_READ: writes through data() fault, and on
+  // Apple platforms madvise(MADV_WILLNEED) reads the pages into the page cache
+  // instead of copy-on-writing them. Every other mode, kRead included, maps it
+  // copy-on-write (writes stay private to this process).
+  const int prot =
+      access == Access::kReadOnly ? PROT_READ : PROT_READ | PROT_WRITE;
+  void* data = mmap(nullptr, length, prot, MAP_PRIVATE, file, offset);
   RET_CHECK_NE(data, MAP_FAILED) << "Failed to map, error: " << strerror(errno);
   RET_CHECK_NE(data, nullptr) << "Failed to map.";
 #ifdef __APPLE__
@@ -139,8 +144,8 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
     ABSL_LOG(WARNING) << "madvise failed: " << strerror(errno);
   }
 #else
-  // Skip MADV_WILLNEED for read-only mappings so callers inspecting only
-  // metadata pages do not trigger kernel readahead for the entire region.
+  // Skip MADV_WILLNEED for kRead so callers inspecting only metadata pages do
+  // not trigger kernel readahead for the entire region. kReadOnly keeps it.
   if (access != Access::kRead && madvise(data, length, MADV_WILLNEED) != 0) {
     ABSL_LOG(WARNING) << "madvise failed: " << strerror(errno);
   }

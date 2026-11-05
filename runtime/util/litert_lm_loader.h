@@ -252,6 +252,13 @@ class LitertLmLoader {
   // Initializes the LitertLmLoader. Includes reading the model header and
   // recording the section locations for on-demand loading later.
   absl::Status Initialize();
+  // Maps the section [begin_offset, end_offset) and records its buffer. With
+  // a ScopedFile source the embedding lookup model sections
+  // (`tf_lite_embedder`, `tf_lite_per_layer_embedder`, in LLM and embedding
+  // models alike) are mapped read-only and every other section copy-on-write,
+  // because LiteRT rewrites the main model's flatbuffer in place; with a
+  // MemoryMappedFile source all sections are served from the caller's mapping
+  // as is.
   absl::Status MapSection(BufferKey buffer_key, uint64_t begin_offset,
                           uint64_t end_offset)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(section_buffers_mutex_);

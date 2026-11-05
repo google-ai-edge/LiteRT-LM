@@ -119,6 +119,12 @@ ABSL_FLAG(std::string, score_target_text, "", "Target text to score.");
 ABSL_FLAG(bool, gpu_madvise_original_shared_tensors, true,
           "If true, the GPU backend will madvise the original shared tensors "
           "after use.");
+ABSL_FLAG(bool, prefetch_embedding_rows, false,
+          "If true, the per-layer embedding lookup asks LiteRT to prefetch the "
+          "embedding rows of each prefill batch before looking them up (an "
+          "advisory page-cache hint; Linux/Android/Windows today, no effect on "
+          "Apple platforms yet). Helps while the embedding tables are "
+          "memory-mapped and cold; never changes results.");
 ABSL_FLAG(
     bool, disable_cache, false,
     "Disable both the weight and program caches. If set to true, "

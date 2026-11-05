@@ -307,11 +307,20 @@ absl::Status PopulateLastTokenEmbedding(
   return absl::OkStatus();
 }
 
+// Whether `executor_settings` turn on embedding row prefetch.
+bool PrefetchEmbeddingRowsEnabled(
+    const LlmExecutorSettings& executor_settings) {
+  const std::optional<AdvancedSettings>& advanced =
+      executor_settings.GetAdvancedSettings();
+  return advanced.has_value() && advanced->prefetch_embedding_rows;
+}
+
 absl::Status InitializeAuxiliaryExecutorComponents(
     ::litert::Environment& lrt_env, ModelResources* resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup,
-    const proto::ExecutorMetadata*& executor_metadata) {
+    const proto::ExecutorMetadata*& executor_metadata,
+    bool prefetch_embedding_rows) {
   if (resources != nullptr) {
     auto executor_metadata_or = resources->GetExecutorMetadata();
     if (executor_metadata_or.ok()) {
@@ -320,7 +329,8 @@ absl::Status InitializeAuxiliaryExecutorComponents(
   }
   if (embedding_lookup == nullptr && resources != nullptr) {
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
-        lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup));
+        lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup,
+        prefetch_embedding_rows));
   }
   return absl::OkStatus();
 }
@@ -2202,7 +2212,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   ABSL_RETURN_IF_ERROR(InitializeAuxiliaryExecutorComponents(
       lrt_env, resources, embedding_lookup, per_layer_embedding_lookup,
-      executor_metadata));
+      executor_metadata, PrefetchEmbeddingRowsEnabled(executor_settings)));
   std::string cache_path = executor_settings.GetCacheDir();
   auto activation_data_type = ActivationDataType::FLOAT16;
   // TODO: b/433590109 - Some GPUs do not support FP16, so we need to check the
@@ -2744,7 +2754,7 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   ABSL_RETURN_IF_ERROR(InitializeAuxiliaryExecutorComponents(
       lrt_env, resources, embedding_lookup, per_layer_embedding_lookup,
-      executor_metadata));
+      executor_metadata, PrefetchEmbeddingRowsEnabled(executor_settings)));
 
   std::string weight_cache_path = executor_settings.GetCacheDir();
 

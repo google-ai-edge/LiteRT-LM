@@ -447,11 +447,15 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
 }
 
 // Initializes the embedding lookup and per-layer embedding lookup managers from
-// the given model resources and environment.
+// the given model resources and environment. If `prefetch_embedding_rows` is
+// true, `per_layer_embedding_lookup` asks LiteRT to prefetch the embedding rows
+// of each prefill batch (EmbeddingLookupText::EnableRowPrefetch, an advisory
+// page-cache hint).
 absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
-    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup);
+    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup,
+    bool prefetch_embedding_rows = false);
 
 // Starts hardware-specific metrics collection on a compiled model.
 void StartCompiledModelMetricsCollection(LiteRtCompiledModel compiled_model,
