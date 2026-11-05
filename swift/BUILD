@@ -157,6 +157,7 @@ apple_xcframework(
             "arm64",
         ],
     },
+    linkopts = ["-headerpad_max_install_names"],
     minimum_os_versions = {
         "ios": "15.0",
     },
@@ -172,6 +173,7 @@ macos_dylib(
     linkopts = [
         "-undefined dynamic_lookup",
         "-install_name @rpath/libCLiteRTLM_mac.dylib",
+        "-headerpad_max_install_names",
     ],
     minimum_os_version = "12.0",
     visibility = ["//visibility:public"],

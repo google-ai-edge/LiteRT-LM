@@ -1099,6 +1099,7 @@ macos_dylib(
     linkopts = [
         "-undefined dynamic_lookup",
         "-install_name @rpath/libLiteRtTopKWebGpuSampler.dylib",
+        "-headerpad_max_install_names",
     ],
     minimum_os_version = LITERT_MIN_MACOS_VERSION,
     tags = ["manual"],
@@ -1119,6 +1120,7 @@ macos_dylib(
     linkopts = [
         "-undefined dynamic_lookup",
         "-install_name @rpath/libLiteRtTopKMetalSampler.dylib",
+        "-headerpad_max_install_names",
     ],
     minimum_os_version = LITERT_MIN_MACOS_VERSION,
     tags = ["manual"],
@@ -1147,6 +1149,7 @@ ios_framework(
     linkopts = [
         "-undefined dynamic_lookup",
         "-install_name @rpath/libLiteRtTopKMetalSampler.dylib",
+        "-headerpad_max_install_names",
     ],
     minimum_os_version = LITERT_MIN_IOS_VERSION,
     tags = [
