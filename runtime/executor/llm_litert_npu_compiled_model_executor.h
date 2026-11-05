@@ -226,6 +226,22 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::Status RestoreContext(
       std::unique_ptr<LlmContext> context_data) override;
 
+  // Saves the ring buffer KV cache of the sliding window layers (see
+  // npu/llm_litert_npu_ring_buffer_state.h) and the processed tokens in an
+  // `LlmProcessedContext`, like `LlmLiteRtCompiledModelExecutorBase`, so that
+  // rolling back more than one token after the ring buffer has wrapped around
+  // can be undone with `RestoreContext(ProcessedContext)`. Used by Conversation
+  // with rewinding disabled (`ConversationConfig::enable_rewinding()`), the
+  // default for the NPU backend.
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const override;
+
+  // Restores a context saved by `SaveContext()`: the ring buffers, the
+  // processed tokens and the step after them. Changes no state if the saved
+  // ring buffers don't match the active context group's.
+  absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) override;
+
  private:
   enum class SpeculativeDecodingType {
     kNone,
@@ -639,6 +655,17 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Tracks whether a decode step was run so we know how to update the
   // constraint state.
   bool ran_decode_ = false;
+
+  // Set when `SetCurrentStep` rolled back more than one token after the ring
+  // buffer KV cache wrapped around, until `RestoreContext(ProcessedContext)`
+  // restored the ring buffer (or `RestoreContext(LlmContext)` the whole KV
+  // cache). Prefill, decode, `SaveContext` and `CloneContext` fail while it is
+  // set, since the ring buffer holds the entries of the rolled back steps. It
+  // is not part of `LlmContext`, which is why `CloneContext` fails instead.
+  bool ring_buffer_restore_required_ = false;
+
+  // Returns an error if `ring_buffer_restore_required_` is set.
+  absl::Status CheckRingBufferRestored() const;
   int64_t kv_cache_init_value_ = 0;
 
   // The text decoder model (owned by ModelResources, which outlives the

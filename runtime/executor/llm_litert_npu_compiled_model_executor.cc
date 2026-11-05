@@ -31,6 +31,7 @@
 #include "absl/log/log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/numbers.h"  // from @com_google_absl
@@ -69,6 +70,7 @@
 #include "runtime/executor/npu/llm_litert_npu_embedder.h"
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
+#include "runtime/executor/npu/llm_litert_npu_ring_buffer_state.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/executor_metadata.pb.h"
@@ -1098,6 +1100,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
     lock.emplace(&execution_mutex_);
   }
   ran_decode_ = false;
+  ABSL_RETURN_IF_ERROR(CheckRingBufferRestored());
   // The prefilled tokens follow the last returned token, so tokens an MTP cycle
   // accepted beyond it (e.g. after the end-of-turn token) are not part of the
   // sequence anymore, and the next MTP cycle has to start cold from the
@@ -1165,6 +1168,7 @@ absl::StatusOr<::litert::TensorBuffer>
 LlmLiteRtNpuCompiledModelExecutor::DecodeLogits(
     const ExecutorInputs& inputs, const ExecutorDecodeParams& decode_params) {
 
+  ABSL_RETURN_IF_ERROR(CheckRingBufferRestored());
   if (current_step_ >= executor_settings_.GetMaxNumTokens()) {
     return absl::ResourceExhaustedError("Reached maximum number of tokens.");
   }
@@ -1367,6 +1371,7 @@ absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtNpuCompiledModelExecutor::Decode(
     const ExecutorDecodeParams& decode_params) {
   auto start = absl::Now();
+  ABSL_RETURN_IF_ERROR(CheckRingBufferRestored());
 
   if (current_step_ >= executor_settings_.GetMaxNumTokens()) {
     return absl::ResourceExhaustedError("Reached maximum number of tokens.");
@@ -1768,15 +1773,18 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
   const ResolvedPrefillSignatures active_sigs = BuildResolvedPrefillSignatures(
       runner_size, ActiveContextGroup().context_size);
 
+  // Roll back the processed tokens first (e.g. after `SetCurrentStep`), which
+  // also drops their pending input token, before reading the pending input
+  // token.
+  if (processed_tokens_.TokenCount() != current_step_) {
+    LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(current_step_));
+  }
   auto [internal_start_step, pending_input_token] =
       processed_tokens_.GetNextUnprocessedToken();
   auto start_prepare_inputs = absl::Now();
   std::vector<int> tokens_to_embed;
   tokens_to_embed.reserve(ids.size());
 
-  if (processed_tokens_.TokenCount() != current_step_) {
-    LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(current_step_));
-  }
   // Check if we have a pending input token, e.g. because we are running a
   // multi-turn conversation or a multi-chunk prefill.
   std::vector<int32_t> prefill_positions;
@@ -2641,10 +2649,19 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::CommitVerifiedKVCache(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::SetCurrentStep(int new_step) {
   const int max_step = processed_tokens_.TokenCount();
-  if (new_step != (max_step - 1)) {
-    return absl::InvalidArgumentError(
-        "NPU executor's SetCurrentStep only supports rolling back one token at "
-        "the end of decode.");
+  if (new_step < 0 || new_step >= max_step) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "NPU executor's SetCurrentStep only supports rolling back, got step ",
+        new_step, " with ", max_step, " processed tokens."));
+  }
+  // `processed_tokens_` is rolled back lazily (by the next prefill or decode),
+  // so `new_step` can also be after `current_step_`: the resource manager
+  // moves the step forward over processed tokens that match the next prefill
+  // (`RemoveMatchingTokens`), reusing their KV cache entries. While the ring
+  // buffer has to be restored, those entries are overwritten, so only
+  // `SessionAdvanced::RestoreContext`'s call at the current step is accepted.
+  if (ring_buffer_restore_required_ && new_step != current_step_) {
+    return CheckRingBufferRestored();
   }
 
   for (int i = new_step; i < current_step_; ++i) {
@@ -2655,6 +2672,23 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::SetCurrentStep(int new_step) {
     }
   }
 
+  // Rolling back more than one token, e.g. when Conversation rewinds a model
+  // turn to refill it as rendered by the prompt template. The KV cache entries
+  // of the rolled back steps are overwritten by the next steps. With a ring
+  // buffer KV cache (sliding window layers), once the ring buffer may have
+  // wrapped around, the rolled back steps have also overwritten the entries of
+  // the steps one ring buffer earlier, so the ring buffer has to be restored
+  // from a context saved with `SaveContext()` at the new step (as
+  // `SessionAdvanced::RestoreContext` does right after this call) before the
+  // next prefill or decode. The entries written so far reach up to the
+  // processed tokens (including the lazily rolled back ones), and up to a
+  // prefill chunk further, e.g. when a prefill writes the KV cache of its whole
+  // padded chunk.
+  const NpuGraphLayout& layout = ActiveContextGroup().layout;
+  ring_buffer_restore_required_ =
+      new_step < max_step - 1 && layout.uses_ringbuffer &&
+      layout.local_cache_length.has_value() &&
+      max_step + layout.prefill_chunk_size > *layout.local_cache_length;
   current_step_ = new_step;
   DiscardSpeculativeState();
   return absl::OkStatus();
@@ -2663,6 +2697,71 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::SetCurrentStep(int new_step) {
 absl::StatusOr<const ProcessedTokens*>
 LlmLiteRtNpuCompiledModelExecutor::GetProcessedTokens() const {
   return &processed_tokens_;
+}
+
+absl::StatusOr<std::unique_ptr<ProcessedContext>>
+LlmLiteRtNpuCompiledModelExecutor::SaveContext() const {
+  // Like `LlmLiteRtCompiledModelExecutorBase::SaveContext`: only the state that
+  // later steps overwrite before they are rolled back is saved, here the ring
+  // buffer KV cache of the sliding window layers (none for models without a
+  // ring buffer).
+  ABSL_RETURN_IF_ERROR(CheckRingBufferRestored());
+  // `processed_tokens_` is rolled back lazily (by the next prefill or decode),
+  // so roll back the saved copy like they would, e.g. after `SetCurrentStep`.
+  ProcessedTokens processed_tokens = processed_tokens_;
+  if (processed_tokens.TokenCount() != current_step_) {
+    ABSL_RETURN_IF_ERROR(processed_tokens.RollBackToStep(current_step_));
+  }
+  const NpuContextGroup& group = ActiveContextGroup();
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<LegacyMapState> ring_buffers,
+      SaveRingBuffers(env_, group.layout, group.input_kv_cache_buffers));
+  return std::make_unique<LlmProcessedContext>(
+      /*lora_id=*/std::nullopt, std::move(ring_buffers),
+      std::move(processed_tokens));
+}
+
+absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
+    std::unique_ptr<ProcessedContext> processed_context) {
+  auto* llm_processed_context =
+      dynamic_cast<LlmProcessedContext*>(processed_context.get());
+  RET_CHECK(llm_processed_context != nullptr)
+          .SetCode(absl::StatusCode::kInvalidArgument)
+      << "Expected a ProcessedContext saved by SaveContext().";
+  auto* ring_buffers =
+      dynamic_cast<LegacyMapState*>(llm_processed_context->state().get());
+  RET_CHECK(ring_buffers != nullptr).SetCode(absl::StatusCode::kInvalidArgument)
+      << "Expected a ProcessedContext saved by SaveContext().";
+
+  // The executor only switches to larger context groups, and stays in the
+  // active one when rolling back. All context groups alias the KV cache
+  // buffers of the largest one, and the ring buffers have the same shape (and
+  // so memory layout) in every context group, so a context saved in a smaller
+  // context group is restored into the active one.
+  NpuContextGroup& group = ActiveContextGroup();
+  ABSL_RETURN_IF_ERROR(RestoreRingBuffers(*ring_buffers, group.layout,
+                                          group.input_kv_cache_buffers));
+  // Restore the processed tokens as saved, including the pending input token:
+  // it was not processed (and its KV cache entries not written) when the
+  // context was saved, so the restored ring buffers do not contain it, and it
+  // has to be processed again by the next prefill or decode.
+  processed_tokens_ = std::move(llm_processed_context->processed_tokens());
+  current_step_ = processed_tokens_.TokenCount();
+  ring_buffer_restore_required_ = false;
+  DiscardSpeculativeState();
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtNpuCompiledModelExecutor::CheckRingBufferRestored()
+    const {
+  if (ring_buffer_restore_required_) {
+    return absl::FailedPreconditionError(
+        "The NPU executor rolled back more than one token after its ring "
+        "buffer KV cache wrapped around, so the ring buffer has to be restored "
+        "with RestoreContext() first (e.g. by using "
+        "ConversationConfig::Builder::SetEnableRewinding(false)).");
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<int> LlmLiteRtNpuCompiledModelExecutor::GetVocabSize() {
@@ -2685,6 +2784,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   NPU_EXECUTOR_LOG(INFO) << "Custom NPU execution latency stats:\n"
                          << latency_stats_;
   current_step_ = 0;
+  ring_buffer_restore_required_ = false;
   ran_decode_ = false;
   active_context_group_index_ = 0;
   if (!context_groups_.empty()) {
@@ -2723,6 +2823,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateNewContext(
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
+  // The cloned context would hold the ring buffer entries of the rolled back
+  // steps, without `ring_buffer_restore_required_`.
+  ABSL_RETURN_IF_ERROR(CheckRingBufferRestored());
   absl::flat_hash_map<std::string, ::litert::TensorBuffer> kv_cache_buffers;
   for (const auto& [name, buffer] :
        ActiveContextGroup().input_kv_cache_buffers) {
@@ -2755,6 +2858,8 @@ LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
 absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   DiscardSpeculativeState();
+  // The whole KV cache, including the ring buffers, is restored below.
+  ring_buffer_restore_required_ = false;
   current_step_ = context_data->runtime_state().current_step;
   processed_tokens_ = context_data->processed_context().processed_tokens();
   if (context_data->runtime_config().sampler_params.has_value()) {
