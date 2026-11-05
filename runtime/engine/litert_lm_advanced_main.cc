@@ -88,6 +88,12 @@ ABSL_FLAG(bool, use_session, false,
           "Note that session does not use Jinja templates. As such, if using "
           "Jinja in LLM Metadata, the user is responsible for manually "
           "applying the prompt template to the input prompt.");
+ABSL_FLAG(bool, enable_debugger, false,
+          "Enable the AI Edge Debugger to write unencrypted tensor and token "
+          "captures to <cache_dir>/litert_lm_debugger/<session_id>/ "
+          "(overwriting any existing captures for that session). Requires "
+          "--cache_dir to be set to a writable directory and "
+          "--disable_cache=false.");
 ABSL_FLAG(int, min_log_severity, -1,
           "Minimum log severity (-1:Default Behavior, 0:Verbose, 1:Debug, "
           "2:Info, 3:Warning, 4:Error, 5:Fatal, 1000:Silent)");
@@ -210,6 +216,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--prefill_chunk_size=<prefill_chunk_size>] "
            "[--vision_backend=<cpu|gpu|npu>] [--audio_backend=<cpu|gpu>] "
            "[--sampler_backend=<cpu|gpu>] [--benchmark] "
+           "[--cache_dir=<cache_dir>] [--enable_debugger=<true|false>] "
            "[--benchmark_prefill_tokens=<num_prefill_tokens>] "
            "[--benchmark_decode_tokens=<num_decode_tokens>] "
            "[--async=<true|false>] [--force_f32=<true|false] "
@@ -286,6 +293,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.num_output_candidates = absl::GetFlag(FLAGS_num_output_candidates);
   settings.benchmark = absl::GetFlag(FLAGS_benchmark);
   settings.enable_profiling = absl::GetFlag(FLAGS_enable_profiling);
+  settings.enable_debugger = absl::GetFlag(FLAGS_enable_debugger);
   settings.benchmark_prefill_tokens =
       absl::GetFlag(FLAGS_benchmark_prefill_tokens);
   settings.benchmark_decode_tokens =

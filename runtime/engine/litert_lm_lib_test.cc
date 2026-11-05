@@ -919,6 +919,25 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_BenchmarkParams) {
   EXPECT_EQ(engine_settings_or->GetBenchmarkParams()->num_decode_tokens(), 64);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_EnableDebugger) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+
+  ASSERT_OK_AND_ASSIGN(EngineSettings engine_settings,
+                       CreateEngineSettings(settings));
+  EXPECT_FALSE(engine_settings.GetEnableDebugger());
+
+  settings.cache_dir = "/tmp/cache";
+  settings.enable_debugger = true;
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  EXPECT_TRUE(engine_settings.GetEnableDebugger());
+  EXPECT_EQ(engine_settings.GetMainExecutorSettings().GetCacheDir(),
+            "/tmp/cache");
+}
+
 TEST(LiteRtLmLibTest, CreateSessionConfig_Default) {
   LiteRtLmSettings settings;
   SessionConfig config = CreateSessionConfig(settings);

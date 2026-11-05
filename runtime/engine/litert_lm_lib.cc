@@ -746,6 +746,7 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       EngineSettings::CreateDefault(std::move(model_assets), backend,
                                     vision_backend, audio_backend));
   backend = engine_settings.GetMainExecutorSettings().GetBackend();
+  engine_settings.SetEnableDebugger(settings.enable_debugger);
   // The deprecated `enable_speculative_decoding` means kOn when no mode is set.
   std::optional<SpeculativeDecodingMode> speculative_decoding_mode =
       settings.speculative_decoding_mode;
