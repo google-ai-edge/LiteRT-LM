@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -209,6 +210,26 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   absl::Status RestoreContext(
       std::unique_ptr<LlmContext> context_data) override;
+
+  // Saves the ring buffer KV cache of the sliding window (local) layers, so
+  // that rolling back more than one token after the ring buffer has wrapped
+  // around can be undone with `RestoreContext(ProcessedContext)`. Used by
+  // Conversation with `SetEnableRewinding(false)`, like the GPU artisan
+  // executor's local context.
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const override;
+
+  // Restores the ring buffer KV cache saved by `SaveContext()`, after
+  // `SetCurrentStep` rolled back to the step of the saved context.
+  absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) override;
+
+  // The number of contexts saved with `SaveContext()` that are still alive,
+  // per step (see `saved_context_steps_`).
+  struct SavedContextSteps {
+    absl::Mutex mutex;
+    absl::flat_hash_map<int, int> counts ABSL_GUARDED_BY(mutex);
+  };
 
  private:
   enum class SpeculativeDecodingType {
@@ -618,6 +639,25 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Tracks whether a decode step was run so we know how to update the
   // constraint state.
   bool ran_decode_ = false;
+
+  // Set when `SetCurrentStep` rolled back more than one token after the ring
+  // buffer KV cache wrapped around, until `RestoreContext(ProcessedContext)`
+  // restored the ring buffer (or `RestoreContext(LlmContext)` the whole KV
+  // cache). Prefill and decode fail while it is set, since
+  // the ring buffer holds the entries of the rolled back steps.
+  bool ring_buffer_restore_required_ = false;
+
+  // The number of contexts saved with `SaveContext()` that are still alive, per
+  // step. A context unregisters itself when it is destroyed (e.g. after
+  // `RestoreContext` restored it, or when the session drops it), so several
+  // saved contexts (e.g. one per session) are tracked. `SetCurrentStep` only
+  // rolls back more than one token after the ring buffer KV cache wrapped
+  // around to the step of a saved context.
+  std::shared_ptr<SavedContextSteps> saved_context_steps_ =
+      std::make_shared<SavedContextSteps>();
+
+  // Returns an error if `ring_buffer_restore_required_` is set.
+  absl::Status CheckRingBufferRestored() const;
   int64_t kv_cache_init_value_ = 0;
 
   // The text decoder model (owned by ModelResources, which outlives the
