@@ -53,6 +53,10 @@ public struct BenchmarkInfo {
 /// - Parameters:
 ///   - modelPath: The path to the model file.
 ///   - backend: The backend to use for the engine.
+///   - visionBackend: The backend to use for the vision executor. If `nil`, the vision executor
+///       is not initialized.
+///   - audioBackend: The backend to use for the audio executor. If `nil`, the audio executor is
+///       not initialized.
 ///   - prefillTokens: The number of tokens to prefill.
 ///   - decodeTokens: The number of tokens to decode.
 ///   - cacheDir: The directory for placing cache files. Set to ":nocache" to disable caching.
@@ -65,6 +69,8 @@ public struct BenchmarkInfo {
 ///   - speculativeDecodingConfig: The speculative decoding configuration of the benchmarked engine
 ///       (see `EngineConfig.speculativeDecodingConfig`). `nil` keeps the runtime default (`.off`),
 ///       unless the deprecated `ExperimentalFlags.enableSpeculativeDecoding` is set.
+///   - samplerConfig: The sampler configuration of the benchmarked conversation. `nil` uses the
+///       model's default sampler, like `ConversationConfig.samplerConfig`.
 /// - Returns: The benchmark info.
 /// - Throws: A `LiteRTLMError` if the engine fails to initialize or generate benchmark info.
 public func benchmark(
@@ -77,7 +83,8 @@ public func benchmark(
   cacheDir: String? = nil,
   prompt: String = "How are you",
   maxNumTokens: Int? = nil,
-  speculativeDecodingConfig: SpeculativeDecodingConfig? = nil
+  speculativeDecodingConfig: SpeculativeDecodingConfig? = nil,
+  samplerConfig: SamplerConfig? = nil
 ) async throws -> BenchmarkInfo {
   ExperimentalFlags.optIntoExperimentalAPIs()
 
@@ -100,7 +107,8 @@ public func benchmark(
   let engine = Engine(engineConfig: engineConfig)
   try await engine.initializeForBenchmark(prefillTokens: prefillTokens, decodeTokens: decodeTokens)
 
-  let conversation = try await engine.createConversation()
+  let conversation = try await engine.createConversation(
+    with: ConversationConfig(samplerConfig: samplerConfig))
   _ = try await conversation.sendMessage(Message(prompt))
   return try conversation.getBenchmarkInfo()
 }

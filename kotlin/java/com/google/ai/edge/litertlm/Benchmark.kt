@@ -95,6 +95,8 @@ data class BenchmarkInfo(
  * @param speculativeDecodingConfig The speculative decoding configuration of the benchmarked engine
  *   (see [EngineConfig.speculativeDecodingConfig]). `null` keeps the runtime default (off), unless
  *   the deprecated [ExperimentalFlags.enableSpeculativeDecoding] is set.
+ * @param samplerConfig The sampler configuration of the benchmarked conversation. When `null`, use
+ *   the model's default sampler, like [ConversationConfig.samplerConfig].
  * @return The benchmark info.
  */
 @ExperimentalApi
@@ -111,6 +113,7 @@ fun benchmark(
   loraConfig: LoraConfig? = null,
   maxNumTokens: Int? = null,
   speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
+  samplerConfig: SamplerConfig? = null,
 ): BenchmarkInfo {
   require(maxNumTokens == null || maxNumTokens > 0) {
     "maxNumTokens must be positive, but got $maxNumTokens."
@@ -144,7 +147,7 @@ fun benchmark(
     val conversationHandle =
       LiteRtLmJni.nativeCreateConversation(
         enginePointer,
-        null, // SamplerConfig
+        samplerConfig,
         "[]", // messagesJsonString
         "[]", // toolsDescriptionJsonString
         null, // channelsJsonString

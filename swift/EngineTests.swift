@@ -406,6 +406,23 @@ class EngineTests: XCTestCase {
     XCTAssertEqual(info.maxNumTokens, 64)
   }
 
+  func testBenchmark_withSamplerConfig_returnsBenchmarkInfo() async throws {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    let info = try await benchmark(
+      modelPath: modelPath,
+      backend: .cpu(),
+      prefillTokens: 16,
+      decodeTokens: 16,
+      samplerConfig: try SamplerConfig(topK: 1, topP: 1.0, temperature: 0.0)
+    )
+
+    XCTAssertGreaterThan(info.lastDecodeTokenCount, 0)
+  }
+
   /// Tests that deinit runs without crashing after initialization.
   func testDeinitDoesNotCrashAfterInitialize() async throws {
     // This function creates, initializes, and then implicitly deinits an engine
