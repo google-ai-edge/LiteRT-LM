@@ -13,7 +13,6 @@
 # limitations under the License.
 
 add_subdirectory(context_handler)
-add_subdirectory(processed_context)
 add_subdirectory(utils)
 
 # ==============================================================================
@@ -87,7 +86,6 @@ add_library(LiteRTLM::Runtime::Framework::ResourceManager ALIAS runtime_framewor
 target_link_libraries(runtime_framework_resource_libs INTERFACE
   LiteRTLM::Runtime::Framework::ResourceManager::Utils
   LiteRTLM::Runtime::Framework::ResourceManager::ContextHandler
-  LiteRTLM::Runtime::Framework::ResourceManager::ProcessedContext
   LiteRTLM::Runtime::Framework::ResourceManager::Manager
   LiteRTLM::Runtime::Framework::ResourceManager::SerialExecutionManager
   LiteRTLM::Runtime::Framework::ResourceManager::ThreadedExecutionManager

@@ -26,26 +26,6 @@ target_include_directories(runtime_framework_thread_options
 )
 
 # ==============================================================================
-# Execution Queue
-# ==============================================================================
-add_litertlm_library(runtime_framework_execution_queue STATIC
-  execution_queue.cc
-)
-add_library(LiteRTLM::Runtime::Framework::ExecutionQueue ALIAS runtime_framework_execution_queue)
-
-target_include_directories(runtime_framework_execution_queue
-  PUBLIC
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_framework_execution_queue
-  PUBLIC
-    LiteRTLM::Runtime::Framework::ThreadOptions
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
 # Threadpool
 # ==============================================================================
 
@@ -85,7 +65,6 @@ add_library(LiteRTLM::Runtime::Framework ALIAS runtime_framework_libs)
 
 target_link_libraries(runtime_framework_libs INTERFACE
   LiteRTLM::Runtime::Framework::ThreadOptions
-  LiteRTLM::Runtime::Framework::ExecutionQueue
   LiteRTLM::Runtime::Framework::Threadpool
   LiteRTLM::Runtime::Framework::ResourceManager
 )
