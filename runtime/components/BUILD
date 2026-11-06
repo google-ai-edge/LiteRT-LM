@@ -13,18 +13,12 @@
 # limitations under the License.
 
 # [Google-internal load of `cc_binary`]
-
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 # [Google-internal load of `cc_library`]
-# [Google-internal load of `cc_shared_library`]
 # [Google-internal load of `cc_test`]
 # [Google-internal load of `objc_library`]
-load(
-    "@bazel_skylib//rules:copy_file.bzl",
-    "copy_file",
-)
-load("@build_bazel_rules_apple//apple:ios.bzl", "ios_framework", "ios_unit_test")
-load("@build_bazel_rules_apple//apple:macos.bzl", "macos_dylib", "macos_unit_test")
+load("@build_bazel_rules_apple//apple:ios.bzl", "ios_unit_test")
+load("@build_bazel_rules_apple//apple:macos.bzl", "macos_unit_test")
 
 LITERT_MIN_IOS_VERSION = "15.0"
 
@@ -245,9 +239,7 @@ cc_library(
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_environment_options",
-        "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc/internal:litert_shared_library",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
@@ -266,7 +258,10 @@ cc_library(
 cc_library(
     name = "default_static_gpu_samplers",
     deps = select({
-        "//runtime/executor:android_webgpu": [":top_k_webgpu_sampler_static"],
+        "//runtime/executor:android_webgpu": [
+            ":top_k_opencl_sampler_static",
+            ":top_k_webgpu_sampler_static",
+        ],
         "@platforms//os:android": [":top_k_opencl_sampler_static"],
         "//runtime/executor:ios_webgpu": [":top_k_webgpu_sampler_static"],
         "//runtime/executor:macos_metal": [":top_k_metal_sampler_static"],
@@ -289,6 +284,9 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/test:matchers",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:test_utils",
@@ -493,33 +491,6 @@ objc_library(
     alwayslink = 1,
 )
 
-# This module requires the shared library of LiteRT runtime `libLiteRt.so`.
-# Need extra flag to build this target: --define=litert_runtime_link_mode=dynamic.
-objc_library(
-    name = "top_k_metal_sampler_runtimecapi",
-    srcs = ["top_k_metal_sampler.mm"],
-    copts = ["-ObjC++"],
-    features = ["-layering_check"],
-    target_compatible_with = select({
-        "@platforms//os:macos": [],
-        "@platforms//os:ios": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    textual_hdrs = ["top_k_metal_sampler.h"],
-    visibility = ["//visibility:private"],
-    deps = METAL_SAMPLER_COMMON_DEPS + [
-        "@com_google_absl//absl/debugging:leak_check",
-        "@com_google_absl//absl/status:status_macros",
-        "@litert//litert/c:litert_common",
-        "@litert//litert/c/internal:litert_runtime_builtin_none",
-        "@litert//litert/cc:litert_environment_api",
-        "@litert//litert/cc:litert_event",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc/internal:litert_handle",
-    ],
-)
-
 OPENCL_SAMPLER_COMMON_DEPS = [
     ":top_k_gpu_sampler",
     "@com_google_absl//absl/base:nullability",
@@ -606,32 +577,6 @@ cc_library(
     alwayslink = 1,
 )
 
-# This module requires the shared library of LiteRT runtime `libLiteRt.so`.
-# Need extra flag to build this target: --define=litert_runtime_link_mode=dynamic.
-cc_library(
-    name = "top_k_opencl_sampler_runtimecapi",
-    srcs = ["top_k_opencl_sampler.cc"],
-    hdrs = ["top_k_opencl_sampler.h"],
-    features = ["-layering_check"],
-    target_compatible_with = select({
-        "@platforms//os:android": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    visibility = ["//visibility:private"],
-    deps = OPENCL_SAMPLER_COMMON_DEPS + [
-        "@com_google_absl//absl/status:status_macros",
-        "@litert//litert/c/internal:litert_runtime_builtin_none",
-        "@litert//litert/cc:litert_any",
-        "@litert//litert/cc:litert_element_type",
-        "@litert//litert/cc:litert_environment_api",
-        "@litert//litert/cc:litert_environment_options",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc/internal:litert_handle",
-    ],
-)
-
 cc_test(
     name = "top_k_opencl_sampler_test",
     srcs = ["top_k_opencl_sampler_test.cc"],
@@ -709,96 +654,6 @@ cc_test(
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
-        "@litert//litert/cc/options:litert_gpu_options",
-        "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_accelerator",
-        "@litert//litert/test:matchers",
-        "//runtime/proto:llm_metadata_cc_proto",
-        "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:model_asset_bundle_resources",
-        "//runtime/util:scoped_file",
-    ],
-)
-
-cc_shared_library(
-    name = "top_k_opencl_sampler_so",
-    shared_lib_name = "libLiteRtTopKOpenClSampler.so",
-    tags = ["manual"],
-    target_compatible_with = select({
-        "@platforms//os:android": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    user_link_flags = select({
-        "@platforms//os:android": [
-            "-landroid",
-            "-Wl,-soname=libLiteRtTopKOpenClSampler.so",
-            # Align PT_LOAD segments and pad GNU_RELRO to a 16 KB boundary.
-            # See https://developer.android.com/guide/practices/page-sizes#relro-flag.
-            "-Wl,-z,max-page-size=16384",
-            "-Wl,-z,common-page-size=16384",
-        ],
-        "@platforms//os:ios": [],
-        "@platforms//os:macos": [],
-        "@platforms//os:windows": [],
-        "//conditions:default": ["-Wl,-soname=libLiteRtTopKOpenClSampler.so"],
-    }),
-    deps = [":top_k_opencl_sampler_runtimecapi"],
-)
-
-cc_library(
-    name = "top_k_opencl_sampler_shared_lib",
-    srcs = [":top_k_opencl_sampler_so"],
-    linkstatic = 1,
-    tags = ["manual"],
-    target_compatible_with = select({
-        "@platforms//os:android": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    alwayslink = 1,
-)
-
-cc_test(
-    name = "top_k_opencl_sampler_c_api_dlopen_test",
-    srcs = ["top_k_opencl_sampler_c_api_dlopen_test.cc"],
-    copts = ["-Wreturn-type-c-linkage"],
-    data = [
-        ":top_k_opencl_sampler_so",
-        "//runtime/testdata",
-    ],
-    tags = [
-        "manual",
-        # Sanitizer runtimes are incompatible with RTLD_DEEPBIND.
-        "noasan",
-        "nomsan",
-        "nopresubmit",
-        "notsan",
-        "requires-gpu-sm90",
-    ],
-    deps = [
-        ":model_resources",
-        ":model_resources_task",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/debugging:leak_check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_buffer_ref",
-        "@litert//litert/cc:litert_common",
-        "@litert//litert/cc:litert_compiled_model",
-        "@litert//litert/cc:litert_element_type",
-        "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc:litert_expected",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_options",
-        "@litert//litert/cc:litert_ranked_tensor_type",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc:litert_tensor_buffer_types",
-        "@litert//litert/cc/internal:litert_shared_library",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_accelerator",
         "@litert//litert/test:matchers",
@@ -903,8 +758,10 @@ TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
     "//runtime/executor:executor_settings_base",
     "//runtime/proto:sampler_params_cc_proto",
     "//runtime/util:litert_status_util",
+    "@litert//litert/cc:litert_any",
     "@litert//litert/cc:litert_environment_api",
     "@litert//litert/cc:litert_environment_options",
+    "@litert//litert/cc:litert_expected",
     "@litert//litert/cc:litert_macros",
     "@litert//litert/cc:litert_tensor_buffer",
     "@litert//litert/cc/internal:litert_handle",
@@ -932,20 +789,6 @@ cc_library(
     }),
     deps = TOP_K_WEBGPU_SAMPLER_COMMON_DEPS + ["@com_google_absl//absl/status:status_macros"],
     alwayslink = 1,
-)
-
-# This module requires the shared library of LiteRT runtime `libLiteRt.so`.
-cc_library(
-    name = "top_k_webgpu_sampler_runtimecapi",
-    srcs = ["top_k_webgpu_sampler.cc"],
-    hdrs = ["top_k_webgpu_sampler.h"],
-    features = ["-layering_check"],
-    local_defines = ["LITERT_SAMPLER_LINKED_DYNAMICALLY"],
-    visibility = ["//visibility:private"],
-    deps = TOP_K_WEBGPU_SAMPLER_COMMON_DEPS + [
-        "@com_google_absl//absl/status:status_macros",
-        "@litert//litert/c/internal:litert_runtime_builtin_none",
-    ],
 )
 
 cc_test(
@@ -1039,206 +882,6 @@ cc_test(
     ] + select({
         "@platforms//os:linux": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
-        ],
-        "//conditions:default": [
-            "//runtime/executor:default_gpu_accelerator",
-        ],
-    }),
-)
-
-cc_shared_library(
-    name = "top_k_webgpu_sampler_so",
-    shared_lib_name = "libLiteRtTopKWebGpuSampler.so",
-    tags = ["manual"],
-    target_compatible_with = select({
-        "@platforms//os:android": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    user_link_flags = select({
-        "@platforms//os:android": [
-            "-landroid",
-            "-Wl,-soname=libLiteRtTopKWebGpuSampler.so",
-            # Align PT_LOAD segments and pad GNU_RELRO to a 16 KB boundary.
-            # See https://developer.android.com/guide/practices/page-sizes#relro-flag.
-            "-Wl,-z,max-page-size=16384",
-            "-Wl,-z,common-page-size=16384",
-        ],
-        "@platforms//os:ios": [],
-        "@platforms//os:macos": [],
-        "@platforms//os:windows": [],
-        "//conditions:default": ["-Wl,-soname=libLiteRtTopKWebGpuSampler.so"],
-    }),
-    deps = [":top_k_webgpu_sampler_runtimecapi"],
-)
-
-macos_dylib(
-    name = "build_top_k_webgpu_sampler_dylib",
-    exported_symbols_lists = ["webgpu_exported_symbols.lds"],
-    linkopts = [
-        "-undefined dynamic_lookup",
-        "-install_name @rpath/libLiteRtTopKWebGpuSampler.dylib",
-        "-headerpad_max_install_names",
-    ],
-    minimum_os_version = LITERT_MIN_MACOS_VERSION,
-    tags = ["manual"],
-    visibility = ["//visibility:private"],
-    deps = [":top_k_webgpu_sampler_runtimecapi"],
-)
-
-copy_file(
-    name = "top_k_webgpu_sampler_dylib",
-    src = ":build_top_k_webgpu_sampler_dylib",
-    out = "libLiteRtTopKWebGpuSampler.dylib",
-    tags = ["manual"],
-)
-
-macos_dylib(
-    name = "build_top_k_metal_sampler_dylib",
-    exported_symbols_lists = ["metal_exported_symbols.lds"],
-    linkopts = [
-        "-undefined dynamic_lookup",
-        "-install_name @rpath/libLiteRtTopKMetalSampler.dylib",
-        "-headerpad_max_install_names",
-    ],
-    minimum_os_version = LITERT_MIN_MACOS_VERSION,
-    tags = ["manual"],
-    visibility = ["//visibility:private"],
-    deps = [":top_k_metal_sampler_runtimecapi"],
-)
-
-copy_file(
-    name = "top_k_metal_sampler_dylib",
-    src = ":build_top_k_metal_sampler_dylib",
-    out = "libLiteRtTopKMetalSampler.dylib",
-    tags = ["manual"],
-)
-
-ios_framework(
-    name = "build_top_k_metal_sampler_framework",
-    bundle_id = "com.google.litert_lm.runtime",
-    bundle_name = "libLiteRtTopKMetalSampler.dylib",
-    exported_symbols_lists = ["metal_exported_symbols.lds"],
-    families = [
-        "iphone",
-        "ipad",
-    ],
-    # copybara:uncomment google_create_srl_bindings_module = False,
-    infoplists = ["LiteRtTopKMetalSamplerInfo.plist"],
-    linkopts = [
-        "-undefined dynamic_lookup",
-        "-install_name @rpath/libLiteRtTopKMetalSampler.dylib",
-        "-headerpad_max_install_names",
-    ],
-    minimum_os_version = LITERT_MIN_IOS_VERSION,
-    tags = [
-        "manual",
-        "nofastbuild",
-    ],
-    visibility = ["//visibility:private"],
-    deps = [":top_k_metal_sampler_runtimecapi"],
-)
-
-# Target for windows libLiteRtTopKWebGpuSampler.dll.
-cc_binary(
-    name = "libLiteRtTopKWebGpuSampler",
-    linkshared = 1,
-    tags = [
-        "nobuilder",
-        "notap",
-        "windows",
-    ],
-    target_compatible_with = ["@platforms//os:windows"],
-    visibility = ["//visibility:private"],
-    win_def_file = ":windows_exported_symbols.def",
-    deps = [":top_k_webgpu_sampler_runtimecapi"] + select({
-        "@platforms//os:windows": [
-            "@litert//litert/c:litert_runtime_c_api_import",
-        ],
-        "//conditions:default": [],
-    }),
-)
-
-alias(
-    name = "top_k_webgpu_sampler_dll",
-    actual = ":libLiteRtTopKWebGpuSampler",
-    visibility = ["//visibility:private"],
-)
-
-cc_library(
-    name = "top_k_webgpu_sampler_shared_lib",
-    srcs = [":top_k_webgpu_sampler_so"],
-    linkstatic = 1,
-    tags = ["manual"],
-    target_compatible_with = select({
-        "@platforms//os:android": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    alwayslink = 1,
-)
-
-# Need extra flag to run this test: --define=litert_runtime_link_mode=dynamic.
-cc_test(
-    name = "top_k_webgpu_sampler_c_api_dlopen_test",
-    srcs = ["top_k_webgpu_sampler_c_api_dlopen_test.cc"],
-    copts = ["-Wreturn-type-c-linkage"],
-    data = [
-        ":top_k_webgpu_sampler_so",
-        "//runtime/testdata",
-    ] + select({
-        "@litert//litert:litert_runtime_link_mode_dynamic": [
-            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_so",
-        ],
-        "//conditions:default": [],
-    }),
-    defines = ["litert_runtime_link_mode=dynamic"],
-    tags = [
-        "manual",
-        "norapid",
-        # Sanitizer runtimes are incompatible with RTLD_DEEPBIND.
-        "noasan",
-        "nomsan",
-        "notsan",
-        "requires-gpu-sm90-full",
-        "notap",  # remove when dynamic linking is enabled
-    ],
-    deps = [
-        ":model_resources",
-        ":model_resources_task",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/debugging:leak_check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_buffer_ref",
-        "@litert//litert/cc:litert_common",
-        "@litert//litert/cc:litert_compiled_model",
-        "@litert//litert/cc:litert_element_type",
-        "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_options",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/cc:litert_tensor_buffer_types",
-        "@litert//litert/cc/internal:litert_shared_library",
-        "@litert//litert/cc/options:litert_google_tensor_options",
-        "@litert//litert/cc/options:litert_gpu_options",
-        "@litert//litert/cc/options:litert_intel_openvino_options",
-        "@litert//litert/cc/options:litert_mediatek_options",
-        "@litert//litert/cc/options:litert_qualcomm_options",
-        "@litert//litert/cc/options:litert_samsung_options",
-        "@litert//litert/test:matchers",
-        "//runtime/proto:llm_metadata_cc_proto",
-        "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:model_asset_bundle_resources",
-        "//runtime/util:scoped_file",
-    ] + select({
-        "@litert//litert:litert_runtime_link_mode_dynamic": [
-            "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator_runtimecapi",
         ],
         "//conditions:default": [
             "//runtime/executor:default_gpu_accelerator",

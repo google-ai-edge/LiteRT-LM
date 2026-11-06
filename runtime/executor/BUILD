@@ -333,11 +333,8 @@ selects.config_setting_group(
 cc_library(
     name = "default_dynamic_gpu_accelerator",
     data = select({
-        ":android_webgpu": [
-            "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator_so",
-        ],
         "@platforms//os:android": [
-            "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_gl_accelerator_so",
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator_so",
         ],
         ":macos_metal": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator_dylib",
