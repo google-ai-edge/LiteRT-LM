@@ -248,13 +248,14 @@ ABSL_FLAG(std::optional<double>, sampler_temperature, std::nullopt,
 ABSL_FLAG(std::optional<int>, sampler_seed, std::nullopt,
           "If set, the random seed of the sampler. Requires --sampler_top_k, "
           "--sampler_top_p or --sampler_temperature.");
-ABSL_FLAG(bool, enable_neon_for_npu_greedy_sampling, true,
-          "If true, enable NEON for NPU greedy sampling.");
-ABSL_FLAG(bool, use_hw_masking_for_npu, true,
-          "If true, use HW masking for NPU.");
-ABSL_FLAG(bool, use_hw_cache_update_for_npu, true,
-          "If true, use HW cache update for NPU.");
-ABSL_FLAG(bool, use_hw_ple_for_npu, true, "If true, use HW PLE for NPU.");
+ABSL_FLAG(std::optional<bool>, enable_neon_for_npu_greedy_sampling,
+          std::nullopt, "If true, enable NEON for NPU greedy sampling.");
+ABSL_FLAG(std::optional<bool>, use_hw_masking_for_npu, std::nullopt,
+          "If true, use handwritten masking for NPU.");
+ABSL_FLAG(std::optional<bool>, use_hw_cache_update_for_npu, std::nullopt,
+          "If true, use handwritten cache update for NPU.");
+ABSL_FLAG(std::optional<bool>, use_hw_ple_for_npu, std::nullopt,
+          "If true, use handwritten PLE for NPU.");
 ABSL_FLAG(bool, enable_npu_debug_logging, false,
           "If true, enable debug logging for NPU.");
 ABSL_FLAG(

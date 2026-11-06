@@ -1134,8 +1134,9 @@ LlmLiteRtNpuCompiledModelExecutor::DecodeNonSpeculative(
     auto start_sample = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
         max_index,
-        ApplyGreedySampling(masked_logits,
-                            npu_config_.enable_neon_for_npu_greedy_sampling));
+        ApplyGreedySampling(
+            masked_logits,
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
   } else {
@@ -1164,11 +1165,12 @@ LlmLiteRtNpuCompiledModelExecutor::DecodeNonSpeculative(
     // Sample the output of the main decode.
     auto start_sample = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
-        max_index, ApplyGreedySampling(
-                       ActiveContextGroup()
-                           .text_decoder_inference_context.decode_output_buffers
-                               [TextDecoderSignatures::kDecodeLogitsOutput],
-                       npu_config_.enable_neon_for_npu_greedy_sampling));
+        max_index,
+        ApplyGreedySampling(
+            ActiveContextGroup()
+                .text_decoder_inference_context.decode_output_buffers
+                    [TextDecoderSignatures::kDecodeLogitsOutput],
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
     ++current_step_;
@@ -1356,7 +1358,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
             ActiveContextGroup()
                 .text_decoder_inference_context.decode_output_buffers
                     [TextDecoderSignatures::kDecodeLogitsOutput],
-            npu_config_.enable_neon_for_npu_greedy_sampling));
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
   } else {
@@ -2121,9 +2123,10 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
 
     start = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
-        int draft_id, ApplyGreedySampling(
-                          ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
-                          npu_config_.enable_neon_for_npu_greedy_sampling));
+        int draft_id,
+        ApplyGreedySampling(
+            ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
     draft_tokens.push_back(draft_id);
@@ -2451,7 +2454,7 @@ LlmLiteRtNpuCompiledModelExecutor::PerformRejectionSampling(
         int sampled_token,
         SampleLogitsSliceFromLockedPtr(
             tensor_type.ElementType(), base_ptr, i, vocab_size, element_size,
-            npu_config_.enable_neon_for_npu_greedy_sampling));
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     all_verifier_sampled.push_back(sampled_token);
   }
   NPU_EXECUTOR_LOG(INFO) << "    [RS] Verifier Sampled Tokens: ["
@@ -3018,10 +3021,39 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
 LlmLiteRtNpuCompiledModelExecutor::Create(
     const LlmExecutorSettings& executor_settings, ModelResources& resources,
     Environment& env) {
+  LlmExecutorSettings mutable_settings = executor_settings;
+
+  auto executor_metadata_status = resources.GetExecutorMetadata();
+  if (executor_metadata_status.ok() && *executor_metadata_status != nullptr) {
+    const auto* executor_metadata = *executor_metadata_status;
+    if (executor_metadata->has_llm_npu_executor_metadata()) {
+      // Failing to apply model metadata is not fatal: fall back to the user
+      // settings / runtime defaults, as before NPU metadata existed.
+      if (absl::Status status = mutable_settings.ResolveNpuSettings(
+              executor_metadata->llm_npu_executor_metadata());
+          !status.ok()) {
+        ABSL_LOG(WARNING) << "Ignoring NPU executor metadata: " << status;
+      }
+    }
+  }
+
   bool enable_npu_debug_logging = false;
-  auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
+  auto npu_config_status = mutable_settings.GetBackendConfig<NpuConfig>();
   if (npu_config_status.ok()) {
     enable_npu_debug_logging = npu_config_status->enable_npu_debug_logging;
+    ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+        << "Resolved NPU Settings:\n"
+        << "  enable_neon_for_npu_greedy_sampling: "
+        << npu_config_status->enable_neon_for_npu_greedy_sampling.value_or(
+               false)
+        << "\n"
+        << "  use_hw_masking_for_npu: "
+        << npu_config_status->use_hw_masking_for_npu.value_or(false) << "\n"
+        << "  use_hw_cache_update_for_npu: "
+        << npu_config_status->use_hw_cache_update_for_npu.value_or(false)
+        << "\n"
+        << "  use_hw_ple_for_npu: "
+        << npu_config_status->use_hw_ple_for_npu.value_or(false);
   }
 
   const proto::LlmMetadata* llm_metadata = nullptr;
@@ -3042,7 +3074,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 
   LITERT_ASSIGN_OR_RETURN(int max_sequence_length,
-                          DetermineSequenceLength(executor_settings, resources,
+                          DetermineSequenceLength(mutable_settings, resources,
                                                   *text_decoder_model));
 
   // `DetermineMaxSequenceLength` resolves the effective limit by taking the
@@ -3050,7 +3082,6 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   // If they differ (e.g. user limit is 0 or larger than what the model
   // supports), we override the settings. If the user requested a smaller limit,
   // it is respected and not overridden.
-  LlmExecutorSettings mutable_settings = executor_settings;
   if (mutable_settings.GetMaxNumTokens() != max_sequence_length) {
     ABSL_LOG(WARNING) << "Overriding executor settings max_num_tokens ("
                       << mutable_settings.GetMaxNumTokens()
@@ -3213,12 +3244,25 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   }
 
   MaskUpdateMethod mask_update_method = MaskUpdateMethod::kModel;
-  KVCacheUpdateMethod cache_update_method = KVCacheUpdateMethod::kModel;
+  // Models with a ringbuffer must use the handwritten KV cache update path
+  // because they do not use dynamic_update_slice and reuse the same KV cache
+  // buffers on model input and output.
+  KVCacheUpdateMethod cache_update_method =
+      context_groups[0].layout.uses_ringbuffer ? KVCacheUpdateMethod::kWH
+                                               : KVCacheUpdateMethod::kModel;
   if (npu_config_status.ok()) {
-    if (npu_config_status->use_hw_masking_for_npu) {
+    if (npu_config_status->use_hw_masking_for_npu.value_or(false)) {
       mask_update_method = MaskUpdateMethod::kWH;
     }
-    if (npu_config_status->use_hw_cache_update_for_npu) {
+    if (context_groups[0].layout.uses_ringbuffer) {
+      if (npu_config_status->use_hw_cache_update_for_npu.has_value() &&
+          !*npu_config_status->use_hw_cache_update_for_npu) {
+        ABSL_LOG(WARNING)
+            << "Overriding use_hw_cache_update_for_npu=false to true because "
+               "models with a ringbuffer require handwritten KV cache updates.";
+      }
+      cache_update_method = KVCacheUpdateMethod::kWH;
+    } else if (npu_config_status->use_hw_cache_update_for_npu.value_or(false)) {
       cache_update_method = KVCacheUpdateMethod::kWH;
     }
   }
@@ -3309,7 +3353,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
           drafter_context,
           DrafterContext::Create(env, **mtp_drafter_model, context_groups));
       MaskUpdateMethod mtp_mask_update_method = MaskUpdateMethod::kModel;
-      if (npu_config_status.ok() && npu_config_status->use_hw_masking_for_npu) {
+      if (npu_config_status.ok() &&
+          npu_config_status->use_hw_masking_for_npu.value_or(false)) {
         mtp_mask_update_method = MaskUpdateMethod::kWH;
       }
       LITERT_ASSIGN_OR_RETURN(

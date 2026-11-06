@@ -34,6 +34,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
@@ -94,10 +95,16 @@ std::ostream& operator<<(std::ostream& os, const CpuConfig& config) {
 }
 
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
+  auto print_opt_bool = [](std::optional<bool> val) -> std::string {
+    return val.has_value() ? (*val ? "true" : "false") : "nullopt";
+  };
   os << "enable_neon_for_npu_greedy_sampling: "
-     << config.enable_neon_for_npu_greedy_sampling << "\n";
-  os << "use_hw_masking_for_npu: " << config.use_hw_masking_for_npu << "\n";
-  os << "use_hw_cache_update_for_npu: " << config.use_hw_cache_update_for_npu
+     << print_opt_bool(config.enable_neon_for_npu_greedy_sampling) << "\n";
+  os << "use_hw_masking_for_npu: "
+     << print_opt_bool(config.use_hw_masking_for_npu) << "\n";
+  os << "use_hw_cache_update_for_npu: "
+     << print_opt_bool(config.use_hw_cache_update_for_npu) << "\n";
+  os << "use_hw_ple_for_npu: " << print_opt_bool(config.use_hw_ple_for_npu)
      << "\n";
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
   return os;
@@ -366,4 +373,30 @@ std::optional<absl::string_view> LlmExecutorSettings::GetCustomBackendOption(
   return std::nullopt;
 }
 
+absl::Status LlmExecutorSettings::ResolveNpuSettings(
+    const proto::LlmNpuExecutorMetadata& metadata) {
+  if (!std::holds_alternative<NpuConfig>(backend_config_)) {
+    return absl::FailedPreconditionError("Backend config is not NpuConfig");
+  }
+  NpuConfig& npu_config = std::get<NpuConfig>(backend_config_);
+  if (!npu_config.enable_neon_for_npu_greedy_sampling.has_value() &&
+      metadata.has_enable_neon_for_npu_greedy_sampling()) {
+    npu_config.enable_neon_for_npu_greedy_sampling =
+        metadata.enable_neon_for_npu_greedy_sampling();
+  }
+  if (!npu_config.use_hw_masking_for_npu.has_value() &&
+      metadata.has_use_hw_masking_for_npu()) {
+    npu_config.use_hw_masking_for_npu = metadata.use_hw_masking_for_npu();
+  }
+  if (!npu_config.use_hw_cache_update_for_npu.has_value() &&
+      metadata.has_use_hw_cache_update_for_npu()) {
+    npu_config.use_hw_cache_update_for_npu =
+        metadata.use_hw_cache_update_for_npu();
+  }
+  if (!npu_config.use_hw_ple_for_npu.has_value() &&
+      metadata.has_use_hw_ple_for_npu()) {
+    npu_config.use_hw_ple_for_npu = metadata.use_hw_ple_for_npu();
+  }
+  return absl::OkStatus();
+}
 }  // namespace litert::lm

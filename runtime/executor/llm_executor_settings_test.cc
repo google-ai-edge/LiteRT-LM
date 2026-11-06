@@ -29,6 +29,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -726,10 +727,10 @@ TEST(LlmExecutorConfigTest, NpuConfigDefaults) {
   // The generic LiteRT compiler-plugin path is opt-in and must default to off
   // so the specialized TF_LITE_AUX NPU executor stays the default behavior.
   EXPECT_FALSE(config.use_generic_litert_compiler_plugin);
-  EXPECT_TRUE(config.enable_neon_for_npu_greedy_sampling);
-  EXPECT_TRUE(config.use_hw_masking_for_npu);
-  EXPECT_TRUE(config.use_hw_cache_update_for_npu);
-  EXPECT_TRUE(config.use_hw_ple_for_npu);
+  EXPECT_FALSE(config.enable_neon_for_npu_greedy_sampling.has_value());
+  EXPECT_FALSE(config.use_hw_masking_for_npu.has_value());
+  EXPECT_FALSE(config.use_hw_cache_update_for_npu.has_value());
+  EXPECT_FALSE(config.use_hw_ple_for_npu.has_value());
   EXPECT_FALSE(config.enable_npu_debug_logging);
 }
 
@@ -802,6 +803,94 @@ TEST(LlmExecutorConfigTest, CustomBackendConfigDefaultsAndOptions) {
       settings.SetCustomBackendOptionsFromStrings({"missing_equals"}).ok());
   EXPECT_FALSE(
       settings.SetCustomBackendOptionsFromStrings({"=empty_key"}).ok());
+}
+
+TEST(LlmExecutorConfigTest, ResolveNpuSettings) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets assets, ModelAssets::Create("/dummy/path"));
+
+  ASSERT_OK_AND_ASSIGN(
+      LlmExecutorSettings settings,
+      LlmExecutorSettings::CreateDefault(assets, Backend::NPU));
+
+  auto initial_npu_config_status = settings.GetBackendConfig<NpuConfig>();
+  ASSERT_OK(initial_npu_config_status);
+  EXPECT_FALSE(initial_npu_config_status->enable_neon_for_npu_greedy_sampling
+                   .has_value());
+  EXPECT_FALSE(initial_npu_config_status->use_hw_masking_for_npu.has_value());
+  EXPECT_FALSE(
+      initial_npu_config_status->use_hw_cache_update_for_npu.has_value());
+  EXPECT_FALSE(initial_npu_config_status->use_hw_ple_for_npu.has_value());
+
+  proto::LlmNpuExecutorMetadata metadata;
+  metadata.set_enable_neon_for_npu_greedy_sampling(true);
+  metadata.set_use_hw_masking_for_npu(false);
+  metadata.set_use_hw_cache_update_for_npu(true);
+  metadata.set_use_hw_ple_for_npu(false);
+
+  ASSERT_OK(settings.ResolveNpuSettings(metadata));
+
+  auto resolved_npu_config_status = settings.GetBackendConfig<NpuConfig>();
+  ASSERT_OK(resolved_npu_config_status);
+  EXPECT_TRUE(
+      resolved_npu_config_status->enable_neon_for_npu_greedy_sampling.value_or(
+          false));
+  EXPECT_FALSE(
+      resolved_npu_config_status->use_hw_masking_for_npu.value_or(true));
+  EXPECT_TRUE(
+      resolved_npu_config_status->use_hw_cache_update_for_npu.value_or(false));
+  EXPECT_FALSE(resolved_npu_config_status->use_hw_ple_for_npu.value_or(true));
+
+  ASSERT_OK_AND_ASSIGN(
+      LlmExecutorSettings settings_user,
+      LlmExecutorSettings::CreateDefault(assets, Backend::NPU));
+
+  NpuConfig user_config;
+  user_config.enable_neon_for_npu_greedy_sampling = false;
+  user_config.use_hw_masking_for_npu = true;
+  settings_user.SetBackendConfig(user_config);
+
+  ASSERT_OK(settings_user.ResolveNpuSettings(metadata));
+
+  auto resolved_user_status = settings_user.GetBackendConfig<NpuConfig>();
+  ASSERT_OK(resolved_user_status);
+  EXPECT_FALSE(
+      resolved_user_status->enable_neon_for_npu_greedy_sampling.value_or(true));
+  EXPECT_TRUE(resolved_user_status->use_hw_masking_for_npu.value_or(false));
+  EXPECT_TRUE(
+      resolved_user_status->use_hw_cache_update_for_npu.value_or(false));
+  EXPECT_FALSE(resolved_user_status->use_hw_ple_for_npu.value_or(true));
+}
+
+TEST(LlmExecutorConfigTest, ResolveNpuSettingsLeavesAbsentFieldsUnset) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets assets, ModelAssets::Create("/dummy/path"));
+  ASSERT_OK_AND_ASSIGN(
+      LlmExecutorSettings settings,
+      LlmExecutorSettings::CreateDefault(assets, Backend::NPU));
+
+  proto::LlmNpuExecutorMetadata metadata;
+  metadata.set_use_hw_cache_update_for_npu(true);
+
+  ASSERT_OK(settings.ResolveNpuSettings(metadata));
+
+  ASSERT_OK_AND_ASSIGN(NpuConfig config,
+                       settings.GetBackendConfig<NpuConfig>());
+  EXPECT_EQ(config.use_hw_cache_update_for_npu, true);
+  EXPECT_FALSE(config.enable_neon_for_npu_greedy_sampling.has_value());
+  EXPECT_FALSE(config.use_hw_masking_for_npu.has_value());
+  EXPECT_FALSE(config.use_hw_ple_for_npu.has_value());
+}
+
+TEST(LlmExecutorConfigTest, ResolveNpuSettingsFailsForNonNpuBackend) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets assets, ModelAssets::Create("/dummy/path"));
+  ASSERT_OK_AND_ASSIGN(
+      LlmExecutorSettings settings,
+      LlmExecutorSettings::CreateDefault(assets, Backend::CPU));
+
+  proto::LlmNpuExecutorMetadata metadata;
+  metadata.set_use_hw_masking_for_npu(true);
+
+  EXPECT_THAT(settings.ResolveNpuSettings(metadata),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
 }  // namespace

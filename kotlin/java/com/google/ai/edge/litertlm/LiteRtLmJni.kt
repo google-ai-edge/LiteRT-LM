@@ -58,6 +58,10 @@ internal object LiteRtLmJni {
    *   null to leave unset.
    * @param gpuUseIrModel Experimental. Whether the GPU backend uses the IrModel initialization
    *   pipeline. Only affects executors on the GPU backend. When null, use the engine's default.
+   * @param enableNeonForNpuGreedySampling Whether to use NEON for NPU greedy sampling.
+   * @param useHwMaskingForNpu Whether to use handwritten masking for NPU.
+   * @param useHwCacheUpdateForNpu Whether to use handwritten KV-cache update for NPU.
+   * @param useHwPleForNpu Whether to use handwritten PLE for NPU.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -81,6 +85,10 @@ internal object LiteRtLmJni {
     speculativeDecodingMode: Int? = null,
     speculativeLenience: Float? = null,
     gpuUseIrModel: Boolean? = null,
+    enableNeonForNpuGreedySampling: Boolean? = null,
+    useHwMaskingForNpu: Boolean? = null,
+    useHwCacheUpdateForNpu: Boolean? = null,
+    useHwPleForNpu: Boolean? = null,
   ): Long
 
   /**
@@ -109,6 +117,10 @@ internal object LiteRtLmJni {
    *   null to leave unset.
    * @param gpuUseIrModel Experimental. Whether the GPU backend uses the IrModel initialization
    *   pipeline. Only affects executors on the GPU backend. When null, use the engine's default.
+   * @param enableNeonForNpuGreedySampling Whether to use NEON for NPU greedy sampling.
+   * @param useHwMaskingForNpu Whether to use handwritten masking for NPU.
+   * @param useHwCacheUpdateForNpu Whether to use handwritten KV-cache update for NPU.
+   * @param useHwPleForNpu Whether to use handwritten PLE for NPU.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateBenchmark(
@@ -128,6 +140,10 @@ internal object LiteRtLmJni {
     speculativeDecodingMode: Int? = null,
     speculativeLenience: Float? = null,
     gpuUseIrModel: Boolean? = null,
+    enableNeonForNpuGreedySampling: Boolean? = null,
+    useHwMaskingForNpu: Boolean? = null,
+    useHwCacheUpdateForNpu: Boolean? = null,
+    useHwPleForNpu: Boolean? = null,
   ): Long
 
   /**

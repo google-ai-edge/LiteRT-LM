@@ -676,7 +676,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jint main_backend_num_threads, jint audio_backend_num_threads,
     jint max_vision_tokens_per_image, jint activation_data_type,
     jobject enable_ynnpack, jobject speculative_decoding_mode,
-    jobject speculative_lenience, jobject gpu_use_ir_model) {
+    jobject speculative_lenience, jobject gpu_use_ir_model,
+    jobject enable_neon_for_npu_greedy_sampling,
+    jobject use_hw_masking_for_npu, jobject use_hw_cache_update_for_npu,
+    jobject use_hw_ple_for_npu) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -862,6 +865,19 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
 
   ApplyOptionalGpuUseIrModel(env, gpu_use_ir_model, *settings);
 
+  if (auto npu_config = settings->GetMutableMainExecutorSettings()
+                            .MutableBackendConfig<litert::lm::NpuConfig>();
+      npu_config.ok()) {
+    npu_config->enable_neon_for_npu_greedy_sampling =
+        GetOptionalBoolean(env, enable_neon_for_npu_greedy_sampling);
+    npu_config->use_hw_masking_for_npu =
+        GetOptionalBoolean(env, use_hw_masking_for_npu);
+    npu_config->use_hw_cache_update_for_npu =
+        GetOptionalBoolean(env, use_hw_cache_update_for_npu);
+    npu_config->use_hw_ple_for_npu =
+        GetOptionalBoolean(env, use_hw_ple_for_npu);
+    settings->GetMutableMainExecutorSettings().SetBackendConfig(*npu_config);
+  }
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
@@ -879,7 +895,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jobject enable_speculative_decoding, jobject enable_ynnpack,
     jint max_num_tokens, jobject speculative_decoding_mode,
-    jobject speculative_lenience, jobject gpu_use_ir_model) {
+    jobject speculative_lenience, jobject gpu_use_ir_model,
+    jobject enable_neon_for_npu_greedy_sampling,
+    jobject use_hw_masking_for_npu, jobject use_hw_cache_update_for_npu,
+    jobject use_hw_ple_for_npu) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -1017,6 +1036,19 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
 
   ApplyOptionalGpuUseIrModel(env, gpu_use_ir_model, *settings);
 
+  if (auto npu_config = settings->GetMutableMainExecutorSettings()
+                            .MutableBackendConfig<litert::lm::NpuConfig>();
+      npu_config.ok()) {
+    npu_config->enable_neon_for_npu_greedy_sampling =
+        GetOptionalBoolean(env, enable_neon_for_npu_greedy_sampling);
+    npu_config->use_hw_masking_for_npu =
+        GetOptionalBoolean(env, use_hw_masking_for_npu);
+    npu_config->use_hw_cache_update_for_npu =
+        GetOptionalBoolean(env, use_hw_cache_update_for_npu);
+    npu_config->use_hw_ple_for_npu =
+        GetOptionalBoolean(env, use_hw_ple_for_npu);
+    settings->GetMutableMainExecutorSettings().SetBackendConfig(*npu_config);
+  }
   auto& benchmark_params = settings->GetMutableBenchmarkParams();
   benchmark_params.set_num_prefill_tokens(prefill_tokens);
   benchmark_params.set_num_decode_tokens(decode_tokens);

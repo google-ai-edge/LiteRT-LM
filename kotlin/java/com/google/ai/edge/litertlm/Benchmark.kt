@@ -138,6 +138,10 @@ fun benchmark(
       speculativeDecodingConfig?.mode?.value,
       speculativeDecodingConfig?.lenience,
       ExperimentalFlags.gpuUseIrModel,
+      ExperimentalFlags.enableNeonForNpuGreedySampling,
+      ExperimentalFlags.useHwMaskingForNpu,
+      ExperimentalFlags.useHwCacheUpdateForNpu,
+      ExperimentalFlags.useHwPleForNpu,
     )
 
   try {

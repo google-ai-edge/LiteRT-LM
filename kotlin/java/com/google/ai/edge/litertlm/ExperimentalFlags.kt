@@ -141,6 +141,50 @@ object ExperimentalFlags {
    * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
    */
   var gpuUseIrModel: Boolean? = null
+
+  /**
+   * Whether to use NEON optimizations for greedy sampling on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent). If true or false,
+   * override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var enableNeonForNpuGreedySampling: Boolean? = null
+
+  /**
+   * Whether to use handwritten mask update logic on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent). If true or false,
+   * override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var useHwMaskingForNpu: Boolean? = null
+
+  /**
+   * Whether to use handwritten KV-cache update logic on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent; ring-buffer models
+   * always use the handwritten path). If true or false, override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var useHwCacheUpdateForNpu: Boolean? = null
+
+  /**
+   * Whether to use handwritten per-layer embedding lookup on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent). If true or false,
+   * override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var useHwPleForNpu: Boolean? = null
 }
 
 // Mark this annotation itself as requiring opt-in

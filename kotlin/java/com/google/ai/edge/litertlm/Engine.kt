@@ -99,6 +99,10 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           engineConfig.speculativeDecodingConfig?.mode?.value,
           engineConfig.speculativeDecodingConfig?.lenience,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.gpuUseIrModel,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.enableNeonForNpuGreedySampling,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.useHwMaskingForNpu,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.useHwCacheUpdateForNpu,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.useHwPleForNpu,
         )
     }
   }

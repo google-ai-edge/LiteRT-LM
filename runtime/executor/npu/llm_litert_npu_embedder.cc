@@ -548,7 +548,8 @@ absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
     bool use_hw_ple_for_npu = false;
     auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
     if (npu_config_status.ok()) {
-      use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
+      use_hw_ple_for_npu =
+          npu_config_status->use_hw_ple_for_npu.value_or(false);
     }
 
     if (use_hw_ple_for_npu) {
