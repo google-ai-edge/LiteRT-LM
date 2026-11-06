@@ -110,6 +110,69 @@ class MainTest(absltest.TestCase):
   @unittest.mock.patch(
       "litert_lm_cli.commands.run.run_interactive"
   )
+  def test_run_with_prompt_file(
+      self, mock_run_interactive, mock_from_model_ref
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+      with open("prompt.txt", "w", encoding="utf-8") as f:
+        f.write("Hello from prompt file\n\n")
+
+      result = runner.invoke(
+          main.cli, ["run", "my-model", "--prompt-file", "prompt.txt"]
+      )
+
+      self.assertEqual(result.exit_code, 0)
+      mock_run_interactive.assert_called_once()
+      kwargs = mock_run_interactive.call_args.kwargs
+      self.assertEqual(kwargs["prompt"], "Hello from prompt file\n\n")
+
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  @unittest.mock.patch(
+      "litert_lm_cli.commands.run.run_interactive"
+  )
+  def test_run_with_prompt_and_prompt_file_conflict(
+      self, mock_run_interactive, mock_from_model_ref
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+      with open("prompt.txt", "w", encoding="utf-8") as f:
+        f.write("Hello")
+
+      result = runner.invoke(
+          main.cli,
+          [
+              "run",
+              "my-model",
+              "--prompt",
+              "Hi",
+              "--prompt-file",
+              "prompt.txt",
+          ],
+      )
+
+      self.assertEqual(result.exit_code, 0)
+      self.assertIn(
+          "Error: Cannot specify both --prompt and --prompt-file.",
+          result.output,
+      )
+
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  @unittest.mock.patch(
+      "litert_lm_cli.commands.run.run_interactive"
+  )
   def test_run_non_tty_no_input(
       self, mock_run_interactive, mock_from_model_ref
   ):
