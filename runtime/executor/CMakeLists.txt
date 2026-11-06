@@ -451,6 +451,7 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
     LiteRTLM::Runtime::Executor::LlmLitertMtpDrafter
     LiteRTLM::Runtime::Executor::LlmLitertVerifier
     LiteRTLM::Runtime::Executor::MtpGatingPolicy
+    LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Executor::SpeculativeDecodingController
     LiteRTLM::Runtime::Executor::MagicNumberConfigsHelper
     LiteRTLM::Runtime::Components::ModelResourcesInterface
@@ -666,6 +667,7 @@ target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplingCpuUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Generated::Protobuf
     LITERTLM_DEPS

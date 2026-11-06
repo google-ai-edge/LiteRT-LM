@@ -76,6 +76,7 @@
 #include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/llm_litert_verifier.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
 #include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
@@ -1809,8 +1810,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
 
   ABSL_ASSIGN_OR_RETURN(
       sampler_,
-      CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_, /*sequence_size=*/1, vocab_size, data_type));
+      CreateExecutorSampler(executor_settings_.GetBackend(), sampler_backend,
+                            output_heads, std::move(sampler_params), env_,
+                            /*sequence_size=*/1, vocab_size, data_type));
 
   // The sampler can feed the sampled token straight into the next decode step
   // only when the decode signature looks up the token embedding in the graph.

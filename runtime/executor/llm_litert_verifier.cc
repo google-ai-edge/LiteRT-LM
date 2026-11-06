@@ -932,7 +932,9 @@ LlmLiteRtVerifier::UpdateSamplerConfig(
     // continue the verifier's stream instead of restarting it.
     rand_gen = own_rand_gen.Get(sampler_params.seed());
   }
-  ABSL_RETURN_IF_ERROR(UpdateOrRecreateSampler(
+  // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the verifier samples from
+  // candidates the device selects; elsewhere this is UpdateOrRecreateSampler().
+  ABSL_RETURN_IF_ERROR(UpdateOrRecreateMtpVerifierSampler(
       sampler_, sampler_max_top_k_, sampler_backend_,
       /*batch_size=*/1, sampler_params, std::cref(env_),
       /*sequence_size=*/width_, vocab_size_, logits_data_type_));
