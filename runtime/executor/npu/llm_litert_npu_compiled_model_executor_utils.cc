@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <ostream>
 #include <set>
 #include <string>
@@ -27,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -52,6 +54,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert  // IWYU pragma: keep
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert  // IWYU pragma: keep
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
@@ -1377,6 +1380,156 @@ ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size,
       .rope = PrefillSig(kPrefillRopeBase, prefill_size),
       .cache_update = absl::StrCat(kPrefillCacheUpdateBase, "_", prefill_size,
                                    "_cache_", context_size)};
+}
+
+bool NeedsVisionAlignedPrefillChunks(const NpuGraphLayout& layout) {
+  return layout.global_mask_type ==
+             proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL ||
+         layout.local_mask_type ==
+             proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+}
+
+absl::StatusOr<std::vector<std::pair<std::string, int>>>
+PlanVisionAlignedPrefillWorkGroups(
+    const SortedPrefillSignatureMap& prefill_signature_map,
+    absl::Span<const int> ids, std::optional<int> pending_token_id) {
+  if (prefill_signature_map.empty()) {
+    return absl::FailedPreconditionError("No prefill signatures available.");
+  }
+  // `Prefill()` rejects empty inputs before planning; this guards other
+  // callers.
+  if (ids.empty()) {
+    return absl::InvalidArgumentError("Prefill token ids must be non-empty.");
+  }
+  // The map is sorted in descending order of the prefill length.
+  const int max_chunk_size = prefill_signature_map.begin()->first;
+  if (max_chunk_size < 2) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Vision-aligned prefill chunks need a prefill length of at least 2, "
+        "got ",
+        max_chunk_size, "."));
+  }
+
+  // The tokens the prefill chunks process, in order: the pending input token
+  // (if any) followed by all ids but the last one, which stays pending for the
+  // next prefill or decode step. The chunks below split this sequence.
+  std::vector<int> tokens_to_process;
+  tokens_to_process.reserve(ids.size());
+  if (pending_token_id.has_value()) {
+    tokens_to_process.push_back(*pending_token_id);
+  }
+  tokens_to_process.insert(tokens_to_process.end(), ids.begin(), ids.end() - 1);
+  const int num_tokens_to_process = tokens_to_process.size();
+
+  // The runs of consecutive vision tokens (images), as [start, end) indices
+  // into `tokens_to_process`.
+  struct VisionRun {
+    int start;
+    int end;
+  };
+  std::vector<VisionRun> vision_runs;
+  for (int i = 0; i < num_tokens_to_process; ++i) {
+    if (tokens_to_process[i] != ExecutorVisionData::kSpecialToken) {
+      continue;
+    }
+    if (!vision_runs.empty() && vision_runs.back().end == i) {
+      vision_runs.back().end = i + 1;
+    } else {
+      vision_runs.push_back({.start = i, .end = i + 1});
+    }
+  }
+
+  // Split `tokens_to_process` into chunks of at most the chunk capacity
+  // (T: text token, V: vision token, |: chunk boundary):
+  //
+  // 1. The capacity ends outside of any image: use the full chunk.
+  //      [T T T V V V T T | T T ...]
+  // 2. The capacity ends inside an image that fits in a chunk on its own: end
+  //    the chunk before the image (the work group is padded up to its
+  //    signature size), so that the image starts the next chunk.
+  //      [T T T V V | V T ...]  ->  [T T T | V V V T ...]
+  // 3. The capacity ends inside an image that does not fit in a chunk on its
+  //    own (or that starts the chunk already): nothing helps, so the image is
+  //    split (the mask update warns about it).
+  //      [V V V V | V V V V | V T ...]
+  std::vector<int> chunk_sizes;
+  int current_chunk_start = 0;
+  auto next_vision_run = vision_runs.begin();
+  while (current_chunk_start < num_tokens_to_process) {
+    // Without a pending token, the first work group also holds the id that
+    // becomes the pending token of the second chunk, which leaves room for one
+    // token less to process in the first chunk.
+    const int current_chunk_capacity =
+        (chunk_sizes.empty() && !pending_token_id.has_value())
+            ? max_chunk_size - 1
+            : max_chunk_size;
+    int current_chunk_end = std::min(
+        current_chunk_start + current_chunk_capacity, num_tokens_to_process);
+
+    // The first image that does not end within the current chunk.
+    while (next_vision_run != vision_runs.end() &&
+           next_vision_run->end <= current_chunk_end) {
+      ++next_vision_run;
+    }
+    if (next_vision_run != vision_runs.end() &&
+        next_vision_run->start < current_chunk_end) {
+      // The chunk would end inside this image.
+      const int image_length = next_vision_run->end - next_vision_run->start;
+      if (next_vision_run->start > current_chunk_start &&
+          image_length <= max_chunk_size) {
+        current_chunk_end = next_vision_run->start;  // Case 2.
+      }
+      // Otherwise case 3.
+    }
+    chunk_sizes.push_back(current_chunk_end - current_chunk_start);
+    current_chunk_start = current_chunk_end;
+  }
+
+  // Convert the chunk sizes to work group sizes (numbers of ids): without a
+  // pending token, the first work group holds one more id than its chunk
+  // processes. (With one, the pending token takes the place of the last id of
+  // the work group, which the next chunk processes.)
+  std::vector<int> group_sizes = std::move(chunk_sizes);
+  if (group_sizes.empty()) {
+    group_sizes.push_back(0);
+  }
+  if (!pending_token_id.has_value()) {
+    ++group_sizes.front();
+  }
+
+  std::vector<std::pair<std::string, int>> work_groups;
+  work_groups.reserve(group_sizes.size());
+  for (const int group_size : group_sizes) {
+    // Use the smallest prefill signature that fits the work group.
+    const std::string* signature = nullptr;
+    for (const auto& [prefill_length, signature_name] : prefill_signature_map) {
+      if (prefill_length < group_size) {
+        break;
+      }
+      signature = &signature_name;
+    }
+    RET_CHECK(signature != nullptr)
+        << "No prefill signature fits a work group of " << group_size
+        << " tokens.";
+    work_groups.emplace_back(*signature, group_size);
+  }
+  return work_groups;
+}
+
+absl::StatusOr<std::vector<std::pair<std::string, int>>>
+GetNpuPrefillWorkGroups(const SortedPrefillSignatureMap& prefill_signature_map,
+                        const NpuGraphLayout& layout, absl::Span<const int> ids,
+                        std::optional<int> pending_token_id) {
+  // With causal attention, or without images, the chunking does not affect
+  // the result.
+  const bool has_vision_tokens =
+      absl::c_linear_search(ids, ExecutorVisionData::kSpecialToken) ||
+      pending_token_id == ExecutorVisionData::kSpecialToken;
+  if (NeedsVisionAlignedPrefillChunks(layout) && has_vision_tokens) {
+    return PlanVisionAlignedPrefillWorkGroups(prefill_signature_map, ids,
+                                              pending_token_id);
+  }
+  return GetOptimizedPrefillWorkGroups(prefill_signature_map, ids.size());
 }
 
 litert::Expected<bool> HasPerLayerEmbedder(

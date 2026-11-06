@@ -45,6 +45,8 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/proto/executor_metadata.pb.h"
@@ -60,7 +62,9 @@ using ::litert::RankedTensorType;
 using ::litert::TensorBuffer;
 using ::litert::TensorBufferScopedLock;
 using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
+using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::HasSubstr;
 using ::testing::status::StatusIs;
 
@@ -1518,6 +1522,312 @@ TEST_F(LlmLiteRtNpuWarmupTest, WarmupDrafterInferenceOnlyRunsFirstContextGroup) 
             -1.0f);
   EXPECT_EQ(drafter_context.signature, "mtp_drafter_cache_640");
   EXPECT_EQ(drafter_aux_context.mask_signature, "mask_cache_640");
+}
+
+TEST(NeedsVisionAlignedPrefillChunksTest, OnlyForVisionBidirectionalMasks) {
+  NpuGraphLayout layout;
+  EXPECT_FALSE(NeedsVisionAlignedPrefillChunks(layout));
+
+  layout.local_mask_type = proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_TRUE(NeedsVisionAlignedPrefillChunks(layout));
+
+  layout.local_mask_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+  layout.global_mask_type = proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_TRUE(NeedsVisionAlignedPrefillChunks(layout));
+
+  layout.global_mask_type = proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(NeedsVisionAlignedPrefillChunks(layout));
+}
+
+constexpr int kTextToken = 7;
+constexpr int kVisionToken = ExecutorVisionData::kSpecialToken;
+// A pending input token from the previous prefill or decode step.
+constexpr std::optional<int> kPendingText = kTextToken;
+constexpr std::optional<int> kNoPending = std::nullopt;
+
+// Builds token ids from (token, count) segments.
+std::vector<int> MakeIds(const std::vector<std::pair<int, int>>& segments) {
+  std::vector<int> ids;
+  for (const auto& [token, count] : segments) {
+    ids.insert(ids.end(), count, token);
+  }
+  return ids;
+}
+
+std::vector<int> GroupSizes(
+    const std::vector<std::pair<std::string, int>>& work_groups) {
+  std::vector<int> sizes;
+  for (const auto& [signature, size] : work_groups) {
+    sizes.push_back(size);
+  }
+  return sizes;
+}
+
+// Returns, for each work group, the indices into the ids of the tokens its
+// prefill chunk processes, as `PrefillInternal` does: the pending input token
+// (index -1 before the first work group) followed by all but the last id of
+// the work group, which becomes the next pending input token.
+std::vector<std::vector<int>> ProcessedIdIndices(
+    const std::vector<std::pair<std::string, int>>& work_groups,
+    std::optional<int> pending_token_id) {
+  std::vector<std::vector<int>> chunks;
+  int next_id = 0;
+  std::optional<int> pending_index =
+      pending_token_id.has_value() ? std::optional<int>(-1) : std::nullopt;
+  for (const auto& [signature, size] : work_groups) {
+    std::vector<int> chunk;
+    if (pending_index.has_value()) {
+      chunk.push_back(*pending_index);
+    }
+    for (int i = next_id; i < next_id + size - 1; ++i) {
+      chunk.push_back(i);
+    }
+    pending_index = next_id + size - 1;
+    next_id += size;
+    chunks.push_back(std::move(chunk));
+  }
+  return chunks;
+}
+
+// Returns the index of the chunk that processes each vision token of `ids`
+// (or -1 if no chunk processes it).
+std::vector<int> ChunkOfEachVisionToken(
+    const std::vector<int>& ids,
+    const std::vector<std::vector<int>>& processed_id_indices) {
+  std::vector<int> chunk_of_id(ids.size(), -1);
+  for (int c = 0; c < processed_id_indices.size(); ++c) {
+    for (const int index : processed_id_indices[c]) {
+      if (index >= 0) {
+        chunk_of_id[index] = c;
+      }
+    }
+  }
+  std::vector<int> result;
+  for (int i = 0; i < ids.size(); ++i) {
+    if (ids[i] == kVisionToken) {
+      result.push_back(chunk_of_id[i]);
+    }
+  }
+  return result;
+}
+
+const SortedPrefillSignatureMap& Prefill128() {
+  static const auto* const kMap =
+      new SortedPrefillSignatureMap({{128, "prefill_128"}});
+  return *kMap;
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, TextOnlyUsesFullChunks) {
+  const std::vector<int> ids = MakeIds({{kTextToken, 300}});
+  for (const std::optional<int> pending_token_id : {kPendingText, kNoPending}) {
+    ASSERT_OK_AND_ASSIGN(auto work_groups,
+                         PlanVisionAlignedPrefillWorkGroups(Prefill128(), ids,
+                                                            pending_token_id));
+    EXPECT_THAT(GroupSizes(work_groups), ElementsAre(128, 128, 44));
+    for (const auto& [signature, size] : work_groups) {
+      EXPECT_EQ(signature, "prefill_128");
+    }
+  }
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest,
+     ImageAcrossChunkBoundaryStartsNewChunk) {
+  // 100 text tokens, a 70-token image and 50 text tokens: with full 128-token
+  // chunks, the image would be split after 27 or 28 of its tokens.
+  const std::vector<int> ids =
+      MakeIds({{kTextToken, 100}, {kVisionToken, 70}, {kTextToken, 50}});
+
+  // With a pending token, the first chunk processes it and ids 0 to 99.
+  ASSERT_OK_AND_ASSIGN(auto with_pending, PlanVisionAlignedPrefillWorkGroups(
+                                              Prefill128(), ids, kPendingText));
+  EXPECT_THAT(GroupSizes(with_pending), ElementsAre(101, 119));
+  EXPECT_THAT(ChunkOfEachVisionToken(
+                  ids, ProcessedIdIndices(with_pending, kPendingText)),
+              Each(1));
+
+  // Without a pending token, the first chunk processes ids 0 to 99 and leaves
+  // id 100 (the first image token) pending for the second chunk.
+  ASSERT_OK_AND_ASSIGN(
+      auto without_pending,
+      PlanVisionAlignedPrefillWorkGroups(Prefill128(), ids, kNoPending));
+  EXPECT_THAT(GroupSizes(without_pending), ElementsAre(101, 119));
+  EXPECT_THAT(ChunkOfEachVisionToken(
+                  ids, ProcessedIdIndices(without_pending, kNoPending)),
+              Each(1));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, ImageEndingAtChunkEndIsUnchanged) {
+  // With a pending token, the first chunk processes it and ids 0 to 126: the
+  // image (ids 57 to 126) ends exactly with the chunk.
+  const std::vector<int> ids =
+      MakeIds({{kTextToken, 57}, {kVisionToken, 70}, {kTextToken, 50}});
+  ASSERT_OK_AND_ASSIGN(auto work_groups, PlanVisionAlignedPrefillWorkGroups(
+                                             Prefill128(), ids, kPendingText));
+  EXPECT_THAT(GroupSizes(work_groups), ElementsAre(128, 49));
+  EXPECT_THAT(ChunkOfEachVisionToken(
+                  ids, ProcessedIdIndices(work_groups, kPendingText)),
+              Each(0));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, ImageLongerThanChunkIsSplit) {
+  const std::vector<int> ids =
+      MakeIds({{kTextToken, 20}, {kVisionToken, 280}, {kTextToken, 20}});
+  ASSERT_OK_AND_ASSIGN(auto work_groups, PlanVisionAlignedPrefillWorkGroups(
+                                             Prefill128(), ids, kPendingText));
+  // The same chunks as without the image.
+  EXPECT_THAT(GroupSizes(work_groups), ElementsAre(128, 128, 64));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, AlignsEachImage) {
+  const std::vector<int> ids = MakeIds({{kTextToken, 100},
+                                        {kVisionToken, 70},
+                                        {kTextToken, 20},
+                                        {kVisionToken, 70},
+                                        {kTextToken, 10}});
+  ASSERT_OK_AND_ASSIGN(auto work_groups, PlanVisionAlignedPrefillWorkGroups(
+                                             Prefill128(), ids, kPendingText));
+  // Chunk 0: pending + ids [0, 100). Chunk 1: ids [100, 190) (the first image
+  // and the text after it); the second image (ids [190, 260)) would not fit,
+  // so it starts chunk 2.
+  EXPECT_THAT(GroupSizes(work_groups), ElementsAre(101, 90, 79));
+  EXPECT_THAT(ChunkOfEachVisionToken(
+                  ids, ProcessedIdIndices(work_groups, kPendingText)),
+              ElementsAreArray(MakeIds({{1, 70}, {2, 70}})));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest,
+     PendingVisionTokenBelongsToFollowingImage) {
+  // The previous step left the first token of an image pending, e.g. because
+  // the image was longer than the remaining space of a split input. It is
+  // processed first, so the image is 1 + 69 tokens long and starts the first
+  // chunk: it cannot move and fits.
+  const std::vector<int> ids = MakeIds({{kVisionToken, 69}, {kTextToken, 100}});
+  ASSERT_OK_AND_ASSIGN(auto work_groups, PlanVisionAlignedPrefillWorkGroups(
+                                             Prefill128(), ids, kVisionToken));
+  EXPECT_THAT(GroupSizes(work_groups), ElementsAre(128, 41));
+  EXPECT_THAT(ChunkOfEachVisionToken(
+                  ids, ProcessedIdIndices(work_groups, kVisionToken)),
+              Each(0));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, UsesSmallestFittingSignature) {
+  const SortedPrefillSignatureMap prefill_signature_map = {
+      {1024, "prefill_1024"}, {128, "prefill_128"}};
+  const std::vector<int> ids =
+      MakeIds({{kTextToken, 1000}, {kVisionToken, 280}, {kTextToken, 20}});
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       PlanVisionAlignedPrefillWorkGroups(prefill_signature_map,
+                                                          ids, kPendingText));
+  EXPECT_THAT(work_groups,
+              ElementsAre(std::pair<std::string, int>("prefill_1024", 1001),
+                          std::pair<std::string, int>("prefill_1024", 299)));
+  EXPECT_THAT(ChunkOfEachVisionToken(
+                  ids, ProcessedIdIndices(work_groups, kPendingText)),
+              Each(1));
+
+  const std::vector<int> short_ids =
+      MakeIds({{kTextToken, 20}, {kVisionToken, 70}, {kTextToken, 20}});
+  ASSERT_OK_AND_ASSIGN(auto short_work_groups,
+                       PlanVisionAlignedPrefillWorkGroups(
+                           prefill_signature_map, short_ids, kPendingText));
+  EXPECT_THAT(short_work_groups,
+              ElementsAre(std::pair<std::string, int>("prefill_128", 110)));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, SingleId) {
+  ASSERT_OK_AND_ASSIGN(auto with_pending,
+                       PlanVisionAlignedPrefillWorkGroups(
+                           Prefill128(), {kTextToken}, kPendingText));
+  EXPECT_THAT(GroupSizes(with_pending), ElementsAre(1));
+  ASSERT_OK_AND_ASSIGN(auto without_pending,
+                       PlanVisionAlignedPrefillWorkGroups(
+                           Prefill128(), {kTextToken}, kNoPending));
+  EXPECT_THAT(GroupSizes(without_pending), ElementsAre(1));
+}
+
+TEST(PlanVisionAlignedPrefillWorkGroupsTest, RejectsInvalidInputs) {
+  EXPECT_THAT(
+      PlanVisionAlignedPrefillWorkGroups(Prefill128(), {}, kPendingText),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(PlanVisionAlignedPrefillWorkGroups(SortedPrefillSignatureMap(),
+                                                 {kTextToken}, kPendingText),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+// Random prompts with images that fit in a chunk: every image is processed by
+// a single chunk, every chunk fits its signature, and the work groups cover
+// all ids.
+TEST(PlanVisionAlignedPrefillWorkGroupsTest,
+     RandomPromptsKeepImagesInOneChunk) {
+  std::mt19937 rng(42);
+  std::uniform_int_distribution<int> text_length(1, 300);
+  std::uniform_int_distribution<int> image_length(1, 128);
+  std::uniform_int_distribution<int> num_images(0, 4);
+  for (int trial = 0; trial < 500; ++trial) {
+    std::vector<std::pair<int, int>> segments = {
+        {kTextToken, text_length(rng)}};
+    std::vector<int> image_lengths;
+    for (int i = num_images(rng); i > 0; --i) {
+      image_lengths.push_back(image_length(rng));
+      segments.push_back({kVisionToken, image_lengths.back()});
+      segments.push_back({kTextToken, text_length(rng)});
+    }
+    const std::vector<int> ids = MakeIds(segments);
+    const std::optional<int> pending_token_id =
+        trial % 2 == 0 ? kPendingText : kNoPending;
+    ASSERT_OK_AND_ASSIGN(auto work_groups,
+                         PlanVisionAlignedPrefillWorkGroups(Prefill128(), ids,
+                                                            pending_token_id));
+
+    int total = 0;
+    for (const auto& [signature, size] : work_groups) {
+      EXPECT_GT(size, 0);
+      EXPECT_LE(size, 128);
+      total += size;
+    }
+    EXPECT_EQ(total, ids.size());
+    const auto processed = ProcessedIdIndices(work_groups, pending_token_id);
+    for (const auto& chunk : processed) {
+      EXPECT_LE(chunk.size(), 128);
+    }
+    const std::vector<int> chunks = ChunkOfEachVisionToken(ids, processed);
+    int offset = 0;
+    for (const int length : image_lengths) {
+      for (int i = 1; i < length; ++i) {
+        EXPECT_EQ(chunks[offset + i], chunks[offset])
+            << "trial " << trial << ": image split across chunks";
+      }
+      offset += length;
+    }
+  }
+}
+
+TEST(GetNpuPrefillWorkGroupsTest, AlignsOnlyForVisionMasksAndImages) {
+  const std::vector<int> image_ids =
+      MakeIds({{kTextToken, 100}, {kVisionToken, 70}, {kTextToken, 50}});
+  const std::vector<int> text_ids = MakeIds({{kTextToken, 220}});
+  NpuGraphLayout causal_layout;
+  NpuGraphLayout vision_layout;
+  vision_layout.local_mask_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+
+  // Causal masks: the image may be split, as the chunking does not matter.
+  ASSERT_OK_AND_ASSIGN(auto causal,
+                       GetNpuPrefillWorkGroups(Prefill128(), causal_layout,
+                                               image_ids, kPendingText));
+  EXPECT_THAT(GroupSizes(causal), ElementsAre(128, 92));
+
+  // Vision-bidirectional masks: the image starts a new chunk.
+  ASSERT_OK_AND_ASSIGN(auto vision,
+                       GetNpuPrefillWorkGroups(Prefill128(), vision_layout,
+                                               image_ids, kPendingText));
+  EXPECT_THAT(GroupSizes(vision), ElementsAre(101, 119));
+
+  // Vision-bidirectional masks without images: the regular chunking.
+  ASSERT_OK_AND_ASSIGN(
+      auto text, GetNpuPrefillWorkGroups(Prefill128(), vision_layout, text_ids,
+                                         kPendingText));
+  EXPECT_THAT(GroupSizes(text), ElementsAre(128, 92));
 }
 
 }  // namespace

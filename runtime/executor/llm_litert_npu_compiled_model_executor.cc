@@ -1017,9 +1017,23 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
   LITERT_ASSIGN_OR_RETURN(auto ids,
                           ReferTensorBufferAsSpan<int32_t>(*text_token_ids));
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto work_groups,
-      GetOptimizedPrefillWorkGroups(prefill_signature_map_, ids.size()));
+  // Prefill chunks are aligned to images for models with vision-bidirectional
+  // attention masks (e.g. Gemma4 12B), see `GetNpuPrefillWorkGroups`.
+  std::optional<int> pending_token_id;
+  if (const auto next = processed_tokens_.GetNextUnprocessedToken();
+      !next.token.empty()) {
+    pending_token_id = next.token[0]->id();
+  }
+  LITERT_ASSIGN_OR_RETURN(auto work_groups,
+                          GetNpuPrefillWorkGroups(prefill_signature_map_,
+                                                  ActiveContextGroup().layout,
+                                                  ids, pending_token_id));
+  NPU_EXECUTOR_LOG(INFO) << "Prefill work group sizes: "
+                         << absl::StrJoin(
+                                work_groups, ", ",
+                                [](std::string* out, const auto& work_group) {
+                                  absl::StrAppend(out, work_group.second);
+                                });
 
   if (is_dynamic_model_) {
     // Grow the KV cache once for the whole request rather than chunk by chunk

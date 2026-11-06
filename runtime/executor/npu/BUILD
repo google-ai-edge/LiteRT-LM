@@ -46,6 +46,7 @@ cc_library(
     srcs = ["llm_litert_npu_compiled_model_executor_utils.cc"],
     hdrs = ["llm_litert_npu_compiled_model_executor_utils.h"],
     deps = [
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
@@ -112,6 +113,8 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
         "@litert//litert/test:matchers",
+        "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_litert_npu_compiled_model_executor",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/util:test_utils",

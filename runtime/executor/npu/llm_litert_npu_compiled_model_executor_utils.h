@@ -297,6 +297,48 @@ absl::StatusOr<std::vector<int>> DetectSupportedContextSizes(
 ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size,
                                                          int context_size = 0);
 
+// Returns whether the prefill chunk boundaries affect the attention of a model
+// with `layout`: with a vision-bidirectional attention mask, an image token
+// attends to the later tokens of its image only if they are in the same prefill
+// chunk. Causal attention gives the same result for any chunking.
+bool NeedsVisionAlignedPrefillChunks(const NpuGraphLayout& layout);
+
+// Plans the prefill work groups, i.e. (prefill signature, number of `ids`)
+// pairs in order, so that every run of vision tokens
+// (`ExecutorVisionData::kSpecialToken`) in `ids` is processed in a single
+// prefill chunk, as vision-bidirectional attention requires. The chunk before
+// an image that would otherwise be split ends early instead (and is padded),
+// and the image starts a new chunk. Images longer than the largest prefill
+// signature are still split.
+//
+// In practice, models should be exported with a prefill length equal to the
+// sliding window (ring buffer) size, e.g. 1024 for Gemma4 12B. Then every image
+// that the sliding window attention can attend over as a whole fits in one
+// prefill chunk, so the chunking imposes no further restriction: an image
+// longer than the sliding window is not attended over as a whole by any
+// executor.
+//
+// A prefill chunk of the NPU executor processes the pending input token of the
+// previous prefill or decode step (`pending_token_id`, if any) followed by all
+// but the last of its work group's ids; the last id becomes the next pending
+// input token. The plan accounts for this one-token offset, and treats a
+// pending vision token as part of the image that follows it.
+//
+// Each work group uses the smallest prefill signature that fits it.
+absl::StatusOr<std::vector<std::pair<std::string, int>>>
+PlanVisionAlignedPrefillWorkGroups(
+    const SortedPrefillSignatureMap& prefill_signature_map,
+    absl::Span<const int> ids, std::optional<int> pending_token_id);
+
+// Returns the prefill work groups for `ids`: aligned to images with
+// `PlanVisionAlignedPrefillWorkGroups` if the model needs it
+// (`NeedsVisionAlignedPrefillChunks`) and `ids` contain vision tokens,
+// otherwise `GetOptimizedPrefillWorkGroups`.
+absl::StatusOr<std::vector<std::pair<std::string, int>>>
+GetNpuPrefillWorkGroups(const SortedPrefillSignatureMap& prefill_signature_map,
+                        const NpuGraphLayout& layout, absl::Span<const int> ids,
+                        std::optional<int> pending_token_id);
+
 static constexpr absl::string_view kPerLayerEmbedderTensor =
     "per_layer_embeddings";
 
