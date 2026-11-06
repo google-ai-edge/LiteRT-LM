@@ -31,6 +31,7 @@
 #include <gtest/gtest.h>
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/log_sink_registry.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -42,6 +43,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/engine.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -1208,6 +1210,110 @@ TEST(PrintMessageTest, StreamingTransitionChannelToContent) {
   EXPECT_EQ(coopt.GetOutput(),
             ColorBlue("[/thought]") + "\n" + ColorYellow("Final answer."));
   EXPECT_EQ(active_channel, "");
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettingsAppendChunksValidation) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  LiteRtLmSettings valid;
+  valid.model_path = model_path.string();
+  valid.backend = "cpu";
+  valid.disable_cache = true;
+  valid.benchmark = true;
+  valid.benchmark_prefill_tokens = 256;
+  valid.benchmark_decode_tokens = 256;
+  valid.benchmark_append_chunks = 4;
+  ASSERT_OK_AND_ASSIGN(const EngineSettings engine_settings,
+                       CreateEngineSettings(valid));
+  ASSERT_TRUE(engine_settings.GetBenchmarkParams().has_value());
+
+  LiteRtLmSettings invalid = valid;
+  invalid.benchmark_append_chunks = -1;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.benchmark = false;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.use_session = true;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.multi_turns = true;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.input_prompt = "";
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.score_target_text = "target";
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_THAT(RunLiteRtLm(valid),
+              StatusIs(absl::StatusCode::kUnimplemented));
+}
+
+TEST(LiteRtLmLibTest, LogMultiPrefillBenchmarkMetricsToLogSink) {
+  const std::filesystem::path log_sink_path =
+      std::filesystem::path(testing::TempDir()) / "multi_prefill_benchmark.log";
+  std::filesystem::remove(log_sink_path);
+
+  proto::BenchmarkParams params;
+  params.set_num_prefill_tokens(256);
+  params.set_num_decode_tokens(256);
+  BenchmarkInfo info(params);
+  for (int chunk = 0; chunk < 4; ++chunk) {
+    ABSL_CHECK_OK(info.TimePrefillTurnStart());
+    ABSL_CHECK_OK(info.TimePrefillTurnEnd(256));
+  }
+  ABSL_CHECK_OK(info.TimePrefillTurnStart());
+  ABSL_CHECK_OK(info.TimePrefillTurnEnd(5));
+  ABSL_CHECK_OK(info.TimeDecodeTurnStart());
+  ABSL_CHECK_OK(info.TimeDecodeTurnEnd(256));
+
+  LiteRtLmSettings settings;
+  settings.backend = "gpu";
+  settings.benchmark = true;
+  settings.benchmark_prefill_tokens = 256;
+  settings.benchmark_decode_tokens = 256;
+  settings.benchmark_append_chunks = 4;
+  settings.log_sink_file = log_sink_path.string();
+
+  {
+    FileLogSink sink(log_sink_path.string());
+    absl::AddLogSink(&sink);
+    LogBenchmarkInfo(info, settings);
+    absl::RemoveLogSink(&sink);
+  }
+
+  std::ifstream log_file(log_sink_path);
+  ASSERT_TRUE(log_file.is_open());
+  const std::string log_contents((std::istreambuf_iterator<char>(log_file)),
+                                 std::istreambuf_iterator<char>());
+  EXPECT_THAT(
+      log_contents,
+      testing::HasSubstr(
+          "] Benchmark flags: "
+          "benchmark_prefill_tokens=256,benchmark_decode_tokens=256,"
+          "backend=gpu,append_chunks=4\n"));
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_THAT(
+        log_contents,
+        testing::HasSubstr(absl::StrCat("] Prefill speed turn ", i, ": ")));
+  }
+  EXPECT_THAT(log_contents, testing::HasSubstr("] Decode speed turn 0: "));
+  EXPECT_THAT(log_contents,
+              testing::Not(testing::HasSubstr("] Decode speed turn 1:")));
 }
 
 }  // namespace
