@@ -447,6 +447,12 @@ struct OptionalArgs {
   //   {.has_pending_message = false}));
   bool has_pending_message = false;
 
+  // When `has_pending_message` is true, whether to close the current turn and
+  // append the generation prompt during this prefill call so a subsequent
+  // decode-only `SendMessageAsync` call can skip prefill and start decoding
+  // directly.
+  bool close_turn_on_prefill = false;
+
   // The repetition penalty config to be used during decode.
   std::optional<RepetitionPenaltyConfig> repetition_penalty_config =
       std::nullopt;
