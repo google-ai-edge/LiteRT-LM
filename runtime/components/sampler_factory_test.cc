@@ -14,14 +14,19 @@
 
 #include "runtime/components/sampler_factory.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -93,6 +98,59 @@ TEST(SamplerFactoryTest,
       auto sampler,
       CreateSampler(Backend::CPU, /*batch_size=*/1, std::move(sampler_params)));
   EXPECT_EQ(sampler, nullptr);
+}
+
+TEST(SamplerFactoryTest, CreateSamplerForUnsupportedBackendFails) {
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_type(proto::SamplerParameters::TOP_P);
+  sampler_params.set_k(1);
+  EXPECT_THAT(
+      CreateSampler(Backend::NPU, /*batch_size=*/1, std::move(sampler_params)),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(SamplerFactoryTest, CreateSamplerForGpuRequiresEnvAndVocabSize) {
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_type(proto::SamplerParameters::TOP_P);
+  sampler_params.set_k(1);
+  EXPECT_THAT(CreateSampler(Backend::GPU, /*batch_size=*/1, sampler_params,
+                            /*env=*/std::nullopt, /*sequence_size=*/1,
+                            /*vocab_size=*/201),
+              StatusIs(absl::StatusCode::kInternal));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(litert::Environment env,
+                              litert::Environment::Create({}));
+  EXPECT_THAT(CreateSampler(Backend::GPU, /*batch_size=*/1, sampler_params, env,
+                            /*sequence_size=*/1, /*vocab_size=*/std::nullopt),
+              StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(SamplerFactoryTest,
+     CreateSamplerForGpuFallsBackToCpuWithoutStaticSamplers) {
+  using Tag = litert::EnvironmentOptions::Tag;
+  using Option = litert::EnvironmentOptions::Option;
+  const std::vector<std::vector<Option>> option_sets = {
+      {},
+      {Option{Tag::kWebGpuDevice, int64_t{1}}},
+      {Option{Tag::kOpenClDeviceId, int64_t{1}}},
+      {Option{Tag::kMetalDevice, static_cast<const void*>(nullptr)}},
+  };
+  for (const auto& options : option_sets) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        litert::Environment env,
+        litert::Environment::Create(litert::EnvironmentOptions(options)));
+    proto::SamplerParameters sampler_params;
+    sampler_params.set_type(proto::SamplerParameters::TOP_P);
+    sampler_params.set_k(1);
+    sampler_params.set_p(0.0);
+    sampler_params.set_temperature(1.0);
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<Sampler> sampler,
+        CreateSampler(Backend::GPU, /*batch_size=*/1, std::move(sampler_params),
+                      env, /*sequence_size=*/1,
+                      /*vocab_size=*/201));
+    EXPECT_NE(dynamic_cast<TopPSampler*>(sampler.get()), nullptr);
+  }
 }
 
 proto::SamplerParameters TopPParams(int k, float p, float temperature) {
