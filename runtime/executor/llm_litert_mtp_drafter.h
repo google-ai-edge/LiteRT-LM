@@ -182,11 +182,13 @@ class LlmLiteRtMtpDrafter {
         drafter_mask_runner_(std::move(drafter_mask_runner)) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
       auto expected = buffer.Duplicate();
-      active_drafter_input_buffers_[name] = std::move(expected.Value());
+      active_drafter_input_buffers_.insert_or_assign(
+          name, std::move(expected.Value()));
     }
     for (const auto& [name, buffer] : drafter_output_buffers_) {
       auto expected = buffer.Duplicate();
-      active_drafter_output_buffers_[name] = std::move(expected.Value());
+      active_drafter_output_buffers_.insert_or_assign(
+          name, std::move(expected.Value()));
     }
   }
 
