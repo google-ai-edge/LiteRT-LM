@@ -21,6 +21,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -30,6 +31,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -51,10 +53,13 @@
 #include "ml_drift/webgpu/spatial_tensor.h"  // from @ml_drift
 #include "ml_drift/webgpu/webgpu_headers.h"  // from @ml_drift
 #include "litert/cc/internal/litert_handle.h"  // from @litert
+#include "litert/cc/litert_any.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "ml_drift_delegate/delegate/webgpu_dawn_loader.h"  // from @litert
 #include "runtime/components/sampler_params_util.h"
 #include "runtime/components/top_k_gpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -188,7 +193,7 @@ if (X != 0 || Y != 0 || S != 0) return;
 args.dst::type result;
 )";
   std::string postfixes[4] = {".x", ".y", ".z", ".w"};
-  for (int s = 0; s < ml_drift::DivideRoundUp(params_count, 4); ++s) {
+  for (int s = 0; s < ::ml_drift::DivideRoundUp(params_count, 4); ++s) {
     for (int ch = 0; ch < 4; ++ch) {
       std::string param_name = absl::StrCat("args.param", s * 4 + ch);
       if (s * 4 + ch >= params_count) {
@@ -205,22 +210,43 @@ args.dst::type result;
 
 absl::StatusOr<std::unique_ptr<WebGpuEnv>> CreateWebGpuEnvFromLiteRtEnv(
     const Environment* env) {
-  LITERT_ASSIGN_OR_RETURN(auto env_options, env->GetOptions());
+  LITERT_ASSIGN_OR_RETURN(EnvironmentOptions env_options, env->GetOptions());
+
+  absl::string_view runtime_library_dir;
+  if (Expected<const LiteRtVariant> runtime_lib_dir_opt =
+          env_options.GetOption(EnvironmentOptions::Tag::kRuntimeLibraryDir);
+      runtime_lib_dir_opt.HasValue()) {
+    if (const char* const* dir =
+            std::get_if<const char*>(&*runtime_lib_dir_opt);
+        dir != nullptr && *dir != nullptr) {
+      runtime_library_dir = *dir;
+    }
+  }
+  if (absl::Status status =
+          litert::ml_drift::EnsureWebGpuDawnLoaded(runtime_library_dir);
+      !status.ok()) {
+    return absl::UnavailableError(status.message());
+  }
+
+  Expected<const LiteRtVariant> wgpu_device_opt =
+      env_options.GetOption(EnvironmentOptions::Tag::kWebGpuDevice);
+  if (!wgpu_device_opt.HasValue()) {
+    return absl::UnavailableError(
+        "WebGPU device is not set in LiteRT environment.");
+  }
 
 #ifdef LITERT_SAMPLER_LINKED_DYNAMICALLY
   LITERT_ASSIGN_OR_RETURN(
-      auto instance_ptr,
+      LiteRtVariant instance_var,
       env_options.GetOption(EnvironmentOptions::Tag::kWebGpuInstance));
   wgpu::Instance instance = reinterpret_cast<WGPUInstance>(  // NOLINT
-      std::get<int64_t>(instance_ptr));
-  ABSL_RETURN_IF_ERROR(ml_drift::webgpu::Instance::Set(instance));
+      std::get<int64_t>(instance_var));
+  ABSL_RETURN_IF_ERROR(  // NOLINT
+      ::ml_drift::webgpu::Instance::Set(instance));
 #endif  // LITERT_SAMPLER_LINKED_DYNAMICALLY
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto wgpu_device_ptr,
-      env_options.GetOption(EnvironmentOptions::Tag::kWebGpuDevice));
   wgpu::Device device = reinterpret_cast<WGPUDevice>(  // NOLINT
-      std::get<int64_t>(wgpu_device_ptr));
+      std::get<int64_t>(*wgpu_device_opt));
 
   wgpu::AdapterInfo adapter_info;
   device.GetAdapterInfo(&adapter_info);
@@ -244,7 +270,8 @@ absl::StatusOr<std::unique_ptr<WebGpuEnv>> CreateWebGpuEnvFromLiteRtEnv(
 // Binds a tensor to the inference context for the given ID.
 // shared_tensors is used to hold any tensors that need to be kept alive for the
 // duration of the inference.
-absl::Status BindTensor(const TensorBuffer& tensor_buffer, ml_drift::ValueId id,
+absl::Status BindTensor(const TensorBuffer& tensor_buffer,
+                        ::ml_drift::ValueId id,
                         InferenceContext& inference_context,
                         std::vector<SpatialTensor>& shared_tensors) {
   LITERT_ASSIGN_OR_RETURN(auto wgpu_buffer, tensor_buffer.GetWebGpuBuffer());
@@ -283,7 +310,7 @@ TensorDescriptor GetTensorDescriptor(const TensorBuffer* tensor_buffer) {
 }
 
 size_t GetMappableBufferSize(const TensorDescriptor& tensor_desc) {
-  return ml_drift::AlignByN(tensor_desc.GetMemorySizeInBytes(), 4);
+  return ::ml_drift::AlignByN(tensor_desc.GetMemorySizeInBytes(), 4);
 }
 
 }  // namespace
@@ -309,19 +336,19 @@ absl::StatusOr<std::unique_ptr<TopKWebGpuSampler>> TopKWebGpuSampler::Create(
 
   CreateGpuModelInfo create_info;
   if (activation_data_type_copy == ActivationDataType::FLOAT16) {
-    create_info.precision = ml_drift::CalculationsPrecision::kF16;
+    create_info.precision = ::ml_drift::CalculationsPrecision::kF16;
   } else {
-    create_info.precision = ml_drift::CalculationsPrecision::kF32;
+    create_info.precision = ::ml_drift::CalculationsPrecision::kF32;
   }
-  create_info.hints.Add(ml_drift::ModelHints::kFastTuning);
-  create_info.hints.Add(ml_drift::ModelHints::kPreferTextureWeights);
-  create_info.hints.Add(ml_drift::ModelHints::kAllowSpecialKernels);
+  create_info.hints.Add(::ml_drift::ModelHints::kFastTuning);
+  create_info.hints.Add(::ml_drift::ModelHints::kPreferTextureWeights);
+  create_info.hints.Add(::ml_drift::ModelHints::kAllowSpecialKernels);
   create_info.storage_type = GetFastestStorageType(gpu_info);
 
-  ml_drift::DataType logits_data_type =
+  DataType logits_data_type =
       (activation_data_type_copy == ActivationDataType::FLOAT16)
-          ? ml_drift::DataType::kFloat16
-          : ml_drift::DataType::kFloat32;
+          ? DataType::kFloat16
+          : DataType::kFloat32;
 
   auto [runtime_c_api, env_handle] = env.GetHolderForCApi();
   auto litert_env = litert::Environment::WrapCObject(runtime_c_api, env_handle,
@@ -518,8 +545,9 @@ absl::Status TopKWebGpuSampler::DownloadSampledIds(void* dst) {
         status = s;
         message = std::string(msg);
       });
-  ABSL_RETURN_IF_ERROR(ml_drift::webgpu::Instance::Wait(env_->device(), future,
-                                                        absl::Seconds(120)));
+  ABSL_RETURN_IF_ERROR(  // NOLINT
+      ::ml_drift::webgpu::Instance::Wait(env_->device(), future,
+                                         absl::Seconds(120)));
 
   if (status != wgpu::MapAsyncStatus::Success) {
     return absl::InternalError(
@@ -589,7 +617,7 @@ absl::Status TopKWebGpuSampler::SetInferenceFuncAndInputTensors(
             param_tensor ? &prev_param_handle : nullptr,
             param_tensor ? &param_handle : nullptr));
 
-    ml_drift::CreateGpuModelInfo input_handling_create_info = create_info_;
+    CreateGpuModelInfo input_handling_create_info = create_info_;
     input_handling_create_info.external_immutable_tensors.clear();
     input_handling_create_info.external_mutable_tensors.clear();
     input_handling_create_info

@@ -88,13 +88,23 @@ device and your development platform.
 Make sure [Git LFS](https://git-lfs.com) is installed, and run `git lfs pull` to
 fetch the latest prebuilt binaries.
 
-> Note: In order to run on GPU on all platforms, we need to take extra steps:
+> Note: GPU backend defaults, shared libraries, and sampler fallback behavior:
 >
-> 1.  `mkdir -p <test_dir>; cp <your litert_lm_main> <test_dir>; cp
->     ./prebuilt/<your OS>/<shared libaries> <test_dir>/` and make sure the
->     prebuilt .so/.dll/.dylib files are in the same directory as
->     `litert_lm_main` binary
-> 1.  Running GPU on Windows needs DirectXShaderCompiler. See
+> 1.  By default, LiteRT-LM selects **WebGPU** on Linux, Windows, and macOS,
+>     **Metal** on iOS, and **OpenCL** (falling back to OpenGL ES if OpenCL is
+>     unsupported) on Android. You can override the Apple or Android GPU backend
+>     at build time with `--//runtime/executor:gpu_accelerator=webgpu` or
+>     `=metal`.
+> 2.  When using WebGPU on Desktop (or WebGPU on Android), make sure the runtime
+>     shared libraries from `./prebuilt/<your OS>/` (such as
+>     `libwebgpu_dawn.so`, `libwebgpu_dawn.dylib`, or `webgpu_dawn.dll`) are in
+>     the same directory as `litert_lm_main` (or on `LD_LIBRARY_PATH`): `mkdir
+>     -p <test_dir>; cp <your litert_lm_main> <test_dir>; cp ./prebuilt/<your
+>     OS>/<shared libraries> <test_dir>/`
+> 3.  If a required GPU runtime library (such as Dawn) or a matching GPU sampler
+>     is unavailable at runtime, sampling logs a warning and automatically falls
+>     back to CPU sampling while inference continues on the active backend.
+> 4.  Running GPU on Windows needs DirectXShaderCompiler. See
 >     [this Note](../../README.md#windows_gpu) for more details.
 
 <details> <span id="deploy_to_windows"></span>
@@ -316,13 +326,16 @@ adb shell $DEVICE_FOLDER/litert_lm_main \
     --model_path=$DEVICE_FOLDER/model.litertlm
 ```
 
-To run with **GPU** backend, we need additional `.so` files. They are located in
-the `prebuilt/` subfolder in the repo (we currently only support `arm64`).
+To run with **GPU** backend using WebGPU or constrained decoding (or when
+building with dynamic accelerator libraries), push any needed `.so` runtime
+libraries from `prebuilt/android_arm64/` (for `arm64`):
 
 ```
 # Skip model push if it is already there
 adb push $MODEL_PATH $DEVICE_FOLDER/model.litertlm
 
+# Push optional runtime shared libraries (for example libwebgpu_dawn.so or
+# constrained decoding libraries) when used by your build/runtime configuration.
 adb push prebuilt/android_arm64/*.so $DEVICE_FOLDER
 adb push bazel-bin/runtime/engine/litert_lm_main $DEVICE_FOLDER
 
