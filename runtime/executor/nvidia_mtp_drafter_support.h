@@ -192,6 +192,15 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateExecutorSampler(
     std::optional<int> vocab_size = std::nullopt,
     std::optional<ActivationDataType> activation_data_type = std::nullopt);
 
+// Tells NVIDIA's decode step that feeds itself, on Backend::NPU with the
+// NVIDIA dispatch library loaded, how many decode steps its caller will still
+// ask for after the next one: `max_num_tokens_to_emit` less one (the decode
+// parameters' bound, nothing when there is none). Its steps ahead stop there,
+// so a bounded response's end leaves none in flight for the next prefill to
+// wait on. A hint: a dispatch that refuses it is logged once.
+void TellNvidiaDecodeBudget(const Environment& env, Backend backend,
+                            std::optional<int> max_num_tokens_to_emit);
+
 // The MTP verifier's session sampler, with the signature of the factory's
 // UpdateOrRecreateSampler so the drafter calls it in that one's place. The
 // sampler of CreateMtpGreedySampler (the NPU route's, known by what it is,

@@ -361,8 +361,9 @@ class DecodeOneStep {
       // that leave room for the token after them.
       draft_token_ids_.resize(max_num_tokens_to_emit - 1);
     }
-    ABSL_ASSIGN_OR_RETURN(auto token_ids,
-                          DecodeAndSample(std::move(decoded_ids)));
+    ABSL_ASSIGN_OR_RETURN(
+        auto token_ids,
+        DecodeAndSample(std::move(decoded_ids), max_num_tokens_to_emit));
 
     size_t sequence_length = token_ids[0].size();
     for (size_t i = 1; i < token_ids.size(); ++i) {
@@ -497,7 +498,8 @@ class DecodeOneStep {
   // sampling. Returns a pointer to the tensor buffer containing the next token
   // IDs.
   absl::StatusOr<std::vector<std::vector<int>>> DecodeAndSample(
-      std::optional<litert::TensorBuffer> decoded_ids) {
+      std::optional<litert::TensorBuffer> decoded_ids,
+      int max_num_tokens_to_emit) {
     if (sampler_) {  // External sampling path
       if (!decoded_ids) {
         return absl::InternalError(
@@ -557,6 +559,9 @@ class DecodeOneStep {
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
       decode_params.SetSpeculativeDecodingConfig(speculative_decoding_config_);
+      if (max_num_tokens_to_emit < std::numeric_limits<int>::max()) {
+        decode_params.SetMaxNumTokensToEmit(max_num_tokens_to_emit);
+      }
       if (constrained_decoder_ != nullptr) {
         decode_params.SetConstrainedDecoder(constrained_decoder_.get());
       }

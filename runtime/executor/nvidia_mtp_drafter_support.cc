@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/base/call_once.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -955,6 +956,34 @@ bool NvidiaDispatchLoaded(
 }
 
 }  // namespace
+
+void TellNvidiaDecodeBudget(const Environment& env, Backend backend,
+                            std::optional<int> max_num_tokens_to_emit) {
+  if (backend != Backend::NPU || !max_num_tokens_to_emit.has_value()) return;
+  using SetBudgetFn = decltype(&LiteRtDispatchNvidiaStepFeedSetBudget);
+  // Looked up once per process, on the first decode step, after the runtime has
+  // loaded the dispatch library; the handle then keeps that library loaded.
+  static absl::once_flag once;
+  static SetBudgetFn set_budget = nullptr;
+  absl::call_once(once, [&env] {
+    auto library = LoadedDispatchLibrary(env);
+    if (!library.ok() || !library->has_value()) return;
+    auto symbol = (*library)->LookupSymbol<SetBudgetFn>(
+        "LiteRtDispatchNvidiaStepFeedSetBudget");
+    if (!symbol.HasValue()) return;
+    set_budget = symbol.Value();
+    new SharedLibrary(std::move(**library));  // kept for the process
+  });
+  if (set_budget == nullptr) return;
+  const int remaining = std::max(*max_num_tokens_to_emit - 1, 0);
+  if (const LiteRtStatus status = set_budget(static_cast<uint32_t>(remaining));
+      status != kLiteRtStatusOk) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "NVIDIA step feed: the dispatch does not take the decode budget "
+           "(status "
+        << status << ")";
+  }
+}
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateMtpGreedySampler(
     Backend backend, int batch_size, proto::SamplerParameters sampler_params,

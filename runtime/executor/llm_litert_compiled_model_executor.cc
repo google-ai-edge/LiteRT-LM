@@ -1347,6 +1347,9 @@ LlmLiteRtCompiledModelExecutorBase::Decode() {
 absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
+  // The NVIDIA decode step that feeds itself runs no steps ahead past them.
+  TellNvidiaDecodeBudget(env_, executor_settings_.GetBackend(),
+                         decode_params.GetMaxNumTokensToEmit());
 
   // The drafter can only continue from its own last verified state if the
   // previous step was a successful MTP round. Invalidate the flag up front so

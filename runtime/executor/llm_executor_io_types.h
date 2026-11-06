@@ -472,10 +472,23 @@ class ExecutorDecodeParams {
     return speculative_decoding_config_;
   }
 
+  // Sets the most tokens the caller takes from this decode step and the ones
+  // after it before the response ends (its output or context limit): an
+  // executor that runs steps ahead of its caller stops there.
+  void SetMaxNumTokensToEmit(int max_num_tokens_to_emit) {
+    max_num_tokens_to_emit_ = max_num_tokens_to_emit;
+  }
+
+  // Returns the most tokens the caller takes, if it said.
+  std::optional<int> GetMaxNumTokensToEmit() const {
+    return max_num_tokens_to_emit_;
+  }
+
  private:
   ConstrainedDecoder* constrained_decoder_ = nullptr;
   const std::atomic<bool>* cancelled_ = nullptr;
   SpeculativeDecodingConfig speculative_decoding_config_;
+  std::optional<int> max_num_tokens_to_emit_;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 
