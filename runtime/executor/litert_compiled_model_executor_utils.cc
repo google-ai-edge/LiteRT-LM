@@ -78,6 +78,7 @@
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
+#include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/tensor_buffer_util.h"
@@ -142,6 +143,13 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
                                       bool enable_file_backed_model_loading,
                                       bool enable_file_backed_for_aot_npu) {
   std::unique_ptr<LitertLmLoader> loader;
+  // The NVIDIA weight store on Windows recovers file offsets from one
+  // zero-offset view of the model, so map the whole file once on NPU.
+#if defined(_WIN32)
+  const bool map_whole_file = enable_file_backed_for_aot_npu;
+#else
+  const bool map_whole_file = false;
+#endif
   if (model_assets.HasMemoryMappedFile()) {
     ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
                           model_assets.GetMemoryMappedFile());
@@ -153,6 +161,14 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
         loader,
         LitertLmLoader::Create(memory_mapped_file,
                                scoped_file.ok() ? *scoped_file : nullptr));
+  } else if (map_whole_file) {
+    ABSL_ASSIGN_OR_RETURN(auto scoped_file,
+                          model_assets.GetOrCreateScopedFile());
+    ABSL_ASSIGN_OR_RETURN(std::shared_ptr<MemoryMappedFile> whole_file,
+                          MemoryMappedFile::Create(scoped_file->file()));
+    ABSL_ASSIGN_OR_RETURN(
+        loader,
+        LitertLmLoader::Create(std::move(whole_file), std::move(scoped_file)));
   } else {
     ABSL_ASSIGN_OR_RETURN(auto scoped_file,
                           model_assets.GetOrCreateScopedFile());

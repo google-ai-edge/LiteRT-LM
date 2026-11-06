@@ -229,6 +229,7 @@ cc_library(
         "//runtime/util:file_util",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_status_util",
+        "//runtime/util:memory_mapped_file",
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
         "//runtime/util:tensor_buffer_util",
