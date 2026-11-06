@@ -116,23 +116,16 @@ cc_library(
     deps = [
         ":tokenizer",
         "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/debugging:leak_check",  # See b/402708346
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
+        "//support/tokenizer/tokenizers",
         "//support/util:litert_status_util",
         "//support/util:memory_mapped_file",
-        "@tokenizers_cpp//:huggingface_tokenizer",
-    ] + select({
-        "@platforms//os:windows": [
-            "//support/util:alloc_defs",
-            "//support/util:global_allocator",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
     alwayslink = 1,
 )
 

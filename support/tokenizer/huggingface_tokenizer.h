@@ -26,9 +26,11 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"
 
-namespace litert::support {
+namespace tokenizers {
+class Tokenizer;
+}  // namespace tokenizers
 
-using TokenizerHandle = void*;
+namespace litert::support {
 
 // A Tokenizer implementation using HuggingFace.
 class HuggingFaceTokenizer : public Tokenizer {
@@ -66,11 +68,11 @@ class HuggingFaceTokenizer : public Tokenizer {
 
  private:
   // Constructor.
-  explicit HuggingFaceTokenizer(TokenizerHandle absl_nonnull handle)
-      : handle_(handle) {};
+  explicit HuggingFaceTokenizer(
+      absl_nonnull std::unique_ptr<::tokenizers::Tokenizer> tokenizer);
 
   // HuggingFace processor.
-  TokenizerHandle absl_nonnull handle_;
+  absl_nonnull std::unique_ptr<::tokenizers::Tokenizer> tokenizer_;
 };
 
 }  // namespace litert::support

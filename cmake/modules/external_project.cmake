@@ -23,6 +23,7 @@ set(LITERTLM_DEPENDENCY_ORDER
     sentencepiece
     tokenizers
     re2
+    oniguruma
     tflite
     litert
 )

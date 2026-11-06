@@ -32,6 +32,10 @@ set(LITERTLM_RE2_PACKAGE_DIR
     "${LITERTLM_CMAKE_PACKAGES_DIR}/re2"
     CACHE PATH "Path to RE2 related build scripts")
 
+set(LITERTLM_ONIGURUMA_PACKAGE_DIR
+    "${LITERTLM_CMAKE_PACKAGES_DIR}/oniguruma"
+    CACHE PATH "Path to Oniguruma related build scripts")
+
 set(LITERTLM_SENTENCEPIECE_PACKAGE_DIR
     "${LITERTLM_CMAKE_PACKAGES_DIR}/sentencepiece"
     CACHE PATH "Path to SentencePiece related build scripts")
