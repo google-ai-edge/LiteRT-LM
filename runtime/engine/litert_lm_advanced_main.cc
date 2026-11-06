@@ -219,6 +219,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--cache_dir=<cache_dir>] [--enable_debugger=<true|false>] "
            "[--benchmark_prefill_tokens=<num_prefill_tokens>] "
            "[--benchmark_decode_tokens=<num_decode_tokens>] "
+           "[--benchmark_append_chunks=<num_chunks>] "
            "[--async=<true|false>] [--force_f32=<true|false] "
            "[--report_peak_memory_footprint] [--multi_turns=<true|false>] "
            "[--num_cpu_threads=<num_cpu_threads>] "
@@ -298,6 +299,8 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_benchmark_prefill_tokens);
   settings.benchmark_decode_tokens =
       absl::GetFlag(FLAGS_benchmark_decode_tokens);
+  settings.benchmark_append_chunks =
+      absl::GetFlag(FLAGS_benchmark_append_chunks);
   settings.async = absl::GetFlag(FLAGS_async);
   settings.report_peak_memory_footprint =
       absl::GetFlag(FLAGS_report_peak_memory_footprint);
