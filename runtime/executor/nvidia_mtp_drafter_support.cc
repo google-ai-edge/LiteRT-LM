@@ -303,7 +303,7 @@ absl::Status CheckIdsTensor(const TensorBuffer& ids_tensor, int rows) {
 // runtime context).
 absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
     const Environment& env) {
-#if defined(__linux__) && defined(RTLD_NOLOAD)
+#if (defined(__linux__) || defined(_WIN32)) && defined(RTLD_NOLOAD)
   LITERT_ASSIGN_OR_RETURN(auto options, env.GetOptions());
   auto directory =
       options.GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
