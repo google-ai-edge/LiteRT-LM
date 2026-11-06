@@ -77,6 +77,7 @@
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/nvidia_mtp_drafter_support.h"
+#include "runtime/executor/nvidia_token_table_support.h"
 #include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
@@ -323,6 +324,8 @@ absl::Status InitializeAuxiliaryExecutorComponents(
   if (embedding_lookup == nullptr && resources != nullptr) {
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
         lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup));
+    // The NVIDIA decode step that feeds itself reads the embedder's tables.
+    RegisterNvidiaTokenTables(lrt_env, *resources, executor_metadata);
   }
   return absl::OkStatus();
 }

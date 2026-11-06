@@ -449,6 +449,7 @@ cc_library(
         ":llm_processed_context",
         ":mtp_gating_policy",
         ":nvidia_mtp_drafter_support",
+        ":nvidia_token_table_support",
         ":speculative_decoding_controller",
         ":speculative_decoding_mode",
         ":state_interface",
@@ -1574,6 +1575,47 @@ cc_library(
         "//runtime/components:sampling_uniforms",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_library(
+    name = "nvidia_token_table_support",
+    srcs = ["nvidia_token_table_support.cc"],
+    hdrs = ["nvidia_token_table_support.h"],
+    deps = [
+        ":litert_compiled_model_executor_utils",
+        ":nvidia_mtp_drafter_support",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/c:litert_model",
+        "@litert//litert/c:litert_model_types",
+        "@litert//litert/c:litert_op_code",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc/internal:litert_shared_library",
+        "@litert//litert/vendors/nvidia/dispatch:token_table_c_api",
+        "//runtime/components:model_resources",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
+cc_test(
+    name = "nvidia_token_table_support_test",
+    srcs = ["nvidia_token_table_support_test.cc"],
+    deps = [
+        ":nvidia_token_table_support",
+        "@com_google_googletest//:gtest_main",
+        "@flatbuffers//:runtime_cc",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_model",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
