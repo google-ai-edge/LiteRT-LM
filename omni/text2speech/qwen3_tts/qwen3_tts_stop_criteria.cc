@@ -29,10 +29,19 @@ int Qwen3TtsStopCriteria::FrameLimit() const { return frame_limit_; }
 bool Qwen3TtsStopCriteria::ShouldStop(int frame, int cb0) {
   repeated_frames_ = cb0 == last_cb0_ ? repeated_frames_ + 1 : 1;
   last_cb0_ = cb0;
+  next_frame_ = frame + 1;
   if (frame + 1 >= frame_limit_) {
     return true;
   }
   return frame >= text_tokens_ && repeated_frames_ >= kMaxRepeatedFrames;
+}
+
+int Qwen3TtsStopCriteria::SuppressedToken() const {
+  if (next_frame_ < text_tokens_ &&
+      repeated_frames_ >= kMaxRepeatedFramesWhileText) {
+    return last_cb0_;
+  }
+  return -1;
 }
 
 }  // namespace litert::omni::tts

@@ -79,5 +79,40 @@ TEST(Qwen3TtsStopCriteriaTest, RepeatsWhileTextIsFedDoNotStop) {
   }
 }
 
+TEST(Qwen3TtsStopCriteriaTest, SuppressesNothingInitially) {
+  EXPECT_EQ(Qwen3TtsStopCriteria(kTextTokens, kMaxFrames).SuppressedToken(),
+            -1);
+}
+
+TEST(Qwen3TtsStopCriteriaTest, SuppressesTokenRepeatedWhileTextIsFed) {
+  Qwen3TtsStopCriteria criteria(kTextTokens, kMaxFrames);
+  int frame = 0;
+  for (; frame < 4; ++frame) {
+    criteria.ShouldStop(frame, /*cb0=*/frame);
+  }
+  for (int i = 1; i < Qwen3TtsStopCriteria::kMaxRepeatedFramesWhileText;
+       ++i, ++frame) {
+    criteria.ShouldStop(frame, /*cb0=*/668);
+    EXPECT_EQ(criteria.SuppressedToken(), -1) << frame;
+  }
+  criteria.ShouldStop(frame++, /*cb0=*/668);
+  EXPECT_EQ(criteria.SuppressedToken(), 668);
+  criteria.ShouldStop(frame, /*cb0=*/617);
+  EXPECT_EQ(criteria.SuppressedToken(), -1);
+}
+
+TEST(Qwen3TtsStopCriteriaTest, DoesNotSuppressAfterText) {
+  Qwen3TtsStopCriteria criteria(kTextTokens, kMaxFrames);
+  for (int frame = 0; frame < kTextTokens - 1; ++frame) {
+    criteria.ShouldStop(frame, /*cb0=*/frame);
+  }
+  // The next frames are fed the TTS pad embedding, where trailing silence and
+  // the codec EOS are expected.
+  for (int frame = kTextTokens - 1; frame < kTextTokens + 6; ++frame) {
+    criteria.ShouldStop(frame, /*cb0=*/668);
+    EXPECT_EQ(criteria.SuppressedToken(), -1) << frame;
+  }
+}
+
 }  // namespace
 }  // namespace litert::omni::tts

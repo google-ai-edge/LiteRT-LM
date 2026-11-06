@@ -29,6 +29,12 @@ namespace litert::omni::tts {
 //   speech repeats a token at most ~4 times), and
 // - capping the utterance at `kMaxFramesPerTextToken` frames per text token
 //   plus `kExtraFrames` (normal speech takes ~2-4.5 frames per token).
+//
+// The Talker can also lock into a silence codebook-0 token while the text is
+// still being fed, e.g. after "Для" in some Russian prompts, and then never
+// speak the rest of the text. `SuppressedToken()` returns the token to mask
+// out of the next frame's logits once it was generated
+// `kMaxRepeatedFramesWhileText` times in a row before all the text was fed.
 class Qwen3TtsStopCriteria {
  public:
   // Maximum number of consecutive frames with the same codebook-0 token after
@@ -38,6 +44,9 @@ class Qwen3TtsStopCriteria {
   static constexpr int kMaxFramesPerTextToken = 8;
   // Frames added to the per-token budget, for very short texts.
   static constexpr int kExtraFrames = 40;
+  // Maximum number of consecutive frames with the same codebook-0 token while
+  // the text is fed (normal speech repeats a token at most ~4 times).
+  static constexpr int kMaxRepeatedFramesWhileText = 4;
 
   // Creates the stop criteria of one utterance.
   //
@@ -66,9 +75,18 @@ class Qwen3TtsStopCriteria {
   //   reached `FrameLimit()`.
   bool ShouldStop(int frame, int cb0);
 
+  // Returns the codebook-0 token to mask out of the logits of the next frame.
+  //
+  // returns
+  // - The last generated codebook-0 token if it was generated
+  //   `kMaxRepeatedFramesWhileText` or more times in a row and the next frame
+  //   is still fed a text token, or -1 if no token has to be masked out.
+  int SuppressedToken() const;
+
  private:
   int text_tokens_;
   int frame_limit_;
+  int next_frame_ = 0;
   int last_cb0_ = -1;
   int repeated_frames_ = 0;
 };

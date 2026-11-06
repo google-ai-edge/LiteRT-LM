@@ -562,6 +562,13 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
       }
     }
 
+    // Keep the Talker from locking into one (silence) token before it has
+    // spoken all the text.
+    if (const int suppressed = stop_criteria.SuppressedToken();
+        suppressed >= 0) {
+      scores[suppressed] = qwen3_tts::kNegInf;
+    }
+
     int cb0 = PickToken(scores, config_.do_sample);
     history.insert(cb0);
 
