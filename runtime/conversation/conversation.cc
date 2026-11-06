@@ -106,6 +106,56 @@ absl::Status ContextWindowFullError(
       "Max number of tokens reached, the context window is full.");
 }
 
+// Returns whether `message` carries no user content, e.g. the empty message
+// with `has_pending_message = false` that closes an appended turn.
+bool HasEmptyContent(const Message& message) {
+  const auto content = message.find("content");
+  if (content == message.end() || content->is_null()) {
+    return true;
+  }
+  if (content->is_string()) {
+    return content->get_ref<const std::string&>().empty();
+  }
+  if (!content->is_array()) {
+    return false;
+  }
+  for (const auto& item : *content) {
+    if (!item.is_object() || item.value("type", "") != "text") {
+      return false;
+    }
+    const auto text = item.find("text");
+    if (text != item.end() && text->is_string() &&
+        !text->get_ref<const std::string&>().empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Replaces raw text inputs with their token ids. A benchmark with
+// `num_prefill_tokens > 0` resizes the last raw text input of every prefill to
+// that many tokens, while token id inputs are prefilled as is.
+absl::Status ConvertRawTextInputsToTokenIds(Tokenizer& tokenizer,
+                                            std::vector<InputData>& inputs) {
+  for (auto& input : inputs) {
+    const auto* input_text = std::get_if<InputText>(&input);
+    if (input_text == nullptr || input_text->IsTensorBuffer()) {
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(absl::string_view raw_text,
+                          input_text->GetRawTextString());
+    if (raw_text.empty()) {
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(std::vector<int> token_ids,
+                          tokenizer.TextToTokenIds(raw_text));
+    ABSL_ASSIGN_OR_RETURN(auto token_ids_buffer,
+                          Tokenizer::TokenIdsToTensorBuffer(token_ids));
+    input = InputText(std::move(token_ids_buffer));
+  }
+  return absl::OkStatus();
+}
+
 bool IsEmptyPreface(const Preface& preface) {
   auto json_preface = std::get<JsonPreface>(preface);
   return (json_preface.messages.is_null() || json_preface.messages.empty()) &&
@@ -691,11 +741,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
   absl::Notification done;
   absl::Status error_status;
-  bool appending = false;
-  {
-    absl::MutexLock lock(history_mutex_);  // NOLINT
-    appending = is_appending_message_;
-  }
+  const bool appending = optional_args.has_pending_message;
 
   absl::Status status = SendMessageAsync(
       message,
@@ -829,6 +875,19 @@ absl::Status Conversation::SendMessageAsync(
                         model_data_processor_->ToInputDataVector(
                             single_turn_text, messages_for_conversion,
                             optional_args.args.value_or(std::monostate())));
+
+  // An empty message that closes an appended turn only prefills the closing
+  // prompt template tokens. Prefill them as token ids so that a benchmark with
+  // `num_prefill_tokens > 0` does not pad them to that many tokens and record
+  // them as an extra full-size prefill turn.
+  const EngineSettings& engine_settings = engine_.GetEngineSettings();
+  if (prev_is_appending_message && !optional_args.has_pending_message &&
+      engine_settings.IsBenchmarkEnabled() &&
+      engine_settings.GetBenchmarkParams()->num_prefill_tokens() > 0 &&
+      HasEmptyContent(message)) {
+    ABSL_RETURN_IF_ERROR(ConvertRawTextInputsToTokenIds(
+        const_cast<Tokenizer&>(engine_.GetTokenizer()), session_inputs));
+  }
 
   if (is_appending_message) {
     if (session_inputs.empty()) {

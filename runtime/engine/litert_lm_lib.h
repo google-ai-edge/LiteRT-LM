@@ -39,6 +39,8 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/conversation/conversation.h"
+#include "runtime/conversation/io_types.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -104,6 +106,10 @@ struct LiteRtLmSettings {
   bool enable_debugger = false;
   int benchmark_prefill_tokens = 0;
   int benchmark_decode_tokens = 0;
+  // Number of user message chunks appended with `has_pending_message = true`
+  // before closing the turn with an empty message (`has_pending_message =
+  // false`) and decoding once. `0` runs the standard single-message path.
+  int benchmark_append_chunks = 0;
   bool async = true;
   // Reports the peak host memory of the process. On supported devices, the
   // accelerator memory may also be reported.
@@ -235,6 +241,11 @@ struct AggregatedLitertLmMetrics {
 AggregatedLitertLmMetrics ComputeMedianMetrics(
     const std::vector<LitertLmMetrics>& metrics);
 
+// Logs single-iteration benchmark metrics to INFO (and any registered log
+// sinks, e.g. when `settings.log_sink_file` is set).
+void LogBenchmarkInfo(const BenchmarkInfo& benchmark_info,
+                      const LiteRtLmSettings& settings);
+
 // Builds the content list from the input data.
 absl::StatusOr<nlohmann::json> BuildContentList(
     const std::vector<InputData>& input_data, const LiteRtLmSettings& settings);
@@ -249,6 +260,13 @@ absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
 
 // Creates the SessionConfig from the LiteRtLmSettings.
 SessionConfig CreateSessionConfig(const LiteRtLmSettings& settings);
+
+// Runs a single Conversation turn, optionally appending
+// `settings.benchmark_append_chunks` user chunks (`has_pending_message = true`)
+// before closing the turn and decoding once.
+absl::StatusOr<Message> RunSingleTurnConversation(
+    const nlohmann::json& content_list, const LiteRtLmSettings& settings,
+    Engine* engine, Conversation* conversation);
 
 // Runs the LLM inference with the given settings.
 // If metrics is not null, the metrics will be populated with the metrics from
