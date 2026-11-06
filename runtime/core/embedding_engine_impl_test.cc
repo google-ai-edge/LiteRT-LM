@@ -83,13 +83,19 @@ using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::Contains;
 using ::testing::ElementsAre;
+using ::testing::FloatNear;
 using ::testing::HasSubstr;
 using ::testing::Key;
+using ::testing::Pointwise;
 using ::testing::Return;
 using ::testing::status::StatusIs;
 
 constexpr absl::string_view kTestEmbeddingModelPath =
     "litert_lm/runtime/testdata/test_embedding.litertlm";
+// `test_embedding.litertlm` with every weight moved into TFLiteWeights
+// sections by `tools/externalize_litertlm.py --num_elements_threshold=0`.
+constexpr absl::string_view kTestEmbeddingExternalWeightsModelPath =
+    "litert_lm/runtime/testdata/test_embedding_external_weights.litertlm";
 constexpr absl::string_view kTestAudioModelPath =
     "litert_lm/runtime/testdata/dummy_audio_only.litertlm";
 
@@ -449,6 +455,66 @@ TEST(EmbeddingEngineImplTest, CreateStreamingWeightsSuccess) {
   ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
                                           model_assets, Backend::CPU));
   EXPECT_OK(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)));
+}
+
+// Regression test: on the CPU backend, the text encoder's external weights must
+// be read into host memory rather than left as a weights stream, which only the
+// GPU backends can consume.
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithExternalWeightsOnCpuMatchesInlineWeights) {
+  const std::string external_model_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       std::string(kTestEmbeddingExternalWeightsModelPath))
+          .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream,
+                       FileDataStream::Create(external_model_path));
+  ASSERT_OK_AND_ASSIGN(auto external_model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto external_settings,
+                       EmbeddingEngineSettings::CreateDefault(
+                           external_model_assets, Backend::CPU));
+  ASSERT_OK_AND_ASSIGN(auto external_engine,
+                       EmbeddingEngineImpl::CreateStreamingWeights(
+                           std::move(external_settings)));
+
+  const std::string inline_model_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       std::string(kTestEmbeddingModelPath))
+          .string();
+  ASSERT_OK_AND_ASSIGN(auto inline_model_assets,
+                       ModelAssets::Create(inline_model_path));
+  ASSERT_OK_AND_ASSIGN(auto inline_resources,
+                       CreateTestModelResources(inline_model_path));
+  ASSERT_OK_AND_ASSIGN(auto inline_env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto inline_settings,
+                       EmbeddingEngineSettings::CreateDefault(
+                           inline_model_assets, Backend::CPU));
+  ASSERT_OK_AND_ASSIGN(auto inline_engine,
+                       EmbeddingEngineImpl::Create(std::move(inline_resources),
+                                                   std::move(inline_env),
+                                                   std::move(inline_settings)));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+  auto make_contents = []() -> absl::StatusOr<std::vector<InputData>> {
+    LITERT_ASSIGN_OR_RETURN(auto token_tensor,
+                            litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                                std::vector<int>{1, 2, 3}));
+    std::vector<InputData> contents;
+    contents.push_back(InputText(std::move(token_tensor)));
+    return contents;
+  };
+  ASSERT_OK_AND_ASSIGN(auto external_contents, make_contents());
+  ASSERT_OK_AND_ASSIGN(
+      auto external_response,
+      external_engine->ComputeEmbedding(external_contents, options));
+  ASSERT_OK_AND_ASSIGN(auto inline_contents, make_contents());
+  ASSERT_OK_AND_ASSIGN(auto inline_response, inline_engine->ComputeEmbedding(
+                                                 inline_contents, options));
+
+  EXPECT_FALSE(external_response.embedding.empty());
+  EXPECT_THAT(external_response.embedding,
+              Pointwise(FloatNear(1e-5), inline_response.embedding));
 }
 
 // Regression test: max_input_length coming from the embedding metadata must

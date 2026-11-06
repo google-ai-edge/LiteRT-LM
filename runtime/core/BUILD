@@ -777,6 +777,7 @@ cc_test(
     data = [
         "//runtime/testdata:dummy_audio_only.litertlm",
         "//runtime/testdata:test_embedding.litertlm",
+        "//runtime/testdata:test_embedding_external_weights.litertlm",
         "//runtime/testdata:test_lm.litertlm",
     ],
     deps = [

@@ -39,6 +39,7 @@ exports_files([
     "colored_rect_163_586_615_957.jpg",
     "test_lm.litertlm",
     "test_embedding.litertlm",
+    "test_embedding_external_weights.litertlm",
     "test_image_70.png",
     "test_image_140.png",
     "test_audio_5s.wav",

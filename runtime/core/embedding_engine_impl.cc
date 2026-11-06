@@ -861,7 +861,23 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           }
         } else if (model_type ==
                    proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER) {
-          StoreWeightsStream(model_type, std::move(section->data_stream));
+          // Last chance to resolve settings: the backend decides how the
+          // weights are handed to the compiler, compiling below freezes them,
+          // and EmbeddingExecutor has no UpdateExecutorSettings.
+          ABSL_RETURN_IF_ERROR(resolve_and_validate_settings());
+          if (settings.GetMainExecutorSettings().GetBackend() == Backend::CPU) {
+            // The CPU backend restores external weights from host memory and
+            // cannot consume a weights stream, so read them in here.
+            const size_t size = section_metadata->end_offset() -
+                                section_metadata->begin_offset();
+            ABSL_LOG(INFO) << "Reading text encoder weights (" << size
+                           << " bytes) into host memory...";
+            ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
+                model_type, *section->data_stream, size));
+            ABSL_LOG(INFO) << "Text encoder weights read.";
+          } else {
+            StoreWeightsStream(model_type, std::move(section->data_stream));
+          }
           if (owned_env == nullptr) {
             ABSL_ASSIGN_OR_RETURN(
                 auto temp_owned_env,
@@ -874,9 +890,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                       proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER)
                   .ok()) {
             ABSL_LOG(INFO) << "Compiling text_encoder on stream...";
-            // Last chance to resolve settings: compiling freezes them, and
-            // EmbeddingExecutor has no UpdateExecutorSettings.
-            ABSL_RETURN_IF_ERROR(resolve_and_validate_settings());
             ABSL_ASSIGN_OR_RETURN(selected_text_signatures_info,
                                   SetTextEncoderSignaturesFromSettings(
                                       *streaming_resources, settings));
