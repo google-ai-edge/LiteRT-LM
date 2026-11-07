@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -192,13 +193,25 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateExecutorSampler(
     std::optional<int> vocab_size = std::nullopt,
     std::optional<ActivationDataType> activation_data_type = std::nullopt);
 
-// Tells NVIDIA's decode step that feeds itself, on Backend::NPU with the
-// NVIDIA dispatch library loaded, how many decode steps its caller will still
+// Tells NVIDIA's decode step that feeds itself, with the NVIDIA dispatch
+// library loaded, the uniforms the session's next samples will draw from `rng`
+// with `sampler_params` (DrawSamplingUniforms, from a copy: `rng` is left to
+// the samples), so its steps ahead sample as the host will
+// (step_sampler_c_api.h). For an executor on Backend::NPU sampling with k > 1
+// (greedy sampling draws none). A hint: a dispatch that refuses it is logged
+// once.
+void TellNvidiaStepDraws(const Environment& env,
+                         const proto::SamplerParameters& sampler_params,
+                         const std::default_random_engine& rng);
+
+// Tells NVIDIA's decode step that feeds itself, for an executor on
+// Backend::NPU with the NVIDIA dispatch library loaded, how many decode steps
+// its caller will still
 // ask for after the next one: `max_num_tokens_to_emit` less one (the decode
 // parameters' bound, nothing when there is none). Its steps ahead stop there,
 // so a bounded response's end leaves none in flight for the next prefill to
 // wait on. A hint: a dispatch that refuses it is logged once.
-void TellNvidiaDecodeBudget(const Environment& env, Backend backend,
+void TellNvidiaDecodeBudget(const Environment& env,
                             std::optional<int> max_num_tokens_to_emit);
 
 // The MTP verifier's session sampler, with the signature of the factory's

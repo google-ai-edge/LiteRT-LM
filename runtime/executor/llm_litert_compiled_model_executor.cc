@@ -1349,8 +1349,9 @@ absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
   // The NVIDIA decode step that feeds itself runs no steps ahead past them.
-  TellNvidiaDecodeBudget(env_, executor_settings_.GetBackend(),
-                         decode_params.GetMaxNumTokensToEmit());
+  if (executor_settings_.GetBackend() == Backend::NPU) {
+    TellNvidiaDecodeBudget(env_, decode_params.GetMaxNumTokensToEmit());
+  }
 
   // The drafter can only continue from its own last verified state if the
   // previous step was a successful MTP round. Invalidate the flag up front so
@@ -2080,6 +2081,13 @@ LlmLiteRtCompiledModelExecutorBase::DrawSampleLogitsUniforms() {
   sampling_uniforms_.resize(output_heads);
   DrawSamplingUniforms(sampler_params, *rand_gen,
                        absl::MakeSpan(sampling_uniforms_));
+  // The NVIDIA decode step that feeds itself samples its steps ahead with the
+  // draws that come next (greedy sampling draws none).
+  if (executor_settings_.GetBackend() == Backend::NPU &&
+      sampler_params.k() > 1) {
+    TellNvidiaStepDraws(env_, sampler_params, *rand_gen);
+  }
+
   return absl::MakeConstSpan(sampling_uniforms_);
 }
 
