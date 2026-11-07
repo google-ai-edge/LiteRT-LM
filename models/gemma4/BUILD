@@ -38,6 +38,8 @@ chat_template_test(
     chat_template = "chat_template_e2b_e4b.jinja",
     golden_dir = "testdata/golden",
     input_dir = "testdata/input",
+    mirror_chat_templates = [
+    ],
     pbtext_files = [
         "LlmMetadataProto.pbtext",
     ],
