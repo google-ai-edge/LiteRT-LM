@@ -62,6 +62,9 @@ ABSL_FLAG(bool, force_fp32_on_gpu, false,
 ABSL_FLAG(int, num_threads, 4, "Number of CPU threads for LiteRT inference.");
 ABSL_FLAG(std::string, cache_dir, "/tmp/omni_cache",
           "Cache directory for downloaded models and compiled backend caches.");
+ABSL_FLAG(std::string, litert_dispatch_lib_dir, "",
+          "Directory containing LiteRT NPU dispatch libraries. If empty, "
+          "defaults to the model file's parent directory.");
 
 // Input & output flags.
 ABSL_FLAG(std::string, audio_path, "",
@@ -242,6 +245,8 @@ absl::Status RunOmniRunner() {
   settings.cache_dir = cache_dir;
   settings.num_threads = absl::GetFlag(FLAGS_num_threads);
   settings.force_fp32_on_gpu = absl::GetFlag(FLAGS_force_fp32_on_gpu);
+  settings.litert_dispatch_lib_dir =
+      absl::GetFlag(FLAGS_litert_dispatch_lib_dir);
   ABSL_ASSIGN_OR_RETURN(settings.backend,
                         ParseOmniBackend(absl::GetFlag(FLAGS_backend)));
 

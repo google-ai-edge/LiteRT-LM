@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -30,6 +31,11 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#if !defined(LITERT_DISABLE_NPU)
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#endif  // !defined(LITERT_DISABLE_NPU)
+#include "omni/base/model_cache.h"
 #include "omni/omni_engine.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -121,6 +127,34 @@ TEST(ModelUtilsTest, CreateCompiledModelConfiguresModelCaches) {
   EXPECT_FALSE(CreateLmRunner(*env, cpu_opts, "bundle.litertlm").ok());
   EXPECT_FALSE(CreateLmEngineRunner(*env, cpu_opts, "bundle.litertlm").ok());
   std::filesystem::remove_all(root);
+}
+
+TEST(ModelUtilsTest, CreateCompilationOptionsConfiguresNpu) {
+  ModelOptions options{
+      .cache_dir = std::string(kNoCacheDir),
+      .backend = lm::Backend::NPU,
+  };
+  ASSERT_OK_AND_ASSIGN(
+      Options comp_options,
+      CreateCompilationOptions(options, "test_model", /*model_path=*/""));
+  auto accelerators = comp_options.GetHardwareAccelerators();
+  ASSERT_TRUE(accelerators.HasValue());
+  EXPECT_NE(*accelerators & static_cast<int>(HwAccelerators::kNpu), 0);
+  EXPECT_EQ(*accelerators, (HwAccelerators::kNpu | HwAccelerators::kCpu).value);
+#if !defined(LITERT_DISABLE_NPU)
+  auto qualcomm_options =
+      comp_options.GetOptions<qualcomm::QualcommOptions>();
+  ASSERT_TRUE(qualcomm_options.HasValue());
+  EXPECT_EQ(qualcomm_options->GetHtpPerformanceMode(),
+            qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  EXPECT_EQ(qualcomm_options->GetHtpPerfCtrlMode(),
+            qualcomm::QualcommOptions::HtpPerfCtrlMode::kManual);
+  auto google_tensor_options =
+      comp_options.GetOptions<google_tensor::GoogleTensorOptions>();
+  ASSERT_TRUE(google_tensor_options.HasValue());
+  EXPECT_EQ(google_tensor_options->GetPerformanceMode(),
+            google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+#endif  // !defined(LITERT_DISABLE_NPU)
 }
 
 TEST(ModelUtilsTest, CreateExecutorInputsWithText) {
@@ -237,11 +271,13 @@ TEST(ModelUtilsTest, ToLmModelOptionsMapsEngineSettings) {
 
   settings.backend = OmniEngine::Settings::Backend::kNpu;
   settings.cache_dir.clear();
+  settings.litert_dispatch_lib_dir = "/custom/dispatch/dir";
   settings.num_threads = 0;
   settings.force_fp32_on_gpu = true;
   opts = ToLmModelOptions(settings);
   EXPECT_EQ(opts.backend, lm::Backend::NPU);
   EXPECT_EQ(opts.cache_dir, ":nocache");
+  EXPECT_EQ(opts.litert_dispatch_lib_dir, "/custom/dispatch/dir");
   EXPECT_EQ(opts.num_threads, 4);
   EXPECT_TRUE(opts.force_fp32_on_gpu);
 }
