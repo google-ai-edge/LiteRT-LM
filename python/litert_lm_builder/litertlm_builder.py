@@ -273,6 +273,56 @@ class ExternalizationSummary:
 # (externalized); google3 keeps True (weights in the model graph) for now.
 DEFAULT_WEIGHTS_IN_MODEL_GRAPH = False
 
+# The oldest LiteRT-LM runtime that runs files with TFLiteWeights sections on
+# GPU. Older runtimes built from GitHub crash when the prebuilt GPU accelerator
+# reads external weights (b/570763900). Files with TFLiteWeights sections get at
+# least this `min_runtime_version` in their LLM or embedding metadata.
+MIN_RUNTIME_VERSION_FOR_EXTERNAL_WEIGHTS = "0.19.0"
+
+
+def _parse_version(version: str) -> list[int]:
+  """Parses a version string the way the runtime's `ParseVersion` does.
+
+  Matches `ParseVersion` in `runtime/core/version.h`, so that the builder and
+  the runtime compare `min_runtime_version` the same way: each dot-separated
+  component contributes its leading digits, and components without leading
+  digits are skipped (e.g. "0.19.0-rc1" parses as [0, 19, 0]).
+
+  Args:
+    version: The version string.
+
+  Returns:
+    The numeric version components.
+  """
+  components = []
+  for component in version.split("."):
+    digits = component[: len(component) - len(component.lstrip("0123456789"))]
+    if digits:
+      components.append(int(digits))
+  return components
+
+
+def _version_less_than(version: str, other_version: str) -> bool:
+  """Returns whether `version` is older than `other_version`.
+
+  Matches `CompareVersions` in `runtime/core/version.h`: missing trailing
+  components count as 0.
+
+  Args:
+    version: The version to compare.
+    other_version: The version to compare against.
+
+  Returns:
+    True if `version` is older than `other_version`.
+  """
+  parsed = _parse_version(version)
+  other_parsed = _parse_version(other_version)
+  length = max(len(parsed), len(other_parsed))
+  parsed += [0] * (length - len(parsed))
+  other_parsed += [0] * (length - len(other_parsed))
+  return parsed < other_parsed
+
+
 # Whether the packaging CLIs deduplicate weight payloads that are byte-identical
 # across TFLite models by default. Only applies when weights are not in the
 # model graph.
@@ -603,6 +653,13 @@ def _set_vision_patch_metadata(
       and "pooling_kernel_size" in sub_msg.DESCRIPTOR.fields_by_name
   ):
     setattr(sub_msg, "pooling_kernel_size", pooling_kernel_size)
+
+
+def _bytes_data_writer(data: bytes) -> Callable[[BinaryIO], None]:
+  def data_writer(stream: BinaryIO) -> None:
+    stream.write(data)
+
+  return data_writer
 
 
 def _file_data_writer(path: pathlib.Path) -> Callable[[BinaryIO], None]:
@@ -1202,16 +1259,9 @@ class LitertLmFileBuilder:
     )
 
     if _is_binary_proto(llm_metadata_path) and not has_overrides:
-
-      def data_writer(stream: BinaryIO):
-        with litertlm_core.open_file(llm_metadata_path, "rb") as f:
-          _copy_file_to_stream(f, stream)
-
+      data_writer = _file_data_writer(pathlib.Path(llm_metadata_path))
     else:
-
-      def data_writer(stream: BinaryIO):
-        assert self._llm_metadata is not None
-        stream.write(self._llm_metadata.SerializeToString())
+      data_writer = _bytes_data_writer(msg.SerializeToString())
 
     section_object = _SectionObject(
         metadata=additional_metadata if additional_metadata else [],
@@ -1322,13 +1372,10 @@ class LitertLmFileBuilder:
         text_format.Parse(f.read(), msg)
     self._embedding_metadata = msg
 
-    def data_writer(stream: BinaryIO):
-      stream.write(msg.SerializeToString())
-
     section_object = _SectionObject(
         metadata=additional_metadata if additional_metadata else [],
         data_type=schema.AnySectionDataType.EmbeddingMetadataProto,
-        data_writer=data_writer,
+        data_writer=_bytes_data_writer(msg.SerializeToString()),
     )
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
@@ -2103,6 +2150,55 @@ class LitertLmFileBuilder:
     self._build_sections(stream, self._sections)
     return None
 
+  def _with_external_weights_min_runtime_version(
+      self, sections: list[_SectionObject]
+  ) -> list[_SectionObject]:
+    """Raises `min_runtime_version` if the file has TFLiteWeights sections.
+
+    If any section is a TFLiteWeights section, the LLM and embedding metadata
+    sections are rewritten so that their `min_runtime_version` is at least
+    `MIN_RUNTIME_VERSION_FOR_EXTERNAL_WEIGHTS`. A newer version that is already
+    set is kept.
+
+    Args:
+      sections: The sections to write.
+
+    Returns:
+      The sections to write, with updated metadata sections if needed.
+    """
+    if not any(
+        s.data_type == schema.AnySectionDataType.TFLiteWeights for s in sections
+    ):
+      return sections
+    result = []
+    for section in sections:
+      metadata: (
+          llm_metadata_pb2.LlmMetadata
+          | embedding_metadata_pb2.EmbeddingMetadata
+          | None
+      ) = None
+      if section.data_type == schema.AnySectionDataType.LlmMetadataProto:
+        metadata = self._llm_metadata
+      elif (
+          section.data_type == schema.AnySectionDataType.EmbeddingMetadataProto
+      ):
+        metadata = self._embedding_metadata
+      if metadata is not None and (
+          not metadata.min_runtime_version
+          or _version_less_than(
+              metadata.min_runtime_version,
+              MIN_RUNTIME_VERSION_FOR_EXTERNAL_WEIGHTS,
+          )
+      ):
+        updated = type(metadata)()
+        updated.CopyFrom(metadata)
+        updated.min_runtime_version = MIN_RUNTIME_VERSION_FOR_EXTERNAL_WEIGHTS
+        section = dataclasses.replace(
+            section, data_writer=_bytes_data_writer(updated.SerializeToString())
+        )
+      result.append(section)
+    return result
+
   def _build_sections(
       self, stream: BinaryIO, sections: list[_SectionObject]
   ) -> None:
@@ -2112,6 +2208,7 @@ class LitertLmFileBuilder:
       stream: The binary output stream to write the LiteRT-LM file to.
       sections: The section objects to serialize into the file.
     """
+    sections = self._with_external_weights_min_runtime_version(sections)
     # Write a new uuid and creation_timestamp, or keep the caller's when
     # SOURCE_DATE_EPOCH is set (see populate_system_metadata).
     self._system_metadata = populate_system_metadata(self._system_metadata)

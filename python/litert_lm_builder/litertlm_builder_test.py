@@ -2476,6 +2476,78 @@ data_path = "{vocoder_path}"
     expected_sha = hashlib.sha256(target_data).hexdigest()
     self.assertEqual(computed_sha, expected_sha)
 
+  def _llm_builder_for_min_runtime_version(
+      self, min_runtime_version: str | None, with_weights: bool
+  ) -> litertlm_builder.LitertLmFileBuilder:
+    metadata = llm_metadata_pb2.LlmMetadata(max_num_tokens=123)
+    if min_runtime_version is not None:
+      metadata.min_runtime_version = min_runtime_version
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_llm_metadata(
+        self._create_dummy_file("llm.pb", metadata.SerializeToString())
+    )
+    if with_weights:
+      builder.add_tflite_weights(
+          self._create_dummy_file("model.weights", b"weights"),
+          "prefill_decode",
+      )
+    return builder
+
+  @parameterized.named_parameters(
+      dict(testcase_name="unset", existing=None, expected="0.19.0"),
+      dict(testcase_name="older", existing="0.12.3", expected="0.19.0"),
+      dict(testcase_name="same", existing="0.19.0", expected="0.19.0"),
+      dict(testcase_name="newer", existing="0.20.1", expected="0.20.1"),
+  )
+  def test_weights_sections_raise_llm_min_runtime_version(
+      self, existing, expected
+  ):
+    ss = self._build_and_read_litertlm(
+        self._llm_builder_for_min_runtime_version(existing, with_weights=True)
+    )
+
+    self.assertIn(f'min_runtime_version: "{expected}"', ss)
+    self.assertIn("max_num_tokens: 123", ss)
+
+  def test_no_weights_sections_keep_llm_min_runtime_version_unset(self):
+    ss = self._build_and_read_litertlm(
+        self._llm_builder_for_min_runtime_version(None, with_weights=False)
+    )
+
+    self.assertNotIn("min_runtime_version:", ss)
+
+  def test_weights_sections_raise_embedding_min_runtime_version(self):
+    metadata = embedding_metadata_pb2.EmbeddingMetadata()
+    metadata.embedding_model_type.embedding_gemma_v2.patch_width = 16
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_embedding_metadata(
+        self._create_dummy_file("embedding.pb", metadata.SerializeToString())
+    )
+    builder.add_tflite_weights(
+        self._create_dummy_file("model.weights", b"weights"), "text_encoder"
+    )
+
+    ss = self._build_and_read_litertlm(builder)
+
+    self.assertIn('min_runtime_version: "0.19.0"', ss)
+    self.assertIn("patch_width: 16", ss)
+
+  @parameterized.parameters(
+      ("0.18.9", "0.19.0", True),
+      ("0.19.0", "0.19.0", False),
+      ("0.19", "0.19.0", False),
+      ("0.19.0-rc1", "0.19.0", False),
+      ("0.9.0", "0.19.0", True),
+      ("1.0.0", "0.19.0", False),
+      # Like the runtime's ParseVersion, components without leading digits are
+      # skipped, so "v0.18.0" parses as 18.0.
+      ("v0.18.0", "0.19.0", False),
+  )
+  def test_version_less_than(self, version, other_version, expected):
+    self.assertEqual(
+        litertlm_builder._version_less_than(version, other_version), expected
+    )
+
 
 class ResolveWeightExternalizationTest(parameterized.TestCase):
 
