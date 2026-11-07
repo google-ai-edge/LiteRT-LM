@@ -526,5 +526,150 @@ class ConversationToolHandlingTest(absltest.TestCase):
     )
 
 
+class ConversationToolCallLimitTest(absltest.TestCase):
+  """Checks that the automatic tool-calling loop stops after 25 rounds."""
+
+  def setUp(self):
+    super().setUp()
+    self.mock_tool = mock.MagicMock()
+    self.mock_tool.execute.return_value = "mock_result"
+    self.conv = litert_lm.conversation.Conversation(
+        lib=mock.MagicMock(),
+        conv_ptr=1,
+        tools_map={"my_tool": self.mock_tool},
+    )
+    self.create_optional_args = self.enter_context(
+        mock.patch.object(self.conv, "_create_optional_args", return_value=None)
+    )
+
+  def _fake_send_message(self, responses):
+    """Makes the model return `responses` in order to `send_message`."""
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation, "create_checked", return_value=1
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation,
+            "get_checked",
+            side_effect=[json.dumps(r).encode() for r in responses],
+        )
+    )
+
+  def _fake_send_message_async(self, responses):
+    """Makes the model stream `responses` in order, one final chunk a turn."""
+    chunks = iter([json.dumps(r).encode() for r in responses])
+
+    def send_message_stream(conv_ptr, message, context, args, callback, data):
+      del conv_ptr, message, context, args  # Unused.
+      callback(data, 1)
+      return 0
+
+    def get_checked(lib, name, restype, chunk_ptr):
+      del lib, restype, chunk_ptr  # Unused.
+      if name == "litert_lm_stream_chunk_get_text":
+        return next(chunks)
+      if name == "litert_lm_stream_chunk_is_final":
+        return True
+      return None  # No error.
+
+    self.conv._lib.litert_lm_conversation_send_message_stream.side_effect = (
+        send_message_stream
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation, "get_checked", side_effect=get_checked
+        )
+    )
+    # Calls the callback directly instead of through ctypes.
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation,
+            "STREAM_CALLBACK_TYPE",
+            side_effect=lambda callback: callback,
+        )
+    )
+
+  def _sent_tool_choices(self):
+    return [
+        c.kwargs["tool_choice"]
+        for c in self.create_optional_args.call_args_list
+    ]
+
+  def test_send_message_answers_after_25_tool_call_rounds(self):
+    self._fake_send_message([_TOOL_CALL_RESPONSE] * 25 + [_ANSWER_RESPONSE])
+
+    response = self.conv.send_message("What's the weather?")
+
+    self.assertEqual(response.to_json(), _ANSWER_RESPONSE)
+    self.assertEqual(self.mock_tool.execute.call_count, 25)
+
+  def test_send_message_raises_on_26th_tool_call_round(self):
+    self._fake_send_message([_TOOL_CALL_RESPONSE] * 26)
+
+    with self.assertRaisesRegex(
+        RuntimeError, "^Exceeded recurring tool call limit of 25$"
+    ):
+      self.conv.send_message("What's the weather?", tool_choice="required")
+
+    # The tools of the 26th round don't run, and only the caller's message is
+    # sent with the tool choice.
+    self.assertEqual(self.mock_tool.execute.call_count, 25)
+    self.assertEqual(self._sent_tool_choices(), ["required"] + [None] * 25)
+
+  def test_send_message_async_answers_after_25_tool_call_rounds(self):
+    self._fake_send_message_async(
+        [_TOOL_CALL_RESPONSE] * 25 + [_ANSWER_RESPONSE]
+    )
+
+    responses = list(self.conv.send_message_async("What's the weather?"))
+
+    self.assertEqual([r.to_json() for r in responses], [_ANSWER_RESPONSE])
+    self.assertEqual(self.mock_tool.execute.call_count, 25)
+
+  def test_send_message_async_raises_on_26th_tool_call_round(self):
+    self._fake_send_message_async([_TOOL_CALL_RESPONSE] * 26)
+
+    with self.assertRaisesRegex(
+        RuntimeError, "^Exceeded recurring tool call limit of 25$"
+    ):
+      list(
+          self.conv.send_message_async(
+              "What's the weather?", tool_choice="required"
+          )
+      )
+
+    self.assertEqual(self.mock_tool.execute.call_count, 25)
+    self.assertEqual(self._sent_tool_choices(), ["required"] + [None] * 25)
+
+  def test_send_message_counts_rounds_per_call(self):
+    self._fake_send_message(
+        ([_TOOL_CALL_RESPONSE] * 25 + [_ANSWER_RESPONSE]) * 2
+    )
+
+    self.conv.send_message("What's the weather?")
+    response = self.conv.send_message("And tomorrow?")
+
+    self.assertEqual(response.to_json(), _ANSWER_RESPONSE)
+    self.assertEqual(self.mock_tool.execute.call_count, 50)
+
+  def test_send_message_returns_tool_calls_rejected_by_handler(self):
+    # Rejected tool calls don't run, so they end the loop instead of counting
+    # as a round.
+    handler = mock.create_autospec(
+        litert_lm.ToolEventHandler, instance=True, spec_set=True
+    )
+    handler.approve_tool_call.return_value = False
+    self.conv.tool_event_handler = handler
+    self._fake_send_message([_TOOL_CALL_RESPONSE])
+
+    response = self.conv.send_message("What's the weather?")
+
+    self.assertEqual([tc.name for tc in response.tool_calls], ["my_tool"])
+    self.mock_tool.execute.assert_not_called()
+    handler.approve_tool_call.assert_called_once()
+
+
 if __name__ == "__main__":
   absltest.main()

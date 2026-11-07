@@ -34,6 +34,10 @@ from ._messages import Message
 from ._messages import normalize_message
 from .utils import thinking_config_to_params
 
+# The maximum number of tool-call rounds in one call to send_message or
+# send_message_async, as in the Kotlin, Swift and JS bindings.
+_RECURRING_TOOL_CALL_LIMIT = 25
+
 
 class Conversation(interfaces.AbstractConversation):
   """Conversation wrapper for the LiteRT-LM C API."""
@@ -133,6 +137,21 @@ class Conversation(interfaces.AbstractConversation):
         constrained_decoding_config=self.constrained_decoding_config,
         visual_token_budget=self._visual_token_budget,
     )
+
+  def _check_tool_call_rounds(self, tool_call_rounds: int) -> None:
+    """Raises if the model asks for more tool-call rounds than allowed.
+
+    Args:
+      tool_call_rounds: The number of tool-call rounds already handled in the
+        current call to send_message or send_message_async.
+
+    Raises:
+      RuntimeError: If `tool_call_rounds` has reached the limit.
+    """
+    if tool_call_rounds >= _RECURRING_TOOL_CALL_LIMIT:
+      raise RuntimeError(
+          f"Exceeded recurring tool call limit of {_RECURRING_TOOL_CALL_LIMIT}"
+      )
 
   def _handle_tool_calls(
       self, response_dict: collections.abc.Mapping[str, Any]
@@ -409,6 +428,7 @@ class Conversation(interfaces.AbstractConversation):
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
+    tool_call_rounds = 0
 
     while True:
       msg_json = json.dumps(current_message)
@@ -456,10 +476,13 @@ class Conversation(interfaces.AbstractConversation):
       if not self.automatic_tool_calling:
         return Message.from_json(response_dict)
 
+      if "tool_calls" in response_dict:
+        self._check_tool_call_rounds(tool_call_rounds)
       tool_responses = self._handle_tool_calls(response_dict)
       if not tool_responses:
         return Message.from_json(response_dict)
 
+      tool_call_rounds += 1
       current_message = tool_responses
       # The tool choice only applies to the caller's message, not to the tool
       # responses sent back automatically.
@@ -494,6 +517,7 @@ class Conversation(interfaces.AbstractConversation):
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
+    tool_call_rounds = 0
 
     while True:
       msg_json = json.dumps(current_message)
@@ -606,9 +630,12 @@ class Conversation(interfaces.AbstractConversation):
       if not full_response_for_tools:
         break
 
+      if "tool_calls" in full_response_for_tools:
+        self._check_tool_call_rounds(tool_call_rounds)
       tool_responses = self._handle_tool_calls(full_response_for_tools)
       if not tool_responses:
         break
+      tool_call_rounds += 1
       current_message = tool_responses
       # The tool choice only applies to the caller's message, not to the tool
       # responses sent back automatically.
