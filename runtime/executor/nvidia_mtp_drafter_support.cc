@@ -957,9 +957,9 @@ bool NvidiaDispatchLoaded(
 
 }  // namespace
 
-void TellNvidiaDecodeBudget(const Environment& env, Backend backend,
+void TellNvidiaDecodeBudget(const Environment& env,
                             std::optional<int> max_num_tokens_to_emit) {
-  if (backend != Backend::NPU || !max_num_tokens_to_emit.has_value()) return;
+  if (!max_num_tokens_to_emit.has_value()) return;
   using SetBudgetFn = decltype(&LiteRtDispatchNvidiaStepFeedSetBudget);
   // Looked up once per process, on the first decode step, after the runtime has
   // loaded the dispatch library; the handle then keeps that library loaded.
@@ -980,6 +980,37 @@ void TellNvidiaDecodeBudget(const Environment& env, Backend backend,
       status != kLiteRtStatusOk) {
     ABSL_LOG_FIRST_N(WARNING, 1)
         << "NVIDIA step feed: the dispatch does not take the decode budget "
+           "(status "
+        << status << ")";
+  }
+}
+
+void TellNvidiaStepDraws(const Environment& env,
+                         const proto::SamplerParameters& sampler_params,
+                         const std::default_random_engine& rng) {
+  using PushFn = decltype(&LiteRtDispatchNvidiaStepSamplerPushUniforms);
+  // Looked up once per process, as TellNvidiaDecodeBudget's entry point.
+  static absl::once_flag once;
+  static PushFn push = nullptr;
+  absl::call_once(once, [&env] {
+    auto library = LoadedDispatchLibrary(env);
+    if (!library.ok() || !library->has_value()) return;
+    auto symbol = (*library)->LookupSymbol<PushFn>(
+        "LiteRtDispatchNvidiaStepSamplerPushUniforms");
+    if (!symbol.HasValue()) return;
+    push = symbol.Value();
+    new SharedLibrary(std::move(**library));  // kept for the process
+  });
+  if (push == nullptr) return;
+  // The next samples' uniforms, as the caller will draw them: the steps ahead
+  // run at most three samples past the host's.
+  std::default_random_engine peek = rng;
+  float uniforms[3];
+  DrawSamplingUniforms(sampler_params, peek, absl::MakeSpan(uniforms));
+  const double draws[3] = {uniforms[0], uniforms[1], uniforms[2]};
+  if (const LiteRtStatus status = push(draws, 3); status != kLiteRtStatusOk) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "NVIDIA step feed: the dispatch does not take the next draws "
            "(status "
         << status << ")";
   }
