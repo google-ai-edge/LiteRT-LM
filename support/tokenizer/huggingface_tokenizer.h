@@ -20,9 +20,11 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"
 
@@ -66,11 +68,19 @@ class HuggingFaceTokenizer : public Tokenizer {
 
  private:
   // Constructor.
-  explicit HuggingFaceTokenizer(TokenizerHandle absl_nonnull handle)
-      : handle_(handle) {};
+  HuggingFaceTokenizer(TokenizerHandle absl_nonnull handle, int vocab_size)
+      : vocab_size_(vocab_size), handle_(handle) {}
+
+  // Vocabulary size, read once at creation (the vocabulary is immutable).
+  const int vocab_size_;
+
+  // Guards concurrent Rust FFI calls (`&mut TokenizerWrapper` in
+  // `tokenizers_c`, including the shared `decode_str` buffer) when a
+  // `Tokenizer` is shared across threads via `Engine`.
+  mutable absl::Mutex mutex_;
 
   // HuggingFace processor.
-  TokenizerHandle absl_nonnull handle_;
+  TokenizerHandle absl_nonnull handle_ ABSL_GUARDED_BY(mutex_);
 };
 
 }  // namespace litert::support

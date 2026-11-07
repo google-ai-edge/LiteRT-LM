@@ -103,6 +103,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
     ],
 )
@@ -115,6 +116,7 @@ cc_library(
     linkstatic = 1,
     deps = [
         ":tokenizer",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/debugging:leak_check",  # See b/402708346
         "@com_google_absl//absl/memory",
@@ -122,6 +124,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "//support/util:litert_status_util",
         "//support/util:memory_mapped_file",

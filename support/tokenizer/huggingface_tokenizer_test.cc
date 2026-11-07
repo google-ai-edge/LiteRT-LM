@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <utility>
 #include <vector>
 
@@ -167,6 +168,53 @@ TEST(HuggingFaceTokenizerTest, GetTokens) {
   EXPECT_EQ(tokens[17], "!");
   EXPECT_EQ(tokens[47], "?");
   EXPECT_EQ(tokens[72], "X");
+}
+
+TEST(HuggingFaceTokenizerTest, ConcurrentEncodeAndDecodeIsThreadSafe) {
+  ASSERT_OK_AND_ASSIGN(auto tokenizer, HuggingFaceTokenizer::CreateFromFile(
+                                           GetHuggingFaceModelPath()));
+
+  // Each thread uses its own input, so a cross-thread overwrite of the shared
+  // decode or token buffers shows up as a wrong result. Expected values are
+  // computed single-threaded first.
+  constexpr int kNumThreads = 4;
+  constexpr int kIterationsPerThread = 50;
+  const std::vector<std::string> expected_tokens = tokenizer->GetTokens();
+  std::vector<std::string> texts;
+  std::vector<std::vector<int>> expected_ids;
+  std::vector<std::string> expected_texts;
+  for (int t = 0; t < kNumThreads; ++t) {
+    texts.push_back(absl::StrCat("Thread ", t, " asks: how's item ", t * 7,
+                                 " going?"));
+    ASSERT_OK_AND_ASSIGN(std::vector<int> ids,
+                         tokenizer->TextToTokenIds(texts.back()));
+    ASSERT_OK_AND_ASSIGN(
+        std::string text,
+        tokenizer->TokenIdsToText(ids, /*skip_special_tokens=*/true));
+    expected_ids.push_back(std::move(ids));
+    expected_texts.push_back(std::move(text));
+  }
+
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int t = 0; t < kNumThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      EXPECT_EQ(tokenizer->GetTokens(), expected_tokens);
+      for (int i = 0; i < kIterationsPerThread; ++i) {
+        ASSERT_OK_AND_ASSIGN(std::vector<int> ids,
+                             tokenizer->TextToTokenIds(texts[t]));
+        EXPECT_EQ(ids, expected_ids[t]);
+        ASSERT_OK_AND_ASSIGN(
+            std::string text,
+            tokenizer->TokenIdsToText(ids, /*skip_special_tokens=*/true));
+        EXPECT_EQ(text, expected_texts[t]);
+        EXPECT_EQ(tokenizer->GetVocabSize(), 49152);
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
 }
 
 }  // namespace
