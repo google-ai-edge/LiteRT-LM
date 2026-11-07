@@ -580,6 +580,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RollBackProcessedTokens() {
   }
   if (current_step == 0) {
     ABSL_RETURN_IF_ERROR(processed_tokens.RollBackToStep(0));
+    ABSL_RETURN_IF_ERROR(Reset());
   } else {
     auto token_at_step = processed_tokens.GetTokenAtStep(current_step - 1);
     ABSL_RETURN_IF_ERROR(processed_tokens.RollBackToStep(current_step - 1));
@@ -1678,16 +1679,80 @@ bool LlmLiteRtCompiledModelExecutorBase::DecodeTakesTokens() const {
 
 absl::StatusOr<std::unique_ptr<StateInterface>>
 LlmLiteRtCompiledModelExecutorBase::CloneState() const {
+  if (llm_context_->runtime_state().current_step <= 0 &&
+      llm_context_->processed_context().processed_tokens().TokenCount() == 0) {
+    return nullptr;
+  }
   int output_heads = 1;
   if (llm_context_->runtime_config().output_heads.has_value()) {
     output_heads = llm_context_->runtime_config().output_heads.value();
   }
+  const bool use_decode_state =
+      output_heads > 1 && llm_context_->runtime_state().ran_decode;
   StateInterface* active_state =
-      (output_heads > 1) ? decode_state_.get() : state_.get();
+      use_decode_state ? decode_state_.get() : state_.get();
   if (active_state == nullptr) {
     return nullptr;
   }
   return active_state->DeepCopy();
+}
+
+absl::StatusOr<std::unique_ptr<StateInterface>>
+LlmLiteRtCompiledModelExecutorBase::ReleaseState(bool save_state) {
+  if (!save_state) {
+    return nullptr;
+  }
+  int output_heads = 1;
+  if (llm_context_->runtime_config().output_heads.has_value()) {
+    output_heads = llm_context_->runtime_config().output_heads.value();
+  }
+  const bool use_decode_state =
+      output_heads > 1 && llm_context_->runtime_state().ran_decode;
+  std::unique_ptr<StateInterface>& active_state =
+      use_decode_state ? decode_state_ : state_;
+  if (active_state == nullptr) {
+    return nullptr;
+  }
+  auto* litert_state = dynamic_cast<LitertState*>(active_state.get());
+  if (litert_state != nullptr && !litert_state->UsesBoundHardwareBuffers()) {
+    return std::move(active_state);
+  }
+  return CloneState();
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::EnsureStateAllocated(
+    bool clear_kv_cache) {
+  const int output_heads =
+      llm_context_->runtime_config().output_heads.value_or(1);
+  if (state_ != nullptr && (output_heads <= 1 || decode_state_ != nullptr)) {
+    return absl::OkStatus();
+  }
+  LitertState::AllocationPolicy allocation_policy =
+      LitertState::AllocationPolicy::kInplace;
+  if (executor_settings_.GetBackend() == Backend::GPU) {
+    if (signatures_.input_int32_param.has_value()) {
+      allocation_policy = LitertState::AllocationPolicy::kGpuOptimizedInplace;
+    } else {
+      allocation_policy = LitertState::AllocationPolicy::kPingPong;
+    }
+  }
+  if (state_ == nullptr) {
+    ABSL_ASSIGN_OR_RETURN(std::string prefill_signature_key,
+                          GetPrefillSignatureKey());
+    LITERT_ASSIGN_OR_RETURN(
+        state_,
+        LitertState::Create(env_, *compiled_model_, prefill_signature_key,
+                            executor_metadata_, allocation_policy,
+                            /*batch_size=*/1, clear_kv_cache));
+  }
+  if (output_heads > 1 && decode_state_ == nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        decode_state_,
+        LitertState::Create(env_, *compiled_model_, kDecodeSignatureRunner,
+                            executor_metadata_, allocation_policy,
+                            /*batch_size=*/output_heads, clear_kv_cache));
+  }
+  return absl::OkStatus();
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
@@ -1744,8 +1809,20 @@ LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
-  std::optional<uint32_t> lora_id;
   ABSL_ASSIGN_OR_RETURN(auto state, CloneState());
+  return CreateContextWithState(std::move(state));
+}
+
+absl::StatusOr<std::unique_ptr<LlmContext>>
+LlmLiteRtCompiledModelExecutorBase::ReleaseContext(bool save_state) {
+  ABSL_ASSIGN_OR_RETURN(auto state, ReleaseState(save_state));
+  return CreateContextWithState(std::move(state));
+}
+
+std::unique_ptr<LlmContext>
+LlmLiteRtCompiledModelExecutorBase::CreateContextWithState(
+    std::unique_ptr<StateInterface> state) const {
+  std::optional<uint32_t> lora_id;
   ProcessedTokens new_processed_tokens =
       llm_context_->processed_context().processed_tokens();
   auto new_processed_context = std::make_unique<LlmProcessedContext>(
@@ -1767,18 +1844,39 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
   }
 
-  // A context at step 0 has no state of its own: reset the state buffers
-  // instead of restoring them.
-  if (llm_context_->runtime_state().current_step > 0) {
+  const bool clear_kv_cache_before_prefill =
+      !executor_settings_.GetAdvancedSettings() ||
+      executor_settings_.GetAdvancedSettings()->clear_kv_cache_before_prefill;
+
+  // A context at step 0 with no processed tokens has no state of its own:
+  // reset the state buffers instead of restoring them.
+  if (llm_context_->runtime_state().current_step > 0 ||
+      llm_context_->processed_context().processed_tokens().TokenCount() > 0) {
     auto restored_state = std::move(
         static_cast<LlmProcessedContext&>(llm_context_->processed_context())
             .state());
     ABSL_RETURN_IF_ERROR(RestoreState(std::move(restored_state)));
+    ABSL_RETURN_IF_ERROR(EnsureStateAllocated(clear_kv_cache_before_prefill));
   } else {
+    auto restored_state = std::move(
+        static_cast<LlmProcessedContext&>(llm_context_->processed_context())
+            .state());
+    if (restored_state != nullptr) {
+      auto* restored_litert = dynamic_cast<LitertState*>(restored_state.get());
+      if (restored_litert != nullptr &&
+          (executor_settings_.GetBackend() == Backend::CPU ||
+           !restored_litert->IsHostMemory())) {
+        std::unique_ptr<StateInterface>& target =
+            restored_state->GetBatchSize() > 1 ? decode_state_ : state_;
+        if (target == nullptr) {
+          target = std::move(restored_state);
+        }
+      }
+    }
     ABSL_RETURN_IF_ERROR(Reset());
   }
 
-  force_prepare_needed_ = true;
+  force_prepare_needed_ = false;
 
   return absl::OkStatus();
 }
@@ -1989,8 +2087,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(
     const LlmExecutorSettings& executor_settings) {
   executor_settings_ = executor_settings;
   if (executor_settings_.GetAdvancedSettings().has_value()) {
-    gpu_enable_metal_residency_set_ = executor_settings_.GetAdvancedSettings()
-                                          ->gpu_enable_metal_residency_set;
+    gpu_enable_metal_residency_set_.store(
+        executor_settings_.GetAdvancedSettings()
+            ->gpu_enable_metal_residency_set,
+        std::memory_order_relaxed);
   }
   return absl::OkStatus();
 }
@@ -2049,11 +2149,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
   // the previous one. The KV cache alone could be kept, since its entries past
   // the current step are masked by position, but a linear attention state is a
   // running summary of every token processed so far.
+  const int output_heads =
+      llm_context_->runtime_config().output_heads.value_or(1);
+  const bool needs_allocation =
+      state_ == nullptr || (output_heads > 1 && decode_state_ == nullptr);
   if (state_ != nullptr) {
     ABSL_RETURN_IF_ERROR(state_->Clear());
   }
   if (decode_state_ != nullptr) {
     ABSL_RETURN_IF_ERROR(decode_state_->Clear());
+  }
+  if (needs_allocation) {
+    ABSL_RETURN_IF_ERROR(EnsureStateAllocated(/*clear_kv_cache=*/true));
   }
   return absl::OkStatus();
 }
@@ -2575,7 +2682,7 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
   absl::Span<const int> drafts = draft_token_ids;
   while (true) {
     if (decode_params.GetCancelled() != nullptr &&
-        decode_params.GetCancelled()->load()) {
+        decode_params.GetCancelled()->load(std::memory_order_relaxed)) {
       if (num_passes == 0) {
         return absl::CancelledError("Draft verification was cancelled.");
       }

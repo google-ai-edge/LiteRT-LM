@@ -27,7 +27,6 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -313,9 +312,8 @@ class LockedLlmExecutor : public LlmExecutor {
     // TODO: b/409401231 - Add unit tests for the new_inputs creation.
     LITERT_ASSIGN_OR_RETURN(
         auto new_inputs_token_ids,
-        CopyToTensorBuffer(
-            absl::MakeConstSpan(input_ids_vec.data(), input_ids_vec.size()),
-            {1, static_cast<int>(input_ids_vec.size())}));
+        CopyToTensorBuffer(absl::MakeConstSpan(input_ids_vec),
+                           {1, static_cast<int>(input_ids_vec.size())}));
     std::optional<ExecutorVisionData> new_vision_data = std::nullopt;
     std::optional<ExecutorAudioData> new_audio_data = std::nullopt;
     if (inputs.GetVisionDataPtr().ok()) {
@@ -348,7 +346,7 @@ class LockedLlmExecutor : public LlmExecutor {
         int largest_time_step,
         current_handler_->shared_processed_context()->LongestHandlerTimeStep(
             *llm_executor_));
-    if (largest_time_step != current_step) {
+    if (largest_time_step > current_step) {
       // If the current handler is not the longest handler, retrieve the
       // processed_context for the previous handler, and update the current
       // handler's shared_processed_context.
@@ -389,6 +387,11 @@ class LockedLlmExecutor : public LlmExecutor {
 
   absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const override {
     return llm_executor_->CloneContext();
+  }
+
+  absl::StatusOr<std::unique_ptr<LlmContext>> ReleaseContext(
+      bool save_state) override {
+    return llm_executor_->ReleaseContext(save_state);
   }
 
   absl::Status RestoreContext(
@@ -494,7 +497,7 @@ class LockedLlmExecutor : public LlmExecutor {
         int largest_time_step,
         current_handler_->shared_processed_context()->LongestHandlerTimeStep(
             *llm_executor_));
-    if (largest_time_step != current_step) {
+    if (largest_time_step > current_step) {
       // If the current handler is not the longest handler, retrieve the
       // processed_context for the previous handler, and update the current
       // handler's shared_processed_context.
@@ -785,10 +788,18 @@ ResourceManager::AcquireExecutorWithContextHandler(
                                                current_handler_);
   }
 
+  // If the current handler has been released by all external owners (the
+  // `ResourceManager` itself holds the only `shared_ptr` reference) and no
+  // other live `ContextHandler` shares its `SharedProcessedContext` (e.g. a
+  // cloned session), discard it instead of saving its KV cache or audio state.
+  const bool discard_current_handler =
+      current_handler_ != nullptr && current_handler_.use_count() == 1 &&
+      current_handler_->shared_processed_context()->NumHandlers() == 1;
+
   // If both handler are sharing the same processed context, save the
   // runtime config and runtime state back to the current handler. Then
   // update the executor with the new handler.
-  if (current_handler_ != nullptr &&
+  if (current_handler_ != nullptr && !discard_current_handler &&
       new_context_handler->shared_processed_context() ==
           current_handler_->shared_processed_context()) {
     ABSL_ASSIGN_OR_RETURN(auto current_runtime_config,
@@ -809,11 +820,18 @@ ResourceManager::AcquireExecutorWithContextHandler(
     ABSL_RETURN_IF_ERROR(llm_executor_->UpdateRuntimeState(*new_runtime_state));
   } else {
     // If the new handler is not sharing the same processed context with the
-    // current handler, clone the processed context to the new handler. Then
-    // restore the executor with the new LlmContext.
+    // current handler, release the processed context to the current handler.
+    // Then restore the executor with the new LlmContext.
     if (current_handler_ != nullptr) {
+      bool save_state = false;
+      if (!discard_current_handler) {
+        ABSL_ASSIGN_OR_RETURN(int longest_time_step,
+                              current_handler_->shared_processed_context()
+                                  ->LongestHandlerTimeStep(*llm_executor_));
+        save_state = longest_time_step > 0;
+      }
       ABSL_ASSIGN_OR_RETURN(auto current_llm_context,
-                            llm_executor_->CloneContext());
+                            llm_executor_->ReleaseContext(save_state));
       ABSL_ASSIGN_OR_RETURN(auto current_runtime_config,
                             current_llm_context->RetrieveRuntimeConfig());
       ABSL_ASSIGN_OR_RETURN(auto current_runtime_state,
@@ -821,13 +839,17 @@ ResourceManager::AcquireExecutorWithContextHandler(
       ABSL_ASSIGN_OR_RETURN(auto current_processed_context,
                             current_llm_context->RetrieveProcessedContext());
 
-      ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
-          std::move(current_runtime_config)));
-      ABSL_RETURN_IF_ERROR(
-          current_handler_->SetRuntimeState(std::move(current_runtime_state)));
-      ABSL_RETURN_IF_ERROR(
-          current_handler_->shared_processed_context()->SetProcessedContext(
-              std::move(current_processed_context)));
+      if (discard_current_handler) {
+        current_handler_ = nullptr;
+      } else {
+        ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
+            std::move(current_runtime_config)));
+        ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeState(
+            std::move(current_runtime_state)));
+        ABSL_RETURN_IF_ERROR(
+            current_handler_->shared_processed_context()->SetProcessedContext(
+                std::move(current_processed_context)));
+      }
     }
 
     ABSL_ASSIGN_OR_RETURN(auto new_runtime_config,
@@ -843,9 +865,11 @@ ResourceManager::AcquireExecutorWithContextHandler(
     ABSL_RETURN_IF_ERROR(llm_executor_->RestoreContext(std::move(llm_context)));
   }
 
-  // If the current handler has an audio context, update it from audio
-  // executor and save it back to the current handler.
-  if (current_handler_ != nullptr && current_handler_->HasAudioContext()) {
+  // If the current handler is still referenced by an external owner and has an
+  // audio context, update it from the audio executor and save it back to the
+  // current handler.
+  if (current_handler_ != nullptr && current_handler_.use_count() > 1 &&
+      current_handler_->HasAudioContext()) {
     ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
     ABSL_ASSIGN_OR_RETURN(auto current_audio_context,
                           audio_executor->CloneContext());

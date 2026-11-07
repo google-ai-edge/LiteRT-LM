@@ -106,6 +106,21 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const override;
 
+  // Releases the current LLM context from the executor before a
+  // `RestoreContext()` call. Moves the active KV cache state (`state_` or
+  // `decode_state_`) out of the executor when `save_state` is true (unless the
+  // state uses bound hardware buffers that cannot be moved out of the compiled
+  // model), or omits the KV cache state when `save_state` is false so the
+  // executor can reuse its existing state buffers in place.
+  //
+  // args:
+  //   save_state: Whether to preserve the KV cache state in the returned
+  //     `LlmContext`.
+  // returns:
+  //   The released `LlmContext`, or an error status on failure.
+  absl::StatusOr<std::unique_ptr<LlmContext>> ReleaseContext(
+      bool save_state) override;
+
   absl::Status RestoreContext(
       std::unique_ptr<LlmContext> context_data) override;
 
@@ -506,6 +521,24 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Clones the KV cache state.
   absl::StatusOr<std::unique_ptr<StateInterface>> CloneState() const;
+
+  // Releases the KV cache state from the executor when unloading a context.
+  absl::StatusOr<std::unique_ptr<StateInterface>> ReleaseState(bool save_state);
+
+  // Builds an `LlmContext` that snapshots the current LoRA ID, processed
+  // tokens, runtime config, and runtime state, and owns `state`.
+  //
+  // args:
+  //   state: The KV cache state to attach to the processed context, or null.
+  // returns:
+  //   The new `LlmContext`.
+  std::unique_ptr<LlmContext> CreateContextWithState(
+      std::unique_ptr<StateInterface> state) const;
+
+  // Ensures that `state_` (and `decode_state_` when `output_heads > 1`) is
+  // allocated, creating a new `LitertState` if the active state was previously
+  // moved into an unloaded context by `ReleaseState()`.
+  absl::Status EnsureStateAllocated(bool clear_kv_cache);
 
   absl::Status RestoreState(std::unique_ptr<StateInterface> state);
 

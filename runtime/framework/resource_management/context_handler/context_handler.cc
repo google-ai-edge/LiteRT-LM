@@ -29,6 +29,11 @@
 
 namespace litert::lm {
 
+int ContextHandler::SharedProcessedContext::NumHandlers() const {
+  absl::MutexLock lock(handlers_mutex_);
+  return static_cast<int>(handlers_.size());
+}
+
 absl::StatusOr<int>
 ContextHandler::SharedProcessedContext::LongestHandlerTimeStep(
     LlmExecutor& llm_executor) const {

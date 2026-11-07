@@ -241,6 +241,30 @@ class LlmExecutorBase {
         "GetContext not implemented for backend: ", ExecutorBackendName()));
   };
 
+  // Releases the current LLM context from the executor when switching to
+  // another context via `RestoreContext()`. Unlike `CloneContext()`, which must
+  // leave the executor's state intact for continued execution,
+  // `ReleaseContext()` may transfer ownership of the KV cache state out of the
+  // executor (when `save_state` is true) or omit the KV cache state entirely
+  // (when `save_state` is false, e.g. when the outgoing context is still at
+  // step 0) to avoid deep-copying KV cache buffers on session switches.
+  //
+  // The default implementation falls back to `CloneContext()`, which always
+  // satisfies this contract (at the cost of a copy). It is intentionally not
+  // `UnimplementedError`: `ResourceManager` calls `ReleaseContext()` on every
+  // session switch, so executors that only implement `CloneContext()` keep
+  // working unchanged.
+  //
+  // args:
+  //   save_state: Whether the outgoing context's KV cache state needs to be
+  //     preserved in the returned `LlmContext`.
+  // returns:
+  //   The released `LlmContext`, or an error status on failure.
+  virtual absl::StatusOr<std::unique_ptr<LlmContext>> ReleaseContext(
+      bool save_state) {
+    return CloneContext();
+  }
+
   // Sets the llm_context and performs necessary operations to make sure the
   // model is restored with the provided llm context.
   virtual absl::Status RestoreContext(

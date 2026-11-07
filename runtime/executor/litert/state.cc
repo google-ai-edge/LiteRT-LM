@@ -334,6 +334,24 @@ bool LitertState::IsHostMemory() const {
   return true;
 }
 
+bool LitertState::UsesBoundHardwareBuffers() const {
+  for (const auto& [_, state_buffer] : bank_1_state_buffers_) {
+    auto buffer_type = state_buffer.buffer.BufferType();
+    if (buffer_type && ShouldSnapshotToHostMemory(*buffer_type)) {
+      return true;
+    }
+  }
+  if (bank_2_state_buffers_.has_value()) {
+    for (const auto& [_, state_buffer] : *bank_2_state_buffers_) {
+      auto buffer_type = state_buffer.buffer.BufferType();
+      if (buffer_type && ShouldSnapshotToHostMemory(*buffer_type)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
   if (this == &other) {
     return absl::OkStatus();
