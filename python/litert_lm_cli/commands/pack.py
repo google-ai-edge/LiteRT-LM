@@ -21,6 +21,7 @@ import textwrap
 import click
 
 from litert_lm_builder import litertlm_builder
+from litert_lm_cli import common
 from litert_lm_cli import help_formatter
 
 
@@ -80,11 +81,44 @@ def _is_interactive() -> bool:
         " jinja_prompt_template field in LlmMetadata."
     ),
 )
+@click.option(
+    "--weights-in-model-graph",
+    is_flag=False,
+    flag_value="true",
+    type=click.Choice(["true", "false"], case_sensitive=False),
+    default=None,
+    callback=common.parse_bool_opt,
+    help=(
+        "Whether to keep TFLite weights inside each model's FlatBuffer. If"
+        " false, eligible weights are moved into TFLiteWeights sections at the"
+        " end of the output file, which the web runtime requires (except with"
+        " the Artisan GPU backend). Defaults to"
+        f" {str(litertlm_builder.DEFAULT_WEIGHTS_IN_MODEL_GRAPH).lower()}."
+    ),
+)
+@click.option(
+    "--dedupe-shared-weights",
+    is_flag=False,
+    flag_value="true",
+    type=click.Choice(["true", "false"], case_sensitive=False),
+    default=None,
+    callback=common.parse_bool_opt,
+    help=(
+        "Whether to keep weight payloads that are byte-identical across TFLite"
+        " models (e.g. a tied token embedding table) in only one model's"
+        " TFLiteWeights section. Requires --weights-in-model-graph=false."
+        " Defaults to"
+        f" {str(litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS).lower()} when"
+        " weights are not in the model graph."
+    ),
+)
 def pack(
     config_or_dir: str = "model.toml",
     output: str | None = None,
     allow_overwrite: bool = False,
     chat_template: str | None = None,
+    weights_in_model_graph: bool | None = None,
+    dedupe_shared_weights: bool | None = None,
 ):
   """Packs a TOML configuration file or directory into a LiteRT-LM file.
 
@@ -96,6 +130,11 @@ def pack(
     allow_overwrite: Whether to allow overwriting an existing output file.
     chat_template: Optional path to a Jinja file to overwrite
       jinja_prompt_template.
+    weights_in_model_graph: Whether to keep TFLite weights inside each model's
+      FlatBuffer instead of moving them into TFLiteWeights sections, or None for
+      the default.
+    dedupe_shared_weights: Whether to deduplicate weight payloads that are
+      byte-identical across TFLite models, or None for the default.
   """
   config_or_dir = os.path.expanduser(config_or_dir)
   if chat_template is not None:
@@ -167,12 +206,18 @@ def pack(
       return
 
   try:
-    if chat_template is not None:
-      litertlm_builder.pack(
-          config_path, output_path, jinja_prompt_template_path=chat_template
-      )
-    else:
-      litertlm_builder.pack(config_path, output_path)
+    externalize_weights, dedupe_shared_weights = (
+        litertlm_builder.resolve_weight_externalization(
+            weights_in_model_graph, dedupe_shared_weights
+        )
+    )
+    litertlm_builder.pack(
+        config_path,
+        output_path,
+        jinja_prompt_template_path=chat_template,
+        externalize_weights=externalize_weights,
+        dedupe_shared_weights=dedupe_shared_weights,
+    )
     click.echo(
         click.style(
             f"Successfully packed LiteRT-LM file to {output_path}", fg="green"

@@ -50,6 +50,25 @@ extracted sections and a reconstructed `model.toml`:
 litert-lm-builder unpack --input demo.litertlm --output ./unpacked_dir
 ```
 
+### Weight placement
+
+By default, `litert-lm-builder` and `litert-lm pack` move the large weights of
+every TFLite model out of its FlatBuffer and into `TFLiteWeights` sections at
+the end of the `.litertlm` file. The web runtime requires this layout (except
+with the Artisan GPU backend). Weights that are byte-identical across models,
+such as a token embedding table that is also the tied output projection, are
+stored only once.
+
+To keep the weights inside each model's FlatBuffer instead, pass
+`--weights-in-model-graph`. To keep weights outside the model graph without
+deduplicating them, pass `--dedupe-shared-weights=false`.
+
+```bash
+litert-lm-builder toml --path example.toml \
+  output --path in_graph.litertlm --weights-in-model-graph
+litert-lm pack ./unpacked_dir --output in_graph.litertlm --weights-in-model-graph
+```
+
 ### Reproducible builds
 
 By default, every build writes a new `uuid` and the current time as

@@ -49,6 +49,7 @@ import logging
 import os
 import pathlib
 import shutil
+import tempfile
 from typing import Any, BinaryIO, Callable, Optional, TypeVar, cast
 import uuid
 import zlib
@@ -60,6 +61,7 @@ from google.protobuf import text_format
 # support is dropped.
 import tomli as tomllib
 
+from litert_lm_builder import externalize_tflite_flatbuffer
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
@@ -258,6 +260,59 @@ class ExternalizationSummary:
   newly_externalized_bytes: int
   redirected_buffers: int = 0
   deduplicated_bytes: int = 0
+
+
+# Whether the packaging CLIs (`litert-lm pack` and `litertlm_builder_cli`) keep
+# TFLite weights inside each model's FlatBuffer by default, instead of moving
+# them into separate TFLiteWeights sections at the end of the LiteRT-LM file.
+# Weights must be outside the model graph for the web runtime (except with the
+# Artisan GPU backend). Both CLIs override this with
+# `--weights-in-model-graph=true|false`.
+#
+# Note the polarity: False means weights are externalized. OSS defaults to False
+# (externalized); google3 keeps True (weights in the model graph) for now.
+DEFAULT_WEIGHTS_IN_MODEL_GRAPH = False
+
+# Whether the packaging CLIs deduplicate weight payloads that are byte-identical
+# across TFLite models by default. Only applies when weights are not in the
+# model graph.
+DEFAULT_DEDUPE_SHARED_WEIGHTS = True
+
+
+def resolve_weight_externalization(
+    weights_in_model_graph: bool | None = None,
+    dedupe_shared_weights: bool | None = None,
+) -> tuple[bool, bool]:
+  """Resolves the packaging CLI weight placement options.
+
+  Args:
+    weights_in_model_graph: Whether to keep TFLite weights inside each model's
+      FlatBuffer instead of moving them into TFLiteWeights sections, or None for
+      the default (`DEFAULT_WEIGHTS_IN_MODEL_GRAPH`).
+    dedupe_shared_weights: Whether to deduplicate weight payloads that are
+      byte-identical across TFLite models, or None for the default
+      (`DEFAULT_DEDUPE_SHARED_WEIGHTS` when weights are not in the model graph).
+
+  Returns:
+    The `externalize_weights` and `dedupe_shared_weights` arguments for
+    `LitertLmFileBuilder.build` and `pack`.
+
+  Raises:
+    ValueError: If deduplication is requested while weights stay in the model
+      graph.
+  """
+  if weights_in_model_graph is None:
+    weights_in_model_graph = DEFAULT_WEIGHTS_IN_MODEL_GRAPH
+  if weights_in_model_graph:
+    if dedupe_shared_weights:
+      raise ValueError(
+          "Deduplicating shared weights requires weights outside the model"
+          " graph (--weights-in-model-graph=false)."
+      )
+    return False, False
+  if dedupe_shared_weights is None:
+    dedupe_shared_weights = DEFAULT_DEDUPE_SHARED_WEIGHTS
+  return True, dedupe_shared_weights
 
 
 # Separates the weight group name from a model type in external buffer group
@@ -548,6 +603,14 @@ def _set_vision_patch_metadata(
       and "pooling_kernel_size" in sub_msg.DESCRIPTOR.fields_by_name
   ):
     setattr(sub_msg, "pooling_kernel_size", pooling_kernel_size)
+
+
+def _file_data_writer(path: pathlib.Path) -> Callable[[BinaryIO], None]:
+  def data_writer(stream: BinaryIO):
+    with litertlm_core.open_file(str(path), "rb") as source:
+      _copy_file_to_stream(source, stream)
+
+  return data_writer
 
 
 LitertLmFileBuilderT = TypeVar(
@@ -1685,11 +1748,317 @@ class LitertLmFileBuilder:
     """Removes the backend_constraint metadata from matching sections."""
     return self.set_backend_constraint(model_type, None)
 
+  def _externalize_sections(
+      self,
+      work_dir: pathlib.Path,
+      num_elements_threshold: int,
+      weight_group_name: str,
+      dedupe_shared_weights: bool = False,
+  ) -> tuple[list[_SectionObject], ExternalizationSummary]:
+    """Externalizes TFLite sections and returns their final file order.
+
+    Args:
+      work_dir: Scratch directory for the processed models and weight blobs.
+      num_elements_threshold: Tensors with at most this many elements stay
+        inline in their FlatBuffer.
+      weight_group_name: External buffer group / blob name of the per-model
+        `TFLiteWeights` sections.
+      dedupe_shared_weights: If true, after externalization every payload that
+        is byte-identical across models is kept in only one model's
+        `TFLiteWeights` section (a token embedder first), and the other models
+        reference it through the external buffer group
+        `<weight_group_name>:<owner model_type>`.
+
+    Returns:
+      The sections to write (models first, then per-model weights) and a
+      summary of the pass.
+
+    Raises:
+      FileNotFoundError: If a TFLiteModel or TFLiteWeights source file does not
+        exist.
+      ValueError: If arguments or section metadata are invalid, or if the
+        externalizer output is incomplete.
+    """
+    if num_elements_threshold < 0:
+      raise ValueError("num_elements_threshold must be non-negative")
+    if (
+        not weight_group_name
+        or weight_group_name in (".", "..")
+        or pathlib.PurePath(weight_group_name).name != weight_group_name
+    ):
+      raise ValueError(
+          "weight_group_name must be a non-empty file name, not a path"
+      )
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    externalized_dir = work_dir / "externalized"
+    weights_by_model: dict[str, _SectionObject] = {}
+    for section in self._sections:
+      if section.data_type != schema.AnySectionDataType.TFLiteWeights:
+        continue
+      model_type = _get_model_type(section)
+      if model_type is None:
+        raise ValueError("TFLiteWeights section has no model_type")
+      weights_by_model[model_type] = section
+
+    model_sections: list[_SectionObject] = []
+    model_order: list[str] = []
+    seen_model_types: set[str] = set()
+    newly_externalized_bytes = 0
+
+    for section_index, original_section in enumerate(self._sections):
+      if original_section.data_type == schema.AnySectionDataType.TFLiteWeights:
+        continue
+
+      section = original_section
+      model_type = _get_model_type(section)
+      if section.data_type == schema.AnySectionDataType.TFLiteModel:
+        if model_type is None:
+          raise ValueError("TFLiteModel section has no model_type")
+        if model_type in seen_model_types:
+          raise ValueError(f"Duplicate TFLiteModel model_type: {model_type}")
+        if section.source_path is None:
+          raise ValueError(
+              f"TFLiteModel {model_type} has no externalizable source path"
+          )
+        seen_model_types.add(model_type)
+        model_order.append(model_type)
+
+        input_model = pathlib.Path(section.source_path)
+        if not input_model.is_file():
+          raise FileNotFoundError(
+              f"TFLiteModel data path does not exist: {input_model}"
+          )
+        existing_weights_section = weights_by_model.get(model_type)
+        existing_weights = None
+        if existing_weights_section is not None:
+          if existing_weights_section.source_path is None:
+            raise ValueError(f"TFLiteWeights {model_type} has no source path")
+          existing_weights = pathlib.Path(existing_weights_section.source_path)
+          if not existing_weights.is_file():
+            raise FileNotFoundError(
+                f"TFLiteWeights data path does not exist: {existing_weights}"
+            )
+
+        output_dir = externalized_dir / f"section_{section_index}_{model_type}"
+        externalize_tflite_flatbuffer.externalize(
+            input_model=input_model,
+            output_dir=output_dir,
+            group_name=weight_group_name,
+            num_elements_threshold=num_elements_threshold,
+            existing_weights=existing_weights,
+        )
+        processed_model = output_dir / "model.tflite"
+        processed_weights = output_dir / weight_group_name
+        if not processed_model.is_file() or not processed_weights.is_file():
+          raise ValueError(
+              f"Externalizer output is incomplete for {model_type}"
+          )
+
+        existing_size = (
+            existing_weights.stat().st_size
+            if existing_weights is not None
+            else 0
+        )
+        processed_size = processed_weights.stat().st_size
+        if processed_size < existing_size:
+          raise ValueError(
+              f"Externalizer dropped existing weights for {model_type}"
+          )
+        newly_externalized_bytes += processed_size - existing_size
+
+        if processed_size:
+          section = dataclasses.replace(
+              section,
+              data_writer=_file_data_writer(processed_model),
+              source_path=str(processed_model),
+          )
+          if existing_weights_section is not None:
+            weights_section = dataclasses.replace(
+                existing_weights_section,
+                data_writer=_file_data_writer(processed_weights),
+                source_path=str(processed_weights),
+            )
+          else:
+            weights_section = _SectionObject(
+                metadata=[
+                    Metadata(
+                        key="model_type",
+                        value=model_type,
+                        dtype=DType.STRING,
+                    )
+                ],
+                data_type=schema.AnySectionDataType.TFLiteWeights,
+                data_writer=_file_data_writer(processed_weights),
+                source_path=str(processed_weights),
+            )
+          weights_by_model[model_type] = weights_section
+
+      model_sections.append(section)
+
+    redirected_buffers = 0
+    deduplicated_bytes = 0
+    if dedupe_shared_weights:
+      redirected_buffers, deduplicated_bytes = self._dedupe_external_weights(
+          model_sections,
+          weights_by_model,
+          model_order,
+          work_dir / "deduped",
+          weight_group_name,
+      )
+
+    ordered_weights = [
+        weights_by_model[model_type]
+        for model_type in model_order
+        if model_type in weights_by_model
+    ]
+    if dedupe_shared_weights:
+      # Write the owners' sections first so that a streaming loader has the
+      # shared payloads in memory before it loads the models referencing them.
+      ordered_weights.sort(
+          key=lambda section: (
+              _get_model_type(section) not in _SHARED_WEIGHT_OWNER_MODEL_TYPES
+          )
+      )
+    return (
+        [*model_sections, *ordered_weights],
+        ExternalizationSummary(
+            models_inspected=len(model_order),
+            models_with_external_weights=len(ordered_weights),
+            newly_externalized_bytes=newly_externalized_bytes,
+            redirected_buffers=redirected_buffers,
+            deduplicated_bytes=deduplicated_bytes,
+        ),
+    )
+
+  def _dedupe_external_weights(
+      self,
+      model_sections: list[_SectionObject],
+      weights_by_model: dict[str, _SectionObject],
+      model_order: list[str],
+      work_dir: pathlib.Path,
+      weight_group_name: str,
+  ) -> tuple[int, int]:
+    """Keeps each byte-identical external payload in one TFLiteWeights section.
+
+    Models are visited in priority order: the token embedders first, then by
+    decreasing weights size. A payload is owned by the first model that has it;
+    later models are rewritten to reference the owner's copy through the group
+    `<weight_group_name>:<owner model_type>` and their own blobs are compacted.
+    A model whose blob becomes empty loses its TFLiteWeights section.
+
+    The embedders own shared payloads (such as a token embedding table that is
+    also the tied output projection) because every runtime keeps their weights
+    in host memory, including the web streaming loader, which streams the
+    prefill/decode weights straight to the GPU and cannot read them twice.
+    Other models can then read the shared payload from the embedder's copy.
+
+    Args:
+      model_sections: Output sections; TFLiteModel entries are updated in place.
+      weights_by_model: Output TFLiteWeights sections by model type; updated in
+        place.
+      model_order: Model types in file order.
+      work_dir: Scratch directory for rewritten models and blobs.
+      weight_group_name: External buffer group name of per-model weights.
+
+    Returns:
+      The number of redirected external buffers and the bytes removed.
+
+    Raises:
+      ValueError: If a model or weights section has no source path.
+    """
+
+    def source_path(section: _SectionObject) -> pathlib.Path:
+      if section.source_path is None:
+        raise ValueError(
+            f"Section {_get_model_type(section)} has no source path"
+        )
+      return pathlib.Path(section.source_path)
+
+    section_index_by_model = {}
+    for index, section in enumerate(model_sections):
+      if section.data_type == schema.AnySectionDataType.TFLiteModel:
+        section_index_by_model[_get_model_type(section)] = index
+
+    def weights_size(model_type: str) -> int:
+      return source_path(weights_by_model[model_type]).stat().st_size
+
+    candidates = [mt for mt in model_order if mt in weights_by_model]
+    candidates.sort(
+        key=lambda mt: (
+            mt not in _SHARED_WEIGHT_OWNER_MODEL_TYPES,
+            -weights_size(mt),
+            model_order.index(mt),
+        )
+    )
+
+    owners: dict[
+        externalize_tflite_flatbuffer.WeightDigest, tuple[str, int, int]
+    ] = {}
+    redirected_buffers = 0
+    deduplicated_bytes = 0
+    for model_type in candidates:
+      model_index = section_index_by_model[model_type]
+      model_path = source_path(model_sections[model_index])
+      weights_path = source_path(weights_by_model[model_type])
+      placements = (
+          externalize_tflite_flatbuffer.collect_external_weight_digests(
+              model_path, weights_path, weight_group_name
+          )
+      )
+      redirects = {
+          digest: owners[digest] for digest in placements if digest in owners
+      }
+      if redirects:
+        output_dir = work_dir / model_type
+        result = externalize_tflite_flatbuffer.redirect_external_weights(
+            input_model=model_path,
+            input_weights=weights_path,
+            output_dir=output_dir,
+            group_name=weight_group_name,
+            redirects=redirects,
+        )
+        redirected_buffers += result.redirected_buffers
+        deduplicated_bytes += result.removed_bytes
+        model_path = output_dir / "model.tflite"
+        weights_path = output_dir / weight_group_name
+        model_sections[model_index] = dataclasses.replace(
+            model_sections[model_index],
+            data_writer=_file_data_writer(model_path),
+            source_path=str(model_path),
+        )
+        if weights_path.stat().st_size:
+          weights_by_model[model_type] = dataclasses.replace(
+              weights_by_model[model_type],
+              data_writer=_file_data_writer(weights_path),
+              source_path=str(weights_path),
+          )
+          placements = (
+              externalize_tflite_flatbuffer.collect_external_weight_digests(
+                  model_path, weights_path, weight_group_name
+              )
+          )
+        else:
+          del weights_by_model[model_type]
+          placements = {}
+
+      owner_group = (
+          f"{weight_group_name}{_WEIGHT_GROUP_MODEL_TYPE_SEPARATOR}{model_type}"
+      )
+      for digest, (offset, length) in placements.items():
+        owners.setdefault(digest, (owner_group, offset, length))
+    return redirected_buffers, deduplicated_bytes
+
   def build(
       self,
       stream: BinaryIO,
       *,
       validate_metadata: bool = False,
+      externalize_weights: bool = False,
+      externalization_work_dir: str | None = None,
+      num_elements_threshold: int = 256,
+      weight_group_name: str = "tflite_weights",
+      dedupe_shared_weights: bool = False,
   ) -> ExternalizationSummary | None:
     """Builds the litertlm into the given stream.
 
@@ -1716,6 +2085,21 @@ class LitertLmFileBuilder:
     self._resolve_pending_model_types()
     if validate_metadata:
       self.validate_metadata()
+    if externalize_weights or dedupe_shared_weights:
+      work_dir_context = (
+          tempfile.TemporaryDirectory(prefix="litertlm_externalize_")
+          if externalization_work_dir is None
+          else contextlib.nullcontext(externalization_work_dir)
+      )
+      with work_dir_context as work_dir:
+        sections, summary = self._externalize_sections(
+            pathlib.Path(work_dir),
+            num_elements_threshold,
+            weight_group_name,
+            dedupe_shared_weights=dedupe_shared_weights,
+        )
+        self._build_sections(stream, sections)
+        return summary
     self._build_sections(stream, self._sections)
     return None
 
@@ -1980,6 +2364,12 @@ def pack_with_summary(
     toml_path: str,
     output_path: str,
     jinja_prompt_template_path: str | None = None,
+    *,
+    externalize_weights: bool = False,
+    externalization_work_dir: str | None = None,
+    num_elements_threshold: int = 256,
+    weight_group_name: str = "tflite_weights",
+    dedupe_shared_weights: bool = False,
 ) -> tuple[str, ExternalizationSummary | None]:
   """Packs TOML and returns the output path and externalization summary."""
   output_dir = os.path.dirname(output_path)
@@ -1991,6 +2381,11 @@ def pack_with_summary(
   with litertlm_core.open_file(output_path, "wb") as f:
     summary = builder.build(
         cast(BinaryIO, f),
+        externalize_weights=externalize_weights,
+        externalization_work_dir=externalization_work_dir,
+        num_elements_threshold=num_elements_threshold,
+        weight_group_name=weight_group_name,
+        dedupe_shared_weights=dedupe_shared_weights,
     )
   return output_path, summary
 
@@ -1999,8 +2394,13 @@ def pack(
     toml_path: str,
     output_path: str,
     jinja_prompt_template_path: str | None = None,
+    *,
+    externalize_weights: bool = False,
+    externalization_work_dir: str | None = None,
+    num_elements_threshold: int = 256,
+    weight_group_name: str = "tflite_weights",
+    dedupe_shared_weights: bool = False,
 ) -> str:
-  # pyformat: disable
   """Packs a TOML configuration and its referenced files into a LiteRT-LM file.
 
   Args:
@@ -2008,15 +2408,27 @@ def pack(
     output_path: The path where the packed LiteRT-LM file will be saved.
     jinja_prompt_template_path: Optional path to a Jinja file to overwrite
       jinja_prompt_template.
+    externalize_weights: Whether to externalize weights from TFLite models.
+    externalization_work_dir: Optional working directory for externalization.
+    num_elements_threshold: Minimum number of elements for a tensor to be
+      externalized.
+    weight_group_name: Name of the externalized weight group.
+    dedupe_shared_weights: Whether to also store weight payloads that are
+      byte-identical across TFLite models only once; the other models reference
+      the owner model's TFLiteWeights section. Implies `externalize_weights`.
 
   Returns:
     The path to the generated LiteRT-LM file.
   """
-  # pyformat: enable
   packed_path, _ = pack_with_summary(
       toml_path,
       output_path,
       jinja_prompt_template_path,
+      externalize_weights=externalize_weights,
+      externalization_work_dir=externalization_work_dir,
+      num_elements_threshold=num_elements_threshold,
+      weight_group_name=weight_group_name,
+      dedupe_shared_weights=dedupe_shared_weights,
   )
   return packed_path
 

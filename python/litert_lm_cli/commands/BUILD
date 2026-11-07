@@ -102,6 +102,7 @@ pytype_strict_library(
     imports = [".."],
     deps = [
         "//python/litert_lm_builder:litertlm_builder",
+        "//python/litert_lm_cli:common",
         "//python/litert_lm_cli:help_formatter",
         requirement("click"),
     ],

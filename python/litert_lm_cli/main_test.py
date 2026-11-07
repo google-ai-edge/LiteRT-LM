@@ -22,9 +22,23 @@ from click import testing
 from prompt_toolkit import key_binding
 
 import litert_lm
+from litert_lm_builder import litertlm_builder
 from litert_lm_cli import common
 from litert_lm_cli import main
 from litert_lm_cli.commands import run as run_cmd
+
+_DEFAULT_EXTERNALIZE_WEIGHTS = (
+    not litertlm_builder.DEFAULT_WEIGHTS_IN_MODEL_GRAPH
+)
+# The weight placement arguments `litert-lm pack` passes to the builder by
+# default.
+_DEFAULT_PACK_WEIGHT_KWARGS = {
+    "externalize_weights": _DEFAULT_EXTERNALIZE_WEIGHTS,
+    "dedupe_shared_weights": (
+        _DEFAULT_EXTERNALIZE_WEIGHTS
+        and litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS
+    ),
+}
 
 
 class MainTest(absltest.TestCase):
@@ -961,7 +975,12 @@ class MainTest(absltest.TestCase):
       self.assertEqual(result.exit_code, 0)
       expected_config = os.path.join(".", "model.toml")
       expected_out = os.path.abspath("out.litertlm")
-      mock_builder_pack.assert_called_once_with(expected_config, expected_out)
+      mock_builder_pack.assert_called_once_with(
+          expected_config,
+          expected_out,
+          jinja_prompt_template_path=None,
+          **_DEFAULT_PACK_WEIGHT_KWARGS,
+      )
 
   @unittest.mock.patch(
       "litert_lm_builder.litertlm_builder.pack"
@@ -992,6 +1011,7 @@ class MainTest(absltest.TestCase):
           expected_config,
           expected_out,
           jinja_prompt_template_path=expected_jinja,
+          **_DEFAULT_PACK_WEIGHT_KWARGS,
       )
 
   @unittest.mock.patch(
@@ -1006,7 +1026,12 @@ class MainTest(absltest.TestCase):
       self.assertEqual(result.exit_code, 0)
       expected_config = "model.toml"
       expected_out = os.path.abspath("output.litertlm")
-      mock_builder_pack.assert_called_once_with(expected_config, expected_out)
+      mock_builder_pack.assert_called_once_with(
+          expected_config,
+          expected_out,
+          jinja_prompt_template_path=None,
+          **_DEFAULT_PACK_WEIGHT_KWARGS,
+      )
 
   @unittest.mock.patch(
       "litert_lm_builder.litertlm_builder.pack"
@@ -1047,7 +1072,12 @@ class MainTest(absltest.TestCase):
       self.assertEqual(result.exit_code, 0)
       expected_config = os.path.join("my-model", "model.toml")
       expected_out = os.path.abspath("my-model.litertlm")
-      mock_builder_pack.assert_called_once_with(expected_config, expected_out)
+      mock_builder_pack.assert_called_once_with(
+          expected_config,
+          expected_out,
+          jinja_prompt_template_path=None,
+          **_DEFAULT_PACK_WEIGHT_KWARGS,
+      )
 
   @unittest.mock.patch(
       "litert_lm_builder.litertlm_builder.pack"
@@ -1066,7 +1096,12 @@ class MainTest(absltest.TestCase):
         self.assertEqual(result.exit_code, 0)
         expected_config = os.path.join(".", "model.toml")
         expected_out = os.path.abspath(os.path.join("..", "my-model.litertlm"))
-        mock_builder_pack.assert_called_once_with(expected_config, expected_out)
+        mock_builder_pack.assert_called_once_with(
+            expected_config,
+            expected_out,
+            jinja_prompt_template_path=None,
+            **_DEFAULT_PACK_WEIGHT_KWARGS,
+        )
       finally:
         os.chdir(original_cwd)
 
@@ -1081,7 +1116,12 @@ class MainTest(absltest.TestCase):
       result = runner.invoke(main.cli, ["pack", "test-model.toml"])
       self.assertEqual(result.exit_code, 0)
       expected_out = os.path.abspath("output.litertlm")
-      mock_builder_pack.assert_called_once_with("test-model.toml", expected_out)
+      mock_builder_pack.assert_called_once_with(
+          "test-model.toml",
+          expected_out,
+          jinja_prompt_template_path=None,
+          **_DEFAULT_PACK_WEIGHT_KWARGS,
+      )
 
   @unittest.mock.patch(
       "litert_lm_builder.litertlm_builder.pack"
@@ -1346,6 +1386,80 @@ class MainTest(absltest.TestCase):
         "unpack",
     }
     self.assertContainsSubset(expected_commands, set(main.cli.commands.keys()))
+
+  def _invoke_pack(self, *flags):
+    """Runs `litert-lm pack` on a placeholder TOML file and returns the result."""
+    runner = testing.CliRunner()
+    with runner.isolated_filesystem():
+      with open("model.toml", "w") as f:
+        f.write("")
+      result = runner.invoke(
+          main.cli, ["pack", "model.toml", "--output", "out.litertlm", *flags]
+      )
+      self.assertEqual(result.exit_code, 0, result.output)
+      return result
+
+  @unittest.mock.patch(
+      "litert_lm_builder.litertlm_builder.pack"
+  )
+  def test_pack_command_default_weight_placement(self, mock_builder_pack):
+    self._invoke_pack()
+
+    mock_builder_pack.assert_called_once_with(
+        "model.toml",
+        unittest.mock.ANY,
+        jinja_prompt_template_path=None,
+        **_DEFAULT_PACK_WEIGHT_KWARGS,
+    )
+
+  @unittest.mock.patch(
+      "litert_lm_builder.litertlm_builder.pack"
+  )
+  def test_pack_command_no_weights_in_model_graph(self, mock_builder_pack):
+    self._invoke_pack("--weights-in-model-graph=false")
+
+    _, kwargs = mock_builder_pack.call_args
+    self.assertTrue(kwargs["externalize_weights"])
+    self.assertEqual(
+        kwargs["dedupe_shared_weights"],
+        litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS,
+    )
+
+  @unittest.mock.patch(
+      "litert_lm_builder.litertlm_builder.pack"
+  )
+  def test_pack_command_no_dedupe_shared_weights(self, mock_builder_pack):
+    self._invoke_pack(
+        "--weights-in-model-graph=false",
+        "--dedupe-shared-weights=false",
+    )
+
+    _, kwargs = mock_builder_pack.call_args
+    self.assertTrue(kwargs["externalize_weights"])
+    self.assertFalse(kwargs["dedupe_shared_weights"])
+
+  @unittest.mock.patch(
+      "litert_lm_builder.litertlm_builder.pack"
+  )
+  def test_pack_command_weights_in_model_graph(self, mock_builder_pack):
+    self._invoke_pack("--weights-in-model-graph")
+
+    _, kwargs = mock_builder_pack.call_args
+    self.assertFalse(kwargs["externalize_weights"])
+    self.assertFalse(kwargs["dedupe_shared_weights"])
+
+  @unittest.mock.patch(
+      "litert_lm_builder.litertlm_builder.pack"
+  )
+  def test_pack_command_dedupe_requires_weights_outside_model_graph(
+      self, mock_builder_pack
+  ):
+    result = self._invoke_pack(
+        "--weights-in-model-graph", "--dedupe-shared-weights"
+    )
+
+    mock_builder_pack.assert_not_called()
+    self.assertIn("--weights-in-model-graph=false", result.output)
 
 
 if __name__ == "__main__":

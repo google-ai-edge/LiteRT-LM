@@ -2477,5 +2477,64 @@ data_path = "{vocoder_path}"
     self.assertEqual(computed_sha, expected_sha)
 
 
+class ResolveWeightExternalizationTest(parameterized.TestCase):
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="outside_graph_default_dedupe",
+          weights_in_model_graph=False,
+          dedupe_shared_weights=None,
+          expected=(True, litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS),
+      ),
+      dict(
+          testcase_name="outside_graph_dedupe",
+          weights_in_model_graph=False,
+          dedupe_shared_weights=True,
+          expected=(True, True),
+      ),
+      dict(
+          testcase_name="outside_graph_no_dedupe",
+          weights_in_model_graph=False,
+          dedupe_shared_weights=False,
+          expected=(True, False),
+      ),
+      dict(
+          testcase_name="in_graph_default_dedupe",
+          weights_in_model_graph=True,
+          dedupe_shared_weights=None,
+          expected=(False, False),
+      ),
+      dict(
+          testcase_name="in_graph_no_dedupe",
+          weights_in_model_graph=True,
+          dedupe_shared_weights=False,
+          expected=(False, False),
+      ),
+  )
+  def test_resolves_options(
+      self, weights_in_model_graph, dedupe_shared_weights, expected
+  ):
+    self.assertEqual(
+        litertlm_builder.resolve_weight_externalization(
+            weights_in_model_graph, dedupe_shared_weights
+        ),
+        expected,
+    )
+
+  def test_default_weight_placement(self):
+    externalize_weights, _ = litertlm_builder.resolve_weight_externalization()
+
+    self.assertEqual(
+        externalize_weights,
+        not litertlm_builder.DEFAULT_WEIGHTS_IN_MODEL_GRAPH,
+    )
+
+  def test_dedupe_requires_weights_outside_model_graph(self):
+    with self.assertRaisesRegex(ValueError, "--weights-in-model-graph=false"):
+      litertlm_builder.resolve_weight_externalization(
+          weights_in_model_graph=True, dedupe_shared_weights=True
+      )
+
+
 if __name__ == "__main__":
   absltest.main()

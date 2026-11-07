@@ -84,7 +84,17 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
     )
 
   def _run_command(self, *args) -> str:
-    """Runs the command with the given arguments."""
+    """Runs the command with the given arguments.
+
+    Weights are kept in the model graph because most tests use placeholder
+    TFLite files that cannot be parsed for weight externalization.
+
+    Args:
+      *args: The arguments that precede the `output` subcommand.
+
+    Returns:
+      The path to the output LiteRT-LM file.
+    """
     output_path = os.path.join(self.temp_dir, "litertlm.litertlm")
     command = [
         self._get_command_path(),
@@ -92,6 +102,7 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
         "output",
         "--path",
         output_path,
+        "--weights-in-model-graph",
     ]
     try:
       subprocess.run(command, check=True, capture_output=True)
@@ -392,6 +403,83 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
         stdout,
     )
 
+  def test_output_help_includes_weight_placement_flags(self):
+    command = [self._get_command_path(), "output", "--help"]
+
+    output = subprocess.run(command, check=True, capture_output=True)
+
+    self.assertEqual(output.returncode, 0)
+    stdout = output.stdout.decode("utf-8")
+    self.assertIn("--weights-in-model-graph", stdout)
+    self.assertIn("--dedupe-shared-weights", stdout)
+
+  def _unpack_test_model(self) -> str:
+    """Unpacks a checked-in LiteRT-LM model and returns its TOML path."""
+    input_litertlm = os.path.join(
+        os.environ.get("TEST_SRCDIR", ""),
+        "litert_lm/runtime/testdata/test_lm.litertlm",
+    )
+    unpack_dir = os.path.join(self.temp_dir, "unpacked_test_lm")
+    subprocess.run(
+        [
+            self._get_command_path(),
+            "unpack",
+            "--input",
+            input_litertlm,
+            "--output",
+            unpack_dir,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return os.path.join(unpack_dir, "model.toml")
+
+  def _pack_toml(self, toml_path: str, *output_args: str) -> str:
+    """Packs `toml_path` with the given `output` arguments."""
+    output_path = os.path.join(self.temp_dir, "repacked.litertlm")
+    subprocess.run(
+        [
+            self._get_command_path(),
+            "toml",
+            "--path",
+            toml_path,
+            "output",
+            "--path",
+            output_path,
+            *output_args,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return output_path
+
+  def test_no_weights_in_model_graph_appends_weight_sections(self):
+    toml_path = self._unpack_test_model()
+
+    output_path = self._pack_toml(toml_path, "--weights-in-model-graph=false")
+
+    ss = self._peek_litertlm_file(output_path)
+    self.assertIn("Data Type:    TFLiteModel", ss)
+    self.assertIn("Data Type:    TFLiteWeights", ss)
+
+  def test_weights_in_model_graph_has_no_weight_sections(self):
+    toml_path = self._unpack_test_model()
+
+    output_path = self._pack_toml(toml_path, "--weights-in-model-graph")
+
+    ss = self._peek_litertlm_file(output_path)
+    self.assertIn("Data Type:    TFLiteModel", ss)
+    self.assertNotIn("Data Type:    TFLiteWeights", ss)
+
+  def test_dedupe_shared_weights_requires_weights_outside_model_graph(self):
+    toml_path = self._unpack_test_model()
+
+    with self.assertRaises(subprocess.CalledProcessError) as e:
+      self._pack_toml(
+          toml_path, "--weights-in-model-graph", "--dedupe-shared-weights"
+      )
+    self.assertIn(b"--weights-in-model-graph=false", e.exception.stderr)
+
   def test_unpack_command(self):
     """Tests that a LiteRT-LM file can be unpacked via CLI."""
     args = ["system_metadata", "--str", "author", "ODML Team"]
@@ -489,6 +577,7 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
         "--path",
         valid_output_path,
         "--validate-metadata",
+        "--weights-in-model-graph",
     ]
     subprocess.run(valid_command, check=True, capture_output=True)
     self.assertTrue(os.path.exists(valid_output_path))
@@ -531,6 +620,7 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
         "--path",
         output_path,
         "--validate-metadata",
+        "--weights-in-model-graph",
     ]
     subprocess.run(command, check=True, capture_output=True)
     self.assertTrue(os.path.exists(output_path))

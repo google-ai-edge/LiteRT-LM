@@ -407,6 +407,16 @@ def _add_hf_tokenizer_parser(subparsers) -> None:
   _add_metadata_arguments(hf_tokenizer_parser)
 
 
+def _parse_bool(value: str) -> bool:
+  """Parses a "true" or "false" flag value (case-insensitive)."""
+  value_lower = value.lower()
+  if value_lower == "true":
+    return True
+  if value_lower == "false":
+    return False
+  raise argparse.ArgumentTypeError(f"expected true or false, got {value!r}")
+
+
 def _add_output_path_parser(subparsers) -> None:
   """Adds an argument for the output path to the subparsers."""
   output_path_parser = subparsers.add_parser(
@@ -421,6 +431,38 @@ def _add_output_path_parser(subparsers) -> None:
       help="The path to the output LiteRT-LM file.",
   )
 
+  output_path_parser.add_argument(
+      "--weights-in-model-graph",
+      nargs="?",
+      const=True,
+      default=None,
+      type=_parse_bool,
+      metavar="{true,false}",
+      help=(
+          "Whether to keep TFLite weights inside each model's FlatBuffer. If"
+          " false, eligible weights are moved out of every TFLiteModel section"
+          " into TFLiteWeights sections at the end of the output file, which"
+          " the web runtime requires (except with the Artisan GPU backend)."
+          " Defaults to"
+          f" {str(litertlm_builder.DEFAULT_WEIGHTS_IN_MODEL_GRAPH).lower()}."
+      ),
+  )
+  output_path_parser.add_argument(
+      "--dedupe-shared-weights",
+      nargs="?",
+      const=True,
+      default=None,
+      type=_parse_bool,
+      metavar="{true,false}",
+      help=(
+          "Whether to keep weight payloads that are byte-identical across"
+          " TFLiteModel sections (e.g. a tied token embedding table) in only"
+          " one model's TFLiteWeights section; the other models reference it."
+          " Requires --weights-in-model-graph=false. Defaults to"
+          f" {str(litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS).lower()} when"
+          " weights are not in the model graph."
+      ),
+  )
   output_path_parser.add_argument(
       "--validate-metadata",
       action="store_true",
@@ -700,6 +742,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
         f" (TOML configuration saved at {toml_path})"
     )
     return
+  externalize_weights = False
+  dedupe_shared_weights = False
   validate_metadata = False
   if "toml" in [pa.command for pa in parsed_args]:
     toml_path = None
@@ -708,6 +752,12 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       match parsed_arg.command:
         case "output":
           output_path = parsed_arg.path
+          externalize_weights, dedupe_shared_weights = (
+              litertlm_builder.resolve_weight_externalization(
+                  parsed_arg.weights_in_model_graph,
+                  parsed_arg.dedupe_shared_weights,
+              )
+          )
           validate_metadata = parsed_arg.validate_metadata
         case "toml":
           toml_path = parsed_arg.path
@@ -724,6 +774,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
       builder.build(
           cast(BinaryIO, f),
+          externalize_weights=externalize_weights,
+          dedupe_shared_weights=dedupe_shared_weights,
           validate_metadata=validate_metadata,
       )
   else:
@@ -757,6 +809,12 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_hf_tokenizer(parsed_arg, builder)
         case "output":
           output_path = parsed_arg.path
+          externalize_weights, dedupe_shared_weights = (
+              litertlm_builder.resolve_weight_externalization(
+                  parsed_arg.weights_in_model_graph,
+                  parsed_arg.dedupe_shared_weights,
+              )
+          )
           validate_metadata = parsed_arg.validate_metadata
         case _:
           raise ValueError(f"Unknown subcommand: {parsed_arg.command}")
@@ -767,6 +825,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
     with litertlm_core.open_file(output_path, "wb") as f:
       builder.build(
           cast(BinaryIO, f),
+          externalize_weights=externalize_weights,
+          dedupe_shared_weights=dedupe_shared_weights,
           validate_metadata=validate_metadata,
       )
 
