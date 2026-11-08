@@ -1,0 +1,30 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -1643,6 +1643,14 @@
+ )
+ 
+ selects.config_setting_group(
++    name = "arm_i8mm_bf16_enabled",
++    match_all = [
++        ":arm_i8mm_enabled",
++        ":arm_bf16_enabled",
++    ],
++)
++
++selects.config_setting_group(
+     name = "arm_sve2_enabled_by_default",
+     match_any = [
+         "//build_config:aarch64",
+diff --git a/build_params.bzl b/build_params.bzl
+--- a/build_params.bzl
++++ b/build_params.bzl
+@@ -407,7 +407,7 @@
+         copts = ["-march=armv8.2-a+sve2"],
+     ),
+     "neoni8mmbf16": _create_params(
+-        cond = "//:arm_i8mm_enabled",
++        cond = "//:arm_i8mm_bf16_enabled",
+         copts = ["-march=armv8.2-a+i8mm+fp16+bf16"],
+         extra_deps = xnnpack_if_kleidiai_enabled([
+             "@KleidiAI//kai/ukernels/matmul:matmul",
