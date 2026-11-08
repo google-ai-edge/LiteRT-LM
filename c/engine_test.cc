@@ -35,6 +35,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "c/conversation.h"
@@ -4585,6 +4586,60 @@ TEST(EngineCErrorTest, ExperimentalNullOutParamsReturnInvalidArgument) {
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 testing::HasSubstr("must not be NULL"));
   }
+}
+
+TEST(EngineCTest, ExperimentalMemoryMonitorReportsPeaks) {
+  LiteRtLmMemoryMonitor* monitor = nullptr;
+  ASSERT_EQ(litert_lm_experimental_memory_monitor_create(
+                /*sampling_interval_ms=*/1, &monitor),
+            kLiteRtLmStatusOk);
+  ASSERT_NE(monitor, nullptr);
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_start(monitor),
+            kLiteRtLmStatusOk);
+  absl::SleepFor(absl::Milliseconds(20));
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_stop(monitor),
+            kLiteRtLmStatusOk);
+
+  float peak_mb = -1.0f;
+  int status =
+      litert_lm_experimental_memory_monitor_get_peak_memory_mb(monitor,
+                                                               &peak_mb);
+  if (status == kLiteRtLmStatusOk) {
+    EXPECT_GT(peak_mb, 0.0f);
+  } else {
+    EXPECT_EQ(status, kLiteRtLmStatusNotFound);
+  }
+  float peak_accelerator_mb = -1.0f;
+  status = litert_lm_experimental_memory_monitor_get_peak_accelerator_memory_mb(
+      monitor, &peak_accelerator_mb);
+  EXPECT_TRUE(status == kLiteRtLmStatusOk ||
+              status == kLiteRtLmStatusNotFound);
+  litert_lm_experimental_memory_monitor_delete(monitor);
+}
+
+TEST(EngineCErrorTest, ExperimentalMemoryMonitorInvalidArguments) {
+  auto* monitor = reinterpret_cast<LiteRtLmMemoryMonitor*>(0x1);
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_create(
+                /*sampling_interval_ms=*/0, &monitor),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(monitor, nullptr);
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_create(1, nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_start(nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_stop(nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  float mb = 0.0f;
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_get_peak_memory_mb(nullptr,
+                                                                     &mb),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_experimental_memory_monitor_get_peak_private_memory_mb(
+                nullptr, &mb),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(
+      litert_lm_experimental_memory_monitor_get_peak_accelerator_memory_mb(
+          nullptr, &mb),
+      kLiteRtLmStatusInvalidArgument);
 }
 
 TEST(EngineCTest, ExperimentalSessionDebugInfoGetCaptureDir) {
