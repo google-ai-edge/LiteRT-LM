@@ -103,6 +103,17 @@ TEST(LlmExecutorConfigTest, StringToBackend) {
   EXPECT_EQ(*backend, Backend::NPU);
 }
 
+TEST(LlmExecutorConfigTest, IsCpuBackend) {
+  EXPECT_TRUE(IsCpuBackend(Backend::CPU));
+  EXPECT_TRUE(IsCpuBackend(Backend::CPU_ARTISAN));
+  EXPECT_FALSE(IsCpuBackend(Backend::GPU));
+  EXPECT_FALSE(IsCpuBackend(Backend::GPU_ARTISAN));
+  EXPECT_FALSE(IsCpuBackend(Backend::NPU));
+  EXPECT_FALSE(IsCpuBackend(Backend::GOOGLE_TENSOR_ARTISAN));
+  EXPECT_FALSE(IsCpuBackend(Backend::UNSPECIFIED));
+  EXPECT_FALSE(IsCpuBackend(RegisterCustomBackend("is_cpu_backend_custom")));
+}
+
 TEST(LlmExecutorConfigTest, StringToActivationDataType) {
   auto activation_data_type = GetActivationDataTypeFromString("float32");
   EXPECT_EQ(*activation_data_type, ActivationDataType::FLOAT32);

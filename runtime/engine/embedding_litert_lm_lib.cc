@@ -206,6 +206,24 @@ bool ParseBool(absl::string_view value) {
   return value == "true" || value == "True" || value == "1";
 }
 
+// Returns true if any executor (main, vision or audio) runs on an accelerator
+// rather than the CPU. Accelerator memory is only tracked for such engines: a
+// CPU-only run holds none, and sampling it is not free (b/581640795).
+bool UsesAccelerator(const EmbeddingEngineSettings& settings) {
+  if (!IsCpuBackend(settings.GetMainExecutorSettings().GetBackend())) {
+    return true;
+  }
+  if (const auto& vision = settings.GetVisionExecutorSettings();
+      vision.has_value() && !IsCpuBackend(vision->GetBackend())) {
+    return true;
+  }
+  if (const auto& audio = settings.GetAudioExecutorSettings();
+      audio.has_value() && !IsCpuBackend(audio->GetBackend())) {
+    return true;
+  }
+  return false;
+}
+
 void StopAndReportPeakMemoryUsage(
     tflite::profiling::memory::MemoryUsageMonitor* mem_monitor,
     AcceleratorMemoryMonitor* accelerator_mem_monitor,
@@ -368,17 +386,15 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   }
 
   std::unique_ptr<tflite::profiling::memory::MemoryUsageMonitor> mem_monitor;
-  std::unique_ptr<AcceleratorMemoryMonitor> accelerator_mem_monitor;
   if (run_settings.report_peak_memory_footprint) {
     mem_monitor =
         std::make_unique<tflite::profiling::memory::MemoryUsageMonitor>(
             kMemoryCheckIntervalMs);
     mem_monitor->Start();
-    // No-op on platforms where accelerator memory tracking is unsupported.
-    accelerator_mem_monitor = std::make_unique<AcceleratorMemoryMonitor>(
-        absl::Milliseconds(kMemoryCheckIntervalMs));
-    accelerator_mem_monitor->Start();
   }
+  // Accelerator memory tracking starts further down, once the engine settings
+  // say whether the engine uses an accelerator at all.
+  std::unique_ptr<AcceleratorMemoryMonitor> accelerator_mem_monitor;
 
   LITERT_ASSIGN_OR_RETURN(auto model_assets,
                           CreateModelAssets(use_mmap, model_path, report_out));
@@ -495,6 +511,15 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       settings.GetMutableAudioExecutorSettings()->SetActivationDataType(
           act_type);
     }
+  }
+
+  // Started before the engine is created so that the peak covers model
+  // loading. No-op on platforms where accelerator memory tracking is
+  // unsupported.
+  if (run_settings.report_peak_memory_footprint && UsesAccelerator(settings)) {
+    accelerator_mem_monitor = std::make_unique<AcceleratorMemoryMonitor>(
+        absl::Milliseconds(kMemoryCheckIntervalMs));
+    accelerator_mem_monitor->Start();
   }
 
   LITERT_ASSIGN_OR_RETURN(auto owned_env,

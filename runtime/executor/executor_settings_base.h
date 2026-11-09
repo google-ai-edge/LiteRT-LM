@@ -76,6 +76,9 @@ bool IsCustomBackend(Backend backend);
 absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str);
 // Returns the string representation of the backend enum.
 std::string GetBackendString(Backend backend);
+// Returns true if `backend` runs on the CPU (CPU or CPU_ARTISAN), i.e. uses no
+// accelerator. Custom backends are not assumed to be CPU-only.
+bool IsCpuBackend(Backend backend);
 
 // Returns the LiteRT hardware accelerator that matches `backend`, for use when
 // compiling auxiliary subgraphs (e.g. logit masking) that must run on the same

@@ -244,6 +244,10 @@ std::ostream& operator<<(std::ostream& os, const Backend& backend) {
   return os << GetBackendString(backend);
 }
 
+bool IsCpuBackend(Backend backend) {
+  return backend == Backend::CPU || backend == Backend::CPU_ARTISAN;
+}
+
 ::litert::HwAccelerators GetHwAcceleratorForBackend(Backend backend) {
   switch (backend) {
     case Backend::GPU:

@@ -81,7 +81,8 @@ ABSL_FLAG(int, benchmark_decode_tokens, 0,
           "of the input prompt).");
 ABSL_FLAG(bool, async, true, "Run the LLM execution asynchronously.");
 ABSL_FLAG(bool, report_peak_memory_footprint, false,
-          "Report peak memory footprint.");
+          "Report the peak host memory of the process. On supported devices, "
+          "the accelerator memory may also be reported.");
 ABSL_FLAG(bool, force_f32, false,
           "Force float 32 precision for the activation data type.");
 ABSL_FLAG(bool, multi_turns, false,

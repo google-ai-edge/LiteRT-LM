@@ -104,6 +104,8 @@ struct LiteRtLmSettings {
   int benchmark_prefill_tokens = 0;
   int benchmark_decode_tokens = 0;
   bool async = true;
+  // Reports the peak host memory of the process. On supported devices, the
+  // accelerator memory may also be reported.
   bool report_peak_memory_footprint = false;
   bool force_f32 = false;
   bool multi_turns = false;
@@ -189,8 +191,8 @@ struct LitertLmMetrics {
   float peak_mem_mb = 0.0f;
   float peak_private_mb = 0.0f;
   // Peak accelerator (GPU / NPU) memory used by the process, in MB. Unset when
-  // accelerator memory tracking is not supported on the platform or peak memory
-  // reporting is disabled.
+  // peak memory reporting is disabled or accelerator memory is not reported
+  // for this run.
   std::optional<float> peak_accelerator_mb;
   // Breakdown of `peak_accelerator_mb` into platform-specific categories, in
   // MB.

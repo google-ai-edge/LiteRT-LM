@@ -564,6 +564,28 @@ void LogMemoryUsage(const LiteRtLmSettings& settings, float peak_mem_mb,
   }
 }
 
+// Returns true if any executor (main, vision, audio or sampler) runs on an
+// accelerator rather than the CPU. Accelerator memory is only tracked for such
+// engines: a CPU-only run holds none, and sampling it is not free
+// (b/581640795).
+bool UsesAccelerator(const EngineSettings& engine_settings) {
+  const LlmExecutorSettings& main = engine_settings.GetMainExecutorSettings();
+  if (!IsCpuBackend(main.GetBackend())) return true;
+  if (main.GetSamplerBackend() != Backend::UNSPECIFIED &&
+      !IsCpuBackend(main.GetSamplerBackend())) {
+    return true;
+  }
+  if (const auto& vision = engine_settings.GetVisionExecutorSettings();
+      vision.has_value() && !IsCpuBackend(vision->GetBackend())) {
+    return true;
+  }
+  if (const auto& audio = engine_settings.GetAudioExecutorSettings();
+      audio.has_value() && !IsCpuBackend(audio->GetBackend())) {
+    return true;
+  }
+  return false;
+}
+
 // Returns the median of `values`, or zero if there is nothing to aggregate. For
 // an even number of values, the average of the two middle values is returned.
 double Median(std::vector<double> values) {
@@ -1275,6 +1297,9 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
   std::vector<LitertLmMetrics> iteration_metrics;
   iteration_metrics.reserve(settings.num_iterations);
 
+  // Accelerator memory is only tracked when the engine uses an accelerator.
+  const bool track_accelerator_memory = UsesAccelerator(engine_settings);
+
   for (int i = 0; i < settings.num_iterations; ++i) {
     std::unique_ptr<tflite::profiling::memory::MemoryUsageMonitor> mem_monitor;
     std::unique_ptr<AcceleratorMemoryMonitor> accelerator_mem_monitor;
@@ -1283,10 +1308,12 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
           std::make_unique<tflite::profiling::memory::MemoryUsageMonitor>(
               kMemoryCheckIntervalMs);
       mem_monitor->Start();
-      // No-op on platforms where accelerator memory tracking is unsupported.
-      accelerator_mem_monitor = std::make_unique<AcceleratorMemoryMonitor>(
-          absl::Milliseconds(kMemoryCheckIntervalMs));
-      accelerator_mem_monitor->Start();
+      if (track_accelerator_memory) {
+        // No-op on platforms where accelerator memory tracking is unsupported.
+        accelerator_mem_monitor = std::make_unique<AcceleratorMemoryMonitor>(
+            absl::Milliseconds(kMemoryCheckIntervalMs));
+        accelerator_mem_monitor->Start();
+      }
     }
 
     // Session and Conversation are mutually exclusive. Only when
