@@ -67,6 +67,10 @@ struct OmniEngineSettings {
   std::string npu_model_remote_url_pattern;
   std::string tokenizer_path;
   std::string tokenizer_remote_url;
+  // Directory containing LiteRT NPU dispatch and compiler plugin libraries.
+  // If empty when `backend == Backend::kNpu`, defaults to the parent directory
+  // of the resolved `model_path`.
+  std::string litert_dispatch_lib_dir;
 };
 
 }  // namespace internal

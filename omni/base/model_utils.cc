@@ -239,6 +239,7 @@ ModelOptions ToLmModelOptions(const OmniEngine::Settings& settings) {
   lm_options.num_threads = settings.num_threads > 0 ? settings.num_threads : 4;
   lm_options.cache_dir = settings.cache_dir.empty() ? std::string(kNoCacheDir)
                                                     : settings.cache_dir;
+  lm_options.litert_dispatch_lib_dir = settings.litert_dispatch_lib_dir;
   lm_options.force_fp32_on_gpu = settings.force_fp32_on_gpu;
   return lm_options;
 }
@@ -341,22 +342,19 @@ absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
   return std::shared_ptr<lm::ModelResources>(std::move(resources));
 }
 
-namespace {
-
 // `model_path` is the file the model weights are read from; it only feeds the
 // on-disk cache key so caches are invalidated when that file changes.
 absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
                                                  absl::string_view model_name,
                                                  absl::string_view model_path) {
   LITERT_ASSIGN_OR_RETURN(auto comp_options, Options::Create());
-  bool target_gpu = options.backend == lm::Backend::GPU;
   ABSL_ASSIGN_OR_RETURN(
       const ModelCacheConfig cache,
       ResolveModelCache(model_name, model_path, options.cache_dir));
 
-  if (target_gpu) {
+  if (options.backend == lm::Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
-                            comp_options.GetOptions<::litert::GpuOptions>());
+                            comp_options.GetOptions<GpuOptions>());
     gpu_compilation_options.EnableInfiniteFloatCapping(true);
     gpu_compilation_options.SetPrecision(options.force_fp32_on_gpu
                                              ? GpuOptions::Precision::kFp32
@@ -381,9 +379,18 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
         ConfigureGpuModelCache(model_name, cache, gpu_compilation_options));
     comp_options.SetHardwareAccelerators(HwAccelerators::kGpu);
   } else {
-    comp_options.SetHardwareAccelerators(HwAccelerators::kCpu);
+    if (options.backend == lm::Backend::NPU) {
+      LITERT_RETURN_IF_ERROR(comp_options.SetHardwareAccelerators(
+          HwAccelerators::kNpu | HwAccelerators::kCpu));
+#if !defined(LITERT_DISABLE_NPU)
+      ABSL_RETURN_IF_ERROR(lm::SetNpuOptions(lm::NpuOptions{}, comp_options));
+#endif  // !defined(LITERT_DISABLE_NPU)
+    } else {
+      LITERT_RETURN_IF_ERROR(
+          comp_options.SetHardwareAccelerators(HwAccelerators::kCpu));
+    }
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
-                            comp_options.GetOptions<::litert::CpuOptions>());
+                            comp_options.GetOptions<CpuOptions>());
     ABSL_RETURN_IF_ERROR(lm::SetCpuOptions(cpu_options, options.num_threads));
     ABSL_RETURN_IF_ERROR(
         ConfigureCpuModelCache(model_name, cache, cpu_options));
@@ -397,8 +404,6 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
   return comp_options;
 }
 
-}  // namespace
-
 absl::StatusOr<CompiledModel> CreateCompiledModel(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename) {
@@ -406,12 +411,12 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
   ABSL_ASSIGN_OR_RETURN(
       auto comp_options,
       CreateCompilationOptions(options, model_filename, /*model_path=*/path));
-  bool target_gpu = options.backend == lm::Backend::GPU;
   ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
                           CompiledModel::Create(env, path, comp_options));
   ABSL_VLOG(2) << absl::StrCat("Compiled model created successfully with ",
-                               target_gpu ? "GPU" : "CPU", " backend");
+                               lm::GetBackendString(options.backend),
+                               " backend");
   return std::move(compiled_model);
 }
 
@@ -448,14 +453,14 @@ absl::StatusOr<CompiledModel> CreateCompiledModelFromBuffer(
       auto comp_options,
       CreateCompilationOptions(options, model_name,
                                ResolveLitertLmPath(options.model_dir)));
-  bool target_gpu = options.backend == lm::Backend::GPU;
   BufferRef<uint8_t> buffer_ref(
       reinterpret_cast<const uint8_t*>(model_buffer.data()),
       model_buffer.size());
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
                           CompiledModel::Create(env, buffer_ref, comp_options));
   ABSL_VLOG(2) << absl::StrCat("Compiled model created from buffer with ",
-                               target_gpu ? "GPU" : "CPU", " backend");
+                               lm::GetBackendString(options.backend),
+                               " backend");
   return std::move(compiled_model);
 }
 
@@ -514,6 +519,9 @@ absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
   if (!options.cache_dir.empty()) {
     executor_settings.SetCacheDir(options.cache_dir);
   }
+  if (!options.litert_dispatch_lib_dir.empty()) {
+    executor_settings.SetLitertDispatchLibDir(options.litert_dispatch_lib_dir);
+  }
   ABSL_ASSIGN_OR_RETURN(auto model_resources,
                         CreateModelResources(path, shared_scoped_file));
   LITERT_ASSIGN_OR_RETURN(auto executor,
@@ -561,6 +569,14 @@ absl::StatusOr<std::unique_ptr<LiteRtLmEngineRunner>> CreateLmEngineRunner(
     if (engine_settings.GetMutableAudioExecutorSettings().has_value()) {
       engine_settings.GetMutableAudioExecutorSettings()->SetCacheDir(
           options.cache_dir);
+    }
+  }
+  if (!options.litert_dispatch_lib_dir.empty()) {
+    engine_settings.GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+        options.litert_dispatch_lib_dir);
+    if (engine_settings.GetMutableAudioExecutorSettings().has_value()) {
+      engine_settings.GetMutableAudioExecutorSettings()
+          ->SetLitertDispatchLibDir(options.litert_dispatch_lib_dir);
     }
   }
   ABSL_ASSIGN_OR_RETURN(auto model_resources,
