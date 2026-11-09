@@ -348,11 +348,9 @@ class SessionConfig {
   // - kOff: never speculate, even if the engine speculates by default.
   // - kOn: speculate on every decode step.
   // - kAdaptive: speculate only while it is measured to be faster than plain
-  //   decoding. Adaptive gating is best effort:
-  //   - Any decoding constraint (e.g. a constrained decoder, a repetition
-  //     penalty or a thinking budget) disables the gating for that request and
-  //     speculation stays on, like kOn, because the constraint state is
-  //     not carried across plain and speculative steps.
+  //   decoding, including under decoding constraints (e.g. a constrained
+  //   decoder, a repetition penalty or a thinking budget). Adaptive gating is
+  //   best effort:
   //   - If the model has no usable MTP drafter, the session decodes plainly
   //     instead of failing (kOn fails).
   //   - The NPU executor does not support gating and speculates on every step,

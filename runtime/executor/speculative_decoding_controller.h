@@ -80,10 +80,10 @@ class SpeculativeDecodingController {
   //   the cost and acceptance of speculative rounds, so the adaptive policy's
   //   speculative estimates are reset when they change. The seed is ignored
   //   (see `SamplerParamsEquivalent()`).
-  // - `constrained`: whether a decoding constraint is active. The constraint
-  //   state is not carried across plain and speculative steps, so
-  //   `SpeculativeDecodingMode::kAdaptive` does not gate constrained steps and
-  //   speculates like `SpeculativeDecodingMode::kOn`.
+  //
+  // Decoding constraints don't change the decision: plain and speculative
+  // steps both leave a `ConstrainedDecoder` at the state the pending token was
+  // sampled under, so they can alternate within a constrained turn.
   //
   // Returns the error of `load_drafter` in `SpeculativeDecodingMode::kOn`.
   // `SpeculativeDecodingMode::kAdaptive` is best effort instead: if the drafter
@@ -92,8 +92,7 @@ class SpeculativeDecodingController {
   absl::StatusOr<Decision> Decide(
       std::optional<SpeculativeDecodingMode> mode, bool drafter_loaded,
       absl::FunctionRef<absl::Status()> load_drafter,
-      const std::optional<proto::SamplerParameters>& sampler_params,
-      bool constrained);
+      const std::optional<proto::SamplerParameters>& sampler_params);
 
   // Reports the outcome of a step decided by `decision`: the number of tokens
   // the step emitted and its wall-clock time. No-op unless
@@ -127,8 +126,7 @@ class SpeculativeDecodingController {
   // Decides a `SpeculativeDecodingMode::kAdaptive` step.
   absl::StatusOr<Decision> DecideAdaptive(
       bool drafter_loaded, absl::FunctionRef<absl::Status()> load_drafter,
-      const std::optional<proto::SamplerParameters>& sampler_params,
-      bool constrained);
+      const std::optional<proto::SamplerParameters>& sampler_params);
 
   // Configuration of `gating_policy_`.
   MtpGatingConfig gating_config_;

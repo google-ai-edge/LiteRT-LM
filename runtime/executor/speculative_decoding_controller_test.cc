@@ -62,11 +62,10 @@ absl::StatusOr<Decision> Decide(SpeculativeDecodingController& controller,
                                 std::optional<SpeculativeDecodingMode> mode,
                                 FakeDrafter& drafter,
                                 const std::optional<proto::SamplerParameters>&
-                                    sampler_params = std::nullopt,
-                                bool constrained = false) {
+                                    sampler_params = std::nullopt) {
   return controller.Decide(
       mode, drafter.loaded(), [&drafter] { return drafter.Load(); },
-      sampler_params, constrained);
+      sampler_params);
 }
 
 proto::SamplerParameters TopP(int k) {
@@ -162,19 +161,6 @@ TEST(SpeculativeDecodingControllerTest, UnsetModeGatesWithAdaptiveDefault) {
   EXPECT_EQ(drafter.load_calls(), 0);
 }
 
-TEST(SpeculativeDecodingControllerTest,
-     UnsetModeWithAdaptiveDefaultSpeculatesUnderConstraints) {
-  SpeculativeDecodingController controller(MtpGatingConfig(),
-                                           SpeculativeDecodingMode::kAdaptive);
-  FakeDrafter drafter(absl::OkStatus(), /*loaded=*/true);
-  ASSERT_OK_AND_ASSIGN(
-      const Decision decision,
-      Decide(controller, std::nullopt, drafter,
-             /*sampler_params=*/std::nullopt, /*constrained=*/true));
-  EXPECT_TRUE(decision.speculate);
-  EXPECT_FALSE(decision.adaptive);
-}
-
 TEST(SpeculativeDecodingControllerTest, OffNeverLoadsDrafter) {
   SpeculativeDecodingController controller;
   FakeDrafter drafter;
@@ -221,20 +207,6 @@ TEST(SpeculativeDecodingControllerTest,
     EXPECT_FALSE(decision.speculate);
     EXPECT_FALSE(decision.adaptive);
   }
-  EXPECT_EQ(drafter.load_calls(), 1);
-  EXPECT_EQ(controller.gating_policy(), nullptr);
-}
-
-TEST(SpeculativeDecodingControllerTest,
-     AdaptiveWithConstraintSpeculatesWithoutGating) {
-  SpeculativeDecodingController controller;
-  FakeDrafter drafter;
-  ASSERT_OK_AND_ASSIGN(
-      const Decision decision,
-      Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter,
-             /*sampler_params=*/std::nullopt, /*constrained=*/true));
-  EXPECT_TRUE(decision.speculate);
-  EXPECT_FALSE(decision.adaptive);
   EXPECT_EQ(drafter.load_calls(), 1);
   EXPECT_EQ(controller.gating_policy(), nullptr);
 }
@@ -450,8 +422,6 @@ TEST(SpeculativeDecodingControllerTest,
   // does not decide keep the switch pending.
   controller.OnContextSwitch();
   ASSERT_OK(Decide(controller, SpeculativeDecodingMode::kOff, drafter));
-  ASSERT_OK(Decide(controller, SpeculativeDecodingMode::kAdaptive, drafter,
-                   /*sampler_params=*/std::nullopt, /*constrained=*/true));
   EXPECT_EQ(controller.gating_policy()->stats().conversation_resets, 0);
   ASSERT_OK_AND_ASSIGN(
       const Decision decision,

@@ -571,12 +571,6 @@ class DecodeOneStep {
         ABSL_ASSIGN_OR_RETURN(
             DraftVerificationResult result,
             executor_.VerifyDraft(draft_token_ids, decode_params));
-        if (constrained_decoder_ != nullptr) {
-          // When MTP primes its drafter, it restarts the drafter's constraint
-          // state, which would drop the verified tokens. So the rest of a
-          // constrained turn decodes without MTP.
-          speculative_decoding_config_.mode = SpeculativeDecodingMode::kOff;
-        }
         output_tokens = {std::move(result.tokens)};
       } else {
         ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));

@@ -1366,8 +1366,7 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           decode_params.GetSpeculativeDecodingConfig().mode,
           /*drafter_loaded=*/mtp_drafter_ != nullptr,
           /*load_drafter=*/[this] { return EnsureMtpDrafterLoaded(); },
-          llm_context_->runtime_config().sampler_params,
-          /*constrained=*/decode_params.GetConstrainedDecoder() != nullptr));
+          llm_context_->runtime_config().sampler_params));
   const bool drafter_is_primed =
       llm_context_->runtime_state().ran_decode && was_mtp_primed;
   // A speculative round advances the current step by up to

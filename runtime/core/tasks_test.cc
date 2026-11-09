@@ -1205,24 +1205,20 @@ TEST_F(TasksTest, DecodeDecodesIfNoDraftTokenFitsIntoTheBudget) {
   EXPECT_THAT(responses.GetTokenIds(), ElementsAre(ElementsAre(224)));
 }
 
-TEST_F(TasksTest, DecodeTurnsMtpOffAfterAVerifiedDraftUnderAConstraint) {
+TEST_F(TasksTest, DecodeKeepsMtpOnAfterAVerifiedDraftUnderAConstraint) {
   // The constraint forces the response, so its state must follow the verified
-  // tokens.
+  // tokens. The executor's decoder carries it into the MTP rounds that follow.
   FakeConstraint constraint({224, 24, 8, 66, 246, 18, 2295, 2294},
                             /*vocabulary_size=*/2560);
   struct TestCase {
     std::string name;
     std::vector<int> draft;
     Constraint* constraint;
-    SpeculativeDecodingMode expected_mode;
   };
   const std::vector<TestCase> test_cases = {
-      {"DraftAndConstraint",
-       {224, 24, 8},
-       &constraint,
-       SpeculativeDecodingMode::kOff},
-      {"DraftOnly", {224, 24, 8}, nullptr, SpeculativeDecodingMode::kOn},
-      {"ConstraintOnly", {}, &constraint, SpeculativeDecodingMode::kOn},
+      {"DraftAndConstraint", {224, 24, 8}, &constraint},
+      {"DraftOnly", {224, 24, 8}, nullptr},
+      {"ConstraintOnly", {}, &constraint},
   };
   for (const TestCase& test_case : test_cases) {
     SCOPED_TRACE(test_case.name);
@@ -1239,7 +1235,7 @@ TEST_F(TasksTest, DecodeTurnsMtpOffAfterAVerifiedDraftUnderAConstraint) {
 
     EXPECT_THAT(responses.GetTexts(), ElementsAre("How's it going?"));
     EXPECT_EQ(executor->last_decode_speculative_decoding_config().mode,
-              test_case.expected_mode);
+              SpeculativeDecodingMode::kOn);
   }
 }
 

@@ -41,8 +41,7 @@ absl::StatusOr<SpeculativeDecodingController::Decision>
 SpeculativeDecodingController::Decide(
     std::optional<SpeculativeDecodingMode> mode, bool drafter_loaded,
     absl::FunctionRef<absl::Status()> load_drafter,
-    const std::optional<proto::SamplerParameters>& sampler_params,
-    bool constrained) {
+    const std::optional<proto::SamplerParameters>& sampler_params) {
   const SpeculativeDecodingMode resolved_mode = mode.value_or(default_mode_);
   switch (resolved_mode) {
     case SpeculativeDecodingMode::kOff:
@@ -53,8 +52,7 @@ SpeculativeDecodingController::Decide(
       }
       return Decision{.speculate = true};
     case SpeculativeDecodingMode::kAdaptive:
-      return DecideAdaptive(drafter_loaded, load_drafter, sampler_params,
-                            constrained);
+      return DecideAdaptive(drafter_loaded, load_drafter, sampler_params);
   }
   return absl::InvalidArgumentError(absl::StrCat(
       "Unknown speculative decoding mode: ", static_cast<int>(resolved_mode)));
@@ -63,8 +61,7 @@ SpeculativeDecodingController::Decide(
 absl::StatusOr<SpeculativeDecodingController::Decision>
 SpeculativeDecodingController::DecideAdaptive(
     bool drafter_loaded, absl::FunctionRef<absl::Status()> load_drafter,
-    const std::optional<proto::SamplerParameters>& sampler_params,
-    bool constrained) {
+    const std::optional<proto::SamplerParameters>& sampler_params) {
   if (!drafter_loaded) {
     // Adaptive mode is best effort: a model without a usable MTP drafter
     // decodes plainly instead of failing every step (kOn still fails).
@@ -78,14 +75,6 @@ SpeculativeDecodingController::DecideAdaptive(
       drafter_unavailable_ = true;
       return Decision{.speculate = false};
     }
-  }
-  if (constrained) {
-    // The constraint state is not carried across plain and speculative steps,
-    // so do not switch mid-turn under constraints.
-    ABSL_LOG_FIRST_N(INFO, 1)
-        << "Adaptive speculative decoding is not supported with decoding "
-           "constraints; speculative decoding is always on.";
-    return Decision{.speculate = true};
   }
   if (gating_policy_ == nullptr) {
     gating_policy_ = std::make_unique<MtpGatingPolicy>(gating_config_);
