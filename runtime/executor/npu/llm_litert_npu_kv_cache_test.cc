@@ -24,9 +24,11 @@
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -39,6 +41,7 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
@@ -48,6 +51,7 @@ using ::litert::Layout;
 using ::litert::RankedTensorType;
 using ::litert::TensorBuffer;
 using ::litert::TensorBufferScopedLock;
+using ::testing::status::StatusIs;
 
 class NpuKVCacheTest : public ::testing::Test {
  protected:
@@ -976,6 +980,46 @@ TEST_F(NpuKVCacheTest, CopySingleKVCacheBufferPadsFloatWithZeros) {
   const std::vector<float> expected = {1.0f, 2.0f, 0.0f, 0.0f,
                                        0.0f, 0.0f, 0.0f, 0.0f};
   for (int i = 0; i < 8; ++i) EXPECT_EQ(lock->second[i], expected[i]) << i;
+}
+
+TEST_F(NpuKVCacheTest, CopySingleKVCacheBufferRejectsElementTypeMismatch) {
+  // Source is Float32 (8 elements = 32 bytes); destination is Int16 (8 elements
+  // = 16 bytes) backed by a 16-element host allocation whose trailing 8
+  // elements act as guard bytes so an unchecked 32-byte copy is caught cleanly
+  // without undefined out-of-bounds memory writes.
+  TensorBuffer src = CreateTensorBufferWithDims(
+      std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f},
+      ElementType::Float32, {1, 1, 4, 2});
+  constexpr int16_t kCanary = 0x1234;
+  TensorBuffer dst_master = CreateTensorBufferWithDims(
+      std::vector<int16_t>(16, kCanary), ElementType::Int16, {1, 1, 8, 2});
+  RankedTensorType dst_type(ElementType::Int16,
+                            Layout(::litert::Dimensions{1, 1, 4, 2}));
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer dst,
+                              CreateAliasBuffer(*env_, dst_master, dst_type));
+
+  EXPECT_THAT(NpuKVCache::CopySingleKVCacheBuffer(
+                  src, dst, /*active_seq_len=*/4, /*kv_cache_init_value=*/0,
+                  /*sequence_axis=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  auto lock = TensorBufferScopedLock::Create<int16_t>(
+      dst_master, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_EQ(lock->second[i], kCanary) << "Modified element at index " << i;
+  }
+}
+
+TEST_F(NpuKVCacheTest, CopySingleKVCacheBufferRejectsRankMismatch) {
+  TensorBuffer src = CreateTensorBufferWithDims(
+      std::vector<int16_t>(8, 7), ElementType::Int16, {1, 1, 4, 2});
+  TensorBuffer dst = CreateTensorBufferWithDims(
+      std::vector<int16_t>(8, 3), ElementType::Int16, {1, 4, 2});
+
+  EXPECT_THAT(NpuKVCache::CopySingleKVCacheBuffer(
+                  src, dst, /*active_seq_len=*/4, /*kv_cache_init_value=*/0,
+                  /*sequence_axis=*/2),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(NpuKVCacheTest, SingleHeadCopyAndClearKVCache) {

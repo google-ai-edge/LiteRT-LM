@@ -287,6 +287,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   }
 
  private:
+  friend class LlmLiteRtNpuCloneContextTest;
   friend class LlmLiteRtNpuWarmupTest;
 
   const NpuContextGroup& ActiveContextGroup() const {

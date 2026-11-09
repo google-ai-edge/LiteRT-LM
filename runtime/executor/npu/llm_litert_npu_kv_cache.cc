@@ -999,9 +999,20 @@ absl::Status NpuKVCache::CopySingleKVCacheBuffer(
   }
   LITERT_ASSIGN_OR_RETURN(auto src_type, src.TensorType());
   LITERT_ASSIGN_OR_RETURN(auto dst_type, dst.TensorType());
+  if (src_type.ElementType() != dst_type.ElementType()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("KV cache buffers have mismatched element types: src=",
+                     static_cast<int>(src_type.ElementType()), ", dst=",
+                     static_cast<int>(dst_type.ElementType())));
+  }
 
   auto src_dims = src_type.Layout().Dimensions();
   auto dst_dims = dst_type.Layout().Dimensions();
+  if (src_dims.size() != dst_dims.size()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("KV cache buffers have mismatched ranks: src=",
+                     src_dims.size(), ", dst=", dst_dims.size()));
+  }
 
   int seq_dim_idx = sequence_axis;
   if (seq_dim_idx < 0) {

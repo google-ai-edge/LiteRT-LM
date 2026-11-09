@@ -2590,8 +2590,7 @@ absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
   absl::flat_hash_map<std::string, ::litert::TensorBuffer> kv_cache_buffers;
   for (const auto& [name, buffer] :
-       ActiveContextGroup()
-           .text_decoder_inference_context.prefill_input_buffers) {
+       ActiveContextGroup().input_kv_cache_buffers) {
     if (absl::StartsWith(name, kv_cache_k_root_name) ||
         absl::StartsWith(name, kv_cache_v_root_name) ||
         absl::StartsWith(name, kv_cache_c_root_name)) {

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <random>
 #include <string>
@@ -28,7 +29,9 @@
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -39,14 +42,17 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/proto/executor_metadata.pb.h"
@@ -1828,6 +1834,228 @@ TEST(GetNpuPrefillWorkGroupsTest, AlignsOnlyForVisionMasksAndImages) {
       auto text, GetNpuPrefillWorkGroups(Prefill128(), vision_layout, text_ids,
                                          kPendingText));
   EXPECT_THAT(GroupSizes(text), ElementsAre(128, 92));
+}
+
+}  // namespace
+
+// Exercises LlmLiteRtNpuCompiledModelExecutor::CloneContext and RestoreContext
+// directly on context groups with decode-only KV cache buffers (e.g. Gemma 4
+// E2B KV-shared layers) and Float32 prefill dummy KV buffers (b/416702118).
+class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
+ protected:
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> MakeExecutor(
+      std::vector<NpuContextGroup> groups,
+      std::vector<int> supported_context_sizes, int current_step) {
+    absl::StatusOr<ModelAssets> model_assets =
+        ModelAssets::Create("dummy_model");
+    ABSL_CHECK_OK(model_assets);
+    absl::StatusOr<LlmExecutorSettings> settings =
+        LlmExecutorSettings::CreateDefault(*std::move(model_assets),
+                                           Backend::NPU);
+    ABSL_CHECK_OK(settings);
+
+    const std::vector<uint8_t> model_buffer = BuildMtpAuxModelBuffer({});
+    ::litert::Expected<::litert::CompiledModel> decoder =
+        ::litert::CompiledModel::Create(
+            *env_,
+            ::litert::BufferRef<uint8_t>(model_buffer.data(),
+                                         model_buffer.size()),
+            ::litert::HwAccelerators::kCpu);
+    ABSL_CHECK(decoder.HasValue());
+    ::litert::Expected<::litert::CompiledModel> aux =
+        ::litert::CompiledModel::Create(
+            *env_,
+            ::litert::BufferRef<uint8_t>(model_buffer.data(),
+                                         model_buffer.size()),
+            ::litert::HwAccelerators::kCpu);
+    ABSL_CHECK(aux.HasValue());
+
+    NpuGraphLayout initial_layout = groups[0].layout;
+    std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+        absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
+        std::move(*settings), *env_, NpuAuxiliaryContext(std::move(*aux)),
+        std::move(*decoder), std::move(groups),
+        std::move(supported_context_sizes), /*prefill_signature_map=*/{},
+        /*prefill_signatures=*/{},
+        LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams{
+            .scale = 1.0f, .zero_point = 0},
+        /*kv_cache_init_value=*/0,
+        LlmLiteRtNpuCompiledModelExecutor::SpeculativeDecodingType::kNone,
+        /*drafter_context=*/std::nullopt,
+        /*drafter_aux_context=*/std::nullopt, NpuEmbedder(), NpuRope(),
+        NpuMask(), NpuKVCache(), /*text_decoder_model=*/nullptr,
+        /*llm_metadata=*/nullptr, /*executor_metadata=*/nullptr,
+        /*is_dynamic_model=*/false, /*dynamic_kv_cache_capacity=*/0,
+        std::move(initial_layout)));
+    executor->current_step_ = current_step;
+    return executor;
+  }
+
+  static NpuContextGroup& MutableContextGroup(
+      LlmLiteRtNpuCompiledModelExecutor& executor, int index = 0) {
+    return executor.context_groups_[index];
+  }
+};
+
+namespace {
+
+TEST_F(LlmLiteRtNpuCloneContextTest,
+       CloneAndRestoreSavesDecodeOnlyKVCacheBuffers) {
+  constexpr int kSeqLen = 4;
+  constexpr int kHeadDim = 2;
+  constexpr int kNumElems = kSeqLen * kHeadDim;
+
+  NpuContextGroup group;
+  group.context_size = kSeqLen;
+  // Layer 0 is in both prefill and decode; layer 14 is decode-only (omitted
+  // from prefill_input_buffers, matching Gemma 4 E2B KV-shared layers).
+  group.input_kv_cache_buffers.emplace(
+      "kv_cache_k_0",
+      CreateTensorBufferWithDims(std::vector<int16_t>(kNumElems, 10),
+                                 ElementType::Int16,
+                                 {1, 1, kSeqLen, kHeadDim}));
+  group.input_kv_cache_buffers.emplace(
+      "kv_cache_v_0",
+      CreateTensorBufferWithDims(std::vector<int16_t>(kNumElems, 11),
+                                 ElementType::Int16,
+                                 {1, 1, kHeadDim, kSeqLen}));
+  group.input_kv_cache_buffers.emplace(
+      "kv_cache_k_14",
+      CreateTensorBufferWithDims(std::vector<int16_t>(kNumElems, 14),
+                                 ElementType::Int16,
+                                 {1, 1, kSeqLen, kHeadDim}));
+  group.input_kv_cache_buffers.emplace(
+      "kv_cache_v_14",
+      CreateTensorBufferWithDims(std::vector<int16_t>(kNumElems, 15),
+                                 ElementType::Int16,
+                                 {1, 1, kHeadDim, kSeqLen}));
+  group.layout = NpuGraphLayout::Resolve(/*prefill_chunk_size=*/2, kSeqLen,
+                                         group.input_kv_cache_buffers, nullptr);
+
+  InferenceContext& ctx = group.text_decoder_inference_context;
+  for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        ctx.prefill_input_buffers[name],
+        group.input_kv_cache_buffers.at(name).Duplicate());
+  }
+  for (absl::string_view name :
+       {"kv_cache_k_0", "kv_cache_v_0", "kv_cache_k_14", "kv_cache_v_14"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        ctx.decode_input_buffers[name],
+        group.input_kv_cache_buffers.at(name).Duplicate());
+  }
+
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(std::move(group));
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeExecutor(std::move(groups), {kSeqLen}, /*current_step=*/3);
+
+  // Clone session A's context.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmContext> session_a_context,
+                       executor->CloneContext());
+
+  // Simulate session B overwriting every KV cache buffer, including the
+  // decode-only layer 14 buffers.
+  for (auto& [name, buf] :
+       MutableContextGroup(*executor).input_kv_cache_buffers) {
+    auto lock = TensorBufferScopedLock::Create<int16_t>(
+        buf, TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(lock.HasValue());
+    std::fill_n(lock->second, kNumElems, static_cast<int16_t>(99));
+  }
+
+  // Restore session A's context and verify all layers (including decode-only
+  // kv_cache_{k,v}_14) hold session A's values rather than session B's 99s.
+  ASSERT_OK(executor->RestoreContext(std::move(session_a_context)));
+
+  auto expect_all_equal = [&](absl::string_view name, int16_t expected) {
+    auto& buf = MutableContextGroup(*executor).input_kv_cache_buffers.at(name);
+    auto lock = TensorBufferScopedLock::Create<int16_t>(
+        buf, TensorBuffer::LockMode::kRead);
+    ABSL_CHECK(lock.HasValue());
+    for (int i = 0; i < kNumElems; ++i) {
+      EXPECT_EQ(lock->second[i], expected) << name << "[" << i << "]";
+    }
+  };
+  expect_all_equal("kv_cache_k_0", 10);
+  expect_all_equal("kv_cache_v_0", 11);
+  expect_all_equal("kv_cache_k_14", 14);
+  expect_all_equal("kv_cache_v_14", 15);
+}
+
+TEST_F(LlmLiteRtNpuCloneContextTest,
+       CloneAndRestoreUsesDecodeQuantizedCacheInsteadOfPrefillDummy) {
+  constexpr int kSeqLen = 4;
+  constexpr int kHeadDim = 2;
+  constexpr int kNumElems = kSeqLen * kHeadDim;
+  constexpr int16_t kGuardCanary = 0x2345;
+
+  // Back the Int16 decode KV cache with a double-length master buffer so that
+  // even if a buggy implementation attempts to copy a Float32 buffer into it,
+  // the overflow lands inside `decode_master`'s guard half rather than
+  // corrupting the heap.
+  std::vector<int16_t> initial_values(kNumElems * 2, kGuardCanary);
+  for (int i = 0; i < kNumElems; ++i) {
+    initial_values[i] = static_cast<int16_t>(100 + i);
+  }
+  TensorBuffer decode_master = CreateTensorBufferWithDims(
+      initial_values, ElementType::Int16, {1, 1, kSeqLen * 2, kHeadDim});
+  RankedTensorType int16_type(
+      ElementType::Int16,
+      Layout(::litert::Dimensions{1, 1, kSeqLen, kHeadDim}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer decode_kv_buf,
+      CreateAliasBuffer(*env_, decode_master, int16_type));
+
+  NpuContextGroup group;
+  group.context_size = kSeqLen;
+  group.input_kv_cache_buffers.emplace("kv_cache_k_31",
+                                       std::move(decode_kv_buf));
+  group.layout = NpuGraphLayout::Resolve(/*prefill_chunk_size=*/2, kSeqLen,
+                                         group.input_kv_cache_buffers, nullptr);
+
+  // Mirror CreateTextDecoderInferenceContext's b/416702118 workaround:
+  // prefill_input_buffers holds an unconnected zeroed Float32 dummy while
+  // input_kv_cache_buffers / decode_input_buffers hold the real Int16 KV cache.
+  InferenceContext& ctx = group.text_decoder_inference_context;
+  ctx.prefill_input_buffers.emplace(
+      "kv_cache_k_31",
+      CreateTensorBufferWithDims(std::vector<float>(kNumElems, 0.0f),
+                                 ElementType::Float32,
+                                 {1, 1, kSeqLen, kHeadDim}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      ctx.decode_input_buffers["kv_cache_k_31"],
+      group.input_kv_cache_buffers.at("kv_cache_k_31").Duplicate());
+
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(std::move(group));
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeExecutor(std::move(groups), {kSeqLen}, /*current_step=*/4);
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmContext> session_a_context,
+                       executor->CloneContext());
+
+  // Overwrite the active Int16 buffer with session B values.
+  {
+    auto write_lock = TensorBufferScopedLock::Create<int16_t>(
+        decode_master, TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(write_lock.HasValue());
+    for (int i = 0; i < kNumElems; ++i) {
+      write_lock->second[i] = static_cast<int16_t>(200 + i);
+    }
+  }
+
+  ASSERT_OK(executor->RestoreContext(std::move(session_a_context)));
+
+  auto read_lock = TensorBufferScopedLock::Create<int16_t>(
+      decode_master, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(read_lock.HasValue());
+  for (int i = 0; i < kNumElems; ++i) {
+    EXPECT_EQ(read_lock->second[i], static_cast<int16_t>(100 + i)) << i;
+  }
+  for (int i = kNumElems; i < kNumElems * 2; ++i) {
+    EXPECT_EQ(read_lock->second[i], kGuardCanary) << "Guard clobbered at " << i;
+  }
 }
 
 }  // namespace
