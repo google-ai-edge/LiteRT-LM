@@ -1162,7 +1162,10 @@ absl::Status SetCommonGpuOptions(
   }
 #if defined(__APPLE__)
   gpu_options.SetPreferTextureWeights(false);
-  gpu_options.SetUseMetalArgumentBuffers(true);
+  // Without Indirect Command Buffers, Metal argument buffers still incur
+  // per-dispatch resource registration while adding an extra device-memory
+  // pointer indirection inside each shader.
+  gpu_options.SetUseMetalArgumentBuffers(false);
 #else   // !__APPLE__
   gpu_options.SetPreferTextureWeights(true);
 #endif  // !__APPLE__
