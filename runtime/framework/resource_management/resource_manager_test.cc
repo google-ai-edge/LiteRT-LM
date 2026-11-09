@@ -32,8 +32,10 @@
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
+#include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -173,15 +175,25 @@ struct ContextSwitchCounts {
   int released_without_save_state = 0;
   int restored_contexts = 0;
   int updated_runtime_states = 0;
+  std::vector<int> prefill_start_steps;
 };
 
 // A fake executor that counts context installs and releases.
 class ContextSwitchFakeLlmExecutor : public FakeLlmExecutor {
  public:
-  explicit ContextSwitchFakeLlmExecutor(ContextSwitchCounts* counts)
-      : FakeLlmExecutor(/*vocab_size=*/16, /*prefill_tokens_set=*/{{1, 2, 3}},
+  explicit ContextSwitchFakeLlmExecutor(
+      ContextSwitchCounts* counts,
+      std::vector<std::vector<int>> prefill_tokens_set = {{1, 2, 3}})
+      : FakeLlmExecutor(/*vocab_size=*/16, prefill_tokens_set,
                         /*decode_tokens_set=*/{{4}}),
         counts_(counts) {}
+
+  using FakeLlmExecutor::Prefill;
+  absl::Status Prefill(const ExecutorInputs& inputs,
+                       const ExecutorPrefillParams& prefill_params) override {
+    counts_->prefill_start_steps.push_back(GetCurrentStep().value_or(-1));
+    return FakeLlmExecutor::Prefill(inputs, prefill_params);
+  }
 
   absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const override {
     ++counts_->cloned_contexts;
@@ -411,6 +423,74 @@ TEST(ResourceManagerTest, RotatesThreeLiveSessionsWithoutCloning) {
   EXPECT_EQ(counts.released_contexts, 8);
   EXPECT_EQ(counts.released_without_save_state, 0);
   EXPECT_EQ(counts.released_with_save_state, 8);
+  EXPECT_EQ(counts.cloned_contexts, 0);
+}
+
+absl::StatusOr<ExecutorInputs> MakeTextInputs(absl::Span<const int> tokens) {
+  auto buffer = CopyToTensorBuffer<int>(
+      tokens, {1, static_cast<int>(tokens.size())});
+  if (!buffer.HasValue()) {
+    return absl::InternalError(buffer.Error().Message());
+  }
+  return ExecutorInputs(ExecutorTextData(std::move(*buffer)), std::nullopt,
+                        std::nullopt);
+}
+
+TEST(ResourceManagerTest,
+     SyncsExecutorStepBeforePrefillingSuffixAfterFullPrefixMatch) {
+  ContextSwitchCounts counts;
+  ASSERT_OK_AND_ASSIGN(
+      auto resource_manager,
+      ResourceManager::Create(
+          /*model_resources=*/nullptr,
+          std::make_unique<ContextSwitchFakeLlmExecutor>(
+              &counts, std::vector<std::vector<int>>{{1, 2}, {3, 4}, {5, 6}}),
+          /*vision_executor_settings=*/nullptr,
+          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ContextHandler> root,
+      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
+  {
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<LlmExecutor> executor,
+        resource_manager->AcquireExecutorWithContextHandler(root));
+    ASSERT_OK_AND_ASSIGN(ExecutorInputs inputs, MakeTextInputs({1, 2}));
+    ASSERT_OK(executor->Prefill(inputs, ExecutorPrefillParams()));
+    EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(2));
+  }
+
+  // Clone `root` at step 2, then advance `root` to step 4 so the shared
+  // `ProcessedTokens` holds {1, 2, 3, 4} while `clone` remains at step 2.
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ContextHandler> clone,
+                       resource_manager->CloneContextHandler(root));
+  {
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<LlmExecutor> executor,
+        resource_manager->AcquireExecutorWithContextHandler(root));
+    ASSERT_OK_AND_ASSIGN(ExecutorInputs inputs, MakeTextInputs({3, 4}));
+    ASSERT_OK(executor->Prefill(inputs, ExecutorPrefillParams()));
+    EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(4));
+  }
+
+  // Acquire `clone` (restoring runtime current_step to 2) and prefill
+  // {3, 4, 5, 6}: `RemoveMatchingTokens` strips {3, 4} up to step 4 ==
+  // `processed_tokens->TokenCount()`, and the executor must be synced to step 4
+  // before prefilling the remaining suffix {5, 6}.
+  {
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<LlmExecutor> executor,
+        resource_manager->AcquireExecutorWithContextHandler(clone));
+    EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(2));
+    ASSERT_OK_AND_ASSIGN(ExecutorInputs inputs, MakeTextInputs({3, 4, 5, 6}));
+    ASSERT_OK(executor->Prefill(inputs, ExecutorPrefillParams()));
+    EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(6));
+    ASSERT_OK_AND_ASSIGN(const ProcessedTokens* processed_tokens,
+                         executor->GetProcessedTokens());
+    EXPECT_THAT(processed_tokens->GetCopyOfTokens(),
+                ElementsAre(ElementsAre(1, 2, 3, 4, 5, 6)));
+  }
+
+  EXPECT_THAT(counts.prefill_start_steps, ElementsAre(0, 2, 4));
   EXPECT_EQ(counts.cloned_contexts, 0);
 }
 

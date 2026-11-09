@@ -299,8 +299,10 @@ cc_test(
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor",
         "//runtime/executor:llm_executor_io_types",
+        "//runtime/executor:llm_executor_processed_tokens",
         "//runtime/executor:llm_executor_settings",
         "//runtime/framework/resource_management/context_handler",
+        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
     ],
 )

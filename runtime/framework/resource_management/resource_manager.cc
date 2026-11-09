@@ -334,6 +334,7 @@ class LockedLlmExecutor : public LlmExecutor {
     // processed token after removing the matching tokens, call executor
     // directly.
     if (processed_tokens->TokenCount() == current_step) {
+      ABSL_RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step));
       return llm_executor_->Prefill(new_inputs, new_prefill_query_params);
     }
     // If the updated current_steps_ is still less than the processed tokens
