@@ -15,6 +15,8 @@
 name: "CI-Mac"
 on:
   push:
+    branches:
+    - main
     tags:
     - v*.*.*
   pull_request:
@@ -32,7 +34,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on the same PR branch, but never cancel an
+  # in-progress cache refresh on main. With cancel-in-progress: false on main,
+  # GitHub Actions runs at most 1 refresh at a time and keeps at most 1 pending
+  # run in the queue (automatically replacing any older queued run with the
+  # latest HEAD commit).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -57,7 +64,8 @@ jobs:
       MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
-      REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
+      REFRESH_CACHE: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+                         github.event_name == 'schedule' ||
                          (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
     steps:
       - name: Checkout code.
@@ -65,41 +73,57 @@ jobs:
         with:
           lfs: true
           persist-credentials: false
+          fetch-depth: 100
 
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4
 
-      - name : Set up cache keys.
+      # Unlike Linux, Android, and Windows CI (which run on self-hosted GKE
+      # runners), macOS CI runs on GitHub-hosted runners and uses actions/cache
+      # with --disk_cache instead of the GCS remote cache.
+      - name: Set up cache keys.
         id: cache-keys
         run: |
-          CACHE_RESTORE_KEY_2="${GITHUB_WORKFLOW}"
-          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
-          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
-          # If it's not a pull request, then it will be the same as $CACHE_RESTORE_KEY_1-.
-          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
-          CACHE_KEY="$CACHE_RESTORE_KEY_0-${{ github.sha }}"
-          echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_0=$CACHE_RESTORE_KEY_0" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_HEAD=$CACHE_RESTORE_KEY_HEAD" >> "$GITHUB_OUTPUT"
-          echo "CACHE_KEY=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+          DAILY_PREFIX="${GITHUB_WORKFLOW}-daily-"
+          HEAD_PREFIX="${GITHUB_WORKFLOW}-head-"
 
-      - name: Clean build outputs if cache is being refreshed.
-        if: env.REFRESH_CACHE == 'true'
-        run: bazel clean --expunge
+          # Look up the currently saved main/head cache SHA and check via
+          # `git merge-base --is-ancestor` whether the commit being built
+          # contains that SHA in its history (even if the main/head cache is a
+          # few CLs behind). If not, fall back to the daily cache.
+          CACHED_HEAD_KEY=$(gh cache list --key "${HEAD_PREFIX}" --sort created_at --order desc --limit 1 --json key -q '.[0].key' 2>/dev/null || true)
+          CACHED_HEAD_SHA="${CACHED_HEAD_KEY#"$HEAD_PREFIX"}"
 
-      - name: Restore bazel cache if cache is not being refreshed.
+          PR_COMMIT="${{ github.event.pull_request.head.sha }}"
+          if [ -n "$CACHED_HEAD_SHA" ] && git merge-base --is-ancestor "$CACHED_HEAD_SHA" "${PR_COMMIT:-HEAD}" 2>/dev/null; then
+            echo "Commit ${PR_COMMIT:-HEAD} contains cached main/head ($CACHED_HEAD_SHA); using main/head cache."
+            CACHE_RESTORE_PRIMARY="${CACHED_HEAD_KEY}"
+          else
+            echo "Commit ${PR_COMMIT:-HEAD} does not contain cached main/head (${CACHED_HEAD_SHA:-none}); falling back to daily cache."
+            CACHE_RESTORE_PRIMARY="${DAILY_PREFIX}${{ github.sha }}"
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            CACHE_PREFIX_TO_CLEAN="${HEAD_PREFIX}"
+            CACHE_SAVE_KEY="${HEAD_PREFIX}${{ github.sha }}"
+          else
+            CACHE_PREFIX_TO_CLEAN="${DAILY_PREFIX}"
+            CACHE_SAVE_KEY="${DAILY_PREFIX}${{ github.sha }}"
+          fi
+
+          echo "DAILY_PREFIX=$DAILY_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "CACHE_RESTORE_PRIMARY=$CACHE_RESTORE_PRIMARY" >> "$GITHUB_OUTPUT"
+          echo "CACHE_PREFIX_TO_CLEAN=$CACHE_PREFIX_TO_CLEAN" >> "$GITHUB_OUTPUT"
+          echo "CACHE_SAVE_KEY=$CACHE_SAVE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Restore bazel cache.
         id: bazel-cache
-        if: env.REFRESH_CACHE != 'true'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/bazel
-          key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          key: ${{ steps.cache-keys.outputs.CACHE_RESTORE_PRIMARY }}
           restore-keys: |
-            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
-            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}-
-            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}-
-            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}-
+            ${{ steps.cache-keys.outputs.DAILY_PREFIX }}
 
       - name: Check cache hit.
         run: |
@@ -111,7 +135,12 @@ jobs:
           STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
           STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
 
+      - name: Record cache timestamp before build.
+        if: env.REFRESH_CACHE == 'true'
+        run: touch "${RUNNER_TEMP}/bazel-cache-start"
+
       - name: Download Model
+        if: github.event_name == 'pull_request'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -180,6 +209,7 @@ jobs:
             //c/...
 
       - name: Run pytest
+        if: github.event_name == 'pull_request'
         run: |
           if [ -f "${MODEL_PATH}" ]; then
             pytest tools/pytest/ --backend=cpu --model-path=${MODEL_PATH} --build-system=bazel
@@ -209,16 +239,40 @@ jobs:
       #     cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.ios_sim_arm64
       #     gh release upload ${GITHUB_REF_NAME} litert_lm_main.ios_sim_arm64 --clobber
 
-      - name: Remove cache if cache is being refreshed.
+      - name: Prune unused cache files before saving.
+        if: env.REFRESH_CACHE == 'true'
+        run: |
+          if [ -d ~/.cache/bazel ]; then
+            echo "Cache size before pruning:"
+            du -sh ~/.cache/bazel
+            # Prune unused disk_cache entries (ac/ and cas/ update file mtime on every hit/write).
+            find ~/.cache/bazel -path ~/.cache/bazel/repo -prune -o -type f ! -newer "${RUNNER_TEMP}/bazel-cache-start" -delete
+            # Prune unused repository_cache entries (DownloadCache touches 'file' on hit; remove the entry directory so 'id-*' is removed with 'file').
+            if [ -d ~/.cache/bazel/repo ]; then
+              find ~/.cache/bazel/repo -type f -name "file" ! -newer "${RUNNER_TEMP}/bazel-cache-start" | while IFS= read -r unused_file; do
+                rm -rf "$(dirname "$unused_file")"
+              done
+            fi
+            find ~/.cache/bazel -type d -empty -delete
+            echo "Cache size after pruning:"
+            du -sh ~/.cache/bazel
+          fi
+
+      - name: Remove previous cache in this slot before saving.
         if: env.REFRESH_CACHE == 'true'
         continue-on-error: true  # Ignore errors when cache is not found.
-        run: gh cache delete ${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}
+        run: |
+          gh cache list --key "${CACHE_PREFIX_TO_CLEAN}" --json id -q '.[].id' | while IFS= read -r cache_id; do
+            if [ -n "$cache_id" ]; then
+              gh cache delete "$cache_id"
+            fi
+          done
         env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          CACHE_PREFIX_TO_CLEAN: ${{ steps.cache-keys.outputs.CACHE_PREFIX_TO_CLEAN }}
 
       - name: Save bazel cache if it's new or being refreshed.
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: env.REFRESH_CACHE == 'true'
         with:
           path: ~/.cache/bazel
-          key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          key: ${{ steps.cache-keys.outputs.CACHE_SAVE_KEY }}
