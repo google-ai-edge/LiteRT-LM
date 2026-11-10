@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_KOKORO_KOKORO_ACOUSTIC_STAGE_H_
 
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <string>
 #include <utility>
@@ -29,6 +30,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
+#include "omni/text2speech/kokoro/common.h"
 #include "omni/text2speech/kokoro/kokoro_io_types.h"
 #include "omni/text2speech/kokoro/kokoro_model_config.h"
 #include "omni/text2speech/kokoro/phonemizer.h"
@@ -39,6 +41,7 @@ namespace litert::omni::tts {
 class KokoroAcousticStage
     : public SingleThreadedStageWithDeque<KokoroAcousticOutput> {
  public:
+  friend class KokoroAcousticStageTestPeer;
   // Creates a KokoroAcousticStage instance and initializes its resources.
   //
   // args
@@ -63,17 +66,39 @@ class KokoroAcousticStage
   int frame_capacity() const { return frame_capacity_; }
 
  protected:
-  bool NeedScheduleInternal() const override {
-    return text_source_.HasOutput();
-  }
+  KokoroAcousticStage(Stage<std::string>* absl_nonnull text_source,
+                      KokoroModelConfig config, absl::string_view model_folder,
+                      std::shared_ptr<ModelResources> absl_nonnull resources)
+      : text_source_(*text_source),
+        config_(std::move(config)),
+        model_folder_(std::move(model_folder)),
+        resources_(std::move(resources)) {}
 
-  // Executes one step of acoustic stage processing asynchronously.
+  bool NeedScheduleInternal() const override;
+
+  // Executes one step of acoustic stage processing: runs the acoustic model on
+  // the next pending slice of the current text chunk, phonemizing and slicing
+  // the next chunk first if no slices are pending. Producing one slice per step
+  // lets the scheduler vocode (and the caller play) a slice while later slices
+  // of the same chunk are still pending.
   //
   // returns
   // - absl::OkStatus() on success, or error status on failure.
   absl::Status ScheduleInternal() override;
 
+  // Drops slices left over from a cancelled or abandoned utterance.
+  void ResetInternal() override;
+
+  // Runs the acoustic model on `slice` and pushes the result downstream.
+  virtual absl::Status RunSlice(const kokoro::TokenSlice& slice);
+
  private:
+  int BucketSize() const;
+
+  // Takes the next text chunk from `text_source_`, phonemizes it, and appends
+  // its slices to `pending_slices_`. Does nothing if no chunk is available.
+  absl::Status SliceNextTextChunk();
+
   struct InputIndices {
     size_t phoneme_ids = 0;
     size_t speaker_style = 1;
@@ -86,14 +111,6 @@ class KokoroAcousticStage
     size_t energy_contour = 2;
     size_t speech_frame_length = 3;
   };
-
-  KokoroAcousticStage(Stage<std::string>* absl_nonnull text_source,
-                      KokoroModelConfig config, absl::string_view model_folder,
-                      std::shared_ptr<ModelResources> absl_nonnull resources)
-      : text_source_(*text_source),
-        config_(std::move(config)),
-        model_folder_(std::move(model_folder)),
-        resources_(std::move(resources)) {}
 
   Stage<std::string>& text_source_;
   KokoroModelConfig config_;
@@ -114,6 +131,9 @@ class KokoroAcousticStage
   // tensor buffers.
   int model_capacity_ = 0;
   int frame_capacity_ = 0;
+
+  // Slices of the current text chunk that haven't been run yet.
+  std::deque<kokoro::TokenSlice> pending_slices_;
 };
 
 }  // namespace litert::omni::tts
