@@ -192,12 +192,15 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
     }
   } else if (logits_tensor_type.ElementType() == ElementType::Float16) {
     LITERT_ASSIGN_OR_RETURN(auto logits_size, logits_tensor.PackedSize());
-    std::vector<uint16_t> logits_data_f16(logits_size / sizeof(uint16_t));
-    TensorBuffer& mutable_logits_tensor =
-        const_cast<TensorBuffer&>(logits_tensor);
-    LITERT_RETURN_IF_ERROR(
-        mutable_logits_tensor.Read(absl::MakeSpan(logits_data_f16)));
-    ConvertFp16ToFp32(logits_data_f16, logits_data_);
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock_and_addr,
+          TensorBufferScopedLock::Create<uint16_t>(
+              logits_tensor, TensorBuffer::LockMode::kRead));
+      ConvertFp16ToFp32(absl::MakeConstSpan(lock_and_addr.second,
+                                            logits_size / sizeof(uint16_t)),
+                        logits_data_);
+    }
     logits_data_span = absl::MakeSpan(logits_data_);
   } else {
     return absl::InvalidArgumentError(

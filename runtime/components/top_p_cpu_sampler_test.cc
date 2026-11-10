@@ -57,8 +57,8 @@ std::vector<float> ZeroUniforms(int batch_size, int sequence_size) {
   return std::vector<float>(batch_size * sequence_size, 0.0f);
 }
 
-Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
-                                              absl::Span<const int> dims) {
+Expected<void> WriteFp16ToTensorBuffer(absl::Span<const float> data,
+                                       TensorBuffer& tensor_buffer) {
   std::vector<uint16_t> fp16_data;
   fp16_data.reserve(data.size());
   for (float val : data) {
@@ -67,14 +67,18 @@ Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
     std::memcpy(&fp16_val, &half_val, sizeof(uint16_t));
     fp16_data.push_back(fp16_val);
   }
+  return tensor_buffer.Write(absl::MakeConstSpan(fp16_data));
+}
 
+Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
+                                              absl::Span<const int> dims) {
   LITERT_ASSIGN_OR_RETURN(
       auto tensor_buffer,
       TensorBuffer::CreateManagedHostMemory(
           RankedTensorType(ElementType::Float16,
                            Layout(Dimensions(dims.begin(), dims.end()))),
-          fp16_data.size() * sizeof(uint16_t)));
-  tensor_buffer.Write(absl::MakeConstSpan(fp16_data));
+          data.size() * sizeof(uint16_t)));
+  LITERT_RETURN_IF_ERROR(WriteFp16ToTensorBuffer(data, tensor_buffer));
   return tensor_buffer;
 }
 
@@ -194,6 +198,40 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2SequenceLength2) {
   // The scores are the log of the probability of the sampled token.
   EXPECT_THAT(*scores, ElementsAre(std::log(1.0f), std::log(1.0f),
                                    std::log(1.0f), std::log(1.0f)));
+}
+
+// Overwriting and sampling from the same Float16 TensorBuffer across calls
+// verifies both that the read lock is released and that `logits_data_` is
+// refreshed on every call.
+TEST(TopPSamplerTest,
+     SampleToIdAndScoreBufferFp16_RepeatedCallsOnSameLogitsTensor) {
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*sequence_size=*/1));
+  auto logits_tensor =
+      CopyFp16ToTensorBuffer(std::vector<float>(8, 0.0f), {2, 4});
+  ASSERT_TRUE(logits_tensor.HasValue());
+  std::vector<int> ids_vector(2);
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {2});
+  ASSERT_TRUE(ids_tensor.HasValue());
+
+  int step = 0;
+  for (const auto& [logits, expected_ids] :
+       std::vector<std::pair<std::vector<float>, std::vector<int>>>{
+           {{0.0f, 0.0f, 10.0f, 0.0f, 11.0f, 12.0f, 1.0f, 2.0f}, {2, 1}},
+           {{9.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 2.0f, 8.0f}, {0, 3}},
+           {{0.0f, 7.0f, 1.0f, 0.0f, 0.0f, 1.0f, 6.0f, 2.0f}, {1, 2}},
+       }) {
+    SCOPED_TRACE(step++);
+    ASSERT_TRUE(WriteFp16ToTensorBuffer(logits, *logits_tensor).HasValue());
+    ASSERT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                                /*scores_tensor=*/nullptr,
+                                                ZeroUniforms(2, 1)));
+    auto ids = CopyFromTensorBuffer<int>(*ids_tensor);
+    ASSERT_TRUE(ids.HasValue());
+    EXPECT_EQ(*ids, expected_ids);
+  }
 }
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_IdsOnly_BatchSize2) {
