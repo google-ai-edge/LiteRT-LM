@@ -13,9 +13,12 @@
 // limitations under the License.
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/constraint_provider.h"
 #include "runtime/components/constrained_decoding/constraint_provider_config.h"
@@ -36,6 +39,16 @@ LlgConstraintProvider::~LlgConstraintProvider() = default;
 
 absl::StatusOr<std::unique_ptr<Constraint>>
 LlgConstraintProvider::CreateConstraint(ConstraintArg constraint_arg) const {
+  return absl::UnimplementedError(
+      "LlGuidance constrained decoding is disabled in this build.");
+}
+
+absl::StatusOr<std::unique_ptr<ConstraintProvider>>
+CreateLlgToolCallConstraintProvider(
+    const Tokenizer* tokenizer,
+    const std::vector<std::vector<int>>& stop_token_ids,
+    absl::string_view fallback_eos_token,
+    std::vector<std::string> special_tokens) {
   return absl::UnimplementedError(
       "LlGuidance constrained decoding is disabled in this build.");
 }

@@ -260,4 +260,37 @@ LlgConstraintProvider::CreateConstraint(ConstraintArg constraint_arg) const {
       std::vector<int>(llg_config_.eos_ids.begin(), llg_config_.eos_ids.end()));
 }
 
+absl::StatusOr<std::unique_ptr<ConstraintProvider>>
+CreateLlgToolCallConstraintProvider(
+    const Tokenizer* tokenizer,
+    const std::vector<std::vector<int>>& stop_token_ids,
+    absl::string_view fallback_eos_token,
+    std::vector<std::string> special_tokens) {
+  if (tokenizer == nullptr) {
+    return absl::InvalidArgumentError(
+        "Tokenizer must not be null when constrained decoding is enabled.");
+  }
+  LlGuidanceConfig llg_config;
+  AddStopTokensAsEosIds(stop_token_ids, llg_config);
+  if (llg_config.eos_ids.empty()) {
+    if (absl::StatusOr<int> eos_id =
+            const_cast<Tokenizer*>(tokenizer)->TokenToId(fallback_eos_token);
+        eos_id.ok() && *eos_id >= 0) {
+      llg_config.eos_ids.push_back(static_cast<uint32_t>(*eos_id));
+    }
+  }
+  llg_config.special_tokens = std::move(special_tokens);
+  absl::StatusOr<std::unique_ptr<ConstraintProvider>> provider =
+      LlgConstraintProvider::Create(*tokenizer, std::move(llg_config));
+  if (!provider.ok()) {
+    return absl::Status(
+        provider.status().code(),
+        absl::StrCat("Failed to create the LLGuidance tool call constraint "
+                     "provider: ",
+                     provider.status().message()));
+  }
+  ABSL_LOG(INFO) << "Created the LLGuidance tool call constraint provider.";
+  return provider;
+}
+
 }  // namespace litert::lm

@@ -710,7 +710,7 @@ cc_library(
     ] + select({
         ":litert_lm_fst_constraints_disabled": [
             "//runtime/components/constrained_decoding:llg_constraint_config",
-            "//runtime/components/constrained_decoding:llg_constraint_provider",
+            "//runtime/components/constrained_decoding:llg_constraint_provider_or_noop",
             "//runtime/components/constrained_decoding:llguidance_schema_utils",
         ],
         "//conditions:default": [

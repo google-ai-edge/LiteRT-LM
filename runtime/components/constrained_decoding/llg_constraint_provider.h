@@ -17,10 +17,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/constraint_provider.h"
 #include "runtime/components/constrained_decoding/constraint_provider_config.h"
@@ -35,6 +37,9 @@ using ::litert::support::Tokenizer;
 
 class LlgConstraintProvider : public ConstraintProvider {
  public:
+  // Creates a provider that uses `llg_config` as it is. For the tool call
+  // constraints of a model data processor, use
+  // `CreateLlgToolCallConstraintProvider` instead.
   static absl::StatusOr<std::unique_ptr<ConstraintProvider>> Create(
       const Tokenizer& tokenizer, LlGuidanceConfig llg_config);
 
@@ -59,6 +64,26 @@ class LlgConstraintProvider : public ConstraintProvider {
   LlgTokenizer* llg_tokenizer_;  // Owned.
   LlGuidanceConfig llg_config_;
 };
+
+// Creates the provider for the tool call constraints of a model. Model data
+// processors use this rather than `LlgConstraintProvider::Create`, so that they
+// all set up the provider the same way and fail if it can't be created.
+//
+// The response ends with one of the model's end-of-sequence (EOS) tokens. They
+// are the single-token sequences in `stop_token_ids`, or `fallback_eos_token`
+// if there are none. `special_tokens` are the control tokens that the tool call
+// grammars contain, e.g. the code fences around a call, which the constraints
+// match as single tokens. Only those are needed: the EOS tokens are special
+// tokens already, and the model's other control tokens are treated as text.
+//
+// Returns an error if `tokenizer` is null or the provider can't be created, so
+// that a model never decodes without the constraints it was asked to use.
+absl::StatusOr<std::unique_ptr<ConstraintProvider>>
+CreateLlgToolCallConstraintProvider(
+    const Tokenizer* tokenizer,
+    const std::vector<std::vector<int>>& stop_token_ids,
+    absl::string_view fallback_eos_token,
+    std::vector<std::string> special_tokens);
 
 }  // namespace litert::lm
 

@@ -1117,6 +1117,7 @@ TEST_F(Gemma3DataProcessorTest, CreateConstraintAlternativeToolFormat) {
 
 TEST_F(Gemma3DataProcessorTest, CreateConstraintWithNonSentencePieceTokenizer) {
   FakeNonSentencePieceTokenizer fake_tokenizer;
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
   ASSERT_OK_AND_ASSIGN(
       auto processor,
       Gemma3DataProcessor::Create(Gemma3DataProcessorConfig(),
@@ -1141,6 +1142,16 @@ TEST_F(Gemma3DataProcessorTest, CreateConstraintWithNonSentencePieceTokenizer) {
 
   ASSERT_OK_AND_ASSIGN(auto constraint, processor->CreateConstraint(tools));
   EXPECT_EQ(constraint, nullptr);
+#else
+  // LLGuidance can't create the constraints from the fake tokenizer, which has
+  // no tokens. Creating the processor fails instead of decoding without them.
+  EXPECT_THAT(
+      Gemma3DataProcessor::Create(Gemma3DataProcessorConfig(),
+                                  /*preface=*/std::nullopt, &fake_tokenizer,
+                                  /*stop_token_ids=*/{},
+                                  /*enable_constrained_decoding=*/true),
+      ::testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
 }
 
 TEST_F(Gemma3DataProcessorTest, CloneState) {

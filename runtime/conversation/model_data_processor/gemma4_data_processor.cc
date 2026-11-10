@@ -174,15 +174,7 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
       return absl::InvalidArgumentError(
           "Tokenizer must not be null when constrained decoding is enabled.");
     }
-    LlGuidanceConfig llg_config;
-    AddStopTokensAsEosIds(stop_token_ids, llg_config);
-    if (llg_config.eos_ids.empty()) {
-      auto eos_id = const_cast<Tokenizer*>(tokenizer)->TokenToId("<eos>");
-      if (eos_id.ok()) {
-        llg_config.eos_ids.push_back(*eos_id);
-      }
-    }
-    llg_config.special_tokens = {
+    std::vector<std::string> special_tokens = {
         config.code_fence_start,
         config.code_fence_end,
         config.function_response_start,
@@ -200,22 +192,19 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
       if (start_token.ok() && end_token.ok()) {
         channel_start_token = *std::move(start_token);
         channel_end_token = *std::move(end_token);
-        llg_config.special_tokens.push_back(channel_start_token);
-        llg_config.special_tokens.push_back(channel_end_token);
+        special_tokens.push_back(channel_start_token);
+        special_tokens.push_back(channel_end_token);
       } else {
         ABSL_LOG(WARNING) << "The tool call constraints won't accept channels: "
                           << (start_token.ok() ? end_token.status()
                                                : start_token.status());
       }
     }
-    auto provider_or =
-        LlgConstraintProvider::Create(*tokenizer, std::move(llg_config));
-    if (provider_or.ok()) {
-      constraint_provider = std::move(*provider_or);
-    } else {
-      ABSL_LOG(WARNING) << "Failed to create LlgConstraintProvider: "
-                        << provider_or.status();
-    }
+    ABSL_ASSIGN_OR_RETURN(
+        constraint_provider,
+        CreateLlgToolCallConstraintProvider(tokenizer, stop_token_ids,
+                                            /*fallback_eos_token=*/"<eos>",
+                                            std::move(special_tokens)));
   }
 #endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
 

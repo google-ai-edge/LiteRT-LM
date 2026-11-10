@@ -59,6 +59,15 @@ TEST(ConstraintProviderNoopTest, LlgConstraintProviderNoopReturnsError) {
               StatusIs(absl::StatusCode::kUnimplemented));
 }
 
+TEST(ConstraintProviderNoopTest,
+     CreateLlgToolCallConstraintProviderNoopReturnsError) {
+  MockTokenizer tokenizer;
+  EXPECT_THAT(CreateLlgToolCallConstraintProvider(
+                  &tokenizer, /*stop_token_ids=*/{{1}},
+                  /*fallback_eos_token=*/"<eos>", /*special_tokens=*/{}),
+              StatusIs(absl::StatusCode::kUnimplemented));
+}
+
 TEST(ConstraintProviderNoopTest, CreateConstraintProviderNoopReturnsError) {
   MockTokenizer tokenizer;
   EXPECT_THAT(

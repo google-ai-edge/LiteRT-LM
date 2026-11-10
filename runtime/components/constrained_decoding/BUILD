@@ -377,8 +377,20 @@ cc_library(
         ":llg_constraint_config",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "//support/tokenizer",
     ],
+)
+
+# :llg_constraint_provider, or :llg_constraint_provider_noop in builds without
+# LLGuidance. Depend on this rather than on one of them, so that a binary never
+# links both.
+alias(
+    name = "llg_constraint_provider_or_noop",
+    actual = select({
+        "//build_config:disable_llguidance": ":llg_constraint_provider_noop",
+        "//conditions:default": ":llg_constraint_provider",
+    }),
 )
 
 cc_library(
@@ -559,6 +571,7 @@ cc_library(
     deps = [
         ":constraint_provider",
         ":constraint_provider_config",
+        ":llg_constraint_provider_or_noop",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "//support/tokenizer",
@@ -569,11 +582,6 @@ cc_library(
             ":external_constraint_provider",
             ":llg_constraint_config",
         ],
-    }) + select({
-        "//build_config:disable_llguidance": [
-            ":llg_constraint_provider_noop",
-        ],
-        "//conditions:default": [":llg_constraint_provider"],
     }),
 )
 

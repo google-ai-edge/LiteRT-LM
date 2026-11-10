@@ -48,6 +48,7 @@ using TokenIds = ::litert::support::TokenIds;
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::Return;
 using ::testing::status::StatusIs;
 
@@ -121,6 +122,57 @@ TEST_F(LlgConstraintProviderTest, CreateFailsWithOutOfRangeEosId) {
       .WillOnce(Return(std::vector<std::string>{"<pad>", "<eos>", "a", "b"}));
 
   EXPECT_THAT(LlgConstraintProvider::Create(tokenizer_, config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(LlgConstraintProviderTest, CreateToolCallProviderUsesStopTokensAsEos) {
+  EXPECT_CALL(tokenizer_, TokenToId).Times(0);
+  EXPECT_CALL(tokenizer_, GetTokens())
+      .WillOnce(Return(std::vector<std::string>{"<pad>", "</s>", "a", "b"}));
+
+  EXPECT_OK(CreateLlgToolCallConstraintProvider(
+      &tokenizer_, /*stop_token_ids=*/{{1}}, /*fallback_eos_token=*/"</s>",
+      /*special_tokens=*/{}));
+}
+
+TEST_F(LlgConstraintProviderTest, CreateToolCallProviderFallsBackToEosToken) {
+  // Only single-token stop sequences can be EOS tokens.
+  EXPECT_CALL(tokenizer_, TokenToId("</s>")).WillOnce(Return(1));
+  EXPECT_CALL(tokenizer_, GetTokens())
+      .WillOnce(Return(std::vector<std::string>{"<pad>", "</s>", "a", "b"}));
+
+  EXPECT_OK(CreateLlgToolCallConstraintProvider(
+      &tokenizer_, /*stop_token_ids=*/{{2, 3}}, /*fallback_eos_token=*/"</s>",
+      /*special_tokens=*/{}));
+}
+
+TEST_F(LlgConstraintProviderTest, CreateToolCallProviderFailsWithoutEosToken) {
+  EXPECT_CALL(tokenizer_, TokenToId("</s>"))
+      .WillOnce(Return(absl::NotFoundError("No </s> token.")));
+
+  EXPECT_THAT(CreateLlgToolCallConstraintProvider(
+                  &tokenizer_, /*stop_token_ids=*/{},
+                  /*fallback_eos_token=*/"</s>", /*special_tokens=*/{}),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("tool call constraint provider")));
+}
+
+TEST_F(LlgConstraintProviderTest,
+       CreateToolCallProviderFailsWithOutOfRangeStopToken) {
+  EXPECT_CALL(tokenizer_, GetTokens())
+      .WillOnce(Return(std::vector<std::string>{"<pad>", "</s>", "a", "b"}));
+
+  EXPECT_THAT(
+      CreateLlgToolCallConstraintProvider(&tokenizer_, /*stop_token_ids=*/{{4}},
+                                          /*fallback_eos_token=*/"</s>",
+                                          /*special_tokens=*/{}),
+      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("out of range")));
+}
+
+TEST_F(LlgConstraintProviderTest, CreateToolCallProviderFailsWithoutTokenizer) {
+  EXPECT_THAT(CreateLlgToolCallConstraintProvider(
+                  /*tokenizer=*/nullptr, /*stop_token_ids=*/{{1}},
+                  /*fallback_eos_token=*/"</s>", /*special_tokens=*/{}),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -312,6 +364,28 @@ TEST_F(LlgConstraintProviderSentencePieceTest, SpecialTokensAreNotDecoded) {
   config.special_tokens = {"<0x0A>"};
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
                        LlgConstraintProvider::Create(tokenizer_, config));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "a\n?"}));
+  std::unique_ptr<Constraint::State> state = constraint->Start();
+  ASSERT_OK(constraint->ComputeMask(*state));
+  ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, kA));
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask,
+                       constraint->ComputeMask(*state));
+  EXPECT_FALSE(IsAllowed(*mask, kNewlineByte));
+}
+
+// CreateLlgToolCallConstraintProvider passes `special_tokens` on to the
+// provider, so "<0x0A>" isn't decoded there either.
+TEST_F(LlgConstraintProviderSentencePieceTest,
+       ToolCallProviderPassesSpecialTokens) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<ConstraintProvider> provider,
+      CreateLlgToolCallConstraintProvider(
+          &tokenizer_, /*stop_token_ids=*/{{kEos}},
+          /*fallback_eos_token=*/"</s>", /*special_tokens=*/{"<0x0A>"}));
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
                        provider->CreateConstraint(LlGuidanceConstraintArg{
                            .constraint_type = LlgConstraintType::kRegex,

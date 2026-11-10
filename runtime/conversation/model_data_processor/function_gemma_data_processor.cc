@@ -233,33 +233,12 @@ FunctionGemmaDataProcessor::Create(
 #else
   std::unique_ptr<ConstraintProvider> constraint_provider = nullptr;
   if (enable_constrained_decoding) {
-    if (tokenizer == nullptr) {
-      return absl::InvalidArgumentError(
-          "Tokenizer must not be null when constrained decoding is enabled.");
-    }
-    LlGuidanceConfig llg_config;
-    AddStopTokensAsEosIds(stop_token_ids, llg_config);
-    if (llg_config.eos_ids.empty()) {
-      auto eos_id = const_cast<Tokenizer*>(tokenizer)->TokenToId("<eos>");
-      if (eos_id.ok()) {
-        llg_config.eos_ids.push_back(*eos_id);
-      }
-    }
-    llg_config.special_tokens = {
-        config.code_fence_start,
-        config.code_fence_end,
-        config.open_quote,
-        config.close_quote,
-        config.function_response_start,
-    };
-    auto provider_or =
-        LlgConstraintProvider::Create(*tokenizer, std::move(llg_config));
-    if (provider_or.ok()) {
-      constraint_provider = std::move(*provider_or);
-    } else {
-      ABSL_LOG(WARNING) << "Failed to create LlgConstraintProvider: "
-                        << provider_or.status();
-    }
+    ABSL_ASSIGN_OR_RETURN(
+        constraint_provider,
+        CreateLlgToolCallConstraintProvider(
+            tokenizer, stop_token_ids, /*fallback_eos_token=*/"<eos>",
+            {config.code_fence_start, config.code_fence_end, config.open_quote,
+             config.close_quote, config.function_response_start}));
   }
 #endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
   return absl::WrapUnique(new FunctionGemmaDataProcessor(
