@@ -422,6 +422,7 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/schema" "${LITERTLM_GENERATED_SRC_DIR}/schema")
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/runtime" "${LITERTLM_GENERATED_SRC_DIR}/runtime")
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/support" "${LITERTLM_GENERATED_SRC_DIR}/support")
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/sync" "${LITERTLM_GENERATED_SRC_DIR}/sync")
 
     include("${LITERTLM_PACKAGE_DIR}/litert_lm_aggregate.cmake")
     generate_litertlm_aggregate()
