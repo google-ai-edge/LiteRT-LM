@@ -377,6 +377,27 @@ selects.config_setting_group(
 )
 
 bool_flag(
+    name = "disable_engine_advanced_legacy",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "disable_engine_advanced_legacy_impl",
+    flag_values = {":disable_engine_advanced_legacy": "true"},
+    visibility = ["//visibility:public"],
+)
+
+selects.config_setting_group(
+    name = "exclude_oss_engine_advanced_legacy_impl",
+    match_any = [
+        ":disable_engine_advanced_legacy_impl",
+        ":disable_gpu_backend",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
     name = "enable_diffusion_executor",
     build_setting_default = False,
     visibility = ["//visibility:public"],
