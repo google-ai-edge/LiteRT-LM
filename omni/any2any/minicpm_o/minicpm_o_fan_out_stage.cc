@@ -28,7 +28,8 @@
 namespace litert::omni::any2any {
 
 MiniCpmOInputFanOutStage::MiniCpmOInputFanOutStage(
-    Stage<OmniSession::Input>* absl_nonnull upstream)
+    Stage<OmniSession::Input>* absl_nonnull upstream, bool has_audio_encoder,
+    bool has_vision_encoder)
     : FanOutStage<OmniSession::Input>(upstream),
       text_queue_(AddOutputQueue(
           std::make_unique<
@@ -47,7 +48,9 @@ MiniCpmOInputFanOutStage::MiniCpmOInputFanOutStage(
               SequencedVariantQueue<OmniSession::Input, EndOfInputTurn>>())),
       end_of_input_queue_(AddOutputQueue(
           std::make_unique<
-              SequencedVariantQueue<OmniSession::Input, EndOfInput>>())) {}
+              SequencedVariantQueue<OmniSession::Input, EndOfInput>>())),
+      has_audio_encoder_(has_audio_encoder),
+      has_vision_encoder_(has_vision_encoder) {}
 
 SequencedVariantQueue<OmniSession::Input, TextInput>&
 MiniCpmOInputFanOutStage::TextQueue() {
@@ -84,6 +87,16 @@ absl::Status MiniCpmOInputFanOutStage::RouteInput(OmniSession::Input input) {
     return absl::UnimplementedError(
         "ImageGenInputMetadata is not yet supported in "
         "MiniCpmOInputFanOutStage.");
+  }
+  if (!has_audio_encoder_ &&
+      (std::holds_alternative<AudioInput>(input) ||
+       std::holds_alternative<AudioInputMetadata>(input))) {
+    return absl::FailedPreconditionError(
+        "Audio input is not supported because audio_encoder is not loaded.");
+  }
+  if (!has_vision_encoder_ && std::holds_alternative<ImageInput>(input)) {
+    return absl::FailedPreconditionError(
+        "Image input is not supported because vision_encoder is not loaded.");
   }
   return FanOutStage<OmniSession::Input>::RouteInput(std::move(input));
 }

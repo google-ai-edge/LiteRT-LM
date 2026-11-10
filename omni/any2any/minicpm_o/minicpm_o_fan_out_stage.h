@@ -33,8 +33,15 @@ class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
   //
   // Args:
   //   upstream: Non-null upstream stage producing `OmniSession::Input` items.
+  //   has_audio_encoder: Whether the audio encoder model is loaded; when false,
+  //     `AudioInput` and `AudioInputMetadata` are rejected with
+  //     `FailedPreconditionError` before assigning a sequence number.
+  //   has_vision_encoder: Whether the vision encoder model is loaded; when
+  //     false, `ImageInput` is rejected with `FailedPreconditionError` before
+  //     assigning a sequence number.
   explicit MiniCpmOInputFanOutStage(
-      Stage<OmniSession::Input>* absl_nonnull upstream);
+      Stage<OmniSession::Input>* absl_nonnull upstream,
+      bool has_audio_encoder = true, bool has_vision_encoder = true);
   ~MiniCpmOInputFanOutStage() override = default;
 
   // Returns the output queue for `TextInput` items.
@@ -87,6 +94,8 @@ class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
   SequencedVariantQueue<OmniSession::Input, ImageInput>* image_queue_;
   SequencedVariantQueue<OmniSession::Input, EndOfInputTurn>* end_of_turn_queue_;
   SequencedVariantQueue<OmniSession::Input, EndOfInput>* end_of_input_queue_;
+  bool has_audio_encoder_ = true;
+  bool has_vision_encoder_ = true;
 };
 
 }  // namespace litert::omni::any2any

@@ -579,6 +579,40 @@ TEST(MiniCpmOFrontendTest,
   EXPECT_THAT(fan_out.Schedule(), StatusIs(absl::StatusCode::kUnimplemented));
 }
 
+TEST(MiniCpmOFrontendTest,
+     FanOutRejectsDisabledAudioAndVisionWithoutAdvancingSeqnum) {
+  // Arrange
+  PushInputSource input_source;
+  MiniCpmOInputFanOutStage fan_out(&input_source, /*has_audio_encoder=*/false,
+                                   /*has_vision_encoder=*/false);
+
+  // Act & Assert: AudioInput, AudioInputMetadata, and ImageInput fail with
+  // FailedPreconditionError before assigning sequence numbers.
+  ASSERT_OK(input_source.PushInput(AudioInput{.pcm_samples = {0.1f}}));
+  EXPECT_THAT(fan_out.Schedule(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_TRUE(fan_out.AudioQueue().Empty());
+
+  ASSERT_OK(input_source.PushInput(
+      AudioInputMetadata{.sample_rate_hz = 16000, .num_channels = 1}));
+  EXPECT_THAT(fan_out.Schedule(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_TRUE(fan_out.AudioInputMetadataQueue().Empty());
+
+  ASSERT_OK(input_source.PushInput(
+      ImageInput{.image_bytes = {1, 2, 3}, .width = 1, .height = 1}));
+  EXPECT_THAT(fan_out.Schedule(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_TRUE(fan_out.ImageQueue().Empty());
+
+  // Subsequent TextInput still receives seqnum 0.
+  ASSERT_OK(input_source.PushInput(TextInput{.text = "Still seqnum 0"}));
+  ASSERT_OK(fan_out.Schedule());
+  ASSERT_OK_AND_ASSIGN(auto text_item, fan_out.TextQueue().PopFront());
+  EXPECT_EQ(text_item.seqnum, 0);
+  EXPECT_EQ(text_item.item.text, "Still seqnum 0");
+}
+
 TEST(MiniCpmOFrontendTest, TextStageProcessesPrompt) {
   SequencedVariantQueue<OmniSession::Input, TextInput> text_queue;
   SequencedVariantQueue<OmniSession::Input, EndOfInputTurn> end_of_turn_queue;

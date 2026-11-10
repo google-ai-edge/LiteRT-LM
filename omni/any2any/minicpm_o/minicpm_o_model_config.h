@@ -197,6 +197,8 @@ struct MiniCpmOModelConfig {
   std::optional<lm::Backend> tts_backend;
   // Optional backend override for the audio vocoder model.
   std::optional<lm::Backend> vocoder_backend;
+  // Whether to force float32 precision on GPU instead of float16.
+  bool force_fp32_on_gpu = false;
 };
 
 }  // namespace litert::omni::any2any
