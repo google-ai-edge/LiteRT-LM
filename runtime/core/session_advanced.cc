@@ -540,7 +540,12 @@ absl::Status SessionAdvanced::SaveCheckpoint(absl::string_view label) {
   }
   ABSL_ASSIGN_OR_RETURN(int current_step,
                         execution_manager_lock->GetCurrentStep(*session_info_));
-  checkpoint_map_[label] = {current_step, session_state_, last_task_ids_};
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<AudioContext> audio_context,
+      execution_manager_lock->SaveAudioContext(*session_info_));
+  checkpoint_map_[label] = {current_step, session_state_, last_task_ids_,
+                            /*processed_context=*/nullptr,
+                            std::move(audio_context)};
   return absl::OkStatus();
 }
 
@@ -559,6 +564,7 @@ absl::Status SessionAdvanced::RewindToCheckpoint(absl::string_view label) {
   // failed, because of the dependency chain, all tasks after the rewind point
   // would be considered as failed then finished immediately.
   last_task_ids_ = it->second.last_task_ids;
+  const AudioContext* audio_context = it->second.audio_context.get();
 
   // Remove all checkpoints after the current step.
   absl::erase_if(checkpoint_map_, [target_step](const auto& pair) {
@@ -570,7 +576,13 @@ absl::Status SessionAdvanced::RewindToCheckpoint(absl::string_view label) {
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  return execution_manager_lock->SetCurrentStep(*session_info_, target_step);
+  ABSL_RETURN_IF_ERROR(
+      execution_manager_lock->SetCurrentStep(*session_info_, target_step));
+  if (audio_context != nullptr) {
+    ABSL_RETURN_IF_ERROR(execution_manager_lock->RestoreAudioContext(
+        *session_info_, *audio_context));
+  }
+  return absl::OkStatus();
 }
 
 absl::Status SessionAdvanced::SaveContext(absl::string_view label) {
@@ -583,8 +595,12 @@ absl::Status SessionAdvanced::SaveContext(absl::string_view label) {
                         execution_manager_lock->GetCurrentStep(*session_info_));
   ABSL_ASSIGN_OR_RETURN(std::unique_ptr<ProcessedContext> processed_context,
                         execution_manager_lock->SaveContext(*session_info_));
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<AudioContext> audio_context,
+      execution_manager_lock->SaveAudioContext(*session_info_));
   checkpoint_map_[label] = {current_step, session_state_, last_task_ids_,
-                            std::move(processed_context)};
+                            std::move(processed_context),
+                            std::move(audio_context)};
   return absl::OkStatus();
 }
 
@@ -609,6 +625,8 @@ absl::Status SessionAdvanced::RestoreContext(absl::string_view label) {
   last_task_ids_ = it->second.last_task_ids;
   std::unique_ptr<ProcessedContext> processed_context =
       std::move(it->second.processed_context);
+  std::unique_ptr<AudioContext> audio_context =
+      std::move(it->second.audio_context);
   checkpoint_map_.erase(it);
 
   // Remove all checkpoints after the current step.
@@ -623,8 +641,13 @@ absl::Status SessionAdvanced::RestoreContext(absl::string_view label) {
   }
   ABSL_RETURN_IF_ERROR(
       execution_manager_lock->SetCurrentStep(*session_info_, target_step));
-  return execution_manager_lock->RestoreContext(*session_info_,
-                                                std::move(processed_context));
+  ABSL_RETURN_IF_ERROR(execution_manager_lock->RestoreContext(
+      *session_info_, std::move(processed_context)));
+  if (audio_context != nullptr) {
+    ABSL_RETURN_IF_ERROR(execution_manager_lock->RestoreAudioContext(
+        *session_info_, *audio_context));
+  }
+  return absl::OkStatus();
 }
 
 absl::Status SessionAdvanced::RewindToStep(int step) {

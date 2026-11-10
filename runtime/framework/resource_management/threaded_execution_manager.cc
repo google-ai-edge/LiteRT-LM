@@ -843,6 +843,13 @@ ThreadedExecutionManager::ProcessAndCombineContents(
         } else if (!absl::IsUnimplemented(flushed_audio_data.status())) {
           return flushed_audio_data.status();
         }
+        // Reset streaming audio encoder state at the end of an audio clip so
+        // that subsequent audio clips in the same prompt or session do not
+        // inherit conformer state buffers or time_step from this clip.
+        if (absl::Status reset_status = (*audio_executor)->Reset();
+            !reset_status.ok() && !absl::IsUnimplemented(reset_status)) {
+          return reset_status;
+        }
       }
       combined_token_ids.push_back(ExecutorAudioData::kEndToken);
     } else {
@@ -1512,6 +1519,31 @@ absl::Status ThreadedExecutionManager::RestoreContext(
                         resource_manager_->AcquireExecutorWithContextHandler(
                             session_info.context_handler));
   return llm_executor->RestoreContext(std::move(processed_context));
+}
+
+absl::StatusOr<std::unique_ptr<AudioContext>>
+ThreadedExecutionManager::SaveAudioContext(const SessionInfo& session_info) {
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<LlmExecutor> llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  if (!session_info.context_handler->HasAudioContext()) {
+    return nullptr;
+  }
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<AudioExecutor> audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  return audio_executor->CloneContext();
+}
+
+absl::Status ThreadedExecutionManager::RestoreAudioContext(
+    const SessionInfo& session_info, const AudioContext& audio_context) {
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<LlmExecutor> llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<AudioExecutor> audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<AudioContext> cloned_audio_context,
+                        audio_executor->CloneContext(audio_context));
+  return audio_executor->RestoreContext(std::move(cloned_audio_context));
 }
 
 absl::StatusOr<AudioExecutorProperties>

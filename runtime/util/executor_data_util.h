@@ -50,16 +50,21 @@ absl::StatusOr<ExecutorVisionData> CombineExecutorVisionData(
 
 // Util function for combining multiple ExecutorAudioData into a single
 // ExecutorAudioData, by concatenating the audio embeddings in a single tensor
-// buffer.
+// buffer (slicing each input tensor to its GetValidTokens() count when set).
 //
-// Specifically, if the elements of input ExecutorAudioData have TensorBuffer
-// with shapes,
-//  [batch_size, num_token_1, feature_dim].
-//  [batch_size, num_token_2, feature_dim].
+// Specifically, if the elements of input ExecutorAudioData have 3D/4D
+// TensorBuffer shapes:
+//  [batch_size, (1,) num_token_1, feature_dim]
 //  ...
-//  [batch_size, num_token_n, feature_dim].
-// The output ExecutorAudioData will have TensorBuffer with shape,
-// [batch_size, num_token_1 + num_token_2 + ... + num_token_n, feature_dim].
+//  [batch_size, (1,) num_token_n, feature_dim]
+// The output ExecutorAudioData will have TensorBuffer with shape:
+//  [batch_size, total_valid_tokens, feature_dim].
+//
+// If the elements of input ExecutorAudioData have 5D Artisan BHWDC
+// TensorBuffer shapes ([batch_size, 1, W, 1, feature_dim] or
+// [batch_size, 1, 1, D, feature_dim]), the output ExecutorAudioData will have
+// TensorBuffer with shape:
+//  [batch_size, 1, total_valid_tokens, 1, feature_dim].
 absl::StatusOr<ExecutorAudioData> CombineExecutorAudioData(
     std::vector<ExecutorAudioData>& executor_data);
 
