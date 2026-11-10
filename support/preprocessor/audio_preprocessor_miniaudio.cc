@@ -38,7 +38,54 @@
 #include "support/preprocessor/audio_preprocessor_utils.h"
 #include "support/preprocessor/mel_filterbank.h"
 #include "support/util/io_types.h"
+
+// Compile a private, decoder-only copy of miniaudio with internal linkage so
+// device I/O, threading, runtime linking, encoding, node-graph, and engine
+// code/vtables are omitted and no external ma_* symbols clash with other
+// miniaudio users. See Section 2.7 ("Build Options") in miniaudio.h
+// (https://miniaud.io/docs/manual/index.html).
+// Prevent <windows.h> (included by miniaudio.h on Windows) from defining min
+// and max macros that collide with std::min below.
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+#define MA_API static
+#define MA_NO_DEVICE_IO
+#define MA_NO_THREADING
+#define MA_NO_RUNTIME_LINKING
+#define MA_NO_ENCODING
+#define MA_NO_GENERATION
+#define MA_NO_RESOURCE_MANAGER
+#define MA_NO_NODE_GRAPH
+#define MA_NO_ENGINE
+
+// Embedded dr_flac decoder build option in miniaudio.h (prefixed from
+// dr_flac.h in https://github.com/mackron/dr_libs): omit duplicate SIMD
+// decoders while retaining the bit-exact scalar fallback, CRC checks, and
+// Ogg-FLAC support.
+#define MA_DR_FLAC_NO_SIMD
+#define MINIAUDIO_IMPLEMENTATION
+
+// Suppress warnings scoped strictly to miniaudio.h (supported by both GCC and
+// Clang): MA_API=static intentionally leaves unreferenced ma_* functions and
+// tables unused so the compiler dead-strips them (-Wunused-function,
+// -Wunused-variable), and miniaudio's C switch blocks use unannotated
+// fallthroughs that warn under strict C++ flags (-Wimplicit-fallthrough).
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
+#endif
 #include "miniaudio.h"  // from @miniaudio
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace litert::support {
 namespace {

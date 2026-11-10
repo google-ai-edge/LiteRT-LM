@@ -846,5 +846,59 @@ TEST(AudioPreprocessorMiniAudioTest, PreprocessDryRunMatchesPreprocessShape) {
             preprocessed_type->Layout().Dimensions());
 }
 
+TEST(AudioPreprocessorMiniAudioTest, DecodeNativeFlacAndResampledAudio) {
+  // Minimal 32-sample, 16 kHz, 16-bit mono Rice-coded native FLAC sine wave.
+  static constexpr uint8_t kMinimalNativeFlac[] = {
+      0x66, 0x4c, 0x61, 0x43, 0x80, 0x00, 0x00, 0x22, 0x04, 0x80, 0x04, 0x80,
+      0x00, 0x00, 0x3e, 0x00, 0x00, 0x3e, 0x03, 0xe8, 0x00, 0xf0, 0x00, 0x00,
+      0x00, 0x20, 0xa1, 0x9c, 0x23, 0x87, 0xfb, 0xc1, 0x38, 0x3c, 0x53, 0x25,
+      0x15, 0x92, 0x80, 0xaa, 0xe7, 0x4d, 0xff, 0xf8, 0x65, 0x08, 0x00, 0x1f,
+      0xa8, 0x4a, 0x00, 0x00, 0x06, 0x1f, 0x0b, 0x50, 0x0e, 0xc7, 0x0f, 0xff,
+      0x0e, 0xc7, 0xe6, 0x2c, 0xb1, 0x98, 0xf8, 0x79, 0x93, 0x9d, 0xb8, 0x5d,
+      0x5f, 0xb8, 0x80, 0x36, 0x36, 0x72, 0x39, 0x8c, 0xb6, 0xfa, 0xa7, 0x3f,
+      0x33, 0x51, 0x28, 0xcc, 0x5e, 0x20, 0x2b, 0x52, 0xc6, 0xce, 0x47, 0x31,
+      0x96, 0xdf, 0x54, 0xe7, 0xe6, 0x6a, 0x96, 0xce,
+  };
+  const absl::string_view flac_bytes(
+      reinterpret_cast<const char*>(kMinimalNativeFlac),
+      sizeof(kMinimalNativeFlac));
+
+  std::vector<float> flac_pcm;
+  ASSERT_OK(AudioPreprocessorMiniAudio::DecodeAudio(
+      flac_bytes, /*num_channels=*/1, /*sample_rate_hz=*/16000, flac_pcm));
+  ASSERT_EQ(flac_pcm.size(), 32);
+  EXPECT_NEAR(flac_pcm[0], 0.0f, 1e-6f);
+  EXPECT_NEAR(flac_pcm[4], 0.12496948f, 1e-5f);
+  EXPECT_NEAR(flac_pcm[12], -0.12496948f, 1e-5f);
+
+  // Resampling path (16 kHz WAV -> 24 kHz) exercises GetDecodedFrameCount's
+  // resampler length calculation as well as DecodeAudio's data converter.
+  ASSERT_OK_AND_ASSIGN(std::string raw_wav, GetRawAudioData());
+  AudioPreprocessorConfig resampled_config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  resampled_config.SetSampleRateHz(24000);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<AudioPreprocessorMiniAudio> preprocessor,
+                       AudioPreprocessorMiniAudio::Create(resampled_config));
+  ASSERT_OK_AND_ASSIGN(
+      Dimensions resampled_dims,
+      preprocessor->GetPreprocessedAudioDimensions(InputAudio(raw_wav)));
+  ASSERT_OK_AND_ASSIGN(InputAudio resampled_preprocessed,
+                       preprocessor->Preprocess(InputAudio(raw_wav)));
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* resampled_tensor,
+                       resampled_preprocessed.GetPreprocessedAudioTensor());
+  auto resampled_type = resampled_tensor->TensorType();
+  ASSERT_TRUE(resampled_type.HasValue());
+  EXPECT_EQ(resampled_dims, resampled_type->Layout().Dimensions());
+
+  // FLAC frame CRC-16 validation remains enabled and rejects corrupted frames.
+  std::string corrupted_flac(flac_bytes);
+  corrupted_flac.back() ^= 0xff;
+  std::vector<float> corrupted_pcm;
+  EXPECT_THAT(AudioPreprocessorMiniAudio::DecodeAudio(
+                  corrupted_flac, /*num_channels=*/1, /*sample_rate_hz=*/16000,
+                  corrupted_pcm),
+              testing::status::StatusIs(absl::StatusCode::kInternal));
+}
+
 }  // namespace
 }  // namespace litert::support
