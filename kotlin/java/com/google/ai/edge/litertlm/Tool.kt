@@ -421,9 +421,5 @@ private fun String.camelToSnakeCase(): String {
   return this.replace(Regex("(?<=[a-zA-Z])[A-Z]")) { "_${it.value}" }.lowercase()
 }
 
-private fun String.snakeToCamelCase(): String {
-  return Regex("_([a-z])").replace(this) { it.value.substring(1).uppercase() }
-}
-
 /** Exception related to tool calling. */
 class ToolException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
