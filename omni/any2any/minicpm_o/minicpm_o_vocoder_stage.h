@@ -30,21 +30,15 @@
 #include "omni/base/stage.h"
 
 namespace litert::omni::any2any {
-namespace minicpm_o {
 
-// Maximum number of left-context mel frames overlapped and crossfaded between
-// consecutive vocoder chunks to avoid chunk-boundary discontinuities.
-inline constexpr int kVocoderOverlapFrames = 16;
-
-}  // namespace minicpm_o
-
-// Stage 4: Neural Mel-to-Waveform Vocoder & Output Stage for MiniCPM-o 4.5.
+// Stage 4: Neural Speech-Token-to-Waveform Vocoder & Output Stage for
+// MiniCPM-o 4.5.
 // Emits `TextOutput` for the generated assistant text and, when audio
-// generation is enabled, runs `audio_vocoder.tflite` (the 24 kHz Vocos/HiFi-GAN
-// mel-to-waveform vocoder of the CosyVoice2/Token2Wav TTS pipeline) with
-// overlapping mel context and linear crossfading to synthesize 24 kHz
-// `AudioOutput` PCM waveforms from the 100-bin log-mel spectrogram frames
-// emitted by `MiniCpmOTtsStage`.
+// generation is enabled, runs `audio_vocoder.tflite` (the 24 kHz CosyVoice2
+// Token2Wav CausalMaskedDiffWithXvec + HiFTGenerator vocoder) over windows of
+// `history + chunk + lookahead` discrete 25 Hz speech tokens (`int32[1, 32]`)
+// to synthesize 24 kHz `AudioOutput` PCM waveforms (`float[1, 27840]`) with
+// short seam de-clicking crossfade at each chunk boundary.
 class MiniCpmOVocoderStage : public SingleThreadedStageWithDeque<Output> {
  public:
   static absl::StatusOr<std::unique_ptr<MiniCpmOVocoderStage>> Create(
@@ -82,8 +76,10 @@ class MiniCpmOVocoderStage : public SingleThreadedStageWithDeque<Output> {
   std::vector<TensorBuffer> input_buffers_;
   std::vector<TensorBuffer> output_buffers_;
 
-  int mel_chunk_frames_ = 100;
-  int upsample_hop_ = minicpm_o::kVocoderHopSize;
+  int history_tokens_ = minicpm_o::kVocoderHistoryTokens;
+  int chunk_tokens_ = minicpm_o::kVocoderChunkTokens;
+  int lookahead_tokens_ = minicpm_o::kVocoderLookaheadTokens;
+  int samples_per_token_ = minicpm_o::kVocoderSamplesPerToken;
 };
 
 }  // namespace litert::omni::any2any

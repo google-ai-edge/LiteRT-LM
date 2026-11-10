@@ -14,6 +14,7 @@
 
 #include "omni/any2any/minicpm_o/minicpm_o_vocoder_stage.h"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <variant>
@@ -67,10 +68,18 @@ TEST(MiniCpmOVocoderStageTest,
               StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST(MiniCpmOVocoderStageTest, CreateRejectsVocoderWithEmptyBuffers) {
+TEST(MiniCpmOVocoderStageTest,
+     CreateRejectsVocoderWithEmptyOrMismatchedBuffers) {
   MiniCpmOModelConfig config;
   config.generate_audio = true;
   FakeTtsStage tts_stage;
+
+  MiniCpmOModelConfig invalid_chunk_config = config;
+  invalid_chunk_config.vocoder_chunk_tokens = 0;
+  EXPECT_THAT(MiniCpmOVocoderStage::Create(&tts_stage, invalid_chunk_config,
+                                           /*vocoder_runner=*/nullptr)
+                  .status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 
   auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
   ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
@@ -88,10 +97,66 @@ TEST(MiniCpmOVocoderStageTest, CreateRejectsVocoderWithEmptyBuffers) {
                                            std::move(vocoder_runner))
                   .status(),
               StatusIs(absl::StatusCode::kInternal));
+
+  // Mismatched input buffer size only (valid output buffer size).
+  auto mismatched_in_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
+  ON_CALL(*mismatched_in_runner, CreateInputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(
+                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 4}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(in_buf));
+            return bufs;
+          });
+  ON_CALL(*mismatched_in_runner, CreateOutputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(
+                auto out_buf,
+                support::CreateTensorBuffer<float>(
+                    {1, minicpm_o::kVocoderOutputSamples}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(out_buf));
+            return bufs;
+          });
+
+  EXPECT_THAT(MiniCpmOVocoderStage::Create(&tts_stage, config,
+                                           std::move(mismatched_in_runner))
+                  .status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Mismatched output buffer size only (valid input buffer size).
+  auto mismatched_out_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
+  ON_CALL(*mismatched_out_runner, CreateInputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(
+                auto in_buf,
+                support::CreateTensorBuffer<int32_t>(
+                    {1, minicpm_o::kVocoderInputTokens}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(in_buf));
+            return bufs;
+          });
+  ON_CALL(*mismatched_out_runner, CreateOutputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(auto out_buf,
+                                    support::CreateTensorBuffer<float>({1, 6}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(out_buf));
+            return bufs;
+          });
+
+  EXPECT_THAT(MiniCpmOVocoderStage::Create(&tts_stage, config,
+                                           std::move(mismatched_out_runner))
+                  .status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(MiniCpmOVocoderStageTest,
-     EmitsTextOutputAndEndOfOutputTurnWhenNoMelFeatures) {
+     EmitsTextOutputAndEndOfOutputTurnWhenNoAudioCodes) {
   MiniCpmOModelConfig config;
   config.generate_audio = false;
   FakeTtsStage tts_stage;
@@ -116,22 +181,24 @@ TEST(MiniCpmOVocoderStageTest,
 }
 
 TEST(MiniCpmOVocoderStageTest,
-     SynthesizesWaveformWithOverlappingContextCrossfadeAndEdgePadding) {
+     SynthesizesWaveformWithHistoryLookaheadSilencePaddingAndCrossfade) {
   MiniCpmOModelConfig config;
   config.generate_audio = true;
-  config.tts_num_mel_bins = 2;
+  config.vocoder_history_tokens = 1;
+  config.vocoder_chunk_tokens = 2;
+  config.vocoder_lookahead_tokens = 1;
+  config.vocoder_samples_per_token = 2;
   config.audio_output_sample_rate_hz = 24000;
   FakeTtsStage tts_stage;
 
-  // Input buffer: [1, 2 bins, 3 chunk_frames] -> mel_chunk_frames = 3,
-  // overlap_frames = max(1, min(16, 3 / 4)) = 1.
-  // Output buffer: [1, 6 samples] -> upsample_hop = 6 / 3 = 2 samples/frame.
+  // Input buffer: int32[1, 4] (1 history + 2 chunk + 1 lookahead).
+  // Output buffer: float[1, 6] ((1 history + 2 chunk) * 2 samples/token).
   auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
   ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
       .WillByDefault(
           [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
             LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<float>({1, 2, 3}));
+                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 4}));
             std::vector<TensorBuffer> bufs;
             bufs.push_back(std::move(in_buf));
             return bufs;
@@ -146,31 +213,34 @@ TEST(MiniCpmOVocoderStageTest,
             return bufs;
           });
 
-  std::vector<std::vector<float>> captured_chunks;
+  std::vector<std::vector<int32_t>> captured_windows;
   int call_idx = 0;
   EXPECT_CALL(*vocoder_runner, Run(absl::string_view(""), _, _))
       .Times(2)
       .WillRepeatedly(
-          [&captured_chunks, &call_idx](
+          [&captured_windows, &call_idx](
               absl::string_view, absl::Span<const TensorBuffer> inputs,
               absl::Span<const TensorBuffer> outputs) -> absl::Status {
-            std::vector<float> chunk_in(6, 0.0f);
+            std::vector<int32_t> window_in(4, 0);
             auto& in_buf = const_cast<TensorBuffer&>(inputs[0]);
             LITERT_RETURN_IF_ERROR(
-                in_buf.Read<float>(absl::MakeSpan(chunk_in)));
-            captured_chunks.push_back(chunk_in);
+                in_buf.Read<int32_t>(absl::MakeSpan(window_in)));
+            captured_windows.push_back(window_in);
 
             // Add +3.0f to chunk 1's output so the linear crossfade on the
-            // overlapped frame (2 samples, alpha = 1/3 and 2/3) is verifiable.
+            // 1-token history overlap (2 samples, alpha = 1/3 and 2/3) is
+            // verifiable.
             const float bias = (call_idx == 1) ? 3.0f : 0.0f;
             ++call_idx;
 
-            // Emit 2 samples per frame based on bin 0 and bin 1 of each frame.
-            // chunk_in layout is [2 bins, 3 frames]:
-            // frame f: (chunk_in[f], chunk_in[3 + f])
+            // Emit 2 samples for each of the first 3 tokens (history + chunk).
             std::vector<float> pcm = {
-                chunk_in[0] + bias, chunk_in[3] + bias, chunk_in[1] + bias,
-                chunk_in[4] + bias, chunk_in[2] + bias, chunk_in[5] + bias,
+                static_cast<float>(window_in[0]) + bias,
+                static_cast<float>(window_in[0] * 10) + bias,
+                static_cast<float>(window_in[1]) + bias,
+                static_cast<float>(window_in[1] * 10) + bias,
+                static_cast<float>(window_in[2]) + bias,
+                static_cast<float>(window_in[2] * 10) + bias,
             };
             auto& out_buf = const_cast<TensorBuffer&>(outputs[0]);
             LITERT_RETURN_IF_ERROR(
@@ -182,29 +252,25 @@ TEST(MiniCpmOVocoderStageTest,
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
-  // 4 total frames across 2 bins in bin-major [2, 4]:
-  // bin 0: {1.0, 2.0, 3.0, 4.0}
-  // bin 1: {10.0, 20.0, 30.0, 40.0}
+  // 3 audio codes: {1, 2, 3}.
+  // Chunk 0 (emitted=0, valid=2): history={4218}, chunk={1, 2}, lookahead={3}.
+  // Chunk 1 (emitted=2, valid=1): history={2}, chunk={3, 4218},
+  // lookahead={4218}.
   tts_stage.Push(MiniCpmOTtsOutput{
       .text = "Audio",
       .has_text = true,
       .is_text_final = true,
-      .mel_features = {1.0f, 2.0f, 3.0f, 4.0f, 10.0f, 20.0f, 30.0f, 40.0f},
-      .num_mel_bins = 2,
-      .num_frames = 4,
+      .audio_codes = {1, 2, 3},
   });
 
   ASSERT_OK(vocoder_stage->Schedule());
 
-  ASSERT_EQ(captured_chunks.size(), 2);
-  // Chunk 0 (frames 0..2): bin 0 {1, 2, 3}, bin 1 {10, 20, 30}.
-  EXPECT_THAT(captured_chunks[0],
-              ElementsAre(1.0f, 2.0f, 3.0f, 10.0f, 20.0f, 30.0f));
-  // Chunk 1 starts at frame 2 (1-frame overlap with chunk 0), covers valid
-  // frames 2..3, and pads slot 2 by repeating the final valid frame (frame 3)
-  // rather than zero-padding: bin 0 {3, 4, 4}, bin 1 {30, 40, 40}.
-  EXPECT_THAT(captured_chunks[1],
-              ElementsAre(3.0f, 4.0f, 4.0f, 30.0f, 40.0f, 40.0f));
+  ASSERT_EQ(captured_windows.size(), 2);
+  EXPECT_THAT(captured_windows[0],
+              ElementsAre(minicpm_o::kTtsSilenceTokenId, 1, 2, 3));
+  EXPECT_THAT(captured_windows[1],
+              ElementsAre(2, 3, minicpm_o::kTtsSilenceTokenId,
+                          minicpm_o::kTtsSilenceTokenId));
 
   ASSERT_OK_AND_ASSIGN(Output text_out, vocoder_stage->GetOutput());
   ASSERT_TRUE(std::holds_alternative<TextOutput>(text_out));
@@ -214,15 +280,15 @@ TEST(MiniCpmOVocoderStageTest,
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(audio_out));
   const auto& audio = std::get<AudioOutput>(audio_out);
   EXPECT_EQ(audio.sample_rate_hz, 24000);
-  // 4 valid frames * 2 samples/frame = 8 valid PCM samples.
-  // Frame 2 (samples 4 and 5) is linearly crossfaded between chunk 0 ({3, 30})
-  // and chunk 1 ({6, 33}) with alpha = 1/3 and 2/3 -> {4.0, 32.0}.
-  // Frame 3 (samples 6 and 7) comes from chunk 1 ({4 + 3, 40 + 3} = {7, 43}).
+  // 3 valid tokens * 2 samples/token = 6 valid PCM samples.
+  // Token 0: {1.0, 10.0}.
+  // Token 1 (crossfaded between chunk 0's {2.0, 20.0} and chunk 1's history
+  // {5.0, 23.0} with alpha = 1/3 and 2/3): {3.0, 22.0}.
+  // Token 2 (from chunk 1): {3.0 + 3.0, 30.0 + 3.0} = {6.0, 33.0}.
   EXPECT_THAT(audio.pcm_samples,
               ElementsAre(FloatNear(1.0f, 1e-5f), FloatNear(10.0f, 1e-5f),
-                          FloatNear(2.0f, 1e-5f), FloatNear(20.0f, 1e-5f),
-                          FloatNear(4.0f, 1e-5f), FloatNear(32.0f, 1e-5f),
-                          FloatNear(7.0f, 1e-5f), FloatNear(43.0f, 1e-5f)));
+                          FloatNear(3.0f, 1e-5f), FloatNear(22.0f, 1e-5f),
+                          FloatNear(6.0f, 1e-5f), FloatNear(33.0f, 1e-5f)));
 
   ASSERT_OK_AND_ASSIGN(Output eot_out, vocoder_stage->GetOutput());
   EXPECT_TRUE(std::holds_alternative<EndOfOutputTurn>(eot_out));
@@ -232,7 +298,10 @@ TEST(MiniCpmOVocoderStageTest,
      FlushPreservesTextAudioAndEndOfOutputTurnWhenBuffered) {
   MiniCpmOModelConfig config;
   config.generate_audio = true;
-  config.tts_num_mel_bins = 2;
+  config.vocoder_history_tokens = 0;
+  config.vocoder_chunk_tokens = 1;
+  config.vocoder_lookahead_tokens = 0;
+  config.vocoder_samples_per_token = 2;
   config.audio_output_sample_rate_hz = 24000;
   FakeTtsStage tts_stage;
 
@@ -241,7 +310,7 @@ TEST(MiniCpmOVocoderStageTest,
       .WillByDefault(
           [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
             LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<float>({1, 2, 1}));
+                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 1}));
             std::vector<TensorBuffer> bufs;
             bufs.push_back(std::move(in_buf));
             return bufs;
@@ -272,9 +341,7 @@ TEST(MiniCpmOVocoderStageTest,
       .text = "Hello",
       .has_text = true,
       .is_text_final = true,
-      .mel_features = {1.0f, 2.0f},
-      .num_mel_bins = 2,
-      .num_frames = 1,
+      .audio_codes = {100},
   });
 
   ASSERT_OK(vocoder_stage->Flush());
@@ -296,7 +363,10 @@ TEST(MiniCpmOVocoderStageTest,
 TEST(MiniCpmOVocoderStageTest, PropagatesVocoderRunnerError) {
   MiniCpmOModelConfig config;
   config.generate_audio = true;
-  config.tts_num_mel_bins = 2;
+  config.vocoder_history_tokens = 0;
+  config.vocoder_chunk_tokens = 1;
+  config.vocoder_lookahead_tokens = 0;
+  config.vocoder_samples_per_token = 2;
   FakeTtsStage tts_stage;
 
   auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
@@ -304,7 +374,7 @@ TEST(MiniCpmOVocoderStageTest, PropagatesVocoderRunnerError) {
       .WillByDefault(
           [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
             LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<float>({1, 2, 1}));
+                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 1}));
             std::vector<TensorBuffer> bufs;
             bufs.push_back(std::move(in_buf));
             return bufs;
@@ -326,12 +396,79 @@ TEST(MiniCpmOVocoderStageTest, PropagatesVocoderRunnerError) {
                                                     std::move(vocoder_runner)));
 
   tts_stage.Push(MiniCpmOTtsOutput{
-      .mel_features = {1.0f, 2.0f},
-      .num_mel_bins = 2,
-      .num_frames = 1,
+      .audio_codes = {42},
   });
 
   EXPECT_THAT(vocoder_stage->Schedule(), StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(MiniCpmOVocoderStageTest, CapsSeamCrossfadeTo48SamplesOnLongHistory) {
+  MiniCpmOModelConfig config;
+  config.generate_audio = true;
+  config.vocoder_history_tokens = 1;
+  config.vocoder_chunk_tokens = 1;
+  config.vocoder_lookahead_tokens = 0;
+  config.vocoder_samples_per_token = 64;
+  config.audio_output_sample_rate_hz = 24000;
+  FakeTtsStage tts_stage;
+
+  auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
+  ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(
+                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 2}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(in_buf));
+            return bufs;
+          });
+  ON_CALL(*vocoder_runner, CreateOutputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(
+                auto out_buf, support::CreateTensorBuffer<float>({1, 128}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(out_buf));
+            return bufs;
+          });
+
+  int call_idx = 0;
+  EXPECT_CALL(*vocoder_runner, Run(absl::string_view(""), _, _))
+      .Times(2)
+      .WillRepeatedly([&call_idx](absl::string_view,
+                                  absl::Span<const TensorBuffer> /*inputs*/,
+                                  absl::Span<const TensorBuffer> outputs)
+                          -> absl::Status {
+        const float val = (call_idx == 0) ? 1.0f : 2.0f;
+        ++call_idx;
+        std::vector<float> pcm(128, val);
+        auto& out_buf = const_cast<TensorBuffer&>(outputs[0]);
+        LITERT_RETURN_IF_ERROR(out_buf.Write<float>(absl::MakeConstSpan(pcm)));
+        return absl::OkStatus();
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
+                       MiniCpmOVocoderStage::Create(&tts_stage, config,
+                                                    std::move(vocoder_runner)));
+
+  tts_stage.Push(MiniCpmOTtsOutput{
+      .is_text_final = true,
+      .audio_codes = {10, 20},
+  });
+
+  ASSERT_OK(vocoder_stage->Schedule());
+  ASSERT_OK_AND_ASSIGN(Output audio_out, vocoder_stage->GetOutput());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(audio_out));
+  const auto& pcm = std::get<AudioOutput>(audio_out).pcm_samples;
+  ASSERT_EQ(pcm.size(), 128);
+  // First 16 samples (64 - 48) of chunk 0 must remain untouched (1.0f), while
+  // samples 16..63 are crossfaded between 1.0f and 2.0f.
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_FLOAT_EQ(pcm[i], 1.0f);
+  }
+  EXPECT_GT(pcm[16], 1.0f);
+  EXPECT_LT(pcm[63], 2.0f);
+  EXPECT_FLOAT_EQ(pcm[64], 2.0f);
 }
 
 }  // namespace

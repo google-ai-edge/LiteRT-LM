@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -42,6 +43,13 @@ MiniCpmOVocoderStage::Create(
     Stage<MiniCpmOTtsOutput>* absl_nonnull tts_stage,
     const MiniCpmOModelConfig& config,
     std::unique_ptr<LiteRtRunner> absl_nullable vocoder_runner) {
+  if (config.vocoder_history_tokens < 0 || config.vocoder_chunk_tokens <= 0 ||
+      config.vocoder_lookahead_tokens < 0 ||
+      config.vocoder_samples_per_token <= 0) {
+    return absl::InvalidArgumentError(
+        "MiniCpmOVocoderStage token window and sample counts must be valid.");
+  }
+
   auto stage = absl::WrapUnique(
       new MiniCpmOVocoderStage(tts_stage, config, std::move(vocoder_runner)));
 
@@ -58,14 +66,24 @@ MiniCpmOVocoderStage::Create(
 
     LITERT_ASSIGN_OR_RETURN(size_t in_bytes, stage->input_buffers_[0].Size());
     LITERT_ASSIGN_OR_RETURN(size_t out_bytes, stage->output_buffers_[0].Size());
-    const int num_bins = std::max(1, stage->config_.tts_num_mel_bins);
-    const int in_floats =
-        std::max(1, static_cast<int>(in_bytes / sizeof(float)));
-    stage->mel_chunk_frames_ = std::max(1, in_floats / num_bins);
-    const int total_samples =
-        std::max(1, static_cast<int>(out_bytes / sizeof(float)));
-    stage->upsample_hop_ =
-        std::max(1, total_samples / stage->mel_chunk_frames_);
+
+    stage->history_tokens_ = stage->config_.vocoder_history_tokens;
+    stage->chunk_tokens_ = stage->config_.vocoder_chunk_tokens;
+    stage->lookahead_tokens_ = stage->config_.vocoder_lookahead_tokens;
+    stage->samples_per_token_ = stage->config_.vocoder_samples_per_token;
+
+    const size_t expected_in_bytes =
+        static_cast<size_t>(stage->history_tokens_ + stage->chunk_tokens_ +
+                            stage->lookahead_tokens_) *
+        sizeof(int32_t);
+    const size_t expected_out_bytes =
+        static_cast<size_t>(stage->history_tokens_ + stage->chunk_tokens_) *
+        stage->samples_per_token_ * sizeof(float);
+    if (in_bytes != expected_in_bytes || out_bytes != expected_out_bytes) {
+      return absl::InvalidArgumentError(
+          "audio_vocoder buffer sizes do not match configured vocoder token "
+          "window and PCM sample dimensions.");
+    }
   } else if (stage->config_.generate_audio) {
     return absl::NotFoundError(
         "MiniCpmOVocoderStage requires vocoder_runner when generate_audio is "
@@ -77,73 +95,76 @@ MiniCpmOVocoderStage::Create(
 
 absl::StatusOr<std::vector<float>> MiniCpmOVocoderStage::SynthesizeWaveform(
     const MiniCpmOTtsOutput& tts_out) {
-  if (vocoder_runner_ == nullptr || tts_out.num_frames <= 0 ||
-      tts_out.mel_features.empty()) {
+  if (vocoder_runner_ == nullptr || tts_out.audio_codes.empty()) {
     return std::vector<float>{};
   }
 
-  const int num_bins = std::max(1, tts_out.num_mel_bins);
-  const int total_frames = tts_out.num_frames;
-  const int chunk_frames = std::max(1, mel_chunk_frames_);
-  const int overlap_frames =
-      (chunk_frames > 1)
-          ? std::max(
-                1, std::min(minicpm_o::kVocoderOverlapFrames, chunk_frames / 4))
-          : 0;
+  const int total_tokens = static_cast<int>(tts_out.audio_codes.size());
+  const int window_tokens = history_tokens_ + chunk_tokens_ + lookahead_tokens_;
+  const size_t history_samples =
+      static_cast<size_t>(history_tokens_) * samples_per_token_;
 
   std::vector<float> waveform;
-  waveform.reserve(static_cast<size_t>(total_frames) * upsample_hop_);
+  waveform.reserve(static_cast<size_t>(total_tokens) * samples_per_token_);
 
-  int emitted_frames = 0;
-  while (emitted_frames < total_frames) {
-    const int cur_overlap_frames =
-        (emitted_frames == 0) ? 0 : std::min(overlap_frames, emitted_frames);
-    const int chunk_start = emitted_frames - cur_overlap_frames;
-    const int valid_frames = std::min(chunk_frames, total_frames - chunk_start);
-
-    std::vector<float> chunk_mel(static_cast<size_t>(num_bins) * chunk_frames,
-                                 0.0f);
-    for (int b = 0; b < num_bins; ++b) {
-      for (int f = 0; f < chunk_frames; ++f) {
-        // Clamp trailing frames of a partial final chunk to the last valid mel
-        // frame rather than zero-padding to avoid boundary filter ringing.
-        const int src_frame = std::min(chunk_start + f, total_frames - 1);
-        const size_t src_idx =
-            static_cast<size_t>(b) * total_frames + src_frame;
-        if (src_idx < tts_out.mel_features.size()) {
-          chunk_mel[static_cast<size_t>(b) * chunk_frames + f] =
-              tts_out.mel_features[src_idx];
-        }
+  int emitted_tokens = 0;
+  while (emitted_tokens < total_tokens) {
+    const int valid_chunk_tokens =
+        std::min(chunk_tokens_, total_tokens - emitted_tokens);
+    std::vector<int32_t> window_codes(window_tokens,
+                                      minicpm_o::kTtsSilenceTokenId);
+    for (int i = 0; i < history_tokens_; ++i) {
+      const int src_idx = emitted_tokens - history_tokens_ + i;
+      if (src_idx >= 0 && src_idx < total_tokens) {
+        window_codes[i] = static_cast<int32_t>(tts_out.audio_codes[src_idx]);
+      }
+    }
+    for (int j = 0; j < chunk_tokens_ + lookahead_tokens_; ++j) {
+      const int src_idx = emitted_tokens + j;
+      if (src_idx >= 0 && src_idx < total_tokens) {
+        window_codes[history_tokens_ + j] =
+            static_cast<int32_t>(tts_out.audio_codes[src_idx]);
       }
     }
 
     LITERT_RETURN_IF_ERROR(
-        input_buffers_[0].Write<float>(absl::MakeConstSpan(chunk_mel)));
+        input_buffers_[0].Write<int32_t>(absl::MakeConstSpan(window_codes)));
     ABSL_RETURN_IF_ERROR(
         vocoder_runner_->Run("", input_buffers_, output_buffers_));
 
     LITERT_ASSIGN_OR_RETURN(
         std::vector<float> chunk_pcm,
         support::CopyFromTensorBuffer<float>(output_buffers_[0]));
-    const size_t valid_samples = std::min(
-        chunk_pcm.size(), static_cast<size_t>(valid_frames) * upsample_hop_);
-    const size_t overlap_samples =
-        std::min({static_cast<size_t>(cur_overlap_frames) * upsample_hop_,
-                  valid_samples, waveform.size()});
 
-    if (overlap_samples > 0) {
-      const size_t crossfade_start = waveform.size() - overlap_samples;
-      for (size_t i = 0; i < overlap_samples; ++i) {
-        const float alpha =
-            static_cast<float>(i + 1) / static_cast<float>(overlap_samples + 1);
-        waveform[crossfade_start + i] =
-            (1.0f - alpha) * waveform[crossfade_start + i] +
-            alpha * chunk_pcm[i];
+    // Crossfade only a short seam window (up to 48 samples = 2 ms at 24 kHz)
+    // immediately preceding `chunk_pcm[history_samples]` to prevent boundary
+    // clicks without superimposing 160 ms (`3840` samples) of independently
+    // phased HiFTGenerator harmonic waveforms.
+    constexpr size_t kMaxSeamCrossfadeSamples = 48;
+    const size_t crossfade_samples =
+        std::min(history_samples, kMaxSeamCrossfadeSamples);
+    if (emitted_tokens > 0 && crossfade_samples > 0 &&
+        waveform.size() >= crossfade_samples &&
+        chunk_pcm.size() >= history_samples) {
+      const size_t waveform_seam_start = waveform.size() - crossfade_samples;
+      const size_t chunk_seam_start = history_samples - crossfade_samples;
+      for (size_t i = 0; i < crossfade_samples; ++i) {
+        const float alpha = static_cast<float>(i + 1) /
+                            static_cast<float>(crossfade_samples + 1);
+        waveform[waveform_seam_start + i] =
+            (1.0f - alpha) * waveform[waveform_seam_start + i] +
+            alpha * chunk_pcm[chunk_seam_start + i];
       }
     }
-    waveform.insert(waveform.end(), chunk_pcm.begin() + overlap_samples,
-                    chunk_pcm.begin() + valid_samples);
-    emitted_frames = chunk_start + valid_frames;
+
+    const size_t valid_new_samples =
+        static_cast<size_t>(valid_chunk_tokens) * samples_per_token_;
+    const size_t copy_start = std::min(history_samples, chunk_pcm.size());
+    const size_t copy_end =
+        std::min(history_samples + valid_new_samples, chunk_pcm.size());
+    waveform.insert(waveform.end(), chunk_pcm.begin() + copy_start,
+                    chunk_pcm.begin() + copy_end);
+    emitted_tokens += valid_chunk_tokens;
   }
 
   return waveform;
@@ -155,8 +176,7 @@ absl::Status MiniCpmOVocoderStage::ProcessTtsOutput(
     PushOutput(TextOutput{.confirmed_text = tts_out.text});
   }
 
-  if (tts_out.num_frames > 0 && !tts_out.mel_features.empty() &&
-      vocoder_runner_ != nullptr) {
+  if (!tts_out.audio_codes.empty() && vocoder_runner_ != nullptr) {
     ABSL_ASSIGN_OR_RETURN(std::vector<float> pcm, SynthesizeWaveform(tts_out));
     if (!pcm.empty()) {
       PushOutput(AudioOutput{
