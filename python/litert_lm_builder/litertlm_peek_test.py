@@ -214,6 +214,56 @@ class LitertlmPeekPyTest(absltest.TestCase):
       # the format changes, we only check that rebuilding the model runs
       # successfully.
 
+  def test_peek_litertlm_file_dumps_multi_chunk_sections(self):
+    temp_dir = self.create_tempdir().full_path
+    weights_size = 2 * litertlm_peek._DUMP_CHUNK_SIZE_BYTES + 54321
+    binary_size = 2 * litertlm_peek._DUMP_CHUNK_SIZE_BYTES + 12345
+    weights_bytes = (bytes(range(251)) * ((weights_size // 251) + 1))[
+        :weights_size
+    ]
+    binary_bytes = (bytes(range(241)) * ((binary_size // 241) + 1))[
+        :binary_size
+    ]
+
+    weights_path = os.path.join(temp_dir, "weights.bin")
+    with open(weights_path, "wb") as f:
+      f.write(weights_bytes)
+    binary_path = os.path.join(temp_dir, "extra.bin")
+    with open(binary_path, "wb") as f:
+      f.write(binary_bytes)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_weights(weights_path, "prefill_decode")
+    builder.add_generic_binary_data(binary_path)
+    litertlm_path = os.path.join(temp_dir, "multi_chunk.litertlm")
+    with open(litertlm_path, "wb") as f:
+      builder.build(f)
+
+    dump_dir = os.path.join(temp_dir, "dump")
+    litertlm_peek.peek_litertlm_file(litertlm_path, dump_dir, io.StringIO())
+
+    dumped_weights_path = os.path.join(
+        dump_dir, "Section0_TFLiteWeights_tf_lite_prefill_decode.weight"
+    )
+    dumped_binary_path = os.path.join(
+        dump_dir, "Section1_GenericBinaryData.bin"
+    )
+    with open(dumped_weights_path, "rb") as f:
+      self.assertEqual(f.read(), weights_bytes)
+    with open(dumped_binary_path, "rb") as f:
+      self.assertEqual(f.read(), binary_bytes)
+
+
+class _RecordingBytesIO(io.BytesIO):
+
+  def __init__(self, initial_bytes: bytes):
+    super().__init__(initial_bytes)
+    self.read_sizes: list[int | None] = []
+
+  def read(self, size: int | None = -1) -> bytes:
+    self.read_sizes.append(size)
+    return super().read(size)
+
 
 class LitertlmPeekUtilTest(absltest.TestCase):
 
@@ -264,6 +314,52 @@ class LitertlmPeekUtilTest(absltest.TestCase):
       with open(file_path, "rb") as f:
         self.assertEqual(f.read(), file_content)
       self.assertIn("model.weight dumped to", mock_output.getvalue())
+
+  def test_dump_tflite_weight_reads_in_bounded_chunks(self):
+    chunk_size = litertlm_peek._DUMP_CHUNK_SIZE_BYTES
+    payload = b"a" * chunk_size + b"b" * chunk_size + b"tail"
+    prefix = b"PREFIX_"
+    suffix = b"_SUFFIX"
+    mock_section = self._create_mock_section([])
+    mock_section.BeginOffset.return_value = len(prefix)
+    mock_section.EndOffset.return_value = len(prefix) + len(payload)
+    stream = _RecordingBytesIO(prefix + payload + suffix)
+
+    with mock.patch.object(
+        litertlm_peek,
+        "_get_tflite_weight_filename",
+        return_value="chunked.weight",
+    ):
+      litertlm_peek._dump_tflite_weight(
+          stream, mock_section, 0, self.temp_dir, io.StringIO()
+      )
+
+    self.assertEqual(stream.read_sizes, [chunk_size, chunk_size, 4])
+    file_path = os.path.join(self.temp_dir, "chunked.weight")
+    with open(file_path, "rb") as f:
+      self.assertEqual(f.read(), payload)
+
+  def test_dump_generic_section_reads_in_bounded_chunks(self):
+    chunk_size = litertlm_peek._DUMP_CHUNK_SIZE_BYTES
+    payload = b"x" * chunk_size + b"y" * chunk_size + b"end"
+    prefix = b"HEADER_"
+    suffix = b"_TRAILER"
+    mock_section = self._create_mock_section([])
+    mock_section.BeginOffset.return_value = len(prefix)
+    mock_section.EndOffset.return_value = len(prefix) + len(payload)
+    mock_section.DataType.return_value = (
+        litertlm_peek.schema.AnySectionDataType.GenericBinaryData
+    )
+    stream = _RecordingBytesIO(prefix + payload + suffix)
+
+    litertlm_peek._dump_generic_section(
+        stream, mock_section, 2, self.temp_dir, io.StringIO()
+    )
+
+    self.assertEqual(stream.read_sizes, [chunk_size, chunk_size, 3])
+    file_path = os.path.join(self.temp_dir, "Section2_GenericBinaryData.bin")
+    with open(file_path, "rb") as f:
+      self.assertEqual(f.read(), payload)
 
   def test_kvp_to_dict(self):
     mock_kvp = mock.Mock()

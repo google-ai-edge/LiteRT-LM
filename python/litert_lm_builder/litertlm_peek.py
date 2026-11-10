@@ -34,6 +34,7 @@ ANSI_BOLD = "\033[1m"
 ANSI_RESET = "\033[0m"
 # --- Indentation Constants ---
 INDENT_SPACES = 2
+_DUMP_CHUNK_SIZE_BYTES = 1024 * 1024
 
 
 def print_boxed_title(
@@ -341,6 +342,30 @@ def _dump_any2any_metadata_proto(
   )
 
 
+def _dump_section_bytes(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    file_path: str,
+    chunk_size: int = _DUMP_CHUNK_SIZE_BYTES,
+) -> None:
+  """Copies a section's byte range from file_stream to file_path in chunks."""
+  begin_offset = section_object.BeginOffset()
+  end_offset = section_object.EndOffset()
+  if end_offset < begin_offset:
+    raise ValueError(
+        f"Invalid section offsets: begin={begin_offset}, end={end_offset}"
+    )
+  file_stream.seek(begin_offset)
+  remaining = end_offset - begin_offset
+  with litertlm_core.open_file(file_path, "wb") as f_out:
+    while remaining > 0:
+      chunk = file_stream.read(min(chunk_size, remaining))
+      if not chunk:
+        break
+      f_out.write(chunk)
+      remaining -= len(chunk)
+
+
 def _dump_section_content(
     file_stream: IO[bytes],
     section_object: schema.SectionObject,
@@ -353,13 +378,7 @@ def _dump_section_content(
   if dump_files_dir:
     file_name = get_filename_fn(section_object, section_index)
     file_path = os.path.join(dump_files_dir, file_name)
-    file_stream.seek(section_object.BeginOffset())
-    with litertlm_core.open_file(file_path, "wb") as f_out:
-      f_out.write(
-          file_stream.read(
-              section_object.EndOffset() - section_object.BeginOffset()
-          )
-      )
+    _dump_section_bytes(file_stream, section_object, file_path)
     output_stream.write(
         f"{' ' * INDENT_SPACES}{file_name} dumped to: {file_path}\n"
     )
@@ -428,13 +447,7 @@ def _dump_generic_section(
     file_extension = _get_generic_section_file_extension(data_type_str)
     file_name = f"Section{section_index}_{data_type_str}{file_extension}"
     file_path = os.path.join(dump_files_dir, file_name)
-    file_stream.seek(section_object.BeginOffset())
-    with litertlm_core.open_file(file_path, "wb") as f_out:
-      f_out.write(
-          file_stream.read(
-              section_object.EndOffset() - section_object.BeginOffset()
-          )
-      )
+    _dump_section_bytes(file_stream, section_object, file_path)
     output_stream.write(
         f"{' ' * INDENT_SPACES}Section{section_index}_{data_type_str} dumped"
         f" to: {file_path}\n"
