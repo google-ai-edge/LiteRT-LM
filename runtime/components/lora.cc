@@ -48,11 +48,6 @@ namespace litert::lm {
 
 namespace {
 
-// Names of the signature runners, used to get the signature runners from the
-// interpreter.
-// TODO: b/450616365 - Consolidate constant definitions.
-constexpr char kDecodeSignatureRunner[] = "decode";
-
 // Input of GPU models exported with runtime-BMM LoRA. It holds the channel
 // range of the LoRA BMM ops (see ml_drift::LlmRuntimeParams) and is not a LoRA
 // weight.

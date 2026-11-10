@@ -212,14 +212,10 @@ absl::Status HWKVCacheUpdate(
   // tokens and to only update the cache with valid tokens.
   static constexpr absl::string_view kValidMask = "valid_mask";
   const bool* valid_mask = nullptr;
-  int64_t valid_mask_size = 0;
   std::optional<::litert::TensorBufferScopedLock> valid_mask_lock;
   if (in_buffers.contains(kValidMask)) {
     auto& buf = in_buffers.at(kValidMask);
     LITERT_ASSIGN_OR_RETURN(auto valid_mask_type, buf.TensorType());
-    LITERT_ASSIGN_OR_RETURN(auto num_elements,
-                            valid_mask_type.Layout().NumElements());
-    valid_mask_size = num_elements;
     if (valid_mask_type.ElementType() != ::litert::ElementType::Bool) {
       return absl::InvalidArgumentError("valid_mask must be Bool type");
     }

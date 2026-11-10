@@ -84,29 +84,6 @@ using ::ml_drift::metal::GetFastestStorageType;
 using ::ml_drift::metal::InferenceContext;
 using ::ml_drift::metal::MetalSpatialTensor;
 
-// A helper class to handle creating encoders/submitting.
-class ComputePassHelper {
- public:
-  explicit ComputePassHelper(const MetalEnv* env, id<MTLCommandQueue> queue) : env_(env) {
-    command_buffer_ = [queue commandBuffer];
-    command_encoder_ = [command_buffer_ computeCommandEncoder];
-  }
-
-  id<MTLComputeCommandEncoder> compute_pass_encoder() const { return command_encoder_; }
-
-  void Submit() {
-    [command_encoder_ endEncoding];
-    [command_buffer_ commit];
-    // [command_buffer_ waitUntilCompleted]; // Removed to allow pipelining
-  }
-
- private:
-  const MetalEnv* env_;
-  // id<MTLCommandQueue> command_queue_; // Removed
-  id<MTLCommandBuffer> command_buffer_;
-  id<MTLComputeCommandEncoder> command_encoder_;
-};
-
 absl::Status InitComputeTask(MetalEnv* env, std::unique_ptr<GPUOperation>&& gpu_op,
                              ComputeTask* task) {
   ABSL_RETURN_IF_ERROR(gpu_op->AssembleCode(env->GetInfo()));

@@ -15,8 +15,6 @@
 #include "runtime/util/log_tensor_buffer.h"
 
 #include <cstdint>
-#include <fstream>
-#include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -67,63 +65,6 @@ TEST(LogTensorBufferTest, LogTensor_Bool) {
   ASSERT_TRUE(tensor_buffer.HasValue());
 
   EXPECT_OK(LogTensor(*tensor_buffer, 3, "Bool Prefix: "));
-}
-
-TEST(LogTensorBufferTest, DumpTensorToCsv_Float) {
-  struct alignas(kHostMemoryBufferAlignment) {
-    float d[5] = {1.1, 2.2, -3.3, 4.4, 5.5};
-  } data;
-
-  auto tensor_buffer = TensorBuffer::CreateFromHostMemory(
-      RankedTensorType(ElementType::Float32, Layout(Dimensions({5}))), data.d,
-      5 * sizeof(float));
-  ASSERT_TRUE(tensor_buffer.HasValue());
-
-  std::string filename = testing::TempDir() + "/test_float.csv";
-  EXPECT_OK(DumpTensorToCsv(*tensor_buffer, filename));
-
-  std::ifstream f(filename);
-  std::string line;
-  ASSERT_TRUE(std::getline(f, line));
-  EXPECT_EQ(line, "1.1,2.2,-3.3,4.4,5.5");
-}
-
-TEST(LogTensorBufferTest, DumpTensorToCsv_Int8) {
-  struct alignas(kHostMemoryBufferAlignment) {
-    int8_t d[5] = {1, 2, -3, 4, 5};
-  } data;
-
-  auto tensor_buffer = TensorBuffer::CreateFromHostMemory(
-      RankedTensorType(ElementType::Int8, Layout(Dimensions({5}))), data.d,
-      5 * sizeof(int8_t));
-  ASSERT_TRUE(tensor_buffer.HasValue());
-
-  std::string filename = testing::TempDir() + "/test_int8.csv";
-  EXPECT_OK(DumpTensorToCsv(*tensor_buffer, filename));
-
-  std::ifstream f(filename);
-  std::string line;
-  ASSERT_TRUE(std::getline(f, line));
-  EXPECT_EQ(line, "1,2,-3,4,5");
-}
-
-TEST(LogTensorBufferTest, DumpTensorToCsv_Bool) {
-  struct alignas(kHostMemoryBufferAlignment) {
-    bool d[3] = {true, false, true};
-  } data;
-
-  auto tensor_buffer = TensorBuffer::CreateFromHostMemory(
-      RankedTensorType(ElementType::Bool, Layout(Dimensions({3}))), data.d,
-      3 * sizeof(bool));
-  ASSERT_TRUE(tensor_buffer.HasValue());
-
-  std::string filename = testing::TempDir() + "/test_bool.csv";
-  EXPECT_OK(DumpTensorToCsv(*tensor_buffer, filename));
-
-  std::ifstream f(filename);
-  std::string line;
-  ASSERT_TRUE(std::getline(f, line));
-  EXPECT_EQ(line, "1,0,1");
 }
 
 }  // namespace

@@ -690,6 +690,7 @@ cc_test(
 
 cc_library(
     name = "fake_llm_executor",
+    testonly = 1,
     srcs = ["fake_llm_executor.cc"],
     hdrs = ["fake_llm_executor.h"],
     deps = [

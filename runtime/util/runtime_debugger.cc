@@ -102,13 +102,11 @@ absl::Status SaveTensorBufferToFile(absl::string_view root_directory,
   void* addr = lock_and_addr->second;
 
   SafetensorsDtype dtype = SafetensorsDtype::kDefault;
-  size_t element_size = sizeof(float);
   std::vector<int64_t> shape;
 
   if (auto tensor_type_or = buffer.TensorType(); tensor_type_or.HasValue()) {
     auto dtype_info = GetSafetensorsDtypeInfo(tensor_type_or->ElementType());
     dtype = dtype_info.dtype;
-    element_size = dtype_info.element_size;
 
     const auto& dims = tensor_type_or->Layout().Dimensions();
     if (!dims.empty()) {

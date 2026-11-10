@@ -171,7 +171,6 @@ cc_library(
         "@litert//litert/cc:litert_expected",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//tflite/types:half",
     ],
 )
 
@@ -471,7 +470,6 @@ cc_library(
     srcs = ["zip_utils.cc"],
     hdrs = ["zip_utils.h"],
     deps = [
-        ":external_file_cc_proto",
         ":litert_status_util",
         ":zip_readonly_mem_file",
         "@com_google_absl//absl/cleanup",

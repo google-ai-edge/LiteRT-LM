@@ -1585,8 +1585,7 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
       combined_token_ids.insert(combined_token_ids.end(), image_token_num,
                                 ExecutorVisionData::kSpecialToken);
       all_image_data.push_back(std::move(single_image_data));
-    } else if (const auto* input_image_end =
-                   std::get_if<InputImageEnd>(&content)) {
+    } else if (std::holds_alternative<InputImageEnd>(content)) {
       combined_token_ids.push_back(ExecutorVisionData::kEndToken);
     } else if (const auto* input_audio = std::get_if<InputAudio>(&content)) {
       // Compiles the audio encoder here if it is loaded lazily.
@@ -1633,8 +1632,7 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         combined_token_ids.insert(combined_token_ids.end(), num_audio_tokens,
                                   ExecutorAudioData::kSpecialToken);
       }
-    } else if (const auto* input_audio_end =
-                   std::get_if<InputAudioEnd>(&content)) {
+    } else if (std::holds_alternative<InputAudioEnd>(content)) {
       if (audio_executor_ != nullptr) {
         auto flushed_audio_data = audio_executor_->Flush();
         if (flushed_audio_data.ok()) {

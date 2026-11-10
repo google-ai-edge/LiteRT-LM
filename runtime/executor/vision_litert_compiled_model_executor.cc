@@ -338,11 +338,6 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
                    ExecutorSettingsBase::kXnnpackCacheSuffix),
       /*check_and_clean=*/true);
   std::string weight_cache_path = vision_executor_settings_.GetCacheDir();
-  auto activation_data_type = ActivationDataType::FLOAT16;
-  if (vision_executor_settings_.GetActivationDataType().has_value()) {
-    activation_data_type =
-        vision_executor_settings_.GetActivationDataType().value();
-  }
   switch (backend_) {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.

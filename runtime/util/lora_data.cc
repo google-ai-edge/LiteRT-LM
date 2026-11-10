@@ -40,9 +40,6 @@ namespace litert::lm {
 namespace {
 
 constexpr absl::string_view kLoRARank = "lora_rank";
-// The maximum size of the metadata buffer.
-// This is the max length we need to mmap to build the flatbuffer model.
-constexpr int kMetadataMaxSize = 1024 * 1024;  // 1MB
 
 absl::StatusOr<std::unique_ptr<tflite::FlatBufferModel>>
 CreateFlatBufferModelFromBuffer(const void* buffer_addr, size_t buffer_size) {

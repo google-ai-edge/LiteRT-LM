@@ -942,13 +942,6 @@ absl::Status FillAttentionMaskImpl(
           end_k = std::min<int>(end_k,
                                 query_step + sliding_window_size.value() + 1);
         }
-        int first_past_non_vision_token = query_step;
-        for (int j = query_step - 1; j >= start_k; --j) {
-          if ((*token_ids)[j] != ExecutorVisionData::kSpecialToken) {
-            first_past_non_vision_token = j;
-            break;
-          }
-        }
         // Image tokens can attend to all past tokens, but cannot attend to
         // future non-vision tokens.
         const int first_future_non_vision_token =

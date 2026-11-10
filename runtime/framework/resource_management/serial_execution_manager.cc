@@ -645,8 +645,7 @@ SerialExecutionManager::ProcessAndCombineContents(
       combined_token_ids.insert(combined_token_ids.end(), image_token_num,
                                 ExecutorVisionData::kSpecialToken);
       all_image_data.push_back(std::move(single_image_data));
-    } else if (const auto* input_image_end =
-                   std::get_if<InputImageEnd>(&preprocessed_content)) {
+    } else if (std::holds_alternative<InputImageEnd>(preprocessed_content)) {
       combined_token_ids.push_back(ExecutorVisionData::kEndToken);
     } else if (const auto* input_audio =
                    std::get_if<InputAudio>(&preprocessed_content)) {
@@ -689,8 +688,7 @@ SerialExecutionManager::ProcessAndCombineContents(
         combined_token_ids.insert(combined_token_ids.end(), num_audio_tokens,
                                   ExecutorAudioData::kSpecialToken);
       }
-    } else if (const auto* input_audio_end =
-                   std::get_if<InputAudioEnd>(&preprocessed_content)) {
+    } else if (std::holds_alternative<InputAudioEnd>(preprocessed_content)) {
       // We allow audio end token even if the audio executor is not
       // available.
       auto audio_executor = resource_manager_->AcquireAudioExecutor();

@@ -226,8 +226,7 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
         return absl::InternalError(
             "Image must be preprocessed before being used in SessionAdvanced.");
       }
-    } else if (const auto* input_image_end =
-                   std::get_if<InputImageEnd>(&content)) {
+    } else if (std::holds_alternative<InputImageEnd>(content)) {
       preprocessed_contents.emplace_back(InputImageEnd());
     } else if (const auto* input_audio = std::get_if<InputAudio>(&content)) {
       if (input_audio->IsTensorBuffer() || input_audio->IsAudioEmbeddings()) {
@@ -237,8 +236,7 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
         return absl::InternalError(
             "Audio must be preprocessed before being used in SessionAdvanced.");
       }
-    } else if (const auto* input_audio_end =
-                   std::get_if<InputAudioEnd>(&content)) {
+    } else if (std::holds_alternative<InputAudioEnd>(content)) {
       preprocessed_contents.emplace_back(InputAudioEnd());
     } else {
       return absl::InternalError(

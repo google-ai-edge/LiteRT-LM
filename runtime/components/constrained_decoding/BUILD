@@ -232,6 +232,7 @@ cc_library(
 
 cc_library(
     name = "fake_constraint",
+    testonly = 1,
     srcs = ["fake_constraint.cc"],
     hdrs = ["fake_constraint.h"],
     deps = [
