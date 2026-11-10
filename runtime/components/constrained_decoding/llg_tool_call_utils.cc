@@ -330,12 +330,15 @@ CHANNEL_TEXT: /(.|\n)+/
 
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options) {
   // The answer can't contain the code fence, so the model can't write a tool
-  // call as text. It needs at least one character, so the model can't end the
-  // turn without answering.
+  // call as text. It needs a character that isn't whitespace, so the model
+  // can't end the turn without a visible answer, e.g. after only "\n". The
+  // model can't end the turn before that character, so only two whitespace
+  // characters can come before it. Otherwise the model could keep writing
+  // whitespace instead of answering.
   return absl::StrCat(absl::StrFormat(
                           R"(
 FORBIDDEN_CALL : /(.|\n)*%s(.|\n)*/
-SAFE_TEXT : /(.|\n)+/ & ~FORBIDDEN_CALL
+SAFE_TEXT : /\s{0,2}\S(.|\n)*/ & ~FORBIDDEN_CALL
 )",
                           EscapeForLarkRegex(options.code_fence_start)),
                       GetStartRule(options, "SAFE_TEXT"));

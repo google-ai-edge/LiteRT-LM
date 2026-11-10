@@ -96,8 +96,8 @@ std::string GetStartRule(const LlgConstraintsOptions& options,
                          absl::string_view body);
 
 // Returns the grammar for text-only answers, i.e. the "none" tool choice. The
-// answer can't contain the code fence, and it can't be empty, even after a
-// channel.
+// answer can't contain the code fence, and it needs a character that isn't
+// whitespace, even after a channel.
 std::string GetTextOnlyBlock(const LlgConstraintsOptions& options);
 
 std::string GetRuleForType(const std::string& type,

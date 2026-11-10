@@ -320,9 +320,9 @@ get_weather(location="Mountain View")
 ```)");
 }
 
-// "none": the answer can't contain the tool_code fence, and it can't be empty.
-// Text that only looks like a call isn't one, since only the fence starts a
-// call.
+// "none": the answer can't contain the tool_code fence, and it can't be empty
+// or only whitespace. Text that only looks like a call isn't one, since only
+// the fence starts a call.
 TEST_F(LlgPythonToolCallsTest, TextOnlyRejectsCodeFence) {
   nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
     "name": "get_weather",
@@ -343,11 +343,13 @@ TEST_F(LlgPythonToolCallsTest, TextOnlyRejectsCodeFence) {
   AssertAccepts(*constraint, "I can't check the weather right now.");
   AssertAccepts(*constraint, "The get_weather tool can tell you.");
   AssertAccepts(*constraint, R"(get_weather(location="Paris"))");
+  AssertAccepts(*constraint, "\nI can't check the weather right now.");
   AssertRejects(*constraint,
                 R"(```tool_code
 get_weather(location="Paris")
 ```)");
   AssertRejects(*constraint, "");
+  AssertRejects(*constraint, "\n");
 }
 
 // Gemma 3 uses this mode by default. The tool_code fence is plain text, so a

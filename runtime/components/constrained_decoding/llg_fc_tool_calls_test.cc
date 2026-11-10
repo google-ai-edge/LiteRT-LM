@@ -243,6 +243,39 @@ TEST_F(LlgFcToolCallsTest, TextOnlyRejectsEmptyAnswer) {
   AssertAccepts(*constraint, "A");
 }
 
+// An answer of only whitespace isn't visible either. After a tool response,
+// Gemma 4 2.3B answered "none" with only "\n". The model can't end the turn
+// before a visible character, so only two whitespace characters can come
+// before it, and the model can't keep writing whitespace instead.
+TEST_F(LlgFcToolCallsTest, TextOnlyRejectsWhitespaceOnlyAnswer) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextOnly);
+  options.channel_start = "<|channel>";
+  options.channel_end = "<channel|>";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  for (absl::string_view answer : {
+           "\n",
+           " ",
+           "\t\n",
+           "<|channel>thought\nI planted them.<channel|>",
+           "<|channel>thought\nI planted them.<channel|>\n",
+           "\n\n\nI planted them.",
+       }) {
+    AssertRejects(*constraint, answer);
+  }
+  for (absl::string_view answer : {
+           "\nI planted them.",
+           "\n\nI planted them.",
+           " I planted\n\n\nthem.\n\n\n",
+           "<|channel>thought\nDone.<channel|>\nI planted them.",
+       }) {
+    AssertAccepts(*constraint, answer);
+  }
+}
+
 // The code fence is matched literally. The `|` in "<|tool_call>" isn't an
 // alternation, so answers that end with "<" or start with "tool_call>" are
 // fine. Text that only looks like a call isn't one, since only the fence starts

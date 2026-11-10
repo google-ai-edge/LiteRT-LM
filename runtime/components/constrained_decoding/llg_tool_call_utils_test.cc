@@ -130,7 +130,7 @@ TEST(LlgToolCallUtilsTest, GetTextOnlyBlock) {
   options.code_fence_start = "<|tool_call>";
 
   std::string block = GetTextOnlyBlock(options);
-  EXPECT_THAT(block, testing::HasSubstr("SAFE_TEXT : /(.|\\n)+/"));
+  EXPECT_THAT(block, testing::HasSubstr(R"(SAFE_TEXT : /\s{0,2}\S(.|\n)*/)"));
   // The fence is escaped, so it matches literally.
   EXPECT_THAT(block, testing::HasSubstr(R"(/(.|\n)*<\|tool_call>(.|\n)*/)"));
 }
