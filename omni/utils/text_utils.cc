@@ -101,7 +101,8 @@ std::vector<std::string> SplitCjkCharacters(
     while (pos < word.size()) {
       const size_t start = pos;
       const char32_t cp = DecodeUtf8CodePoint(word, pos);
-      const absl::string_view ch(word.data() + start, pos - start);
+      const absl::string_view ch =
+          absl::string_view(word).substr(start, pos - start);
       if (IsCjkCharacter(cp)) {
         if (!pending.empty()) pieces.push_back(std::move(pending));
         pending.clear();
