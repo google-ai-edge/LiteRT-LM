@@ -26,6 +26,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/executor/gpu_artisan/utils/constraint_utils.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
@@ -81,6 +82,9 @@ struct RuntimeState {
 
   // Random generator for sampling step.
   std::shared_ptr<std::default_random_engine> rand_gen;
+
+  // The current state of the constraint.
+  std::shared_ptr<::odml::infra::llm_utils::Constraint::State> constraint_state;
 
   // Whether decode has been run ever after prefill.
   // This is only used by the compiled model executor to determine whether

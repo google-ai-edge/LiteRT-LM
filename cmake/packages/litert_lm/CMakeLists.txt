@@ -219,6 +219,15 @@ option(LITERT_LM_ENABLE_LFM2_PROCESSOR
 option(LITERT_LM_ENABLE_MINICPM_PROCESSOR
     "Enable MiniCPM family model data processors"
     ON)
+option(LITERT_LM_ENABLE_GPU_ARTISAN
+    "Enable GPU Artisan backend"
+    OFF)
+
+if(LITERT_LM_ENABLE_GPU_ARTISAN)
+    message(FATAL_ERROR
+        "LITERT_LM_ENABLE_GPU_ARTISAN is currently supported in Bazel builds "
+        "only; CMake external dependencies for ml_drift are not yet wired.")
+endif()
 
 # --- Build
 option(LITERT_BUILD_CONFIG_DISABLE_GPU_VAL
