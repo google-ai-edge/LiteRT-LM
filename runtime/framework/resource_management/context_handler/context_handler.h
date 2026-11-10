@@ -169,13 +169,6 @@ class ContextHandler::SharedProcessedContext {
                     handlers_.end());
   }
 
-  // Returns the number of live `ContextHandler`s currently referencing this
-  // `SharedProcessedContext`.
-  //
-  // returns:
-  //   The count of registered handlers in `handlers_`.
-  int NumHandlers() const ABSL_LOCKS_EXCLUDED(handlers_mutex_);
-
   // Returns the number of tokens in the longest handler.
   absl::StatusOr<int> LongestHandlerTimeStep(LlmExecutor& llm_executor) const;
 

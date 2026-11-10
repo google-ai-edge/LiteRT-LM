@@ -1906,94 +1906,6 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
-     ReleaseAndRestoreContextMovesMultiHeadDecodeState) {
-  const std::filesystem::path model_path =
-      std::filesystem::path(::testing::SrcDir()) /
-      "litert_lm/runtime/testdata/magic_test_decode_batch.tflite";
-  ASSERT_OK_AND_ASSIGN(auto model_assets,
-                       ModelAssets::Create(model_path.string()));
-  ASSERT_OK_AND_ASSIGN(auto executor_settings,
-                       LlmExecutorSettings::CreateDefault(model_assets));
-  executor_settings.SetCacheDir(":nocache");
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      auto env, Environment::Create(std::vector<Environment::Option>()));
-  ASSERT_OK_AND_ASSIGN(auto model_resources,
-                       TfLiteModelResources::Create(model_assets));
-  ASSERT_OK_AND_ASSIGN(
-      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
-                         std::move(executor_settings), env, *model_resources));
-  ASSERT_NE(executor, nullptr);
-
-  // Prefill 5 tokens: before Decode() runs (`ran_decode == false`), the active
-  // KV cache lives in `state_` (batch size 1). Releasing and restoring must
-  // preserve `state_` and allow subsequent `Decode()` to broadcast it into
-  // `decode_state_`.
-  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      auto input_tokens_buffer,
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5}));
-  ExecutorInputs inputs;
-  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
-  ASSERT_OK(executor->Prefill(inputs));
-
-  ASSERT_OK_AND_ASSIGN(auto prefill_only_context,
-                       executor->ReleaseContext(/*save_state=*/true));
-  StateInterface* prefill_state_ptr =
-      static_cast<LlmProcessedContext&>(
-          prefill_only_context->processed_context())
-          .state()
-          .get();
-  ASSERT_NE(prefill_state_ptr, nullptr);
-  EXPECT_EQ(prefill_state_ptr->GetBatchSize(), 1);
-  ASSERT_OK(executor->RestoreContext(std::move(prefill_only_context)));
-  ASSERT_OK(executor->Decode());
-
-  ASSERT_OK_AND_ASSIGN(auto context_a,
-                       executor->ReleaseContext(/*save_state=*/true));
-  StateInterface* decode_state_ptr_a =
-      static_cast<LlmProcessedContext&>(context_a->processed_context())
-          .state()
-          .get();
-  ASSERT_NE(decode_state_ptr_a, nullptr);
-  EXPECT_GT(decode_state_ptr_a->GetBatchSize(), 1);
-
-  // Switch to a fresh context with the same multi-head RuntimeConfig: Reset()
-  // must allocate a new `decode_state_` so prefill + decode succeed.
-  ASSERT_OK_AND_ASSIGN(auto runtime_config, executor->GetRuntimeConfig());
-  ASSERT_OK_AND_ASSIGN(auto context_b_init, executor->CreateNewContext(
-                                                std::nullopt, runtime_config));
-  ASSERT_OK(executor->RestoreContext(std::move(context_b_init)));
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      auto input_tokens_buffer_b,
-      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5}));
-  ExecutorInputs inputs_b;
-  inputs_b.SetTextData(ExecutorTextData(std::move(input_tokens_buffer_b)));
-  ASSERT_OK(executor->Prefill(inputs_b));
-  ASSERT_OK(executor->Decode());
-
-  ASSERT_OK_AND_ASSIGN(auto context_b,
-                       executor->ReleaseContext(/*save_state=*/true));
-  StateInterface* decode_state_ptr_b =
-      static_cast<LlmProcessedContext&>(context_b->processed_context())
-          .state()
-          .get();
-  ASSERT_NE(decode_state_ptr_b, nullptr);
-  EXPECT_NE(decode_state_ptr_a, decode_state_ptr_b);
-
-  // Restoring context_a moves `decode_state_ptr_a` back into `decode_state_`
-  // and allows continuing multi-head `Decode()` without re-broadcasting.
-  ASSERT_OK(executor->RestoreContext(std::move(context_a)));
-  ASSERT_OK(executor->Decode());
-  ASSERT_OK_AND_ASSIGN(auto context_a_after,
-                       executor->ReleaseContext(/*save_state=*/true));
-  EXPECT_EQ(
-      static_cast<LlmProcessedContext&>(context_a_after->processed_context())
-          .state()
-          .get(),
-      decode_state_ptr_a);
-}
-
-TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      RollBackProcessedTokensWithZeroTokenIdTest) {
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
@@ -2217,37 +2129,6 @@ TEST_F(LlmLiteRtCompiledModelExecutorLinearAttentionTest,
   // The state buffers belong to the executor and still hold the sequence that
   // just ran; restoring the context at step 0 must not continue from it.
   ASSERT_OK(executor_->RestoreContext(std::move(context)));
-  RecordStateBuffersBeforeEachGraphRun();
-  ASSERT_OK(Prefill());
-
-  EXPECT_THAT(key_cache_, Each(0));
-  EXPECT_THAT(value_cache_, Each(0));
-}
-
-TEST_F(
-    LlmLiteRtCompiledModelExecutorLinearAttentionTest,
-    RestoreContextAtStepZeroWithSharedProcessedTokensResetsStateWhenRollingBack) {
-  ASSERT_NO_FATAL_FAILURE(CreateExecutor("magic_test_none.tflite",
-                                         /*with_linear_attention_state=*/true));
-  FillStateBuffersBeforeEachGraphRun();
-  ASSERT_OK(Prefill());
-  ASSERT_OK_AND_ASSIGN(auto context,
-                       executor_->ReleaseContext(/*save_state=*/true));
-  // Simulate a sibling ContextHandler at step 0 sharing a ProcessedContext that
-  // has already advanced to step 5.
-  context->runtime_state().current_step = 0;
-  ASSERT_EQ(context->processed_context().processed_tokens().TokenCount(), 5);
-
-  // Restoring preserves the shared KV cache state (so a sibling handler or
-  // prefix match can still use it), while a subsequent Prefill() from step 0
-  // rolls back ProcessedTokens to 0 and zeroes the state buffers.
-  ASSERT_OK(executor_->RestoreContext(std::move(context)));
-  ASSERT_OK_AND_ASSIGN(auto cloned_before_prefill, executor_->CloneContext());
-  EXPECT_NE(static_cast<LlmProcessedContext&>(
-                cloned_before_prefill->processed_context())
-                .state(),
-            nullptr);
-
   RecordStateBuffersBeforeEachGraphRun();
   ASSERT_OK(Prefill());
 

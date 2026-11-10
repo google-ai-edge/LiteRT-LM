@@ -24,7 +24,6 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/engine/engine_settings.h"
@@ -170,15 +169,12 @@ TEST(ResourceManagerTest, ExecutorsDontVerifyDraftsByDefault) {
 // How the resource manager has installed contexts into an executor.
 struct ContextSwitchCounts {
   int cloned_contexts = 0;
-  int released_contexts = 0;
-  int released_with_save_state = 0;
-  int released_without_save_state = 0;
   int restored_contexts = 0;
   int updated_runtime_states = 0;
   std::vector<int> prefill_start_steps;
 };
 
-// A fake executor that counts context installs and releases.
+// A fake executor that counts context installs.
 class ContextSwitchFakeLlmExecutor : public FakeLlmExecutor {
  public:
   explicit ContextSwitchFakeLlmExecutor(
@@ -197,17 +193,6 @@ class ContextSwitchFakeLlmExecutor : public FakeLlmExecutor {
 
   absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const override {
     ++counts_->cloned_contexts;
-    return MakeContext();
-  }
-
-  absl::StatusOr<std::unique_ptr<LlmContext>> ReleaseContext(
-      bool save_state) override {
-    ++counts_->released_contexts;
-    if (save_state) {
-      ++counts_->released_with_save_state;
-    } else {
-      ++counts_->released_without_save_state;
-    }
     return MakeContext();
   }
 
@@ -271,159 +256,6 @@ TEST(ResourceManagerTest, SwitchesToClonesByUpdatingRuntimeState) {
   ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(clone_2));
   EXPECT_EQ(counts.restored_contexts, 1);
   EXPECT_EQ(counts.updated_runtime_states, 2);
-}
-
-TEST(ResourceManagerTest, SkipsContextSaveWhenSwitchingFromReleasedHandler) {
-  ContextSwitchCounts counts;
-  ASSERT_OK_AND_ASSIGN(
-      auto resource_manager,
-      ResourceManager::Create(
-          /*model_resources=*/nullptr,
-          std::make_unique<ContextSwitchFakeLlmExecutor>(&counts),
-          /*vision_executor_settings=*/nullptr,
-          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
-  ASSERT_OK_AND_ASSIGN(
-      std::shared_ptr<ContextHandler> session_1,
-      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-  {
-    ASSERT_OK_AND_ASSIGN(
-        std::unique_ptr<LlmExecutor> executor,
-        resource_manager->AcquireExecutorWithContextHandler(session_1));
-    ASSERT_OK(executor->SetCurrentStep(3));
-  }
-  EXPECT_EQ(counts.restored_contexts, 1);
-  EXPECT_EQ(counts.released_contexts, 0);
-  EXPECT_EQ(counts.cloned_contexts, 0);
-
-  // Destroy session_1 before switching to session_2: the outgoing context has
-  // no live owner or clone, so ResourceManager must release it without saving
-  // its state and must not clone it.
-  session_1.reset();
-
-  ASSERT_OK_AND_ASSIGN(
-      std::shared_ptr<ContextHandler> session_2,
-      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(session_2));
-  EXPECT_EQ(counts.restored_contexts, 2);
-  EXPECT_EQ(counts.released_contexts, 1);
-  EXPECT_EQ(counts.released_without_save_state, 1);
-  EXPECT_EQ(counts.released_with_save_state, 0);
-  EXPECT_EQ(counts.cloned_contexts, 0);
-}
-
-TEST(ResourceManagerTest,
-     PreservesContextWhenSwitchingFromReleasedHandlerWithLiveClone) {
-  ContextSwitchCounts counts;
-  ASSERT_OK_AND_ASSIGN(
-      auto resource_manager,
-      ResourceManager::Create(
-          /*model_resources=*/nullptr,
-          std::make_unique<ContextSwitchFakeLlmExecutor>(&counts),
-          /*vision_executor_settings=*/nullptr,
-          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
-  ASSERT_OK_AND_ASSIGN(
-      std::shared_ptr<ContextHandler> session_1,
-      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-  {
-    ASSERT_OK_AND_ASSIGN(
-        std::unique_ptr<LlmExecutor> executor,
-        resource_manager->AcquireExecutorWithContextHandler(session_1));
-    ASSERT_OK(executor->SetCurrentStep(3));
-  }
-  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ContextHandler> clone_1,
-                       resource_manager->CloneContextHandler(session_1));
-
-  // Destroy session_1 while clone_1 still shares its SharedProcessedContext.
-  session_1.reset();
-
-  ASSERT_OK_AND_ASSIGN(
-      std::shared_ptr<ContextHandler> session_2,
-      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(session_2));
-  EXPECT_EQ(counts.released_contexts, 1);
-  EXPECT_EQ(counts.released_with_save_state, 1);
-  EXPECT_TRUE(clone_1->shared_processed_context()->HasProcessedContext());
-}
-
-TEST(ResourceManagerTest,
-     PassesSaveStateFalseAtStepZeroAndTrueAfterStepAdvances) {
-  ContextSwitchCounts counts;
-  ASSERT_OK_AND_ASSIGN(
-      auto resource_manager,
-      ResourceManager::Create(
-          /*model_resources=*/nullptr,
-          std::make_unique<ContextSwitchFakeLlmExecutor>(&counts),
-          /*vision_executor_settings=*/nullptr,
-          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
-  ASSERT_OK_AND_ASSIGN(
-      std::shared_ptr<ContextHandler> session_1,
-      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-  ASSERT_OK_AND_ASSIGN(
-      std::shared_ptr<ContextHandler> session_2,
-      resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-
-  // Acquire session_1 at step 0, then switch to session_2: save_state must be
-  // false because session_1 is still at step 0.
-  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(session_1));
-  {
-    ASSERT_OK_AND_ASSIGN(
-        std::unique_ptr<LlmExecutor> executor,
-        resource_manager->AcquireExecutorWithContextHandler(session_2));
-    EXPECT_EQ(counts.released_contexts, 1);
-    EXPECT_EQ(counts.released_without_save_state, 1);
-    EXPECT_EQ(counts.released_with_save_state, 0);
-    ASSERT_OK(executor->SetCurrentStep(3));
-  }
-
-  // Switch back to session_1 while session_2 is at step 3: save_state must be
-  // true.
-  ASSERT_OK(resource_manager->AcquireExecutorWithContextHandler(session_1));
-  EXPECT_EQ(counts.released_contexts, 2);
-  EXPECT_EQ(counts.released_without_save_state, 1);
-  EXPECT_EQ(counts.released_with_save_state, 1);
-}
-
-TEST(ResourceManagerTest, RotatesThreeLiveSessionsWithoutCloning) {
-  ContextSwitchCounts counts;
-  ASSERT_OK_AND_ASSIGN(
-      auto resource_manager,
-      ResourceManager::Create(
-          /*model_resources=*/nullptr,
-          std::make_unique<ContextSwitchFakeLlmExecutor>(&counts),
-          /*vision_executor_settings=*/nullptr,
-          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
-  std::vector<std::shared_ptr<ContextHandler>> sessions;
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_OK_AND_ASSIGN(
-        std::shared_ptr<ContextHandler> session,
-        resource_manager->CreateContextHandler(SessionConfig::CreateDefault()));
-    sessions.push_back(std::move(session));
-  }
-
-  // Advances every session past step 0, then rotates through them twice.
-  for (int round = 0; round < 3; ++round) {
-    for (int i = 0; i < sessions.size(); ++i) {
-      SCOPED_TRACE(absl::StrCat("round=", round, " session=", i));
-      ASSERT_OK_AND_ASSIGN(
-          std::unique_ptr<LlmExecutor> executor,
-          resource_manager->AcquireExecutorWithContextHandler(sessions[i]));
-      if (round == 0) {
-        ASSERT_OK(executor->SetCurrentStep(i + 1));
-      } else {
-        // Each session gets back the step it left at.
-        EXPECT_THAT(executor->GetCurrentStep(), IsOkAndHolds(i + 1));
-      }
-    }
-  }
-
-  // 9 acquisitions: the first loads into an empty executor and the other 8
-  // each release the outgoing session, which is always past step 0, so every
-  // release saves (moves) its state and none of them clones.
-  EXPECT_EQ(counts.restored_contexts, 9);
-  EXPECT_EQ(counts.released_contexts, 8);
-  EXPECT_EQ(counts.released_without_save_state, 0);
-  EXPECT_EQ(counts.released_with_save_state, 8);
-  EXPECT_EQ(counts.cloned_contexts, 0);
 }
 
 absl::StatusOr<ExecutorInputs> MakeTextInputs(absl::Span<const int> tokens) {

@@ -88,21 +88,7 @@ class LitertState : public StateInterface {
   absl::Status Clear() override;
 
   // Returns true if all state buffers are backed by host memory.
-  //
-  // returns:
-  //   True if every state buffer in `bank_1_state_buffers_` (and
-  //   `bank_2_state_buffers_` if present) has buffer type
-  //   `TensorBufferType::kHostMemory`.
   bool IsHostMemory() const;
-
-  // Returns true if any state buffer is backed by hardware memory whose handle
-  // is bound directly to a hardware delegate (`kAhwb`, `kIon`, `kDmaBuf`, or
-  // `kFastRpc`) and therefore must be snapshotted into host memory on clone and
-  // copied back in place on restore rather than replaced.
-  //
-  // returns:
-  //   True if any state buffer uses a bound hardware buffer type.
-  bool UsesBoundHardwareBuffers() const;
 
   // Copies the contents of all state buffers (both banks for kPingPong) and
   // the ping-pong bank index from `other` into this state's existing buffers,
