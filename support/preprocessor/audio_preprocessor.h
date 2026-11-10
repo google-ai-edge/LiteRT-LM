@@ -36,7 +36,7 @@ namespace litert::support {
 class AudioPreprocessorConfig {
  public:
   // The padding type of for FFT bins.
-  enum FftPaddingType {
+  enum FftPaddingType : int {
     // Right padding. The resulted FFT frame will be right padding with zeros or
     // truncated to the given FFT frame length.
     kRight = 0,
