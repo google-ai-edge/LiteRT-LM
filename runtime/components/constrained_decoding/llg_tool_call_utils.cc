@@ -14,10 +14,13 @@
 
 #include "runtime/components/constrained_decoding/llg_tool_call_utils.h"
 
+#include <cstddef>
 #include <string>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
@@ -148,6 +151,90 @@ void AppendOptionalProperties(const std::vector<std::string>& optional_props,
   }
 }
 
+namespace {
+
+// Returns the body of a tool's rule for
+// `ToolFormatConfig::alphabetical_properties`: the properties in alphabetical
+// order, ignoring case, separated by commas. Each required property must be
+// there, and each optional one may be left out.
+std::string GetAlphabeticalPropertiesBody(
+    const std::vector<std::string>& required_props,
+    const std::vector<std::string>& optional_props,
+    absl::string_view tool_name) {
+  struct Property {
+    std::string sort_key;
+    std::string name;
+    std::string rule;
+    bool is_required;
+  };
+  const std::string sanitized_tool = SanitizeLarkRuleName(tool_name);
+  std::vector<Property> properties;
+  std::unordered_set<std::string> names;
+  const auto add = [&](const std::string& name, bool is_required) {
+    if (!names.insert(name).second) {
+      return;
+    }
+    properties.push_back({
+        .sort_key = absl::AsciiStrToLower(name),
+        .name = name,
+        .rule = absl::StrFormat("%s-%s-%s", sanitized_tool,
+                                is_required ? "req" : "opt",
+                                SanitizeLarkRuleName(name)),
+        .is_required = is_required,
+    });
+  };
+  for (const std::string& name : required_props) {
+    add(name, /*is_required=*/true);
+  }
+  for (const std::string& name : optional_props) {
+    add(name, /*is_required=*/false);
+  }
+  // Jinja's dictsort compares the names in lowercase. Names that are the same
+  // in lowercase are compared as they are, so the order is always the same.
+  absl::c_sort(properties, [](const Property& a, const Property& b) {
+    return std::tie(a.sort_key, a.name) < std::tie(b.sort_key, b.name);
+  });
+
+  if (properties.empty()) {
+    return R"("")";
+  }
+  const auto first_required = absl::c_find_if(
+      properties,
+      [](const Property& property) { return property.is_required; });
+  if (first_required == properties.end()) {
+    // Any of the properties can come first, and it has no comma before it.
+    std::vector<std::string> alternatives;
+    alternatives.reserve(properties.size());
+    for (size_t i = 0; i < properties.size(); ++i) {
+      std::vector<std::string> sequence = {properties[i].rule};
+      for (size_t j = i + 1; j < properties.size(); ++j) {
+        sequence.push_back(absl::StrFormat(R"(("," %s)?)", properties[j].rule));
+      }
+      alternatives.push_back(absl::StrJoin(sequence, " "));
+    }
+    return absl::StrFormat("(%s)?", absl::StrJoin(alternatives, " | "));
+  }
+  // The first required property is always there, so the optional properties
+  // before it are followed by a comma, and the properties after it are
+  // preceded by one.
+  std::vector<std::string> sequence;
+  sequence.reserve(properties.size());
+  for (auto it = properties.begin(); it != properties.end(); ++it) {
+    if (it < first_required) {
+      sequence.push_back(absl::StrFormat(R"((%s ",")?)", it->rule));
+    } else if (it == first_required) {
+      sequence.push_back(it->rule);
+    } else if (it->is_required) {
+      sequence.push_back(absl::StrFormat(R"("," %s)", it->rule));
+    } else {
+      sequence.push_back(absl::StrFormat(R"(("," %s)?)", it->rule));
+    }
+  }
+  return absl::StrJoin(sequence, " ");
+}
+
+}  // namespace
+
 void AppendToolRules(const nlohmann::ordered_json& tool,
                      const std::string& tool_name,
                      const ToolFormatConfig& config,
@@ -161,11 +248,16 @@ void AppendToolRules(const nlohmann::ordered_json& tool,
   ExtractToolProperties(tool, tool_name, config, tool_blocks, required_props,
                         optional_props);
 
-  std::vector<std::string> sequence;
-  AppendRequiredProperties(required_props, tool_name, sequence);
-  AppendOptionalProperties(optional_props, tool_name, tool_blocks, sequence);
-
-  std::string body = sequence.empty() ? R"("")" : absl::StrJoin(sequence, " ");
+  std::string body;
+  if (config.alphabetical_properties) {
+    body = GetAlphabeticalPropertiesBody(required_props, optional_props,
+                                         tool_name);
+  } else {
+    std::vector<std::string> sequence;
+    AppendRequiredProperties(required_props, tool_name, sequence);
+    AppendOptionalProperties(optional_props, tool_name, tool_blocks, sequence);
+    body = sequence.empty() ? R"("")" : absl::StrJoin(sequence, " ");
+  }
   if (config.start_wrap.empty() && config.end_wrap.empty()) {
     tool_blocks.push_back(absl::StrFormat(R"(%s: %s)", tool_rule, body));
   } else {

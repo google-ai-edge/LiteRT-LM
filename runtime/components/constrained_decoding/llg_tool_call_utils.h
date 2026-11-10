@@ -55,6 +55,13 @@ struct ToolFormatConfig {
   std::string end_wrap;
   absl::AnyInvocable<std::string(const nlohmann::ordered_json&, bool) const>
       generate_value_rule;
+  // If true, the properties must be in alphabetical order, ignoring case, like
+  // Jinja's dictsort sorts them, whether they're required or optional. Gemma 4
+  // and FunctionGemma write the arguments of a tool call in this order. Each
+  // optional property can be left out. If false, the required properties come
+  // first, in the order of "required", followed by the optional ones in any
+  // order.
+  bool alphabetical_properties = false;
 };
 
 void ExtractToolProperties(const nlohmann::ordered_json& tool,

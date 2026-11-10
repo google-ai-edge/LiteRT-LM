@@ -102,8 +102,7 @@ IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_]*/
 INTEGER: /-?(?:0|[1-9]\d*)/
 NUMBER: /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/
 BOOLEAN: "true" | "false"
-NULL: "null"
-%%ignore /[ \t\r\n]+/)",
+NULL: "null")",
                          options.open_quote, options.close_quote);
 }
 
@@ -143,6 +142,7 @@ absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
         .start_wrap = "{",
         .end_wrap = "}",
         .generate_value_rule = GenerateFcValueRule,
+        .alphabetical_properties = true,
     };
     AppendToolRules(tool, tool_name, fc_config, tool_blocks);
   }

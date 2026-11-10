@@ -824,7 +824,7 @@ TEST_F(LlgFcToolCallsTest, FcArgumentTypes) {
   // Accepts all supported types.
   AssertAccepts(
       *constraint,
-      R"(<|tool_call>call:complex_tool{str:<|"|>abc<|"|>,num:1.2,int:3,bool:true,list:[<|"|>a<|"|>,<|"|>b<|"|>],dict:{k:<|"|>v<|"|>},null_val:null}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:complex_tool{bool:true,dict:{k:<|"|>v<|"|>},int:3,list:[<|"|>a<|"|>,<|"|>b<|"|>],null_val:null,num:1.2,str:<|"|>abc<|"|>}<tool_call|><|tool_response>)");
 }
 
 TEST_F(LlgFcToolCallsTest, FcNullValue) {
@@ -919,20 +919,70 @@ TEST_F(LlgFcToolCallsTest, FcNestedStructures) {
       R"(<|tool_call>call:nested_tool{nested_arr:[[1,2],[3]],nested_obj:{a:{b:<|"|>c<|"|>}}}<tool_call|><|tool_response>)");
 }
 
-TEST_F(LlgFcToolCallsTest, RequiredParametersStrictOrder) {
-  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
-    "name": "set_timer",
+// Gemma 4 and FunctionGemma write the arguments in alphabetical order, whatever
+// the order of "required", and Gemma 4's chat template sorts them that way in
+// the history too. Like in Gallery, "required" here is in declaration order
+// (b/581415640).
+TEST_F(LlgFcToolCallsTest, RequiredParametersInAlphabeticalOrder) {
+  nlohmann::ordered_json plant_seed = nlohmann::ordered_json::parse(R"json({
+    "name": "plant_seed",
     "parameters": {
       "type": "object",
       "properties": {
-        "duration": {
-          "type": "integer"
-        },
-        "sound": {
-          "type": "boolean"
-        }
+        "seed": { "type": "string" },
+        "plots": { "type": "array", "items": { "type": "integer" } }
       },
-      "required": ["sound", "duration"]
+      "required": ["seed", "plots"]
+    }
+  })json");
+  nlohmann::ordered_json run_js = nlohmann::ordered_json::parse(R"json({
+    "name": "run_js",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skill_name": { "type": "string" },
+        "script_name": { "type": "string" },
+        "data": { "type": "string" }
+      },
+      "required": ["skill_name", "script_name", "data"]
+    }
+  })json");
+  nlohmann::ordered_json tools =
+      nlohmann::ordered_json::array({plant_seed, run_js});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:plant_seed{plots:[1,2,3],seed:<|"|>sunflower<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:run_js{data:<|"|>{}<|"|>,script_name:<|"|>index.html<|"|>,skill_name:<|"|>query-wikipedia<|"|>}<tool_call|><|tool_response>)");
+
+  // The order of "required".
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:plant_seed{seed:<|"|>sunflower<|"|>,plots:[1,2,3]}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:run_js{skill_name:<|"|>query-wikipedia<|"|>,script_name:<|"|>index.html<|"|>,data:<|"|>{}<|"|>}<tool_call|><|tool_response>)");
+}
+
+// The optional arguments are in the same order, before, between or after the
+// required ones. Each can be left out, but not repeated.
+TEST_F(LlgFcToolCallsTest, OptionalParametersInAlphabeticalOrder) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "search",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zone": { "type": "string" },
+        "sort": { "type": "string" },
+        "query": { "type": "string" },
+        "limit": { "type": "integer" }
+      },
+      "required": ["zone", "query"]
     }
   })json");
   nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
@@ -942,93 +992,153 @@ TEST_F(LlgFcToolCallsTest, RequiredParametersStrictOrder) {
 
   AssertAccepts(
       *constraint,
-      R"(<|tool_call>call:set_timer{sound:true,duration:10}<tool_call|><|tool_response>)");
-
-  AssertRejects(
-      *constraint,
-      R"(<|tool_call>call:set_timer{duration:10,sound:true}<tool_call|><|tool_response>)");
-}
-
-TEST_F(LlgFcToolCallsTest, RequiredParametersBeforeOptional) {
-  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
-    "name": "set_timer",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "duration": {
-          "type": "integer"
-        },
-        "sound": {
-          "type": "boolean"
-        }
-      },
-      "required": ["duration"]
-    }
-  })json");
-  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
-
-  auto constraint = CreateConstraint(
-      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
-
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
   AssertAccepts(
       *constraint,
-      R"(<|tool_call>call:set_timer{duration:10,sound:true}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,sort:<|"|>date<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>,sort:<|"|>date<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
 
+  // Out of order.
   AssertRejects(
       *constraint,
-      R"(<|tool_call>call:set_timer{sound:true,duration:10}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:search{zone:<|"|>US<|"|>,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,limit:5,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{sort:<|"|>date<|"|>,query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  // A required argument is missing.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  // An argument is repeated.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,limit:6,query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,sort:<|"|>date<|"|>,sort:<|"|>name<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
 }
 
-TEST_F(LlgFcToolCallsTest, OptionalParametersFlexibleOrder) {
+TEST_F(LlgFcToolCallsTest, OnlyOptionalParametersInAlphabeticalOrder) {
   nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
     "name": "search",
     "parameters": {
       "type": "object",
       "properties": {
         "query": { "type": "string" },
+        "limit": { "type": "integer" },
         "filter": { "type": "string" }
       }
     }
   })json");
   nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
   auto constraint = CreateConstraint(
       tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
 
+  AssertAccepts(*constraint,
+                R"(<|tool_call>call:search{}<tool_call|><|tool_response>)");
   AssertAccepts(
       *constraint,
-      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,filter:<|"|>images<|"|>}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:search{limit:5}<tool_call|><|tool_response>)");
   AssertAccepts(
       *constraint,
       R"(<|tool_call>call:search{filter:<|"|>images<|"|>,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{filter:<|"|>images<|"|>,limit:5,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,filter:<|"|>images<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,limit:6}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{,limit:5}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,}<tool_call|><|tool_response>)");
 }
 
-TEST_F(LlgFcToolCallsTest, DuplicateOptionalParametersAllowed) {
+// Like Jinja's dictsort, the order ignores case, so "text_color" comes before
+// "textAlign", though '_' comes after 'A'.
+TEST_F(LlgFcToolCallsTest, ParametersSortedIgnoringCase) {
   nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
-    "name": "search",
+    "name": "set_style",
     "parameters": {
       "type": "object",
       "properties": {
-        "query": { "type": "string" },
-        "filter": { "type": "string" }
+        "textAlign": { "type": "string" },
+        "text_color": { "type": "string" }
       },
-      "required": ["query"]
+      "required": ["textAlign", "text_color"]
     }
   })json");
   nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
   auto constraint = CreateConstraint(
       tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
 
   AssertAccepts(
       *constraint,
-      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,filter:<|"|>images<|"|>,filter:<|"|>videos<|"|>}<tool_call|><|tool_response>)");
-
+      R"(<|tool_call>call:set_style{text_color:<|"|>red<|"|>,textAlign:<|"|>left<|"|>}<tool_call|><|tool_response>)");
   AssertRejects(
       *constraint,
-      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,query:<|"|>dog<|"|>}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:set_style{textAlign:<|"|>left<|"|>,text_color:<|"|>red<|"|>}<tool_call|><|tool_response>)");
+}
 
-  AssertRejects(
+// Gemma 4 and FunctionGemma write calls without whitespace. If the grammar
+// allowed whitespace in a call, the model could keep writing it without moving
+// on, until it ran out of tokens (b/581415640).
+TEST_F(LlgFcToolCallsTest, RejectsWhitespaceInCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "plant_seed",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "seed": { "type": "string" },
+        "plots": { "type": "array", "items": { "type": "integer" } }
+      },
+      "required": ["seed", "plots"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
       *constraint,
-      R"(<|tool_call>call:search{filter:<|"|>images<|"|>,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+      R"(<|tool_call>call:plant_seed{plots:[1,2],seed:<|"|>sunflower<|"|>}<tool_call|><|tool_response>)");
+  // Strings can still have whitespace.
+  AssertAccepts(*constraint,
+                "<|tool_call>call:plant_seed{plots:[1,2],seed:<|\"|>giant\tsun "
+                "flower\n<|\"|>}<tool_call|><|tool_response>");
+
+  for (absl::string_view call : {
+           "call: plant_seed{plots:[1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed {plots:[1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{\n\tplots:[1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots: [1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots:[1, 2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots:[1,2], seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots:[1,2],seed:<|\"|>sunflower<|\"|>\n}",
+       }) {
+    AssertRejects(*constraint, absl::StrCat("<|tool_call>", call,
+                                            "<tool_call|><|tool_response>"));
+  }
 }
 
 TEST_F(LlgFcToolCallsTest, MultipleFunctionCalls) {
@@ -1171,7 +1281,7 @@ TEST_P(LlgFcToolNameTest, AcceptsValidToolName) {
       *constraint,
       absl::StrCat(
           "<|tool_call>call:", tool_name,
-          R"({zipCode:94043,_unit:<|"|>C<|"|>}<tool_call|><|tool_response>)"));
+          R"({_unit:<|"|>C<|"|>,zipCode:94043}<tool_call|><|tool_response>)"));
   AssertRejects(
       *constraint,
       R"(<|tool_call>call:other_tool{zipCode:94043}<tool_call|><|tool_response>)");
