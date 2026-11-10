@@ -879,5 +879,124 @@ TEST(ImagePreprocessorUtilsTest, PatchifyImageUint8FusedSuccess) {
   }
 }
 
+TEST(ImagePreprocessorUtilsTest, PatchifyImageRowFillerMatchesSpanOverload) {
+  constexpr int kBatch = 2;
+  constexpr int kHeight = 4;
+  constexpr int kWidth = 8;
+  constexpr int kChannels = 3;
+  constexpr int kNumElements = kBatch * kHeight * kWidth * kChannels;
+
+  std::vector<float> float_image(kNumElements);
+  for (int i = 0; i < kNumElements; ++i) {
+    float_image[i] = static_cast<float>(i) * 0.25f;
+  }
+
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({kBatch, kHeight, kWidth, kChannels});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 8,
+                               .pooling_kernel_size = 2,
+                               .emit_positions = true,
+                               .merge_patches = true});
+
+  ASSERT_OK_AND_ASSIGN(InputImage expected_image,
+                       PatchifyImage(float_image, parameter));
+  ASSERT_OK_AND_ASSIGN(
+      InputImage actual_image,
+      PatchifyImage(parameter, [&](int batch_idx, int src_h, int src_w,
+                                   int num_pixels, int channels, float* dst) {
+        EXPECT_EQ(channels, kChannels);
+        const size_t src_idx =
+            ((static_cast<size_t>(batch_idx) * kHeight + src_h) * kWidth +
+             src_w) *
+            channels;
+        for (int i = 0; i < num_pixels * channels; ++i) {
+          dst[i] = float_image[src_idx + i];
+        }
+      }));
+
+  ASSERT_OK_AND_ASSIGN(const auto* expected_map,
+                       expected_image.GetPreprocessedImageTensorMap());
+  ASSERT_OK_AND_ASSIGN(const auto* actual_map,
+                       actual_image.GetPreprocessedImageTensorMap());
+
+  ASSERT_TRUE(expected_map->contains("images"));
+  ASSERT_TRUE(actual_map->contains("images"));
+  ASSERT_TRUE(expected_map->contains("positions_xy"));
+  ASSERT_TRUE(actual_map->contains("positions_xy"));
+
+  auto exp_img_lock = TensorBufferScopedLock::Create<float>(
+      expected_map->at("images"), TensorBuffer::LockMode::kRead);
+  auto act_img_lock = TensorBufferScopedLock::Create<float>(
+      actual_map->at("images"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(exp_img_lock.HasValue());
+  ASSERT_TRUE(act_img_lock.HasValue());
+
+  const float* exp_data = exp_img_lock->second;
+  const float* act_data = act_img_lock->second;
+  for (int i = 0; i < kNumElements; ++i) {
+    EXPECT_FLOAT_EQ(act_data[i], exp_data[i]) << "Mismatch at index " << i;
+  }
+
+  auto exp_pos_lock = TensorBufferScopedLock::Create<int32_t>(
+      expected_map->at("positions_xy"), TensorBuffer::LockMode::kRead);
+  auto act_pos_lock = TensorBufferScopedLock::Create<int32_t>(
+      actual_map->at("positions_xy"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(exp_pos_lock.HasValue());
+  ASSERT_TRUE(act_pos_lock.HasValue());
+
+  const int32_t* exp_pos = exp_pos_lock->second;
+  const int32_t* act_pos = act_pos_lock->second;
+  // 2 batches * 2 merged patches * 2 coords = 8 ints.
+  for (int i = 0; i < 8; ++i) {
+    EXPECT_EQ(act_pos[i], exp_pos[i]) << "Position mismatch at index " << i;
+  }
+}
+
+TEST(ImagePreprocessorUtilsTest, PatchifyImageRowFillerErrorPaths) {
+  bool filler_called = false;
+  auto noop_filler = [&](int /*batch_idx*/, int /*src_h*/, int /*src_w*/,
+                         int /*num_pixels*/, int /*channels*/,
+                         float* /*dst*/) { filler_called = true; };
+
+  // Missing patchify_config returns kInternal (even before checking target
+  // dimensions).
+  ImagePreprocessParameter missing_config_param;
+  EXPECT_THAT(
+      PatchifyImage(missing_config_param, noop_filler),
+      StatusIs(absl::StatusCode::kInternal, "Patchify config is not set."));
+  missing_config_param.SetTargetDimensions({1, 4, 4, 3});
+  EXPECT_THAT(
+      PatchifyImage(missing_config_param, noop_filler),
+      StatusIs(absl::StatusCode::kInternal, "Patchify config is not set."));
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+
+  // Invalid target_dimensions rank (must be 4D).
+  EXPECT_THAT(PatchifyImage(parameter, noop_filler),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Target dimensions must be 4."));
+  parameter.SetTargetDimensions({1, 4, 4});
+  EXPECT_THAT(PatchifyImage(parameter, noop_filler),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Target dimensions must be 4."));
+
+  // Non-positive batch_size or channels.
+  for (const Dimensions& invalid_dims : std::vector<Dimensions>{
+           {0, 4, 4, 3}, {-1, 4, 4, 3}, {1, 4, 4, 0}, {1, 4, 4, -3}}) {
+    parameter.SetTargetDimensions(invalid_dims);
+    EXPECT_THAT(PatchifyImage(parameter, noop_filler),
+                StatusIs(absl::StatusCode::kInvalidArgument,
+                         "Batch size and channels must be positive."));
+  }
+
+  EXPECT_FALSE(filler_called);
+}
+
 }  // namespace
 }  // namespace litert::support

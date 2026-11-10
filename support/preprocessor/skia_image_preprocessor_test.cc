@@ -21,9 +21,11 @@
 #include <ios>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -474,6 +476,148 @@ TEST(SkiaImagePreprocessorTest, DryRunFixedSizeImageIsNotDecoded) {
   EXPECT_THAT(preprocessor.Preprocess(
                   InputImage(std::string("invalid_image_bytes")), parameter),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// Builds a minimal uncompressed 24-bit bottom-up BMP image from top-down RGB
+// pixels.
+std::string CreateUncompressedRgbBmp(int width, int height,
+                                     const std::vector<uint8_t>& rgb_pixels) {
+  const int row_stride = (width * 3 + 3) & ~3;
+  const int pixel_data_size = row_stride * height;
+  const int file_size = 54 + pixel_data_size;
+
+  std::string bmp(file_size, '\0');
+  auto write_u16 = [&](int offset, uint16_t val) {
+    bmp[offset + 0] = static_cast<char>(val & 0xFF);
+    bmp[offset + 1] = static_cast<char>((val >> 8) & 0xFF);
+  };
+  auto write_u32 = [&](int offset, uint32_t val) {
+    bmp[offset + 0] = static_cast<char>(val & 0xFF);
+    bmp[offset + 1] = static_cast<char>((val >> 8) & 0xFF);
+    bmp[offset + 2] = static_cast<char>((val >> 16) & 0xFF);
+    bmp[offset + 3] = static_cast<char>((val >> 24) & 0xFF);
+  };
+
+  // BITMAPFILEHEADER (14 bytes)
+  bmp[0] = 'B';
+  bmp[1] = 'M';
+  write_u32(2, static_cast<uint32_t>(file_size));
+  write_u32(10, 54);  // bfOffBits
+
+  // BITMAPINFOHEADER (40 bytes)
+  write_u32(14, 40);  // biSize
+  write_u32(18, static_cast<uint32_t>(width));
+  // Bottom-up row order (positive biHeight) is universally supported.
+  write_u32(22, static_cast<uint32_t>(height));
+  write_u16(26, 1);   // biPlanes
+  write_u16(28, 24);  // biBitCount (24-bit BGR)
+  write_u32(34, static_cast<uint32_t>(pixel_data_size));
+
+  for (int y = 0; y < height; ++y) {
+    const int dst_row = height - 1 - y;
+    for (int x = 0; x < width; ++x) {
+      const int src_idx = (y * width + x) * 3;
+      const int dst_idx = 54 + dst_row * row_stride + x * 3;
+      bmp[dst_idx + 0] = static_cast<char>(rgb_pixels[src_idx + 2]);  // B
+      bmp[dst_idx + 1] = static_cast<char>(rgb_pixels[src_idx + 1]);  // G
+      bmp[dst_idx + 2] = static_cast<char>(rgb_pixels[src_idx + 0]);  // R
+    }
+  }
+  return bmp;
+}
+
+// Creates a top-down RGB checkerboard pattern with alternating high-contrast
+// pixels that Mitchell cubic resampling would blur if `makeScaled` were called
+// at 1:1 scale.
+std::vector<uint8_t> CreateCheckerboardRgbPixels(int width, int height) {
+  std::vector<uint8_t> rgb_pixels(width * height * 3);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const bool odd = ((x + y) % 2) == 1;
+      const int idx = (y * width + x) * 3;
+      rgb_pixels[idx + 0] = odd ? 255 : 0;
+      rgb_pixels[idx + 1] = odd ? 0 : 255;
+      rgb_pixels[idx + 2] = odd ? 51 : 204;
+    }
+  }
+  return rgb_pixels;
+}
+
+TEST(SkiaImagePreprocessorTest,
+     PreprocessIdentityScalePreservesExactPixelValues) {
+  SkiaImagePreprocessor preprocessor;
+  constexpr int kWidth = 4;
+  constexpr int kHeight = 4;
+  const std::vector<uint8_t> rgb_pixels =
+      CreateCheckerboardRgbPixels(kWidth, kHeight);
+  const std::string bmp_bytes =
+      CreateUncompressedRgbBmp(kWidth, kHeight, rgb_pixels);
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, kHeight, kWidth, 3});
+
+  ASSERT_OK_AND_ASSIGN(
+      InputImage preprocessed,
+      preprocessor.Preprocess(InputImage(bmp_bytes), parameter));
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* tensor,
+                       preprocessed.GetPreprocessedImageTensor());
+  auto lock = TensorBufferScopedLock::Create<float>(
+      *tensor, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  const float* data = lock->second;
+
+  for (size_t i = 0; i < rgb_pixels.size(); ++i) {
+    EXPECT_FLOAT_EQ(data[i], static_cast<float>(rgb_pixels[i]) / 255.0f)
+        << "Mismatch at channel index " << i;
+  }
+}
+
+TEST(SkiaImagePreprocessorTest,
+     PreprocessWithPatchifyIdentityScalePreservesExactPixelValues) {
+  SkiaImagePreprocessor preprocessor;
+  constexpr int kWidth = 4;
+  constexpr int kHeight = 4;
+  const std::vector<uint8_t> rgb_pixels =
+      CreateCheckerboardRgbPixels(kWidth, kHeight);
+  const std::string bmp_bytes =
+      CreateUncompressedRgbBmp(kWidth, kHeight, rgb_pixels);
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 4,
+                               .pooling_kernel_size = 1});
+
+  ASSERT_OK_AND_ASSIGN(
+      InputImage preprocessed,
+      preprocessor.Preprocess(InputImage(bmp_bytes), parameter));
+  ASSERT_OK_AND_ASSIGN(
+      (const absl::flat_hash_map<std::string, TensorBuffer>* tensor_map),
+      preprocessed.GetPreprocessedImageTensorMap());
+  ASSERT_TRUE(tensor_map->contains("images"));
+  const TensorBuffer& images_tensor = tensor_map->at("images");
+  auto lock = TensorBufferScopedLock::Create<float>(
+      images_tensor, TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock.HasValue());
+  const float* data = lock->second;
+
+  // Verify each patch contains the exact unblurred pixel values.
+  for (int mh = 0; mh < 2; ++mh) {
+    for (int mw = 0; mw < 2; ++mw) {
+      const int patch_idx = mh * 2 + mw;
+      for (int ph = 0; ph < 2; ++ph) {
+        for (int pw = 0; pw < 2; ++pw) {
+          const int src_y = mh * 2 + ph;
+          const int src_x = mw * 2 + pw;
+          const int src_idx = (src_y * kWidth + src_x) * 3;
+          const int dst_idx = patch_idx * 12 + (ph * 2 + pw) * 3;
+          for (int c = 0; c < 3; ++c) {
+            EXPECT_FLOAT_EQ(
+                data[dst_idx + c],
+                static_cast<float>(rgb_pixels[src_idx + c]) / 255.0f);
+          }
+        }
+      }
+    }
+  }
 }
 
 }  // namespace
