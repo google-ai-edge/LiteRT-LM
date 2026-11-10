@@ -234,7 +234,9 @@ def handle_post_embeddings(handler: Any) -> None:
     return
 
   try:
-    model_id, backend, _ = openai_common.parse_model_parameter(raw_model_str)
+    model_id, backend, max_num_tokens = openai_common.parse_model_parameter(
+        raw_model_str
+    )
   except ValueError as e:
     handler.send_error(400, f"Invalid model parameter: {e}")
     return
@@ -264,7 +266,9 @@ def handle_post_embeddings(handler: Any) -> None:
       handler.send_error(400, "dimensions must be a positive integer")
       return
 
-  engine = handler.get_embedding_engine(model_id, backend=backend)
+  engine = handler.get_embedding_engine(
+      model_id, backend=backend, max_num_tokens=max_num_tokens
+  )
   if engine is None:
     return
 

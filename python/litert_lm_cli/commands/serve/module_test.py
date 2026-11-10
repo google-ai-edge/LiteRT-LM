@@ -1154,7 +1154,9 @@ class ServeTest(parameterized.TestCase):
         urllib.request.urlopen(req)
       self.assertEqual(cm.exception.code, 400)
 
-      mock_emb_engine.compute_embedding_batch.side_effect = RuntimeError("boom")
+      mock_emb_engine.compute_embedding_batch.side_effect = RuntimeError(
+          "ERROR:\n\u2514 Input sequence length (403) exceeds maximum (128)."
+      )
       data_ok = json.dumps({
           "model": "embedding-gemma",
           "input": "hello",
@@ -1611,6 +1613,27 @@ class ServeTest(parameterized.TestCase):
     handler.handle_inference_error(RuntimeError("failure"), "gemma3", "hi")
     handler.send_error.assert_not_called()
 
+  def test_cors_request_handler_send_error_sanitizes_reason_phrase(self):
+    handler = object.__new__(util.CORSRequestHandler)
+    with mock.patch.object(
+        http.server.BaseHTTPRequestHandler, "send_error"
+    ) as mock_super_send_error:
+      handler.send_error(500)
+      mock_super_send_error.assert_called_once_with(500, None, None)
+
+      mock_super_send_error.reset_mock()
+      raw_msg = "ERROR:\n\u2514 Input sequence length exceeds max."
+      handler.send_error(500, raw_msg)
+      mock_super_send_error.assert_called_once_with(
+          500, "ERROR: ? Input sequence length exceeds max.", raw_msg
+      )
+
+      mock_super_send_error.reset_mock()
+      handler.send_error(400, "Bad\nLine", "Detailed explain")
+      mock_super_send_error.assert_called_once_with(
+          400, "Bad Line", "Detailed explain"
+      )
+
   def test_get_or_initialize_server_embedding_engine(self):
     mock_m1 = mock.Mock(spec_set=["exists", "model_path", "model_id"])
     mock_m1.exists.return_value = True
@@ -1660,6 +1683,7 @@ class ServeTest(parameterized.TestCase):
       server.litert_lm_embedding_engine = None
       server.embedding_model_id = None
       server.embedding_backend = None
+      server.embedding_max_num_tokens = None
       server.embedding_vision_backend = None
       server.embedding_audio_backend = None
       server.embedding_engine_cache_key = None
@@ -1673,7 +1697,7 @@ class ServeTest(parameterized.TestCase):
       self.assertEqual(engine1, mock_emb_engine_1)
       self.assertEqual(mock_emb_engine_cls.call_count, 1)
       self.assertEqual(
-          server.embedding_engine_cache_key, ("embedding-model", None)
+          server.embedding_engine_cache_key, ("embedding-model", None, None)
       )
       parse_backend_calls = mock_model_mod.parse_backend.call_count
       resolve_config_calls = mock_model_mod.resolve_config_option.call_count
@@ -1699,7 +1723,7 @@ class ServeTest(parameterized.TestCase):
       self.assertEqual(engine3, mock_emb_engine_1)
       self.assertEqual(mock_emb_engine_cls.call_count, 1)
       self.assertEqual(
-          server.embedding_engine_cache_key, ("embedding-model", "cpu")
+          server.embedding_engine_cache_key, ("embedding-model", "cpu", None)
       )
       # Primary backend was resolved once, vision/audio were not resolved
       self.assertEqual(mock_model_mod.parse_backend.call_count, 1)
@@ -1714,9 +1738,151 @@ class ServeTest(parameterized.TestCase):
       self.assertEqual(mock_emb_engine_cls.call_count, 2)
       mock_emb_engine_1.close.assert_called_once()
       self.assertEqual(
-          server.embedding_engine_cache_key, ("embedding-model-2", None)
+          server.embedding_engine_cache_key, ("embedding-model-2", None, None)
       )
       self.assertEqual(server.embedding_model_id, "embedding-model-2")
+
+  def test_get_or_initialize_server_embedding_engine_max_num_tokens(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/embedding-model"
+    mock_m.model_id = "embedding-model"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_model_mod.resolve_config_option.side_effect = (
+        lambda value, model_obj, config_key, label=None: (
+            8192 if value is None and config_key == "max_num_tokens" else value
+        )
+    )
+
+    mock_emb_engine_1 = mock.MagicMock()
+    mock_emb_engine_2 = mock.MagicMock()
+
+    with mock.patch.object(
+        mock_litert_lm,
+        "EmbeddingEngine",
+        side_effect=[mock_emb_engine_1, mock_emb_engine_2],
+    ) as mock_emb_engine_cls:
+      server = mock.MagicMock(spec=util.LiteRTLMServer)
+      server.litert_lm_embedding_engine = None
+      server.embedding_model_id = None
+      server.embedding_backend = None
+      server.embedding_max_num_tokens = None
+      server.embedding_vision_backend = None
+      server.embedding_audio_backend = None
+      server.embedding_engine_cache_key = None
+
+      # 1. Config-resolved max_num_tokens (8192) propagates to max_input_length.
+      engine1 = util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model"
+      )
+      self.assertEqual(engine1, mock_emb_engine_1)
+      self.assertEqual(mock_emb_engine_cls.call_count, 1)
+      _, kwargs1 = mock_emb_engine_cls.call_args
+      self.assertEqual(kwargs1.get("max_input_length"), 8192)
+      self.assertEqual(server.embedding_max_num_tokens, 8192)
+      self.assertEqual(
+          server.embedding_engine_cache_key, ("embedding-model", None, None)
+      )
+
+      # 2. Explicit max_num_tokens=8192 matches resolved config value (secondary
+      # cache hit without re-initializing).
+      engine2 = util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model", max_num_tokens=8192
+      )
+      self.assertEqual(engine2, mock_emb_engine_1)
+      self.assertEqual(mock_emb_engine_cls.call_count, 1)
+      self.assertEqual(
+          server.embedding_engine_cache_key, ("embedding-model", None, 8192)
+      )
+
+      # 3. Changing max_num_tokens to 2048 closes old engine and re-initializes.
+      engine3 = util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model", max_num_tokens=2048
+      )
+      self.assertEqual(engine3, mock_emb_engine_2)
+      self.assertEqual(mock_emb_engine_cls.call_count, 2)
+      mock_emb_engine_1.close.assert_called_once()
+      _, kwargs3 = mock_emb_engine_cls.call_args
+      self.assertEqual(kwargs3.get("max_input_length"), 2048)
+      self.assertEqual(server.embedding_max_num_tokens, 2048)
+      self.assertEqual(
+          server.embedding_engine_cache_key, ("embedding-model", None, 2048)
+      )
+
+  def test_openai_embeddings_propagates_max_num_tokens(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/embedding-gemma"
+    mock_m.model_id = "embedding-gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_model_mod.resolve_config_option.side_effect = (
+        lambda value, model_obj, config_key, label=None: (
+            4096 if value is None and config_key == "max_num_tokens" else value
+        )
+    )
+
+    mock_emb_engine_1 = mock.MagicMock()
+    mock_emb_engine_1.compute_embedding_batch.return_value = [
+        mock.MagicMock(embedding=[0.1, 0.2]),
+    ]
+    mock_emb_engine_2 = mock.MagicMock()
+    mock_emb_engine_2.compute_embedding_batch.return_value = [
+        mock.MagicMock(embedding=[0.3, 0.4]),
+    ]
+    mock_emb_engine_cls = self.enter_context(
+        mock.patch.object(
+            mock_litert_lm,
+            "EmbeddingEngine",
+            side_effect=[mock_emb_engine_1, mock_emb_engine_2],
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      # 1. Request without inline token override uses config max_num_tokens.
+      req1 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/embeddings",
+          data=json.dumps({
+              "model": "embedding-gemma",
+              "input": "hello",
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req1) as resp1:
+        self.assertEqual(resp1.getcode(), 200)
+      self.assertEqual(mock_emb_engine_cls.call_count, 1)
+      self.assertEqual(
+          mock_emb_engine_cls.call_args.kwargs.get("max_input_length"), 4096
+      )
+
+      # 2. Request with inline model parameter "embedding-gemma,gpu,8192"
+      # overrides config and re-initializes EmbeddingEngine.
+      req2 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/embeddings",
+          data=json.dumps({
+              "model": "embedding-gemma,gpu,8192",
+              "input": "hello",
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req2) as resp2:
+        self.assertEqual(resp2.getcode(), 200)
+      self.assertEqual(mock_emb_engine_cls.call_count, 2)
+      mock_emb_engine_1.close.assert_called_once()
+      self.assertEqual(
+          mock_emb_engine_cls.call_args.kwargs.get("max_input_length"), 8192
+      )
+    finally:
+      if server.litert_lm_embedding_engine is not None:
+        server.litert_lm_embedding_engine.close()
+      server.shutdown()
+      thread.join()
 
   def test_openai_models_listing_and_errors(self):
     m1 = mock.Mock(spec_set=["model_id", "model_path"])

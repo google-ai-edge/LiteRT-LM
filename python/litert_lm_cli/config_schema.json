@@ -46,7 +46,8 @@
         "max_num_tokens": {
           "type": "integer",
           "minimum": 1,
-          "$comment": "Added in version 0.15.0"
+          "description": "Maximum number of tokens for the KV cache (for LLM models) or maximum input token length (max_input_length, for embedding models).",
+          "$comment": "Added in version 0.15.0; propagated as max_input_length for embedding models in version 0.20.0"
         },
         "temperature": {
           "type": "number",

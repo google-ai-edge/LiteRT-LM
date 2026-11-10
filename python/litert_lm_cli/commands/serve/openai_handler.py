@@ -299,12 +299,14 @@ class OpenAIHandler(util.CORSRequestHandler):
       self,
       model_id: str,
       backend: str | None = None,
+      max_num_tokens: int | None = None,
   ) -> litert_lm.EmbeddingEngine | None:
     """Retrieves or initializes the embedding engine for the given model ID.
 
     Args:
       model_id: The model identifier string.
       backend: Optional requested backend override.
+      max_num_tokens: Optional requested max_num_tokens override.
 
     Returns:
       The LiteRT-LM EmbeddingEngine instance, or None if initialization failed.
@@ -315,6 +317,7 @@ class OpenAIHandler(util.CORSRequestHandler):
           self.server,
           model_id=model_id,
           backend=backend,
+          max_num_tokens=max_num_tokens,
       )
     except FileNotFoundError as e:
       self.send_error(404, "".join(traceback.format_exception_only(e)))
@@ -327,9 +330,21 @@ class OpenAIHandler(util.CORSRequestHandler):
       self,
       model_id: str,
       backend: str | None = None,
+      max_num_tokens: int | None = None,
   ) -> litert_lm.EmbeddingEngine | None:
-    """Retrieves or initializes the embedding engine for the given model ID."""
-    return self._get_embedding_engine(model_id, backend=backend)
+    """Retrieves or initializes the embedding engine for the given model ID.
+
+    Args:
+      model_id: The model identifier string.
+      backend: Optional requested backend override.
+      max_num_tokens: Optional requested max_num_tokens override.
+
+    Returns:
+      The LiteRT-LM EmbeddingEngine instance, or None if initialization failed.
+    """
+    return self._get_embedding_engine(
+        model_id, backend=backend, max_num_tokens=max_num_tokens
+    )
 
   def _handle_inference_error(
       self, e: Exception, model_id: str, prompt: Any

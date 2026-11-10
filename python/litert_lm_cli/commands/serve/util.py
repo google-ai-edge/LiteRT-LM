@@ -60,12 +60,14 @@ class LiteRTLMServer(http.server.HTTPServer):
       or None.
     embedding_backend: The hardware backend used by the embedding engine, or
       None.
+    embedding_max_num_tokens: The maximum input token length configured for the
+      embedding engine, or None.
     embedding_vision_backend: The hardware backend used for embedding vision
       encoding, or None.
     embedding_audio_backend: The hardware backend used for embedding audio
       encoding, or None.
-    embedding_engine_cache_key: The cache key tuple (model_id, backend) for the
-      currently loaded embedding engine, or None.
+    embedding_engine_cache_key: The cache key tuple (model_id, backend,
+      max_num_tokens) for the currently loaded embedding engine, or None.
     allowed_origins: Allowed CORS origins.
     address_family: Socket address family (e.g. AF_INET or AF_INET6).
   """
@@ -94,9 +96,12 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.litert_lm_embedding_engine: litert_lm.EmbeddingEngine | None = None
     self.embedding_model_id: str | None = None
     self.embedding_backend: litert_lm.Backend | None = None
+    self.embedding_max_num_tokens: int | None = None
     self.embedding_vision_backend: litert_lm.Backend | None = None
     self.embedding_audio_backend: litert_lm.Backend | None = None
-    self.embedding_engine_cache_key: tuple[str, str | None] | None = None
+    self.embedding_engine_cache_key: (
+        tuple[str, str | None, int | None] | None
+    ) = None
 
   def close_conversation(self) -> None:
     """Closes and resets the currently cached conversation, if any."""
@@ -133,6 +138,37 @@ class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
   def do_OPTIONS(self) -> None:  # pylint: disable=invalid-name
     self.send_response(200)
     self.end_headers()
+
+  def send_error(
+      self,
+      code: int,
+      message: str | None = None,
+      explain: str | None = None,
+  ) -> None:
+    """Sends an HTTP error response with a sanitized reason phrase.
+
+    Sanitizes `message` into a single-line Latin-1 string suitable for HTTP
+    reason phrases (RFC 9112) while preserving multiline or Unicode error
+    details in `explain` when `explain` is not explicitly provided.
+
+    Args:
+      code: The HTTP status code.
+      message: Optional short error message. If None, the standard HTTP reason
+        phrase for `code` is used.
+      explain: Optional detailed explanation. If None and `message` is provided,
+        defaults to the original unsanitized `message`.
+    """
+    if message is not None:
+      if explain is None:
+        explain = message
+      # HTTP status reason-phrases must be single-line Latin-1 (RFC 9112),
+      # whereas C++ runtime errors may contain newlines and Unicode (e.g. '└').
+      message = (
+          " ".join(message.splitlines())
+          .encode("latin-1", errors="replace")
+          .decode("latin-1")
+      )
+    super().send_error(code, message, explain)
 
 
 def get_or_initialize_server_engine(
@@ -275,13 +311,16 @@ def get_or_initialize_server_embedding_engine(
     *,
     model_id: str,
     backend: str | None = None,
+    max_num_tokens: int | None = None,
 ) -> litert_lm.EmbeddingEngine:
-  """Retrieves the persistent server embedding engine or initializes it on first request.
+  """Retrieves or initializes the persistent server embedding engine.
 
   Args:
     server: The active custom LiteRTLMServer instance object.
     model_id: The requested model identifier string.
     backend: Optional requested backend override (e.g. 'cpu', 'gpu', 'npu').
+    max_num_tokens: Optional requested max_num_tokens override, propagated to
+      EmbeddingEngine as max_input_length.
 
   Returns:
     The shared LiteRT-LM EmbeddingEngine context object.
@@ -289,7 +328,7 @@ def get_or_initialize_server_embedding_engine(
   Raises:
     FileNotFoundError: If the model package path does not exist.
   """
-  cache_key = (model_id, backend)
+  cache_key = (model_id, backend, max_num_tokens)
   if (
       server.litert_lm_embedding_engine is not None
       and server.embedding_engine_cache_key == cache_key
@@ -302,11 +341,15 @@ def get_or_initialize_server_embedding_engine(
     raise FileNotFoundError(f"Model {model_id} not found")
 
   resolved_backend = model.parse_backend(backend, model_obj=m)
+  resolved_max_num_tokens = model.resolve_config_option(
+      max_num_tokens, m, "max_num_tokens"
+  )
 
   if server.litert_lm_embedding_engine is not None:
     if (
         server.embedding_model_id == model_id
         and server.embedding_backend == resolved_backend
+        and server.embedding_max_num_tokens == resolved_max_num_tokens
     ):
       server.embedding_engine_cache_key = cache_key
       return server.litert_lm_embedding_engine
@@ -314,7 +357,8 @@ def get_or_initialize_server_embedding_engine(
     click.echo(
         click.style(
             f"Re-initializing embedding engine (model: {model_id}, backend:"
-            f" {resolved_backend})",
+            f" {resolved_backend}, max_num_tokens:"
+            f" {resolved_max_num_tokens})",
             fg="yellow",
         )
     )
@@ -322,6 +366,7 @@ def get_or_initialize_server_embedding_engine(
     server.litert_lm_embedding_engine = None
     server.embedding_model_id = None
     server.embedding_backend = None
+    server.embedding_max_num_tokens = None
     server.embedding_vision_backend = None
     server.embedding_audio_backend = None
     server.embedding_engine_cache_key = None
@@ -356,10 +401,12 @@ def get_or_initialize_server_embedding_engine(
       vision_backend=vision_backend,
       audio_backend=audio_backend,
       cache_dir=cache_dir_val,
+      max_input_length=resolved_max_num_tokens,
   )
   server.litert_lm_embedding_engine = engine
   server.embedding_model_id = model_id
   server.embedding_backend = resolved_backend
+  server.embedding_max_num_tokens = resolved_max_num_tokens
   server.embedding_vision_backend = vision_backend
   server.embedding_audio_backend = audio_backend
   server.embedding_engine_cache_key = cache_key
