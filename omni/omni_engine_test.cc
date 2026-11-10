@@ -49,6 +49,7 @@
 #include "omni/text2speech/vocoder.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/any2any_session_config.pb.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/speech2text_session_config.pb.h"
 #include "runtime/proto/text2speech_session_config.pb.h"
@@ -310,6 +311,30 @@ TEST(OmniEngineTest, ResolvesText2ImageModelAndForwardsOptions) {
                HasSubstr("/custom/text2image_cache/bonsai-flux2.litertlm")));
 }
 
+TEST(OmniEngineTest, ResolvesAny2AnyModelAndForwardsOptions) {
+  OmniEngine::Settings settings{
+      .backend = OmniEngine::Settings::Backend::kGpu,
+      .cache_dir = "/custom/any2any_cache",
+      .num_threads = 4,
+  };
+  EXPECT_THAT(
+      OmniEngine::Create("minicpm-o-4.5", settings),
+      StatusIs(absl::StatusCode::kNotFound,
+               HasSubstr("/custom/any2any_cache/minicpm-o-4.5.litertlm")));
+
+  lm::proto::Any2AnySessionConfig any2any_config;
+  any2any_config.set_generate_audio(true);
+  EXPECT_THAT(
+      OmniEngine::Create("minicpm-o-4.5", settings, &any2any_config),
+      StatusIs(absl::StatusCode::kNotFound,
+               HasSubstr("/custom/any2any_cache/minicpm-o-4.5.litertlm")));
+
+  lm::proto::Speech2TextSessionConfig mismatched_config;
+  mismatched_config.set_overlap_ratio(0.4f);
+  EXPECT_THAT(OmniEngine::Create("minicpm-o-4.5", settings, &mismatched_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(OmniEngineTest, RejectsUnknownModel) {
   EXPECT_THAT(
       OmniEngine::Create("unknown-model-xyz"),
@@ -450,8 +475,8 @@ TEST_F(OmniSessionTest, AsrSessionProcessAsyncWithAudioInput) {
 
   absl::Notification done;
   std::vector<OmniSession::TextOutput> outputs;
-  ASSERT_OK(omni_session->ProcessAsync(
-      [&](absl::StatusOr<OmniSession::Output> res) {
+  ASSERT_OK(
+      omni_session->ProcessAsync([&](absl::StatusOr<OmniSession::Output> res) {
         if (absl::IsOutOfRange(res.status())) {
           done.Notify();
           return res.status();

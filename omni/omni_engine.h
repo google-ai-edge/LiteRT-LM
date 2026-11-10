@@ -93,6 +93,9 @@ struct OmniEngineSettings {
 //
 // Supported Text2Image model names (registered in `omni/text2image/`):
 //   - "bonsai-flux2" / "flux2" / "flux2-klein" / "flux.2-klein-4b"
+//
+// Supported Any2Any model names (registered in `omni/any2any/`):
+//   - "minicpm-o-4.5" / "minicpm-o" / "openbmb/MiniCPM-o-4_5"
 class OmniEngine {
  public:
   using Settings = internal::OmniEngineSettings;

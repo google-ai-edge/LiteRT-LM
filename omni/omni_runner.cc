@@ -43,6 +43,7 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
+#include "runtime/proto/any2any_session_config.pb.h"
 #include "runtime/proto/speech2text_session_config.pb.h"
 #include "runtime/proto/text2image_session_config.pb.h"
 #include "runtime/proto/text2speech_session_config.pb.h"
@@ -51,8 +52,8 @@
 
 // Common engine flags.
 ABSL_FLAG(std::string, model_name, "",
-          "Model name (e.g., parakeet-tdt-0.6b-v3, kokoro, bonsai-flux2). If "
-          "empty, inferred from --model_path.");
+          "Model name (e.g., parakeet-tdt-0.6b-v3, kokoro, bonsai-flux2, "
+          "minicpm-o-4.5). If empty, inferred from --model_path.");
 ABSL_FLAG(std::string, model_path, "",
           "Path to a .litertlm model package or model directory.");
 ABSL_FLAG(std::string, backend, "cpu",
@@ -68,12 +69,18 @@ ABSL_FLAG(std::string, litert_dispatch_lib_dir, "",
 
 // Input & output flags.
 ABSL_FLAG(std::string, audio_path, "",
-          "Path to input WAV audio file (for ASR transcription).");
+          "Path to input WAV audio file (for ASR or Any-to-Any).");
+ABSL_FLAG(std::string, image_path, "",
+          "Path to input PNG/JPEG/BMP image file (for Any-to-Any).");
 ABSL_FLAG(std::string, text, "",
-          "Input text prompt (for TTS synthesis or Text-to-Image generation).");
+          "Input text prompt (for TTS, Text-to-Image, or Any-to-Any).");
 ABSL_FLAG(std::string, output_path, "",
-          "Output file path (.wav for TTS audio, .png for Text-to-Image, or "
-          "optional .txt file for ASR transcript).");
+          "Output file path (.wav for TTS/Any-to-Any audio, .png for "
+          "Text-to-Image, or optional .txt file for ASR/Any-to-Any text).");
+
+// Any-to-Any session flags.
+ABSL_FLAG(bool, generate_audio, false,
+          "Whether to synthesize speech audio output for Any-to-Any models.");
 
 // ASR session flags.
 ABSL_FLAG(float, overlap_ratio, 0.4f,
@@ -186,6 +193,7 @@ absl::Status WritePngFile(absl::string_view filename,
 
 struct OutputCollector {
   std::string output_path;
+  bool separate_text_chunks_with_space = false;
   std::vector<float> accumulated_audio;
   int audio_sample_rate_hz = 24000;
   std::string accumulated_transcript;
@@ -196,7 +204,7 @@ absl::Status HandleOutput(const OmniSession::Output& out,
                           OutputCollector& collector) {
   if (const auto* text_out = std::get_if<TextOutput>(&out)) {
     if (!text_out->confirmed_text.empty()) {
-      if (collector.printed_text) {
+      if (collector.printed_text && collector.separate_text_chunks_with_space) {
         std::cout << " ";
         collector.accumulated_transcript.append(" ");
       }
@@ -224,11 +232,12 @@ absl::Status HandleOutput(const OmniSession::Output& out,
 
 absl::Status RunOmniRunner() {
   const std::string audio_path = absl::GetFlag(FLAGS_audio_path);
+  const std::string image_path = absl::GetFlag(FLAGS_image_path);
   const std::string text = absl::GetFlag(FLAGS_text);
-  if (audio_path.empty() == text.empty()) {
+  if (audio_path.empty() && image_path.empty() && text.empty()) {
     return absl::InvalidArgumentError(
-        "Exactly one of --audio_path (for ASR) or --text (for TTS / "
-        "Text-to-Image) must be provided.");
+        "At least one of --audio_path, --image_path, or --text must be "
+        "provided.");
   }
 
   const std::string cache_dir = absl::GetFlag(FLAGS_cache_dir);
@@ -296,15 +305,26 @@ absl::Status RunOmniRunner() {
     }
   }
 
+  litert::lm::proto::Any2AnySessionConfig any2any_config;
   litert::lm::proto::Speech2TextSessionConfig asr_config;
   litert::lm::proto::Text2SpeechSessionConfig tts_config;
   litert::lm::proto::Text2ImageSessionConfig t2i_config;
   const MessageLite* session_config = nullptr;
 
-  if (reg.metadata_proto_type_id == "litert.lm.proto.Speech2TextMetadata") {
+  if (reg.metadata_proto_type_id == "litert.lm.proto.Any2AnyMetadata") {
+    any2any_config.set_generate_audio(absl::GetFlag(FLAGS_generate_audio));
+    session_config = &any2any_config;
+  } else if (reg.metadata_proto_type_id ==
+             "litert.lm.proto.Speech2TextMetadata") {
     if (audio_path.empty()) {
       return absl::InvalidArgumentError(
           absl::StrCat("ASR model '", model_name, "' requires --audio_path."));
+    }
+    if (!image_path.empty() || !text.empty()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "ASR model '", model_name,
+          "' only accepts --audio_path (--image_path and --text are not "
+          "supported)."));
     }
     asr_config.set_overlap_ratio(absl::GetFlag(FLAGS_overlap_ratio));
     if (absl::EqualsIgnoreCase(absl::GetFlag(FLAGS_text_merger_type),
@@ -324,6 +344,12 @@ absl::Status RunOmniRunner() {
       return absl::InvalidArgumentError(absl::StrCat(
           "Text-to-Image model '", model_name, "' requires --text."));
     }
+    if (!audio_path.empty() || !image_path.empty()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Text-to-Image model '", model_name,
+          "' only accepts --text (--audio_path and --image_path are not "
+          "supported)."));
+    }
     const int img_size = absl::GetFlag(FLAGS_img_size);
     if (img_size > 0) {
       t2i_config.set_width(img_size);
@@ -337,6 +363,12 @@ absl::Status RunOmniRunner() {
     if (text.empty()) {
       return absl::InvalidArgumentError(
           absl::StrCat("TTS model '", model_name, "' requires --text."));
+    }
+    if (!audio_path.empty() || !image_path.empty()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "TTS model '", model_name,
+          "' only accepts --text (--audio_path and --image_path are not "
+          "supported)."));
     }
     const std::string language = absl::GetFlag(FLAGS_language);
     const std::string voice = absl::GetFlag(FLAGS_voice);
@@ -365,6 +397,13 @@ absl::Status RunOmniRunner() {
   ABSL_ASSIGN_OR_RETURN(auto session,
                         engine->CreateSession(std::move(input_source)));
 
+  if (!image_path.empty()) {
+    ABSL_ASSIGN_OR_RETURN(std::string bytes,
+                          litert::omni::LoadFile(image_path));
+    OmniSession::ImageInput image_in;
+    image_in.image_bytes.assign(bytes.begin(), bytes.end());
+    ABSL_RETURN_IF_ERROR(raw_input_source->PushInput(std::move(image_in)));
+  }
   if (!audio_path.empty()) {
     constexpr int kDefaultAsrSampleRateHz = 16000;
     std::vector<float> pcm_samples;
@@ -382,7 +421,8 @@ absl::Status RunOmniRunner() {
           .pcm_samples = std::vector<float>(pcm_samples.begin() + offset,
                                             pcm_samples.begin() + end)}));
     }
-  } else {
+  }
+  if (!text.empty()) {
     ABSL_RETURN_IF_ERROR(
         raw_input_source->PushInput(OmniSession::TextInput{.text = text}));
   }
@@ -390,6 +430,8 @@ absl::Status RunOmniRunner() {
 
   OutputCollector collector{
       .output_path = absl::GetFlag(FLAGS_output_path),
+      .separate_text_chunks_with_space =
+          (reg.metadata_proto_type_id == "litert.lm.proto.Speech2TextMetadata"),
   };
 
   const absl::Time run_start = absl::Now();
@@ -411,7 +453,11 @@ absl::Status RunOmniRunner() {
   if (collector.printed_text) {
     std::cout << std::endl;
   }
-  if (!audio_path.empty() && !collector.output_path.empty()) {
+  const bool expects_text_output_file =
+      (reg.metadata_proto_type_id == "litert.lm.proto.Speech2TextMetadata") ||
+      (reg.metadata_proto_type_id == "litert.lm.proto.Any2AnyMetadata" &&
+       !absl::GetFlag(FLAGS_generate_audio));
+  if (expects_text_output_file && !collector.output_path.empty()) {
     std::ofstream out_file(collector.output_path);
     if (!out_file.is_open()) {
       return absl::InternalError(

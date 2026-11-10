@@ -51,6 +51,7 @@
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
 #include "runtime/proto/text2speech_metadata.pb.h"
@@ -183,6 +184,10 @@ const MessageLite* absl_nullable MergeMetadata(
   }
   if (metadata_proto_type_id == "litert.lm.proto.Text2ImageMetadata") {
     return MergeMetadataProto(lm_resources->GetText2ImageMetadata(),
+                              caller_metadata, merged_metadata);
+  }
+  if (metadata_proto_type_id == "litert.lm.proto.Any2AnyMetadata") {
+    return MergeMetadataProto(lm_resources->GetAny2AnyMetadata(),
                               caller_metadata, merged_metadata);
   }
   return caller_metadata;
@@ -532,10 +537,9 @@ OmniRegistry::CreateSessionFactory(
                              library_dir.c_str()});
     }
   }
-  LITERT_ASSIGN_OR_RETURN(
-      Environment env,
-      Environment::Create(
-          EnvironmentOptions(absl::MakeConstSpan(env_options))));
+  LITERT_ASSIGN_OR_RETURN(Environment env,
+                          Environment::Create(EnvironmentOptions(
+                              absl::MakeConstSpan(env_options))));
   LITERT_ASSIGN_OR_RETURN(Options options, Options::Create());
   ABSL_RETURN_IF_ERROR(
       ConfigureLiteRtOptions(resolved_model_name, resolved_settings, options));

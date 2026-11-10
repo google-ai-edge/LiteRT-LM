@@ -117,6 +117,7 @@ cc_library(
         "//runtime/components:model_resources_litert_lm",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/proto:any2any_metadata_cc_proto",
         "//runtime/proto:speech2text_metadata_cc_proto",
         "//runtime/proto:text2image_metadata_cc_proto",
         "//runtime/proto:text2speech_metadata_cc_proto",
@@ -153,6 +154,8 @@ cc_test(
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "//runtime/components:model_resources",
+        "//runtime/proto:any2any_metadata_cc_proto",
+        "//runtime/proto:any2any_session_config_cc_proto",
         "//runtime/proto:speech2text_metadata_cc_proto",
         "//runtime/proto:speech2text_session_config_cc_proto",
         "//runtime/proto:text2speech_session_config_cc_proto",
@@ -195,6 +198,7 @@ cc_test(
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_options",
+        "//omni/any2any:minicpm_o",  # build_cleaner: keep
         "//omni/base:io_types",
         "//omni/base:stage",
         "//omni/speech2text:asr_session",
@@ -213,6 +217,7 @@ cc_test(
         "//omni/text2speech:vocoder",
         "//runtime/components:model_resources",
         "//runtime/framework:threadpool",
+        "//runtime/proto:any2any_session_config_cc_proto",
         "//runtime/proto:speech2text_metadata_cc_proto",
         "//runtime/proto:speech2text_session_config_cc_proto",
         "//runtime/proto:text2speech_session_config_cc_proto",
@@ -237,6 +242,7 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
+        "//omni/any2any:minicpm_o",  # build_cleaner: keep
         "//omni/base:io_types",
         "//omni/base:model_utils",
         "//omni/speech2text:moonshine",  # build_cleaner: keep
@@ -249,6 +255,7 @@ cc_binary(
         "//omni/text2speech:kokoro",  # build_cleaner: keep
         "//omni/text2speech:qwen3_tts",  # build_cleaner: keep
         "//runtime/executor:default_gpu_accelerator",
+        "//runtime/proto:any2any_session_config_cc_proto",
         "//runtime/proto:speech2text_session_config_cc_proto",
         "//runtime/proto:text2image_session_config_cc_proto",
         "//runtime/proto:text2speech_session_config_cc_proto",

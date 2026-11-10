@@ -49,6 +49,8 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/any2any_metadata.pb.h"
+#include "runtime/proto/any2any_session_config.pb.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/speech2text_session_config.pb.h"
 #include "runtime/proto/text2speech_session_config.pb.h"
@@ -68,19 +70,18 @@ using ::testing::IsEmpty;
 using ::testing::NotNull;
 using ::testing::StartsWith;
 
-void WriteTestLitertLmWithSpeech2TextMetadata(
-    const std::string& path,
-    const lm::proto::Speech2TextMetadata& embedded_metadata) {
+void WriteTestLitertLmWithMetadataSection(
+    const std::string& path, lm::schema::AnySectionDataType section_type,
+    const MessageLite& embedded_metadata) {
   const std::string serialized = embedded_metadata.SerializeAsString();
   constexpr uint64_t kDataOffset = 512;
 
   flatbuffers::FlatBufferBuilder builder(256);
-  auto asr_meta_section = lm::schema::CreateSectionObject(
+  auto meta_section = lm::schema::CreateSectionObject(
       builder, /*items=*/0, /*begin_offset=*/kDataOffset,
-      /*end_offset=*/kDataOffset + serialized.size(),
-      lm::schema::AnySectionDataType_Speech2TextMetadataProto);
+      /*end_offset=*/kDataOffset + serialized.size(), section_type);
   std::vector<flatbuffers::Offset<lm::schema::SectionObject>> sections = {
-      asr_meta_section};
+      meta_section};
   auto section_metadata = lm::schema::CreateSectionMetadata(
       builder, builder.CreateVector(sections));
   auto metadata =
@@ -105,6 +106,22 @@ void WriteTestLitertLmWithSpeech2TextMetadata(
   std::string pad(kDataOffset - header_end_offset, '\0');
   file.write(pad.data(), pad.size());
   file.write(serialized.data(), serialized.size());
+}
+
+void WriteTestLitertLmWithSpeech2TextMetadata(
+    const std::string& path,
+    const lm::proto::Speech2TextMetadata& embedded_metadata) {
+  WriteTestLitertLmWithMetadataSection(
+      path, lm::schema::AnySectionDataType_Speech2TextMetadataProto,
+      embedded_metadata);
+}
+
+void WriteTestLitertLmWithAny2AnyMetadata(
+    const std::string& path,
+    const lm::proto::Any2AnyMetadata& embedded_metadata) {
+  WriteTestLitertLmWithMetadataSection(
+      path, lm::schema::AnySectionDataType_Any2AnyMetadataProto,
+      embedded_metadata);
 }
 
 class FakeSessionFactory : public OmniSessionFactory {
@@ -421,11 +438,11 @@ TEST(OmniRegistryTest, DeletesOnlyStaleCachesOfTheSameModel) {
 
 TEST(OmniRegistryTest, FindModelNameForPathMatchesLongestRegisteredName) {
   auto& registry = OmniRegistry::Get();
-  const auto factory =
-      [](absl::string_view, const OmniEngine::Settings&,
-         const MessageLite* absl_nullable, const MessageLite* absl_nullable,
-         ::litert::Environment&, ::litert::Options&,
-         std::shared_ptr<lm::ModelResources> absl_nullable)
+  const auto factory = [](absl::string_view, const OmniEngine::Settings&,
+                          const MessageLite* absl_nullable,
+                          const MessageLite* absl_nullable,
+                          ::litert::Environment&, ::litert::Options&,
+                          std::shared_ptr<lm::ModelResources> absl_nullable)
       -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
     return std::make_unique<FakeSessionFactory>();
   };
@@ -571,6 +588,92 @@ TEST(OmniRegistryTest,
   EXPECT_EQ(captured_metadata.decode_stop_token_id(), 50257);
   EXPECT_THAT(captured_metadata.decode_start_token_ids(),
               ElementsAre(50258, 50259));
+}
+
+TEST(OmniRegistryTest,
+     MergesEmbeddedAny2AnyMetadataAndForwardsAny2AnySessionConfig) {
+  auto& registry = OmniRegistry::Get();
+  lm::proto::Any2AnySessionConfig captured_session_config;
+  lm::proto::Any2AnyMetadata captured_metadata;
+
+  ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+      .model_names = {"any2any-metadata-merge-test-model"},
+      .get_session_factory =
+          [&](absl::string_view /*model_name*/,
+              const OmniEngine::Settings& /*settings*/,
+              const MessageLite* absl_nullable session_cfg,
+              const MessageLite* absl_nullable metadata,
+              ::litert::Environment& /*env*/, ::litert::Options& /*options*/,
+              std::shared_ptr<lm::ModelResources> /*lm_resources*/)
+          -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+        captured_session_config.Clear();
+        captured_metadata.Clear();
+        if (session_cfg != nullptr) {
+          captured_session_config.CheckTypeAndMergeFrom(*session_cfg);
+        }
+        if (metadata != nullptr) {
+          captured_metadata.CheckTypeAndMergeFrom(*metadata);
+        }
+        return std::make_unique<FakeSessionFactory>();
+      },
+      .session_config_type_id = "Any2Any",
+  }));
+  absl::Cleanup cleanup = [&] {
+    registry.UnregisterModel("any2any-metadata-merge-test-model");
+  };
+
+  const std::string test_model_path = absl::StrCat(
+      ::testing::TempDir(), "/any2any_metadata_merge_test.litertlm");
+  lm::proto::Any2AnyMetadata embedded_metadata;
+  embedded_metadata.set_input_sample_rate_hz(16000);
+  embedded_metadata.set_output_sample_rate_hz(24000);
+  embedded_metadata.set_system_prompt("Default system prompt");
+  WriteTestLitertLmWithAny2AnyMetadata(test_model_path, embedded_metadata);
+
+  OmniEngine::Settings settings{
+      .cache_dir = ":nocache",
+      .model_path = test_model_path,
+  };
+
+  // 1. Embedded Any2AnyMetadata is merged with caller Any2AnyMetadata and
+  // Any2AnySessionConfig is validated and forwarded.
+  lm::proto::Any2AnySessionConfig caller_session_config;
+  caller_session_config.set_generate_audio(true);
+  caller_session_config.set_max_new_tokens(128);
+  lm::proto::Any2AnyMetadata caller_metadata;
+  caller_metadata.set_system_prompt("Caller override prompt");
+  ASSERT_OK_AND_ASSIGN(auto factory1,
+                       registry.CreateSessionFactory(
+                           "any2any-metadata-merge-test-model", settings,
+                           &caller_session_config, &caller_metadata));
+  EXPECT_THAT(factory1, NotNull());
+  EXPECT_TRUE(captured_session_config.generate_audio());
+  EXPECT_EQ(captured_session_config.max_new_tokens(), 128);
+  EXPECT_EQ(captured_metadata.input_sample_rate_hz(), 16000);
+  EXPECT_EQ(captured_metadata.output_sample_rate_hz(), 24000);
+  EXPECT_EQ(captured_metadata.system_prompt(), "Caller override prompt");
+
+  // 2. When caller metadata is nullptr, embedded Any2AnyMetadata is forwarded.
+  ASSERT_OK_AND_ASSIGN(auto factory2,
+                       registry.CreateSessionFactory(
+                           "any2any-metadata-merge-test-model", settings));
+  EXPECT_THAT(factory2, NotNull());
+  EXPECT_EQ(captured_metadata.input_sample_rate_hz(), 16000);
+  EXPECT_EQ(captured_metadata.output_sample_rate_hz(), 24000);
+  EXPECT_EQ(captured_metadata.system_prompt(), "Default system prompt");
+
+  // 3. Mismatched session_config or metadata proto types are rejected.
+  lm::proto::Speech2TextSessionConfig wrong_session_config;
+  EXPECT_THAT(registry.CreateSessionFactory("any2any-metadata-merge-test-model",
+                                            settings, &wrong_session_config),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("litert.lm.proto.Any2AnySessionConfig")));
+  lm::proto::Speech2TextMetadata wrong_metadata;
+  EXPECT_THAT(registry.CreateSessionFactory(
+                  "any2any-metadata-merge-test-model", settings,
+                  /*session_config=*/nullptr, &wrong_metadata),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("litert.lm.proto.Any2AnyMetadata")));
 }
 
 TEST(OmniRegistryTest, ConfiguresNpuEnvironmentAndCompilationOptions) {

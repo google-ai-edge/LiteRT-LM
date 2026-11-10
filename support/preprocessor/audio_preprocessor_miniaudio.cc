@@ -70,6 +70,10 @@
 // Ogg-FLAC support.
 #define MA_DR_FLAC_NO_SIMD
 #define MINIAUDIO_IMPLEMENTATION
+// miniaudio.h defines `ma_atomic_global_lock` at file scope without `MA_API`,
+// so rename it to avoid duplicate symbol errors when linked alongside another
+// translation unit that defines `MINIAUDIO_IMPLEMENTATION`.
+#define ma_atomic_global_lock ma_atomic_global_lock_litert_lm_private
 
 // Suppress warnings scoped strictly to miniaudio.h (supported by both GCC and
 // Clang): MA_API=static intentionally leaves unreferenced ma_* functions and
@@ -86,6 +90,7 @@
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+#undef ma_atomic_global_lock
 
 namespace litert::support {
 namespace {
