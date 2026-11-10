@@ -16,13 +16,36 @@
 
 import {ReactiveController, ReactiveControllerHost} from 'lit';
 
-import {ChatSessionStore, ConversationMeta, StoredMessage} from './stores/chat_session_store.js';
+import {ChatSessionStore, ConversationMeta, getIdleStatus, StoredMessage} from './stores/chat_session_store.js';
 import {LocalDirectoryService} from './stores/local_directory_service.js';
-import {ModelLoaderService} from './stores/model_loader_service.js';
+import {ConfirmDialogOptions, ModelLoaderService} from './stores/model_loader_service.js';
 import {loadModelFromUrl} from './stores/model_url_parameter.js';
 import {SettingsStore} from './stores/settings_store.js';
 
-export type {ConversationMeta, StoredMessage};
+export type {ConfirmDialogOptions, ConversationMeta, StoredMessage};
+
+function isErrorStatusMessage(msg: string): boolean {
+  return /^(Failed|Could not|Error|Generation failed|⚠|Only images and audio|The "model" URL parameter)/i
+      .test(msg.trim());
+}
+
+/**
+ * Overrides installed by dev-only entry points (`src/dev/`) before the app is
+ * created. Production code never sets them.
+ */
+export interface DevHooks {
+  /** Replaces `localStorage`, e.g. to keep demo state in memory. */
+  storage?: Storage;
+  /** Creates the model loader, e.g. one with a simulated engine. */
+  createModelLoader?:
+      (updateCallback: () => void, updateStatus: (msg: string) => void,
+       localDirService: LocalDirectoryService) => ModelLoaderService;
+  /** Runs when the app connects. Returning true skips the normal startup. */
+  onConnected?: (controller: LlmChatStateController) => boolean;
+}
+
+/** See `DevHooks`. */
+export const devHooks: DevHooks = {};
 
 /**
  * UI specific orchestrator state controller for the LiteRT-LM Chat
@@ -31,40 +54,74 @@ export type {ConversationMeta, StoredMessage};
 export class LlmChatStateController implements ReactiveController {
   private hosts: ReactiveControllerHost[] = [];
 
+  readonly storage: Storage = devHooks.storage ?? window.localStorage;
   readonly settings: SettingsStore;
   readonly localDirService: LocalDirectoryService;
   readonly modelLoader: ModelLoaderService;
   readonly chatSession: ChatSessionStore;
 
   // Global UI status string
-  statusText = 'Idle. Select settings to start.';
+  statusText = getIdleStatus(false);
+
+  // Dismissible inline error banner message when an operation fails
+  errorMessage: string|null = null;
+
+  // Optional non-blocking UI confirmation handler registered by the app shell
+  confirmHandler: ((options: ConfirmDialogOptions) => Promise<boolean>)|null =
+      null;
 
   constructor(host: ReactiveControllerHost) {
-    this.settings = new SettingsStore(() => this.requestUpdate());
+    this.settings = new SettingsStore(() => this.requestUpdate(), this.storage);
     this.localDirService = new LocalDirectoryService(
         this.settings,
         () => this.requestUpdate(),
-        (msg: string) => {
-          this.statusText = msg;
-          this.requestUpdate();
-        }
+        this.handleStatus,
     );
-    this.modelLoader = new ModelLoaderService(
-        () => this.requestUpdate(),
-        (msg: string) => {
-          this.statusText = msg;
-          this.requestUpdate();
-        },
-        this.localDirService
-    );
+    const createModelLoader: NonNullable<DevHooks['createModelLoader']> =
+        devHooks.createModelLoader ??
+        ((...args) => new ModelLoaderService(...args));
+    this.modelLoader = createModelLoader(
+        () => this.requestUpdate(), this.handleStatus, this.localDirService);
+    this.modelLoader.confirmAction = (options: ConfirmDialogOptions) =>
+        this.requestConfirm(options);
     this.chatSession = new ChatSessionStore(
-        () => this.requestUpdate(), this.settings, this.modelLoader,
-        (msg: string) => {
-          this.statusText = msg;
-          this.requestUpdate();
-        });
+        () => this.requestUpdate(),
+        this.settings,
+        this.modelLoader,
+        this.handleStatus,
+        this.storage,
+    );
 
     this.addHost(host, true);
+  }
+
+  private readonly handleStatus = (msg: string) => {
+    this.statusText = msg;
+    if (isErrorStatusMessage(msg)) {
+      this.errorMessage = msg;
+    } else if (
+        msg.startsWith('Preparing') || msg.startsWith('Loading') ||
+        msg.startsWith('Downloading') || msg.startsWith('Model loaded') ||
+        msg.startsWith('Thinking') || msg.startsWith('Idle') ||
+        msg.startsWith('Restored conversation')) {
+      this.errorMessage = null;
+    }
+    this.requestUpdate();
+  };
+
+  requestConfirm(options: ConfirmDialogOptions): Promise<boolean> {
+    if (this.confirmHandler) {
+      return this.confirmHandler(options);
+    }
+    return Promise.resolve(confirm(options.message));
+  }
+
+  dismissError() {
+    this.errorMessage = null;
+    if (isErrorStatusMessage(this.statusText)) {
+      this.statusText = getIdleStatus(Boolean(this.modelLoader.engine));
+    }
+    this.requestUpdate();
   }
 
   addHost(host: ReactiveControllerHost, isPrimary = false) {
@@ -93,20 +150,19 @@ export class LlmChatStateController implements ReactiveController {
 
   hostConnected() {
     // Triggered automatically when the Lit Element mounts.
+    const handledByDevHook = devHooks.onConnected?.(this) ?? false;
     void this.modelLoader.updateCacheSize();
+    if (handledByDevHook) return;
 
     const loadsModelFromUrl = loadModelFromUrl(window.location.search, {
       settings: this.settings,
       modelLoader: this.modelLoader,
       chatSession: this.chatSession,
-      updateStatus: (msg: string) => {
-        this.statusText = msg;
-        this.requestUpdate();
-      },
+      updateStatus: this.handleStatus,
     });
     if (loadsModelFromUrl) return;
 
-    const activeId = window.localStorage.getItem('litertlm-active-conv-id');
+    const activeId = this.storage.getItem('litertlm-active-conv-id');
     if (activeId &&
         this.chatSession.conversationsList.some(c => c.id === activeId)) {
       void this.chatSession.selectConversation(activeId);

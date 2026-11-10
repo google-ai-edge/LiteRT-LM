@@ -29,11 +29,13 @@ describe('ChatSessionStore', () => {
   let fakeEngine: EngineFake;
   let updateCallbackCalled = false;
   let statusUpdated = false;
+  let lastStatus = '';
 
   beforeEach(async () => {
     // Reset state & mocks
     updateCallbackCalled = false;
     statusUpdated = false;
+    lastStatus = '';
     window.localStorage.clear();
 
     settingsStore = new SettingsStore(() => {});
@@ -58,6 +60,7 @@ describe('ChatSessionStore', () => {
         settingsStore, modelLoader,
         (msg: string) => {
           statusUpdated = true;
+          lastStatus = msg;
         });
   });
 
@@ -66,13 +69,15 @@ describe('ChatSessionStore', () => {
   });
 
   it('starts a new conversation cleanly', async () => {
+    window.localStorage.setItem('litertlm-active-conv-id', 'previous-conv');
+
     await chatSessionStore.startNewConversation();
 
     expect(chatSessionStore.messages.length).toBe(0);
     expect(chatSessionStore.activeSavedConvId).toBeNull();
     expect(window.localStorage.getItem('litertlm-active-conv-id')).toBeNull();
     expect(updateCallbackCalled).toBeTrue();
-    expect(statusUpdated).toBeTrue();
+    expect(lastStatus).toBe('Model loaded and ready.');
   });
 
   it('generates auto-id and commits newly sent messages to localStorage history',
@@ -345,16 +350,147 @@ describe('ChatSessionStore', () => {
     expect(chatSessionStore.codeSandbox.run).toHaveBeenCalledWith('21+21');
   });
 
-  it('sendMessage cancels generation gracefully', async () => {
-    await chatSessionStore.createConversationSession();
+  it('sendMessage cancels generation gracefully mid-thought and mid-answer',
+     async () => {
+       await chatSessionStore.createConversationSession();
 
-    // We want to cancel midway. We can call cancelGeneration synchronously
-    // but the promise handling in JS might complete before cancellation if the
-    // mock streaming is entirely synchronous. However, we can just trigger it,
-    // though our ConversationFake is completely synchronous. Let's at least
-    // ensure cancelGeneration sets the flag.
-    chatSessionStore.cancelGeneration();
-    expect(chatSessionStore.isCancelled).toBeTrue();
+       // 1. Mid-thought cancellation: no answer text emitted yet.
+       let thoughtPulls = 0;
+       spyOn(chatSessionStore.activeConversation!, 'sendMessageStreaming')
+           .and.callFake(() => new ReadableStream<Message>({
+             async pull(controller) {
+               thoughtPulls++;
+               if (thoughtPulls === 1) {
+                 controller.enqueue({
+                   role: 'assistant',
+                   channels: {thought: 'Analyzing WebGPU shader...' as string},
+                 } as unknown as Message);
+                 return;
+               }
+               chatSessionStore.cancelGeneration();
+               await Promise.resolve();
+               controller.close();
+             },
+           }));
+
+       await chatSessionStore.sendMessage('Stop during thinking');
+       expect(chatSessionStore.isGenerating).toBeFalse();
+       expect(lastStatus).toBe('Generation stopped.');
+       expect(chatSessionStore.messages[1].thoughtText)
+           .toContain('Analyzing WebGPU shader...');
+       expect(chatSessionStore.messages[1].text).toBe('');
+       expect(chatSessionStore.messages[1].stopped).toBeTrue();
+
+       // 2. Mid-answer cancellation (activeConversation was rebuilt in finally).
+       let answerPulls = 0;
+       spyOn(chatSessionStore.activeConversation!, 'sendMessageStreaming')
+           .and.callFake(() => new ReadableStream<Message>({
+             async pull(controller) {
+               answerPulls++;
+               if (answerPulls === 1) {
+                 controller.enqueue({
+                   role: 'assistant',
+                   content: 'Partial answer',
+                 });
+                 return;
+               }
+               chatSessionStore.cancelGeneration();
+               await Promise.resolve();
+               controller.close();
+             },
+           }));
+
+       await chatSessionStore.sendMessage('Stop during answer');
+       expect(chatSessionStore.isGenerating).toBeFalse();
+       expect(lastStatus).toBe('Generation stopped.');
+       expect(chatSessionStore.messages[3].text).toBe('Partial answer');
+       expect(chatSessionStore.messages[3].stopped).toBeTrue();
+       expect(chatSessionStore.messages[3].tokensCount).toBeTruthy();
+     });
+
+  it('removes blank assistant turn when runtime error occurs before first token',
+     async () => {
+       await chatSessionStore.createConversationSession();
+       spyOn(chatSessionStore.activeConversation!, 'sendMessageStreaming')
+           .and.callFake(() => new ReadableStream<Message>({
+             pull(controller) {
+               controller.error(new Error('WebGPU device lost'));
+             },
+           }));
+
+       await chatSessionStore.sendMessage('Trigger error');
+
+       expect(chatSessionStore.isGenerating).toBeFalse();
+       expect(lastStatus).toContain('Generation failed: WebGPU device lost');
+       expect(chatSessionStore.messages.length).toBe(1);
+       expect(chatSessionStore.messages[0].role).toBe('user');
+       expect(chatSessionStore.messages[0].text).toBe('Trigger error');
+     });
+
+  it('shows tool results and errors in the tool trace', async () => {
+    await chatSessionStore.createConversationSession();
+    const converseFake = fakeEngine.cachedConversation!;
+    chatSessionStore.codeSandbox.run = jasmine.createSpy().and.returnValues(
+        Promise.resolve({
+          resultAsString: '42',
+          consoleMessages: [{type: 'log', text: 'computing'}],
+        }),
+        Promise.resolve({error: 'boom', consoleMessages: []}));
+    const toolCall = {
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{
+        type: 'function' as const,
+        function: {name: 'run_javascript', arguments: {code: '21+21'}}
+      }]
+    };
+    converseFake.queueResponse(toolCall);
+    converseFake.queueResponse({role: 'assistant', content: 'Done.'});
+    converseFake.queueResponse(toolCall);
+    converseFake.queueResponse({role: 'assistant', content: 'Failed.'});
+
+    await chatSessionStore.sendMessage('Run it');
+    await chatSessionStore.sendMessage('Run it again');
+
+    expect(chatSessionStore.messages[1].toolCalls?.[0]?.outputText)
+        .toBe('computing\n→ 42');
+    expect(chatSessionStore.messages[3].toolCalls?.[0]?.outputText)
+        .toBe('Error: boom');
+  });
+
+  it('keeps tool calls when an error interrupts generation', async () => {
+    await chatSessionStore.createConversationSession();
+    const converseFake = fakeEngine.cachedConversation!;
+    chatSessionStore.codeSandbox.run = jasmine.createSpy().and.returnValue(
+        Promise.resolve({resultAsString: '42', consoleMessages: []}));
+    converseFake.queueResponse({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        type: 'function',
+        function: {name: 'run_javascript', arguments: {code: '21+21'}}
+      }]
+    });
+    const sendMessageStreaming =
+        converseFake.sendMessageStreaming.bind(converseFake);
+    let calls = 0;
+    spyOn(converseFake, 'sendMessageStreaming')
+        .and.callFake(message => calls++ === 0 ?
+                          sendMessageStreaming(message) :
+                          new ReadableStream<Message>({
+                            pull(controller) {
+                              controller.error(new Error('WebGPU device lost'));
+                            },
+                          }));
+
+    await chatSessionStore.sendMessage('What is 21+21?');
+
+    expect(lastStatus).toContain('Generation failed: WebGPU device lost');
+    expect(chatSessionStore.messages.length).toBe(2);
+    expect(chatSessionStore.messages[1].toolCalls?.map(call => call.name))
+        .toEqual(['run_javascript']);
+    expect(chatSessionStore.messages[1].text)
+        .toBe('*[Generation interrupted by an error]*');
   });
 
   it('sendMessage ignores empty text or if already generating', async () => {
@@ -445,6 +581,26 @@ describe('ChatSessionStore', () => {
          await chatSessionStore.sendMessage('Hello again');
          expect(chatSessionStore.activeConversation).not.toBe(sessionWithPrompt);
        });
+
+    it('uses Top-K 1 for greedy sampling', async () => {
+      settingsStore.samplerType = 'greedy';
+      settingsStore.topK = 8;
+
+      const config = await sendAndGetConfig();
+
+      expect(config.sessionConfig?.samplerParams?.k).toBe(1);
+    });
+
+    it('keeps the session if Top-K changes under greedy sampling', async () => {
+      settingsStore.samplerType = 'greedy';
+      await chatSessionStore.createConversationSession();
+      const session = chatSessionStore.activeConversation;
+
+      settingsStore.topK = 8;
+      await chatSessionStore.sendMessage('Hello');
+
+      expect(chatSessionStore.activeConversation).toBe(session);
+    });
 
     it('keeps the session if the disabled tools are only reordered',
        async () => {

@@ -85,6 +85,14 @@ export function suppressKnownWasmWarnings(
   consoleObj.warn = wrappedWarn;
 }
 
+/** Options describing a non-blocking confirmation dialog request. */
+export interface ConfirmDialogOptions {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+}
+
 /**
  * Service responsible for downloading, caching, and building the GPU WASM
  * engine.
@@ -103,6 +111,10 @@ export class ModelLoaderService {
   isDownloadAborted = false;
 
   loadedSettings: ModelSettings|null = null;
+  /** Asks the user to confirm a destructive action. */
+  confirmAction = (options: ConfirmDialogOptions) =>
+      Promise.resolve(confirm(options.message));
+  private readonly inMemoryModels = new Map<string, File>();
 
   constructor(
       private readonly updateCallback: () => void,
@@ -114,13 +126,20 @@ export class ModelLoaderService {
       private readonly resolve: typeof resolveModel = resolveModel) {}
 
   async updateCacheSize() {
+    if (!window.caches) {
+      this.cachedModels = new Map(Array.from(
+          this.inMemoryModels, ([path, file]) => [getModelKey(path), file.size]));
+      this.updateCallback();
+      return;
+    }
     try {
       const cache = await window.caches.open('litertlm-models');
       const keys = await cache.keys();
       const newCachedModels = new Map<string, number>();
       // hf:// models are cached under the URL they were loaded from.
-      const hfModels = new Map(Object.entries(this.getHfModelUrls())
-                                   .map(([uri, url]) => [url, uri]));
+      const hfModels = new Map(
+          Object.entries(this.getHfModelUrls())
+              .map(([uri, url]) => [url, uri]));
 
       for (const request of keys) {
         if (LEGACY_MODEL_PATHS.has(request.url)) {
@@ -150,17 +169,34 @@ export class ModelLoaderService {
 
   needsModelReload(settings: ModelSettings): boolean {
     if (!this.engine || !this.loadedSettings) return true;
-    return this.loadedSettings.selectedModelPath !== settings.selectedModelPath ||
-           this.loadedSettings.contextLength !== settings.contextLength ||
-           this.loadedSettings.topK !== settings.topK ||
-           this.loadedSettings.enableSpeculativeDecoding !==
-               settings.enableSpeculativeDecoding;
+    const topKChanged = settings.samplerType !== 'greedy' &&
+        this.loadedSettings.topK !== settings.topK;
+    return this.loadedSettings.selectedModelPath !==
+        settings.selectedModelPath ||
+        this.loadedSettings.contextLength !== settings.contextLength ||
+        topKChanged ||
+        this.loadedSettings.enableSpeculativeDecoding !==
+            settings.enableSpeculativeDecoding;
   }
 
   async deleteModelFromCache(modelPath: string): Promise<boolean> {
-    const confirmDelete = confirm(
-        'Are you sure you want to remove this model\'s weights from your browser cache?');
+    const confirmDelete = await this.confirmAction({
+      title: 'Remove cached weights?',
+      message:
+          'Remove this model\'s downloaded weights from your browser cache? You can re-download them anytime.',
+      confirmLabel: 'Remove Weights',
+      danger: true,
+    });
     if (!confirmDelete) return false;
+
+    if (!window.caches) {
+      const removed = this.inMemoryModels.delete(modelPath);
+      if (removed) {
+        this.updateStatus('Model cache removed successfully.');
+        await this.updateCacheSize();
+      }
+      return removed;
+    }
 
     try {
       const cache = await window.caches.open('litertlm-models');
@@ -177,9 +213,22 @@ export class ModelLoaderService {
   }
 
   async clearAllCache(onDeleted?: () => void) {
-    const confirmClear = confirm(
-        'Are you sure you want to delete ALL cached models? This will free up significant disk space.');
+    const confirmClear = await this.confirmAction({
+      title: 'Clear all cached models?',
+      message:
+          'Delete all cached model weights stored in this browser? This will free up disk space.',
+      confirmLabel: 'Clear All',
+      danger: true,
+    });
     if (!confirmClear) return;
+
+    if (!window.caches) {
+      this.inMemoryModels.clear();
+      this.updateStatus('Model cache cleared successfully.');
+      if (onDeleted) onDeleted();
+      await this.updateCacheSize();
+      return;
+    }
 
     try {
       this.updateStatus('Clearing all cache...');
@@ -258,9 +307,51 @@ export class ModelLoaderService {
         this.updateStatus(`Loading local directory model ${modelFilename}...`);
         const file = await this.localDirService.getFile(modelPath);
         modelInput = file.stream();
+      } else if (!window.caches) {
+        const memFile = this.inMemoryModels.get(modelPath);
+        if (memFile) {
+          this.updateStatus(`Loading imported model (${modelFilename})...`);
+          modelInput = memFile.stream();
+        } else if (modelPath.startsWith('https://local-model/')) {
+          throw new Error(
+              'Local model file not found in cache. Please re-upload the file.');
+        } else {
+          const modelUrl = await this.resolveModelUrl(modelPath);
+          this.downloadProgresses.set(modelKey, 0);
+          this.downloadSpeeds.set(modelKey, '0 MB / 0 MB');
+          this.updateCallback();
+          this.updateStatus(`Downloading weights (${modelFilename})...`);
+
+          this.downloadAbortController = new AbortController();
+          const response = await fetch(modelUrl, {
+            signal: this.downloadAbortController.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to fetch model: ${response.statusText}`);
+          }
+          if (!response.body) {
+            throw new Error('Model response body is empty.');
+          }
+
+          const totalBytes =
+              Number(response.headers.get('content-length') || '0');
+          let bytesRead = 0;
+          modelInput =
+              this.makeProgressStream(response.body, (chunkLength) => {
+                bytesRead += chunkLength;
+                const percent =
+                    totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
+                this.downloadProgresses.set(modelKey, Math.round(percent));
+                this.downloadSpeeds.set(
+                    modelKey,
+                    `${(bytesRead / 1e6).toFixed(1)} MB / ${
+                        (totalBytes / 1e6).toFixed(1)} MB`);
+                this.updateCallback();
+              });
+        }
       } else {
         const cache = await window.caches.open('litertlm-models');
-        const previousUrl = this.getHfModelUrls()[modelKey];
+        const previousUrl = this.getHfModelUrls()[getModelKey(modelPath)];
         const modelUrl = await this.resolveModelUrl(modelPath);
         const cachedResponse = await cache.match(modelUrl);
         if (cachedResponse) {
@@ -308,13 +399,16 @@ export class ModelLoaderService {
           if (!response.ok) {
             throw new Error(`Failed to fetch model: ${response.statusText}`);
           }
+          if (!response.body) {
+            throw new Error('Model response body is empty.');
+          }
 
           const totalBytes =
               Number(response.headers.get('content-length') || '0');
           let bytesRead = 0;
 
           const progressStream =
-              this.makeProgressStream(response.body!, (chunkLength) => {
+              this.makeProgressStream(response.body, (chunkLength) => {
                 bytesRead += chunkLength;
                 const percent =
                     totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
@@ -379,7 +473,7 @@ export class ModelLoaderService {
             enable_external_embeddings: false,
             use_submodel: false,
             use_autosized_ringbuffers: true,
-          } as GpuArtisanConfig
+          } as GpuArtisanConfig,
         },
         // Always enable image input. On web, only one vision signature is
         // loaded by default to fit in the wasm heap.
@@ -430,6 +524,21 @@ export class ModelLoaderService {
 
   async importCustomModel(file: File): Promise<CustomModel> {
     const path = `https://local-model/${file.name}`;
+    const customModel: CustomModel = {
+      name: file.name.replace(/\.litertlm$/, ''),
+      filename: file.name,
+      path,
+      size: `${(file.size / 1e9).toFixed(2)} GB`
+    };
+
+    if (!window.caches) {
+      this.inMemoryModels.set(path, file);
+      this.cachedModels.set(getModelKey(path), file.size);
+      this.updateStatus(`Local model ${file.name} imported.`);
+      this.updateCallback();
+      return customModel;
+    }
+
     const cache = await window.caches.open('litertlm-models');
 
     this.updateStatus(`Importing local model ${file.name}...`);
@@ -444,13 +553,6 @@ export class ModelLoaderService {
         }
       });
       await cache.put(path, response);
-
-      const customModel: CustomModel = {
-        name: file.name.replace(/\.litertlm$/, ''),
-        filename: file.name,
-        path,
-        size: `${(file.size / 1e9).toFixed(2)} GB`
-      };
 
       await this.updateCacheSize();
       this.updateStatus(`Local model ${file.name} imported.`);

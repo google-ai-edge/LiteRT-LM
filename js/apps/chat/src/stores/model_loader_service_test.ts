@@ -259,6 +259,25 @@ describe('ModelLoaderService', () => {
     expect(modelLoader.isModelLoading).toBeFalse();
   });
 
+  it('loadModelWeights fails cleanly when the response has no body',
+     async () => {
+       settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+       let latestStatus = '';
+       modelLoader = new ModelLoaderService(() => {}, (msg: string) => {
+         latestStatus = msg;
+       }, undefined, fakeEngineCreate, fakeLoadWasm);
+       const mockCache = {match: jasmine.createSpy().and.resolveTo(undefined)};
+       spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+       spyOn(window, 'fetch').and.resolveTo(new Response(null));
+
+       await modelLoader.loadModelWeights(
+           settingsStore.modelSettings, async () => {});
+
+       expect(modelLoader.engine).toBeNull();
+       expect(latestStatus)
+           .toBe('Failed to load model: Model response body is empty.');
+     });
+
   it('loadModelWeights handles user cancellation', async () => {
     settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
 
@@ -679,7 +698,7 @@ describe('ModelLoaderService', () => {
       expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
     });
 
-    it('returns true when topK changes', async () => {
+    it('returns true when topK changes under non-greedy sampler', async () => {
       const mockStream = new ReadableStream({
         start(controller) {
           controller.enqueue(new Uint8Array([1, 2, 3]));
@@ -695,6 +714,7 @@ describe('ModelLoaderService', () => {
       spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
 
       settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      settingsStore.samplerType = 'top_k';
       settingsStore.topK = 32;
       await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
 
@@ -702,6 +722,30 @@ describe('ModelLoaderService', () => {
 
       settingsStore.topK = 64;
       expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+
+    it('returns false when topK changes under greedy sampler', async () => {
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        }
+      });
+      const mockCache = {
+        match: jasmine.createSpy().and.resolveTo({
+          headers: new Headers({'content-length': '3'}),
+          body: mockStream,
+        })
+      };
+      spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      settingsStore.samplerType = 'greedy';
+      settingsStore.topK = 32;
+      await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
+
+      settingsStore.topK = 64;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
     });
   });
 
@@ -719,7 +763,11 @@ describe('ModelLoaderService', () => {
     });
 
     async function load() {
-      spyOn(window.caches, 'open').and.resolveTo(fakeCache());
+      if (jasmine.isSpy(window.caches.open)) {
+        (window.caches.open as jasmine.Spy).and.resolveTo(fakeCache());
+      } else {
+        spyOn(window.caches, 'open').and.resolveTo(fakeCache());
+      }
       await modelLoader.loadModelWeights(
           settingsStore.modelSettings, async () => {});
     }

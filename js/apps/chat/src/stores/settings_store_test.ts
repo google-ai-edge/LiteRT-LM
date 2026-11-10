@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {migrateModelPath, MODELS, SettingsStore} from './settings_store.js';
+import {findModel, migrateModelPath, MODELS, SettingsStore} from './settings_store.js';
 
 describe('SettingsStore', () => {
   let mockCallbackCount = 0;
@@ -185,5 +185,18 @@ describe('SettingsStore', () => {
         'litertlm-chat-settings', JSON.stringify({selectedModelPath: oldPath}));
     expect(new SettingsStore(mockUpdateCallback).selectedModelPath)
         .toBe('hf://litert-community/gemma-4-E4B-it-litert-lm');
+  });
+
+  it('finds built-in, custom, and local-directory models by path', () => {
+    const custom =
+        {name: 'Mine', filename: 'mine.litertlm', path: 'p/mine', size: '1 GB'};
+    const local =
+        {name: 'Dir', filename: 'dir.litertlm', path: 'p/local', size: '2 GB'};
+    const models = {customModels: [custom], localDirModels: [local]};
+
+    expect(findModel(models, MODELS[1]!.path)).toBe(MODELS[1]);
+    expect(findModel(models, 'p/mine')).toBe(custom);
+    expect(findModel(models, 'p/local')).toBe(local);
+    expect(findModel(models, 'p/unknown')).toBeUndefined();
   });
 });

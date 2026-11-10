@@ -143,6 +143,16 @@ export function migrateModelPath(path: string): string {
   return LEGACY_MODEL_PATHS.get(path) ?? path;
 }
 
+/** Finds a built-in, custom, or local-directory model by path. */
+export function findModel(
+    models: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
+    path: string): CustomModel|undefined {
+  return [
+    ...MODELS,
+    ...(models.customModels ?? []),
+    ...(models.localDirModels ?? []),
+  ].find(m => m.path === path);
+}
 
 /** Store for managing inference configuration and persistence. */
 export class SettingsStore implements Settings {
@@ -179,13 +189,15 @@ export class SettingsStore implements Settings {
 
   private readonly SETTINGS_KEY = 'litertlm-chat-settings';
 
-  constructor(private readonly updateCallback: () => void) {
+  constructor(
+      private readonly updateCallback: () => void,
+      private readonly storage: Storage = window.localStorage) {
     this.loadSettings();
   }
 
   loadSettings() {
     try {
-      const data = window.localStorage.getItem(this.SETTINGS_KEY);
+      const data = this.storage.getItem(this.SETTINGS_KEY);
       if (data) {
         const parsed = JSON.parse(data);
         const result = PartialSettingsSchema.safeParse(parsed);
@@ -235,7 +247,7 @@ export class SettingsStore implements Settings {
         customModels: this.customModels,
         localDirModels: this.localDirModels,
       };
-      window.localStorage.setItem(this.SETTINGS_KEY, JSON.stringify(payload));
+      this.storage.setItem(this.SETTINGS_KEY, JSON.stringify(payload));
       this.updateCallback();
     } catch (e) {
       console.error('[LiteRT-LM] Failed to save settings:', e);
