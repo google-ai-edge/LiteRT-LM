@@ -206,6 +206,60 @@ absl::Status BindTensor(const TensorBuffer& tensor_buffer, ::ml_drift::ValueId t
   return inference_context.SetTensor(tensor_id, &shared_tensor);
 }
 
+// Waits for a command buffer to complete without putting the waiting thread to sleep on arm64.
+//
+// Unless TopKMetalSampler handles the input of the next decode step, nothing is queued behind the
+// sampling, so the thread waiting for the sampled IDs also waits for the decode step that produced
+// the logits, i.e. for most of every token. Any kernel-blocking wait (-[MTLCommandBuffer
+// waitUntilCompleted], a mutex/condition variable, or std::atomic::wait) sleeps for that whole
+// window, and iOS then moves the decode thread to the efficiency cores, where the CPU work between
+// two decode steps, for which the GPU idles, takes several times longer: decode was 15-25% slower
+// on iPhone 15 Pro. Spinning (e.g. on std::atomic::load) keeps the thread on its core but runs the
+// core hot, so the device throttles sooner.
+//
+// On arm64, the thread therefore waits in WFE: the core idles in a low-power state until the
+// completion handler wakes it up, and the thread stays runnable meanwhile. Wait() uses
+// __builtin_arm_ldaex (LDAXR) rather than std::atomic::load (LDAR) so the load arms the core's
+// exclusive monitor on `completed_` (which requires a raw integer pointer, hence __atomic_store_n).
+// Other architectures keep calling -[MTLCommandBuffer waitUntilCompleted].
+class CompletionWaiter {
+ public:
+#if defined(__aarch64__)
+  // Must be created before `command_buffer` is committed.
+  explicit CompletionWaiter(id<MTLCommandBuffer> command_buffer)
+      : completed_(std::make_shared<uint32_t>(0)) {
+    std::shared_ptr<uint32_t> completed = completed_;
+    [command_buffer addCompletedHandler:^(id<MTLCommandBuffer>) {
+      __atomic_store_n(completed.get(), 1, __ATOMIC_RELEASE);
+      __builtin_arm_sev();
+    }];
+  }
+
+  // Returns once the command buffer has completed (no timeout: a committed command buffer cannot be
+  // cancelled, so returning early would let callers reuse buffers the GPU is still writing).
+  void Wait() const {
+    // LDAXR arms the exclusive monitor for `completed_`. The store of the completion handler clears
+    // it, which wakes up WFE, as does the SEV after the store.
+    while (__builtin_arm_ldaex(completed_.get()) == 0) {
+      __builtin_arm_wfe();
+    }
+    __builtin_arm_clrex();
+  }
+
+ private:
+  // Set to 1 by the completion handler, which shares it.
+  std::shared_ptr<uint32_t> completed_;
+#else
+  explicit CompletionWaiter(id<MTLCommandBuffer> command_buffer)
+      : command_buffer_(command_buffer) {}
+
+  void Wait() const { [command_buffer_ waitUntilCompleted]; }
+
+ private:
+  id<MTLCommandBuffer> command_buffer_;
+#endif
+};
+
 }  // namespace
 
 // static
@@ -257,8 +311,12 @@ absl::StatusOr<std::unique_ptr<TopKMetalSampler>> TopKMetalSampler::Create(
       .max_top_k = sampler_params.k(),
   };
 
+  // Don't take ownership of the caller's environment.
+  auto [runtime_c_api, env_handle] = env.GetHolderForCApi();
+  auto litert_env =
+      litert::Environment::WrapCObject(runtime_c_api, env_handle, litert::OwnHandle::kNo);
   auto handler = absl::WrapUnique(new TopKMetalSampler(
-      std::move(env), std::move(metal_env), std::move(gpu_info), std::move(create_info),
+      std::move(litert_env), std::move(metal_env), std::move(gpu_info), std::move(create_info),
       sampler_params, config, logits_data_type, command_queue));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
@@ -439,43 +497,46 @@ absl::Status TopKMetalSampler::SampleToIdAndScoreBuffer(const TensorBuffer& logi
     [blit_encoder endEncoding];
 
     // Encode next input handling if available.
+    const bool handles_input = HandlesInput();
     litert::ml_drift::CustomEventMetal* sampling_done_event = nullptr;
-    if (input_handling_ != nullptr) {
+    if (handles_input) {
       sampling_done_event = new litert::ml_drift::CustomEventMetal(metal_env_->device());
       sampling_done_event->EncodeSignal(command_buffer);
 
       input_handling_->EncodeWithCommandBuffer(command_buffer);
-      if (run_inference_func_ != nullptr) {
-        // Associate input_handling_done_event to next_ids_tensor, i.e. to signal the event to the
-        // beginning of next decode step when next_ids_tensor_ is ready to read.
-        auto* input_handling_done_event =
-            new litert::ml_drift::CustomEventMetal(metal_env_->device());
-        input_handling_done_event->EncodeSignal(command_buffer);
-        LITERT_ASSIGN_OR_RETURN(auto litert_event, litert::Event::CreateManaged(
-                                                       litert_env_, litert::Event::Type::kCustom));
-        // Pass the ownership of input_handling_done_event to litert_event.
-        litert_event.SetCustomEvent(input_handling_done_event);
-        input_handling_done_event->Release(input_handling_done_event);  // Decrement the refcount.
-        LITERT_RETURN_IF_ERROR(next_ids_tensor_.has_value());
-        next_ids_tensor_->SetEvent(std::move(litert_event));
-      }
+      // Associate input_handling_done_event to next_ids_tensor, i.e. to signal the event to the
+      // beginning of next decode step when next_ids_tensor_ is ready to read.
+      auto* input_handling_done_event =
+          new litert::ml_drift::CustomEventMetal(metal_env_->device());
+      input_handling_done_event->EncodeSignal(command_buffer);
+      LITERT_ASSIGN_OR_RETURN(auto litert_event, litert::Event::CreateManaged(
+                                                     litert_env_, litert::Event::Type::kCustom));
+      // Pass the ownership of input_handling_done_event to litert_event.
+      litert_event.SetCustomEvent(input_handling_done_event);
+      input_handling_done_event->Release(input_handling_done_event);  // Decrement the refcount.
+      LITERT_RETURN_IF_ERROR(next_ids_tensor_.has_value());
+      next_ids_tensor_->SetEvent(std::move(litert_event));
     }
 
+    // Without input handling, this thread waits for the decode step that produced the logits too.
+    std::optional<CompletionWaiter> completion_waiter;
+    if (!handles_input) {
+      completion_waiter.emplace(command_buffer);
+    }
     [command_buffer commit];
 
-    if (input_handling_ != nullptr) {
-      if (run_inference_func_ != nullptr) {
-        int ret = run_inference_func_(run_inference_arg_);
-        if (ret != 0) {
-          return absl::Status(static_cast<absl::StatusCode>(ret), "Failed to run inference.");
-        }
+    if (handles_input) {
+      int ret = run_inference_func_(run_inference_arg_);
+      if (ret != 0) {
+        sampling_done_event->Release(sampling_done_event);
+        return absl::Status(static_cast<absl::StatusCode>(ret), "Failed to run inference.");
       }
       // Wait for sampling complete before reading back results
       sampling_done_event->Wait(sampling_done_event, /*timeout_in_ms=*/-1);
       sampling_done_event->Release(sampling_done_event);  // Decrement the refcount.
     } else {
       // Wait for all GPU work to complete before reading back results.
-      [command_buffer waitUntilCompleted];
+      completion_waiter->Wait();
     }
   }
 
