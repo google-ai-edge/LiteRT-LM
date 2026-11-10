@@ -303,13 +303,6 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_char_p),
       ctypes.c_size_t,
   ]
-  lib.litert_lm_engine_settings_set_enable_speculative_decoding.restype = (
-      ctypes.c_int
-  )
-  lib.litert_lm_engine_settings_set_enable_speculative_decoding.argtypes = [
-      ctypes.c_void_p,
-      ctypes.c_bool,
-  ]
   lib.litert_lm_engine_settings_set_speculative_decoding_config.restype = (
       ctypes.c_int
   )
@@ -453,13 +446,6 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
-  lib.litert_lm_session_config_set_enable_speculative_decoding.restype = (
-      ctypes.c_int
-  )
-  lib.litert_lm_session_config_set_enable_speculative_decoding.argtypes = [
-      ctypes.c_void_p,
-      ctypes.c_bool,
-  ]
   lib.litert_lm_session_config_set_speculative_decoding_config.restype = (
       ctypes.c_int
   )
@@ -531,14 +517,6 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_void_p),
       ctypes.c_size_t,
       ctypes.POINTER(ctypes.c_void_p),
-  ]
-  lib.litert_lm_session_generate_content_stream.restype = ctypes.c_int
-  lib.litert_lm_session_generate_content_stream.argtypes = [
-      ctypes.c_void_p,
-      ctypes.POINTER(ctypes.c_void_p),
-      ctypes.c_size_t,
-      STREAM_CALLBACK_TYPE,
-      ctypes.c_void_p,
   ]
 
   # Conversation Config
@@ -781,12 +759,7 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_size_t),
   ]
 
-  # Conversation Optional Args
-  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_int
-  lib.litert_lm_conversation_optional_args_create.argtypes = [
-      ctypes.POINTER(ctypes.c_void_p),
-  ]
-  lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
+  # Conversation Optional Args (constraints & tool choice)
   lib.litert_lm_conversation_optional_args_set_constraint.restype = ctypes.c_int
   lib.litert_lm_conversation_optional_args_set_constraint.argtypes = [
       ctypes.c_void_p,
