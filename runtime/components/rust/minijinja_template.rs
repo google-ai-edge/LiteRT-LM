@@ -36,7 +36,6 @@ mod ffi {
         fn apply(self: &MinijinjaTemplate, inputs_json: String) -> ApplyResult;
         fn source(self: &MinijinjaTemplate) -> &str;
         fn get_capabilities(self: &MinijinjaTemplate) -> ChatTemplateCapabilities;
-        fn get_error(self: &MinijinjaTemplate) -> String;
         fn clone_template(self: &MinijinjaTemplate) -> Box<MinijinjaTemplate>;
     }
 }
@@ -207,10 +206,6 @@ impl MinijinjaTemplate {
 
     fn get_capabilities(&self) -> ffi::ChatTemplateCapabilities {
         self.caps
-    }
-
-    fn get_error(&self) -> String {
-        self.creation_error.clone()
     }
 
     fn clone_template(&self) -> Box<MinijinjaTemplate> {

@@ -42,10 +42,8 @@ mod ffi {
         fn get_integer(self: &JsonValue) -> i64;
         fn get_string(self: &JsonValue) -> &str;
 
-        fn array_len(self: &JsonValue) -> usize;
         fn array_get(self: &JsonValue) -> Vec<JsonValue>;
 
-        fn object_has_key(self: &JsonValue, key: &str) -> bool;
         fn object_keys(self: &JsonValue) -> Vec<String>;
         fn object_get(self: &JsonValue, key: &str) -> Box<JsonValue>;
 
@@ -146,24 +144,10 @@ impl JsonValue {
         }
     }
 
-    fn array_len(self: &JsonValue) -> usize {
-        match &*self.inner {
-            InnerValue::Array(a) => a.len(),
-            _ => 0,
-        }
-    }
-
     fn array_get(self: &JsonValue) -> Vec<JsonValue> {
         match &*self.inner {
             InnerValue::Array(arr) => arr.iter().map(|a| JsonValue { inner: a.clone() }).collect(),
             _ => Vec::new(),
-        }
-    }
-
-    fn object_has_key(self: &JsonValue, key: &str) -> bool {
-        match &*self.inner {
-            InnerValue::Object(obj) => obj.contains_key(key),
-            _ => false,
         }
     }
 
