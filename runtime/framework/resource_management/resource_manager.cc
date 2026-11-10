@@ -803,6 +803,11 @@ ResourceManager::AcquireExecutorWithContextHandler(
                           new_context_handler->RetrieveRuntimeConfig());
     ABSL_ASSIGN_OR_RETURN(auto new_runtime_state,
                           new_context_handler->RetrieveRuntimeState());
+    if (current_runtime_config.constraint.has_value() &&
+        !new_runtime_config->constraint.has_value()) {
+      ABSL_RETURN_IF_ERROR(llm_executor_->UpdateRuntimeConfig(
+          RuntimeConfig{.constraint = nullptr}));
+    }
     ABSL_RETURN_IF_ERROR(
         llm_executor_->UpdateRuntimeConfig(*new_runtime_config));
     ABSL_RETURN_IF_ERROR(llm_executor_->UpdateRuntimeState(*new_runtime_state));
@@ -819,6 +824,10 @@ ResourceManager::AcquireExecutorWithContextHandler(
                             current_llm_context->RetrieveRuntimeState());
       ABSL_ASSIGN_OR_RETURN(auto current_processed_context,
                             current_llm_context->RetrieveProcessedContext());
+      if (current_runtime_config->constraint.has_value()) {
+        ABSL_RETURN_IF_ERROR(llm_executor_->UpdateRuntimeConfig(
+            RuntimeConfig{.constraint = nullptr}));
+      }
 
       ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
           std::move(current_runtime_config)));
