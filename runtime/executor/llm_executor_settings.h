@@ -33,10 +33,11 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/gpu_artisan/utils/constraint_utils.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
 
@@ -563,6 +564,9 @@ struct RuntimeConfig {
 
   // The number of tokens per decode function call.
   std::optional<int> tokens_per_decode;
+
+  // The constraint to be applied to the output tokens.
+  std::optional<std::shared_ptr<odml::infra::llm_utils::Constraint>> constraint;
 };
 
 }  // namespace litert::lm
