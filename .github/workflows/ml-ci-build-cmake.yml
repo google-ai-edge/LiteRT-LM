@@ -81,6 +81,11 @@ jobs:
           TZ: Etc/UTC
         run: |
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+          printf 'http://us-central1.gce.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://mirrors.edge.kernel.org/ubuntu/\tpriority:2\nhttp://archive.ubuntu.com/ubuntu/\tpriority:3\n' \
+            > /etc/apt/mirrors.txt
+          sed -i -E 's@https?://(archive|security)\.ubuntu\.com/ubuntu/?@mirror+file:/etc/apt/mirrors.txt@g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
           apt-get update && apt-get install -yq \
             build-essential gcc clang lld cmake make gdb pkg-config \
             openjdk-17-jdk-headless git wget curl unzip \
