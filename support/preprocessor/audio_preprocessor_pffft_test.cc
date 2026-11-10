@@ -41,7 +41,9 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/audio_preprocessor_utils.h"
 #include "support/util/io_types.h"
+#include "third_party/pffft/src/pffft.h"
 
 namespace litert::support {
 namespace {
@@ -244,6 +246,54 @@ TEST(AudioPreprocessorPffftTest, VerifyPcmFramesToSpectrogram) {
   EXPECT_NEAR(spectrograms[0], 2.359288f, 1e-4);
   EXPECT_NEAR(spectrograms[fft_bins / 4], 0.0f, 1e-4);
   EXPECT_NEAR(spectrograms[fft_bins - 1], 635.846558f, 1e-4);
+}
+
+TEST(AudioPreprocessorPffftTest,
+     PcmFramesToSpectrogramIsBitIdenticalToWindowedSignalsReference) {
+  ASSERT_OK_AND_ASSIGN(std::vector<float> pcm_frames, GetDecodedAudioData());
+  for (const AudioPreprocessorConfig& config :
+       {AudioPreprocessorConfig::CreateDefaultUsmConfig(),
+        AudioPreprocessorConfig::CreateDefaultGemma4Config()}) {
+    ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                         AudioPreprocessorPffft::Create(config));
+    std::vector<float> spectrograms;
+    ASSERT_OK(preprocessor->PcmFramesToSpectrogramForTesting(pcm_frames,
+                                                             spectrograms));
+
+    std::vector<float> input_queue;
+    int samples_to_next_step = config.GetFrameLength();
+    if (config.GetSemicausalPadding()) {
+      samples_to_next_step = config.GetFrameLength() - config.GetHopLength();
+      input_queue.resize(config.GetHopLength(), 0.0f);
+    }
+    ASSERT_OK_AND_ASSIGN(
+        std::vector<std::vector<float>> windowed_signals,
+        GetWindowedSignalsForFft(config, pcm_frames, input_queue,
+                                 samples_to_next_step));
+
+    const int fft_length = config.GetFftLength();
+    std::unique_ptr<PFFFT_Setup, decltype(&pffft_destroy_setup)> setup(
+        pffft_new_setup(fft_length, PFFFT_REAL), &pffft_destroy_setup);
+    ASSERT_NE(setup, nullptr);
+    std::vector<float> data(fft_length);
+    std::vector<float> work(fft_length);
+    std::vector<float> expected_spectrograms;
+    for (const auto& current_window : windowed_signals) {
+      pffft_transform_ordered(setup.get(), current_window.data(), data.data(),
+                              work.data(), PFFFT_FORWARD);
+      float first_bin = data[0];
+      expected_spectrograms.push_back(first_bin * first_bin);
+      for (size_t i = 2; i < data.size(); i += 2) {
+        float real = data[i];
+        float imag = data[i + 1];
+        expected_spectrograms.push_back(real * real + imag * imag);
+      }
+      float last_bin = data[1];
+      expected_spectrograms.push_back(last_bin * last_bin);
+    }
+
+    EXPECT_EQ(spectrograms, expected_spectrograms);
+  }
 }
 
 TEST(AudioPreprocessorPffftTest, UsmPreprocessingWithPcmFrames) {

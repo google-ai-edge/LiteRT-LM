@@ -28,6 +28,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -43,45 +44,6 @@
 namespace litert::support {
 
 namespace {
-
-// Use Pffft to compute `spectrograms` from `windowed_signals`.
-absl::Status ComputeSpectrogram(
-    const std::vector<std::vector<float>>& windowed_signals, int fft_length,
-    int fft_bins, std::vector<float>& spectrograms) {
-  if (fft_length / 2 + 1 != fft_bins) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "fft_bins (", fft_bins, ") must equal fft_length (", fft_length,
-        ") / 2 + 1, but do not."));
-  }
-
-  PFFFT_Setup* setup = pffft_new_setup(fft_length, PFFFT_REAL);
-  if (setup == nullptr) {
-    return absl::InternalError("Failed to create PFFFT setup.");
-  }
-
-  std::vector<float> data(fft_length);
-  std::vector<float> work(fft_length);
-
-  for (const auto& current_window : windowed_signals) {
-    pffft_transform_ordered(setup, current_window.data(), data.data(),
-                            work.data(), PFFFT_FORWARD);
-
-    // The DC and half-frequency bins are stashed together as the real and
-    // imaginary values in the first output bin.
-    float first_bin = data[0];
-    spectrograms.push_back(first_bin * first_bin);
-    for (size_t i = 2; i < data.size(); i += 2) {
-      float real = data[i];
-      float imag = data[i + 1];
-      spectrograms.push_back(real * real + imag * imag);
-    }
-    float last_bin = data[1];
-    spectrograms.push_back(last_bin * last_bin);
-  }
-
-  pffft_destroy_setup(setup);
-  return absl::OkStatus();
-}
 
 // RIFF/WAVE header and chunk constants.
 constexpr absl::string_view kRiffChunkId = "RIFF";
@@ -153,12 +115,49 @@ AudioPreprocessorPffft::Create(const AudioPreprocessorConfig& config) {
 
 absl::Status AudioPreprocessorPffft::PcmFramesToSpectrogram(
     absl::Span<const float> pcm_frames, std::vector<float>& spectrograms) {
-  LITERT_ASSIGN_OR_RETURN(auto windowed_signals,
-                        GetWindowedSignalsForFft(config_, pcm_frames,
-                                                 input_queue_,
-                                                 samples_to_next_step_));
-  return ComputeSpectrogram(windowed_signals, config_.GetFftLength(),
-                            config_.GetFftBins(), spectrograms);
+  const int fft_length = config_.GetFftLength();
+  const int fft_bins = config_.GetFftBins();
+  if (fft_length <= 0) {
+    return absl::InvalidArgumentError("FFT length must be positive.");
+  }
+  if (fft_length / 2 + 1 != fft_bins) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("fft_bins (", fft_bins, ") must equal fft_length (",
+                     fft_length, ") / 2 + 1, but do not."));
+  }
+  if (absl::StatusOr<int> expected_frames =
+          CountFramedSegments(config_, pcm_frames.size(), input_queue_.size(),
+                              samples_to_next_step_);
+      expected_frames.ok()) {
+    spectrograms.reserve(spectrograms.size() +
+                         static_cast<size_t>(*expected_frames) * fft_bins);
+  }
+
+  std::unique_ptr<PFFFT_Setup, decltype(&pffft_destroy_setup)> setup(
+      pffft_new_setup(fft_length, PFFFT_REAL), &pffft_destroy_setup);
+  if (setup == nullptr) {
+    return absl::InternalError("Failed to create PFFFT setup.");
+  }
+  std::vector<float> data(fft_length);
+  std::vector<float> work(fft_length);
+
+  return ForEachWindowedSignalForFft(
+      config_, pcm_frames, input_queue_, samples_to_next_step_,
+      [&](absl::Span<const float> current_window) {
+        pffft_transform_ordered(setup.get(), current_window.data(), data.data(),
+                                work.data(), PFFFT_FORWARD);
+        // The DC and half-frequency bins are stashed together as the real and
+        // imaginary values in the first output bin.
+        float first_bin = data[0];
+        spectrograms.push_back(first_bin * first_bin);
+        for (size_t i = 2; i < data.size(); i += 2) {
+          float real = data[i];
+          float imag = data[i + 1];
+          spectrograms.push_back(real * real + imag * imag);
+        }
+        float last_bin = data[1];
+        spectrograms.push_back(last_bin * last_bin);
+      });
 }
 
 namespace {
