@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CORE_EMBEDDING_ENGINE_IMPL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CORE_EMBEDDING_ENGINE_IMPL_H_
 
+#include <future>  // NOLINT(build/c++11)
 #include <memory>
 #include <optional>
 #include <vector>
@@ -92,6 +93,21 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       EmbeddingEngineSettings settings,
       std::optional<BenchmarkInfo> benchmark_info = std::nullopt);
 
+  // Same as above, but with a Tokenizer that is still being created, e.g. on
+  // another thread with `std::async`, so that its creation overlaps with the
+  // creation of the executors. `tokenizer` is only waited for once the
+  // executors are created, and is always waited for before this returns (also
+  // on failure), so state borrowed by the task creating it (e.g. `resources`)
+  // only needs to outlive this call. The future may resolve to nullptr for
+  // callers providing pre-tokenized token ID buffers.
+  static absl::StatusOr<std::unique_ptr<EmbeddingEngine>> Create(
+      std::unique_ptr<ModelResources> resources,
+      std::unique_ptr<OwnedEnvironment> env,
+      std::future<absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>>>
+          tokenizer,
+      EmbeddingEngineSettings settings,
+      std::optional<BenchmarkInfo> benchmark_info = std::nullopt);
+
   // Creates an EmbeddingEngineImpl instance without a Tokenizer (for callers
   // providing pre-tokenized token ID buffers).
   static absl::StatusOr<std::unique_ptr<EmbeddingEngine>> Create(
@@ -99,7 +115,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       std::unique_ptr<OwnedEnvironment> env, EmbeddingEngineSettings settings,
       std::optional<BenchmarkInfo> benchmark_info = std::nullopt);
 
-  // Creates an EmbeddingEngineImpl instance from EmbeddingEngineSettings.
+  // Creates an EmbeddingEngineImpl instance from EmbeddingEngineSettings. The
+  // tokenizer is created on a separate thread while the LiteRT environment and
+  // the executors are created.
   static absl::StatusOr<std::unique_ptr<EmbeddingEngine>> Create(
       EmbeddingEngineSettings settings);
 

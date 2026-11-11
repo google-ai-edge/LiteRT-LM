@@ -14,14 +14,17 @@
 
 #include "runtime/core/embedding_engine_impl.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
+#include <future>  // NOLINT(build/c++11)
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <utility>
 #include <variant>
 #include <vector>
@@ -34,6 +37,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
@@ -443,6 +447,119 @@ TEST(EmbeddingEngineImplTest, CreateWithNullTokenizerSuccess) {
   EXPECT_OK(EmbeddingEngineImpl::Create(std::move(resources2), std::move(env2),
                                         /*tokenizer=*/nullptr,
                                         std::move(settings2)));
+}
+
+TEST(EmbeddingEngineImplTest, CreateWithAsyncTokenizerFromResourcesSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  // The tokenizer is created from the resources on another thread while the
+  // engine creates the executors from the same resources.
+  std::future<absl::StatusOr<std::unique_ptr<Tokenizer>>> tokenizer_future =
+      std::async(std::launch::async, [resources_ptr = resources.get()] {
+        return resources_ptr->GetTokenizer();
+      });
+  EXPECT_OK(EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                        std::move(tokenizer_future),
+                                        std::move(settings)));
+}
+
+TEST(EmbeddingEngineImplTest, CreateWithAsyncTokenizerErrorFails) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  std::future<absl::StatusOr<std::unique_ptr<Tokenizer>>> tokenizer_future =
+      std::async(std::launch::async,
+                 []() -> absl::StatusOr<std::unique_ptr<Tokenizer>> {
+                   return absl::NotFoundError("No tokenizer.");
+                 });
+  EXPECT_THAT(
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer_future),
+                                  std::move(settings)),
+      StatusIs(absl::StatusCode::kNotFound, HasSubstr("No tokenizer.")));
+}
+
+TEST(EmbeddingEngineImplTest, CreateWithInvalidTokenizerFutureFails) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_THAT(EmbeddingEngineImpl::Create(
+                  std::move(resources), std::move(env),
+                  std::future<absl::StatusOr<std::unique_ptr<Tokenizer>>>(),
+                  std::move(settings)),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Tokenizer future must be valid.")));
+}
+
+// The task creating the tokenizer may borrow the model resources, so Create()
+// must wait for it before returning, also when it fails.
+TEST(EmbeddingEngineImplTest, CreateFailureWaitsForAsyncTokenizer) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  // Unlike the future of `std::async`, the future of a `std::promise` does not
+  // block on destruction, so this checks that Create() itself waits.
+  std::promise<absl::StatusOr<std::unique_ptr<Tokenizer>>> tokenizer_promise;
+  std::atomic<bool> tokenizer_done = false;
+  std::thread tokenizer_thread(
+      [&tokenizer_promise, &tokenizer_done, resources_ptr = resources.get()] {
+        absl::SleepFor(absl::Milliseconds(100));
+        auto tokenizer = resources_ptr->GetTokenizer();
+        tokenizer_done.store(true, std::memory_order_release);
+        tokenizer_promise.set_value(std::move(tokenizer));
+      });
+
+  EXPECT_THAT(EmbeddingEngineImpl::Create(std::move(resources), /*env=*/nullptr,
+                                          tokenizer_promise.get_future(),
+                                          std::move(settings)),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("OwnedEnvironment cannot be null.")));
+  EXPECT_TRUE(tokenizer_done.load(std::memory_order_acquire));
+  tokenizer_thread.join();
+}
+
+TEST(EmbeddingEngineImplTest, CreateWithSettingsAndBenchmarkRecordsTokenizer) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.GetMutableBenchmarkParams();
+
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EmbeddingEngineImpl::Create(std::move(settings)));
+
+  auto benchmark_info = engine->GetBenchmarkInfo();
+  ASSERT_TRUE(benchmark_info.has_value());
+  const auto& init_phases = benchmark_info->GetInitPhases();
+  EXPECT_THAT(init_phases, Contains(Key("Init Total")));
+  EXPECT_THAT(init_phases, Contains(Key("Init Executor")));
+  EXPECT_THAT(init_phases, Contains(Key("Init Tokenizer")));
 }
 
 TEST(EmbeddingEngineImplTest, CreateStreamingWeightsSuccess) {

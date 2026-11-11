@@ -15,9 +15,11 @@
 #include "runtime/core/embedding_engine_impl.h"
 
 #include <algorithm>
+#include <chrono>  // NOLINT(build/c++11)
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <future>  // NOLINT(build/c++11)
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,6 +35,8 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -415,17 +419,49 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     std::unique_ptr<::litert::support::Tokenizer> tokenizer,
     EmbeddingEngineSettings settings,
     std::optional<BenchmarkInfo> benchmark_info) {
-  if (resources == nullptr) {
+  std::promise<absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>>>
+      tokenizer_promise;
+  tokenizer_promise.set_value(std::move(tokenizer));
+  return Create(std::move(resources), std::move(env),
+                tokenizer_promise.get_future(), std::move(settings),
+                std::move(benchmark_info));
+}
+
+// static
+absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
+    std::unique_ptr<ModelResources> resources,
+    std::unique_ptr<OwnedEnvironment> env,
+    std::future<absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>>>
+        tokenizer_future,
+    EmbeddingEngineSettings settings,
+    std::optional<BenchmarkInfo> benchmark_info) {
+  // The model resources are shared by the embedding executor and the vision
+  // executor (and kept by the engine to compile the multimodal encoders on
+  // their first use), so that each executor can be destroyed independently.
+  std::shared_ptr<ModelResources> shared_resources = std::move(resources);
+
+  if (!tokenizer_future.valid()) {
+    return absl::InvalidArgumentError("Tokenizer future must be valid.");
+  }
+  // The task creating the tokenizer may still be running and borrowing the
+  // model resources. Declared after `shared_resources` so that, on every
+  // return path, the task is waited for before the resources can be destroyed.
+  // A deferred task (which never runs concurrently) is not run just to be
+  // waited for.
+  absl::Cleanup wait_for_tokenizer = [&tokenizer_future] {
+    if (tokenizer_future.valid() &&
+        tokenizer_future.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::deferred) {
+      tokenizer_future.wait();
+    }
+  };
+
+  if (shared_resources == nullptr) {
     return absl::InvalidArgumentError("ModelResources cannot be null.");
   }
   if (env == nullptr) {
     return absl::InvalidArgumentError("OwnedEnvironment cannot be null.");
   }
-
-  // The model resources are shared by the embedding executor and the vision
-  // executor (and kept by the engine to compile the multimodal encoders on
-  // their first use), so that each executor can be destroyed independently.
-  std::shared_ptr<ModelResources> shared_resources = std::move(resources);
 
   if (IsPixelTensorDevice()) {
     auto cores = GetPixelPerformanceCores();
@@ -535,18 +571,12 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     }
   }
 
-  SpecialTokens special_tokens;
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter = std::nullopt;
   std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
       nullptr;
   if (metadata.has_value()) {
-    if (tokenizer != nullptr) {
-      LITERT_ASSIGN_OR_RETURN(special_tokens,
-                              ExtractSpecialTokens(*metadata, *tokenizer));
-    }
-    image_preprocess_parameter =
-        ExtractImagePreprocessParameter(*metadata);
+    image_preprocess_parameter = ExtractImagePreprocessParameter(*metadata);
     LITERT_ASSIGN_OR_RETURN(audio_preprocessor,
                             ExtractAudioPreprocessor(*metadata));
   }
@@ -586,11 +616,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
             *settings.GetAudioExecutorSettings(), env->env, shared_resources));
   }
 
-  special_tokens.has_end_of_vision_model =
+  const bool has_end_of_vision_model =
       shared_resources
           ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_VISION)
           .ok();
-  special_tokens.has_end_of_audio_model =
+  const bool has_end_of_audio_model =
       shared_resources
           ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_END_OF_AUDIO)
           .ok();
@@ -628,6 +658,22 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(
         benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kExecutor));
+  }
+
+  // Now that the executors are created, wait for the tokenizer, whose creation
+  // may have been running concurrently.
+  LITERT_ASSIGN_OR_RETURN(
+      std::unique_ptr<::litert::support::Tokenizer> tokenizer,
+      tokenizer_future.get());
+  SpecialTokens special_tokens;
+  if (metadata.has_value() && tokenizer != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(special_tokens,
+                            ExtractSpecialTokens(*metadata, *tokenizer));
+  }
+  special_tokens.has_end_of_vision_model = has_end_of_vision_model;
+  special_tokens.has_end_of_audio_model = has_end_of_audio_model;
+
+  if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(
         benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTotal));
   }
@@ -1197,23 +1243,36 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     ABSL_RETURN_IF_ERROR(
         benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
   }
+  const bool benchmark_enabled = benchmark_info.has_value();
 
-  // Load tokenizer.
-  if (benchmark_info.has_value()) {
-    ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-        BenchmarkInfo::InitPhase::kTokenizer));
-  }
-
-  LITERT_ASSIGN_OR_RETURN(auto tokenizer, resources->GetTokenizer());
-
-  if (benchmark_info.has_value()) {
-    ABSL_RETURN_IF_ERROR(
-        benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTokenizer));
-  }
-
-  if (tokenizer == nullptr) {
-    return absl::InvalidArgumentError("Tokenizer cannot be null.");
-  }
+  // Load the tokenizer on a separate thread while the LiteRT environment and
+  // the executors are created. Loading the tokenizer is CPU-only work that
+  // does not depend on them. The task only borrows the model resources (whose
+  // tokenizer sections are read through the thread-safe LitertLmLoader) and
+  // `tokenizer_duration`. The Create() overload below, which takes ownership of
+  // the resources, always waits for the task before returning, and
+  // `tokenizer_duration` is declared before `tokenizer_future`, whose
+  // destructor joins the thread, so both outlive the task.
+  absl::Duration tokenizer_duration = absl::ZeroDuration();
+  auto create_tokenizer = [resources_ptr = resources.get(),
+                           &tokenizer_duration]()
+      -> absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>> {
+    const absl::Time start_time = absl::Now();
+    LITERT_ASSIGN_OR_RETURN(auto tokenizer, resources_ptr->GetTokenizer());
+    tokenizer_duration = absl::Now() - start_time;
+    if (tokenizer == nullptr) {
+      return absl::InvalidArgumentError("Tokenizer cannot be null.");
+    }
+    return tokenizer;
+  };
+#ifdef __EMSCRIPTEN__
+  // Threads are not available on web; create the tokenizer when it is needed.
+  constexpr std::launch kTokenizerLaunchPolicy = std::launch::deferred;
+#else
+  constexpr std::launch kTokenizerLaunchPolicy = std::launch::async;
+#endif  // __EMSCRIPTEN__
+  std::future<absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>>>
+      tokenizer_future = std::async(kTokenizerLaunchPolicy, create_tokenizer);
 
   // Create LiteRT environment.
   std::unique_ptr<OwnedEnvironment> owned_env;
@@ -1223,9 +1282,17 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     owned_env = std::make_unique<OwnedEnvironment>(std::move(env));
   }
 
-  return Create(std::move(resources), std::move(owned_env),
-                std::move(tokenizer), std::move(settings),
-                std::move(benchmark_info));
+  LITERT_ASSIGN_OR_RETURN(
+      std::unique_ptr<EmbeddingEngine> engine,
+      Create(std::move(resources), std::move(owned_env),
+             std::move(tokenizer_future), std::move(settings),
+             std::move(benchmark_info)));
+  // The tokenizer future has been consumed, so `tokenizer_duration` is set.
+  if (benchmark_enabled) {
+    ABSL_RETURN_IF_ERROR(engine->GetMutableBenchmarkInfo()->InitPhaseRecord(
+        BenchmarkInfo::InitPhase::kTokenizer, tokenizer_duration));
+  }
+  return engine;
 }
 
 EmbeddingEngineImpl::EmbeddingEngineImpl(

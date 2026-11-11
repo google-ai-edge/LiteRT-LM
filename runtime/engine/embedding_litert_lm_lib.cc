@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
+#include <future>  // NOLINT(build/c++11)
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -65,6 +66,7 @@
 #include "runtime/util/memory_profiling/accelerator_memory_monitor.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
+#include "support/tokenizer/tokenizer.h"
 #include "tflite/profiling/memory_usage_monitor.h"  // from @litert
 
 namespace litert::lm {
@@ -403,10 +405,24 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
                           BuildLiteRtCompiledModelResources(
                               model_assets, enable_file_backed_model_loading));
 
-  LITERT_ASSIGN_OR_RETURN(auto tokenizer, resources->GetTokenizer());
-  if (!tokenizer) {
-    return absl::NotFoundError("Tokenizer not found in model resources.");
-  }
+  // Load the tokenizer on a separate thread while the engine settings, the
+  // LiteRT environment and the executors are created. The task borrows
+  // `resources`, which is declared before `tokenizer_future`, whose destructor
+  // joins the thread, and EmbeddingEngineImpl::Create() waits for the task
+  // before returning.
+  std::future<absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>>>
+      tokenizer_future = std::async(
+          std::launch::async,
+          [resources_ptr = resources.get()]()
+              -> absl::StatusOr<std::unique_ptr<::litert::support::Tokenizer>> {
+            LITERT_ASSIGN_OR_RETURN(auto tokenizer,
+                                    resources_ptr->GetTokenizer());
+            if (!tokenizer) {
+              return absl::NotFoundError(
+                  "Tokenizer not found in model resources.");
+            }
+            return tokenizer;
+          });
 
   std::optional<Backend> vision_backend = std::nullopt;
   if (const auto vision_backend_str = run_settings.vision_backend;
@@ -527,10 +543,10 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   auto owned_env_ptr = std::make_unique<OwnedEnvironment>(std::move(owned_env));
 
   Emit(report_out, "Initializing EmbeddingEngine...");
-  LITERT_ASSIGN_OR_RETURN(auto engine,
-                          EmbeddingEngineImpl::Create(
-                              std::move(resources), std::move(owned_env_ptr),
-                              std::move(tokenizer), std::move(settings)));
+  LITERT_ASSIGN_OR_RETURN(
+      auto engine, EmbeddingEngineImpl::Create(
+                       std::move(resources), std::move(owned_env_ptr),
+                       std::move(tokenizer_future), std::move(settings)));
   const absl::Time init_end_time = absl::Now();
   const double init_time_ms =
       absl::ToDoubleMilliseconds(init_end_time - init_start_time);

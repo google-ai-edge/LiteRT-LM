@@ -417,6 +417,7 @@ cc_library(
         "//runtime/util/memory_profiling:accelerator_memory_monitor",
         "//support/preprocessor:audio_preprocessor_miniaudio",  # buildcleaner: keep
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
+        "//support/tokenizer",
         "@litert//tflite/profiling:memory_usage_monitor",
     ],
 )
