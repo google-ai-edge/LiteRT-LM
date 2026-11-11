@@ -39,6 +39,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_streaming.h"
 #include "runtime/core/audio_session_advanced.h"
+#include "runtime/core/engine_init_utils.h"
 #include "runtime/core/engine_vision_utils.h"
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
@@ -48,7 +49,6 @@
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/audio/audio_executor_utils.h"
-#include "runtime/executor/audio_litert_compiled_model_executor.h"
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -62,7 +62,6 @@
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/executor/vision/vision_executor_utils.h"
-#include "runtime/executor/vision_litert_compiled_model_executor.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/framework/resource_management/serial_execution_manager.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
@@ -78,13 +77,6 @@
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "runtime/util/streamed_weights_manager.h"
 #include "schema/core/litertlm_header_schema_generated.h"
-#include "schema/core/litertlm_read.h"
-#ifdef ENABLE_HUGGINGFACE_TOKENIZER
-#include "support/tokenizer/huggingface_tokenizer.h"
-#endif  // ENABLE_HUGGINGFACE_TOKENIZER
-#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
-#include "support/tokenizer/sentencepiece_tokenizer.h"
-#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
@@ -218,6 +210,29 @@ void MaybeUpgradeToStreamingModelAssets(EngineSettings& engine_settings) {
   main_executor_settings.SetModelAssets(*std::move(streaming_model_assets));
 }
 #endif  // __EMSCRIPTEN__
+
+absl::StatusOr<std::unique_ptr<ExecutionManager>> CreateExecutionManager(
+    bool single_threaded, Tokenizer* tokenizer, ModelResources* model_resources,
+    std::unique_ptr<LlmExecutor> executor,
+    std::unique_ptr<VisionExecutorSettings> vision_settings,
+    std::unique_ptr<AudioExecutorSettings> audio_settings,
+    Environment* litert_env,
+    std::unique_ptr<AudioExecutor> audio_executor = nullptr,
+    std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr,
+    std::unique_ptr<VisionExecutor> vision_executor = nullptr) {
+  if (single_threaded) {
+    return SerialExecutionManager::Create(
+        tokenizer, model_resources, std::move(executor),
+        std::move(vision_settings), std::move(audio_settings), litert_env,
+        std::move(audio_executor), std::move(runtime_debugger),
+        std::move(vision_executor));
+  }
+  return ThreadedExecutionManager::Create(
+      tokenizer, model_resources, std::move(executor),
+      std::move(vision_settings), std::move(audio_settings), litert_env,
+      std::move(audio_executor), std::move(runtime_debugger),
+      std::move(vision_executor));
+}
 
 }  // namespace
 
@@ -477,20 +492,9 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     ABSL_ASSIGN_OR_RETURN(tokenizer, create_tokenizer());
     // Update and load the parameters from the model file and convert the
     // tokens to ids.
-    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidateWithResources(
         tokenizer.get(), llm_metadata, input_prompt_as_hint,
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
+        model_resources.get()));
   } else {
     // If the model type is available, wait for the tokenizer to be created
     // after the model is loaded.
@@ -506,20 +510,8 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
       tokenizer_future = std::async(std::launch::deferred, create_tokenizer);
     }
 
-    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-        nullptr, llm_metadata, input_prompt_as_hint,
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
+    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidateWithResources(
+        nullptr, llm_metadata, input_prompt_as_hint, model_resources.get()));
   }
 
   if (benchmark_info.has_value()) {
@@ -527,13 +519,9 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
         BenchmarkInfo::InitPhase::kExecutor));
   }
 
-  std::unique_ptr<OwnedEnvironment> owned_env;
-  {
-    ABSL_ASSIGN_OR_RETURN(
-        auto temp_owned_env,
-        CreateEnvironment(engine_settings, model_resources.get()));
-    owned_env = std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<OwnedEnvironment> owned_env,
+      CreateOwnedEnvironment(engine_settings, model_resources.get()));
 
   std::unique_ptr<LlmExecutor> executor;
   std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr;
@@ -575,21 +563,8 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     engine_settings.SetEnableDebugger(false);
   }
 
-  std::unique_ptr<VisionExecutorSettings> vision_executor_settings_ptr;
-  if (engine_settings.GetVisionExecutorSettings().has_value()) {
-    vision_executor_settings_ptr = std::make_unique<VisionExecutorSettings>(
-        std::move(engine_settings.GetVisionExecutorSettings().value()));
-    if (vision_executor_settings_ptr->GetAdapterBackend() != Backend::CPU) {
-      ABSL_LOG(WARNING) << "Vision adapter backend is not CPU, which may cause "
-                           "precision loss.";
-    }
-  }
-
-  std::unique_ptr<AudioExecutorSettings> audio_executor_settings_ptr;
-  if (engine_settings.GetAudioExecutorSettings().has_value()) {
-    audio_executor_settings_ptr = std::make_unique<AudioExecutorSettings>(
-        std::move(engine_settings.GetAudioExecutorSettings().value()));
-  }
+  ModalityExecutorSettings modality_settings =
+      ExtractModalityExecutorSettings(engine_settings);
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(
@@ -599,20 +574,9 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
   if (hasLlmModelType) {
     // Now load the tokenizer and update the engine settings.
     ABSL_ASSIGN_OR_RETURN(tokenizer, tokenizer_future.get());
-    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidateWithResources(
         tokenizer.get(), llm_metadata, input_prompt_as_hint,
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-        model_resources->GetTFLiteModelBackendConstraint(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-        model_resources->GetTFLiteModelPreferActivationType(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
+        model_resources.get()));
     // As we load the tokenizer asynchronously, we need to update the executor
     // settings after the tokenizer is loaded.
     ABSL_RETURN_IF_ERROR(executor->UpdateExecutorSettings(
@@ -623,24 +587,14 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     ABSL_RETURN_IF_ERROR(benchmark_info->InitPhaseRecord(
         BenchmarkInfo::InitPhase::kTokenizer, tokenizer_duration));
   }
-  std::unique_ptr<ExecutionManager> execution_manager;
-  if (!engine_settings.GetSingleThreadedExecution()) {
-    ABSL_ASSIGN_OR_RETURN(
-        execution_manager,
-        ThreadedExecutionManager::Create(
-            tokenizer.get(), model_resources.get(), std::move(executor),
-            std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env,
-            /*audio_executor=*/nullptr, runtime_debugger));
-  } else {
-    ABSL_ASSIGN_OR_RETURN(
-        execution_manager,
-        SerialExecutionManager::Create(
-            tokenizer.get(), model_resources.get(), std::move(executor),
-            std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env,
-            /*audio_executor=*/nullptr, runtime_debugger));
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<ExecutionManager> execution_manager,
+      CreateExecutionManager(
+          engine_settings.GetSingleThreadedExecution(), tokenizer.get(),
+          model_resources.get(), std::move(executor),
+          std::move(modality_settings.vision),
+          std::move(modality_settings.audio), &owned_env->env,
+          /*audio_executor=*/nullptr, std::move(runtime_debugger)));
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(
@@ -693,21 +647,11 @@ EngineAdvancedImpl::CreateStreamingWeights(
   // early error returns, so it is declared first.
   std::unique_ptr<OwnedEnvironment> owned_env;
   auto streaming_model_resources = std::make_unique<ModelResourcesStreaming>();
-  for (proto::LlmMetadata::TfLiteModelType model_type :
-       {proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
-        proto::LlmMetadata::TF_LITE_VISION_ENCODER,
-        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW}) {
-    if (auto bc = loader.GetTFLiteModelBackendConstraint(model_type);
-        bc.has_value()) {
-      streaming_model_resources->SetTFLiteModelBackendConstraint(
-          model_type, std::move(*bc));
-    }
-    if (auto pat = loader.GetTFLiteModelPreferActivationType(model_type);
-        pat.has_value()) {
-      streaming_model_resources->SetTFLiteModelPreferActivationType(
-          model_type, std::move(*pat));
-    }
-  }
+  CopyStreamingModelHints(loader,
+                          {proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                           proto::LlmMetadata::TF_LITE_VISION_ENCODER,
+                           proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW},
+                          *streaming_model_resources);
   std::unique_ptr<Tokenizer> tokenizer;
   std::unique_ptr<LlmExecutor> executor;
   std::unique_ptr<CompiledModel> compiled_main_model;
@@ -731,46 +675,20 @@ EngineAdvancedImpl::CreateStreamingWeights(
     if (!set_llm_metadata) {
       return absl::OkStatus();
     }
-    if (tokenizer != nullptr) {
-      ABSL_LOG(INFO) << "Setting engine settings...";
-      ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-          tokenizer.get(), &llm_metadata, input_prompt_as_hint,
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
-      engine_settings_updated = true;
-      ABSL_LOG(INFO) << "Engine settings set.";
-    } else if (llm_metadata.has_llm_model_type() && !engine_settings_updated) {
-      // Like the non-streaming path, model files with LlmModelType can update
-      // the settings without the tokenizer. They are updated again with the
-      // tokenizer once it is loaded, before the executor is created.
-      ABSL_LOG(INFO) << "Setting engine settings without tokenizer...";
-      ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-          /*tokenizer=*/nullptr, &llm_metadata, input_prompt_as_hint,
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
-      engine_settings_updated = true;
-      ABSL_LOG(INFO) << "Engine settings set.";
+    // Like the non-streaming path, model files with LlmModelType can update
+    // settings once without the tokenizer, then again once the tokenizer is
+    // loaded before the executor is created.
+    if (tokenizer == nullptr &&
+        (!llm_metadata.has_llm_model_type() || engine_settings_updated)) {
+      return absl::OkStatus();
     }
+    ABSL_LOG(INFO) << "Setting engine settings"
+                   << (tokenizer == nullptr ? " without tokenizer..." : "...");
+    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidateWithResources(
+        tokenizer.get(), &llm_metadata, input_prompt_as_hint,
+        streaming_model_resources.get()));
+    engine_settings_updated = true;
+    ABSL_LOG(INFO) << "Engine settings set.";
     return absl::OkStatus();
   };
 
@@ -795,53 +713,21 @@ EngineAdvancedImpl::CreateStreamingWeights(
         break;
       case schema::AnySectionDataType_LlmMetadataProto: {
         ABSL_LOG(INFO) << "Processing section data type: LlmMetadata";
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
-        if (!llm_metadata.ParseFromString(
-                absl::string_view(buffer.data(), buffer.size()))) {
-          return absl::InternalError("Failed to parse LlmMetadata");
-        }
-
+        ABSL_ASSIGN_OR_RETURN(
+            llm_metadata,
+            section->ParseProto<proto::LlmMetadata>("LlmMetadata"));
         set_llm_metadata = true;
         ABSL_LOG(INFO) << "LlmMetadataProto processed.";
 
         streaming_model_resources->SetLlmMetadata(llm_metadata);
-
         ABSL_RETURN_IF_ERROR(maybe_set_engine_settings());
-
         break;
       }
       case schema::AnySectionDataType_SP_Tokenizer: {
-#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
-        ABSL_LOG(INFO) << "Processing section data type: SP_Tokenizer";
-        if (engine_settings.IsBenchmarkEnabled()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
-        ABSL_ASSIGN_OR_RETURN(
-            tokenizer,
-            ::litert::support::SentencePieceTokenizer::CreateFromBuffer(
-                absl::string_view(buffer.data(), buffer.size())));
-        ABSL_LOG(INFO) << "SentencePieceTokenizer created.";
-
-        if (engine_settings.IsBenchmarkEnabled()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
-
+        ABSL_ASSIGN_OR_RETURN(tokenizer, LoadStreamedSentencePieceTokenizer(
+                                             *section, benchmark_info));
         ABSL_RETURN_IF_ERROR(maybe_set_engine_settings());
-
         break;
-#else
-        return absl::UnimplementedError(
-            "SentencePiece tokenizer support is not enabled.");
-#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
       }
       case schema::AnySectionDataType_TFLiteModel: {
         ABSL_LOG(INFO) << "Processing section data type: TFLiteModel";
@@ -856,23 +742,8 @@ EngineAdvancedImpl::CreateStreamingWeights(
         if (model_type == proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
           return absl::UnimplementedError("kUnknown is not implemented");
         }
-        if (section->backend_constraint.has_value()) {
-          streaming_model_resources->SetTFLiteModelBackendConstraint(
-              model_type, *section->backend_constraint);
-        }
-        if (section->prefer_activation_type.has_value()) {
-          streaming_model_resources->SetTFLiteModelPreferActivationType(
-              model_type, *section->prefer_activation_type);
-        }
-
-        ABSL_LOG(INFO) << "Caching model from stream for type: "
-                       << static_cast<int>(model_type);
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
-        streaming_model_resources->SetModelBuffer(model_type,
-                                                  std::move(buffer));
+        ABSL_RETURN_IF_ERROR(CacheStreamedModelSection(
+            *section, model_type, *streaming_model_resources));
         if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE &&
             owned_env == nullptr) {
           if (!set_llm_metadata) {
@@ -880,11 +751,8 @@ EngineAdvancedImpl::CreateStreamingWeights(
                 "LlmMetadata must be parsed before TFLiteModel.");
           }
           ABSL_ASSIGN_OR_RETURN(
-              auto temp_owned_env,
-              CreateEnvironment(engine_settings,
-                                streaming_model_resources.get()));
-          owned_env =
-              std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
+              owned_env, CreateOwnedEnvironment(
+                             engine_settings, streaming_model_resources.get()));
         }
         break;
       }
@@ -896,55 +764,34 @@ EngineAdvancedImpl::CreateStreamingWeights(
         ABSL_ASSIGN_OR_RETURN(
             const proto::LlmMetadata::TfLiteModelType model_type,
             ParseLlmTfLiteModelType(*section->buffer_key.model_type));
+        const bool is_vision_weights =
+            model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER ||
+            model_type == proto::LlmMetadata::TF_LITE_VISION_ADAPTER;
+        const bool is_audio_weights =
+            model_type == proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW ||
+            model_type == proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER;
         if (model_type == proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER ||
-            model_type == proto::LlmMetadata::TF_LITE_EMBEDDER) {
-          ABSL_LOG(INFO)
-              << "Caching embedder weights from stream (CPU) for model type: "
-              << static_cast<int>(model_type);
-          size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
-          ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
-              model_type, *section->data_stream, size));
-        } else if (model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER ||
-                   model_type == proto::LlmMetadata::TF_LITE_VISION_ADAPTER) {
-          // Vision weights are always stored in host memory before being
-          // loaded, even when the encoder runs on GPU, due to an issue with
-          // streaming float32 weights. The vision executor is compiled from
-          // them after all sections are processed.
-          if (!engine_settings.GetVisionExecutorSettings().has_value()) {
-            ABSL_LOG(INFO) << "Vision is not enabled. Skipping weights for "
+            model_type == proto::LlmMetadata::TF_LITE_EMBEDDER ||
+            is_vision_weights || is_audio_weights) {
+          // Vision, audio, and embedder weights are buffered in host memory
+          // (even when the vision or audio encoder runs on GPU, due to an issue
+          // with streaming float32 weights). Their executors are compiled from
+          // host memory after all sections are processed.
+          if ((is_vision_weights &&
+               !engine_settings.GetVisionExecutorSettings().has_value()) ||
+              (is_audio_weights &&
+               !engine_settings.GetAudioExecutorSettings().has_value())) {
+            ABSL_LOG(INFO) << "Modality is not enabled. Skipping weights for "
                               "model type: "
                            << static_cast<int>(model_type);
             break;
           }
-          const size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
-          ABSL_LOG(INFO) << "Reading weights (" << size
+          ABSL_LOG(INFO) << "Reading weights (" << section->Size()
                          << " bytes) for model type "
                          << static_cast<int>(model_type)
                          << " into host memory...";
           ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
-              model_type, *section->data_stream, size));
-          ABSL_LOG(INFO) << "Weights read.";
-        } else if (model_type == proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW ||
-                   model_type == proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER) {
-          // Same as vision above: audio weights are stored in host memory and
-          // the audio executor is compiled from them after all sections are
-          // processed.
-          if (!engine_settings.GetAudioExecutorSettings().has_value()) {
-            ABSL_LOG(INFO) << "Audio is not enabled. Skipping weights for "
-                              "model type: "
-                           << static_cast<int>(model_type);
-            break;
-          }
-          const size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
-          ABSL_LOG(INFO) << "Reading weights (" << size
-                         << " bytes) for model type "
-                         << static_cast<int>(model_type)
-                         << " into host memory...";
-          ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
-              model_type, *section->data_stream, size));
+              model_type, *section->data_stream, section->Size()));
           ABSL_LOG(INFO) << "Weights read.";
         } else {
           if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER &&
@@ -999,59 +846,16 @@ EngineAdvancedImpl::CreateStreamingWeights(
         break;
       }
       case schema::AnySectionDataType_HF_Tokenizer_Zlib: {
-#ifdef ENABLE_HUGGINGFACE_TOKENIZER
-        ABSL_LOG(INFO) << "Processing section data type: HF_Tokenizer_Zlib";
-        if (engine_settings.IsBenchmarkEnabled()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
-        std::vector<uint8_t> compressed_buffer(
-            section_metadata->end_offset() - section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            reinterpret_cast<char*>(compressed_buffer.data()), 0,
-            compressed_buffer.size()));
-
-        std::vector<uint8_t> decompressed_buffer;
-        ABSL_RETURN_IF_ERROR(schema::DecompressData(compressed_buffer.data(),
-                                                    compressed_buffer.size(),
-                                                    &decompressed_buffer));
-
-        std::string json_data(
-            reinterpret_cast<const char*>(decompressed_buffer.data()),
-            decompressed_buffer.size());
-        ABSL_ASSIGN_OR_RETURN(
-            tokenizer,
-            ::litert::support::HuggingFaceTokenizer::CreateFromJson(json_data));
-        ABSL_LOG(INFO) << "HuggingFaceTokenizer created.";
-
-        if (engine_settings.IsBenchmarkEnabled()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
-
+        ABSL_ASSIGN_OR_RETURN(tokenizer, LoadStreamedHuggingFaceTokenizer(
+                                             *section, benchmark_info));
         ABSL_RETURN_IF_ERROR(maybe_set_engine_settings());
-
         break;
-#else
-        ABSL_RETURN_IF_ERROR(section->data_stream->Discard(
-            0,
-            section_metadata->end_offset() - section_metadata->begin_offset()));
-        return absl::UnimplementedError(
-            "HuggingFace tokenizer found, but LiteRT LM was built with "
-            "--define=DISABLE_HUGGINGFACE_TOKENIZER=1.");
-#endif  // ENABLE_HUGGINGFACE_TOKENIZER
       }
       case schema::AnySectionDataType_ExecutorMetadataProto: {
         ABSL_LOG(INFO) << "Processing section data type: ExecutorMetadataProto";
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
-        proto::ExecutorMetadata executor_metadata;
-        if (!executor_metadata.ParseFromString(
-                absl::string_view(buffer.data(), buffer.size()))) {
-          return absl::InternalError("Failed to parse ExecutorMetadata");
-        }
+        ABSL_ASSIGN_OR_RETURN(
+            proto::ExecutorMetadata executor_metadata,
+            section->ParseProto<proto::ExecutorMetadata>("ExecutorMetadata"));
         streaming_model_resources->SetExecutorMetadata(
             std::move(executor_metadata));
         ABSL_LOG(INFO) << "ExecutorMetadataProto processed.";
@@ -1113,110 +917,24 @@ EngineAdvancedImpl::CreateStreamingWeights(
           /*per_layer_embedding_lookup=*/nullptr,
           std::move(compiled_drafter_model)));
 
-  std::unique_ptr<ExecutionManager> execution_manager;
-  std::unique_ptr<VisionExecutorSettings> vision_executor_settings_ptr;
-  std::unique_ptr<VisionExecutor> vision_executor;
-  if (engine_settings.GetVisionExecutorSettings().has_value()) {
-    if (streaming_model_resources
-            ->GetTFLiteModel(proto::LlmMetadata::TF_LITE_VISION_ENCODER)
-            .ok()) {
-      ABSL_RETURN_IF_ERROR(MaybeSelectVisionSignatures(
+  ABSL_ASSIGN_OR_RETURN(
+      StreamedVisionExecutorInit vision_init,
+      InitializeStreamedVisionExecutor(
           engine_settings, *streaming_model_resources,
-          set_llm_metadata ? &llm_metadata : nullptr));
-      vision_executor_settings_ptr = std::make_unique<VisionExecutorSettings>(
-          std::move(engine_settings.GetVisionExecutorSettings().value()));
-      if (vision_executor_settings_ptr->GetAdapterBackend() != Backend::CPU) {
-        ABSL_LOG(WARNING) << "Vision adapter backend is not CPU, which may "
-                             "cause precision loss.";
-      }
+          set_llm_metadata ? &llm_metadata : nullptr, owned_env->env));
+  ABSL_ASSIGN_OR_RETURN(
+      StreamedAudioExecutorInit audio_init,
+      InitializeStreamedAudioExecutor(
+          engine_settings, *streaming_model_resources, owned_env->env));
 
-      // The vision executor must be created now, while the vision encoder
-      // weights are still in host memory. It can not be lazily created later
-      // since the model can not be reloaded from the (already consumed) stream.
-      //
-      // The encoder and adapter keep a reference to the settings they are
-      // created with, so use the heap-allocated settings that the
-      // ResourceManager takes ownership of below, which outlive the executor.
-      ABSL_LOG(INFO) << "Creating vision executor from stream...";
-      ABSL_ASSIGN_OR_RETURN(vision_executor,
-                            VisionLiteRtCompiledModelExecutor::Create(
-                                *vision_executor_settings_ptr, owned_env->env,
-                                *streaming_model_resources));
-      ABSL_LOG(INFO) << "Vision executor created.";
-
-      // We only need to keep the encoder weights in host memory when running
-      // on CPU. Don't release the vision adapter weights, as it always runs on
-      // CPU.
-      if (vision_executor_settings_ptr->GetBackend() != Backend::CPU) {
-        streaming_model_resources->ReleaseWeights(
-            proto::LlmMetadata::TF_LITE_VISION_ENCODER);
-        ABSL_LOG(INFO) << "Released host memory for vision encoder weights.";
-      }
-    } else {
-      ABSL_LOG(WARNING) << "Vision executor settings are set, but the model "
-                           "has no vision encoder. Vision is disabled.";
-      // Clear the settings so the engine doesn't report vision support.
-      // Otherwise sessions that enable the vision modality (which the Web SDK
-      // does by default when vision settings are present) fail to load the
-      // vision executor.
-      engine_settings.GetMutableVisionExecutorSettings().reset();
-    }
-  }
-
-  std::unique_ptr<AudioExecutorSettings> audio_executor_settings_ptr;
-  std::unique_ptr<AudioExecutor> audio_executor;
-  if (engine_settings.GetAudioExecutorSettings().has_value()) {
-    if (streaming_model_resources
-            ->GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)
-            .ok()) {
-      audio_executor_settings_ptr = std::make_unique<AudioExecutorSettings>(
-          std::move(engine_settings.GetAudioExecutorSettings().value()));
-
-      // Create the audio executor now, while the audio encoder weights are
-      // still in host memory. It can not be lazily created later since the
-      // model can not be reloaded from the (already consumed) stream.
-      ABSL_LOG(INFO) << "Creating audio executor from stream...";
-      ABSL_ASSIGN_OR_RETURN(audio_executor,
-                            AudioLiteRtCompiledModelExecutor::Create(
-                                *audio_executor_settings_ptr, owned_env->env,
-                                *streaming_model_resources));
-      ABSL_LOG(INFO) << "Audio executor created.";
-
-      // Only keep the encoder weights in host memory when running on CPU.
-      // The audio adapter always runs on CPU, so keep its weights.
-      if (audio_executor_settings_ptr->GetBackend() != Backend::CPU) {
-        streaming_model_resources->ReleaseWeights(
-            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW);
-        ABSL_LOG(INFO) << "Released host memory for audio encoder weights.";
-      }
-    } else {
-      ABSL_LOG(WARNING) << "Audio executor settings are set, but the model "
-                           "has no audio encoder. Audio is disabled.";
-      // Clear the settings so the engine doesn't report audio support (see the
-      // vision case above).
-      engine_settings.GetMutableAudioExecutorSettings().reset();
-    }
-  }
-
-  if (!engine_settings.GetSingleThreadedExecution()) {
-    ABSL_ASSIGN_OR_RETURN(
-        execution_manager,
-        ThreadedExecutionManager::Create(
-            tokenizer.get(), streaming_model_resources.get(),
-            std::move(executor), std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env,
-            std::move(audio_executor), /*runtime_debugger=*/nullptr,
-            std::move(vision_executor)));
-  } else {
-    ABSL_ASSIGN_OR_RETURN(
-        execution_manager,
-        SerialExecutionManager::Create(
-            tokenizer.get(), streaming_model_resources.get(),
-            std::move(executor), std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env,
-            std::move(audio_executor), /*runtime_debugger=*/nullptr,
-            std::move(vision_executor)));
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<ExecutionManager> execution_manager,
+      CreateExecutionManager(
+          engine_settings.GetSingleThreadedExecution(), tokenizer.get(),
+          streaming_model_resources.get(), std::move(executor),
+          std::move(vision_init.settings), std::move(audio_init.settings),
+          &owned_env->env, std::move(audio_init.executor),
+          /*runtime_debugger=*/nullptr, std::move(vision_init.executor)));
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(

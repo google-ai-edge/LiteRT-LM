@@ -37,6 +37,7 @@
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/model_resources_streaming.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
@@ -1224,6 +1225,40 @@ TEST(EngineSettingsTest, PrintOperator) {
   benchmark_params.set_num_prefill_tokens(100);
   std::stringstream oss;
   oss << *settings;
+}
+
+TEST(EngineSettingsTest, MaybeUpdateAndValidateWithResources) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("test_model_path_1"));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::CPU,
+                                    /*vision_backend=*/Backend::CPU,
+                                    /*audio_backend=*/Backend::CPU));
+
+  testing::NiceMock<MockTokenizer> tokenizer;
+  ON_CALL(tokenizer, TokenIdsToText).WillByDefault(Return("fake_text"));
+  ON_CALL(tokenizer, TokenToId).WillByDefault(Return(1));
+  ON_CALL(tokenizer, TextToTokenIds).WillByDefault(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+
+  EXPECT_OK(settings.MaybeUpdateAndValidateWithResources(
+      &tokenizer, &llm_metadata,
+      /*input_prompt_as_hint=*/"",
+      /*model_resources=*/nullptr));
+
+  ModelResourcesStreaming resources;
+  resources.SetTFLiteModelPreferActivationType(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE, "fp32");
+  resources.SetTFLiteModelBackendConstraint(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, "gpu");
+
+  EXPECT_THAT(settings.MaybeUpdateAndValidateWithResources(
+                  &tokenizer, &llm_metadata,
+                  /*input_prompt_as_hint=*/"", &resources),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT32);
 }
 
 TEST(SessionConfigTest, CreateDefault) {
