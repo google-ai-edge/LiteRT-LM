@@ -356,6 +356,13 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
              litert::lm::Backend::GOOGLE_TENSOR_ARTISAN)
       .value("NPU", litert::lm::Backend::NPU);
 
+  emscripten::enum_<litert::lm::ActivationDataType>("ActivationDataType")
+      .value("FLOAT32", litert::lm::ActivationDataType::FLOAT32)
+      .value("FLOAT16", litert::lm::ActivationDataType::FLOAT16)
+      .value("INT16", litert::lm::ActivationDataType::INT16)
+      .value("INT8", litert::lm::ActivationDataType::INT8);
+  emscripten::register_optional<litert::lm::ActivationDataType>();
+
   emscripten::class_<litert::lm::ModelAssets>("ModelAssets")
       .class_function(
           "createStreaming",
@@ -424,6 +431,15 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   }
                   return emscripten::val(vision_settings->GetBackend());
                 }))
+      .function(
+          "getMutableVisionExecutorSettings",
+          optional_override([](litert::lm::EngineSettings& settings)
+                                -> litert::lm::ExecutorSettingsBase* {
+            auto& vision_settings = settings.GetMutableVisionExecutorSettings();
+            return vision_settings.has_value() ? &*vision_settings : nullptr;
+          }),
+          emscripten::allow_raw_pointers(),
+          emscripten::return_value_policy::reference())
       .function("getAudioBackend",
                 optional_override([](const litert::lm::EngineSettings& settings)
                                       -> emscripten::val {
@@ -434,6 +450,15 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   }
                   return emscripten::val(audio_settings->GetBackend());
                 }))
+      .function(
+          "getMutableAudioExecutorSettings",
+          optional_override([](litert::lm::EngineSettings& settings)
+                                -> litert::lm::ExecutorSettingsBase* {
+            auto& audio_settings = settings.GetMutableAudioExecutorSettings();
+            return audio_settings.has_value() ? &*audio_settings : nullptr;
+          }),
+          emscripten::allow_raw_pointers(),
+          emscripten::return_value_policy::reference())
       .function("getMaxVisionTokensPerImage",
                 &litert::lm::EngineSettings::GetMaxVisionTokensPerImage)
       .function("setMaxVisionTokensPerImage",
@@ -531,7 +556,14 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::class_<litert::lm::ExecutorSettingsBase>("ExecutorSettingsBase")
       .function("getCacheDir", &litert::lm::ExecutorSettingsBase::GetCacheDir)
       .function("setCacheDir", &litert::lm::ExecutorSettingsBase::SetCacheDir)
-      .function("getBackend", &litert::lm::ExecutorSettingsBase::GetBackend);
+      .function("getBackend", &litert::lm::ExecutorSettingsBase::GetBackend)
+      .function("getActivationDataType",
+                optional_override(
+                    [](const litert::lm::ExecutorSettingsBase& settings) {
+                      return settings.GetActivationDataType();
+                    }))
+      .function("setActivationDataType",
+                &litert::lm::ExecutorSettingsBase::SetActivationDataType);
 
   emscripten::class_<litert::lm::LlmExecutorSettings,
                      emscripten::base<litert::lm::ExecutorSettingsBase>>(

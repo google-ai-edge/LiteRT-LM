@@ -18,11 +18,11 @@ import {getGlobalLiteRtLm} from './global_litertlm.js';
 import {ModelInput} from './model_input.js';
 import {SpeculativeDecodingConfig, speculativeDecodingConfigToWasm, wasmSpeculativeDecodingConfigToConfig} from './speculative_decoding_config.js';
 import {RecursiveRequired} from './types.js';
-import {type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
+import {ActivationDataType, type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
 
 // Re-export these types since they're already compatible with JS.
-export {AdvancedSettings, CpuConfig, GpuConfig};
+export {ActivationDataType, AdvancedSettings, CpuConfig, GpuConfig};
 
 /**
  * LiteRT-LM GpuArtisanConfig
@@ -63,10 +63,30 @@ export interface EngineSettings {
    */
   backend?: Backend;
   /**
+   * Activation precision for the text model on GPU backends (`Backend.GPU` and
+   * `Backend.GPU_ARTISAN`), such as `ActivationDataType.FLOAT16` or
+   * `ActivationDataType.FLOAT32`.
+   *
+   * If unset, the runtime uses the model section's preferred activation type if
+   * present, or `ActivationDataType.FLOAT16` otherwise. Ignored on
+   * `Backend.CPU`.
+   */
+  activationDataType?: ActivationDataType;
+  /**
    * Backend for the vision encoder. Can be `Backend.CPU` or `Backend.GPU`.
    * If unset, vision input is disabled.
    */
   visionBackend?: Backend;
+  /**
+   * Activation precision for the vision encoder when `visionBackend` is
+   * `Backend.GPU`, such as `ActivationDataType.FLOAT16` or
+   * `ActivationDataType.FLOAT32`.
+   *
+   * If unset, the runtime uses the model section's preferred activation type if
+   * present, or `ActivationDataType.FLOAT32` otherwise. Ignored when vision is
+   * disabled or when `visionBackend` is `Backend.CPU`.
+   */
+  visionActivationDataType?: ActivationDataType;
   /**
    * Maximum number of vision tokens per image. Only used when vision is
    * enabled. If unset, the model's default is used.
@@ -86,6 +106,16 @@ export interface EngineSettings {
    * If unset, audio input is disabled.
    */
   audioBackend?: Backend;
+  /**
+   * Activation precision for the audio encoder when `audioBackend` is
+   * `Backend.GPU`, such as `ActivationDataType.FLOAT16` or
+   * `ActivationDataType.FLOAT32`.
+   *
+   * If unset, the runtime uses the model section's preferred activation type if
+   * present, or `ActivationDataType.FLOAT32` otherwise. Ignored when audio is
+   * disabled or when `audioBackend` is `Backend.CPU`.
+   */
+  audioActivationDataType?: ActivationDataType;
   mainExecutorSettings?: LlmExecutorSettings;
   benchmarkEnabled?: boolean;
   /**
@@ -103,8 +133,10 @@ export interface EngineSettings {
   speculativeDecodingConfig?: SpeculativeDecodingConfig;
 }
 
-type OptionalEngineSettingsKeys = 'visionBackend'|'maxVisionTokensPerImage'|
-    'minVisionTokensPerImage'|'audioBackend'|'speculativeDecodingConfig';
+type OptionalEngineSettingsKeys =
+    'activationDataType'|'visionBackend'|'visionActivationDataType'|
+    'maxVisionTokensPerImage'|'minVisionTokensPerImage'|'audioBackend'|
+    'audioActivationDataType'|'speculativeDecodingConfig';
 
 /**
  * EngineSettings with all defaults resolved. Fields that have no default
@@ -130,6 +162,21 @@ export function fillWasmEngineSettingsFromEngineSettings(
 
   if (engineSettings.benchmarkEnabled) {
     wasmEngineSettings.enableBenchmark();
+  }
+
+  if (engineSettings.activationDataType !== undefined) {
+    wasmExecutorSettings.setActivationDataType(
+        {value: engineSettings.activationDataType});
+  }
+  if (engineSettings.visionActivationDataType !== undefined) {
+    wasmEngineSettings.getMutableVisionExecutorSettings()
+        ?.setActivationDataType(
+            {value: engineSettings.visionActivationDataType});
+  }
+  if (engineSettings.audioActivationDataType !== undefined) {
+    wasmEngineSettings.getMutableAudioExecutorSettings()
+        ?.setActivationDataType(
+            {value: engineSettings.audioActivationDataType});
   }
 
   if (engineSettings.maxVisionTokensPerImage !== undefined) {
@@ -261,12 +308,17 @@ export function wasmEngineSettingsToEngineSettings(
     }
   }
 
+  const visionSettings = wasmEngineSettings.getMutableVisionExecutorSettings();
+  const audioSettings = wasmEngineSettings.getMutableAudioExecutorSettings();
   return {
     backend,
+    activationDataType: wasmExecutorSettings.getActivationDataType()?.value,
     visionBackend: wasmEngineSettings.getVisionBackend()?.value,
+    visionActivationDataType: visionSettings?.getActivationDataType()?.value,
     maxVisionTokensPerImage: wasmEngineSettings.getMaxVisionTokensPerImage(),
     minVisionTokensPerImage: wasmEngineSettings.getMinVisionTokensPerImage(),
     audioBackend: wasmEngineSettings.getAudioBackend()?.value,
+    audioActivationDataType: audioSettings?.getActivationDataType()?.value,
     mainExecutorSettings: {
       maxNumTokens: wasmExecutorSettings.getMaxNumTokens(),
       maxNumImages: wasmExecutorSettings.getMaxNumImages(),

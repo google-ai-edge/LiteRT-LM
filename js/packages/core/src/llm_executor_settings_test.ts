@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
+import {ActivationDataType, LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
 import {Cleanup} from './cleanup.js';
@@ -97,6 +97,25 @@ describe('LlmExecutorSettings', () => {
     llmExecutorSettings.setSamplerBackend(liteRtLm.liteRtLmWasm.Backend.GPU);
     expect(llmExecutorSettings.getSamplerBackend())
         .toBe(liteRtLm.liteRtLmWasm.Backend.GPU);
+  });
+
+  it('leaves activation data type unset by default', () => {
+    expect(llmExecutorSettings.getActivationDataType()).toBeUndefined();
+  });
+
+  it('sets and gets activation data type', () => {
+    const wasmTypes = liteRtLm.liteRtLmWasm.ActivationDataType;
+    expect(wasmTypes.FLOAT32.value).toBe(ActivationDataType.FLOAT32);
+    expect(wasmTypes.FLOAT16.value).toBe(ActivationDataType.FLOAT16);
+    expect(wasmTypes.INT16.value).toBe(ActivationDataType.INT16);
+    expect(wasmTypes.INT8.value).toBe(ActivationDataType.INT8);
+
+    for (const wasmType of
+             [wasmTypes.FLOAT32, wasmTypes.FLOAT16, wasmTypes.INT16,
+              wasmTypes.INT8]) {
+      llmExecutorSettings.setActivationDataType(wasmType);
+      expect(llmExecutorSettings.getActivationDataType()).toBe(wasmType);
+    }
   });
 
   it('sets and gets advanced settings', () => {

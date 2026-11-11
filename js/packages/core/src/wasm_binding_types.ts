@@ -41,6 +41,24 @@ export const Backend = {
 export type Backend = (typeof Backend)[keyof typeof Backend];
 
 /**
+ * Activation data types for LiteRT-LM executors.
+ */
+export const ActivationDataType = {
+  // Ideally, we'd pull these from the Wasm module, but we want them to be
+  // available in JS before the Wasm module is loaded.
+  FLOAT32: 0,
+  FLOAT16: 1,
+  INT16: 2,
+  INT8: 3,
+} as const;
+
+/**
+ * A LiteRT-LM ActivationDataType.
+ */
+export type ActivationDataType =
+    (typeof ActivationDataType)[keyof typeof ActivationDataType];
+
+/**
  * How speculative decoding (e.g. MTP) is used during decode.
  */
 export const SpeculativeDecodingMode = {
@@ -195,8 +213,12 @@ export declare interface EngineSettings extends Deletable {
   getMutableMainExecutorSettings(): LlmExecutorSettings;
   /** Returns undefined if vision is not enabled. */
   getVisionBackend(): EmscriptenEnumElement<Backend>|undefined;
+  /** Returns null if vision is not enabled. */
+  getMutableVisionExecutorSettings(): ExecutorSettingsBase|null;
   /** Returns undefined if audio is not enabled. */
   getAudioBackend(): EmscriptenEnumElement<Backend>|undefined;
+  /** Returns null if audio is not enabled. */
+  getMutableAudioExecutorSettings(): ExecutorSettingsBase|null;
   getMaxVisionTokensPerImage(): number|undefined;
   setMaxVisionTokensPerImage(maxVisionTokensPerImage: number): void;
   getMinVisionTokensPerImage(): number|undefined;
@@ -315,6 +337,9 @@ export declare interface ExecutorSettingsBase extends Deletable {
   getCacheDir(): string;
   setCacheDir(cacheDir: string): void;
   getBackend(): EmscriptenEnumElement<Backend>;
+  getActivationDataType(): EmscriptenEnumElement<ActivationDataType>|undefined;
+  setActivationDataType(
+      activationDataType: EmscriptenEnumElement<ActivationDataType>): void;
 }
 
 /**
@@ -715,6 +740,11 @@ export declare interface LiteRtLmWasm extends WasmModule {
   /** Returns an AdvancedSettings object with the C++ default values. */
   createDefaultAdvancedSettings(): AdvancedSettings;
   Backend: BackendEnum;
+  ActivationDataType: EmscriptenEnum<{
+    FLOAT32: ActivationDataType; FLOAT16: ActivationDataType;
+    INT16: ActivationDataType;
+    INT8: ActivationDataType;
+  }>;
   SpeculativeDecodingMode: EmscriptenEnum<{
     OFF: SpeculativeDecodingMode; ON: SpeculativeDecodingMode;
     ADAPTIVE: SpeculativeDecodingMode;

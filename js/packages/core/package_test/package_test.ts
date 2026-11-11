@@ -24,7 +24,7 @@
  * They only use the CPU backend so that they can run without a GPU.
  */
 
-import {Backend, Engine, LiteRtLm, loadLiteRtLm, unloadLiteRtLm} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, LiteRtLm, loadLiteRtLm, unloadLiteRtLm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
 const TEST_MODEL_PATH = '/testdata/test_lm.litertlm';
@@ -70,6 +70,7 @@ describe('@litert-lm/core package', () => {
       engine = await Engine.create({
         model: TEST_MODEL_PATH,
         backend: Backend.CPU,
+        activationDataType: ActivationDataType.FLOAT32,
         mainExecutorSettings: {
           maxNumTokens: 128,
         },
@@ -83,6 +84,8 @@ describe('@litert-lm/core package', () => {
     it('creates an Engine with the requested settings', () => {
       expect(engine).toBeDefined();
       expect(engine.settings.backend).toBe(Backend.CPU);
+      expect(engine.settings.activationDataType)
+          .toBe(ActivationDataType.FLOAT32);
       expect(engine.settings.mainExecutorSettings.maxNumTokens).toBe(128);
     });
 

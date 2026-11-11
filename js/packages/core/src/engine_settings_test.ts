@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Backend, fillWasmEngineSettingsFromEngineSettings, LiteRtLm, loadLiteRtLm, SpeculativeDecodingMode, unloadLiteRtLm, type Wasm, wasmEngineSettingsToEngineSettings} from '@litert-lm/core';
+import {ActivationDataType, Backend, fillWasmEngineSettingsFromEngineSettings, LiteRtLm, loadLiteRtLm, SpeculativeDecodingMode, unloadLiteRtLm, type Wasm, wasmEngineSettingsToEngineSettings} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
 import {Cleanup} from './cleanup.js';
@@ -185,6 +185,105 @@ describe('EngineSettings', () => {
        const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
        expect(resolved.visionBackend).toBeUndefined();
        expect(resolved.audioBackend).toBeUndefined();
+       wasmSettings.delete();
+     });
+
+  it('leaves activation data types unset by default', async () => {
+    const wasmSettings = unwrapWasmResult(
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU,
+            liteRtLm.liteRtLmWasm.Backend.GPU,
+            liteRtLm.liteRtLmWasm.Backend.GPU));
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {
+          model: '/path/to/model',
+          backend: Backend.GPU,
+          visionBackend: Backend.GPU,
+          audioBackend: Backend.GPU,
+        },
+        Backend.GPU, liteRtLm.liteRtLmWasm);
+    const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+    expect(resolved.activationDataType).toBeUndefined();
+    expect(resolved.visionActivationDataType).toBeUndefined();
+    expect(resolved.audioActivationDataType).toBeUndefined();
+    wasmSettings.delete();
+  });
+
+  it('round-trips activationDataType on GPU and GPU_ARTISAN', async () => {
+    for (const [wasmBackend, backend, activationDataType] of [
+             [
+               liteRtLm.liteRtLmWasm.Backend.GPU,
+               Backend.GPU,
+               ActivationDataType.FLOAT32,
+             ],
+             [
+               liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN,
+               Backend.GPU_ARTISAN,
+               ActivationDataType.FLOAT16,
+             ],
+    ] as const) {
+      const wasmSettings = unwrapWasmResult(
+          await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+              modelAssets, wasmBackend));
+      fillWasmEngineSettingsFromEngineSettings(
+          wasmSettings, {
+            model: '/path/to/model',
+            backend,
+            activationDataType,
+          },
+          backend, liteRtLm.liteRtLmWasm);
+      expect(wasmEngineSettingsToEngineSettings(wasmSettings)
+                 .activationDataType)
+          .toBe(activationDataType);
+      wasmSettings.delete();
+    }
+  });
+
+  it('round-trips multimodal visionActivationDataType and audioActivationDataType',
+     async () => {
+       const wasmSettings = unwrapWasmResult(
+           await liteRtLm.liteRtLmWasm.EngineSettings.createDefaultMultimodal(
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU,
+               liteRtLm.liteRtLmWasm.Backend.GPU,
+               liteRtLm.liteRtLmWasm.Backend.GPU));
+       fillWasmEngineSettingsFromEngineSettings(
+           wasmSettings, {
+             model: '/path/to/model',
+             backend: Backend.GPU,
+             activationDataType: ActivationDataType.FLOAT32,
+             visionBackend: Backend.GPU,
+             visionActivationDataType: ActivationDataType.FLOAT16,
+             audioBackend: Backend.GPU,
+             audioActivationDataType: ActivationDataType.FLOAT32,
+           },
+           Backend.GPU, liteRtLm.liteRtLmWasm);
+       const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+       expect(resolved.activationDataType).toBe(ActivationDataType.FLOAT32);
+       expect(resolved.visionActivationDataType)
+           .toBe(ActivationDataType.FLOAT16);
+       expect(resolved.audioActivationDataType)
+           .toBe(ActivationDataType.FLOAT32);
+       wasmSettings.delete();
+     });
+
+  it('ignores visionActivationDataType and audioActivationDataType when disabled',
+     async () => {
+       const wasmSettings = unwrapWasmResult(
+           await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
+       fillWasmEngineSettingsFromEngineSettings(
+           wasmSettings, {
+             model: '/path/to/model',
+             backend: Backend.GPU,
+             visionActivationDataType: ActivationDataType.FLOAT16,
+             audioActivationDataType: ActivationDataType.FLOAT32,
+           },
+           Backend.GPU, liteRtLm.liteRtLmWasm);
+       const resolved = wasmEngineSettingsToEngineSettings(wasmSettings);
+       expect(resolved.visionBackend).toBeUndefined();
+       expect(resolved.visionActivationDataType).toBeUndefined();
+       expect(resolved.audioBackend).toBeUndefined();
+       expect(resolved.audioActivationDataType).toBeUndefined();
        wasmSettings.delete();
      });
 
