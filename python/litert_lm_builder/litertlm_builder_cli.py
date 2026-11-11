@@ -458,7 +458,8 @@ def _add_output_path_parser(subparsers) -> None:
           "Whether to keep weight payloads that are byte-identical across"
           " TFLiteModel sections (e.g. a tied token embedding table) in only"
           " one model's TFLiteWeights section; the other models reference it."
-          " Requires --weights-in-model-graph=false. Defaults to"
+          " Setting it to true implies --weights-in-model-graph=false unless"
+          " that flag is also set. Defaults to"
           f" {str(litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS).lower()} when"
           " weights are not in the model graph."
       ),
@@ -742,8 +743,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
         f" (TOML configuration saved at {toml_path})"
     )
     return
-  externalize_weights = False
-  dedupe_shared_weights = False
+  weights_in_model_graph = None
+  dedupe_shared_weights = None
   validate_metadata = False
   if "toml" in [pa.command for pa in parsed_args]:
     toml_path = None
@@ -752,12 +753,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       match parsed_arg.command:
         case "output":
           output_path = parsed_arg.path
-          externalize_weights, dedupe_shared_weights = (
-              litertlm_builder.resolve_weight_externalization(
-                  parsed_arg.weights_in_model_graph,
-                  parsed_arg.dedupe_shared_weights,
-              )
-          )
+          weights_in_model_graph = parsed_arg.weights_in_model_graph
+          dedupe_shared_weights = parsed_arg.dedupe_shared_weights
           validate_metadata = parsed_arg.validate_metadata
         case "toml":
           toml_path = parsed_arg.path
@@ -774,7 +771,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
       builder.build(
           cast(BinaryIO, f),
-          externalize_weights=externalize_weights,
+          weights_in_model_graph=weights_in_model_graph,
           dedupe_shared_weights=dedupe_shared_weights,
           validate_metadata=validate_metadata,
       )
@@ -809,12 +806,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_hf_tokenizer(parsed_arg, builder)
         case "output":
           output_path = parsed_arg.path
-          externalize_weights, dedupe_shared_weights = (
-              litertlm_builder.resolve_weight_externalization(
-                  parsed_arg.weights_in_model_graph,
-                  parsed_arg.dedupe_shared_weights,
-              )
-          )
+          weights_in_model_graph = parsed_arg.weights_in_model_graph
+          dedupe_shared_weights = parsed_arg.dedupe_shared_weights
           validate_metadata = parsed_arg.validate_metadata
         case _:
           raise ValueError(f"Unknown subcommand: {parsed_arg.command}")
@@ -825,7 +818,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
     with litertlm_core.open_file(output_path, "wb") as f:
       builder.build(
           cast(BinaryIO, f),
-          externalize_weights=externalize_weights,
+          weights_in_model_graph=weights_in_model_graph,
           dedupe_shared_weights=dedupe_shared_weights,
           validate_metadata=validate_metadata,
       )

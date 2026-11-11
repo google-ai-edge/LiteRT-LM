@@ -22,22 +22,15 @@ from click import testing
 from prompt_toolkit import key_binding
 
 import litert_lm
-from litert_lm_builder import litertlm_builder
 from litert_lm_cli import common
 from litert_lm_cli import main
 from litert_lm_cli.commands import run as run_cmd
 
-_DEFAULT_EXTERNALIZE_WEIGHTS = (
-    not litertlm_builder.DEFAULT_WEIGHTS_IN_MODEL_GRAPH
-)
 # The weight placement arguments `litert-lm pack` passes to the builder by
-# default.
+# default; the builder then applies its own defaults.
 _DEFAULT_PACK_WEIGHT_KWARGS = {
-    "externalize_weights": _DEFAULT_EXTERNALIZE_WEIGHTS,
-    "dedupe_shared_weights": (
-        _DEFAULT_EXTERNALIZE_WEIGHTS
-        and litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS
-    ),
+    "weights_in_model_graph": None,
+    "dedupe_shared_weights": None,
 }
 
 
@@ -1412,54 +1405,45 @@ class MainTest(absltest.TestCase):
         **_DEFAULT_PACK_WEIGHT_KWARGS,
     )
 
-  @unittest.mock.patch(
-      "litert_lm_builder.litertlm_builder.pack"
-  )
-  def test_pack_command_no_weights_in_model_graph(self, mock_builder_pack):
-    self._invoke_pack("--weights-in-model-graph=false")
+  def test_pack_command_forwards_weight_placement(self):
+    for flags, expected in [
+        (("--weights-in-model-graph=false",), (False, None)),
+        (("--weights-in-model-graph",), (True, None)),
+        (
+            ("--weights-in-model-graph=false", "--dedupe-shared-weights=false"),
+            (False, False),
+        ),
+        (("--dedupe-shared-weights",), (None, True)),
+    ]:
+      with self.subTest(flags=flags), unittest.mock.patch(
+          "litert_lm_builder.litertlm_builder.pack"
+      ) as mock_builder_pack:
+        self._invoke_pack(*flags)
 
-    _, kwargs = mock_builder_pack.call_args
-    self.assertTrue(kwargs["externalize_weights"])
-    self.assertEqual(
-        kwargs["dedupe_shared_weights"],
-        litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS,
-    )
+        _, kwargs = mock_builder_pack.call_args
+        self.assertEqual(
+            (kwargs["weights_in_model_graph"], kwargs["dedupe_shared_weights"]),
+            expected,
+        )
 
-  @unittest.mock.patch(
-      "litert_lm_builder.litertlm_builder.pack"
-  )
-  def test_pack_command_no_dedupe_shared_weights(self, mock_builder_pack):
-    self._invoke_pack(
-        "--weights-in-model-graph=false",
-        "--dedupe-shared-weights=false",
-    )
+  def test_pack_command_dedupe_requires_weights_outside_model_graph(self):
+    runner = testing.CliRunner()
+    with runner.isolated_filesystem():
+      with open("model.toml", "w") as f:
+        f.write("")
+      result = runner.invoke(
+          main.cli,
+          [
+              "pack",
+              "model.toml",
+              "--output",
+              "out.litertlm",
+              "--weights-in-model-graph",
+              "--dedupe-shared-weights",
+          ],
+      )
 
-    _, kwargs = mock_builder_pack.call_args
-    self.assertTrue(kwargs["externalize_weights"])
-    self.assertFalse(kwargs["dedupe_shared_weights"])
-
-  @unittest.mock.patch(
-      "litert_lm_builder.litertlm_builder.pack"
-  )
-  def test_pack_command_weights_in_model_graph(self, mock_builder_pack):
-    self._invoke_pack("--weights-in-model-graph")
-
-    _, kwargs = mock_builder_pack.call_args
-    self.assertFalse(kwargs["externalize_weights"])
-    self.assertFalse(kwargs["dedupe_shared_weights"])
-
-  @unittest.mock.patch(
-      "litert_lm_builder.litertlm_builder.pack"
-  )
-  def test_pack_command_dedupe_requires_weights_outside_model_graph(
-      self, mock_builder_pack
-  ):
-    result = self._invoke_pack(
-        "--weights-in-model-graph", "--dedupe-shared-weights"
-    )
-
-    mock_builder_pack.assert_not_called()
-    self.assertIn("--weights-in-model-graph=false", result.output)
+    self.assertIn("weights_in_model_graph=False", result.output)
 
 
 if __name__ == "__main__":

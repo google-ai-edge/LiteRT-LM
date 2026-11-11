@@ -83,6 +83,13 @@ class LitertlmBuilderTest(parameterized.TestCase):
   def setUp(self):
     super().setUp()
     self.temp_dir = self.create_tempdir().full_path
+    # Most tests use placeholder TFLite files that cannot be parsed for weight
+    # externalization, so keep weights in the model graph by default.
+    self.enter_context(
+        mock.patch.object(
+            litertlm_builder, "DEFAULT_WEIGHTS_IN_MODEL_GRAPH", True
+        )
+    )
 
   def _create_dummy_file(self, filename: str, content: bytes) -> str:
     filepath = os.path.join(self.temp_dir, filename)
@@ -2571,6 +2578,12 @@ class ResolveWeightExternalizationTest(parameterized.TestCase):
           expected=(True, False),
       ),
       dict(
+          testcase_name="default_graph_dedupe",
+          weights_in_model_graph=None,
+          dedupe_shared_weights=True,
+          expected=(True, True),
+      ),
+      dict(
           testcase_name="in_graph_default_dedupe",
           weights_in_model_graph=True,
           dedupe_shared_weights=None,
@@ -2587,14 +2600,14 @@ class ResolveWeightExternalizationTest(parameterized.TestCase):
       self, weights_in_model_graph, dedupe_shared_weights, expected
   ):
     self.assertEqual(
-        litertlm_builder.resolve_weight_externalization(
+        litertlm_builder._resolve_weight_externalization(
             weights_in_model_graph, dedupe_shared_weights
         ),
         expected,
     )
 
   def test_default_weight_placement(self):
-    externalize_weights, _ = litertlm_builder.resolve_weight_externalization()
+    externalize_weights, _ = litertlm_builder._resolve_weight_externalization()
 
     self.assertEqual(
         externalize_weights,
@@ -2602,9 +2615,122 @@ class ResolveWeightExternalizationTest(parameterized.TestCase):
     )
 
   def test_dedupe_requires_weights_outside_model_graph(self):
-    with self.assertRaisesRegex(ValueError, "--weights-in-model-graph=false"):
-      litertlm_builder.resolve_weight_externalization(
+    with self.assertRaisesRegex(ValueError, "weights_in_model_graph=False"):
+      litertlm_builder._resolve_weight_externalization(
           weights_in_model_graph=True, dedupe_shared_weights=True
+      )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="default_outside_graph",
+          default_in_graph=False,
+          kwargs={},
+          expected_dedupe=litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS,
+      ),
+      dict(
+          testcase_name="explicit_outside_graph",
+          default_in_graph=True,
+          kwargs={"weights_in_model_graph": False},
+          expected_dedupe=litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS,
+      ),
+      dict(
+          testcase_name="dedupe_implies_outside_graph",
+          default_in_graph=True,
+          kwargs={"dedupe_shared_weights": True},
+          expected_dedupe=True,
+      ),
+  )
+  def test_build_externalizes_weights(
+      self, default_in_graph, kwargs, expected_dedupe
+  ):
+    builder = litertlm_builder.LitertLmFileBuilder()
+    summary = litertlm_builder.ExternalizationSummary(
+        models_inspected=0,
+        models_with_external_weights=0,
+        newly_externalized_bytes=0,
+    )
+    with mock.patch.object(
+        litertlm_builder, "DEFAULT_WEIGHTS_IN_MODEL_GRAPH", default_in_graph
+    ), mock.patch.object(
+        litertlm_builder.LitertLmFileBuilder,
+        "_externalize_sections",
+        autospec=True,
+        return_value=([], summary),
+    ) as externalize_mock:
+      result = builder.build(io.BytesIO(), **kwargs)
+
+    self.assertIs(result, summary)
+    _, call_kwargs = externalize_mock.call_args
+    self.assertEqual(call_kwargs["dedupe_shared_weights"], expected_dedupe)
+
+  @parameterized.named_parameters(
+      dict(testcase_name="default_in_graph", default_in_graph=True, kwargs={}),
+      dict(
+          testcase_name="explicit_in_graph",
+          default_in_graph=False,
+          kwargs={"weights_in_model_graph": True},
+      ),
+  )
+  def test_build_keeps_weights_in_model_graph(self, default_in_graph, kwargs):
+    builder = litertlm_builder.LitertLmFileBuilder()
+    with mock.patch.object(
+        litertlm_builder, "DEFAULT_WEIGHTS_IN_MODEL_GRAPH", default_in_graph
+    ), mock.patch.object(
+        litertlm_builder.LitertLmFileBuilder,
+        "_externalize_sections",
+        autospec=True,
+    ) as externalize_mock:
+      result = builder.build(io.BytesIO(), **kwargs)
+
+    self.assertIsNone(result)
+    externalize_mock.assert_not_called()
+
+  def test_pack_checks_weight_placement_before_reading_toml(self):
+    output_path = os.path.join(self.create_tempdir().full_path, "out.litertlm")
+
+    # The TOML file does not exist, so the options must be rejected first.
+    with self.assertRaisesRegex(ValueError, "weights_in_model_graph=False"):
+      litertlm_builder.pack(
+          "/nonexistent/model.toml",
+          output_path,
+          weights_in_model_graph=True,
+          dedupe_shared_weights=True,
+      )
+    self.assertFalse(os.path.exists(output_path))
+
+  def test_pack_dedupe_implies_weights_outside_model_graph(self):
+    temp_dir = self.create_tempdir().full_path
+    toml_path = os.path.join(temp_dir, "model.toml")
+    with open(toml_path, "w") as f:
+      f.write("")
+    summary = litertlm_builder.ExternalizationSummary(
+        models_inspected=0,
+        models_with_external_weights=0,
+        newly_externalized_bytes=0,
+    )
+    with mock.patch.object(
+        litertlm_builder, "DEFAULT_WEIGHTS_IN_MODEL_GRAPH", True
+    ), mock.patch.object(
+        litertlm_builder.LitertLmFileBuilder,
+        "_externalize_sections",
+        autospec=True,
+        return_value=([], summary),
+    ) as externalize_mock:
+      _, result = litertlm_builder.pack_with_summary(
+          toml_path,
+          os.path.join(temp_dir, "out.litertlm"),
+          dedupe_shared_weights=True,
+      )
+
+    self.assertIs(result, summary)
+    _, call_kwargs = externalize_mock.call_args
+    self.assertTrue(call_kwargs["dedupe_shared_weights"])
+
+  def test_build_rejects_dedupe_with_weights_in_model_graph(self):
+    builder = litertlm_builder.LitertLmFileBuilder()
+    with self.assertRaisesRegex(ValueError, "weights_in_model_graph=False"):
+      builder.build(
+          io.BytesIO(), weights_in_model_graph=True, dedupe_shared_weights=True
       )
 
 

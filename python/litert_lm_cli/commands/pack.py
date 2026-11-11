@@ -106,7 +106,8 @@ def _is_interactive() -> bool:
     help=(
         "Whether to keep weight payloads that are byte-identical across TFLite"
         " models (e.g. a tied token embedding table) in only one model's"
-        " TFLiteWeights section. Requires --weights-in-model-graph=false."
+        " TFLiteWeights section. Setting it to true implies"
+        " --weights-in-model-graph=false unless that flag is also set."
         " Defaults to"
         f" {str(litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS).lower()} when"
         " weights are not in the model graph."
@@ -206,16 +207,11 @@ def pack(
       return
 
   try:
-    externalize_weights, dedupe_shared_weights = (
-        litertlm_builder.resolve_weight_externalization(
-            weights_in_model_graph, dedupe_shared_weights
-        )
-    )
     litertlm_builder.pack(
         config_path,
         output_path,
         jinja_prompt_template_path=chat_template,
-        externalize_weights=externalize_weights,
+        weights_in_model_graph=weights_in_model_graph,
         dedupe_shared_weights=dedupe_shared_weights,
     )
     click.echo(

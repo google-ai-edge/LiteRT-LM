@@ -69,6 +69,15 @@ litert-lm-builder toml --path example.toml \
 litert-lm pack ./unpacked_dir --output in_graph.litertlm --weights-in-model-graph
 ```
 
+The Python API has the same defaults. `LitertLmFileBuilder.build`, `pack` and
+`pack_with_summary` take `weights_in_model_graph` and `dedupe_shared_weights`
+keyword arguments:
+
+```python
+with open("in_graph.litertlm", "wb") as f:
+  builder.build(f, weights_in_model_graph=True)
+```
+
 ### Reproducible builds
 
 By default, every build writes a new `uuid` and the current time as

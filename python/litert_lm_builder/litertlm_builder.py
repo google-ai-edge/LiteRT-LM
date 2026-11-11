@@ -262,8 +262,9 @@ class ExternalizationSummary:
   deduplicated_bytes: int = 0
 
 
-# Whether the packaging CLIs (`litert-lm pack` and `litertlm_builder_cli`) keep
-# TFLite weights inside each model's FlatBuffer by default, instead of moving
+# Whether `LitertLmFileBuilder.build`, `pack`, `pack_with_summary` and the
+# packaging CLIs (`litert-lm pack` and `litertlm_builder_cli`) keep TFLite
+# weights inside each model's FlatBuffer by default, instead of moving
 # them into separate TFLiteWeights sections at the end of the LiteRT-LM file.
 # Weights must be outside the model graph for the web runtime (except with the
 # Artisan GPU backend). Both CLIs override this with
@@ -323,41 +324,45 @@ def _version_less_than(version: str, other_version: str) -> bool:
   return parsed < other_parsed
 
 
-# Whether the packaging CLIs deduplicate weight payloads that are byte-identical
-# across TFLite models by default. Only applies when weights are not in the
+# Whether `LitertLmFileBuilder.build`, `pack`, `pack_with_summary` and the
+# packaging CLIs deduplicate weight payloads that are byte-identical across
+# TFLite models by default. Only applies when weights are not in the
 # model graph.
 DEFAULT_DEDUPE_SHARED_WEIGHTS = True
 
 
-def resolve_weight_externalization(
+def _resolve_weight_externalization(
     weights_in_model_graph: bool | None = None,
     dedupe_shared_weights: bool | None = None,
 ) -> tuple[bool, bool]:
-  """Resolves the packaging CLI weight placement options.
+  """Resolves the weight placement options.
 
   Args:
     weights_in_model_graph: Whether to keep TFLite weights inside each model's
       FlatBuffer instead of moving them into TFLiteWeights sections, or None for
-      the default (`DEFAULT_WEIGHTS_IN_MODEL_GRAPH`).
+      the default: False if `dedupe_shared_weights` is True, and
+      `DEFAULT_WEIGHTS_IN_MODEL_GRAPH` otherwise.
     dedupe_shared_weights: Whether to deduplicate weight payloads that are
       byte-identical across TFLite models, or None for the default
       (`DEFAULT_DEDUPE_SHARED_WEIGHTS` when weights are not in the model graph).
 
   Returns:
-    The `externalize_weights` and `dedupe_shared_weights` arguments for
-    `LitertLmFileBuilder.build` and `pack`.
+    Whether to externalize weights, and whether to deduplicate them.
 
   Raises:
     ValueError: If deduplication is requested while weights stay in the model
       graph.
   """
   if weights_in_model_graph is None:
-    weights_in_model_graph = DEFAULT_WEIGHTS_IN_MODEL_GRAPH
+    weights_in_model_graph = (
+        False if dedupe_shared_weights else DEFAULT_WEIGHTS_IN_MODEL_GRAPH
+    )
   if weights_in_model_graph:
     if dedupe_shared_weights:
       raise ValueError(
           "Deduplicating shared weights requires weights outside the model"
-          " graph (--weights-in-model-graph=false)."
+          " graph (weights_in_model_graph=False or"
+          " --weights-in-model-graph=false)."
       )
     return False, False
   if dedupe_shared_weights is None:
@@ -2101,11 +2106,11 @@ class LitertLmFileBuilder:
       stream: BinaryIO,
       *,
       validate_metadata: bool = False,
-      externalize_weights: bool = False,
+      weights_in_model_graph: bool | None = None,
       externalization_work_dir: str | None = None,
       num_elements_threshold: int = 256,
       weight_group_name: str = "tflite_weights",
-      dedupe_shared_weights: bool = False,
+      dedupe_shared_weights: bool | None = None,
   ) -> ExternalizationSummary | None:
     """Builds the litertlm into the given stream.
 
@@ -2115,24 +2120,38 @@ class LitertLmFileBuilder:
     Args:
       stream: The binary output stream to write the LiteRT-LM file to.
       validate_metadata: Whether to validate the metadata before building.
-      externalize_weights: Whether to externalize large tensor weights into a
-        separate weights section.
+      weights_in_model_graph: Whether to keep TFLite weights inside each model's
+        FlatBuffer. If False, eligible weights are moved into TFLiteWeights
+        sections at the end of the file, which the web runtime requires (except
+        with the Artisan GPU backend). Defaults to False if
+        `dedupe_shared_weights` is True, and to `DEFAULT_WEIGHTS_IN_MODEL_GRAPH`
+        otherwise.
       externalization_work_dir: Optional directory path for temporary weight
         externalization files.
       num_elements_threshold: Minimum number of tensor elements for a weight to
         be externalized.
       weight_group_name: Name of the externalized weights group section.
-      dedupe_shared_weights: Whether to also store payloads that are
-        byte-identical across models only once (implies `externalize_weights`).
+      dedupe_shared_weights: Whether to store weight payloads that are
+        byte-identical across models only once. Defaults to
+        `DEFAULT_DEDUPE_SHARED_WEIGHTS` when weights are not in the model graph.
 
     Returns:
-      An `ExternalizationSummary` when `externalize_weights` is True, or None
-      otherwise.
+      An `ExternalizationSummary` when weights are moved out of the model graph,
+      or None otherwise.
+
+    Raises:
+      ValueError: If `dedupe_shared_weights` is True while
+        `weights_in_model_graph` is True.
     """
+    externalize_weights, dedupe_shared_weights = (
+        _resolve_weight_externalization(
+            weights_in_model_graph, dedupe_shared_weights
+        )
+    )
     self._resolve_pending_model_types()
     if validate_metadata:
       self.validate_metadata()
-    if externalize_weights or dedupe_shared_weights:
+    if externalize_weights:
       work_dir_context = (
           tempfile.TemporaryDirectory(prefix="litertlm_externalize_")
           if externalization_work_dir is None
@@ -2462,13 +2481,15 @@ def pack_with_summary(
     output_path: str,
     jinja_prompt_template_path: str | None = None,
     *,
-    externalize_weights: bool = False,
+    weights_in_model_graph: bool | None = None,
     externalization_work_dir: str | None = None,
     num_elements_threshold: int = 256,
     weight_group_name: str = "tflite_weights",
-    dedupe_shared_weights: bool = False,
+    dedupe_shared_weights: bool | None = None,
 ) -> tuple[str, ExternalizationSummary | None]:
   """Packs TOML and returns the output path and externalization summary."""
+  # Check the weight placement options before reading any input.
+  _resolve_weight_externalization(weights_in_model_graph, dedupe_shared_weights)
   output_dir = os.path.dirname(output_path)
   if output_dir:
     os.makedirs(output_dir, exist_ok=True)
@@ -2478,7 +2499,7 @@ def pack_with_summary(
   with litertlm_core.open_file(output_path, "wb") as f:
     summary = builder.build(
         cast(BinaryIO, f),
-        externalize_weights=externalize_weights,
+        weights_in_model_graph=weights_in_model_graph,
         externalization_work_dir=externalization_work_dir,
         num_elements_threshold=num_elements_threshold,
         weight_group_name=weight_group_name,
@@ -2492,11 +2513,11 @@ def pack(
     output_path: str,
     jinja_prompt_template_path: str | None = None,
     *,
-    externalize_weights: bool = False,
+    weights_in_model_graph: bool | None = None,
     externalization_work_dir: str | None = None,
     num_elements_threshold: int = 256,
     weight_group_name: str = "tflite_weights",
-    dedupe_shared_weights: bool = False,
+    dedupe_shared_weights: bool | None = None,
 ) -> str:
   """Packs a TOML configuration and its referenced files into a LiteRT-LM file.
 
@@ -2505,14 +2526,15 @@ def pack(
     output_path: The path where the packed LiteRT-LM file will be saved.
     jinja_prompt_template_path: Optional path to a Jinja file to overwrite
       jinja_prompt_template.
-    externalize_weights: Whether to externalize weights from TFLite models.
+    weights_in_model_graph: Whether to keep TFLite weights inside each model's
+      FlatBuffer. See `LitertLmFileBuilder.build`.
     externalization_work_dir: Optional working directory for externalization.
     num_elements_threshold: Minimum number of elements for a tensor to be
       externalized.
     weight_group_name: Name of the externalized weight group.
-    dedupe_shared_weights: Whether to also store weight payloads that are
+    dedupe_shared_weights: Whether to store weight payloads that are
       byte-identical across TFLite models only once; the other models reference
-      the owner model's TFLiteWeights section. Implies `externalize_weights`.
+      the owner model's TFLiteWeights section. See `LitertLmFileBuilder.build`.
 
   Returns:
     The path to the generated LiteRT-LM file.
@@ -2521,7 +2543,7 @@ def pack(
       toml_path,
       output_path,
       jinja_prompt_template_path,
-      externalize_weights=externalize_weights,
+      weights_in_model_graph=weights_in_model_graph,
       externalization_work_dir=externalization_work_dir,
       num_elements_threshold=num_elements_threshold,
       weight_group_name=weight_group_name,
