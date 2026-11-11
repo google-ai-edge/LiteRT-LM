@@ -1267,9 +1267,7 @@ bool DetectUsesRingbuffer(
 
   std::set<int64_t> cache_seqs;
   for (const auto& [name, buffer] : input_kv_cache_buffers) {
-    if (name.starts_with(kKvCacheKRootName) ||
-        name.starts_with(kKvCacheVRootName) ||
-        name.starts_with(kKvCacheCRootName)) {
+    if (IsKvCacheTensorName(name)) {
       auto tensor_type_expected = buffer.TensorType();
       if (tensor_type_expected.HasValue()) {
         auto dims = tensor_type_expected->Layout().Dimensions();

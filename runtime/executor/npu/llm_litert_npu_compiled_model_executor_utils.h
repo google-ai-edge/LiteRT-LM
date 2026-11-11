@@ -216,6 +216,20 @@ inline constexpr absl::string_view kKvCacheSliceKRootName = "kv_slice_k_";
 inline constexpr absl::string_view kKvCacheSliceVRootName = "kv_slice_v_";
 inline constexpr absl::string_view kKvCacheSliceCRootName = "kv_slice_c_";
 
+// Returns true if `name` is a persistent KV cache input tensor (`kv_cache_*`).
+inline bool IsKvCacheTensorName(absl::string_view name) {
+  return name.starts_with(kKvCacheKRootName) ||
+         name.starts_with(kKvCacheVRootName) ||
+         name.starts_with(kKvCacheCRootName);
+}
+
+// Returns true if `name` is a KV cache slice output tensor (`kv_slice_*`).
+inline bool IsKvCacheSliceTensorName(absl::string_view name) {
+  return name.starts_with(kKvCacheSliceKRootName) ||
+         name.starts_with(kKvCacheSliceVRootName) ||
+         name.starts_with(kKvCacheSliceCRootName);
+}
+
 bool IsNpuSyncWorkaroundEnabled();
 
 // Fills a TensorBuffer with a specific uint16 value across all supported types.

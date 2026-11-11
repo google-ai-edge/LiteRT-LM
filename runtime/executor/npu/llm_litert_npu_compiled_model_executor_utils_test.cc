@@ -34,6 +34,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
@@ -52,9 +54,13 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
+#include "runtime/executor/npu/llm_litert_npu_embedder.h"
+#include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
+#include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
@@ -1392,21 +1398,24 @@ float GetFirstFloat(const TensorBuffer& buffer) {
 
 }  // namespace
 
-// Gives the tests access to the private warm-up functions of
+// Gives the tests access to the private warm-up and buffer setup functions of
 // LlmLiteRtNpuCompiledModelExecutor.
 class LlmLiteRtNpuWarmupTest : public DrafterContextTest {
  protected:
   static absl::Status WarmupInference(
       ::litert::CompiledModel& text_decoder_compiled_model,
       std::vector<NpuContextGroup>& context_groups,
-      ::litert::CompiledModel& compiled_model_auxiliary) {
-    InferenceContext rope_inference_context;
-    InferenceContext mask_inference_context;
-    InferenceContext cache_update_inference_context;
+      ::litert::CompiledModel& compiled_model_auxiliary,
+      const InferenceContext& rope_inference_context = {},
+      const InferenceContext& mask_inference_context = {},
+      const InferenceContext& cache_update_inference_context = {},
+      MaskUpdateMethod mask_update_method = MaskUpdateMethod::kModel,
+      KVCacheUpdateMethod cache_update_method = KVCacheUpdateMethod::kModel) {
     return LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
         text_decoder_compiled_model, context_groups, compiled_model_auxiliary,
         rope_inference_context, mask_inference_context,
-        cache_update_inference_context);
+        cache_update_inference_context, mask_update_method,
+        cache_update_method);
   }
 
   static absl::Status WarmupDrafterInference(
@@ -1414,6 +1423,82 @@ class LlmLiteRtNpuWarmupTest : public DrafterContextTest {
       absl::Span<const NpuContextGroup> context_groups) {
     return LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
         drafter_context, drafter_aux_context, context_groups);
+  }
+
+  static absl::StatusOr<int> AllocateTextDecoderBuffers(
+      ::litert::Environment& env, const ::litert::Model* text_decoder_model,
+      ::litert::CompiledModel& text_decoder_compiled_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
+      absl::string_view decode_signature, absl::string_view verify_signature,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          text_decoder_prefill_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          text_decoder_decode_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          text_decoder_verify_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          input_kv_cache_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          prefill_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          decode_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          verify_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+      int64_t kv_cache_init_value) {
+    return LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
+        env, text_decoder_model, text_decoder_compiled_model,
+        prefill_signatures, decode_signature, verify_signature,
+        text_decoder_prefill_input_buffers, text_decoder_decode_input_buffers,
+        text_decoder_verify_input_buffers, input_kv_cache_buffers,
+        prefill_output_kv_cache_slice_buffers,
+        decode_output_kv_cache_slice_buffers,
+        verify_output_kv_cache_slice_buffers, kv_quant_params,
+        kv_cache_init_value);
+  }
+
+  static absl::StatusOr<InferenceContext> CreateTextDecoderInferenceContext(
+      ::litert::Environment& env,
+      ::litert::CompiledModel& text_decoder_compiled_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
+      absl::string_view decode_signature, absl::string_view verify_signature,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          input_kv_cache_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          prefill_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          decode_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          verify_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          text_decoder_prefill_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          text_decoder_decode_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          text_decoder_verify_input_buffers) {
+    return LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
+        env, text_decoder_compiled_model, prefill_signatures, decode_signature,
+        verify_signature, input_kv_cache_buffers,
+        prefill_output_kv_cache_slice_buffers,
+        decode_output_kv_cache_slice_buffers,
+        verify_output_kv_cache_slice_buffers,
+        text_decoder_prefill_input_buffers, text_decoder_decode_input_buffers,
+        text_decoder_verify_input_buffers);
+  }
+
+  static absl::Status ApplyLegacyKvCacheWorkarounds(
+      const ::litert::CompiledModel& text_decoder_compiled_model,
+      absl::string_view prefill_signature,
+      const proto::LlmMetadata* llm_metadata,
+      absl::Span<const int> sorted_supported_context_sizes,
+      bool has_per_layer_embeddings, int64_t kv_cache_init_value,
+      bool enable_npu_debug_logging,
+      InferenceContext& text_decoder_inference_context) {
+    return LlmLiteRtNpuCompiledModelExecutor::ApplyLegacyKvCacheWorkarounds(
+        text_decoder_compiled_model, prefill_signature, llm_metadata,
+        sorted_supported_context_sizes, has_per_layer_embeddings,
+        kv_cache_init_value, enable_npu_debug_logging,
+        text_decoder_inference_context);
   }
 };
 
@@ -1845,7 +1930,10 @@ class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
  protected:
   std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> MakeExecutor(
       std::vector<NpuContextGroup> groups,
-      std::vector<int> supported_context_sizes, int current_step) {
+      std::vector<int> supported_context_sizes, int current_step,
+      int max_num_tokens = 1024, int64_t kv_cache_init_value = 0,
+      ResolvedPrefillSignatures prefill_signatures = {},
+      NpuEmbedder embedder = NpuEmbedder()) {
     absl::StatusOr<ModelAssets> model_assets =
         ModelAssets::Create("dummy_model");
     ABSL_CHECK_OK(model_assets);
@@ -1853,6 +1941,7 @@ class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
         LlmExecutorSettings::CreateDefault(*std::move(model_assets),
                                            Backend::NPU);
     ABSL_CHECK_OK(settings);
+    settings->SetMaxNumTokens(max_num_tokens);
 
     const std::vector<uint8_t> model_buffer = BuildMtpAuxModelBuffer({});
     ::litert::Expected<::litert::CompiledModel> decoder =
@@ -1870,23 +1959,24 @@ class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
             ::litert::HwAccelerators::kCpu);
     ABSL_CHECK(aux.HasValue());
 
-    NpuGraphLayout initial_layout = groups[0].layout;
+    NpuGraphLayout initial_layout =
+        !groups.empty() ? groups[0].layout : NpuGraphLayout();
     std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
         absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
-        std::move(*settings), *env_, NpuAuxiliaryContext(std::move(*aux)),
-        std::move(*decoder), std::move(groups),
-        std::move(supported_context_sizes), /*prefill_signature_map=*/{},
-        /*prefill_signatures=*/{},
-        LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams{
-            .scale = 1.0f, .zero_point = 0},
-        /*kv_cache_init_value=*/0,
-        LlmLiteRtNpuCompiledModelExecutor::SpeculativeDecodingType::kNone,
-        /*drafter_context=*/std::nullopt,
-        /*drafter_aux_context=*/std::nullopt, NpuEmbedder(), NpuRope(),
-        NpuMask(), NpuKVCache(), /*text_decoder_model=*/nullptr,
-        /*llm_metadata=*/nullptr, /*executor_metadata=*/nullptr,
-        /*is_dynamic_model=*/false, /*dynamic_kv_cache_capacity=*/0,
-        std::move(initial_layout)));
+            std::move(*settings), *env_, NpuAuxiliaryContext(std::move(*aux)),
+            std::move(*decoder), std::move(groups),
+            std::move(supported_context_sizes), /*prefill_signature_map=*/{},
+            std::move(prefill_signatures),
+            LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams{
+                .scale = 1.0f, .zero_point = 0},
+            kv_cache_init_value,
+            LlmLiteRtNpuCompiledModelExecutor::SpeculativeDecodingType::kNone,
+            /*drafter_context=*/std::nullopt,
+            /*drafter_aux_context=*/std::nullopt, std::move(embedder),
+            NpuRope(), NpuMask(), NpuKVCache(), /*text_decoder_model=*/nullptr,
+            /*llm_metadata=*/nullptr, /*executor_metadata=*/nullptr,
+            /*is_dynamic_model=*/false, /*dynamic_kv_cache_capacity=*/0,
+            std::move(initial_layout)));
     executor->current_step_ = current_step;
     return executor;
   }
@@ -1894,6 +1984,42 @@ class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
   static NpuContextGroup& MutableContextGroup(
       LlmLiteRtNpuCompiledModelExecutor& executor, int index = 0) {
     return executor.context_groups_[index];
+  }
+
+  static int ActiveContextGroupIndex(
+      const LlmLiteRtNpuCompiledModelExecutor& executor) {
+    return executor.active_context_group_index_;
+  }
+
+  static void SetActiveContextGroupIndex(
+      LlmLiteRtNpuCompiledModelExecutor& executor, int index) {
+    executor.active_context_group_index_ = index;
+  }
+
+  static ProcessedTokens& MutableProcessedTokens(
+      LlmLiteRtNpuCompiledModelExecutor& executor) {
+    return executor.processed_tokens_;
+  }
+
+  static absl::StatusOr<ResolvedPrefillSignatures> PreparePrefillSignatures(
+      LlmLiteRtNpuCompiledModelExecutor& executor,
+      absl::string_view prefill_signature, size_t num_tokens) {
+    return executor.PreparePrefillSignatures(prefill_signature, num_tokens);
+  }
+
+  static absl::StatusOr<std::vector<std::vector<int>>> FinishDecodeStep(
+      LlmLiteRtNpuCompiledModelExecutor& executor, int token_id,
+      absl::Time start_time, bool advance_step = false,
+      bool mark_previous_processed = false) {
+    return executor.FinishDecodeStep(
+        token_id, start_time,
+        {.advance_step = advance_step,
+         .mark_previous_processed = mark_previous_processed});
+  }
+
+  static void EnqueuePendingAcceptedToken(
+      LlmLiteRtNpuCompiledModelExecutor& executor, int token_id) {
+    executor.pending_accepted_tokens_.push_back(token_id);
   }
 };
 
@@ -2055,6 +2181,735 @@ TEST_F(LlmLiteRtNpuCloneContextTest,
   }
   for (int i = kNumElems; i < kNumElems * 2; ++i) {
     EXPECT_EQ(read_lock->second[i], kGuardCanary) << "Guard clobbered at " << i;
+  }
+}
+
+TEST(KvCacheTensorNamePredicatesTest, MatchesExpectedPrefixes) {
+  EXPECT_TRUE(IsKvCacheTensorName("kv_cache_k_0"));
+  EXPECT_TRUE(IsKvCacheTensorName("kv_cache_v_15"));
+  EXPECT_TRUE(IsKvCacheTensorName("kv_cache_c_3"));
+  EXPECT_FALSE(IsKvCacheTensorName("kv_slice_k_0"));
+  EXPECT_FALSE(IsKvCacheTensorName("embeddings"));
+
+  EXPECT_TRUE(IsKvCacheSliceTensorName("kv_slice_k_0"));
+  EXPECT_TRUE(IsKvCacheSliceTensorName("kv_slice_v_15"));
+  EXPECT_TRUE(IsKvCacheSliceTensorName("kv_slice_c_3"));
+  EXPECT_FALSE(IsKvCacheSliceTensorName("kv_cache_k_0"));
+  EXPECT_FALSE(IsKvCacheSliceTensorName("logits"));
+}
+
+// Builds a minimal text decoder TFLite model with `prefill_4`, `decode`, and
+// `verify` signatures to exercise AllocateTextDecoderBuffers and
+// CreateTextDecoderInferenceContext on CPU.
+std::vector<uint8_t> BuildTextDecoderBufferTestModel(
+    tflite::TensorType prefill_unconnected_kv_type) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto add_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
+  auto reshape_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_RESHAPE);
+  auto opcodes_vec = builder.CreateVector({add_opcode, reshape_opcode});
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  buffers.push_back(tflite::CreateBuffer(builder));
+  auto add_zero_floats = [&](size_t count) -> uint32_t {
+    std::vector<uint8_t> bytes(count * sizeof(float), 0);
+    buffers.push_back(
+        tflite::CreateBuffer(builder, builder.CreateVector(bytes)));
+    return buffers.size() - 1;
+  };
+  auto add_shape_buf = [&](std::vector<int32_t> shape) -> uint32_t {
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(shape.data());
+    std::vector<uint8_t> bytes(raw, raw + shape.size() * sizeof(int32_t));
+    buffers.push_back(
+        tflite::CreateBuffer(builder, builder.CreateVector(bytes)));
+    return buffers.size() - 1;
+  };
+  auto make_tensor = [&](std::vector<int32_t> dims, tflite::TensorType type,
+                         uint32_t buf_idx, absl::string_view name) {
+    return tflite::CreateTensor(builder, builder.CreateVector(dims), type,
+                                buf_idx,
+                                builder.CreateString(name.data(), name.size()));
+  };
+  auto make_map = [&](absl::string_view name, uint32_t idx) {
+    return tflite::CreateTensorMap(
+        builder, builder.CreateString(name.data(), name.size()), idx);
+  };
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  // Subgraph 0: "prefill_4" with shared kv_cache_k_0 (INT16) and unconnected
+  // kv_cache_k_25 (`prefill_unconnected_kv_type`).
+  {
+    uint32_t zero_buf = add_zero_floats(16);
+    uint32_t shape_slice = add_shape_buf({1, 1, 4, 4});
+    auto tensors = builder.CreateVector({
+        make_tensor({1, 4, 4}, tflite::TensorType_FLOAT32, 0, "embeddings"),
+        make_tensor({1, 1, 8, 4}, tflite::TensorType_INT16, 0, "kv_cache_k_0"),
+        make_tensor({1, 1, 8, 4}, prefill_unconnected_kv_type, 0,
+                    "kv_cache_k_25"),
+        make_tensor({1, 4, 4}, tflite::TensorType_FLOAT32, zero_buf, "zeros"),
+        make_tensor({1, 4, 4}, tflite::TensorType_FLOAT32, 0, "unused_out"),
+        make_tensor({4}, tflite::TensorType_INT32, shape_slice, "slice_shape"),
+        make_tensor({1, 1, 4, 4}, tflite::TensorType_INT16, 0, "kv_slice_k_0"),
+        make_tensor({1, 1, 4, 4}, tflite::TensorType_INT16, 0, "kv_in_slice"),
+    });
+    // Pass embeddings -> unused_out via ADD, and reshape a 16-elem INT16 input
+    // to kv_slice_k_0 so all signature tensors are valid graph tensors.
+    auto add_op = tflite::CreateOperator(builder, 0,
+                                         builder.CreateVector<int32_t>({0, 3}),
+                                         builder.CreateVector<int32_t>({4}));
+    auto reshape_op = tflite::CreateOperator(
+        builder, 1, builder.CreateVector<int32_t>({7, 5}),
+        builder.CreateVector<int32_t>({6}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors, builder.CreateVector<int32_t>({0, 1, 2, 7}),
+        builder.CreateVector<int32_t>({4, 6}),
+        builder.CreateVector({add_op, reshape_op}),
+        builder.CreateString("prefill_4")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder,
+        builder.CreateVector(
+            {make_map("embeddings", 0), make_map("kv_cache_k_0", 1),
+             make_map("kv_cache_k_25", 2), make_map("aux_in", 7)}),
+        builder.CreateVector(
+            {make_map("unused_out", 4), make_map("kv_slice_k_0", 6)}),
+        builder.CreateString("prefill_4"), 0));
+  }
+
+  // Subgraph 1: "decode" with INT16 kv_cache_k_0 and kv_cache_k_25, plus
+  // logits, activations, and kv_slice_k_0 outputs.
+  {
+    uint32_t zero_buf = add_zero_floats(4);
+    uint32_t shape_slice = add_shape_buf({1, 1, 1, 4});
+    auto tensors = builder.CreateVector({
+        make_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, 0, "embeddings"),
+        make_tensor({1, 1, 8, 4}, tflite::TensorType_INT16, 0, "kv_cache_k_0"),
+        make_tensor({1, 1, 8, 4}, tflite::TensorType_INT16, 0, "kv_cache_k_25"),
+        make_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, zero_buf, "zeros"),
+        make_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, 0, "logits"),
+        make_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, 0, "activations"),
+        make_tensor({4}, tflite::TensorType_INT32, shape_slice, "slice_shape"),
+        make_tensor({1, 1, 1, 4}, tflite::TensorType_INT16, 0, "kv_in_slice"),
+        make_tensor({1, 1, 1, 4}, tflite::TensorType_INT16, 0, "kv_slice_k_0"),
+    });
+    auto add_logits = tflite::CreateOperator(
+        builder, 0, builder.CreateVector<int32_t>({0, 3}),
+        builder.CreateVector<int32_t>({4}));
+    auto add_acts = tflite::CreateOperator(
+        builder, 0, builder.CreateVector<int32_t>({0, 3}),
+        builder.CreateVector<int32_t>({5}));
+    auto reshape_op = tflite::CreateOperator(
+        builder, 1, builder.CreateVector<int32_t>({7, 6}),
+        builder.CreateVector<int32_t>({8}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors, builder.CreateVector<int32_t>({0, 1, 2, 7}),
+        builder.CreateVector<int32_t>({4, 5, 8}),
+        builder.CreateVector({add_logits, add_acts, reshape_op}),
+        builder.CreateString("decode")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder,
+        builder.CreateVector(
+            {make_map("embeddings", 0), make_map("kv_cache_k_0", 1),
+             make_map("kv_cache_k_25", 2), make_map("aux_in", 7)}),
+        builder.CreateVector({make_map("logits", 4), make_map("activations", 5),
+                              make_map("kv_slice_k_0", 8)}),
+        builder.CreateString("decode"), 1));
+  }
+
+  // Subgraph 2: "verify" with embeddings, kv_cache_k_0 -> logits, activations,
+  // kv_slice_k_0.
+  {
+    uint32_t zero_buf = add_zero_floats(8);
+    uint32_t shape_slice = add_shape_buf({1, 1, 2, 4});
+    auto tensors = builder.CreateVector({
+        make_tensor({1, 2, 4}, tflite::TensorType_FLOAT32, 0, "embeddings"),
+        make_tensor({1, 1, 8, 4}, tflite::TensorType_INT16, 0, "kv_cache_k_0"),
+        make_tensor({1, 2, 4}, tflite::TensorType_FLOAT32, zero_buf, "zeros"),
+        make_tensor({1, 2, 4}, tflite::TensorType_FLOAT32, 0, "logits"),
+        make_tensor({1, 2, 4}, tflite::TensorType_FLOAT32, 0, "activations"),
+        make_tensor({4}, tflite::TensorType_INT32, shape_slice, "slice_shape"),
+        make_tensor({1, 1, 2, 4}, tflite::TensorType_INT16, 0, "kv_in_slice"),
+        make_tensor({1, 1, 2, 4}, tflite::TensorType_INT16, 0, "kv_slice_k_0"),
+    });
+    auto add_logits = tflite::CreateOperator(
+        builder, 0, builder.CreateVector<int32_t>({0, 2}),
+        builder.CreateVector<int32_t>({3}));
+    auto add_acts = tflite::CreateOperator(
+        builder, 0, builder.CreateVector<int32_t>({0, 2}),
+        builder.CreateVector<int32_t>({4}));
+    auto reshape_op = tflite::CreateOperator(
+        builder, 1, builder.CreateVector<int32_t>({6, 5}),
+        builder.CreateVector<int32_t>({7}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors, builder.CreateVector<int32_t>({0, 1, 6}),
+        builder.CreateVector<int32_t>({3, 4, 7}),
+        builder.CreateVector({add_logits, add_acts, reshape_op}),
+        builder.CreateString("verify")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder,
+        builder.CreateVector({make_map("embeddings", 0),
+                              make_map("kv_cache_k_0", 1),
+                              make_map("aux_in", 6)}),
+        builder.CreateVector({make_map("logits", 3), make_map("activations", 4),
+                              make_map("kv_slice_k_0", 7)}),
+        builder.CreateString("verify"), 2));
+  }
+
+  auto model = tflite::CreateModel(
+      builder, 3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("decoder_test"), builder.CreateVector(buffers),
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  builder.Finish(model, "TFL3");
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+TEST_F(
+    LlmLiteRtNpuWarmupTest,
+    AllocateAndCreateDecoderInferenceContextHandlesMismatchedFloat32Prefill) {
+  const std::vector<uint8_t> buf =
+      BuildTextDecoderBufferTestModel(tflite::TensorType_FLOAT32);
+  ::litert::Model model = LoadModel(buf);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled,
+      ::litert::CompiledModel::Create(
+          *env_, ::litert::BufferRef<uint8_t>(buf.data(), buf.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  ResolvedPrefillSignatures prefill_sigs = BuildResolvedPrefillSignatures(4);
+  absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_in, decode_in,
+      verify_in, kv_in, prefill_slice_out, decode_slice_out, verify_slice_out;
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
+
+  ASSERT_OK_AND_ASSIGN(
+      int resolved_ctx,
+      AllocateTextDecoderBuffers(
+          *env_, &model, compiled, prefill_sigs, "decode", "verify", prefill_in,
+          decode_in, verify_in, kv_in, prefill_slice_out, decode_slice_out,
+          verify_slice_out, kv_quant_params, /*kv_cache_init_value=*/7));
+  EXPECT_EQ(resolved_ctx, 8);
+  EXPECT_TRUE(kv_in.contains("kv_cache_k_0"));
+  EXPECT_TRUE(kv_in.contains("kv_cache_k_25"));
+  EXPECT_TRUE(prefill_slice_out.contains("kv_slice_k_0"));
+  EXPECT_TRUE(decode_slice_out.contains("kv_slice_k_0"));
+  EXPECT_TRUE(verify_slice_out.contains("kv_slice_k_0"));
+
+  // Persistent KV buffers were allocated from decode (Int16) and filled with 7.
+  {
+    auto lock = TensorBufferScopedLock::Create<int16_t>(
+        kv_in.at("kv_cache_k_25"), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    EXPECT_EQ(lock->second[0], 7);
+  }
+
+  ASSERT_OK_AND_ASSIGN(InferenceContext ctx,
+                       CreateTextDecoderInferenceContext(
+                           *env_, compiled, prefill_sigs, "decode", "verify",
+                           kv_in, prefill_slice_out, decode_slice_out,
+                           verify_slice_out, prefill_in, decode_in, verify_in));
+
+  // Shared Int16 kv_cache_k_0 aliases `kv_in`, while Float32 prefill
+  // kv_cache_k_25 gets a separate cleared Float32 dummy buffer (b/416702118).
+  EXPECT_TRUE(SharesMemory(ctx.prefill_input_buffers.at("kv_cache_k_0"),
+                           kv_in.at("kv_cache_k_0")));
+  EXPECT_FALSE(SharesMemory(ctx.prefill_input_buffers.at("kv_cache_k_25"),
+                            kv_in.at("kv_cache_k_25")));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto prefill_k25_type,
+      ctx.prefill_input_buffers.at("kv_cache_k_25").TensorType());
+  EXPECT_EQ(prefill_k25_type.ElementType(), ElementType::Float32);
+
+  // Decode and verify outputs include both slice buffers and
+  // logits/activations.
+  EXPECT_TRUE(ctx.decode_output_buffers.contains("logits"));
+  EXPECT_TRUE(ctx.decode_output_buffers.contains("activations"));
+  EXPECT_TRUE(ctx.verify_output_buffers.contains("logits"));
+  EXPECT_TRUE(ctx.verify_output_buffers.contains("activations"));
+}
+
+TEST_F(LlmLiteRtNpuWarmupTest,
+       CreateTextDecoderInferenceContextRejectsIncompatibleKvTypes) {
+  // Int8 in prefill vs Int16 in decode is rejected as incompatible.
+  const std::vector<uint8_t> buf =
+      BuildTextDecoderBufferTestModel(tflite::TensorType_INT8);
+  ::litert::Model model = LoadModel(buf);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled,
+      ::litert::CompiledModel::Create(
+          *env_, ::litert::BufferRef<uint8_t>(buf.data(), buf.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  ResolvedPrefillSignatures prefill_sigs = BuildResolvedPrefillSignatures(4);
+  absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_in, decode_in,
+      verify_in, kv_in, prefill_slice_out, decode_slice_out, verify_slice_out;
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
+  ASSERT_OK(AllocateTextDecoderBuffers(
+      *env_, &model, compiled, prefill_sigs, "decode", "verify", prefill_in,
+      decode_in, verify_in, kv_in, prefill_slice_out, decode_slice_out,
+      verify_slice_out, kv_quant_params, /*kv_cache_init_value=*/0));
+
+  EXPECT_THAT(CreateTextDecoderInferenceContext(
+                  *env_, compiled, prefill_sigs, "decode", "verify", kv_in,
+                  prefill_slice_out, decode_slice_out, verify_slice_out,
+                  prefill_in, decode_in, verify_in),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Incompatible KV cache tensor types for "
+                                 "'kv_cache_k_25'")));
+}
+
+// Builds a multi-signature auxiliary model where each signature `(sig, in_name,
+// out_name, bias)` computes `out = in + bias` on a `[1, 1, 4]` Float32 tensor.
+struct SimpleAuxSigSpec {
+  std::string sig_name;
+  std::string in_name;
+  std::string out_name;
+  float bias;
+};
+
+std::vector<uint8_t> BuildSimpleAuxModelBuffer(
+    const std::vector<SimpleAuxSigSpec>& specs) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto add_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
+  auto opcodes_vec = builder.CreateVector({add_opcode});
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  buffers.push_back(tflite::CreateBuffer(builder));
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  for (size_t i = 0; i < specs.size(); ++i) {
+    std::vector<float> bias_vals(4, specs[i].bias);
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(bias_vals.data());
+    buffers.push_back(tflite::CreateBuffer(
+        builder, builder.CreateVector(std::vector<uint8_t>(raw, raw + 16))));
+    const uint32_t bias_buf = buffers.size() - 1;
+
+    auto t_in = tflite::CreateTensor(
+        builder, builder.CreateVector<int32_t>({1, 1, 4}),
+        tflite::TensorType_FLOAT32, 0, builder.CreateString(specs[i].in_name));
+    auto t_bias = tflite::CreateTensor(
+        builder, builder.CreateVector<int32_t>({1, 1, 4}),
+        tflite::TensorType_FLOAT32, bias_buf, builder.CreateString("bias"));
+    auto t_out = tflite::CreateTensor(
+        builder, builder.CreateVector<int32_t>({1, 1, 4}),
+        tflite::TensorType_FLOAT32, 0, builder.CreateString(specs[i].out_name));
+    auto op = tflite::CreateOperator(builder, 0,
+                                     builder.CreateVector<int32_t>({0, 1}),
+                                     builder.CreateVector<int32_t>({2}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, builder.CreateVector({t_in, t_bias, t_out}),
+        builder.CreateVector<int32_t>({0}), builder.CreateVector<int32_t>({2}),
+        builder.CreateVector({op}), builder.CreateString(specs[i].sig_name)));
+    auto in_map = tflite::CreateTensorMap(
+        builder, builder.CreateString(specs[i].in_name), 0);
+    auto out_map = tflite::CreateTensorMap(
+        builder, builder.CreateString(specs[i].out_name), 2);
+    sig_defs.push_back(
+        tflite::CreateSignatureDef(builder, builder.CreateVector({in_map}),
+                                   builder.CreateVector({out_map}),
+                                   builder.CreateString(specs[i].sig_name), i));
+  }
+
+  auto model = tflite::CreateModel(
+      builder, 3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("aux_test"), builder.CreateVector(buffers), 0, 0,
+      builder.CreateVector(sig_defs));
+  builder.Finish(model, "TFL3");
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+TEST_F(LlmLiteRtNpuWarmupTest,
+       WarmupInferenceAppliesAuxOverridesSkipsWHAndClearsMasterKVCache) {
+  const std::vector<uint8_t> decoder_buf = BuildSimpleAuxModelBuffer({
+      {"prefill_640", "embeddings", "logits", 0.0f},
+      {"decode_640", "embeddings", "logits", 0.0f},
+  });
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto decoder,
+      ::litert::CompiledModel::Create(
+          *env_,
+          ::litert::BufferRef<uint8_t>(decoder_buf.data(), decoder_buf.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  const std::vector<uint8_t> aux_buf = BuildSimpleAuxModelBuffer({
+      {"prefill_rope", "rope_in", "rope_out", 10.0f},
+      {"prefill_mask", "mask_in", "mask_local", 20.0f},
+      {"prefill_cache_update", "kv_cache_k_0", "kv_cache_v_0", 30.0f},
+      {"decode_rope", "rope_in", "rope_out", 40.0f},
+      {"decode_mask", "mask_in", "mask_local", 50.0f},
+      {"decode_cache_update", "kv_cache_k_0", "kv_cache_v_0", 60.0f},
+      {"verify_rope", "rope_in", "rope_out", 70.0f},
+      {"verify_mask", "mask_in", "mask_local", 80.0f},
+      {"verify_cache_update", "cu_in", "cu_out", 90.0f},
+  });
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto aux,
+      ::litert::CompiledModel::Create(
+          *env_, ::litert::BufferRef<uint8_t>(aux_buf.data(), aux_buf.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  auto make_f32_buf = [&](float val) {
+    return CreateTensorBufferWithDims(std::vector<float>(4, val),
+                                      ElementType::Float32, {1, 1, 4});
+  };
+
+  NpuContextGroup group;
+  group.context_size = 640;
+  group.prefill_signatures.prefill = "prefill_640";
+  group.prefill_signatures.rope = "prefill_rope";
+  group.prefill_signatures.mask = "prefill_mask";
+  group.prefill_signatures.cache_update = "prefill_cache_update";
+  group.decode_signature = "decode_640";
+  group.decode_aux_signatures.rope = "decode_rope";
+  group.decode_aux_signatures.mask = "decode_mask";
+  group.decode_aux_signatures.cache_update = "decode_cache_update";
+  group.verify_signature = "verify_absent";
+  group.input_kv_cache_buffers.emplace("kv_cache_k_0", make_f32_buf(5.0f));
+  group.input_kv_cache_buffers.emplace("kv_cache_v_0", make_f32_buf(6.0f));
+
+  InferenceContext& dec_ctx = group.text_decoder_inference_context;
+  dec_ctx.prefill_input_buffers.emplace("embeddings", make_f32_buf(0.0f));
+  dec_ctx.prefill_input_buffers.emplace("rope_out", make_f32_buf(-1.0f));
+  dec_ctx.prefill_input_buffers.emplace("mask_local", make_f32_buf(-1.0f));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      dec_ctx.prefill_input_buffers["kv_cache_k_0"],
+      group.input_kv_cache_buffers.at("kv_cache_k_0").Duplicate());
+  dec_ctx.prefill_output_buffers.emplace("logits", make_f32_buf(0.0f));
+
+  dec_ctx.decode_input_buffers.emplace("embeddings", make_f32_buf(0.0f));
+  dec_ctx.decode_input_buffers.emplace("rope_out", make_f32_buf(-1.0f));
+  dec_ctx.decode_input_buffers.emplace("mask_local", make_f32_buf(-1.0f));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      dec_ctx.decode_input_buffers["kv_cache_v_0"],
+      group.input_kv_cache_buffers.at("kv_cache_v_0").Duplicate());
+  dec_ctx.decode_output_buffers.emplace("logits", make_f32_buf(0.0f));
+
+  InferenceContext rope_ctx, mask_ctx, cu_ctx;
+  rope_ctx.prefill_input_buffers.emplace("rope_in", make_f32_buf(1.0f));
+  rope_ctx.prefill_output_buffers.emplace("rope_out", make_f32_buf(-99.0f));
+  rope_ctx.decode_input_buffers.emplace("rope_in", make_f32_buf(2.0f));
+  rope_ctx.decode_output_buffers.emplace("rope_out", make_f32_buf(-99.0f));
+  rope_ctx.verify_input_buffers.emplace("rope_in", make_f32_buf(3.0f));
+  rope_ctx.verify_output_buffers.emplace("rope_out", make_f32_buf(-99.0f));
+
+  mask_ctx.prefill_input_buffers.emplace("mask_in", make_f32_buf(1.0f));
+  mask_ctx.prefill_output_buffers.emplace("mask_local", make_f32_buf(-99.0f));
+  mask_ctx.decode_input_buffers.emplace("mask_in", make_f32_buf(2.0f));
+  mask_ctx.decode_output_buffers.emplace("mask_local", make_f32_buf(-99.0f));
+  mask_ctx.verify_input_buffers.emplace("mask_in", make_f32_buf(3.0f));
+  mask_ctx.verify_output_buffers.emplace("mask_local", make_f32_buf(-99.0f));
+
+  cu_ctx.prefill_input_buffers.emplace("kv_cache_k_0", make_f32_buf(-99.0f));
+  cu_ctx.prefill_output_buffers.emplace("kv_cache_v_0", make_f32_buf(-99.0f));
+  cu_ctx.decode_input_buffers.emplace("kv_cache_k_0", make_f32_buf(-99.0f));
+  cu_ctx.decode_output_buffers.emplace("kv_cache_v_0", make_f32_buf(-99.0f));
+  cu_ctx.verify_input_buffers.emplace("cu_in", make_f32_buf(4.0f));
+  cu_ctx.verify_output_buffers.emplace("cu_out", make_f32_buf(-99.0f));
+
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(std::move(group));
+
+  // 1. With kWH mask and kWH cache update, only RoPE aux signatures run;
+  // embeddings are filled with 1.0f before decoder warmup; KV caches are
+  // cleared to 0.0f at the end.
+  ASSERT_OK(WarmupInference(decoder, groups, aux, rope_ctx, mask_ctx, cu_ctx,
+                            MaskUpdateMethod::kWH, KVCacheUpdateMethod::kWH));
+  EXPECT_EQ(
+      GetFirstFloat(
+          groups[0].text_decoder_inference_context.prefill_output_buffers.at(
+              "logits")),
+      1.0f);
+  EXPECT_EQ(
+      GetFirstFloat(
+          groups[0].text_decoder_inference_context.prefill_input_buffers.at(
+              "rope_out")),
+      11.0f);
+  EXPECT_EQ(
+      GetFirstFloat(
+          groups[0].text_decoder_inference_context.decode_input_buffers.at(
+              "rope_out")),
+      42.0f);
+  EXPECT_EQ(GetFirstFloat(rope_ctx.verify_output_buffers.at("rope_out")),
+            73.0f);
+  // Mask and cache update were skipped under kWH.
+  EXPECT_EQ(
+      GetFirstFloat(
+          groups[0].text_decoder_inference_context.prefill_input_buffers.at(
+              "mask_local")),
+      -1.0f);
+  EXPECT_EQ(GetFirstFloat(mask_ctx.verify_output_buffers.at("mask_local")),
+            -99.0f);
+  EXPECT_EQ(GetFirstFloat(cu_ctx.verify_output_buffers.at("cu_out")), -99.0f);
+  // Master KV caches on `groups.back()` were cleared at the end of warmup.
+  EXPECT_EQ(GetFirstFloat(groups[0].input_kv_cache_buffers.at("kv_cache_k_0")),
+            0.0f);
+  EXPECT_EQ(GetFirstFloat(groups[0].input_kv_cache_buffers.at("kv_cache_v_0")),
+            0.0f);
+
+  // 2. With kModel mask and kModel cache update, mask and cache_update
+  // overrides also run.
+  ASSERT_OK(WarmupInference(decoder, groups, aux, rope_ctx, mask_ctx, cu_ctx,
+                            MaskUpdateMethod::kModel,
+                            KVCacheUpdateMethod::kModel));
+  EXPECT_EQ(
+      GetFirstFloat(
+          groups[0].text_decoder_inference_context.prefill_input_buffers.at(
+              "mask_local")),
+      21.0f);
+  EXPECT_EQ(
+      GetFirstFloat(
+          groups[0].text_decoder_inference_context.decode_input_buffers.at(
+              "mask_local")),
+      52.0f);
+  EXPECT_EQ(GetFirstFloat(mask_ctx.verify_output_buffers.at("mask_local")),
+            83.0f);
+  EXPECT_EQ(GetFirstFloat(cu_ctx.verify_output_buffers.at("cu_out")), 94.0f);
+}
+
+TEST_F(LlmLiteRtNpuCloneContextTest,
+       PreparePrefillSignaturesValidatesBoundsAndResolvesChunkSize) {
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  auto executor = MakeExecutor(std::move(groups), {640}, /*current_step=*/600,
+                               /*max_num_tokens=*/630);
+
+  // Exceeds user max_num_tokens (600 + 32 > 630).
+  EXPECT_THAT(PreparePrefillSignatures(*executor, "prefill_64", 32),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("exceeds max sequence length (630)")));
+
+  // Fits max_num_tokens (600 + 16 <= 630), but padded runner_size 64 overflows
+  // NPU hardware context_size (600 + 64 > 640).
+  EXPECT_THAT(PreparePrefillSignatures(*executor, "prefill_64_cache_640", 16),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Padded prefill length (64) plus current step "
+                                 "(600) exceeds NPU context size (640)")));
+
+  // Fits both max_num_tokens and context_size (600 + 32 <= 640).
+  ASSERT_OK_AND_ASSIGN(
+      ResolvedPrefillSignatures sigs,
+      PreparePrefillSignatures(*executor, "prefill_32_cache_640", 10));
+  EXPECT_EQ(sigs.size, 32);
+  EXPECT_EQ(sigs.context_size, 640);
+  EXPECT_EQ(sigs.prefill, "prefill_32_cache_640");
+}
+
+TEST_F(LlmLiteRtNpuCloneContextTest,
+       ResetClearsAllContextGroupKVCachesAndResetsActiveGroup) {
+  std::vector<NpuContextGroup> groups;
+  for (int ctx_size : {64, 128}) {
+    NpuContextGroup g;
+    g.context_size = ctx_size;
+    g.input_kv_cache_buffers.emplace(
+        "kv_cache_k_0",
+        CreateTensorBufferWithDims(std::vector<int16_t>(16, 42),
+                                   ElementType::Int16, {1, 1, 4, 4}));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        g.text_decoder_inference_context.decode_input_buffers["kv_cache_k_0"],
+        g.input_kv_cache_buffers.at("kv_cache_k_0").Duplicate());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        g.text_decoder_inference_context.prefill_input_buffers["kv_cache_k_0"],
+        g.input_kv_cache_buffers.at("kv_cache_k_0").Duplicate());
+    groups.push_back(std::move(g));
+  }
+
+  auto executor =
+      MakeExecutor(std::move(groups), {64, 128}, /*current_step=*/50,
+                   /*max_num_tokens=*/128, /*kv_cache_init_value=*/-3);
+  SetActiveContextGroupIndex(*executor, 1);
+
+  ASSERT_OK(executor->Reset());
+  EXPECT_EQ(ActiveContextGroupIndex(*executor), 0);
+  ASSERT_OK_AND_ASSIGN(int step_after_reset, executor->GetCurrentStep());
+  EXPECT_EQ(step_after_reset, 0);
+
+  for (int idx : {0, 1}) {
+    auto lock = TensorBufferScopedLock::Create<int16_t>(
+        MutableContextGroup(*executor, idx)
+            .input_kv_cache_buffers.at("kv_cache_k_0"),
+        TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    EXPECT_EQ(lock->second[0], -3) << "group " << idx;
+  }
+
+  // Overwrite group 1 again and verify RestoreContext with an empty context
+  // (`current_step == 0`) also clears all context group KV caches.
+  {
+    auto write_lock = TensorBufferScopedLock::Create<int16_t>(
+        MutableContextGroup(*executor, 1)
+            .input_kv_cache_buffers.at("kv_cache_k_0"),
+        TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(write_lock.HasValue());
+    write_lock->second[0] = 99;
+  }
+  SetActiveContextGroupIndex(*executor, 1);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmContext> empty_ctx,
+                       executor->CreateNewContext(std::nullopt, {}));
+  ASSERT_OK(executor->RestoreContext(std::move(empty_ctx)));
+  EXPECT_EQ(ActiveContextGroupIndex(*executor), 0);
+  {
+    auto lock = TensorBufferScopedLock::Create<int16_t>(
+        MutableContextGroup(*executor, 1)
+            .input_kv_cache_buffers.at("kv_cache_k_0"),
+        TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    EXPECT_EQ(lock->second[0], -3);
+  }
+}
+
+TEST_F(LlmLiteRtNpuCloneContextTest,
+       FinishDecodeStepEnqueuesTokenAndOptionallyAdvancesStep) {
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(64));
+  auto executor = MakeExecutor(std::move(groups), {64}, /*current_step=*/5);
+
+  // Non-speculative path: keeps `current_step_` as already incremented by
+  // caller and enqueues token 11 as pending.
+  ASSERT_OK_AND_ASSIGN(auto out1,
+                       FinishDecodeStep(*executor, /*token_id=*/11, absl::Now(),
+                                        /*advance_step=*/false));
+  EXPECT_THAT(out1, ElementsAre(ElementsAre(11)));
+  ASSERT_OK_AND_ASSIGN(int step1, executor->GetCurrentStep());
+  EXPECT_EQ(step1, 5);
+  auto [first_step, first_pending] =
+      MutableProcessedTokens(*executor).GetNextUnprocessedToken();
+  ASSERT_EQ(first_pending.size(), 1);
+  EXPECT_EQ(first_pending[0]->id(), 11);
+
+  // Queued speculative token path: marks previous pending token as processed,
+  // enqueues token 22, and advances `current_step_`.
+  ASSERT_OK_AND_ASSIGN(auto out2,
+                       FinishDecodeStep(*executor, /*token_id=*/22, absl::Now(),
+                                        /*advance_step=*/true,
+                                        /*mark_previous_processed=*/true));
+  EXPECT_THAT(out2, ElementsAre(ElementsAre(22)));
+  ASSERT_OK_AND_ASSIGN(int step2, executor->GetCurrentStep());
+  EXPECT_EQ(step2, 6);
+  auto [next_step, pending] =
+      MutableProcessedTokens(*executor).GetNextUnprocessedToken();
+  ASSERT_EQ(pending.size(), 1);
+  EXPECT_EQ(pending[0]->id(), 22);
+
+  // Public Decode() pops from `pending_accepted_tokens_` via
+  // PopPendingAcceptedToken and advances `current_step_`.
+  MutableProcessedTokens(*executor).AddProcessedTokens({0, 1, 2, 3, 4});
+  EnqueuePendingAcceptedToken(*executor, 33);
+  ASSERT_OK_AND_ASSIGN(auto out3, executor->Decode());
+  EXPECT_THAT(out3, ElementsAre(ElementsAre(33)));
+  ASSERT_OK_AND_ASSIGN(int step3, executor->GetCurrentStep());
+  EXPECT_EQ(step3, 7);
+}
+
+TEST_F(LlmLiteRtNpuWarmupTest,
+       ApplyLegacyKvCacheWorkaroundsRecreatesDecodeBuffersForLegacyLayers) {
+  struct LayerCase {
+    std::string k_name;
+    std::string v_name;
+  };
+  std::vector<LayerCase> cases = {
+      {"kv_cache_k_25", "kv_cache_v_25"},
+      {"kv_cache_k_23", "kv_cache_v_23"},
+  };
+
+  for (const LayerCase& tc : cases) {
+    flatbuffers::FlatBufferBuilder builder;
+    auto reshape_op =
+        tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_RESHAPE);
+    auto opcodes = builder.CreateVector({reshape_op});
+    std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+    buffers.push_back(tflite::CreateBuffer(builder));
+    const std::vector<int32_t> shape = {1, 1, 4, 4};
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(shape.data());
+    buffers.push_back(tflite::CreateBuffer(
+        builder, builder.CreateVector(std::vector<uint8_t>(raw, raw + 16))));
+
+    struct SubgraphAndSig {
+      flatbuffers::Offset<tflite::SubGraph> subgraph;
+      flatbuffers::Offset<tflite::SignatureDef> sig_def;
+    };
+    auto make_sub = [&](absl::string_view sig, tflite::TensorType kv_type,
+                        uint32_t idx) {
+      auto t_k =
+          tflite::CreateTensor(builder, builder.CreateVector(shape), kv_type, 0,
+                               builder.CreateString(tc.k_name));
+      auto t_v =
+          tflite::CreateTensor(builder, builder.CreateVector(shape), kv_type, 0,
+                               builder.CreateString(tc.v_name));
+      auto t_s = tflite::CreateTensor(
+          builder, builder.CreateVector<int32_t>({4}), tflite::TensorType_INT32,
+          1, builder.CreateString("s"));
+      auto t_out =
+          tflite::CreateTensor(builder, builder.CreateVector(shape), kv_type, 0,
+                               builder.CreateString("out"));
+      auto op = tflite::CreateOperator(builder, 0,
+                                       builder.CreateVector<int32_t>({0, 2}),
+                                       builder.CreateVector<int32_t>({3}));
+      auto sg = tflite::CreateSubGraph(
+          builder, builder.CreateVector({t_k, t_v, t_s, t_out}),
+          builder.CreateVector<int32_t>({0, 1}),
+          builder.CreateVector<int32_t>({3}), builder.CreateVector({op}),
+          builder.CreateString(sig.data(), sig.size()));
+      auto sd = tflite::CreateSignatureDef(
+          builder,
+          builder.CreateVector({
+              tflite::CreateTensorMap(builder, builder.CreateString(tc.k_name),
+                                      0),
+              tflite::CreateTensorMap(builder, builder.CreateString(tc.v_name),
+                                      1),
+          }),
+          builder.CreateVector({tflite::CreateTensorMap(
+              builder, builder.CreateString("out"), 3)}),
+          builder.CreateString(sig.data(), sig.size()), idx);
+      return SubgraphAndSig{sg, sd};
+    };
+
+    auto [sg_prefill, sd_prefill] =
+        make_sub("prefill_4", tflite::TensorType_FLOAT32, 0);
+    auto [sg_decode, sd_decode] =
+        make_sub("decode", tflite::TensorType_INT16, 1);
+    auto m = tflite::CreateModel(
+        builder, 3, opcodes, builder.CreateVector({sg_prefill, sg_decode}),
+        builder.CreateString("legacy"), builder.CreateVector(buffers), 0, 0,
+        builder.CreateVector({sd_prefill, sd_decode}));
+    builder.Finish(m, "TFL3");
+    std::vector<uint8_t> model_bytes(
+        builder.GetBufferPointer(),
+        builder.GetBufferPointer() + builder.GetSize());
+
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto compiled, ::litert::CompiledModel::Create(
+                           *env_,
+                           ::litert::BufferRef<uint8_t>(model_bytes.data(),
+                                                        model_bytes.size()),
+                           ::litert::HwAccelerators::kCpu));
+
+    InferenceContext ctx;
+    // Give prefill_input_buffers a mismatched Int16 buffer (32 bytes vs
+    // Float32's 64 bytes) so `correct_mismatched_prefill_buffers` also runs.
+    ctx.prefill_input_buffers.emplace(
+        tc.k_name,
+        CreateTensorBufferWithDims(std::vector<int16_t>(16, 0),
+                                   ElementType::Int16, {1, 1, 4, 4}));
+    ctx.prefill_input_buffers.emplace(
+        tc.v_name,
+        CreateTensorBufferWithDims(std::vector<int16_t>(16, 0),
+                                   ElementType::Int16, {1, 1, 4, 4}));
+
+    ASSERT_OK(ApplyLegacyKvCacheWorkarounds(
+        compiled, "prefill_4", /*llm_metadata=*/nullptr, {64},
+        /*has_per_layer_embeddings=*/false, /*kv_cache_init_value=*/9,
+        /*enable_npu_debug_logging=*/true, ctx));
+
+    ASSERT_TRUE(ctx.decode_input_buffers.contains(tc.k_name)) << tc.k_name;
+    ASSERT_TRUE(ctx.decode_input_buffers.contains(tc.v_name)) << tc.v_name;
+    auto lock = TensorBufferScopedLock::Create<int16_t>(
+        ctx.decode_input_buffers.at(tc.k_name), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    EXPECT_EQ(lock->second[0], 9) << tc.k_name;
   }
 }
 

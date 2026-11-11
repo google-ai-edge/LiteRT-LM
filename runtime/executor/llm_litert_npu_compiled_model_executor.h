@@ -296,9 +296,6 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   NpuContextGroup& ActiveContextGroup() {
     return context_groups_[active_context_group_index_];
   }
-  NpuContextGroup& MutableActiveContextGroup() {
-    return context_groups_[active_context_group_index_];
-  }
 
   // Ensures that the active context group can hold `required_tokens` tokens.
   // - Static multi-context models: switches to the smallest context group that
@@ -320,6 +317,24 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Re-binds the KV cache, mask, RoPE, embedder and drafter sub-components to
   // the buffers of the active context group.
   absl::Status RebindActiveContextGroup();
+
+  // Validates sequence/context limits, grows or switches context group if
+  // required, and resolves prefill signatures for a chunk of `num_tokens`.
+  absl::StatusOr<ResolvedPrefillSignatures> PreparePrefillSignatures(
+      absl::string_view prefill_signature, size_t num_tokens);
+
+  struct DecodeStepOptions {
+    bool advance_step = false;
+    bool mark_previous_processed = false;
+  };
+
+  // Looks up the decode embedding for `token_id`, enqueues it as the next
+  // pending input token, updates decode step/latency counters, and returns it.
+  absl::StatusOr<std::vector<std::vector<int>>> FinishDecodeStep(
+      int token_id, absl::Time start_time, DecodeStepOptions options);
+
+  // Clears the KV cache buffers across all context groups.
+  absl::Status ClearAllContextGroupKVCaches();
 
   // Prefill internal implementation, for one prefill call to the Interpreter
   // with a certain length.
@@ -536,6 +551,17 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::Status ClearKVCache(
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers)
       const;
+
+  // Applies KV cache buffer workarounds for legacy single-context models with
+  // mismatched prefill/decode KV cache dtypes.
+  static absl::Status ApplyLegacyKvCacheWorkarounds(
+      const ::litert::CompiledModel& text_decoder_compiled_model,
+      absl::string_view prefill_signature,
+      const proto::LlmMetadata* llm_metadata,
+      absl::Span<const int> sorted_supported_context_sizes,
+      bool has_per_layer_embeddings, int64_t kv_cache_init_value,
+      bool enable_npu_debug_logging,
+      InferenceContext& text_decoder_inference_context);
 
   // Allocates input and output buffers for the text decoder compiled model:
   // - text_decoder_{prefill,decode,verify}_input_buffers: Non-KV input tensor
