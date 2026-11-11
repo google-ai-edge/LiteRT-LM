@@ -48,6 +48,7 @@
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -621,11 +622,30 @@ std::ostream& operator<<(std::ostream& os, const LatencyStats& stats) {
 // NpuAuxiliaryContext Implementation
 // -----------------------------------------------------------------------------
 
+bool IsPrecompiledForNpu(const litert::Model& model) {
+  // Same key LiteRT uses to skip JIT compilation of precompiled models.
+  constexpr char kBuildStampKey[] = "LiteRtStamp";
+  return model.Metadata(kBuildStampKey).HasValue();
+}
+
+litert::Expected<litert::Options> CreateLiteRtNpuAuxiliaryOptions(
+    const litert::Model& model, const LlmExecutorSettings& settings,
+    bool is_dynamic_model) {
+  if (IsPrecompiledForNpu(model)) {
+    return CreateLiteRtNpuOptions(settings, is_dynamic_model);
+  }
+  // Requesting the NPU for a model without NPU bytecode makes LiteRT JIT it.
+  ABSL_LOG(INFO) << "Auxiliary model is not precompiled for the NPU, "
+                    "running it on the CPU.";
+  return CreateLiteRtCpuOptions(settings);
+}
+
 absl::StatusOr<NpuAuxiliaryContext> NpuAuxiliaryContext::Create(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
     const LlmExecutorSettings& settings, bool is_dynamic_model) {
   LITERT_ASSIGN_OR_RETURN(auto options,
-                          CreateLiteRtNpuOptions(settings, is_dynamic_model));
+                          CreateLiteRtNpuAuxiliaryOptions(
+                              npu_auxiliary_model, settings, is_dynamic_model));
   LITERT_ASSIGN_OR_RETURN(
       CompiledModel npu_auxiliary_compiled_model,
       CompiledModelWrapper::Create(env, npu_auxiliary_model.Get(), options));

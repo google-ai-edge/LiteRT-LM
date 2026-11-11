@@ -1052,12 +1052,14 @@ TEST_F(DrafterContextTest, CreateRejectsKVCacheShapeMismatch) {
 // and optional `input_tokens` [1] to `mask_output_name` [1, 1, 1, N]). Each
 // signature casts its scalar int32 position/step input to float32 and adds a
 // zero constant of the output shape so the output buffer is filled with the
-// scalar input value.
+// scalar input value. With `with_build_stamp` the model carries a
+// "LiteRtStamp" metadata entry, as models compiled ahead of time for an NPU do.
 std::vector<uint8_t> BuildMtpAuxModelBuffer(
     const std::vector<std::pair<std::string, int32_t>>& mask_signatures,
     bool with_input_tokens = true,
     absl::string_view rope_output_name = "activations",
-    absl::string_view mask_output_name = "mask_local") {
+    absl::string_view mask_output_name = "mask_local",
+    bool with_build_stamp = false) {
   flatbuffers::FlatBufferBuilder builder;
   auto cast_opcode =
       tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_CAST);
@@ -1150,13 +1152,34 @@ std::vector<uint8_t> BuildMtpAuxModelBuffer(
         builder.CreateString(mask_signatures[i].first), subgraph_index));
   }
 
+  using MetadataVector =
+      flatbuffers::Vector<flatbuffers::Offset<tflite::Metadata>>;
+  flatbuffers::Offset<MetadataVector> metadata = 0;
+  if (with_build_stamp) {
+    // LiteRT only recognizes a stamp of exactly two 125-byte strings.
+    const std::vector<uint8_t> stamp_bytes(2 * 125, 0);
+    buffers.push_back(
+        tflite::CreateBuffer(builder, builder.CreateVector(stamp_bytes)));
+    metadata = builder.CreateVector(
+        {tflite::CreateMetadata(builder, builder.CreateString("LiteRtStamp"),
+                                static_cast<uint32_t>(buffers.size() - 1))});
+  }
   auto model = tflite::CreateModel(
       builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
       builder.CreateString("mtp_aux_model"), builder.CreateVector(buffers),
-      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+      /*metadata_buffer=*/0, metadata, builder.CreateVector(sig_defs));
   tflite::FinishModelBuffer(builder, model);
   return std::vector<uint8_t>(builder.GetBufferPointer(),
                               builder.GetBufferPointer() + builder.GetSize());
+}
+
+// Same as `BuildMtpAuxModelBuffer` with the default names, for a model that
+// carries the build stamp of a model compiled ahead of time.
+std::vector<uint8_t> BuildStampedMtpAuxModelBuffer(
+    const std::vector<std::pair<std::string, int32_t>>& mask_signatures) {
+  return BuildMtpAuxModelBuffer(mask_signatures, /*with_input_tokens=*/true,
+                                "activations", "mask_local",
+                                /*with_build_stamp=*/true);
 }
 
 TEST_F(DrafterContextTest,
@@ -1339,6 +1362,60 @@ TEST_F(DrafterContextTest,
                HasSubstr("produces \"mask_local\" with shape [1, 1, 1, 640] "
                          "but MTP drafter signature \"mtp_drafter_cache_1024\" "
                          "expects shape [1, 1, 1, 1024]")));
+}
+
+TEST_F(DrafterContextTest, IsPrecompiledForNpuDetectsBuildStamp) {
+  ::litert::Model plain_model =
+      LoadModel(BuildMtpAuxModelBuffer({{"mask", 640}}));
+  ::litert::Model stamped_model =
+      LoadModel(BuildStampedMtpAuxModelBuffer({{"mask", 640}}));
+
+  EXPECT_FALSE(IsPrecompiledForNpu(plain_model));
+  EXPECT_TRUE(IsPrecompiledForNpu(stamped_model));
+}
+
+TEST_F(DrafterContextTest, AuxiliaryOptionsRequestNpuOnlyWithBuildStamp) {
+  ::litert::Model plain_model =
+      LoadModel(BuildMtpAuxModelBuffer({{"mask", 640}}));
+  ::litert::Model stamped_model =
+      LoadModel(BuildStampedMtpAuxModelBuffer({{"mask", 640}}));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("dont_care_path"));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      LlmExecutorSettings::CreateDefault(std::move(model_assets)));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto plain_options,
+      CreateLiteRtNpuAuxiliaryOptions(plain_model, settings));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto stamped_options,
+      CreateLiteRtNpuAuxiliaryOptions(stamped_model, settings));
+
+  EXPECT_THAT(plain_options.GetHardwareAccelerators(),
+              ::testing::litert::IsOkAndHolds(
+                  static_cast<int>(kLiteRtHwAcceleratorCpu)));
+  EXPECT_THAT(stamped_options.GetHardwareAccelerators(),
+              ::testing::litert::IsOkAndHolds(kLiteRtHwAcceleratorNpu |
+                                              kLiteRtHwAcceleratorCpu));
+}
+
+TEST_F(DrafterContextTest, AuxiliaryContextCreatesModelWithoutStamp) {
+  ::litert::Model aux_model =
+      LoadModel(BuildMtpAuxModelBuffer({{"mask", 640}}));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("dont_care_path"));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      LlmExecutorSettings::CreateDefault(std::move(model_assets)));
+
+  ASSERT_OK_AND_ASSIGN(
+      NpuAuxiliaryContext context,
+      NpuAuxiliaryContext::Create(*env_, aux_model, settings));
+  EXPECT_TRUE(
+      context.npu_auxiliary_compiled_model.FindSignature("rope").HasValue());
+  EXPECT_TRUE(
+      context.npu_auxiliary_compiled_model.FindSignature("mask").HasValue());
 }
 
 TEST_F(ExecutorUtilsTest, ResolveGraphLayout_Gemma4_12bAttentionMaskTypes) {
