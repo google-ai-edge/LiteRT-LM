@@ -61,6 +61,30 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+
+// Maps `buffer_handle` for reading, awaiting the `mapAsync` promise directly
+// (via JSPI/Asyncify), and copies the first `copy_size` bytes into `dst`.
+// Returns 0 on success, 1 if mapping failed.
+//
+// Awaiting the promise resumes the caller as soon as the readback completes.
+// Polling with `emscripten_sleep()` instead goes through nested `setTimeout()`
+// calls, which browsers clamp to >= 4 ms, adding up to ~4 ms per decode step.
+// clang-format off
+EM_ASYNC_JS(int, ReadMappableBufferJs,
+            (WGPUBuffer buffer_handle, double map_size, void* dst,
+             double copy_size), {
+  const buffer = WebGPU.getJsObject(buffer_handle);
+  try {
+    await buffer.mapAsync(GPUMapMode.READ, 0, map_size);
+  } catch (e) {
+    return 1;
+  }
+  HEAPU8.set(new Uint8Array(buffer.getMappedRange(0, map_size), 0, copy_size),
+             dst >>> 0);
+  buffer.unmap();
+  return 0;
+});
+// clang-format on
 #endif  // __EMSCRIPTEN__
 
 #define SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(expr, error_msg) \
@@ -482,7 +506,17 @@ absl::Status TopKWebGpuSampler::UpdateConfig(
 
 absl::Status TopKWebGpuSampler::DownloadSampledIds(void* dst) {
   size_t data_size = GetMappableBufferSize(tokens_ids_->GetDescriptor());
+  size_t logical_size =
+      kv_cache_batch_size_ * config_.sequence_size * sizeof(int32_t);
 
+#ifdef __EMSCRIPTEN__
+  if (ReadMappableBufferJs(tokens_ids_mappable_buffer_->Get(),
+                           static_cast<double>(data_size), dst,
+                           static_cast<double>(logical_size)) != 0) {
+    return absl::InternalError("MapAsync failed while reading sampled ids.");
+  }
+  return absl::OkStatus();
+#else
   wgpu::MapAsyncStatus status;
   std::string message;
   wgpu::Future future = tokens_ids_mappable_buffer_->MapAsync(
@@ -491,31 +525,8 @@ absl::Status TopKWebGpuSampler::DownloadSampledIds(void* dst) {
         status = s;
         message = std::string(msg);
       });
-
-#ifdef __EMSCRIPTEN__
-  // Keep busy-waiting for Emscripten as it needs to yield to JS to process the
-  // result of the `.mapAsync` call and return it to us.
-  // This likely won't be necessary if running in a pthread.
-  wgpu::FutureWaitInfo wait_info = {};
-  wait_info.future = future;
-  wgpu::WaitStatus wait_status = wgpu::WaitStatus::TimedOut;
-  absl::Time timeout = absl::Now() + absl::Seconds(120);
-  while (wait_status == wgpu::WaitStatus::TimedOut) {
-    ml_drift::webgpu::Instance::ProcessEvents();
-    wait_status = ml_drift::webgpu::Instance::Get().WaitAny(1u, &wait_info, 0);
-    if (absl::Now() > timeout) {
-      return absl::AbortedError(
-          "The timeout was reached while reading back data.");
-    }
-    if (wait_status == wgpu::WaitStatus::TimedOut) {
-      emscripten_sleep(1);
-    }
-  }
-  ABSL_RETURN_IF_ERROR(ml_drift::webgpu::VerifyWaitStatus(wait_status));
-#else
   ABSL_RETURN_IF_ERROR(ml_drift::webgpu::Instance::Wait(env_->device(), future,
                                                         absl::Seconds(120)));
-#endif
 
   if (status != wgpu::MapAsyncStatus::Success) {
     return absl::InternalError(
@@ -529,11 +540,10 @@ absl::Status TopKWebGpuSampler::DownloadSampledIds(void* dst) {
     return absl::InternalError("GetConstMappedRange failed.");
   }
 
-  size_t logical_size =
-      kv_cache_batch_size_ * config_.sequence_size * sizeof(int32_t);
   // No need to conversion since the data is the vector of int32_t.
   std::memcpy(dst, ptr, logical_size);
   return absl::OkStatus();
+#endif  // __EMSCRIPTEN__
 }
 
 bool TopKWebGpuSampler::CanHandleInput() const { return true; }
