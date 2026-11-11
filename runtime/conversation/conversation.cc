@@ -14,6 +14,8 @@
 
 #include "runtime/conversation/conversation.h"
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -678,6 +680,67 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
   return conversation;
 }
 
+namespace {
+
+class ScopedAsyncTask {
+ public:
+  explicit ScopedAsyncTask(std::shared_ptr<std::atomic<int>> active_tasks)
+      : active_tasks_(std::move(active_tasks)) {
+    active_tasks_->fetch_add(1, std::memory_order_relaxed);
+  }
+  ScopedAsyncTask(const ScopedAsyncTask&) = delete;
+  ScopedAsyncTask& operator=(const ScopedAsyncTask&) = delete;
+  ScopedAsyncTask(ScopedAsyncTask&& other) noexcept
+      : active_tasks_(std::move(other.active_tasks_)) {}
+  ScopedAsyncTask& operator=(ScopedAsyncTask&& other) noexcept {
+    if (this != &other) {
+      Complete();
+      active_tasks_ = std::move(other.active_tasks_);
+    }
+    return *this;
+  }
+  ~ScopedAsyncTask() { Complete(); }
+
+  void Complete() {
+    if (active_tasks_ != nullptr) {
+      active_tasks_->fetch_sub(1, std::memory_order_acq_rel);
+      active_tasks_ = nullptr;
+    }
+  }
+
+ private:
+  std::shared_ptr<std::atomic<int>> active_tasks_;
+};
+
+}  // namespace
+
+Conversation::~Conversation() {
+  shutting_down_.store(true, std::memory_order_release);
+  cancel_generation_.fetch_add(1, std::memory_order_acq_rel);
+  if (session_ != nullptr) {
+    if (active_tasks_->load(std::memory_order_acquire) > 0) {
+      session_->CancelProcess();
+      session_->WaitUntilDone().IgnoreError();
+    }
+    session_.reset();
+  }
+}
+
+absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+Conversation::WrapSessionCallback(
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+  return [callback = std::move(callback),
+          task_guard = ScopedAsyncTask(active_tasks_)](
+             absl::StatusOr<Responses> responses) mutable {
+    const bool is_end =
+        !responses.ok() || IsTaskEndState(responses->GetTaskState());
+    callback(std::move(responses));
+    if (is_end) {
+      task_guard.Complete();
+    }
+  };
+}
+
 void Conversation::AddTaskController(
     const std::optional<std::string>& task_group_id,
     std::unique_ptr<Engine::Session::TaskController> task_controller) {
@@ -839,43 +902,48 @@ absl::Status Conversation::SendMessageAsync(
         auto task_controller,
         session_->RunPrefillAsync(
             session_inputs,
-            [callback = std::move(user_callback), remove_turn_from_history](
-                absl::StatusOr<Responses> responses) mutable {
-              if (IsContextWindowFull(responses)) {
-                // The input was not prefilled, so it is not part of the
-                // conversation.
-                remove_turn_from_history();
-                callback(ContextWindowFullError(responses));
-                return;
-              }
-              if (!responses.ok()) {
-                auto status = IgnoreEmptyInputError(responses.status());
-                if (!status.ok()) {
-                  if (absl::IsCancelled(status)) {
+            WrapSessionCallback(
+                [callback = std::move(user_callback), remove_turn_from_history](
+                    absl::StatusOr<Responses> responses) mutable {
+                  if (IsContextWindowFull(responses)) {
+                    // The input was not prefilled, so it is not part of the
+                    // conversation.
                     remove_turn_from_history();
+                    callback(ContextWindowFullError(responses));
+                    return;
                   }
-                  callback(status);
-                } else {
-                  callback(Message());
-                }
-                return;
-              }
-              if (responses->GetTaskState() == TaskState::kDone) {
-                callback(Message());
-              } else if (responses->GetTaskState() == TaskState::kCancelled ||
-                         responses->GetTaskState() ==
-                             TaskState::kDependentTaskCancelled) {
-                remove_turn_from_history();
-                callback(absl::CancelledError("Task cancelled"));
-              } else if (IsTaskEndState(responses->GetTaskState())) {
-                callback(absl::InternalError(absl::StrCat(
-                    "Prefill failed with task state: ",
-                    TaskStateToString(responses->GetTaskState()))));
-              }
-            }));
+                  if (!responses.ok()) {
+                    auto status = IgnoreEmptyInputError(responses.status());
+                    if (!status.ok()) {
+                      if (absl::IsCancelled(status)) {
+                        remove_turn_from_history();
+                      }
+                      callback(status);
+                    } else {
+                      callback(Message());
+                    }
+                    return;
+                  }
+                  if (responses->GetTaskState() == TaskState::kDone) {
+                    callback(Message());
+                  } else if (responses->GetTaskState() ==
+                                 TaskState::kCancelled ||
+                             responses->GetTaskState() ==
+                                 TaskState::kDependentTaskCancelled) {
+                    remove_turn_from_history();
+                    callback(absl::CancelledError("Task cancelled"));
+                  } else if (IsTaskEndState(responses->GetTaskState())) {
+                    callback(absl::InternalError(absl::StrCat(
+                        "Prefill failed with task state: ",
+                        TaskStateToString(responses->GetTaskState()))));
+                  }
+                })));
     AddTaskController(optional_args.task_group_id, std::move(task_controller));
     return absl::OkStatus();
   }
+
+  const uint64_t cancel_generation =
+      cancel_generation_.load(std::memory_order_acquire);
 
   ABSL_ASSIGN_OR_RETURN(
       auto decode_config,
@@ -918,6 +986,9 @@ absl::Status Conversation::SendMessageAsync(
       [this, shared_user_callback, suppress_completion,
        optional_args =
            std::move(optional_args)](const Message& complete_message) {
+        if (shutting_down_.load(std::memory_order_acquire)) {
+          return;
+        }
         absl::StatusOr<std::vector<InputData>> refill_session_inputs;
         {
           absl::MutexLock lock(history_mutex_);
@@ -943,13 +1014,14 @@ absl::Status Conversation::SendMessageAsync(
         }
 
         auto refill_task_controller = session_->RunPrefillAsync(
-            *refill_session_inputs, [](absl::StatusOr<Responses> responses) {
+            *refill_session_inputs,
+            WrapSessionCallback([](absl::StatusOr<Responses> responses) {
               if (!responses.ok()) {
                 ABSL_LOG(ERROR)
                     << "Failed to refill KV cache after channel filtering: "
                     << responses.status();
               }
-            });
+            }));
         if (refill_task_controller.ok()) {
           AddTaskController(optional_args.task_group_id,
                             std::move(*refill_task_controller));
@@ -971,9 +1043,11 @@ absl::Status Conversation::SendMessageAsync(
 
   if (session_inputs.empty()) {
     auto decode_task_controller = session_->RunDecodeAsync(
-        [callback = internal_callback](absl::StatusOr<Responses> responses) {
-          (*callback)(responses);
-        },
+        WrapSessionCallback(
+            [callback = internal_callback](
+                absl::StatusOr<Responses> responses) {
+              (*callback)(responses);
+            }),
         decode_config);
     if (decode_task_controller.ok()) {
       AddTaskController(task_group_id, std::move(*decode_task_controller));
@@ -987,70 +1061,80 @@ absl::Status Conversation::SendMessageAsync(
       auto prefill_task_controller,
       session_->RunPrefillAsync(
           session_inputs,
-          [this, callback = internal_callback, decode_config,
-           open_channel_name = std::move(open_channel_name), task_group_id,
-           remove_turn_from_history = std::move(remove_turn_from_history)](
-              absl::StatusOr<Responses> responses) mutable {
-            // First, check if prefill returned an error. Ignore errors
-            // caused by empty input, as this is a valid case for triggering
-            // decode only.
-            auto status = IgnoreEmptyInputError(responses.status());
-            if (IsContextWindowFull(responses)) {
-              // The input was not prefilled, so it is not part of the
-              // conversation.
-              remove_turn_from_history();
-              (*callback)(ContextWindowFullError(responses));
-            } else if (!status.ok()) {
-              // Scenario 1: Prefill failed with an unexpected error.
-              // If prefill failed, invoke the callback with the error
-              // status and do not proceed to decode.
-              (*callback)(responses.status());
-            } else if (responses.ok() &&
-                       IsTaskEndState(responses->GetTaskState()) &&
-                       responses->GetTaskState() != TaskState::kDone) {
-              (*callback)(responses);
-            } else if (IsEmptyInputError(responses.status()) ||
-                       (responses.ok() &&
-                        responses->GetTaskState() == TaskState::kDone)) {
-              // Scenario 2: Prefill was skipped due to empty input, or
-              // prefill completed successfully. In either case, we can now
-              // start the decode process.
-              if (config_.filter_channel_content_from_kv_cache() &&
-                  !open_channel_name.has_value()) {
-                auto save_status =
-                    config_.enable_rewinding()
-                        ? session_->SaveCheckpoint(kChannelContentCheckpoint)
-                        : session_->SaveContext(kChannelContentCheckpoint);
-                if (!save_status.ok()) {
-                  (*callback)(save_status);
-                  return;
-                }
-                absl::MutexLock lock(history_mutex_);
-                checkpoint_message_index_ = history_.size();
-                checkpoint_after_user_prefill_ = true;
-              }
+          WrapSessionCallback(
+              [this, callback = internal_callback, decode_config,
+               open_channel_name = std::move(open_channel_name), task_group_id,
+               cancel_generation,
+               remove_turn_from_history = std::move(remove_turn_from_history)](
+                  absl::StatusOr<Responses> responses) mutable {
+                // First, check if prefill returned an error. Ignore errors
+                // caused by empty input, as this is a valid case for triggering
+                // decode only.
+                auto status = IgnoreEmptyInputError(responses.status());
+                if (IsContextWindowFull(responses)) {
+                  // The input was not prefilled, so it is not part of the
+                  // conversation.
+                  remove_turn_from_history();
+                  (*callback)(ContextWindowFullError(responses));
+                } else if (!status.ok()) {
+                  // Scenario 1: Prefill failed with an unexpected error.
+                  // If prefill failed, invoke the callback with the error
+                  // status and do not proceed to decode.
+                  (*callback)(responses.status());
+                } else if (responses.ok() &&
+                           IsTaskEndState(responses->GetTaskState()) &&
+                           responses->GetTaskState() != TaskState::kDone) {
+                  (*callback)(responses);
+                } else if (IsEmptyInputError(responses.status()) ||
+                           (responses.ok() &&
+                            responses->GetTaskState() == TaskState::kDone)) {
+                  if (shutting_down_.load(std::memory_order_acquire) ||
+                      cancel_generation_.load(std::memory_order_acquire) !=
+                          cancel_generation) {
+                    (*callback)(Responses(TaskState::kCancelled));
+                    return;
+                  }
+                  // Scenario 2: Prefill was skipped due to empty input, or
+                  // prefill completed successfully. In either case, we can now
+                  // start the decode process.
+                  if (config_.filter_channel_content_from_kv_cache() &&
+                      !open_channel_name.has_value()) {
+                    auto save_status =
+                        config_.enable_rewinding()
+                            ? session_->SaveCheckpoint(
+                                  kChannelContentCheckpoint)
+                            : session_->SaveContext(kChannelContentCheckpoint);
+                    if (!save_status.ok()) {
+                      (*callback)(save_status);
+                      return;
+                    }
+                    absl::MutexLock lock(history_mutex_);
+                    checkpoint_message_index_ = history_.size();
+                    checkpoint_after_user_prefill_ = true;
+                  }
 
-              // Run decode.
-              auto decode_task_controller = session_->RunDecodeAsync(
-                  [callback](absl::StatusOr<Responses> responses) {
-                    (*callback)(responses);
-                  },
-                  decode_config);
-              // If RunDecodeAsync returns a task controller, it means the
-              // decode task was scheduled successfully. Add the controller
-              // to our map if a task_group_id was provided, so it can be
-              // cancelled later.
-              if (decode_task_controller.ok()) {
-                AddTaskController(task_group_id,
-                                  std::move(*decode_task_controller));
-              } else {
-                // If !decode_task_controller.ok(), it means
-                // RunDecodeAsync failed to schedule. Invoke the callback
-                // with the error status.
-                (*callback)(decode_task_controller.status());
-              }
-            }
-          }));
+                  // Run decode.
+                  auto decode_task_controller = session_->RunDecodeAsync(
+                      WrapSessionCallback(
+                          [callback](absl::StatusOr<Responses> responses) {
+                            (*callback)(responses);
+                          }),
+                      decode_config);
+                  // If RunDecodeAsync returns a task controller, it means the
+                  // decode task was scheduled successfully. Add the controller
+                  // to our map if a task_group_id was provided, so it can be
+                  // cancelled later.
+                  if (decode_task_controller.ok()) {
+                    AddTaskController(task_group_id,
+                                      std::move(*decode_task_controller));
+                  } else {
+                    // If !decode_task_controller.ok(), it means
+                    // RunDecodeAsync failed to schedule. Invoke the callback
+                    // with the error status.
+                    (*callback)(decode_task_controller.status());
+                  }
+                }
+              })));
   AddTaskController(task_group_id, std::move(prefill_task_controller));
 
   return absl::OkStatus();
@@ -1140,7 +1224,10 @@ absl::StatusOr<BenchmarkInfo*> Conversation::GetMutableBenchmarkInfo() {
   return session_->GetMutableBenchmarkInfo();
 }
 
-void Conversation::CancelProcess() { session_->CancelProcess(); }
+void Conversation::CancelProcess() {
+  cancel_generation_.fetch_add(1, std::memory_order_acq_rel);
+  session_->CancelProcess();
+}
 
 void Conversation::CancelGroup(absl::string_view task_group_id) {
   absl::MutexLock lock(task_controllers_mutex_);
