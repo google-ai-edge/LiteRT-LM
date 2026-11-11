@@ -22,16 +22,26 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/io_types.h"
+#include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_resources.h"
+#include "omni/base/model_utils.h"
 #include "omni/multi_staged_session.h"
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/any2any_session_config.pb.h"
 
 namespace litert::omni::any2any {
+
+// Creates a `LiteRtLmRunner` wrapping the `TF_LITE_LLM_BACKBONE` and
+// `TF_LITE_TEXT_EMBEDDER` sections of an Any-to-Any `.litertlm` bundle.
+absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateBackboneLmRunner(
+    Environment& env, const ModelOptions& options,
+    std::shared_ptr<lm::ModelResources> lm_resources);
 
 // Base `OmniSessionFactory` implementation for Any-to-Any multimodal models.
 class Any2AnySessionFactory : public OmniSessionFactory {
