@@ -126,4 +126,44 @@ describe('loadModelFromUrl', () => {
     expect(settings.customModels).toEqual([]);
     expect(modelLoader.loadModelWeights).not.toHaveBeenCalled();
   });
+
+  it('passes cpu backend to addRemoteModel when textBackend is cpu and preserves cpu for standard .litertlm',
+     async () => {
+       settings.textBackend = 'cpu';
+
+       loadModelFromUrl('?model=litert-community/SmolLM3-3B', dependencies);
+       await flush();
+
+       expect(modelLoader.addRemoteModel)
+           .toHaveBeenCalledOnceWith('hf://litert-community/SmolLM3-3B', 'cpu');
+       expect(settings.textBackend).toBe('cpu');
+       expect(modelLoader.loadModelWeights)
+           .toHaveBeenCalledOnceWith(
+               jasmine.objectContaining({textBackend: 'cpu'}),
+               jasmine.any(Function));
+     });
+
+  it('coerces textBackend back to gpu when ?model= resolves to a -gpu.litertlm package',
+     async () => {
+       settings.textBackend = 'cpu';
+       const gpuOnlyModel: CustomModel = {
+         name: 'Gemma 4 E2B',
+         filename: 'gemma-4-E2B-it-gpu.litertlm',
+         path: 'hf://litert-community/gemma-4-E2B-it-litert-lm',
+         size: '2.3 GB',
+       };
+       modelLoader.addRemoteModel.and.resolveTo(gpuOnlyModel);
+
+       loadModelFromUrl(
+           '?model=litert-community/gemma-4-E2B-it-litert-lm', dependencies);
+       await flush();
+
+       expect(modelLoader.addRemoteModel).toHaveBeenCalledOnceWith(
+           'hf://litert-community/gemma-4-E2B-it-litert-lm', 'cpu');
+       expect(settings.textBackend).toBe('gpu');
+       expect(modelLoader.loadModelWeights)
+           .toHaveBeenCalledOnceWith(
+               jasmine.objectContaining({textBackend: 'gpu'}),
+               jasmine.any(Function));
+     });
 });

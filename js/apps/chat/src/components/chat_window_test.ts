@@ -93,6 +93,7 @@ describe('litert-chat-window', () => {
         'https://example.com/path/to/model_file.litertlm';
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
+    mockSettings.textBackend = 'gpu';
 
     mockLocalDirService = jasmine.createSpyObj('LocalDirectoryService', [
       'mountDirectory',
@@ -789,7 +790,7 @@ describe('litert-chat-window', () => {
 
            await submit(form, 'litert-community/SmolLM3-3B');
            expect(mockModelLoader.addRemoteModel)
-               .toHaveBeenCalledOnceWith('litert-community/SmolLM3-3B');
+               .toHaveBeenCalledOnceWith('litert-community/SmolLM3-3B', 'gpu');
            expect(mockSettings.customModels).toEqual([remoteModel]);
            expect(mockSettings.selectedModelPath).toBe(remoteModel.path);
            expect(

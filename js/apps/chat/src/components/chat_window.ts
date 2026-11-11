@@ -1290,8 +1290,14 @@ export class LitertChatWindow extends LitElement {
                     type="button"
                     class="btn-composer-model ${
                         this.isModelMenuOpen || this.isAddingModel ? 'open' : ''}"
-                    title="Active model (${modelSummary.name}) — click to switch model"
-                    aria-label="Active model: ${modelSummary.name}, status: ${modelSummary.stateLabel}. Click to switch model"
+                    title="Active model (${modelSummary.name})${
+                        modelSummary.backendOverride ?
+                            ` · ${modelSummary.backendOverride.detail}` :
+                            ''} — click to switch model"
+                    aria-label="Active model: ${modelSummary.name}, status: ${modelSummary.stateLabel}${
+                        modelSummary.backendOverride ?
+                            `, ${modelSummary.backendOverride.detail}` :
+                            ''}. Click to switch model"
                   >
                     <span class="model-pill-dot ${modelSummary.dotClass}"></span>
                     <span class="model-pill-name">${

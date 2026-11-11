@@ -76,6 +76,12 @@ describe('litert-lm-chat-app', () => {
     mockSettings.enableSpeculativeDecoding = false;
     mockSettings.systemPrompt = '';
     mockSettings.disabledTools = [];
+    mockSettings.textBackend = 'gpu';
+    mockSettings.visionBackend = 'gpu';
+    mockSettings.audioBackend = 'gpu';
+    mockSettings.textPrecision = 'default';
+    mockSettings.visionPrecision = 'default';
+    mockSettings.audioPrecision = 'default';
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 
@@ -403,13 +409,61 @@ describe('litert-lm-chat-app', () => {
        expect(element.shadowRoot!.querySelector('header h1')!.textContent!.trim())
            .toBe('LiteRT-LM.js Chat');
 
-       mockSettings.selectedModelPath = MODELS[0]!.path;
-       element.requestUpdate();
        const chatWindow =
            element.shadowRoot!.querySelector('litert-chat-window')!;
+       const sidebar =
+           element.shadowRoot!.querySelector('litert-sidebar')!;
+       await chatWindow.updateComplete;
+       await sidebar.updateComplete;
+       expect(sidebar.shadowRoot!.querySelector('#runtime-backend-badge'))
+           .toBeNull();
+       expect(
+           chatWindow.shadowRoot!.querySelector('#composer-model-backend-note'))
+           .toBeNull();
+
+       mockSettings.visionBackend = 'cpu';
        chatWindow.requestUpdate();
+       sidebar.requestUpdate();
+       await chatWindow.updateComplete;
+       await sidebar.updateComplete;
+       expect(
+           sidebar.shadowRoot!.querySelector('#runtime-backend-badge')!
+               .textContent!.trim())
+           .toBe('WebGPU · CPU');
+       expect(
+           chatWindow.shadowRoot!.querySelector('#composer-model-backend-note')!
+               .textContent)
+           .toContain('WebGPU · CPU');
+       expect(
+           chatWindow.shadowRoot!
+               .querySelector<HTMLButtonElement>('#btn-composer-model')!
+               .getAttribute('title'))
+           .toContain('WebGPU · CPU');
+
+       mockSettings.selectedModelPath =
+           'https://example.com/gemma-3-1b-it.litertlm';
+       mockSettings.textBackend = 'cpu';
+       mockSettings.audioBackend = 'cpu';
+       chatWindow.requestUpdate();
+       sidebar.requestUpdate();
+       await chatWindow.updateComplete;
+       await sidebar.updateComplete;
+       expect(
+           sidebar.shadowRoot!.querySelector('#runtime-backend-badge')!
+               .textContent!.trim())
+           .toBe('CPU');
+
+       // Switching back to a -gpu.litertlm model treats Text as GPU -> mixed
+       mockSettings.selectedModelPath = MODELS[0]!.path;
+       mockSettings.visionBackend = 'gpu';
+       mockSettings.audioBackend = 'gpu';
+       mockSettings.textBackend = 'gpu';
+       element.requestUpdate();
+       chatWindow.requestUpdate();
+       sidebar.requestUpdate();
        await element.updateComplete;
        await chatWindow.updateComplete;
+       await sidebar.updateComplete;
 
        const composerDropdown = chatWindow.shadowRoot!.querySelector(
            '#composer-model-dropdown') as CustomDropdown;

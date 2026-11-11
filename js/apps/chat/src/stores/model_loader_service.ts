@@ -14,13 +14,25 @@
  * limitations under the License.
  */
 
-import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
 import {parseModelReference} from './model_reference.js';
-import {CustomModel, LEGACY_MODEL_PATHS, ModelSettings} from './settings_store.js';
+import {CustomModel, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, ModalityBackend, ModalityConfig, ModelSettings} from './settings_store.js';
+
+function toBackend({backend}: ModalityConfig): Backend {
+  return backend === 'cpu' ? Backend.CPU : Backend.GPU;
+}
+
+/** Returns the activation precision override, which only applies on GPU. */
+function toActivationDataType({backend, precision}: ModalityConfig):
+    ActivationDataType|undefined {
+  if (backend === 'cpu' || precision === 'default') return undefined;
+  return precision === 'fp32' ? ActivationDataType.FLOAT32 :
+                                ActivationDataType.FLOAT16;
+}
 
 const SUPPRESSED_WARNING_PATTERNS = [
   /mel_filterbank\.cc:.*Missing \d+ bands\s+starting at \d+ in mel-frequency design\./,
@@ -139,7 +151,7 @@ export class ModelLoaderService {
       // hf:// models are cached under the URL they were loaded from.
       const hfModels = new Map(
           Object.entries(this.getHfModelUrls())
-              .map(([uri, url]) => [url, uri]));
+              .map(([uri, url]) => [url, uri.replace(/#backend=cpu$/, '')]));
 
       for (const request of keys) {
         if (LEGACY_MODEL_PATHS.has(request.url)) {
@@ -151,12 +163,10 @@ export class ModelLoaderService {
         if (response) {
           const key = hfModels.get(request.url) ?? request.url;
           const contentLength = response.headers.get('content-length');
-          if (contentLength) {
-            newCachedModels.set(key, Number(contentLength));
-          } else {
-            const blob = await response.blob();
-            newCachedModels.set(key, blob.size);
-          }
+          const size = contentLength ? Number(contentLength) :
+                                       (await response.blob()).size;
+          // A model's GPU and CPU variants share a key, so add up their sizes.
+          newCachedModels.set(key, (newCachedModels.get(key) ?? 0) + size);
         }
       }
 
@@ -176,7 +186,9 @@ export class ModelLoaderService {
         this.loadedSettings.contextLength !== settings.contextLength ||
         topKChanged ||
         this.loadedSettings.enableSpeculativeDecoding !==
-            settings.enableSpeculativeDecoding;
+            settings.enableSpeculativeDecoding ||
+        EXPERIMENTAL_SETTING_KEYS.some(
+            key => this.loadedSettings![key] !== settings[key]);
   }
 
   async deleteModelFromCache(modelPath: string): Promise<boolean> {
@@ -200,7 +212,14 @@ export class ModelLoaderService {
 
     try {
       const cache = await window.caches.open('litertlm-models');
-      const deleted = await cache.delete(this.getCacheUrl(modelPath));
+      const gpuUrl = this.getCacheUrl(modelPath, 'gpu');
+      const cpuHfUrl = modelPath.startsWith('hf://') ?
+          this.getHfModelUrls()[this.getHfStorageKey(modelPath, 'cpu')] :
+          undefined;
+      const deletedGpu = await cache.delete(gpuUrl);
+      const deletedCpu =
+          cpuHfUrl && cpuHfUrl !== gpuUrl ? await cache.delete(cpuHfUrl) : false;
+      const deleted = deletedGpu || deletedCpu;
       if (deleted) {
         this.updateStatus('Model cache removed successfully.');
         await this.updateCacheSize();
@@ -274,6 +293,9 @@ export class ModelLoaderService {
     const modelPath = settings.selectedModelPath;
     const modelFilename = modelPath.split('/').pop() || modelPath;
     const modelKey = getModelKey(modelPath);
+    const modalities = getModalityConfigs(settings);
+    const textBackend = modalities.text.backend;
+    const useCpuText = textBackend === 'cpu';
 
     this.isModelLoading = true;
     this.isDownloadAborted = false;
@@ -316,7 +338,7 @@ export class ModelLoaderService {
           throw new Error(
               'Local model file not found in cache. Please re-upload the file.');
         } else {
-          const modelUrl = await this.resolveModelUrl(modelPath);
+          const modelUrl = await this.resolveModelUrl(modelPath, textBackend);
           this.downloadProgresses.set(modelKey, 0);
           this.downloadSpeeds.set(modelKey, '0 MB / 0 MB');
           this.updateCallback();
@@ -351,11 +373,12 @@ export class ModelLoaderService {
         }
       } else {
         const cache = await window.caches.open('litertlm-models');
-        const previousUrl = this.getHfModelUrls()[getModelKey(modelPath)];
-        const modelUrl = await this.resolveModelUrl(modelPath);
+        const hfStorageKey = this.getHfStorageKey(modelPath, textBackend);
+        const previousUrl = this.getHfModelUrls()[hfStorageKey];
+        const modelUrl = await this.resolveModelUrl(modelPath, textBackend);
         const cachedResponse = await cache.match(modelUrl);
         if (cachedResponse) {
-          this.setHfModelUrl(modelPath, modelUrl);
+          this.setHfModelUrl(modelPath, modelUrl, textBackend);
         }
 
         this.downloadProgresses.set(modelKey, 0);
@@ -431,7 +454,7 @@ export class ModelLoaderService {
 
           void cache.put(modelUrl, cacheResponse)
               .then(async () => {
-                this.setHfModelUrl(modelPath, modelUrl);
+                this.setHfModelUrl(modelPath, modelUrl, textBackend);
                 if (previousUrl && previousUrl !== modelUrl) {
                   // The hf:// model's previous file, which it was updated from.
                   await cache.delete(previousUrl);
@@ -456,7 +479,12 @@ export class ModelLoaderService {
 
       this.engine = await this.createEngine({
         model: modelInput,
-        mainExecutorSettings: {
+        // Without a backend, Engine.create() picks GPU or GPU_ARTISAN.
+        ...(useCpuText ? {backend: Backend.CPU} : {}),
+        activationDataType: toActivationDataType(modalities.text),
+        mainExecutorSettings: useCpuText ? {
+          maxNumTokens: settings.contextLength,
+        } : {
           maxNumTokens: settings.contextLength,
           // Artisan (GPU_ARTISAN) models reserve GPU memory for the embeddings
           // of this many images per conversation up front, and can't take
@@ -477,10 +505,12 @@ export class ModelLoaderService {
         },
         // Always enable image input. On web, only one vision signature is
         // loaded by default to fit in the wasm heap.
-        visionBackend: Backend.GPU,
+        visionBackend: toBackend(modalities.vision),
+        visionActivationDataType: toActivationDataType(modalities.vision),
         // Always enable audio input. On GPU, the audio encoder's weights are
         // released from the wasm heap after they are uploaded.
-        audioBackend: Backend.GPU,
+        audioBackend: toBackend(modalities.audio),
+        audioActivationDataType: toActivationDataType(modalities.audio),
         // The drafter can only be loaded when the engine is created, so this
         // can't be changed per session. ADAPTIVE only speculates while it's
         // faster than decoding normally. Models without a drafter can't use
@@ -576,7 +606,9 @@ export class ModelLoaderService {
    * now, so it keeps loading the same file (from the cache, once downloaded)
    * until it's added again.
    */
-  async addRemoteModel(text: string): Promise<CustomModel> {
+  async addRemoteModel(
+      text: string,
+      textBackend: ModalityBackend = 'gpu'): Promise<CustomModel> {
     try {
       const reference = parseModelReference(text);
       if (!reference) {
@@ -584,9 +616,7 @@ export class ModelLoaderService {
             `"${text.trim()}" isn't a URL or a Hugging Face repo (org/repo)`);
       }
       this.updateStatus(`Looking up ${reference}...`);
-      // Engines are created without a backend, so choose the file that
-      // Engine.create() would choose without one.
-      const {huggingFace} = await this.resolve(reference);
+      const {huggingFace} = await this.resolveFor(reference, textBackend);
       let model: CustomModel;
       if (huggingFace) {
         const {repo, path, source} = huggingFace;
@@ -626,16 +656,16 @@ export class ModelLoaderService {
    * offline, the URL it was last loaded from is used, so that it still loads
    * from the cache.
    */
-  private async resolveModelUrl(modelPath: string): Promise<string> {
+  private async resolveModelUrl(
+      modelPath: string, textBackend: ModalityBackend = 'gpu'): Promise<string> {
     if (!modelPath.startsWith('hf://')) return modelPath;
     this.updateStatus(`Looking up ${modelPath}...`);
+    const storageKey = this.getHfStorageKey(modelPath, textBackend);
     try {
-      // Engines are created without a backend, so choose the file that
-      // Engine.create() would choose without one.
-      const {huggingFace} = await this.resolve(modelPath);
+      const {huggingFace} = await this.resolveFor(modelPath, textBackend);
       if (huggingFace) return huggingFace.source.url;
     } catch (e) {
-      const lastUrl = this.getHfModelUrls()[getModelKey(modelPath)];
+      const lastUrl = this.getHfModelUrls()[storageKey];
       if (!lastUrl) throw e;
       console.warn(
           `[LiteRT-LM] Failed to look up ${modelPath}, loading ${lastUrl}:`, e);
@@ -644,9 +674,26 @@ export class ModelLoaderService {
     throw new Error(`${modelPath} isn't a Hugging Face model`);
   }
 
+  /** Resolves a model to the file that `textBackend` can run. */
+  private resolveFor(reference: string, textBackend: ModalityBackend) {
+    // Without a backend, resolveModel prefers -gpu.litertlm and falls back to
+    // .litertlm, which Engine.create() also does.
+    return textBackend === 'cpu' ?
+        this.resolve(reference, {backend: Backend.CPU}) :
+        this.resolve(reference);
+  }
+
+  private getHfStorageKey(
+      modelPath: string, textBackend: ModalityBackend = 'gpu'): string {
+    const base = getModelKey(modelPath);
+    return textBackend === 'cpu' ? `${base}#backend=cpu` : base;
+  }
+
   /** Returns the URL a model is cached under. */
-  private getCacheUrl(modelPath: string): string {
-    return this.getHfModelUrls()[getModelKey(modelPath)] ?? modelPath;
+  private getCacheUrl(
+      modelPath: string, textBackend: ModalityBackend = 'gpu'): string {
+    return this.getHfModelUrls()[this.getHfStorageKey(modelPath, textBackend)] ??
+        modelPath;
   }
 
   /** Returns the URLs that `hf://` models were last loaded from. */
@@ -662,10 +709,11 @@ export class ModelLoaderService {
     }
   }
 
-  private setHfModelUrl(modelPath: string, url: string) {
+  private setHfModelUrl(
+      modelPath: string, url: string, textBackend: ModalityBackend = 'gpu') {
     if (!modelPath.startsWith('hf://')) return;
     const urls = this.getHfModelUrls();
-    urls[getModelKey(modelPath)] = url;
+    urls[this.getHfStorageKey(modelPath, textBackend)] = url;
     window.localStorage.setItem(HF_MODEL_URLS_KEY, JSON.stringify(urls));
   }
 

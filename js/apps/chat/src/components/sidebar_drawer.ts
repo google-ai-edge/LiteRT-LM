@@ -19,7 +19,7 @@ import {customElement, property, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
-import {PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
+import {getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
 import {CHAT_TOOLS} from '../stores/tools.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
@@ -28,7 +28,7 @@ import {getDeepActiveElement, getFocusableElementsDeep} from './focus_util.js';
 /* tslint:disable:no-new-decorators */
 
 /** Collapsible settings panels available in the sidebar. */
-type SettingsPage = 'model-config'|'system-prompt';
+type SettingsPage = 'model-config'|'system-prompt'|'experimental';
 
 const RESET_CONFIRMATIONS: Record<SettingsGroup, {title: string; message: string}> = {
   modelConfig: {
@@ -40,6 +40,11 @@ const RESET_CONFIRMATIONS: Record<SettingsGroup, {title: string; message: string
     title: 'Reset system prompt & tools?',
     message:
         'Clear your custom System Prompt and re-enable all built-in tools?',
+  },
+  experimental: {
+    title: 'Reset experimental settings?',
+    message:
+        'Restore Text, Vision, and Audio backends and activation precision to their default values?',
   },
 };
 
@@ -273,6 +278,19 @@ export class LitertSidebar extends LitElement {
         color: var(--text-muted, #94a3b8);
         white-space: nowrap;
         min-width: 0;
+      }
+
+      .exp-badge {
+        font-size: 0.6rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 1px 5px;
+        border-radius: 999px;
+        color: var(--warning-text, var(--warning, #fbbf24));
+        background-color: color-mix(
+            in srgb, var(--warning, #fbbf24) 11%, transparent);
+        border: 1px solid color-mix(
+            in srgb, var(--warning, #fbbf24) 32%, transparent);
       }
 
       .btn-close-tray {
@@ -592,6 +610,65 @@ export class LitertSidebar extends LitElement {
         flex-shrink: 0;
       }
 
+      /* Experimental Backend & Precision Matrix */
+      .exp-matrix {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+
+      .exp-col-headers,
+      .exp-row {
+        display: grid;
+        grid-template-columns: 56px minmax(0, 0.78fr) minmax(0, 1.22fr);
+        gap: 7px;
+        align-items: center;
+      }
+
+      .exp-col-headers span {
+        font-size: 0.65rem;
+        font-weight: 600;
+        color: var(--text-muted, #94a3b8);
+        letter-spacing: 0.02em;
+      }
+
+      .exp-modality-label {
+        font-size: 0.74rem;
+        font-weight: 600;
+        color: var(--text, #f1f5f9);
+      }
+
+      .exp-row select {
+        width: 100%;
+        min-width: 0;
+        height: 30px;
+        padding: 4px 24px 4px 7px;
+        font-size: 0.72rem;
+        background-position: right 6px center;
+        background-size: 12px 12px;
+      }
+
+      .experimental-note {
+        height: 36px;
+        min-height: 36px;
+        max-height: 36px;
+        box-sizing: border-box;
+        padding: 5px 8px;
+        border-radius: 7px;
+        background-color: var(--bg-card, #171c26);
+        border: 1px solid var(--border, #262f40);
+        font-size: 0.66rem;
+        line-height: 1.32;
+        color: var(--text-muted, #94a3b8);
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+      }
+
+      .experimental-note .nowrap {
+        white-space: nowrap;
+      }
+
       /* Compact Runtime Status Footer */
       .sidebar-status-footer {
         flex-shrink: 0;
@@ -625,7 +702,29 @@ export class LitertSidebar extends LitElement {
       .status-header-left {
         display: inline-flex;
         align-items: center;
-        gap: 7px;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .runtime-backend-badge {
+        display: inline-flex;
+        align-items: center;
+        height: 16px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background-color: var(--bg-elevated, #1e2432);
+        border: 1px solid var(--border, #262f40);
+        color: var(--text-secondary, #cbd5e1);
+        font-family: inherit;
+        font-size: 0.62rem;
+        font-weight: 600;
+        line-height: 1;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      .status-header:has(.runtime-backend-badge) .load-time-prefix {
+        display: none;
       }
 
       .status-indicator {
@@ -728,6 +827,24 @@ export class LitertSidebar extends LitElement {
           height: 48px;
           min-height: 48px;
           padding: 6px 9px;
+        }
+
+        .exp-matrix {
+          gap: 4px;
+        }
+
+        .exp-row select {
+          height: 28px;
+          padding: 3px 22px 3px 7px;
+        }
+
+        .experimental-note {
+          height: 30px;
+          min-height: 30px;
+          max-height: 30px;
+          padding: 3px 8px;
+          font-size: 0.64rem;
+          line-height: 1.25;
         }
 
         .toggle-row {
@@ -896,10 +1013,10 @@ export class LitertSidebar extends LitElement {
 
   /**
    * Focuses the logical last bottom-dock control when Shift+Tabbing back into
-   * the sidebar while the bottommost settings disclosure (System Prompt) is open.
+   * the sidebar while the bottommost settings disclosure (Experimental) is open.
    */
   focusLastBottomElement(): boolean {
-    if (this.openSettingsPage !== 'system-prompt') return false;
+    if (this.openSettingsPage !== 'experimental') return false;
     if (this.renderRoot.querySelector('#btn-cancel-download')) return false;
     const tray = this.renderRoot.querySelector<HTMLElement>('.settings-tray');
     const trayFocusables = tray ? getFocusableElementsDeep(tray) : [];
@@ -948,11 +1065,14 @@ export class LitertSidebar extends LitElement {
         this.renderRoot.querySelector<HTMLElement>('#tab-model-config');
     const tabSys =
         this.renderRoot.querySelector<HTMLElement>('#tab-system-prompt');
+    const tabExp =
+        this.renderRoot.querySelector<HTMLElement>('#tab-experimental');
     const orderedPages: SettingsPage[] = [
       'model-config',
       'system-prompt',
+      'experimental',
     ];
-    const orderedTabs = [tabModel, tabSys];
+    const orderedTabs = [tabModel, tabSys, tabExp];
     const openIdx = orderedPages.indexOf(this.openSettingsPage);
     const ownerTab = openIdx >= 0 ? orderedTabs[openIdx] : null;
     const nextTab = openIdx >= 0 ? orderedTabs[openIdx + 1] : null;
@@ -997,7 +1117,7 @@ export class LitertSidebar extends LitElement {
           dismissSidebarBtn.focus();
           return;
         }
-        // Desktop: move focus synchronously to #tab-system-prompt without
+        // Desktop: move focus synchronously to #tab-experimental without
         // preventDefault so native Tab advances past the sidebar into <main>.
         ownerTab?.focus();
         return;
@@ -1328,6 +1448,128 @@ export class LitertSidebar extends LitElement {
     `;
   }
 
+  private getExperimentalBadge(): string {
+    const configs = getModalityConfigs(this.state.settings);
+    const overrides = MODALITIES.flatMap(modality => {
+      const {backend, precision} = configs[modality];
+      const prefix = modality[0].toUpperCase();
+      if (backend === 'cpu') return [`${prefix}:CPU`];
+      if (precision !== 'default') {
+        return [`${prefix}:${precision.toUpperCase()}`];
+      }
+      return [];
+    });
+    if (overrides.length === 0) {
+      return 'GPU · Default';
+    }
+    if (overrides.length <= 2) {
+      return overrides.join(' · ');
+    }
+    return `${overrides.slice(0, 2).join(' · ')} +${overrides.length - 2}`;
+  }
+
+  private renderExperimentalPanel() {
+    const settings = this.state.settings;
+    const gpuOnlyText =
+        isGpuOnlyTextModel(settings.selectedModelPath, settings);
+    const configs = getModalityConfigs(settings);
+
+    const textBackendReason =
+        'This model\'s text decoder is WebGPU-only (-gpu.litertlm). Load a standard .litertlm (<1.5 GB) to run Text on CPU.';
+    const cpuPrecisionReason =
+        'CPU backend always executes in FP32 / native graph precision.';
+
+    const noteContent = gpuOnlyText ? html`
+          <span>This model's text is <span class="nowrap">WebGPU-only</span>. CPU text needs a standard <span class="nowrap">.litertlm</span> (<span class="nowrap">&lt;1.5 GB</span>).</span>
+        ` : configs.text.backend === 'cpu' ? html`
+          <span>Text CPU runs in WASM (FP32) for standard <span class="nowrap">.litertlm</span> models (<span class="nowrap">&lt;1.5 GB</span>).</span>
+        ` : (configs.vision.backend === 'cpu' || configs.audio.backend === 'cpu') ? html`
+          <span>CPU modalities run in WASM (FP32). GPU defaults: Text FP16, Vision/Audio FP32.</span>
+        ` : html`
+          <span>Experimental overrides. GPU defaults: Text FP16, Vision &amp; Audio FP32.</span>
+        `;
+
+    const renderRow = (modality: Modality, label: string,
+                       defaultPrecision: string) => {
+      const {backend, precision} = configs[modality];
+      const backendLocked = modality === 'text' && gpuOnlyText;
+      const onCpu = backend === 'cpu';
+      return html`
+          <div class="exp-row">
+            <span class="exp-modality-label">${label}</span>
+            <select
+              id="${modality}-backend"
+              aria-label="${label} backend"
+              .value=${backend}
+              ?disabled=${backendLocked}
+              title=${backendLocked ? textBackendReason : nothing}
+              aria-describedby=${
+          modality === 'text' ? 'experimental-note' : nothing}
+              @change=${(e: Event) =>
+          this.handleSettingInput(e, `${modality}Backend`)}
+            >
+              <option value="gpu">GPU</option>
+              <option value="cpu">CPU</option>
+            </select>
+            <select
+              id="${modality}-precision"
+              aria-label="${label} precision"
+              .value=${onCpu ? 'fp32' : precision}
+              ?disabled=${onCpu}
+              title=${onCpu ? cpuPrecisionReason : nothing}
+              aria-describedby=${
+          modality === 'text' || onCpu ? 'experimental-note' : nothing}
+              @change=${(e: Event) =>
+          this.handleSettingInput(e, `${modality}Precision`)}
+            >
+              ${onCpu ? html`
+                <option value="fp32">FP32 (CPU)</option>
+              ` : html`
+                <option value="default">Default (${defaultPrecision})</option>
+                <option value="fp16">FP16</option>
+                <option value="fp32">FP32</option>
+              `}
+            </select>
+          </div>
+      `;
+    };
+
+    return html`
+      <div
+        id="panel-experimental"
+        class="tuning-body"
+        role="region"
+        aria-labelledby="tab-experimental"
+      >
+        <div class="exp-matrix">
+          <div class="exp-col-headers" aria-hidden="true">
+            <span>Modality</span>
+            <span>Backend</span>
+            <span>Precision</span>
+          </div>
+
+          ${renderRow('text', 'Text', 'FP16')}
+          ${renderRow('vision', 'Vision', 'FP32')}
+          ${renderRow('audio', 'Audio', 'FP32')}
+        </div>
+
+        <div id="experimental-note" class="experimental-note">
+          ${noteContent}
+        </div>
+
+        <div class="tuning-footer">
+          <span class="setting-hint">Reloads model on next message</span>
+          <button
+            id="btn-reset-experimental"
+            type="button"
+            class="btn btn-secondary btn-reset-sm"
+            @click=${() => this.handleResetSettings('experimental')}
+          >Reset</button>
+        </div>
+      </div>
+    `;
+  }
+
   override render() {
     const activeModelKey = getModelKey(this.state.settings.selectedModelPath);
     const sampler = this.state.settings.samplerType;
@@ -1350,6 +1592,7 @@ export class LitertSidebar extends LitElement {
 
     const isModelConfigOpen = this.openSettingsPage === 'model-config';
     const isSystemPromptOpen = this.openSettingsPage === 'system-prompt';
+    const isExperimentalOpen = this.openSettingsPage === 'experimental';
     const disclosures: Array<
         {page: SettingsPage, label: string, badge: string, icon: SVGTemplateResult}> = [
       {
@@ -1374,6 +1617,15 @@ export class LitertSidebar extends LitElement {
         icon: svg`
           <polyline points="4 17 10 11 4 5"></polyline>
           <line x1="12" y1="19" x2="20" y2="19"></line>`,
+      },
+      {
+        page: 'experimental',
+        label: 'Experimental',
+        badge: this.getExperimentalBadge(),
+        icon: svg`
+          <path d="M9 3h6"></path>
+          <path d="M10 3v6.5L4.8 18.2A2 2 0 0 0 6.5 21h11a2 2 0 0 0 1.7-2.8L14 9.5V3"></path>
+          <path d="M7.5 15h9"></path>`,
       },
     ];
 
@@ -1474,12 +1726,15 @@ export class LitertSidebar extends LitElement {
           </div>
         </div>
 
-        ${isModelConfigOpen || isSystemPromptOpen ? html`
+        ${isModelConfigOpen || isSystemPromptOpen || isExperimentalOpen ? html`
           <div class="settings-tray">
             <div class="settings-tray-header">
               <span class="settings-tray-title">${
                 isModelConfigOpen ? 'Model Configuration' :
-                                    'System Prompt & Tools'}</span>
+                isSystemPromptOpen ? 'System Prompt & Tools' : html`
+                  <span>Experimental</span>
+                  <span class="exp-badge">Preview</span>
+                `}</span>
               <button
                 type="button"
                 class="btn-close-tray"
@@ -1490,8 +1745,9 @@ export class LitertSidebar extends LitElement {
                 }}
               >✕</button>
             </div>
-            ${isModelConfigOpen ? this.renderModelConfigPanel(sampler) :
-                                  this.renderSystemPromptPanel()}
+            ${isModelConfigOpen  ? this.renderModelConfigPanel(sampler) :
+              isSystemPromptOpen ? this.renderSystemPromptPanel() :
+                                   this.renderExperimentalPanel()}
           </div>
         ` : nothing}
       </div>
@@ -1544,9 +1800,23 @@ export class LitertSidebar extends LitElement {
                                                               ''}"
                 ></span>
                 <span>Runtime</span>
+                ${(() => {
+                  const backendOverride =
+                      getNonDefaultBackendSummary(this.state.settings);
+                  return backendOverride ? html`
+                    <span
+                      id="runtime-backend-badge"
+                      class="runtime-backend-badge"
+                      title=${backendOverride.detail}
+                    >${backendOverride.label}</span>
+                  ` : nothing;
+                })()}
               </span>
               ${this.state.modelLoader.metricLoadTime !== '-' ? html`
-                <span class="load-time-pill">Loaded in <b>${this.state.modelLoader.metricLoadTime}</b></span>
+                <span
+                  class="load-time-pill"
+                  title="Loaded in ${this.state.modelLoader.metricLoadTime}"
+                ><span class="load-time-prefix">Loaded in </span><b>${this.state.modelLoader.metricLoadTime}</b></span>
               ` : nothing}
             </div>
             ${(() => {

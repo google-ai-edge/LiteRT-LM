@@ -18,7 +18,7 @@ import {css, html, nothing, TemplateResult} from 'lit';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
-import {CustomModel, findModel, MODELS, selectCustomModel} from '../stores/settings_store.js';
+import {coerceGpuOnlyTextBackend, CustomModel, findModel, getNonDefaultBackendSummary, MODELS, NonDefaultBackendSummary, selectCustomModel} from '../stores/settings_store.js';
 
 const LARGE_MODEL_WARNING_KEY = 'litertlm-large-model-warning-dismissed';
 
@@ -307,6 +307,7 @@ export interface ActiveModelSummary {
   compactStateLabel: string;
   dotClass: string;
   isActiveState: boolean;
+  backendOverride: NonDefaultBackendSummary|null;
 }
 
 /** Computes the active model's display name, status dot, and state label. */
@@ -318,6 +319,7 @@ export function getActiveModelSummary(
   const cleanName = rawName
                         .replace(/,\s*\d+(\.\d+)?\s*GB\)$/, ')')
                         .replace(/\s*\(\d+(\.\d+)?\s*GB\)$/, '');
+  const backendOverride = getNonDefaultBackendSummary(state.settings);
   const summary =
       (stateLabel: string, dotClass = '', isActiveState = false,
        compactStateLabel = ''): ActiveModelSummary => ({
@@ -326,6 +328,7 @@ export function getActiveModelSummary(
         compactStateLabel,
         dotClass,
         isActiveState,
+        backendOverride,
       });
 
   const key = getModelKey(selectedPath);
@@ -361,6 +364,7 @@ export function removeCustomModelFromSettings(
       state.settings.customModels.filter(m => m.path !== modelPath);
   if (state.settings.selectedModelPath === modelPath) {
     state.settings.selectedModelPath = MODELS[0]!.path;
+    coerceGpuOnlyTextBackend(state.settings);
   }
 }
 
@@ -391,6 +395,7 @@ export async function deleteCachedModelAndSyncSettings(
   }
   if (state.settings.selectedModelPath === modelPath) {
     state.settings.selectedModelPath = MODELS[0]!.path;
+    coerceGpuOnlyTextBackend(state.settings);
     settingsChanged = true;
   }
   if (settingsChanged) {
@@ -432,6 +437,7 @@ export async function selectModelWithLargeModelCheck(
 
   if (state.settings.selectedModelPath !== path) {
     state.settings.selectedModelPath = path;
+    coerceGpuOnlyTextBackend(state.settings);
     state.settings.saveSettings();
 
     void state.modelLoader.loadModelWeights(
@@ -477,7 +483,8 @@ export async function addRemoteModelFromInput(
     onSelected?: () => void): Promise<boolean> {
   let customModel: CustomModel;
   try {
-    customModel = await state.modelLoader.addRemoteModel(text);
+    customModel = await state.modelLoader.addRemoteModel(
+        text, state.settings.textBackend);
   } catch {
     return false;
   }
@@ -626,6 +633,19 @@ export function renderModelDropdownItems(
       </div>
     </div>
     <div class="dropdown-footer-section">
+      ${(() => {
+        const backendOverride = getNonDefaultBackendSummary(state.settings);
+        return backendOverride ? html`
+          <div
+            id="${idPrefix}-backend-note"
+            class="dropdown-footer-row backend-override-bar"
+            title=${backendOverride.detail}
+          >
+            <span>Backend override:</span>
+            <span class="cache-bar-value">${backendOverride.label}</span>
+          </div>
+        ` : nothing;
+      })()}
       ${localDirAuthorized ? html`
         <div class="dropdown-footer-row local-dir-bar">
           <span class="local-dir-info" title=${localDirName}>

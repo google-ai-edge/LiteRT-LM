@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
 import {getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
@@ -111,6 +111,31 @@ describe('ModelLoaderService', () => {
     expect(modelLoader.cachedModels.get('https://example.com/model2.litertlm'))
         .toBe(2048);
     expect(updateCalled).toBeTrue();
+  });
+
+  it('adds up the cached GPU and CPU variants of a model', async () => {
+    window.localStorage.setItem('litertlm-hf-model-urls', JSON.stringify({
+      'hf://org/model': 'https://hf.co/model-gpu.litertlm',
+      'hf://org/model#backend=cpu': 'https://hf.co/model-cpu.litertlm',
+    }));
+    const mockCache = {
+      keys: jasmine.createSpy().and.resolveTo([
+        {url: 'https://hf.co/model-gpu.litertlm'},
+        {url: 'https://hf.co/model-cpu.litertlm'},
+      ]),
+      match: jasmine.createSpy().and.callFake(
+          async (req: {url: string}) => ({
+            headers: new Headers({
+              'content-length': req.url.includes('cpu') ? '200' : '100',
+            }),
+          })),
+    };
+    spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+    await modelLoader.updateCacheSize();
+
+    expect(modelLoader.cachedModels.get('hf://org/model')).toBe(300);
+    window.localStorage.removeItem('litertlm-hf-model-urls');
   });
 
   it('deletes model from cache when confirmed', async () => {
@@ -796,6 +821,61 @@ describe('ModelLoaderService', () => {
       expect(modelLoader.needsModelReload(settingsStore.modelSettings))
           .toBeTrue();
     });
+
+    it('wires experimental modality backends and activation precision into Engine.create and needsModelReload',
+       async () => {
+         // Default GPU settings: backend omitted for text auto-detection,
+         // visionBackend & audioBackend = Backend.GPU, precision overrides omitted.
+         await load();
+         let callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBeUndefined();
+         expect(callArgs.visionBackend).toBe(Backend.GPU);
+         expect(callArgs.audioBackend).toBe(Backend.GPU);
+         expect(callArgs.activationDataType).toBeUndefined();
+         expect(callArgs.visionActivationDataType).toBeUndefined();
+         expect(callArgs.audioActivationDataType).toBeUndefined();
+
+         // Changing any experimental backend or precision requires model reload.
+         settingsStore.textPrecision = 'fp32';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+
+         settingsStore.visionBackend = 'cpu';
+         settingsStore.visionPrecision = 'fp16';  // ignored on CPU
+         settingsStore.audioBackend = 'gpu';
+         settingsStore.audioPrecision = 'fp16';
+         await load();
+
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBeUndefined();
+         expect(callArgs.activationDataType).toBe(ActivationDataType.FLOAT32);
+         expect(callArgs.visionBackend).toBe(Backend.CPU);
+         expect(callArgs.visionActivationDataType).toBeUndefined();
+         expect(callArgs.audioBackend).toBe(Backend.GPU);
+         expect(callArgs.audioActivationDataType)
+             .toBe(ActivationDataType.FLOAT16);
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+
+         // Non-GPU .litertlm with textBackend = 'cpu' passes Backend.CPU and
+         // omits GPU Artisan config and text activationDataType.
+         settingsStore.textBackend = 'cpu';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBe(Backend.CPU);
+         expect(callArgs.activationDataType).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.backendConfig).toBeUndefined();
+
+         // -gpu.litertlm models coerce textBackend back to GPU (backend omitted).
+         settingsStore.selectedModelPath =
+             'https://example.com/gemma-4-E2B-it-gpu.litertlm';
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBeUndefined();
+       });
   });
 
   describe('suppressKnownWasmWarnings', () => {

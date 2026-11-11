@@ -62,6 +62,12 @@ describe('litert-sidebar', () => {
     mockSettings.enableSpeculativeDecoding = false;
     mockSettings.systemPrompt = '';
     mockSettings.disabledTools = [];
+    mockSettings.textBackend = 'gpu';
+    mockSettings.visionBackend = 'gpu';
+    mockSettings.audioBackend = 'gpu';
+    mockSettings.textPrecision = 'default';
+    mockSettings.visionPrecision = 'default';
+    mockSettings.audioPrecision = 'default';
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 
@@ -128,12 +134,17 @@ describe('litert-sidebar', () => {
           .toBeNull();
       expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
           .toBeNull();
+      expect(element.shadowRoot!.querySelector('#panel-experimental'))
+          .toBeNull();
       const modelToggle =
           element.shadowRoot!.querySelector('#tab-model-config')!;
       const promptToggle =
           element.shadowRoot!.querySelector('#tab-system-prompt')!;
+      const expToggle =
+          element.shadowRoot!.querySelector('#tab-experimental')!;
       expect(modelToggle.getAttribute('aria-expanded')).toBe('false');
       expect(promptToggle.getAttribute('aria-expanded')).toBe('false');
+      expect(expToggle.getAttribute('aria-expanded')).toBe('false');
     });
 
     it('switches between disclosures so at most one panel is open', async () => {
@@ -436,6 +447,132 @@ describe('litert-sidebar', () => {
       await Promise.resolve();
       expect(mockSettings.resetDefaults).toHaveBeenCalledWith('systemPrompt');
     });
+  });
+
+  describe('experimental page', () => {
+    beforeEach(async () => {
+      await toggleSettingsPage('experimental');
+    });
+
+    it('disables CPU text backend for -gpu.litertlm models and enables it for non-GPU models',
+       async () => {
+         const textBackend = element.shadowRoot!.querySelector<HTMLSelectElement>(
+             '#text-backend')!;
+         const note =
+             element.shadowRoot!.querySelector<HTMLElement>('#experimental-note')!;
+         expect(textBackend.disabled).toBeTrue();
+         expect(textBackend.value).toBe('gpu');
+         expect(textBackend.getAttribute('title')).toContain('-gpu.litertlm');
+         expect(note.textContent).toContain('WebGPU-only');
+         expect(note.querySelectorAll('.nowrap').length).toBeGreaterThan(0);
+
+         mockSettings.selectedModelPath =
+             'https://example.com/gemma-3-1b-it.litertlm';
+         element.requestUpdate();
+         await element.updateComplete;
+
+         expect(textBackend.disabled).toBeFalse();
+         textBackend.value = 'cpu';
+         textBackend.dispatchEvent(new Event('change'));
+         expect(mockSettings.textBackend).toBe('cpu');
+         expect(mockSettings.saveSettings).toHaveBeenCalled();
+
+         element.requestUpdate();
+         await element.updateComplete;
+         const textPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#text-precision')!;
+         expect(textPrecision.disabled).toBeTrue();
+         expect(textPrecision.value).toBe('fp32');
+       });
+
+    it('updates vision/audio backends and activation precision and resets experimental group',
+       async () => {
+         const expTab = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#tab-experimental')!;
+
+         const textPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#text-precision')!;
+         textPrecision.value = 'fp32';
+         textPrecision.dispatchEvent(new Event('change'));
+         expect(mockSettings.textPrecision).toBe('fp32');
+
+         const visionBackend =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#vision-backend')!;
+         visionBackend.value = 'cpu';
+         visionBackend.dispatchEvent(new Event('change'));
+         expect(mockSettings.visionBackend).toBe('cpu');
+
+         const audioPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#audio-precision')!;
+         audioPrecision.value = 'fp16';
+         audioPrecision.dispatchEvent(new Event('change'));
+         expect(mockSettings.audioPrecision).toBe('fp16');
+
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const visionPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#vision-precision')!;
+         expect(visionPrecision.disabled).toBeTrue();
+         expect(
+             expTab.querySelector('.tuning-pill')!.textContent!.trim())
+             .toBe('T:FP32 · V:CPU +1');
+
+         element.shadowRoot!
+             .querySelector<HTMLButtonElement>('#btn-reset-experimental')!
+             .click();
+         await Promise.resolve();
+         expect(mockSettings.resetDefaults)
+             .toHaveBeenCalledWith('experimental');
+       });
+
+    it('surfaces non-default backend badge in Runtime card only when a modality uses CPU',
+       async () => {
+         expect(element.shadowRoot!.querySelector('#runtime-backend-badge'))
+             .toBeNull();
+
+         mockSettings.visionBackend = 'cpu';
+         element.requestUpdate();
+         await element.updateComplete;
+         let runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         expect(runtimeBadge).toBeTruthy();
+         expect(runtimeBadge!.textContent!.trim()).toBe('WebGPU · CPU');
+
+         mockSettings.selectedModelPath =
+             'https://example.com/gemma-3-1b-it.litertlm';
+         mockSettings.textBackend = 'cpu';
+         mockSettings.audioBackend = 'cpu';
+         element.requestUpdate();
+         await element.updateComplete;
+         runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         expect(runtimeBadge!.textContent!.trim()).toBe('CPU');
+
+         mockSettings.selectedModelPath = MODELS[0]!.path;
+         mockModelLoader.metricLoadTime = '12.48s';
+         element.style.width = '248px';
+         element.style.display = 'flex';
+         element.requestUpdate();
+         await element.updateComplete;
+         runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         const statusHeader =
+             element.shadowRoot!.querySelector<HTMLElement>('.status-header')!;
+         expect(runtimeBadge!.textContent!.trim()).toBe('WebGPU · CPU');
+         expect(runtimeBadge!.scrollWidth)
+             .toBeLessThanOrEqual(runtimeBadge!.clientWidth);
+         expect(statusHeader.scrollWidth)
+             .toBeLessThanOrEqual(statusHeader.clientWidth);
+       });
   });
 
   it('renders conversations list and triggers selection', async () => {

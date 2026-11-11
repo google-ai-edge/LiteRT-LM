@@ -66,7 +66,9 @@ async function loadHuggingFaceModel(
   }
   let model: CustomModel;
   try {
-    model = await modelLoader.addRemoteModel(reference);
+    model = settings.textBackend === 'cpu' ?
+        await modelLoader.addRemoteModel(reference, 'cpu') :
+        await modelLoader.addRemoteModel(reference);
   } catch {
     // The model loader shows the error in the status.
     return;
