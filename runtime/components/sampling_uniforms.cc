@@ -39,7 +39,8 @@ void DrawUniforms(std::default_random_engine& rng, absl::Span<float> uniforms) {
 void DrawSamplingUniforms(const proto::SamplerParameters& sampler_params,
                           std::default_random_engine& rng,
                           absl::Span<float> uniforms) {
-  if (sampler_params.k() > 1) {
+  if (sampler_params.type() != proto::SamplerParameters::GREEDY &&
+      sampler_params.k() > 1) {
     DrawUniforms(rng, uniforms);
   } else {
     std::fill(uniforms.begin(), uniforms.end(), 0.0f);

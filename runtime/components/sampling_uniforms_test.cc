@@ -14,6 +14,7 @@
 
 #include "runtime/components/sampling_uniforms.h"
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 #include <vector>
@@ -71,6 +72,14 @@ TEST(SamplingUniformsTest, DrawSamplingUniformsSkipsGreedySampling) {
   std::default_random_engine rng(3);
   std::vector<float> uniforms(4, 0.5f);
   DrawSamplingUniforms(ParamsWithK(1), rng, absl::MakeSpan(uniforms));
+  EXPECT_THAT(uniforms, Each(0.0f));
+  EXPECT_EQ(rng, std::default_random_engine(3));
+
+  proto::SamplerParameters greedy_with_stale_k;
+  greedy_with_stale_k.set_type(proto::SamplerParameters::GREEDY);
+  greedy_with_stale_k.set_k(40);
+  std::fill(uniforms.begin(), uniforms.end(), 0.5f);
+  DrawSamplingUniforms(greedy_with_stale_k, rng, absl::MakeSpan(uniforms));
   EXPECT_THAT(uniforms, Each(0.0f));
   EXPECT_EQ(rng, std::default_random_engine(3));
 }

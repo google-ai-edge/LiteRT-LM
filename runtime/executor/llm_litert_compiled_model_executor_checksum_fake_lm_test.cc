@@ -50,7 +50,7 @@
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"

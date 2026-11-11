@@ -39,6 +39,7 @@
 #include "ml_drift/common/task/gpu_operation.h"  // from @ml_drift
 #include "ml_drift/common/task/tensor_desc.h"  // from @ml_drift
 #include "ml_drift/common/types.h"  // from @ml_drift
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 
@@ -201,9 +202,23 @@ GpuModelBuilder::TensorHandle AddTopKTopPSampling(
                           "top_k_top_p_sampling");
   return dst;
 }
+
+absl::Status ValidateSamplerParamsFields(
+    const SamplerParameters& sampler_params) {
+  return ValidateTopPSamplingParams(sampler_params.type(), sampler_params.k(),
+                                    sampler_params.p(),
+                                    sampler_params.temperature());
+}
 }  // namespace
 
 absl::Status TopKGpuSampler::Initialize() {
+  ABSL_RETURN_IF_ERROR(ValidateSamplerParamsFields(sampler_params_));
+  if (config_.max_top_k <= 0) {
+    return absl::InvalidArgumentError("k must be positive.");
+  }
+  if (config_.sequence_size <= 0) {
+    return absl::InvalidArgumentError("sequence_size must be positive.");
+  }
   ABSL_RETURN_IF_ERROR(InitSampling());
   return absl::OkStatus();
 }
@@ -282,23 +297,22 @@ absl::StatusOr<GpuModel> TopKGpuSampler::CreateSamplingModel(
   return std::move(gpu_model);
 }
 
-absl::Status TopKGpuSampler::CheckTopKWithinMax(
-    const SamplerParameters& sampler_params) const {
-  if (sampler_params.k() > config_.max_top_k) {
+absl::Status TopKGpuSampler::UpdateConfig(
+    const SamplerParameters& sampler_params, int batch_size) {
+  const SamplerParameters normalized = NormalizeSamplerParams(sampler_params);
+  ABSL_RETURN_IF_ERROR(ValidateSamplerParamsFields(normalized));
+  if (normalized.k() > config_.max_top_k) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "k=", sampler_params.k(), " exceeds the k=", config_.max_top_k,
+        "k=", normalized.k(), " exceeds the k=", config_.max_top_k,
         " the GPU sampler was created with; create a new sampler instead."));
   }
-  return absl::OkStatus();
-}
-
-absl::Status TopKGpuSampler::CheckBatchSizeWithinMax(int batch_size) const {
   if (batch_size <= 0 || batch_size > kv_cache_batch_size_) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("batch_size=", batch_size, " is not in [1, ",
-                     kv_cache_batch_size_,
-                     "], the batch size the GPU sampler was created with."));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "batch_size=", batch_size, " is not in [1, ", kv_cache_batch_size_,
+        "], the batch size the GPU sampler was created with."));
   }
+  sampler_params_ = normalized;
+  config_.batch_size = batch_size;
   return absl::OkStatus();
 }
 

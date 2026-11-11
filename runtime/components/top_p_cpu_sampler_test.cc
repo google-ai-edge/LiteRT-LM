@@ -676,5 +676,75 @@ TEST(TopPSamplerTest,
   EXPECT_THAT(*step3_ids, ElementsAre(1, 2));
 }
 
+TEST(TopPSamplerTest, UpdateConfigSupportsGreedyAndTopKAndValidatesBounds) {
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler,
+      TopPSampler::Create(/*k=*/4, /*p=*/0.1f, /*temperature=*/1.0f,
+                          /*batch_size=*/1, /*sequence_size=*/1));
+
+  // Logits [10.0, 9.9, -100.0, -100.0]: with p=0.1 token 0 (~0.525 mass) forms
+  // a 1-token nucleus, whereas TOP_K (k=2, p=0.0 normalized to p=1.0) includes
+  // token 1 as well, so uniform 0.9 picks token 1.
+  const std::vector<float> logits = {10.0f, 9.9f, -100.0f, -100.0f};
+  auto logits_tensor = CopyToTensorBuffer<float>(logits, {1, 1, 4});
+  ASSERT_TRUE(logits_tensor.HasValue());
+  auto ids_tensor = CopyToTensorBuffer<int>(std::vector<int>{-1}, {1, 1});
+  ASSERT_TRUE(ids_tensor.HasValue());
+
+  proto::SamplerParameters top_k_params;
+  top_k_params.set_type(proto::SamplerParameters::TOP_K);
+  top_k_params.set_k(2);
+  top_k_params.set_p(0.0f);
+  top_k_params.set_temperature(1.0f);
+  ASSERT_OK(sampler->UpdateConfig(top_k_params, /*batch_size=*/1));
+  const std::vector<float> high_uniform = {0.9f};
+  ASSERT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                              /*scores_tensor=*/nullptr,
+                                              high_uniform));
+  auto top_k_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(top_k_ids.HasValue());
+  EXPECT_THAT(*top_k_ids, ElementsAre(1));
+
+  // GREEDY with default k=0 normalizes to k=1 and always picks argmax token 0,
+  // even with uniform 0.9.
+  proto::SamplerParameters greedy_params;
+  greedy_params.set_type(proto::SamplerParameters::GREEDY);
+  ASSERT_OK(sampler->UpdateConfig(greedy_params, /*batch_size=*/1));
+  ASSERT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                              /*scores_tensor=*/nullptr,
+                                              high_uniform));
+  auto greedy_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(greedy_ids.HasValue());
+  EXPECT_THAT(*greedy_ids, ElementsAre(0));
+
+  // Invalid updates fail without mutating the sampler's state.
+  proto::SamplerParameters bad_top_k;
+  bad_top_k.set_type(proto::SamplerParameters::TOP_K);
+  bad_top_k.set_k(0);
+  EXPECT_THAT(sampler->UpdateConfig(bad_top_k, /*batch_size=*/1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  proto::SamplerParameters nan_temp;
+  nan_temp.set_type(proto::SamplerParameters::TOP_P);
+  nan_temp.set_k(2);
+  nan_temp.set_p(0.9f);
+  nan_temp.set_temperature(std::numeric_limits<float>::quiet_NaN());
+  EXPECT_THAT(sampler->UpdateConfig(nan_temp, /*batch_size=*/1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  proto::SamplerParameters unknown_type;
+  unknown_type.set_type(static_cast<proto::SamplerParameters::Type>(99));
+  unknown_type.set_k(1);
+  EXPECT_THAT(sampler->UpdateConfig(unknown_type, /*batch_size=*/1),
+              StatusIs(absl::StatusCode::kUnimplemented));
+
+  ASSERT_OK(sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                              /*scores_tensor=*/nullptr,
+                                              high_uniform));
+  auto preserved_ids = CopyFromTensorBuffer<int>(*ids_tensor);
+  ASSERT_TRUE(preserved_ids.HasValue());
+  EXPECT_THAT(*preserved_ids, ElementsAre(0));
+}
+
 }  // namespace
 }  // namespace litert::lm

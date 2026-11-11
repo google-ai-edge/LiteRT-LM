@@ -37,6 +37,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -302,12 +303,16 @@ class TopKCApiSampler : public Sampler {
 
   absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
                             int batch_size) override {
+    // Libraries built before `NormalizeSamplerParams` was added would read the
+    // raw `k` and `p` of `GREEDY` and `TOP_K` parameters, as at creation.
+    const proto::SamplerParameters normalized =
+        NormalizeSamplerParams(sampler_params);
     char* error_msg = nullptr;
     // No generator: the uniforms come from the callers. Only the library's
     // entry points without uniforms (used as a fallback above) use the
     // generator of the library's sampler handle.
     int error_code =
-        capi_->update_config_func(sampler_, &sampler_params, batch_size,
+        capi_->update_config_func(sampler_, &normalized, batch_size,
                                   /*rand_gen_shared_ptr=*/nullptr, &error_msg);
     return CreateStatusAndFreeErrorMsg(error_code, error_msg);
   }
@@ -701,6 +706,17 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
     int batch_size, proto::SamplerParameters sampler_params,
     const litert::Environment& env, int sequence_size, int vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
+  switch (sampler_params.type()) {
+    case proto::SamplerParameters::TYPE_UNSPECIFIED:
+      ABSL_VLOG(1) << "Sampler type is unspecified. Assume the LLM Executor "
+                      "handles the sampling logic.";
+      return nullptr;
+    case proto::SamplerParameters::TOP_P:
+      break;
+    default:
+      return absl::UnimplementedError(absl::StrCat(
+          "Sampler type: ", sampler_params.type(), " not implemented yet."));
+  }
   // Check environment options to determine the preferred backend.
   auto options_or = env.GetOptions();
   bool use_metal = false;
@@ -811,6 +827,7 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
     std::optional<std::reference_wrapper<const litert::Environment>> env,
     std::optional<int> sequence_size, std::optional<int> vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
+  sampler_params = NormalizeSamplerParams(std::move(sampler_params));
   int sequence_size_value = sequence_size.value_or(1);
   switch (backend) {
     case Backend::GPU: {
@@ -851,46 +868,19 @@ absl::Status UpdateOrRecreateSampler(
     std::optional<std::reference_wrapper<const litert::Environment>> env,
     std::optional<int> sequence_size, std::optional<int> vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
-  if (sampler == nullptr || sampler_params.k() > max_top_k) {
+  const proto::SamplerParameters normalized =
+      NormalizeSamplerParams(sampler_params);
+  if (sampler == nullptr || normalized.k() > max_top_k) {
     ABSL_ASSIGN_OR_RETURN(
         std::unique_ptr<Sampler> new_sampler,
-        CreateSampler(backend, batch_size, sampler_params, env, sequence_size,
+        CreateSampler(backend, batch_size, normalized, env, sequence_size,
                       vocab_size, activation_data_type));
     RET_CHECK(new_sampler != nullptr)
         << "No sampler for sampler type " << sampler_params.type();
     sampler = std::move(new_sampler);
-    max_top_k = sampler_params.k();
+    max_top_k = normalized.k();
   }
-  return sampler->UpdateConfig(sampler_params, batch_size);
-}
-
-proto::SamplerParameters GreedySamplerParams() {
-  proto::SamplerParameters sampler_params;
-  sampler_params.set_type(proto::SamplerParameters::TOP_P);
-  sampler_params.set_k(1);
-  sampler_params.set_p(0.0f);
-  sampler_params.set_temperature(1.0f);
-  sampler_params.set_seed(0);
-  return sampler_params;
-}
-
-bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
-                             const std::optional<proto::SamplerParameters>& b,
-                             bool ignore_seed) {
-  const auto is_default = [](const std::optional<proto::SamplerParameters>& p) {
-    return !p.has_value() ||
-           p->type() == proto::SamplerParameters::TYPE_UNSPECIFIED;
-  };
-  const bool a_is_default = is_default(a);
-  const bool b_is_default = is_default(b);
-  if (a_is_default || b_is_default) {
-    return a_is_default == b_is_default;
-  }
-  return a->type() == b->type() && a->k() == b->k() && a->p() == b->p() &&
-         a->temperature() == b->temperature() &&
-         (ignore_seed || a->seed() == b->seed()) &&
-         a->backend() == b->backend() &&
-         a->compute_exact_log_probs() == b->compute_exact_log_probs();
+  return sampler->UpdateConfig(normalized, batch_size);
 }
 
 }  // namespace litert::lm

@@ -52,7 +52,7 @@
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
-#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"

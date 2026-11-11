@@ -32,8 +32,9 @@ message SamplerParameters {
     GREEDY = 3;
   }
 
-  // The type of sampling used to pick the winning token. Ignored on the GPU
-  // path, which defaults to combining top-k and top-p sampling.
+  // The type of sampling used to pick the winning token. Supported on both CPU
+  // and GPU sampling paths (NPU fixed-function executors ignore session sampler
+  // parameters and decode greedily).
   Type type = 1;
   // The value of k determines how many of the top-k logits are used during
   // sampling. This field is relevant for TOP_K and TOP_P sampling.

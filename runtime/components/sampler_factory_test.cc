@@ -15,7 +15,6 @@
 #include "runtime/components/sampler_factory.h"
 
 #include <memory>
-#include <optional>
 #include <utility>
 
 #include <gmock/gmock.h>
@@ -68,13 +67,38 @@ TEST(SamplerFactoryTest, CreateSamplerForCpuWithComputeExactLogProbs) {
   EXPECT_TRUE(top_p_sampler->ComputeExactLogProbs());
 }
 
+TEST(SamplerFactoryTest, CreateSamplerForCpuSupportsGreedyAndTopK) {
+  proto::SamplerParameters greedy_params;
+  greedy_params.set_type(proto::SamplerParameters::GREEDY);
+  ASSERT_OK_AND_ASSIGN(
+      auto greedy_sampler,
+      CreateSampler(Backend::CPU, /*batch_size=*/1, std::move(greedy_params)));
+  EXPECT_NE(dynamic_cast<TopPSampler*>(greedy_sampler.get()), nullptr);
+
+  proto::SamplerParameters top_k_params;
+  top_k_params.set_type(proto::SamplerParameters::TOP_K);
+  top_k_params.set_k(10);
+  top_k_params.set_temperature(0.8f);
+  ASSERT_OK_AND_ASSIGN(
+      auto top_k_sampler,
+      CreateSampler(Backend::CPU, /*batch_size=*/1, std::move(top_k_params)));
+  EXPECT_NE(dynamic_cast<TopPSampler*>(top_k_sampler.get()), nullptr);
+
+  proto::SamplerParameters invalid_top_k;
+  invalid_top_k.set_type(proto::SamplerParameters::TOP_K);
+  invalid_top_k.set_k(0);
+  EXPECT_THAT(
+      CreateSampler(Backend::CPU, /*batch_size=*/1, std::move(invalid_top_k)),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(SamplerFactoryTest, CreateSamplerForCpuWithUnsupportedSamplerTypeFails) {
   proto::SamplerParameters sampler_params;
   sampler_params.set_k(1);
   sampler_params.set_p(0.0);
   sampler_params.set_temperature(1.0);
   sampler_params.set_seed(12345);
-  sampler_params.set_type(proto::SamplerParameters::TOP_K);
+  sampler_params.set_type(static_cast<proto::SamplerParameters::Type>(99));
   auto result = CreateSampler(Backend::CPU,
                               /*batch_size=*/1, std::move(sampler_params));
   EXPECT_THAT(result, StatusIs(absl::StatusCode::kUnimplemented));
@@ -136,6 +160,15 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerRecreatesOnlyWhenTopKGrows) {
                                     TopPParams(10, 0.9f, 0.7f)));
   EXPECT_EQ(sampler.get(), recreated);
   EXPECT_EQ(max_top_k, 40);
+
+  // Switching to GREEDY (even with k = 0) normalizes to k = 1 and updates in
+  // place without failing or shrinking max_top_k.
+  proto::SamplerParameters greedy;
+  greedy.set_type(proto::SamplerParameters::GREEDY);
+  ASSERT_OK(UpdateOrRecreateSampler(sampler, max_top_k, Backend::CPU,
+                                    /*batch_size=*/1, greedy));
+  EXPECT_EQ(sampler.get(), recreated);
+  EXPECT_EQ(max_top_k, 40);
 }
 
 TEST(SamplerFactoryTest, UpdateOrRecreateSamplerFailsWithoutSampler) {
@@ -147,86 +180,6 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerFailsWithoutSampler) {
                                       /*batch_size=*/1, unspecified),
               StatusIs(absl::StatusCode::kInternal));
   EXPECT_EQ(max_top_k, 0);
-}
-
-TEST(SamplerFactoryTest, GreedySamplerParamsAreGreedyTopP) {
-  const proto::SamplerParameters params = GreedySamplerParams();
-  EXPECT_EQ(params.type(), proto::SamplerParameters::TOP_P);
-  EXPECT_EQ(params.k(), 1);
-  EXPECT_EQ(params.temperature(), 1.0f);
-  EXPECT_EQ(params.seed(), 0);
-}
-
-TEST(SamplerFactoryTest, SamplerParamsEquivalentTreatsUnspecifiedAsDefault) {
-  // Unspecified parameters select the default sampler like unset ones, whatever
-  // the other fields hold.
-  proto::SamplerParameters unspecified;
-  unspecified.set_k(40);
-  unspecified.set_temperature(0.7f);
-  EXPECT_TRUE(SamplerParamsEquivalent(std::nullopt, std::nullopt));
-  EXPECT_TRUE(SamplerParamsEquivalent(std::nullopt, unspecified));
-  EXPECT_TRUE(SamplerParamsEquivalent(unspecified, std::nullopt));
-  EXPECT_TRUE(SamplerParamsEquivalent(unspecified, proto::SamplerParameters()));
-
-  EXPECT_FALSE(SamplerParamsEquivalent(std::nullopt, GreedySamplerParams()));
-  EXPECT_FALSE(SamplerParamsEquivalent(GreedySamplerParams(), unspecified));
-}
-
-TEST(SamplerFactoryTest, SamplerParamsEquivalentComparesEveryField) {
-  proto::SamplerParameters base;
-  base.set_type(proto::SamplerParameters::TOP_P);
-  base.set_k(40);
-  base.set_p(0.95f);
-  base.set_temperature(1.0f);
-  base.set_seed(7);
-  EXPECT_TRUE(SamplerParamsEquivalent(base, base));
-
-  proto::SamplerParameters unset_seed = base;
-  unset_seed.clear_seed();
-  proto::SamplerParameters zero_seed = base;
-  zero_seed.set_seed(0);
-  EXPECT_TRUE(SamplerParamsEquivalent(unset_seed, zero_seed));
-
-  proto::SamplerParameters changed = base;
-  changed.set_type(proto::SamplerParameters::TOP_K);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-  changed = base;
-  changed.set_k(10);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-  changed = base;
-  changed.set_p(0.5f);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-  changed = base;
-  changed.set_temperature(0.7f);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-  changed = base;
-  changed.set_seed(8);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-  changed = base;
-  changed.set_backend(proto::SamplerParameters::CPU);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-  changed = base;
-  changed.set_compute_exact_log_probs(true);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base));
-}
-
-TEST(SamplerFactoryTest, SamplerParamsEquivalentCanIgnoreSeed) {
-  proto::SamplerParameters base;
-  base.set_type(proto::SamplerParameters::TOP_P);
-  base.set_k(40);
-  base.set_p(0.95f);
-  base.set_temperature(1.0f);
-  base.set_seed(7);
-
-  proto::SamplerParameters changed = base;
-  changed.set_seed(8);
-  EXPECT_TRUE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
-  changed.clear_seed();
-  EXPECT_TRUE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
-
-  // The other fields are still compared.
-  changed.set_k(10);
-  EXPECT_FALSE(SamplerParamsEquivalent(changed, base, /*ignore_seed=*/true));
 }
 
 }  // namespace

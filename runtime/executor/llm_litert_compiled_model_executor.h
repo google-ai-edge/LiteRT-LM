@@ -176,6 +176,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status InitializeSampler(
       std::optional<ActivationDataType> logits_data_type = std::nullopt);
 
+  // Updates the sampler's config.
+  absl::Status UpdateSamplerConfig();
+
   // Profiling APIs.
   absl::Status StartProfiling() override;
   absl::Status StopProfiling() override;

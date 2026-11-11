@@ -459,7 +459,7 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
     LiteRTLM::Runtime::Components::ModelResourcesLitertLm
     LiteRTLM::Runtime::Components::ModelResourcesTask
     LiteRTLM::Runtime::Components::SamplerInterface
-    LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
@@ -643,7 +643,7 @@ target_link_libraries(runtime_executor_speculative_decoding_controller
   PUBLIC
     LiteRTLM::Runtime::Executor::MtpGatingPolicy
     LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
-    LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplerParamsUtil
     LITERTLM_DEPS
 )
 
@@ -668,6 +668,7 @@ target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingCpuUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Generated::Protobuf
@@ -722,7 +723,7 @@ target_link_libraries(runtime_executor_llm_litert_verifier
     LiteRTLM::Runtime::Executor::LlmExecutorSettingsUtils
     LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::SamplerInterface
-    LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
@@ -759,7 +760,7 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
     LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::SamplerInterface
-    LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask

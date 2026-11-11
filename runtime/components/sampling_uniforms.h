@@ -33,7 +33,7 @@ void DrawUniforms(std::default_random_engine& rng, absl::Span<float> uniforms);
 
 // Fills `uniforms` for a sampling call with `sampler_params`: draws them from
 // `rng`, or sets them to 0 without consuming `rng` for greedy sampling
-// (k <= 1).
+// (`GREEDY` or `k <= 1`).
 void DrawSamplingUniforms(const proto::SamplerParameters& sampler_params,
                           std::default_random_engine& rng,
                           absl::Span<float> uniforms);

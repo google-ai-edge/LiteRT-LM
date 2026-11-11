@@ -67,24 +67,6 @@ absl::Status UpdateOrRecreateSampler(
     std::optional<int> vocab_size = std::nullopt,
     std::optional<ActivationDataType> activation_data_type = std::nullopt);
 
-// Returns TOP_P parameters with k = 1 (i.e. greedy sampling), temperature 1 and
-// seed 0.
-proto::SamplerParameters GreedySamplerParams();
-
-// Returns whether `a` and `b` select the same sampler configuration. Unset
-// parameters and parameters with type `TYPE_UNSPECIFIED` both select the
-// default sampler, so they compare equal to each other whatever their other
-// fields hold. Otherwise all fields are compared; an unset `seed` equals seed
-// 0, which is how the samplers read it. `ignore_seed` skips the seed, which
-// only picks the random stream, not the sampled distribution or the sampler's
-// cost.
-//
-// Note: the fields are compared one by one; update this function when a field
-// is added to `SamplerParameters`.
-bool SamplerParamsEquivalent(const std::optional<proto::SamplerParameters>& a,
-                             const std::optional<proto::SamplerParameters>& b,
-                             bool ignore_seed = false);
-
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_FACTORY_H_

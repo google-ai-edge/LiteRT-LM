@@ -108,6 +108,29 @@ cc_test(
 )
 
 cc_library(
+    name = "sampler_params_util",
+    srcs = ["sampler_params_util.cc"],
+    hdrs = ["sampler_params_util.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "//runtime/proto:sampler_params_cc_proto",
+    ],
+)
+
+cc_test(
+    name = "sampler_params_util_test",
+    srcs = ["sampler_params_util_test.cc"],
+    deps = [
+        ":sampler_params_util",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "//runtime/proto:sampler_params_cc_proto",
+    ],
+)
+
+cc_library(
     name = "sampling_uniforms",
     srcs = ["sampling_uniforms.cc"],
     hdrs = ["sampling_uniforms.h"],
@@ -179,6 +202,7 @@ cc_library(
     hdrs = ["top_p_cpu_sampler.h"],
     deps = [
         ":sampler",
+        ":sampler_params_util",
         ":sampling_cpu_util",
         ":sampling_uniforms",
         "@com_google_absl//absl/memory",
@@ -232,6 +256,7 @@ cc_library(
     hdrs = ["sampler_factory.h"],
     deps = [
         ":sampler",
+        ":sampler_params_util",
         ":top_p_cpu_sampler",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:nullability",
@@ -417,6 +442,7 @@ cc_library(
     hdrs = ["top_k_gpu_sampler.h"],
     deps = [
         ":sampler",
+        ":sampler_params_util",
         ":sampling_uniforms",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -441,6 +467,7 @@ cc_library(
 )
 
 METAL_SAMPLER_COMMON_DEPS = [
+    ":sampler_params_util",
     ":top_k_gpu_sampler",
     "@com_google_absl//absl/memory",
     "@com_google_absl//absl/status",
@@ -522,6 +549,7 @@ objc_library(
 )
 
 OPENCL_SAMPLER_COMMON_DEPS = [
+    ":sampler_params_util",
     ":top_k_gpu_sampler",
     "@com_google_absl//absl/base:nullability",
     "@com_google_absl//absl/log:absl_log",
@@ -872,6 +900,7 @@ cc_library(
 )
 
 TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
+    ":sampler_params_util",
     ":top_k_gpu_sampler",
     ":webgpu_dawn_shared_lib",
     "@com_google_absl//absl/base:nullability",

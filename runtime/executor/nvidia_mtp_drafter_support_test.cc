@@ -766,6 +766,35 @@ TEST(NvidiaMtpDrafterSupportTest, VerifierSamplerKeepsTheFactorySemantics) {
   update(TopPParameters(100, 0.9f, 1.0f, 5));
   compare("k 100", TopPParameters(100, 0.9f, 1.0f, 5), 3);
   EXPECT_EQ(reference_max_k, 100);
+  // Raw TOP_K (with default p = 0) and GREEDY (with default k = 0) normalize on
+  // the NPU route just as in UpdateOrRecreateSampler.
+  proto::SamplerParameters top_k;
+  top_k.set_type(proto::SamplerParameters::TOP_K);
+  top_k.set_k(16);
+  top_k.set_temperature(0.9f);
+  top_k.set_seed(7);
+  update(top_k);
+  compare("top_k 16", top_k, 3);
+  proto::SamplerParameters greedy;
+  greedy.set_type(proto::SamplerParameters::GREEDY);
+  update(greedy);
+  compare("raw greedy", greedy, 2);
+  EXPECT_EQ(npu_max_k, 100);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto raw_greedy_npu,
+      CreateMtpGreedySampler(Backend::NPU, 1, greedy, std::cref(env), kRows,
+                             kVocab, ActivationDataType::FLOAT32));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto ids_ref,
+                              CreateTensorBuffer<int32_t>({1, kRows}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto ids_raw,
+                              CreateTensorBuffer<int32_t>({1, kRows}));
+  const std::vector<float> zero_uniforms(kRows, 0.0f);
+  ASSERT_OK(reference->SampleToIdAndScoreBuffer(logits, ids_ref, nullptr,
+                                                zero_uniforms));
+  ASSERT_OK(raw_greedy_npu->SampleToIdAndScoreBuffer(logits, ids_raw, nullptr,
+                                                     zero_uniforms));
+  EXPECT_EQ(ReadIds(ids_raw, kRows), ReadIds(ids_ref, kRows));
 }
 
 // The generic factory returns no sampler for an unspecified type: the NPU

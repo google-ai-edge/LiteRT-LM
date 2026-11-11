@@ -53,7 +53,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
-#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"

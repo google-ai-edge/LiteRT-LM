@@ -2746,6 +2746,112 @@ TEST(EngineCTest, RunPrefillAndDecode) {
   EXPECT_GT(strlen(response_text), 0);
 }
 
+TEST(EngineCTest, RunPrefillAndDecodeWithGreedyAndTopKSamplerTypes) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  const char* prompt = "Hello world!";
+  InputDataPtr input_data(
+      CreateInputData(kLiteRtLmInputDataTypeText, prompt, strlen(prompt)),
+      &litert_lm_input_data_delete);
+  ASSERT_NE(input_data, nullptr);
+  const LiteRtLmInputData* inputs[] = {input_data.get()};
+
+  const auto run_session_with_params =
+      [&](const LiteRtLmSamplerParams* params) -> std::string {
+    SessionConfigPtr session_config(CreateSessionConfig(),
+                                    &litert_lm_session_config_delete);
+    EXPECT_NE(session_config, nullptr);
+    EXPECT_EQ(litert_lm_session_config_set_sampler_params(session_config.get(),
+                                                          params),
+              kLiteRtLmStatusOk);
+    SessionPtr session(CreateSession(engine.get(), session_config.get()),
+                       &litert_lm_session_delete);
+    if (session == nullptr) {
+      return "";
+    }
+    EXPECT_EQ(litert_lm_session_run_prefill(session.get(), inputs, 1),
+              kLiteRtLmStatusOk);
+    ResponsesPtr responses(RunDecode(session.get()),
+                           &litert_lm_responses_delete);
+    if (responses == nullptr) {
+      return "";
+    }
+    const char* text = GetOk<const char*>(
+        litert_lm_responses_get_response_text_at, responses.get(), 0);
+    return text != nullptr ? std::string(text) : "";
+  };
+
+  // Greedy sampling works with default-initialized fields (top_k = 0).
+  SamplerParamsPtr greedy_params(
+      CreateSamplerParams(kLiteRtLmSamplerTypeGreedy),
+      &litert_lm_sampler_params_delete);
+  ASSERT_NE(greedy_params, nullptr);
+  const std::string greedy_text = run_session_with_params(greedy_params.get());
+  EXPECT_FALSE(greedy_text.empty()) << litert_lm_get_last_error_message();
+
+  // Top-K sampling works without setting top_p, including on an engine that
+  // already initialized its sampler for an earlier session.
+  SamplerParamsPtr top_k_params(CreateSamplerParams(kLiteRtLmSamplerTypeTopK),
+                                &litert_lm_sampler_params_delete);
+  ASSERT_NE(top_k_params, nullptr);
+  EXPECT_EQ(litert_lm_sampler_params_set_top_k(top_k_params.get(), 1),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_sampler_params_set_temperature(top_k_params.get(), 0.8f),
+            kLiteRtLmStatusOk);
+  const std::string top_k_text = run_session_with_params(top_k_params.get());
+  EXPECT_FALSE(top_k_text.empty()) << litert_lm_get_last_error_message();
+  EXPECT_EQ(top_k_text, greedy_text);
+
+  // Top-K with top_k > 1 exercises p = 1.0f normalization and sampler growth.
+  EXPECT_EQ(litert_lm_sampler_params_set_top_k(top_k_params.get(), 5),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_sampler_params_set_seed(top_k_params.get(), 0),
+            kLiteRtLmStatusOk);
+  const std::string top_k5_text = run_session_with_params(top_k_params.get());
+  EXPECT_FALSE(top_k5_text.empty()) << litert_lm_get_last_error_message();
+
+  // Top-K and Top-P with non-positive k (such as the default top_k = 0) are
+  // rejected up front at session creation rather than failing lazily on the
+  // first decode step.
+  for (const LiteRtLmSamplerType sampler_type :
+       {kLiteRtLmSamplerTypeTopK, kLiteRtLmSamplerTypeTopP}) {
+    SCOPED_TRACE(sampler_type);
+    SamplerParamsPtr invalid_params(CreateSamplerParams(sampler_type),
+                                    &litert_lm_sampler_params_delete);
+    ASSERT_NE(invalid_params, nullptr);
+    if (sampler_type == kLiteRtLmSamplerTypeTopP) {
+      ASSERT_EQ(litert_lm_sampler_params_set_top_p(invalid_params.get(), 0.8f),
+                kLiteRtLmStatusOk);
+      ASSERT_EQ(
+          litert_lm_sampler_params_set_temperature(invalid_params.get(), 0.7f),
+          kLiteRtLmStatusOk);
+    }
+    SessionConfigPtr invalid_config(CreateSessionConfig(),
+                                    &litert_lm_session_config_delete);
+    ASSERT_NE(invalid_config, nullptr);
+    ASSERT_EQ(litert_lm_session_config_set_sampler_params(invalid_config.get(),
+                                                          invalid_params.get()),
+              kLiteRtLmStatusOk);
+    LiteRtLmSession* invalid_session = nullptr;
+    const int create_status = litert_lm_engine_create_session(
+        engine.get(), invalid_config.get(), &invalid_session);
+    EXPECT_EQ(create_status, kLiteRtLmStatusInvalidArgument);
+    litert_lm_session_delete(invalid_session);
+  }
+}
+
 TEST(EngineCTest, TextScoringBasic) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");

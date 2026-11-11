@@ -217,14 +217,18 @@ typedef struct LiteRtLmSessionConfig LiteRtLmSessionConfig;
 //
 // Added in version 0.1.0.
 typedef enum {
-  // Default fallback/unspecified.
+  // Default fallback/unspecified: uses the model metadata's default sampler
+  // parameters when present, or greedy decoding otherwise.
   kLiteRtLmSamplerTypeUnspecified = 0,
-  // Probabilistically pick among the top k tokens.
+  // Probabilistically pick among the top `top_k` tokens (`top_k >= 1`) scaled
+  // by `temperature` (`>= 0`, where `0` selects argmax). `top_p` is ignored.
   kLiteRtLmSamplerTypeTopK = 1,
-  // Probabilistically pick among the tokens such that the sum is greater
-  // than or equal to p tokens after first performing top-k sampling.
+  // Probabilistically pick from the smallest prefix of the top `top_k` tokens
+  // (`top_k >= 1`) whose cumulative probability mass is `>= top_p` (`[0, 1]`),
+  // scaled by `temperature` (`>= 0`, where `0` selects argmax).
   kLiteRtLmSamplerTypeTopP = 2,
-  // Pick the token with maximum logit (i.e., argmax).
+  // Pick the token with maximum logit (i.e., argmax). `top_k`, `top_p`,
+  // `temperature`, and `seed` are ignored.
   kLiteRtLmSamplerTypeGreedy = 3,
 } LiteRtLmSamplerType;
 
@@ -252,6 +256,16 @@ typedef enum {
 typedef struct LiteRtLmSamplerParams LiteRtLmSamplerParams;
 
 // Creates LiteRT LM Sampler Parameters with a specific sampler type.
+//
+// Numeric fields are zero-initialized (`top_k = 0`, `top_p = 0.0f`,
+// `temperature = 0.0f`, `seed = 0`). Before creating a session or conversation:
+// - `kLiteRtLmSamplerTypeGreedy` and `kLiteRtLmSamplerTypeUnspecified` are
+//   valid as-is.
+// - `kLiteRtLmSamplerTypeTopK` requires `top_k >= 1` via
+//   `litert_lm_sampler_params_set_top_k` (and optional `temperature >= 0`,
+//   `seed`).
+// - `kLiteRtLmSamplerTypeTopP` requires `top_k >= 1`, `top_p` in `[0, 1]`, and
+//   finite `temperature >= 0`.
 //
 // @param type The sampler type to use.
 // @param out_params On success, receives the created parameters, owned by the

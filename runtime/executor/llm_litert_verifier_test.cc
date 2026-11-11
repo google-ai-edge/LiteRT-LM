@@ -50,7 +50,7 @@
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
-#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/llm_executor_settings.h"

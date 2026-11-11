@@ -51,6 +51,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "ml_drift_delegate/delegate/custom_event_metal.h"  // from @litert
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/top_k_gpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -268,6 +269,7 @@ absl::StatusOr<std::unique_ptr<TopKMetalSampler>> TopKMetalSampler::Create(
     std::optional<ActivationDataType> activation_data_type, SamplerParameters sampler_params) {
   RET_CHECK_GT(batch_size, 0) << "Batch size must be positive.";
   RET_CHECK_GT(vocab_size, 0) << "Vocabulary size must be positive.";
+  sampler_params = NormalizeSamplerParams(std::move(sampler_params));
 
   ABSL_ASSIGN_OR_RETURN(auto metal_env, CreateMetalEnvFromLiteRtEnv(env));
   auto gpu_info = metal_env->GetInfo();
@@ -557,15 +559,6 @@ absl::Status TopKMetalSampler::DownloadSampledIds(void* dst) {
     return absl::InternalError("staging_ids_buffer_ is not initialized.");
   }
   memcpy(dst, [staging_ids_buffer_ contents], tokens_ids_->GetMemorySizeInBytes());
-  return absl::OkStatus();
-}
-
-absl::Status TopKMetalSampler::UpdateConfig(const proto::SamplerParameters& sampler_params,
-                                            int batch_size) {
-  ABSL_RETURN_IF_ERROR(CheckTopKWithinMax(sampler_params));
-  ABSL_RETURN_IF_ERROR(CheckBatchSizeWithinMax(batch_size));
-  sampler_params_ = sampler_params;
-  config_.batch_size = batch_size;
   return absl::OkStatus();
 }
 

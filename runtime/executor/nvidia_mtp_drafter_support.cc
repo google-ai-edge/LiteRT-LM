@@ -62,6 +62,7 @@
 #include "litert/vendors/nvidia/dispatch/topk_candidates_c_api.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_cpu_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -795,7 +796,9 @@ class LazyNvidiaSampler : public Sampler {
 
   absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
                             int batch_size) override {
-    if (host_ == nullptr || sampler_params.k() > host_max_top_k_) {
+    const proto::SamplerParameters normalized =
+        NormalizeSamplerParams(sampler_params);
+    if (host_ == nullptr || normalized.k() > host_max_top_k_) {
       // As UpdateOrRecreateSampler: a new CPU sampler.
       std::optional<std::reference_wrapper<const Environment>> env;
       if (env_ != nullptr) {
@@ -803,19 +806,21 @@ class LazyNvidiaSampler : public Sampler {
       }
       ABSL_ASSIGN_OR_RETURN(
           std::unique_ptr<Sampler> new_host,
-          CreateSampler(Backend::CPU, batch_size, sampler_params, env,
+          CreateSampler(Backend::CPU, batch_size, normalized, env,
                         sequence_size_, vocab_size_, activation_data_type_));
       RET_CHECK(new_host != nullptr)
           << "No sampler for sampler type " << sampler_params.type();
       host_ = std::move(new_host);
-      host_max_top_k_ = sampler_params.k();
+      host_max_top_k_ = normalized.k();
+    } else {
+      ABSL_RETURN_IF_ERROR(host_->UpdateConfig(normalized, batch_size));
     }
-    sampler_params_ = sampler_params;
+    sampler_params_ = normalized;
     batch_size_ = batch_size;
     decided_ = false;
     device_greedy_.reset();
     device_candidates_.reset();
-    return host_->UpdateConfig(sampler_params, batch_size);
+    return absl::OkStatus();
   }
 
  private:
@@ -931,6 +936,7 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateNpuRouteSampler(
     std::optional<int> sequence_size, std::optional<int> vocab_size,
     std::optional<ActivationDataType> activation_data_type,
     bool tells_step_feed) {
+  sampler_params = NormalizeSamplerParams(std::move(sampler_params));
   ABSL_ASSIGN_OR_RETURN(
       auto host,
       CreateSampler(Backend::CPU, batch_size, sampler_params, env,
@@ -1066,10 +1072,12 @@ absl::Status UpdateOrRecreateMtpVerifierSampler(
                                    sampler_params, env, sequence_size,
                                    vocab_size, activation_data_type);
   }
+  const proto::SamplerParameters normalized =
+      NormalizeSamplerParams(sampler_params);
   if (sampler == nullptr) {
     ABSL_ASSIGN_OR_RETURN(
         sampler,
-        CreateNpuRouteSampler(batch_size, sampler_params, env, sequence_size,
+        CreateNpuRouteSampler(batch_size, normalized, env, sequence_size,
                               vocab_size, activation_data_type,
                               /*tells_step_feed=*/false));
     npu_sampler = dynamic_cast<LazyNvidiaSampler*>(sampler.get());
@@ -1077,10 +1085,10 @@ absl::Status UpdateOrRecreateMtpVerifierSampler(
   if (npu_sampler != nullptr) {
     npu_sampler->SetRecreation(sequence_size, vocab_size, activation_data_type);
   }
-  ABSL_RETURN_IF_ERROR(sampler->UpdateConfig(sampler_params, batch_size));
+  ABSL_RETURN_IF_ERROR(sampler->UpdateConfig(normalized, batch_size));
   // The NPU route's sampler keeps its host sampler at the capacity it needs:
   // the caller's capacity follows an update that took.
-  max_top_k = std::max(max_top_k, sampler_params.k());
+  max_top_k = std::max(max_top_k, normalized.k());
   return absl::OkStatus();
 }
 

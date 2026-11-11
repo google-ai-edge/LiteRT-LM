@@ -62,7 +62,7 @@
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/common_utils.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -308,6 +308,19 @@ absl::Status PopulateLastTokenEmbedding(
     out_embedding.assign(last_tok_emb.begin(), last_tok_emb.end());
   }
   return absl::OkStatus();
+}
+
+// Resolves the context's optional `SamplerParameters` into concrete parameters
+// for the executor's sampler and verifier: unset / `TYPE_UNSPECIFIED` defaults
+// to greedy (`GreedySamplerParams()`), and `GREEDY` / `TOP_K` are normalized to
+// their `TOP_P` equivalents.
+proto::SamplerParameters ResolveExecutorSamplerParams(
+    const std::optional<proto::SamplerParameters>& sampler_params) {
+  if (!sampler_params.has_value() ||
+      sampler_params->type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
+    return GreedySamplerParams();
+  }
+  return NormalizeSamplerParams(*sampler_params);
 }
 
 absl::Status InitializeAuxiliaryExecutorComponents(
@@ -1314,12 +1327,8 @@ LlmLiteRtCompiledModelExecutorBase::MaybeUpdateVerifierSamplerConfig() {
 
 std::pair<proto::SamplerParameters, std::shared_ptr<std::default_random_engine>>
 LlmLiteRtCompiledModelExecutorBase::GetVerifierSamplerConfig() {
-  proto::SamplerParameters sampler_params = GreedySamplerParams();
-  if (llm_context_->runtime_config().sampler_params.has_value() &&
-      llm_context_->runtime_config().sampler_params->type() !=
-          proto::SamplerParameters::TYPE_UNSPECIFIED) {
-    sampler_params = llm_context_->runtime_config().sampler_params.value();
-  }
+  proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
+      llm_context_->runtime_config().sampler_params);
   // The session sampler draws its uniforms from `runtime_state().rand_gen`
   // (see `DrawSampleLogitsUniforms()`); share it with the verifier too so that
   // plain and speculative steps consume a single random stream.
@@ -1778,6 +1787,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     ABSL_RETURN_IF_ERROR(Reset());
   }
 
+  if (sampler_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(UpdateSamplerConfig());
+  }
+
   force_prepare_needed_ = true;
 
   return absl::OkStatus();
@@ -1800,17 +1813,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   if (llm_context_->runtime_config().output_heads.has_value()) {
     output_heads = llm_context_->runtime_config().output_heads.value();
   }
-  proto::SamplerParameters sampler_params;
-  if (llm_context_->runtime_config().sampler_params.has_value()) {
-    sampler_params = llm_context_->runtime_config().sampler_params.value();
-  }
-  if (sampler_params.type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
-    sampler_params.set_type(proto::SamplerParameters::TOP_P);
-    sampler_params.set_k(1);
-    sampler_params.set_p(0.0f);
-    sampler_params.set_temperature(1.0f);
-    sampler_params.set_seed(0);
-  }
+  proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
+      llm_context_->runtime_config().sampler_params);
 
   gpu_sampler_max_top_k_ = sampler_params.k();
 
@@ -1819,6 +1823,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       CreateExecutorSampler(executor_settings_.GetBackend(), sampler_backend,
                             output_heads, std::move(sampler_params), env_,
                             /*sequence_size=*/1, vocab_size, data_type));
+
+  // Keep the context's generator: it may already have drawn uniforms, e.g.
+  // when `UpdateSamplerConfig()` recreates the sampler mid-session. Seed one
+  // for a context without one (`CreateNewContext()` always sets one), so that
+  // `MaybeUpdateVerifierSamplerConfig()` below shares it with
+  // `DrawSampleLogitsUniforms()`.
+  if (llm_context_->runtime_state().rand_gen == nullptr) {
+    llm_context_->runtime_state().rand_gen =
+        std::make_shared<std::default_random_engine>(
+            llm_context_->runtime_config().sampler_params.has_value()
+                ? llm_context_->runtime_config().sampler_params->seed()
+                : 0);
+  }
 
   // The sampler can feed the sampled token straight into the next decode step
   // only when the decode signature looks up the token embedding in the graph.
@@ -1893,6 +1910,30 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   return MaybeUpdateVerifierSamplerConfig();
 }
 
+absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateSamplerConfig() {
+  if (sampler_ == nullptr) {
+    return absl::OkStatus();
+  }
+
+  const proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
+      llm_context_->runtime_config().sampler_params);
+  int output_heads = 1;
+  if (llm_context_->runtime_config().output_heads.has_value()) {
+    output_heads = llm_context_->runtime_config().output_heads.value();
+  }
+  ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
+                        GetSamplerBackend(executor_settings_));
+  if (sampler_backend == Backend::GPU &&
+      sampler_params.k() > gpu_sampler_max_top_k_) {
+    ABSL_VLOG(1) << "Recreating sampler due to incompatible config change.";
+    sampler_ = nullptr;
+    return InitializeSampler();
+  }
+
+  ABSL_RETURN_IF_ERROR(sampler_->UpdateConfig(sampler_params, output_heads));
+  return MaybeUpdateVerifierSamplerConfig();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::SwapSamplerInputTensors() {
   // Move the input_pos and mask to previous ones.
   std::swap(decode_prev_input_pos_,
@@ -1963,12 +2004,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
 absl::Span<const float>
 LlmLiteRtCompiledModelExecutorBase::DrawSampleLogitsUniforms() {
   // Default parameters sample greedily, as in `InitializeSampler()`.
-  proto::SamplerParameters sampler_params = GreedySamplerParams();
-  if (llm_context_->runtime_config().sampler_params.has_value() &&
-      llm_context_->runtime_config().sampler_params->type() !=
-          proto::SamplerParameters::TYPE_UNSPECIFIED) {
-    sampler_params = llm_context_->runtime_config().sampler_params.value();
-  }
+  const proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
+      llm_context_->runtime_config().sampler_params);
   std::shared_ptr<std::default_random_engine>& rand_gen =
       llm_context_->runtime_state().rand_gen;
   if (rand_gen == nullptr) {

@@ -34,6 +34,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_cpu_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -143,27 +144,27 @@ void ConvertFp16ToFp32(absl::Span<const uint16_t> fp16_values,
   }
 }
 
-}  // namespace
-
-absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
-    int k, float p, float temperature, int batch_size, int sequence_size,
-    bool compute_exact_log_probs) {
-  if (k <= 0) {
-    return absl::InvalidArgumentError("k must be positive.");
-  }
-  if (p < 0.0f || p > 1.0f) {
-    return absl::InvalidArgumentError("p must be in [0, 1].");
-  }
+absl::Status ValidateTopPSamplerConfig(proto::SamplerParameters::Type type,
+                                       int k, float p, float temperature,
+                                       int batch_size, int sequence_size) {
+  ABSL_RETURN_IF_ERROR(ValidateTopPSamplingParams(type, k, p, temperature));
   if (batch_size <= 0) {
     return absl::InvalidArgumentError("batch_size must be positive.");
   }
   if (sequence_size <= 0) {
     return absl::InvalidArgumentError("sequence_size must be positive.");
   }
-  if (temperature < 0.0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Temperature must be >= 0, but got ", temperature));
-  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
+    int k, float p, float temperature, int batch_size, int sequence_size,
+    bool compute_exact_log_probs) {
+  ABSL_RETURN_IF_ERROR(
+      ValidateTopPSamplerConfig(proto::SamplerParameters::TOP_P, k, p,
+                                temperature, batch_size, sequence_size));
   return absl::WrapUnique(new TopPSampler(
       k, p, temperature, batch_size, sequence_size, compute_exact_log_probs));
 }
@@ -242,14 +243,16 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
 
 absl::Status TopPSampler::UpdateConfig(
     const proto::SamplerParameters& sampler_params, int batch_size) {
-  if (batch_size <= 0) {
-    return absl::InvalidArgumentError("batch_size must be positive.");
-  }
-  k_ = sampler_params.k();
-  p_ = sampler_params.p();
-  temperature_ = sampler_params.temperature();
+  const proto::SamplerParameters normalized =
+      NormalizeSamplerParams(sampler_params);
+  ABSL_RETURN_IF_ERROR(ValidateTopPSamplerConfig(
+      normalized.type(), normalized.k(), normalized.p(),
+      normalized.temperature(), batch_size, sequence_size_));
+  k_ = normalized.k();
+  p_ = normalized.p();
+  temperature_ = normalized.temperature();
   batch_size_ = batch_size;
-  compute_exact_log_probs_ = sampler_params.compute_exact_log_probs();
+  compute_exact_log_probs_ = normalized.compute_exact_log_probs();
   return absl::OkStatus();
 }
 

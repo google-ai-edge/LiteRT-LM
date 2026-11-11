@@ -1492,6 +1492,7 @@ TEST(SessionConfigTest,
   auto session_config = SessionConfig::CreateDefault();
   session_config.GetMutableSamplerParams().set_type(
       proto::SamplerParameters::TOP_P);
+  session_config.GetMutableSamplerParams().set_k(10);
   session_config.GetMutableSamplerParams().set_p(0.5f);
 
   MockTokenizer tokenizer;
@@ -1510,6 +1511,7 @@ TEST(SessionConfigTest,
   EXPECT_EQ(session_config.GetSamplerBackend(), Backend::GPU);
   EXPECT_EQ(session_config.GetSamplerParams().type(),
             proto::SamplerParameters::TOP_P);
+  EXPECT_EQ(session_config.GetSamplerParams().k(), 10);
   EXPECT_EQ(session_config.GetSamplerParams().p(), 0.5f);
 }
 
@@ -1763,18 +1765,24 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateRejectsInvalidSamplerParams) {
   constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
   constexpr float kInf = std::numeric_limits<float>::infinity();
   struct InvalidParams {
-    float p;
-    float temperature;
+    int k = 40;
+    float p = 0.95f;
+    float temperature = 1.0f;
   };
   const InvalidParams invalid_params[] = {
-      {.p = kNan, .temperature = 1.0f},   {.p = -0.1f, .temperature = 1.0f},
-      {.p = 1.1f, .temperature = 1.0f},   {.p = 0.95f, .temperature = kNan},
-      {.p = 0.95f, .temperature = -1.0f}, {.p = 0.95f, .temperature = kInf},
+      {.k = 0},
+      {.k = -1},
+      {.p = kNan},
+      {.p = -0.1f},
+      {.p = 1.1f},
+      {.temperature = kNan},
+      {.temperature = -1.0f},
+      {.temperature = kInf},
   };
 
   for (const InvalidParams& invalid : invalid_params) {
-    SCOPED_TRACE(
-        absl::StrCat("p: ", invalid.p, ", temperature: ", invalid.temperature));
+    SCOPED_TRACE(absl::StrCat("k: ", invalid.k, ", p: ", invalid.p,
+                              ", temperature: ", invalid.temperature));
     // Invalid params set on the session.
     auto settings = EngineSettings::CreateDefault(*model_assets);
     ASSERT_OK(settings);
@@ -1783,7 +1791,7 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateRejectsInvalidSamplerParams) {
     SessionConfig session_config = SessionConfig::CreateDefault();
     proto::SamplerParameters& params = session_config.GetMutableSamplerParams();
     params.set_type(proto::SamplerParameters::TOP_P);
-    params.set_k(40);
+    params.set_k(invalid.k);
     params.set_p(invalid.p);
     params.set_temperature(invalid.temperature);
     EXPECT_THAT(session_config.MaybeUpdateAndValidate(*settings),
@@ -1793,6 +1801,7 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateRejectsInvalidSamplerParams) {
     auto model_settings = EngineSettings::CreateDefault(*model_assets);
     ASSERT_OK(model_settings);
     proto::LlmMetadata invalid_metadata = CreateLlmMetadata();
+    invalid_metadata.mutable_sampler_params()->set_k(invalid.k);
     invalid_metadata.mutable_sampler_params()->set_p(invalid.p);
     invalid_metadata.mutable_sampler_params()->set_temperature(
         invalid.temperature);
@@ -1800,6 +1809,52 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateRejectsInvalidSamplerParams) {
         model_settings->MaybeUpdateAndValidate(&tokenizer, &invalid_metadata));
     SessionConfig default_config = SessionConfig::CreateDefault();
     EXPECT_THAT(default_config.MaybeUpdateAndValidate(*model_settings),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+
+  auto valid_settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(valid_settings);
+  proto::LlmMetadata valid_metadata = CreateLlmMetadata();
+  ASSERT_OK(
+      valid_settings->MaybeUpdateAndValidate(&tokenizer, &valid_metadata));
+
+  // TOP_K requires k >= 1 and finite temperature >= 0, while ignoring p.
+  for (const int invalid_k : {0, -1}) {
+    SessionConfig top_k_config = SessionConfig::CreateDefault();
+    proto::SamplerParameters& params = top_k_config.GetMutableSamplerParams();
+    params.set_type(proto::SamplerParameters::TOP_K);
+    params.set_k(invalid_k);
+    params.set_temperature(1.0f);
+    EXPECT_THAT(top_k_config.MaybeUpdateAndValidate(*valid_settings),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+  {
+    SessionConfig top_k_config = SessionConfig::CreateDefault();
+    proto::SamplerParameters& params = top_k_config.GetMutableSamplerParams();
+    params.set_type(proto::SamplerParameters::TOP_K);
+    params.set_k(10);
+    params.set_p(2.0f);  // Ignored for TOP_K.
+    params.set_temperature(0.8f);
+    EXPECT_OK(top_k_config.MaybeUpdateAndValidate(*valid_settings));
+  }
+
+  // GREEDY ignores k, p, and temperature.
+  {
+    SessionConfig greedy_config = SessionConfig::CreateDefault();
+    proto::SamplerParameters& params = greedy_config.GetMutableSamplerParams();
+    params.set_type(proto::SamplerParameters::GREEDY);
+    params.set_k(0);
+    params.set_p(-1.0f);
+    params.set_temperature(-1.0f);
+    EXPECT_OK(greedy_config.MaybeUpdateAndValidate(*valid_settings));
+  }
+
+  // Unknown sampler types are rejected.
+  {
+    SessionConfig unknown_config = SessionConfig::CreateDefault();
+    unknown_config.GetMutableSamplerParams().set_type(
+        static_cast<proto::SamplerParameters::Type>(99));
+    EXPECT_THAT(unknown_config.MaybeUpdateAndValidate(*valid_settings),
                 StatusIs(absl::StatusCode::kInvalidArgument));
   }
 }
@@ -1941,6 +1996,50 @@ TEST(EngineSettingsTest,
   llm_metadata.set_min_runtime_version("0.18.0");
 
   EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidate_GreedyMetadataDoesNotInflateGpuMaxTopK) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_1"));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  // GREEDY ignores k, so a large stale k in metadata does not raise GpuConfig's
+  // max_top_k.
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings greedy_settings,
+      EngineSettings::CreateDefault(model_assets, Backend::GPU));
+  ASSERT_OK_AND_ASSIGN(
+      const GpuConfig initial_gpu_config,
+      greedy_settings.GetMainExecutorSettings().GetBackendConfig<GpuConfig>());
+  proto::LlmMetadata greedy_metadata = CreateLlmMetadata();
+  greedy_metadata.mutable_sampler_params()->set_type(
+      proto::SamplerParameters::GREEDY);
+  greedy_metadata.mutable_sampler_params()->set_k(128);
+  ASSERT_OK(
+      greedy_settings.MaybeUpdateAndValidate(&tokenizer, &greedy_metadata));
+  ASSERT_OK_AND_ASSIGN(
+      const GpuConfig updated_greedy_config,
+      greedy_settings.GetMainExecutorSettings().GetBackendConfig<GpuConfig>());
+  EXPECT_EQ(updated_greedy_config.max_top_k, initial_gpu_config.max_top_k);
+
+  // Non-GREEDY metadata (e.g. TOP_K) with the same k raises max_top_k.
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings top_k_settings,
+      EngineSettings::CreateDefault(model_assets, Backend::GPU));
+  proto::LlmMetadata top_k_metadata = CreateLlmMetadata();
+  top_k_metadata.mutable_sampler_params()->set_type(
+      proto::SamplerParameters::TOP_K);
+  top_k_metadata.mutable_sampler_params()->set_k(128);
+  ASSERT_OK(top_k_settings.MaybeUpdateAndValidate(&tokenizer, &top_k_metadata));
+  ASSERT_OK_AND_ASSIGN(
+      const GpuConfig updated_top_k_config,
+      top_k_settings.GetMainExecutorSettings().GetBackendConfig<GpuConfig>());
+  EXPECT_EQ(updated_top_k_config.max_top_k, 128u);
 }
 
 }  // namespace

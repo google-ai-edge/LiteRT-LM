@@ -38,10 +38,13 @@ class TopKGpuSampler : public Sampler {
  public:
   virtual ~TopKGpuSampler() = default;
 
+  // Normalizes `sampler_params` (see `NormalizeSamplerParams`) and stores them
+  // with `batch_size`. Returns an UnimplementedError if their type is
+  // unrecognized, or an InvalidArgumentError if `k`, `p`, or `temperature` is
+  // out of bounds, `k` exceeds the k the sampler was created with, or
+  // `batch_size` is outside [1, the batch size the sampler was created with].
   absl::Status UpdateConfig(const proto::SamplerParameters& sampler_params,
-                            int batch_size) override {
-    return absl::UnimplementedError("Not implemented yet.");
-  }
+                            int batch_size) override;
 
   // Draws the uniforms of a sampling call with the current parameters from
   // `rng`: one value per (batch, position) of the `batch_size` of
@@ -103,17 +106,6 @@ class TopKGpuSampler : public Sampler {
 
   // Initializes the sampling model and related operations.
   virtual absl::Status InitSampling() = 0;
-
-  // Returns an InvalidArgumentError if `sampler_params.k()` exceeds the k the
-  // sampler was created with: the sampling model keeps only that many logits,
-  // so a larger k requires creating a new sampler.
-  absl::Status CheckTopKWithinMax(
-      const proto::SamplerParameters& sampler_params) const;
-
-  // Returns an InvalidArgumentError unless `batch_size` is in [1, the batch
-  // size the sampler was created with]: the GPU buffers are sized for that
-  // many batches.
-  absl::Status CheckBatchSizeWithinMax(int batch_size) const;
 
   // Gets the descriptors for model tensor creation.
   ::ml_drift::TensorDescriptor GetParamsTensorDescriptor() const;

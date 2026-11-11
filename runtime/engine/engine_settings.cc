@@ -85,15 +85,34 @@ absl::Status ValidateSpeculativeDecodingConfig(
   return absl::OkStatus();
 }
 
-// Returns an InvalidArgument error if `sampler_params` holds a `p` outside
-// [0, 1] or a `temperature` that is negative or not finite (NaN included).
-// `k` is not checked because it is 0 for sampler types that ignore it.
+// Returns an InvalidArgument error if `sampler_params` (prior to
+// `NormalizeSamplerParams`) holds an unrecognized `type`, a non-positive `k`
+// for `TOP_K` / `TOP_P`, a `p` outside [0, 1] for `TOP_P`, or a negative /
+// non-finite `temperature` for `TOP_K` / `TOP_P`. `GREEDY` and
+// `TYPE_UNSPECIFIED` ignore `k`, `p`, and `temperature`.
 absl::Status ValidateSamplerParams(
     const proto::SamplerParameters& sampler_params) {
-  const float p = sampler_params.p();
-  if (!(p >= 0.0f && p <= 1.0f)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Sampler top-p must be in [0, 1], but got: ", p));
+  switch (sampler_params.type()) {
+    case proto::SamplerParameters::TYPE_UNSPECIFIED:
+    case proto::SamplerParameters::GREEDY:
+      return absl::OkStatus();
+    case proto::SamplerParameters::TOP_K:
+      break;
+    case proto::SamplerParameters::TOP_P: {
+      const float p = sampler_params.p();
+      if (!(p >= 0.0f && p <= 1.0f)) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Sampler top-p must be in [0, 1], but got: ", p));
+      }
+      break;
+    }
+    default:
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unsupported sampler type: ", sampler_params.type()));
+  }
+  if (sampler_params.k() <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Sampler top-k must be >= 1, but got: ", sampler_params.k()));
   }
   const float temperature = sampler_params.temperature();
   if (!(temperature >= 0.0f && std::isfinite(temperature))) {
@@ -526,7 +545,9 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
         proto::SamplerParameters::TOP_P);
   }
 
-  if (metadata.has_sampler_params() && metadata.sampler_params().k() > 0) {
+  if (metadata.has_sampler_params() &&
+      metadata.sampler_params().type() != proto::SamplerParameters::GREEDY &&
+      metadata.sampler_params().k() > 0) {
     const uint32_t metadata_top_k =
         static_cast<uint32_t>(metadata.sampler_params().k());
     if (backend == Backend::GPU_ARTISAN
