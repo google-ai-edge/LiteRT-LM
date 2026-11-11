@@ -21,42 +21,89 @@
   <title>LiteRT-LM.js Chat</title>
   
   <!-- PWA Assets & Mobile Headers -->
+  <link rel="icon" type="image/svg+xml" href="./assets/LiteRT_App_1024x1024px_Symbol-only_1.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
   <link rel="manifest" href="./manifest.json" crossorigin="use-credentials">
-
-  <meta name="theme-color" content="#0b0f19">
+  <meta name="theme-color" content="#0d1017">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
+    /* Colors follow the OS theme until the app sets data-theme. */
     :root {
-      --bg-dark: #0b0f19;
-      --bg-card: #151d30;
-      --bg-chat: #0e1424;
-      --bg-input: #070a12;
-      --border: #24324f;
-      --text: #f1f5f9;
-      --text-muted: #64748b;
-      --teal: #00c99e;
-      --teal-dark: #0b705d;
-      --blue: #3b82f6;
-      --blue-dark: #1d4ed8;
-      --slate-bubble-user: #1e293b;
-      --slate-bubble-bot: #151e33;
+      color-scheme: light dark;
+      --bg-dark: light-dark(#ffffff, #0d1017);
+      --bg-chat: light-dark(#ffffff, #0d1017);
+      --bg-sidebar: light-dark(#f8fafc, #131720);
+      --bg-card: light-dark(#f1f5f9, #171c26);
+      --bg-elevated: light-dark(#e2e8f0, #1e2432);
+      --bg-composer: light-dark(#f8fafc, #151a24);
+      --bg-input: light-dark(#ffffff, #10141c);
+      --slate-bubble-user: light-dark(#eef2f7, #1d2433);
+      --slate-bubble-bot: transparent;
+      --border: light-dark(#cbd5e1, #262f40);
+      --border-subtle: light-dark(#e2e8f0, rgba(255, 255, 255, 0.08));
+      --border-strong: light-dark(#94a3b8, #364156);
+      --text: light-dark(#0f172a, #f1f5f9);
+      --text-secondary: light-dark(#334155, #cbd5e1);
+      --text-muted: light-dark(#475569, #94a3b8);
+      --teal: light-dark(#0f766e, #14d4aa);
+      --teal-dark: light-dark(#115e59, #0b705d);
+      --teal-subtle: light-dark(rgba(15, 118, 110, 0.10), rgba(20, 212, 170, 0.12));
+      --teal-btn-bg: light-dark(#0f766e, #14d4aa);
+      --teal-btn-hover: light-dark(#115e59, #2ee0b8);
+      --teal-btn-text: light-dark(#ffffff, #041f18);
+      --blue: light-dark(#1d4ed8, #60a5fa);
+      --blue-dark: light-dark(#1e40af, #1d4ed8);
+      --danger: light-dark(#b91c1c, #f87171);
+      --danger-subtle: light-dark(rgba(185, 28, 28, 0.08), rgba(248, 113, 113, 0.12));
+      --danger-btn-bg: #dc2626;
+      --danger-btn-hover: #b91c1c;
+      --warning: light-dark(#b45309, #fbbf24);
+      --warning-text: light-dark(#92400e, #fbbf24);
+      --code-bg: light-dark(#f1f5f9, #080b10);
+      --code-header-bg: light-dark(#e2e8f0, #141923);
+      --overlay-backdrop: light-dark(rgba(15, 23, 42, 0.45), rgba(4, 7, 13, 0.68));
+      --shadow-sm: 0 1px 2px light-dark(rgba(15, 23, 42, 0.06), rgba(0, 0, 0, 0.3));
+      --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.48);
+      --shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.28);
+      --hljs-fg: light-dark(#0f172a, #e2e8f0);
+      --hljs-comment: light-dark(#475569, #94a3b8);
+      --hljs-keyword: light-dark(#0369a1, #7dd3fc);
+      --hljs-string: light-dark(#0f766e, #6ee7b7);
+      --hljs-number: light-dark(#b45309, #fcd34d);
+      --hljs-title: light-dark(#9d174d, #f9a8d4);
+      --hljs-attr: light-dark(#1d4ed8, #93c5fd);
+      --hljs-tag: light-dark(#0f766e, #5eead4);
+    }
+
+    [data-theme="dark"] {
+      color-scheme: dark;
+    }
+
+    [data-theme="light"] {
+      color-scheme: light;
+      --shadow-md: 0 12px 32px rgba(15, 23, 42, 0.14);
+      --shadow-composer: 0 2px 14px rgba(15, 23, 42, 0.06);
     }
 
     html, body {
       margin: 0;
       padding: 0;
       height: 100vh;
+      height: 100dvh;
       overflow: hidden;
-      overscroll-behavior: none; 
+      overscroll-behavior: none;
     }
 
     body {
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background-color: var(--bg-dark);
       color: var(--text);
       display: flex;
       flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
   </style>
 </head>
