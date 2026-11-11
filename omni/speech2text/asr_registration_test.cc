@@ -36,6 +36,9 @@ TEST(AsrRegistrationTest, OnlyLinkedModelIsRegistered) {
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("parakeet-ctc-0.6b"));
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("moonshine-tiny"));
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("whisper-tiny"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("whisper-base"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("whisper-small"));
+  EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("whisper-medium"));
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("qwen3-asr-0.6b"));
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("tinygemma-asr"));
 

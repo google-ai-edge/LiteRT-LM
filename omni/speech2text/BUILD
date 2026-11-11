@@ -739,6 +739,7 @@ cc_library(
 cc_library(
     name = "whisper",
     srcs = ["whisper.cc"],
+    hdrs = ["whisper.h"],
     deps = [
         ":asr_session",
         ":audio_source",
@@ -763,6 +764,7 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/proto:speech2text_metadata_cc_proto",
         "//runtime/proto:speech2text_model_type_cc_proto",
+        "//runtime/proto:speech2text_session_config_cc_proto",
         "//support/tokenizer",
     ],
     alwayslink = 1,

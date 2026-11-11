@@ -54,6 +54,9 @@ ABSL_FLAG(float, overlap_ratio, 0.4f,
           "between 0.0 and 1.0.");
 ABSL_FLAG(std::string, text_merger_type, "timestamp",
           "Text merger implementation to use: timestamp or levenshtein.");
+ABSL_FLAG(std::string, language, "",
+          "Optional language hint in BCP-47 format (e.g. 'en-US', 'zh-CN', "
+          "'ja').");
 ABSL_FLAG(std::string, model_path, "",
           "Direct path to model file (.litertlm or .tflite), bypassing curl "
           "download.");
@@ -67,11 +70,21 @@ class FileOmniInputSource : public litert::omni::OmniSession::InputSource {
       : source_(std::move(source)) {}
 
  protected:
-  void ResetInternal() override { source_->Reset(); }
-  bool NeedScheduleInternal() const override { return source_->NeedSchedule(); }
+  void ResetInternal() override {
+    source_->Reset();
+    eof_pushed_ = false;
+  }
+  bool NeedScheduleInternal() const override {
+    return source_->NeedSchedule() || !eof_pushed_;
+  }
   absl::Status ScheduleInternal() override {
     SetState(State::kRunning);
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+    if (!source_->NeedSchedule()) {
+      eof_pushed_ = true;
+      PushOutput(litert::omni::OmniSession::EndOfInput{});
+      return absl::OkStatus();
+    }
     ABSL_RETURN_IF_ERROR(source_->Schedule());
     ABSL_ASSIGN_OR_RETURN(std::vector<float> chunk, source_->GetOutput());
     PushOutput(
@@ -81,15 +94,14 @@ class FileOmniInputSource : public litert::omni::OmniSession::InputSource {
 
  private:
   std::unique_ptr<litert::omni::asr::FileAudioSource> source_;
+  bool eof_pushed_ = false;
 };
 
-absl::Status RunAsrRunner(absl::string_view model_name,
-                          absl::string_view audio_path,
-                          absl::string_view cache_dir,
-                          absl::string_view backend_flag, int num_threads,
-                          float overlap_ratio,
-                          absl::string_view text_merger_flag,
-                          absl::string_view model_path_flag) {
+absl::Status RunAsrRunner(
+    absl::string_view model_name, absl::string_view audio_path,
+    absl::string_view cache_dir, absl::string_view backend_flag,
+    int num_threads, float overlap_ratio, absl::string_view text_merger_flag,
+    absl::string_view language_flag, absl::string_view model_path_flag) {
   if (audio_path.empty()) {
     return absl::InvalidArgumentError("--audio_path flag is required.");
   }
@@ -153,6 +165,9 @@ absl::Status RunAsrRunner(absl::string_view model_name,
               TEXT_MERGER_TYPE_TIMESTAMP);
     }
   }
+  if (!language_flag.empty()) {
+    session_config.set_language(language_flag);
+  }
 
   ABSL_ASSIGN_OR_RETURN(
       auto engine, litert::omni::OmniEngine::Create(model_name, engine_settings,
@@ -203,7 +218,8 @@ int main(int argc, char* argv[]) {
       absl::GetFlag(FLAGS_model_name), absl::GetFlag(FLAGS_audio_path),
       absl::GetFlag(FLAGS_cache_dir), absl::GetFlag(FLAGS_backend),
       absl::GetFlag(FLAGS_num_threads), absl::GetFlag(FLAGS_overlap_ratio),
-      absl::GetFlag(FLAGS_text_merger_type), absl::GetFlag(FLAGS_model_path));
+      absl::GetFlag(FLAGS_text_merger_type), absl::GetFlag(FLAGS_language),
+      absl::GetFlag(FLAGS_model_path));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "ASR Runner failed: " << status;
     return 1;

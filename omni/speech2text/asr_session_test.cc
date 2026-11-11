@@ -42,6 +42,7 @@
 #include "omni/speech2text/detokenizer.h"
 #include "omni/speech2text/levenshtein_text_merger.h"
 #include "omni/speech2text/speech_recognizer.h"
+#include "omni/speech2text/whisper.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
@@ -66,6 +67,7 @@ class AsrSessionTest : public ::testing::Test {
 namespace {
 
 using ::absl_testing::StatusIs;
+using ::testing::ElementsAre;
 using ::testing::IsSupersetOf;
 
 TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
@@ -84,6 +86,12 @@ TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
                             "moonshine-int8",
                             "whisper-tiny",
                             "whisper-tiny-int8",
+                            "whisper-base",
+                            "whisper-base-int8",
+                            "whisper-small",
+                            "whisper-small-int8",
+                            "whisper-medium",
+                            "whisper-medium-int8",
                             "whisper",
                             "whisper-int8",
                             "qwen3-asr-0.6b",
@@ -97,9 +105,225 @@ TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("parakeet-ctc-0.6b"));
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("moonshine-tiny"));
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("whisper-tiny"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("whisper-base"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("whisper-small"));
+  EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("whisper-medium"));
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("qwen3-asr-0.6b"));
   EXPECT_TRUE(OmniRegistry::Get().IsModelRegistered("tinygemma-asr"));
   EXPECT_FALSE(OmniRegistry::Get().IsModelRegistered("unknown-model"));
+
+  ASSERT_OK_AND_ASSIGN(auto tiny_reg,
+                       OmniRegistry::Get().GetRegisteredModel("whisper-tiny"));
+  EXPECT_EQ(tiny_reg.canonical_model_name, "whisper-tiny");
+  EXPECT_EQ(tiny_reg.model_remote_url,
+            "https://huggingface.co/litert-community/whisper-tiny/resolve/main/"
+            "whisper_tiny_30s_i8.litertlm");
+
+  ASSERT_OK_AND_ASSIGN(auto base_reg,
+                       OmniRegistry::Get().GetRegisteredModel("whisper-base"));
+  EXPECT_EQ(base_reg.canonical_model_name, "whisper-base");
+  EXPECT_EQ(base_reg.model_remote_url,
+            "https://huggingface.co/litert-community/whisper-base/resolve/main/"
+            "whisper_base_30s_i8.litertlm");
+
+  ASSERT_OK_AND_ASSIGN(auto small_reg,
+                       OmniRegistry::Get().GetRegisteredModel("whisper-small"));
+  EXPECT_EQ(small_reg.canonical_model_name, "whisper-small");
+  EXPECT_EQ(
+      small_reg.model_remote_url,
+      "https://huggingface.co/litert-community/whisper-small/resolve/main/"
+      "whisper_small_30s_i8.litertlm");
+
+  ASSERT_OK_AND_ASSIGN(auto medium_reg, OmniRegistry::Get().GetRegisteredModel(
+                                            "whisper-medium"));
+  EXPECT_EQ(medium_reg.canonical_model_name, "whisper-medium");
+  EXPECT_EQ(
+      medium_reg.model_remote_url,
+      "https://huggingface.co/litert-community/whisper-medium/resolve/main/"
+      "whisper_medium_30s_i8.litertlm");
+}
+
+TEST_F(AsrSessionTest, WhisperResolvesLanguageTokenFromSessionConfig) {
+  // Default metadata without language hint uses <|en|> (50259).
+  ASSERT_OK_AND_ASSIGN(lm::proto::Speech2TextMetadata default_resolved,
+                       ResolveWhisperMetadata(/*metadata=*/nullptr));
+  EXPECT_THAT(default_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50259, 50359, 50363));
+
+  // BCP-47 locale tags and language codes map to Whisper language token IDs.
+  lm::proto::Speech2TextSessionConfig zh_config;
+  zh_config.set_language("zh-CN");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata zh_resolved,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &zh_config));
+  EXPECT_THAT(zh_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50260, 50359, 50363));
+
+  for (absl::string_view zh_alias : {"cmn_hans_cn", "cmn", "cn"}) {
+    lm::proto::Speech2TextSessionConfig alias_config;
+    alias_config.set_language(zh_alias);
+    ASSERT_OK_AND_ASSIGN(
+        lm::proto::Speech2TextMetadata alias_resolved,
+        ResolveWhisperMetadata(/*metadata=*/nullptr, &alias_config));
+    EXPECT_THAT(alias_resolved.decode_start_token_ids(),
+                ElementsAre(50258, 50260, 50359, 50363));
+  }
+
+  lm::proto::Speech2TextSessionConfig ja_config;
+  ja_config.set_language("ja");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata ja_resolved,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &ja_config));
+  EXPECT_THAT(ja_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50266, 50359, 50363));
+
+  lm::proto::Speech2TextSessionConfig jp_config;
+  jp_config.set_language("jp");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata jp_resolved,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &jp_config));
+  EXPECT_THAT(jp_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50266, 50359, 50363));
+
+  lm::proto::Speech2TextSessionConfig ko_config;
+  ko_config.set_language("ko-KR");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata ko_resolved,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &ko_config));
+  EXPECT_THAT(ko_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50264, 50359, 50363));
+
+  lm::proto::Speech2TextSessionConfig kr_config;
+  kr_config.set_language("kr");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata kr_resolved,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &kr_config));
+  EXPECT_THAT(kr_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50264, 50359, 50363));
+
+  lm::proto::Speech2TextSessionConfig hi_config;
+  hi_config.set_language("hi-IN");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata hi_resolved,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &hi_config));
+  EXPECT_THAT(hi_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50276, 50359, 50363));
+
+  // Also overrides the language slot when metadata already carries the default
+  // 4-token prefix.
+  lm::proto::Speech2TextSessionConfig es_config;
+  es_config.set_language("<|es|>");
+  ASSERT_OK_AND_ASSIGN(lm::proto::Speech2TextMetadata es_resolved,
+                       ResolveWhisperMetadata(&default_resolved, &es_config));
+  EXPECT_THAT(es_resolved.decode_start_token_ids(),
+              ElementsAre(50258, 50262, 50359, 50363));
+
+  // Legacy ISO 639-1 and BCP-47 locale aliases map to Whisper's canonical
+  // language tokens (`nb-NO` -> `<|no|>`, `iw` -> `<|he|>`, `in` -> `<|id|>`,
+  // `ji` -> `<|yi|>`, `jv` -> `<|jw|>`, `fil` -> `<|tl|>`).
+  struct AliasCase {
+    absl::string_view alias;
+    int expected_lang_token_id;
+  };
+  for (const AliasCase& tc : {
+           AliasCase{"nb-NO", 50288},
+           AliasCase{"iw", 50279},
+           AliasCase{"in", 50275},
+           AliasCase{"ji", 50335},
+           AliasCase{"jv", 50356},
+           AliasCase{"fil", 50348},
+       }) {
+    lm::proto::Speech2TextSessionConfig alias_config;
+    alias_config.set_language(tc.alias);
+    ASSERT_OK_AND_ASSIGN(
+        lm::proto::Speech2TextMetadata alias_resolved,
+        ResolveWhisperMetadata(/*metadata=*/nullptr, &alias_config));
+    EXPECT_THAT(alias_resolved.decode_start_token_ids(),
+                ElementsAre(50258, tc.expected_lang_token_id, 50359, 50363))
+        << "alias=" << tc.alias;
+  }
+
+  // Unrecognized languages (including "yue" on 99-language Whisper without a
+  // v3 tokenizer, or unknown codes like "zz-ZZ") return InvalidArgumentError
+  // rather than silently falling back to English or mapping to <|translate|>.
+  lm::proto::Speech2TextSessionConfig yue_config;
+  yue_config.set_language("yue");
+  EXPECT_THAT(ResolveWhisperMetadata(/*metadata=*/nullptr, &yue_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  lm::proto::Speech2TextSessionConfig unknown_config;
+  unknown_config.set_language("zz-ZZ");
+  EXPECT_THAT(ResolveWhisperMetadata(/*metadata=*/nullptr, &unknown_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+class FakeWhisperTokenizer : public ::litert::support::Tokenizer {
+ public:
+  explicit FakeWhisperTokenizer(bool include_yue) : include_yue_(include_yue) {}
+
+  ::litert::support::TokenizerType GetTokenizerType() const override {
+    return ::litert::support::TokenizerType::kHuggingFace;
+  }
+  absl::StatusOr<std::vector<int>> TextToTokenIds(
+      absl::string_view /*text*/) override {
+    return std::vector<int>{1};
+  }
+  absl::StatusOr<int> TokenToId(absl::string_view token) override {
+    const int shift = include_yue_ ? 1 : 0;
+    if (token == "<|endoftext|>") return 50257;
+    if (token == "<|startoftranscript|>") return 50258;
+    if (token == "<|en|>") return 50259;
+    if (token == "<|zh|>") return 50260;
+    if (token == "<|hi|>") return 50276;
+    if (include_yue_ && token == "<|yue|>") return 50358;
+    if (token == "<|translate|>") return 50358 + shift;
+    if (token == "<|transcribe|>") return 50359 + shift;
+    if (token == "<|notimestamps|>") return 50363 + shift;
+    return absl::NotFoundError("Unknown token");
+  }
+  absl::StatusOr<std::string> TokenIdsToText(
+      absl::Span<const int> /*token_ids*/,
+      bool /*skip_special_tokens*/) override {
+    return "tok";
+  }
+  std::vector<std::string> GetTokens() const override { return {}; }
+  int GetVocabSize() const override { return 51865; }
+
+ private:
+  bool include_yue_;
+};
+
+TEST_F(AsrSessionTest, WhisperResolvesStartTokensFromTokenizerVocab) {
+  // 99-language Whisper tokenizer (tiny/base/small/medium): <|yue|> is absent
+  // and rejected; <|hi|> resolves to [50258, 50276, 50359, 50363].
+  FakeWhisperTokenizer v2_tok(/*include_yue=*/false);
+  lm::proto::Speech2TextSessionConfig hi_config;
+  hi_config.set_language("hi");
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata v2_hi,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &hi_config, &v2_tok));
+  EXPECT_THAT(v2_hi.decode_start_token_ids(),
+              ElementsAre(50258, 50276, 50359, 50363));
+
+  lm::proto::Speech2TextSessionConfig yue_config;
+  yue_config.set_language("yue");
+  EXPECT_THAT(
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &yue_config, &v2_tok),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // 100-language Whisper v3 tokenizer: <|yue|> is 50358, and task tokens shift
+  // by +1 (<|transcribe|>=50360, <|notimestamps|>=50364).
+  FakeWhisperTokenizer v3_tok(/*include_yue=*/true);
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata v3_yue,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &yue_config, &v3_tok));
+  EXPECT_THAT(v3_yue.decode_start_token_ids(),
+              ElementsAre(50258, 50358, 50360, 50364));
+  ASSERT_OK_AND_ASSIGN(
+      lm::proto::Speech2TextMetadata v3_hi,
+      ResolveWhisperMetadata(/*metadata=*/nullptr, &hi_config, &v3_tok));
+  EXPECT_THAT(v3_hi.decode_start_token_ids(),
+              ElementsAre(50258, 50276, 50360, 50364));
 }
 
 TEST_F(AsrSessionTest, RejectsUnknownModelOnCreate) {
