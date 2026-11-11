@@ -19,6 +19,7 @@
 #include <filesystem>  // NOLINT
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -29,6 +30,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -431,6 +433,60 @@ TEST(LiteRtLmLibTest, RunLiteRtLmWithValidModelPath) {
   // test litertlm file, we only run 32 tokens.
   settings.max_num_tokens = 32;
   EXPECT_OK(RunLiteRtLm(settings));
+}
+
+TEST(LiteRtLmLibTest,
+     RunLiteRtLmAsyncPrefillOverflowReturnsErrorAndUnregistersLogSink) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  const std::filesystem::path log_sink_path =
+      std::filesystem::path(testing::TempDir()) / "async_overflow_sink.log";
+  std::filesystem::remove(log_sink_path);
+
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "cpu";
+  settings.disable_cache = true;
+  settings.async = true;
+  settings.max_num_tokens = 10;
+  settings.input_prompt =
+      "Hello world Hello world Hello world Hello world Hello world";
+  settings.log_sink_file = log_sink_path.string();
+
+  EXPECT_THAT(
+      RunLiteRtLm(settings),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               testing::HasSubstr("Exceeding the maximum number of tokens")));
+
+  // Verify the log sink was unregistered on the error return path.
+  ABSL_LOG(INFO) << "PostErrorLogSinkSentinel";
+  std::ifstream log_file(log_sink_path);
+  ASSERT_TRUE(log_file.is_open());
+  const std::string log_contents((std::istreambuf_iterator<char>(log_file)),
+                                 std::istreambuf_iterator<char>());
+  EXPECT_THAT(log_contents,
+              testing::Not(testing::HasSubstr("PostErrorLogSinkSentinel")));
+}
+
+TEST(LiteRtLmLibTest, RunLiteRtLmAsyncBenchmarkPrefillOverflowReturnsError) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "cpu";
+  settings.disable_cache = true;
+  settings.async = true;
+  settings.benchmark = true;
+  settings.max_num_tokens = 10;
+  settings.benchmark_prefill_tokens = 20;
+  settings.benchmark_decode_tokens = 4;
+
+  EXPECT_THAT(
+      RunLiteRtLm(settings),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               testing::HasSubstr("Exceeding the maximum number of tokens")));
 }
 
 TEST(LiteRtLmLibTest, CreateEngineSuccess) {

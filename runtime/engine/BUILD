@@ -189,6 +189,7 @@ cc_library(
         ":engine_interface",
         ":engine_settings",
         ":io_types",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/container:btree",
         "@com_google_absl//absl/container:flat_hash_map",

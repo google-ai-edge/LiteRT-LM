@@ -47,6 +47,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/btree_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -61,6 +62,7 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
@@ -179,24 +181,68 @@ std::optional<MtpGatingConfig> GetMtpGatingConfig(
   return config;
 }
 
+// Registers a FileLogSink with Abseil's global log sink registry for the
+// lifetime of the scope.
+class ScopedFileLogSink {
+ public:
+  explicit ScopedFileLogSink(const std::string& filename) : sink_(filename) {
+    absl::AddLogSink(&sink_);
+  }
+  ~ScopedFileLogSink() { absl::RemoveLogSink(&sink_); }
+
+  ScopedFileLogSink(const ScopedFileLogSink&) = delete;
+  ScopedFileLogSink& operator=(const ScopedFileLogSink&) = delete;
+
+ private:
+  FileLogSink sink_;
+};
+
+// Shared state for asynchronous Conversation::SendMessageAsync callbacks.
+// Heap-allocated via std::shared_ptr so callbacks remain memory-safe even if
+// Engine::WaitUntilDone returns early on timeout while background tasks drain.
+struct AsyncMessageCallbackState {
+  absl::Mutex mu;
+  absl::Status status ABSL_GUARDED_BY(mu);
+  std::stringstream captured_output ABSL_GUARDED_BY(mu);
+  std::string active_channel ABSL_GUARDED_BY(mu);
+
+  void RecordError(const absl::Status& err) {
+    absl::MutexLock lock(mu);
+    if (status.ok()) {
+      status = err;
+    }
+  }
+
+  absl::Status GetStatus() {
+    absl::MutexLock lock(mu);
+    return status;
+  }
+
+  std::string GetCapturedOutput() {
+    absl::MutexLock lock(mu);
+    return captured_output.str();
+  }
+};
+
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
-    std::stringstream& captured_output) {
-  auto active_channel = std::make_shared<std::string>();
-  return [&captured_output, active_channel](absl::StatusOr<Message> message) {
+    std::shared_ptr<AsyncMessageCallbackState> state) {
+  return [state = std::move(state)](absl::StatusOr<Message> message) {
     if (!message.ok()) {
+      state->RecordError(message.status());
       std::cout << message.status().message() << std::endl;
       return;
     }
+    absl::MutexLock lock(state->mu);
     if (message->is_null()) {
-      if (active_channel && !active_channel->empty()) {
-        std::cout << ColorBlue("[/" + *active_channel + "]") << std::endl;
+      if (!state->active_channel.empty()) {
+        std::cout << ColorBlue("[/" + state->active_channel + "]") << std::endl;
       } else {
         std::cout << std::endl << std::flush;
       }
       return;
     }
-    auto status = PrintMessage(*message, captured_output, active_channel.get(),
-                               /*streaming=*/true);
+    auto status = PrintMessage(*message, state->captured_output,
+                               &state->active_channel, /*streaming=*/true);
     if (!status.ok()) {
       ABSL_LOG(ERROR) << "Failed to print message: " << status;
     }
@@ -263,15 +309,33 @@ absl::StatusOr<Message> RunSingleTurnConversation(
   // Skip printing the output when using fake prefill tokens.
   bool should_print_output = settings.benchmark_prefill_tokens == 0;
   if (settings.async) {
-    auto print_message_callback =
-        should_print_output ? CreatePrintMessageCallback(captured_output)
-                            : [](absl::StatusOr<Message> message) {};
+    auto callback_state = std::make_shared<AsyncMessageCallbackState>();
+    absl::AnyInvocable<void(absl::StatusOr<Message>)> print_message_callback =
+        should_print_output
+            ? CreatePrintMessageCallback(callback_state)
+            : absl::AnyInvocable<void(absl::StatusOr<Message>)>(
+                  [callback_state](absl::StatusOr<Message> message) {
+                    if (!message.ok()) {
+                      callback_state->RecordError(message.status());
+                    }
+                  });
     ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
         json::object({{"role", "user"}, {"content", content_list}}),
         std::move(print_message_callback), std::move(optional_args)));
-    ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(kWaitUntilDoneTimeout));
-    ABSL_RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
-    return conversation->GetHistory().back();
+    if (absl::Status wait_status = engine->WaitUntilDone(kWaitUntilDoneTimeout);
+        !wait_status.ok()) {
+      conversation->CancelProcess();
+      return wait_status;
+    }
+    ABSL_RETURN_IF_ERROR(callback_state->GetStatus());
+    ABSL_RETURN_IF_ERROR(
+        CheckExpectedOutput(callback_state->GetCapturedOutput(), settings));
+    const auto history = conversation->GetHistory();
+    if (history.empty()) {
+      return absl::InternalError(
+          "Conversation history is empty after SendMessageAsync.");
+    }
+    return history.back();
   } else {
     ABSL_ASSIGN_OR_RETURN(
         auto model_message,
@@ -334,11 +398,19 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
     }
 
     if (settings.async) {
+      auto callback_state = std::make_shared<AsyncMessageCallbackState>();
       ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
           json::object({{"role", "user"}, {"content", content_list}}),
-          CreatePrintMessageCallback(captured_output),
+          CreatePrintMessageCallback(callback_state),
           std::move(optional_args)));
-      ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(kWaitUntilDoneTimeout));
+      if (absl::Status wait_status =
+              engine->WaitUntilDone(kWaitUntilDoneTimeout);
+          !wait_status.ok()) {
+        conversation->CancelProcess();
+        return wait_status;
+      }
+      ABSL_RETURN_IF_ERROR(callback_state->GetStatus());
+      captured_output << callback_state->GetCapturedOutput();
     } else {
       ABSL_ASSIGN_OR_RETURN(
           auto model_message,
@@ -1279,10 +1351,9 @@ absl::StatusOr<nlohmann::json> BuildContentList(
 
 absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
                          std::vector<LitertLmMetrics>* metrics) {
-  std::unique_ptr<FileLogSink> log_sink;
+  std::optional<ScopedFileLogSink> log_sink;
   if (settings.log_sink_file.has_value()) {
-    log_sink = std::make_unique<FileLogSink>(settings.log_sink_file.value());
-    absl::AddLogSink(log_sink.get());
+    log_sink.emplace(*settings.log_sink_file);
   }
 
   ABSL_ASSIGN_OR_RETURN(EngineSettings engine_settings,
@@ -1428,10 +1499,6 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
     metrics->insert(metrics->end(),
                     std::make_move_iterator(iteration_metrics.begin()),
                     std::make_move_iterator(iteration_metrics.end()));
-  }
-
-  if (log_sink) {
-    absl::RemoveLogSink(log_sink.get());
   }
 
   return absl::OkStatus();
