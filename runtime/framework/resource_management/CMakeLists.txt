@@ -31,7 +31,10 @@ target_include_directories(runtime_framework_resource_manager_manager
 
 target_link_libraries(runtime_framework_resource_manager_manager
   PUBLIC
+    LiteRTLM::Runtime::Executor::AudioExecutorUtils
+    LiteRTLM::Runtime::Executor::VisionExecutorUtils
     LiteRTLM::Runtime::Framework::ThreadOptions
+    LiteRTLM::Runtime::Util::FileUtil
     LITERTLM_DEPS
 )
 

@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -43,6 +44,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_utils.h"
 #include "runtime/executor/audio_litert_compiled_model_executor.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -52,11 +54,14 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor_utils.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 #include "runtime/framework/resource_management/utils/movable_mutex_lock.h"
 #include "runtime/framework/resource_management/utils/resource_manager_utils.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/file_util.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
@@ -121,6 +126,85 @@ absl::Status SaveProcessedContextAndSeparateLoadedHandler(
   ABSL_RETURN_IF_ERROR(context_handler->UpdateSharedProcessedContext(
       new_shared_processed_context));
   return absl::OkStatus();
+}
+
+bool HasUsableCpuWeightCacheFile(const ExecutorSettingsBase& settings,
+                                 absl::string_view suffix) {
+  if (settings.IsWeightCacheDisabled()) {
+    return false;
+  }
+  const absl::string_view cache_dir = settings.GetCacheDir();
+  if (cache_dir == ":nocache" || cache_dir == ":memory") {
+    return false;
+  }
+  auto cache_file =
+      settings.GetWeightCacheFile(suffix, /*check_and_clean=*/false);
+  if (!cache_file.ok()) {
+    return false;
+  }
+  if (const auto* scoped_file =
+          std::get_if<std::shared_ptr<ScopedFile>>(&*cache_file)) {
+    return *scoped_file != nullptr && (*scoped_file)->IsValid();
+  }
+  const std::string& cache_path = std::get<std::string>(*cache_file);
+  const absl::string_view parent_dir = Dirname(cache_path);
+  return FileExists(cache_path) ||
+         IsDirectoryWritable(parent_dir.empty() ? "." : parent_dir);
+}
+
+bool IsVisionExecutorReloadable(
+    const VisionExecutorSettings* absl_nullable settings,
+    ModelResources* absl_nullable model_resources) {
+  if (settings == nullptr || model_resources == nullptr ||
+      settings->GetBackend() != Backend::CPU ||
+      settings->GetEncoderBackend() != Backend::CPU ||
+      settings->GetAdapterBackend() != Backend::CPU) {
+    return false;
+  }
+  const std::string encoder_suffix =
+      absl::StrCat(VisionExecutorSettings::kEncoderName,
+                   ExecutorSettingsBase::kXnnpackCacheSuffix);
+  if (!HasUsableCpuWeightCacheFile(*settings, encoder_suffix)) {
+    return false;
+  }
+  if (model_resources->HasTFLiteModel(
+          proto::LlmMetadata::TF_LITE_VISION_ADAPTER)) {
+    const std::string adapter_suffix =
+        absl::StrCat(VisionExecutorSettings::kAdapterName,
+                     ExecutorSettingsBase::kXnnpackCacheSuffix);
+    if (!HasUsableCpuWeightCacheFile(*settings, adapter_suffix)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsAudioExecutorReloadable(
+    const AudioExecutorSettings* absl_nullable settings,
+    ModelResources* absl_nullable model_resources) {
+  if (settings == nullptr || model_resources == nullptr ||
+      !settings->GetBundledWithMainModel() ||
+      settings->GetBackend() != Backend::CPU ||
+      settings->GetAdapterBackend() != Backend::CPU ||
+      settings->GetLoraRank() != 0) {
+    return false;
+  }
+  const std::string encoder_suffix =
+      absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
+                   ExecutorSettingsBase::kXnnpackCacheSuffix);
+  if (!HasUsableCpuWeightCacheFile(*settings, encoder_suffix)) {
+    return false;
+  }
+  if (model_resources->HasTFLiteModel(
+          proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER)) {
+    const std::string adapter_suffix =
+        absl::StrCat(AudioExecutorSettings::kAdapterName,
+                     ExecutorSettingsBase::kXnnpackCacheSuffix);
+    if (!HasUsableCpuWeightCacheFile(*settings, adapter_suffix)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -533,7 +617,10 @@ ResourceManager::~ResourceManager() {
   }
 
   // Environment is only released after all the executors are destroyed.
-  backup_litert_env_.reset();
+  {
+    absl::MutexLock lock(litert_env_mutex_);
+    backup_litert_env_.reset();
+  }
 }
 
 ResourceManager::ResourceManager(
@@ -545,14 +632,51 @@ ResourceManager::ResourceManager(
     ::litert::Environment* absl_nullable litert_env,
     std::unique_ptr<AudioExecutor> audio_executor,
     std::unique_ptr<VisionExecutor> vision_executor)
-    :  // dummy comment to prevent clang-format from moving the next line here
+    : model_resources_(model_resources),
       llm_executor_(std::move(llm_executor)),
       vision_executor_(std::move(vision_executor)),
+      vision_prepared_(vision_executor_ != nullptr),
+      can_reload_vision_executor_(
+          vision_executor_ == nullptr &&
+          IsVisionExecutorReloadable(vision_executor_settings.get(),
+                                     model_resources)),
       vision_executor_settings_(std::move(vision_executor_settings)),
       audio_executor_(std::move(audio_executor)),
+      audio_prepared_(audio_executor_ != nullptr),
+      can_reload_audio_executor_(
+          audio_executor_ == nullptr &&
+          IsAudioExecutorReloadable(audio_executor_settings.get(),
+                                    model_resources)),
       audio_executor_settings_(std::move(audio_executor_settings)),
       litert_env_(litert_env),
       llm_executor_settings_(std::move(llm_executor_settings)) {
+  if (model_resources_ != nullptr && vision_executor_settings_ != nullptr) {
+    bool is_legacy_vision = false;
+    if (!is_legacy_vision && model_resources_->HasTFLiteModel(
+                                 proto::LlmMetadata::TF_LITE_VISION_ENCODER)) {
+      has_bundled_vision_encoder_ = true;
+      auto props =
+          GetVisionExecutorPropertiesFromModelResources(*model_resources_);
+      if (props.ok()) {
+        cached_vision_properties_ = *std::move(props);
+      }
+    }
+  }
+  if (model_resources_ != nullptr && audio_executor_settings_ != nullptr &&
+      audio_executor_settings_->GetBundledWithMainModel() &&
+      audio_executor_settings_->GetBackend() != Backend::GPU_ARTISAN &&
+      model_resources_->HasTFLiteModel(
+          proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)) {
+    has_bundled_audio_encoder_ = true;
+    auto props =
+        GetAudioExecutorPropertiesFromModelResources(*model_resources_);
+    if (props.ok()) {
+      if (props->is_streaming_model) {
+        can_reload_audio_executor_ = false;
+      }
+      cached_audio_properties_ = *std::move(props);
+    }
+  }
 }
 
 std::optional<uint32_t> ResourceManager::AssignLoraId(
@@ -591,9 +715,10 @@ std::optional<uint32_t> ResourceManager::AssignLoraIdLocked(
   return lora_id;
 }
 
-absl::Status ResourceManager::MaybeCreateLitertEnv() {
+absl::StatusOr<::litert::Environment*> ResourceManager::GetOrCreateLitertEnv() {
+  absl::MutexLock lock(litert_env_mutex_);
   if (litert_env_ != nullptr) {
-    return absl::OkStatus();
+    return litert_env_;
   }
   std::vector<::litert::EnvironmentOptions::Option> env_options;
   if (auto severity = GetMinLogSeverity()) {
@@ -607,7 +732,7 @@ absl::Status ResourceManager::MaybeCreateLitertEnv() {
   backup_litert_env_ =
       std::make_unique<litert::Environment>(std::move(new_litert_env));
   litert_env_ = backup_litert_env_.get();
-  return absl::OkStatus();
+  return litert_env_;
 }
 
 absl::StatusOr<std::unique_ptr<ContextHandler>>
@@ -636,7 +761,11 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
 
   // Find the audio lora id.
   if (session_config.GetAudioScopedLoraFile() != nullptr) {
-    ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
+    {
+      absl::MutexLock audio_lock(audio_executor_mutex_);
+      can_reload_audio_executor_ = false;
+      ABSL_RETURN_IF_ERROR(EnsureAudioExecutorLoadedLocked());
+    }
     absl::MutexLock lora_lock(lora_mutex_);
     ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
     const std::string audio_lora_key = GetScopedLoraKey(
@@ -674,25 +803,55 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
                           llm_executor_->CreateNewContext(
                               std::move(lora_id), std::move(runtime_config)));
   }
-  std::unique_ptr<AudioContext> audio_context;
-  if (session_config.AudioModalityEnabled()) {
-    ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
-    ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-    if (session_config.GetAudioScopedLoraFile() == nullptr) {
-      auto use_lora_status = audio_executor->UseLoRA(std::nullopt);
-      if (!use_lora_status.ok() && !absl::IsUnimplemented(use_lora_status)) {
-        return use_lora_status;
+
+  if (session_config.VisionModalityEnabled()) {
+    bool defer_vision_loading = false;
+    {
+      absl::MutexLock vision_lock(vision_executor_mutex_);
+      if (vision_executor_ != nullptr ||
+          (can_reload_vision_executor_ && has_bundled_vision_encoder_)) {
+        vision_prepared_ = true;
+        defer_vision_loading = true;
       }
     }
-    auto audio_executor_properties =
-        audio_executor->GetAudioExecutorProperties();
-    if (audio_executor_properties.ok()) {
-      if (audio_executor_properties->is_streaming_model) {
-        ABSL_ASSIGN_OR_RETURN(audio_context,
-                              audio_executor->CreateNewContext());
+    if (!defer_vision_loading) {
+      ABSL_RETURN_IF_ERROR(TryLoadingVisionExecutor());
+    }
+  }
+
+  std::unique_ptr<AudioContext> audio_context;
+  if (session_config.AudioModalityEnabled()) {
+    bool defer_audio_loading = false;
+    {
+      absl::MutexLock audio_lock(audio_executor_mutex_);
+      if (can_reload_audio_executor_ &&
+          session_config.GetAudioScopedLoraFile() == nullptr &&
+          (audio_executor_ != nullptr ||
+           (cached_audio_properties_.has_value() &&
+            !cached_audio_properties_->is_streaming_model))) {
+        audio_prepared_ = true;
+        defer_audio_loading = true;
       }
-    } else if (!absl::IsUnimplemented(audio_executor_properties.status())) {
-      return audio_executor_properties.status();
+    }
+    if (!defer_audio_loading) {
+      ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
+      ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+      if (session_config.GetAudioScopedLoraFile() == nullptr) {
+        auto use_lora_status = audio_executor->UseLoRA(std::nullopt);
+        if (!use_lora_status.ok() && !absl::IsUnimplemented(use_lora_status)) {
+          return use_lora_status;
+        }
+      }
+      auto audio_executor_properties =
+          audio_executor->GetAudioExecutorProperties();
+      if (audio_executor_properties.ok()) {
+        if (audio_executor_properties->is_streaming_model) {
+          ABSL_ASSIGN_OR_RETURN(audio_context,
+                                audio_executor->CreateNewContext());
+        }
+      } else if (!absl::IsUnimplemented(audio_executor_properties.status())) {
+        return audio_executor_properties.status();
+      }
     }
   }
   return ContextHandler::Create(std::move(llm_context),
@@ -871,24 +1030,41 @@ ResourceManager::AcquireExecutorWithContextHandler(
 
 absl::Status ResourceManager::TryLoadingVisionExecutor() {
   absl::MutexLock lock(vision_executor_mutex_);
+  return EnsureVisionExecutorLoadedLocked();
+}
+
+absl::Status ResourceManager::EnsureVisionExecutorLoadedLocked() {
   if (vision_executor_ != nullptr) {
+    vision_prepared_ = true;
     return absl::OkStatus();
   }
   if (!vision_executor_settings_) {
     return absl::InvalidArgumentError("Vision options should not be null.");
   }
 
-  ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
-  RET_CHECK_NE(litert_env_, nullptr);
-  ABSL_ASSIGN_OR_RETURN(vision_executor_,
-                        VisionLiteRtCompiledModelExecutor::Create(
-                            *vision_executor_settings_, *litert_env_));
+  ABSL_ASSIGN_OR_RETURN(auto* litert_env, GetOrCreateLitertEnv());
+  RET_CHECK_NE(litert_env, nullptr);
+  if (model_resources_ != nullptr && has_bundled_vision_encoder_) {
+    ABSL_ASSIGN_OR_RETURN(
+        vision_executor_,
+        VisionLiteRtCompiledModelExecutor::Create(
+            *vision_executor_settings_, *litert_env, *model_resources_));
+  } else {
+    ABSL_ASSIGN_OR_RETURN(vision_executor_,
+                          VisionLiteRtCompiledModelExecutor::Create(
+                              *vision_executor_settings_, *litert_env));
+  }
+  vision_prepared_ = true;
   return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<VisionExecutor>>
 ResourceManager::AcquireVisionExecutor() {
   MovableMutexLock lock(&vision_executor_mutex_);
+  if (vision_executor_ == nullptr && vision_prepared_ &&
+      can_reload_vision_executor_) {
+    ABSL_RETURN_IF_ERROR(EnsureVisionExecutorLoadedLocked());
+  }
   if (vision_executor_ == nullptr) {
     return absl::InvalidArgumentError(
         "Vision executor should not be null, please TryLoadingVisionExecutor() "
@@ -898,35 +1074,57 @@ ResourceManager::AcquireVisionExecutor() {
                                                 std::move(lock));
 }
 
-absl::Status ResourceManager::TryLoadingAudioExecutor() {
-  bool is_llm_gpu_artisan = false;
-  if (audio_executor_settings_ && audio_executor_settings_->GetBackend() ==
-                                      litert::lm::Backend::GPU_ARTISAN) {
-    RET_CHECK(llm_executor_settings_.has_value());
-    is_llm_gpu_artisan =
-        (llm_executor_settings_->GetBackend() == Backend::GPU_ARTISAN);
+void ResourceManager::MaybeUnloadVisionExecutor() {
+  std::shared_ptr<VisionExecutor> evicted;
+  {
+    absl::MutexLock lock(vision_executor_mutex_);
+    if (can_reload_vision_executor_) {
+      evicted = std::move(vision_executor_);
+    }
   }
+}
 
+absl::Status ResourceManager::TryLoadingAudioExecutor() {
   absl::MutexLock lock(audio_executor_mutex_);
+  return EnsureAudioExecutorLoadedLocked();
+}
+
+absl::Status ResourceManager::EnsureAudioExecutorLoadedLocked() {
   if (audio_executor_ != nullptr) {
+    audio_prepared_ = true;
     return absl::OkStatus();
   }
   if (!audio_executor_settings_) {
     return absl::InvalidArgumentError("Audio options should not be null.");
   }
-  {
-    ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
-    RET_CHECK_NE(litert_env_, nullptr);
+
+  ABSL_ASSIGN_OR_RETURN(auto* litert_env, GetOrCreateLitertEnv());
+  RET_CHECK_NE(litert_env, nullptr);
+  if (model_resources_ != nullptr && has_bundled_audio_encoder_) {
+    ABSL_ASSIGN_OR_RETURN(
+        audio_executor_,
+        litert::lm::AudioLiteRtCompiledModelExecutor::Create(
+            *audio_executor_settings_, *litert_env, *model_resources_));
+  } else {
     ABSL_ASSIGN_OR_RETURN(audio_executor_,
                           litert::lm::AudioLiteRtCompiledModelExecutor::Create(
-                              *audio_executor_settings_, *litert_env_));
+                              *audio_executor_settings_, *litert_env));
   }
+  auto props = audio_executor_->GetAudioExecutorProperties();
+  if (props.ok() && props->is_streaming_model) {
+    can_reload_audio_executor_ = false;
+  }
+  audio_prepared_ = true;
   return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<AudioExecutor>>
 ResourceManager::AcquireAudioExecutor() {
   MovableMutexLock lock(&audio_executor_mutex_);
+  if (audio_executor_ == nullptr && audio_prepared_ &&
+      can_reload_audio_executor_) {
+    ABSL_RETURN_IF_ERROR(EnsureAudioExecutorLoadedLocked());
+  }
   if (audio_executor_ == nullptr) {
     return absl::InvalidArgumentError(
         "Audio executor should not be null, please TryLoadingAudioExecutor() "
@@ -934,6 +1132,37 @@ ResourceManager::AcquireAudioExecutor() {
   }
   return std::make_unique<LockedAudioExecutor>(audio_executor_,
                                                std::move(lock));
+}
+
+void ResourceManager::MaybeUnloadAudioExecutor() {
+  std::shared_ptr<AudioExecutor> evicted;
+  {
+    absl::MutexLock lock(audio_executor_mutex_);
+    if (can_reload_audio_executor_) {
+      evicted = std::move(audio_executor_);
+    }
+  }
+}
+
+absl::StatusOr<std::optional<ExecutorAudioData>>
+ResourceManager::FlushAudioIfLoaded() {
+  absl::MutexLock lock(audio_executor_mutex_);
+  if (audio_executor_ == nullptr) {
+    return std::nullopt;
+  }
+  auto flushed = audio_executor_->Flush();
+  if (absl::IsUnimplemented(flushed.status())) {
+    return std::nullopt;
+  }
+  ABSL_ASSIGN_OR_RETURN(ExecutorAudioData audio_data, std::move(flushed));
+  return std::move(audio_data);
+}
+
+void ResourceManager::ResetAudioIfLoaded() {
+  absl::MutexLock lock(audio_executor_mutex_);
+  if (audio_executor_ != nullptr) {
+    audio_executor_->Reset().IgnoreError();
+  }
 }
 
 absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
@@ -961,15 +1190,27 @@ absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
 
 absl::StatusOr<AudioExecutorProperties>
 ResourceManager::GetAudioExecutorProperties() {
-  ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
-  MovableMutexLock lock(&audio_executor_mutex_);
+  if (cached_audio_properties_.has_value()) {
+    return *cached_audio_properties_;
+  }
+  absl::MutexLock lock(audio_executor_mutex_);
+  if (audio_executor_ != nullptr) {
+    return audio_executor_->GetAudioExecutorProperties();
+  }
+  ABSL_RETURN_IF_ERROR(EnsureAudioExecutorLoadedLocked());
   return audio_executor_->GetAudioExecutorProperties();
 }
 
 absl::StatusOr<VisionExecutorProperties>
 ResourceManager::GetVisionExecutorProperties() {
-  ABSL_RETURN_IF_ERROR(TryLoadingVisionExecutor());
+  if (cached_vision_properties_.has_value()) {
+    return *cached_vision_properties_;
+  }
   absl::MutexLock lock(vision_executor_mutex_);
+  if (vision_executor_ != nullptr) {
+    return vision_executor_->GetVisionExecutorProperties();
+  }
+  ABSL_RETURN_IF_ERROR(EnsureVisionExecutorLoadedLocked());
   return vision_executor_->GetVisionExecutorProperties();
 }
 

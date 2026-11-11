@@ -38,6 +38,7 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -110,8 +111,8 @@ bool ModelResourcesLitertLm::HasTFLiteModel(
 }
 
 bool ModelResourcesLitertLm::HasTFLiteModel(absl::string_view model_type_str) {
-  std::string key = absl::AsciiStrToLower(model_type_str);
-  return model_map_.contains(key) || litert_lm_loader_->HasTFLiteModel(key);
+  return litert_lm_loader_->HasTFLiteModel(
+      absl::AsciiStrToLower(model_type_str));
 }
 
 absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
@@ -122,14 +123,17 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
 absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
     absl::string_view model_type_str) {
   std::string key = absl::AsciiStrToLower(model_type_str);
-  auto it = model_map_.find(key);
-  if (it != model_map_.end()) {
-    return it->second.get();
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (auto it = model_map_.find(key); it != model_map_.end()) {
+      return it->second.get();
+    }
   }
   if (!litert_lm_loader_->HasTFLiteModel(key)) {
     return absl::NotFoundError(absl::StrCat(key, " not found in the model."));
   }
 
+  std::unique_ptr<litert::Model> model_ptr;
   if (enable_file_backed_model_loading_) {
     auto scoped_file = litert_lm_loader_->GetScopedFile();
     auto section_location = litert_lm_loader_->GetSectionLocation(
@@ -146,21 +150,23 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
         ABSL_VLOG(1) << "File-backed LiteRT model loading is unsupported; "
                         "falling back to buffer-backed loading.";
       } else {
-        auto& model = model_map_[key];
-        model = std::make_unique<litert::Model>(
+        model_ptr = std::make_unique<litert::Model>(
             std::move(model_from_section).value());
-        return model.get();
       }
     }
   }
 
-  ABSL_ASSIGN_OR_RETURN(litert::BufferRef<uint8_t> buffer_ref,
-                        GetTFLiteModelSectionBuffer(key));
-  LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
-  auto model_ptr = std::make_unique<litert::Model>(std::move(model));
-  auto* raw_model_ptr = model_ptr.get();
-  model_map_[key] = std::move(model_ptr);
-  return raw_model_ptr;
+  if (model_ptr == nullptr) {
+    ABSL_ASSIGN_OR_RETURN(litert::BufferRef<uint8_t> buffer_ref,
+                          GetTFLiteModelSectionBuffer(key));
+    LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
+    model_ptr = std::make_unique<litert::Model>(std::move(model));
+  }
+
+  absl::MutexLock lock(mutex_);
+  auto [it, inserted] =
+      model_map_.try_emplace(std::move(key), std::move(model_ptr));
+  return it->second.get();
 }
 
 std::optional<std::string>
@@ -266,28 +272,40 @@ absl::StatusOr<const Tokenizer*> ModelResourcesLitertLm::GetOrCreateTokenizer(
 absl::StatusOr<const Tokenizer*> ModelResourcesLitertLm::GetOrCreateTokenizer(
     absl::string_view model_type_str) {
   std::string key = absl::AsciiStrToLower(model_type_str);
-  if (auto it = tokenizer_map_.find(key); it != tokenizer_map_.end()) {
-    return it->second.get();
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (auto it = tokenizer_map_.find(key); it != tokenizer_map_.end()) {
+      return it->second.get();
+    }
   }
   ABSL_ASSIGN_OR_RETURN(auto tokenizer, GetTokenizer(key));
-  return tokenizer_map_.emplace(std::move(key), std::move(tokenizer))
-      .first->second.get();
+  absl::MutexLock lock(mutex_);
+  auto [it, inserted] =
+      tokenizer_map_.try_emplace(std::move(key), std::move(tokenizer));
+  return it->second.get();
 }
 
 absl::StatusOr<const proto::LlmMetadata*>
 ModelResourcesLitertLm::GetLlmMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (llm_metadata_ != nullptr) {
+      return llm_metadata_.get();
+    }
+  }
+  // Non-LLM containers (e.g. TTS, ASR) carry no LlmMetadata section; report
+  // NotFound instead of dereferencing an empty optional.
+  if (!litert_lm_loader_->HasLlmMetadata()) {
+    return absl::NotFoundError("LlmMetadata not found in the model file.");
+  }
+  auto buffer_ref = litert_lm_loader_->GetLlmMetadata();
+  auto llm_metadata = std::make_unique<proto::LlmMetadata>();
+  if (!llm_metadata->ParseFromString(
+          std::string(buffer_ref.StrView()))) {  // NOLINT
+    return absl::InternalError("Failed to parse LlmMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (llm_metadata_ == nullptr) {
-    // Non-LLM containers (e.g. TTS, ASR) carry no LlmMetadata section; report
-    // NotFound instead of dereferencing an empty optional.
-    if (!litert_lm_loader_->HasLlmMetadata()) {
-      return absl::NotFoundError("LlmMetadata not found in the model file.");
-    }
-    auto buffer_ref = litert_lm_loader_->GetLlmMetadata();
-    auto llm_metadata = std::make_unique<proto::LlmMetadata>();
-    if (!llm_metadata->ParseFromString(
-            std::string(buffer_ref.StrView()))) {  // NOLINT
-      return absl::InternalError("Failed to parse LlmMetadata");
-    }
     llm_metadata_ = std::move(llm_metadata);
   }
   return llm_metadata_.get();
@@ -295,17 +313,23 @@ ModelResourcesLitertLm::GetLlmMetadata() {
 
 absl::StatusOr<const proto::ExecutorMetadata*>
 ModelResourcesLitertLm::GetExecutorMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (executor_metadata_ != nullptr) {
+      return executor_metadata_.get();
+    }
+  }
+  auto buffer_ref_or = litert_lm_loader_->GetExecutorMetadata();
+  if (!buffer_ref_or.has_value()) {
+    return absl::NotFoundError("ExecutorMetadata not found in the model file.");
+  }
+  auto executor_metadata = std::make_unique<proto::ExecutorMetadata>();
+  if (!executor_metadata->ParseFromString(
+          std::string(buffer_ref_or->StrView()))) {  // NOLINT
+    return absl::InternalError("Failed to parse ExecutorMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (executor_metadata_ == nullptr) {
-    auto buffer_ref_or = litert_lm_loader_->GetExecutorMetadata();
-    if (!buffer_ref_or.has_value()) {
-      return absl::NotFoundError(
-          "ExecutorMetadata not found in the model file.");
-    }
-    auto executor_metadata = std::make_unique<proto::ExecutorMetadata>();
-    if (!executor_metadata->ParseFromString(
-            std::string(buffer_ref_or->StrView()))) {  // NOLINT
-      return absl::InternalError("Failed to parse ExecutorMetadata");
-    }
     executor_metadata_ = std::move(executor_metadata);
   }
   return executor_metadata_.get();
@@ -313,16 +337,23 @@ ModelResourcesLitertLm::GetExecutorMetadata() {
 
 absl::StatusOr<const proto::EmbeddingMetadata*>
 ModelResourcesLitertLm::GetEmbeddingMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (embedding_metadata_ != nullptr) {
+      return embedding_metadata_.get();
+    }
+  }
+  auto buffer_ref = litert_lm_loader_->GetEmbeddingMetadata();
+  if (!buffer_ref.has_value()) {
+    return absl::NotFoundError("No EmbeddingMetadata found in the model.");
+  }
+  auto embedding_metadata = std::make_unique<proto::EmbeddingMetadata>();
+  if (!embedding_metadata->ParseFromString(
+          std::string(buffer_ref->StrView()))) {  // NOLINT
+    return absl::InternalError("Failed to parse EmbeddingMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (embedding_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetEmbeddingMetadata();
-    if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No EmbeddingMetadata found in the model.");
-    }
-    auto embedding_metadata = std::make_unique<proto::EmbeddingMetadata>();
-    if (!embedding_metadata->ParseFromString(
-            std::string(buffer_ref->StrView()))) {  // NOLINT
-      return absl::InternalError("Failed to parse EmbeddingMetadata");
-    }
     embedding_metadata_ = std::move(embedding_metadata);
   }
   return embedding_metadata_.get();
@@ -330,16 +361,23 @@ ModelResourcesLitertLm::GetEmbeddingMetadata() {
 
 absl::StatusOr<const proto::Text2SpeechMetadata*>
 ModelResourcesLitertLm::GetText2SpeechMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (text2speech_metadata_ != nullptr) {
+      return text2speech_metadata_.get();
+    }
+  }
+  auto buffer_ref = litert_lm_loader_->GetText2SpeechMetadata();
+  if (!buffer_ref.has_value()) {
+    return absl::NotFoundError("No Text2SpeechMetadata found in the model.");
+  }
+  auto text2speech_metadata = std::make_unique<proto::Text2SpeechMetadata>();
+  if (!text2speech_metadata->ParseFromArray(buffer_ref->Data(),
+                                            buffer_ref->Size())) {
+    return absl::InternalError("Failed to parse Text2SpeechMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (text2speech_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetText2SpeechMetadata();
-    if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No Text2SpeechMetadata found in the model.");
-    }
-    auto text2speech_metadata = std::make_unique<proto::Text2SpeechMetadata>();
-    if (!text2speech_metadata->ParseFromArray(buffer_ref->Data(),
-                                              buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse Text2SpeechMetadata");
-    }
     text2speech_metadata_ = std::move(text2speech_metadata);
   }
   return text2speech_metadata_.get();
@@ -347,16 +385,23 @@ ModelResourcesLitertLm::GetText2SpeechMetadata() {
 
 absl::StatusOr<const proto::Speech2TextMetadata*>
 ModelResourcesLitertLm::GetSpeech2TextMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (speech2text_metadata_ != nullptr) {
+      return speech2text_metadata_.get();
+    }
+  }
+  auto buffer_ref = litert_lm_loader_->GetSpeech2TextMetadata();
+  if (!buffer_ref.has_value()) {
+    return absl::NotFoundError("No Speech2TextMetadata found in the model.");
+  }
+  auto speech2text_metadata = std::make_unique<proto::Speech2TextMetadata>();
+  if (!speech2text_metadata->ParseFromArray(buffer_ref->Data(),
+                                            buffer_ref->Size())) {
+    return absl::InternalError("Failed to parse Speech2TextMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (speech2text_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetSpeech2TextMetadata();
-    if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No Speech2TextMetadata found in the model.");
-    }
-    auto speech2text_metadata = std::make_unique<proto::Speech2TextMetadata>();
-    if (!speech2text_metadata->ParseFromArray(buffer_ref->Data(),
-                                              buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse Speech2TextMetadata");
-    }
     speech2text_metadata_ = std::move(speech2text_metadata);
   }
   return speech2text_metadata_.get();
@@ -364,16 +409,23 @@ ModelResourcesLitertLm::GetSpeech2TextMetadata() {
 
 absl::StatusOr<const proto::Text2ImageMetadata*>
 ModelResourcesLitertLm::GetText2ImageMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (text2image_metadata_ != nullptr) {
+      return text2image_metadata_.get();
+    }
+  }
+  auto buffer_ref = litert_lm_loader_->GetText2ImageMetadata();
+  if (!buffer_ref.has_value()) {
+    return absl::NotFoundError("No Text2ImageMetadata found in the model.");
+  }
+  auto text2image_metadata = std::make_unique<proto::Text2ImageMetadata>();
+  if (!text2image_metadata->ParseFromArray(buffer_ref->Data(),
+                                           buffer_ref->Size())) {
+    return absl::InternalError("Failed to parse Text2ImageMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (text2image_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetText2ImageMetadata();
-    if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No Text2ImageMetadata found in the model.");
-    }
-    auto text2image_metadata = std::make_unique<proto::Text2ImageMetadata>();
-    if (!text2image_metadata->ParseFromArray(buffer_ref->Data(),
-                                             buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse Text2ImageMetadata");
-    }
     text2image_metadata_ = std::move(text2image_metadata);
   }
   return text2image_metadata_.get();
@@ -381,16 +433,23 @@ ModelResourcesLitertLm::GetText2ImageMetadata() {
 
 absl::StatusOr<const proto::Any2AnyMetadata*>
 ModelResourcesLitertLm::GetAny2AnyMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (any2any_metadata_ != nullptr) {
+      return any2any_metadata_.get();
+    }
+  }
+  auto buffer_ref = litert_lm_loader_->GetAny2AnyMetadata();
+  if (!buffer_ref.has_value()) {
+    return absl::NotFoundError("No Any2AnyMetadata found in the model.");
+  }
+  auto any2any_metadata = std::make_unique<proto::Any2AnyMetadata>();
+  if (!any2any_metadata->ParseFromArray(buffer_ref->Data(),
+                                        buffer_ref->Size())) {
+    return absl::InternalError("Failed to parse Any2AnyMetadata");
+  }
+  absl::MutexLock lock(mutex_);
   if (any2any_metadata_ == nullptr) {
-    auto buffer_ref = litert_lm_loader_->GetAny2AnyMetadata();
-    if (!buffer_ref.has_value()) {
-      return absl::NotFoundError("No Any2AnyMetadata found in the model.");
-    }
-    auto any2any_metadata = std::make_unique<proto::Any2AnyMetadata>();
-    if (!any2any_metadata->ParseFromArray(buffer_ref->Data(),
-                                          buffer_ref->Size())) {
-      return absl::InternalError("Failed to parse Any2AnyMetadata");
-    }
     any2any_metadata_ = std::move(any2any_metadata);
   }
   return any2any_metadata_.get();

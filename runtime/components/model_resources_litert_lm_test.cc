@@ -15,10 +15,16 @@
 #include "runtime/components/model_resources_litert_lm.h"
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <thread>      // NOLINT(build/c++11)
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status_macros.h"  // from @com_google_absl  // IWYU pragma: keep
+#include "absl/synchronization/barrier.h"  // from @com_google_absl
+#include "litert/cc/litert_model.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -55,6 +61,66 @@ TEST(ModelResourcesLitertLmTest, GetTFLiteModelWithFileBackedLoading) {
       const auto* tflite_model,
       model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE));
   EXPECT_GT(tflite_model->GetNumSignatures(), 0);
+}
+
+TEST(ModelResourcesLitertLmTest, ConcurrentLazyAccessReturnsStablePointers) {
+  const auto model_path =
+      std::filesystem::path(testing::SrcDir()) / kTestLmPath;
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+
+  constexpr int kNumThreads = 8;
+  absl::Barrier start_barrier(kNumThreads);
+  std::vector<const Model*> models(kNumThreads, nullptr);
+  std::vector<const LlmMetadata*> metadata_ptrs(kNumThreads, nullptr);
+  std::vector<const Tokenizer*> tokenizers(kNumThreads, nullptr);
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i]() {
+      start_barrier.Block();
+      EXPECT_TRUE(
+          model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE));
+      EXPECT_FALSE(
+          model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_VISION_ENCODER));
+      auto model =
+          model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE);
+      ASSERT_OK(model);
+      models[i] = *model;
+      auto metadata = model_resources->GetLlmMetadata();
+      ASSERT_OK(metadata);
+      metadata_ptrs[i] = *metadata;
+      EXPECT_FALSE(model_resources->GetExecutorMetadata().ok());
+      EXPECT_FALSE(model_resources->GetEmbeddingMetadata().ok());
+      EXPECT_FALSE(model_resources->GetText2SpeechMetadata().ok());
+      EXPECT_FALSE(model_resources->GetSpeech2TextMetadata().ok());
+      EXPECT_FALSE(model_resources->GetText2ImageMetadata().ok());
+      EXPECT_FALSE(model_resources->GetAny2AnyMetadata().ok());
+#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
+      auto tokenizer = model_resources->GetOrCreateTokenizer(
+          LlmMetadata::TF_LITE_PREFILL_DECODE);
+      ASSERT_OK(tokenizer);
+      tokenizers[i] = *tokenizer;
+#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  ASSERT_NE(models[0], nullptr);
+  ASSERT_NE(metadata_ptrs[0], nullptr);
+  for (int i = 1; i < kNumThreads; ++i) {
+    EXPECT_EQ(models[i], models[0]);
+    EXPECT_EQ(metadata_ptrs[i], metadata_ptrs[0]);
+#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
+    EXPECT_NE(tokenizers[i], nullptr);
+    EXPECT_EQ(tokenizers[i], tokenizers[0]);
+#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
+  }
 }
 
 }  // namespace
