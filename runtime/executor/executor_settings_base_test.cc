@@ -349,6 +349,54 @@ TEST(LlmExecutorConfigTest, ModelAssetsDataStream) {
   EXPECT_THAT(oss.str(), testing::HasSubstr("FAKE_WEIGHTS_NONE"));
 }
 
+TEST(LlmExecutorConfigTest, ModelAssetsIsDirectory) {
+  const std::filesystem::path test_dir =
+      std::filesystem::path(::testing::TempDir()) / "model_assets_is_dir_test";
+  std::error_code ec;
+  std::filesystem::remove_all(test_dir, ec);
+  ASSERT_TRUE(std::filesystem::create_directories(test_dir, ec));
+  struct ScopedRemoveAll {
+    std::filesystem::path path;
+    ~ScopedRemoveAll() {
+      std::error_code cleanup_ec;
+      std::filesystem::remove_all(path, cleanup_ec);
+    }
+  } cleanup{test_dir};
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets dir_assets,
+                       ModelAssets::Create(test_dir.string()));
+  EXPECT_TRUE(dir_assets.IsDirectory());
+
+  const std::string model_path = GetTestModelPath();
+  ASSERT_OK_AND_ASSIGN(ModelAssets file_assets,
+                       ModelAssets::Create(model_path));
+  EXPECT_FALSE(file_assets.IsDirectory());
+
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets missing_assets,
+      ModelAssets::Create((test_dir / "does_not_exist").string()));
+  EXPECT_FALSE(missing_assets.IsDirectory());
+
+  ASSERT_OK_AND_ASSIGN(ScopedFile scoped_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets scoped_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(scoped_file)),
+                          test_dir.string()));
+  EXPECT_FALSE(scoped_assets.IsDirectory());
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mmf,
+                       InMemoryFile::Create("content"));
+  ASSERT_OK_AND_ASSIGN(ModelAssets mmf_assets,
+                       ModelAssets::Create(std::move(mmf), test_dir.string()));
+  EXPECT_FALSE(mmf_assets.IsDirectory());
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> data_stream,
+                       FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(ModelAssets stream_assets,
+                       ModelAssets::Create(data_stream));
+  EXPECT_FALSE(stream_assets.IsDirectory());
+}
+
 TEST(LlmExecutorConfigTest, GetCacheSuffixValidCpu) {
   auto result = ExecutorSettingsBase::GetCacheSuffix(
       Backend::CPU, "/path/to/model.litertlm", "");

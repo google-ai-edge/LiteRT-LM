@@ -40,6 +40,7 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #ifdef ENGINE_ADVANCED
+#include "runtime/components/model_resources_hf_dir.h"
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/util/file_data_stream.h"
@@ -692,6 +693,65 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading_HfTokenizer) {
                        "Environment was not initialized during streaming."));
 }
 #endif  // ENABLE_HUGGINGFACE_TOKENIZER
+
+TEST(EngineTest,
+     CreateEngine_HuggingFaceDirectoryDispatchesModelResourcesHfDir) {
+  const auto model_dir =
+      std::filesystem::path(::testing::TempDir()) / "test_engine_hf_dir";
+  std::filesystem::remove_all(model_dir);
+  ASSERT_TRUE(std::filesystem::create_directories(model_dir));
+  absl::Cleanup remove_dir = [&model_dir] {
+    std::filesystem::remove_all(model_dir);
+  };
+
+  ASSERT_OK_AND_ASSIGN(
+      Backend custom_backend,
+      ExecutorBackendRegistry::Instance().TryRegister(
+          "test_hf_dir_backend",
+          [](const LlmExecutorSettings& settings,
+             ModelResources& resources)
+              -> absl::StatusOr<std::unique_ptr<LlmExecutor>> {
+            auto* hf_resources =
+                dynamic_cast<ModelResourcesHfDir*>(&resources);
+            if (hf_resources == nullptr) {
+              return absl::InternalError("Expected ModelResourcesHfDir.");
+            }
+            return absl::UnimplementedError(absl::StrCat(
+                "dispatched_model_type=", hf_resources->model_type()));
+          }));
+  absl::Cleanup unregister_backend = [custom_backend] {
+    ExecutorBackendRegistry::Instance()
+        .Unregister(custom_backend)
+        .IgnoreError();
+  };
+
+  // Directory without config.json fails in ModelResourcesHfDir::Create.
+  ASSERT_OK_AND_ASSIGN(ModelAssets missing_config_assets,
+                       ModelAssets::Create(model_dir.string()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings missing_config_settings,
+      EngineSettings::CreateDefault(missing_config_assets, custom_backend));
+  missing_config_settings.SetParallelFileSectionLoading(false);
+  EXPECT_THAT(CreateEngine(missing_config_settings),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
+
+  {
+    std::ofstream config_file(model_dir / "config.json");
+    ASSERT_TRUE(config_file.is_open());
+    config_file << R"({"model_type": "qwen3_5", "eos_token_id": 2})";
+  }
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets dir_assets,
+                       ModelAssets::Create(model_dir.string()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings dir_settings,
+      EngineSettings::CreateDefault(dir_assets, custom_backend));
+  dir_settings.SetParallelFileSectionLoading(false);
+  EXPECT_THAT(CreateEngine(dir_settings),
+              testing::status::StatusIs(
+                  absl::StatusCode::kUnimplemented,
+                  testing::HasSubstr("dispatched_model_type=qwen3_5")));
+}
 #endif  // ENGINE_ADVANCED
 
 // TODO (b/397975034): Add more tests for Engine.

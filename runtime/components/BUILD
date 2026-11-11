@@ -412,6 +412,54 @@ cc_library(
 )
 
 cc_library(
+    name = "model_resources_hf_dir",
+    srcs = ["model_resources_hf_dir.cc"],
+    hdrs = ["model_resources_hf_dir.h"],
+    deps = [
+        ":model_resources",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/proto:token_cc_proto",
+        "//support/tokenizer",
+        "//support/tokenizer:huggingface_tokenizer_noop",
+    ],
+)
+
+cc_test(
+    name = "model_resources_hf_dir_test",
+    srcs = ["model_resources_hf_dir_test.cc"],
+    deps = [
+        ":model_resources_hf_dir",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/proto:token_cc_proto",
+        "//runtime/util:test_utils",
+        "//support/tokenizer",
+    ] + select({
+        ":disable_huggingface_tokenizer": [],
+        "@platforms//os:chromiumos": [],
+        "//conditions:default": ["//support/tokenizer:huggingface_tokenizer"],
+    }),
+)
+
+cc_library(
     name = "top_k_gpu_sampler",
     srcs = ["top_k_gpu_sampler.cc"],
     hdrs = ["top_k_gpu_sampler.h"],
