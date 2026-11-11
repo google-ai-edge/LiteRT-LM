@@ -106,6 +106,10 @@ struct GpuArtisanConfig {
   // local attention. Prevents instantaneous rewinding, but saves a lot of
   // memory, especially for large models.
   bool use_autosized_ringbuffers = false;
+
+  // Number of draft tokens for speculative decoding.
+  // 0 selects automatic default gamma (2).
+  uint32_t num_draft_tokens = 0;
 };
 
 std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config);

@@ -78,6 +78,7 @@ std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "set_enable_host_mapped_pointer: "
      << config.set_enable_host_mapped_pointer << "\n";
   os << "disallow_8bit_convs: " << config.disallow_8bit_convs << "\n";
+  os << "num_draft_tokens: " << config.num_draft_tokens << "\n";
   return os;
 }
 

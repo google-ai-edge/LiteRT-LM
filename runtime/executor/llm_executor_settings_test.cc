@@ -196,10 +196,14 @@ GpuArtisanConfig CreateGpuArtisanConfig() {
   config.max_top_k = 40;
   config.enable_decode_logits = true;
   config.use_submodel = true;
+  config.num_draft_tokens = 2;
   return config;
 }
 
 TEST(LlmExecutorConfigTest, GpuArtisanConfig) {
+  GpuArtisanConfig default_config;
+  EXPECT_EQ(default_config.num_draft_tokens, 0);
+
   GpuArtisanConfig config = CreateGpuArtisanConfig();
   std::stringstream oss;
   oss << config;
@@ -217,6 +221,7 @@ use_submodel: 1
                    kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
+num_draft_tokens: 2
 )");
   EXPECT_EQ(oss.str(), expected_output);
 }
@@ -251,6 +256,7 @@ use_submodel: 1
       kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
+num_draft_tokens: 2
 
 max_tokens: 1024
 activation_data_type: FLOAT16
@@ -327,6 +333,7 @@ use_submodel: 1
       kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
+num_draft_tokens: 2
 
 max_tokens: 1024
 activation_data_type: FLOAT16
