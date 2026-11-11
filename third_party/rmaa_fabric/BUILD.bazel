@@ -1,0 +1,37 @@
+# Copyright 2026 RMAA Holdings & The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+load("//build_config:litert_lm.bzl", "litert_lm_cc_library", "litert_lm_cc_test")
+
+package(
+    default_visibility = ["//visibility:public"],
+)
+
+litert_lm_cc_library(
+    name = "rmaa_fabric",
+    srcs = ["src/litert_lm_rmaa_fabric.cc"],
+    hdrs = ["include/litert_lm_rmaa_fabric.h"],
+    includes = ["include"],
+    copts = [
+        "-std=c++20",
+        "-DLITERT_LM_ENABLE_RMAA_FABRIC",
+    ],
+    deps = [
+        "//c:api_export_headers",
+        "//c:error_reporter",
+    ],
+)
+
+litert_lm_cc_test(
+    name = "rmaa_fabric_test",
+    srcs = ["tests/test_rmaa_integration.cc"],
+    deps = [
+        ":rmaa_fabric",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
