@@ -1864,7 +1864,9 @@ class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
  protected:
   std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> MakeExecutor(
       std::vector<NpuContextGroup> groups,
-      std::vector<int> supported_context_sizes, int current_step) {
+      std::vector<int> supported_context_sizes, int current_step,
+      ResolvedPrefillSignatures prefill_signatures = {},
+      NpuEmbedder embedder = NpuEmbedder()) {
     absl::StatusOr<ModelAssets> model_assets =
         ModelAssets::Create("dummy_model");
     ABSL_CHECK_OK(model_assets);
@@ -1889,23 +1891,24 @@ class LlmLiteRtNpuCloneContextTest : public DrafterContextTest {
             ::litert::HwAccelerators::kCpu);
     ABSL_CHECK(aux.HasValue());
 
-    NpuGraphLayout initial_layout = groups[0].layout;
+    NpuGraphLayout initial_layout =
+        !groups.empty() ? groups[0].layout : NpuGraphLayout();
     std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
         absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
-        std::move(*settings), *env_, NpuAuxiliaryContext(std::move(*aux)),
-        std::move(*decoder), std::move(groups),
-        std::move(supported_context_sizes), /*prefill_signature_map=*/{},
-        /*prefill_signatures=*/{},
-        LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams{
-            .scale = 1.0f, .zero_point = 0},
-        /*kv_cache_init_value=*/0,
-        LlmLiteRtNpuCompiledModelExecutor::SpeculativeDecodingType::kNone,
-        /*drafter_context=*/std::nullopt,
-        /*drafter_aux_context=*/std::nullopt, NpuEmbedder(), NpuRope(),
-        NpuMask(), NpuKVCache(), /*text_decoder_model=*/nullptr,
-        /*llm_metadata=*/nullptr, /*executor_metadata=*/nullptr,
-        /*is_dynamic_model=*/false, /*dynamic_kv_cache_capacity=*/0,
-        std::move(initial_layout)));
+            std::move(*settings), *env_, NpuAuxiliaryContext(std::move(*aux)),
+            std::move(*decoder), std::move(groups),
+            std::move(supported_context_sizes), /*prefill_signature_map=*/{},
+            std::move(prefill_signatures),
+            LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams{
+                .scale = 1.0f, .zero_point = 0},
+            /*kv_cache_init_value=*/0,
+            LlmLiteRtNpuCompiledModelExecutor::SpeculativeDecodingType::kNone,
+            /*drafter_context=*/std::nullopt,
+            /*drafter_aux_context=*/std::nullopt, std::move(embedder),
+            NpuRope(), NpuMask(), NpuKVCache(), /*text_decoder_model=*/nullptr,
+            /*llm_metadata=*/nullptr, /*executor_metadata=*/nullptr,
+            /*is_dynamic_model=*/false, /*dynamic_kv_cache_capacity=*/0,
+            std::move(initial_layout)));
     executor->current_step_ = current_step;
     return executor;
   }
