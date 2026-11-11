@@ -47,6 +47,7 @@ describe('litert-chat-bubble', () => {
     ]);
     mockState = {
       chatSession: mockChatSession,
+      requestConfirm: jasmine.createSpy('requestConfirm').and.resolveTo(true),
     } as unknown as jasmine.SpyObj<LlmChatStateController>;
 
     element = document.createElement('litert-chat-bubble');
@@ -60,6 +61,25 @@ describe('litert-chat-bubble', () => {
       element.remove();
     }
   });
+
+  it('registers with the state controller once and unregisters on removal',
+     async () => {
+       const state = {
+         chatSession: mockChatSession,
+         addHost: jasmine.createSpy('addHost'),
+         removeHost: jasmine.createSpy('removeHost'),
+       };
+       const bubble = document.createElement('litert-chat-bubble');
+       bubble.state = state as unknown as LlmChatStateController;
+       bubble.message = {role: 'user', text: 'Hi', senderName: 'User'};
+       document.body.appendChild(bubble);
+       await bubble.updateComplete;
+
+       bubble.remove();
+
+       expect(state.addHost).toHaveBeenCalledOnceWith(bubble);
+       expect(state.removeHost).toHaveBeenCalledOnceWith(bubble);
+     });
 
   it('renders a user message', async () => {
     element.message = {
@@ -94,9 +114,10 @@ describe('litert-chat-bubble', () => {
     expect(bubble).toBeTruthy();
     expect(bubble!.classList.contains('assistant')).toBeTrue();
 
-    // Check sender name is cleaned
+    // Check sender name is cleaned and no assistant logo avatar is rendered
     const sender = element.shadowRoot!.querySelector('.message-sender');
     expect(sender!.textContent!.trim()).toBe('Assistant');
+    expect(element.shadowRoot!.querySelector('.assistant-avatar')).toBeNull();
 
     const content = element.shadowRoot!.querySelector('.message-content');
     expect(content).toBeTruthy();
@@ -113,7 +134,7 @@ describe('litert-chat-bubble', () => {
     expect(link!.textContent).toBe('link');
   });
 
-  it('renders thought process CoT blocks', async () => {
+  it('renders thought process CoT blocks collapsed once answer arrives and toggles on click', async () => {
     element.message = {
       role: 'assistant',
       text: 'Final answer.',
@@ -123,14 +144,46 @@ describe('litert-chat-bubble', () => {
     element.index = 2;
     await element.updateComplete;
 
-    const details = element.shadowRoot!.querySelector('.thought-details');
+    const details = element.shadowRoot!.querySelector('.thought-details') as HTMLDetailsElement;
     expect(details).toBeTruthy();
+    expect(details.open).toBeFalse();
 
-    const summary = details!.querySelector('.thought-summary');
-    expect(summary!.textContent!.trim()).toBe('Thought Process');
+    const summary = details.querySelector('.thought-summary') as HTMLElement;
+    expect(summary.textContent!.trim()).toBe('Thought Process');
+    const labelEl =
+        summary.querySelector('.thought-summary-label') as HTMLElement;
+    const beforeRect = labelEl.getBoundingClientRect();
 
-    const thoughtContent = details!.querySelector('.thought-content');
+    const thoughtContent = details.querySelector('.thought-content');
     expect(thoughtContent!.textContent!.trim()).toBe('Thinking about the answer...');
+
+    summary.click();
+    await element.updateComplete;
+    expect(details.open).toBeTrue();
+    const afterRect = labelEl.getBoundingClientRect();
+    expect(afterRect.left).toBeCloseTo(beforeRect.left, 0);
+    expect(afterRect.top).toBeCloseTo(beforeRect.top, 0);
+
+    summary.click();
+    await element.updateComplete;
+    expect(details.open).toBeFalse();
+  });
+
+  it('hides assistant Copy and Retry actions while streaming', async () => {
+    element.message = {
+      role: 'assistant',
+      text: 'Partial stream...',
+      senderName: 'Assistant',
+    };
+    element.index = 2;
+    element.streaming = true;
+    await element.updateComplete;
+
+    expect(element.shadowRoot!.querySelector('.message-actions')).toBeNull();
+
+    element.streaming = false;
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('.message-actions')).toBeTruthy();
   });
 
   it('renders code blocks with headers and copy buttons', async () => {
@@ -162,6 +215,27 @@ describe('litert-chat-bubble', () => {
     expect(code!.textContent!.trim()).toBe('const x = 5;');
   });
 
+  it('keeps nested code blocks in their list and the text around them',
+     async () => {
+       element.message = {
+         role: 'assistant',
+         text: 'Intro:\n\n```js\nfirst();\n```\n\nThen:\n\n' +
+             '- Step one:\n\n  ```js\n  second();\n  ```\n\n- Step two\n',
+         senderName: 'Assistant',
+       };
+       await element.updateComplete;
+
+       const blocks = element.shadowRoot!.querySelectorAll('litert-code-block');
+       expect(blocks.length).toBe(2);
+       expect(blocks[0]!.closest('li')).toBeNull();
+       const text = blocks[0]!.parentElement!.textContent!;
+       expect(text).toContain('Intro:');
+       expect(text).toContain('Then:');
+       expect(text).not.toContain('>');
+       expect(blocks[1]!.closest('li')).not.toBeNull();
+       expect(blocks[1]!.closest('ul')!.querySelectorAll('li').length).toBe(2);
+     });
+
   it('triggers rewindAndEdit when user clicks Edit', async () => {
     element.message = {
       role: 'user',
@@ -172,7 +246,8 @@ describe('litert-chat-bubble', () => {
     await element.updateComplete;
 
     const editBtn = element.shadowRoot!.querySelector('.btn-action') as HTMLButtonElement;
-    expect(editBtn.textContent!.trim()).toBe('✎ Edit');
+    expect(editBtn.textContent!.trim()).toBe('Edit');
+    expect(editBtn.querySelector('svg')).toBeTruthy();
 
     // Setup spy return
     const parts: PromptPart[] = [{type: 'text', text: 'Edit me'}];
@@ -261,7 +336,8 @@ describe('litert-chat-bubble', () => {
     // The copy button is first, retry is second
     const actionBtns = element.shadowRoot!.querySelectorAll('.btn-action');
     const retryBtn = actionBtns[1] as HTMLButtonElement;
-    expect(retryBtn.textContent!.trim()).toBe('⟲ Retry');
+    expect(retryBtn.textContent!.trim()).toBe('Retry');
+    expect(retryBtn.querySelector('svg')).toBeTruthy();
 
     retryBtn.click();
 
@@ -402,6 +478,7 @@ describe('litert-chat-bubble', () => {
       'Steps:\n\n1. **First**: one.\n2. **Second**: two.\n3. Third.\n\nDone.',
       'Steps:\n\n1. First.\n\n2. Second.\n\n10. Tenth.\n\nDone.',
       'Intro.\n- Apple\n- **Banana**\n* Cherry\n\n***Note:*** ok.',
+      'Table:\n\n| Stage | Bound |\n| :--- | :--- |\n| Prefill | Compute |\n\nOk.',
     ];
     element.index = 1;
     element.streaming = true;
@@ -421,6 +498,116 @@ describe('litert-chat-bubble', () => {
     }
     expect(drops).toEqual([]);
   });
+
+  it('re-enables Edit button immediately when generation stops', async () => {
+    element.message = {
+      role: 'user',
+      text: 'Prompt while generating',
+      senderName: 'User',
+    };
+    element.index = 0;
+    element.disabled = true;
+    await element.updateComplete;
+
+    const editBtn =
+        element.shadowRoot!.querySelector('.btn-action') as HTMLButtonElement;
+    expect(editBtn.disabled).toBeTrue();
+
+    element.disabled = false;
+    await element.updateComplete;
+    expect(editBtn.disabled).toBeFalse();
+  });
+
+  it('renders Stopped chip and partial tokens outside copyable text',
+     async () => {
+       element.message = {
+         role: 'assistant',
+         text: 'Partial output',
+         senderName: 'Assistant',
+         stopped: true,
+         tokensCount: '12',
+       };
+       element.index = 1;
+       await element.updateComplete;
+
+       const stoppedChip = element.shadowRoot!.querySelector('.stopped-chip');
+       expect(stoppedChip).toBeTruthy();
+       expect(stoppedChip!.textContent).toContain('Stopped');
+
+       const stats = element.shadowRoot!.querySelector('.message-stats');
+       expect(stats!.textContent).toContain('12');
+
+       const copyBtn = element.shadowRoot!.querySelector('.btn-action') as
+           HTMLButtonElement;
+       copyBtn.click();
+       await new Promise(resolve => setTimeout(resolve, 20));
+       expect(mockClipboardWriteText).toHaveBeenCalledWith('Partial output');
+     });
+
+  it('renders completed tool calls as a collapsible disclosure', async () => {
+    element.message = {
+      role: 'assistant',
+      text: 'The sum is 650.',
+      senderName: 'Assistant',
+      toolCalls: [{
+        id: 1,
+        name: 'run_javascript',
+        argsText: '1 + 2',
+        status: 'completed',
+        outputText: '3',
+      }],
+    };
+    element.index = 1;
+    await element.updateComplete;
+
+    const toolDetails =
+        element.shadowRoot!.querySelector('.tool-details') as HTMLDetailsElement;
+    expect(toolDetails).toBeTruthy();
+    expect(toolDetails.open).toBeFalse();
+    expect(toolDetails.querySelector('.tool-summary')!.textContent)
+        .toContain('Ran run_javascript');
+    expect(toolDetails.textContent).toContain('1 + 2');
+    expect(toolDetails.textContent).toContain('3');
+  });
+
+  it('preserves live litert-code-block instance and user scroll position across streamed tokens',
+     async () => {
+       const lines = Array.from({length: 40}, (_, i) => `const line${i} = ${i};`)
+                         .join('\n');
+       element.index = 1;
+       element.streaming = true;
+       element.message = {
+         role: 'assistant',
+         text: `Here is code:\n\`\`\`js\n${lines}`,
+         senderName: 'Assistant',
+       };
+       await element.updateComplete;
+
+       const initialBlock =
+           element.shadowRoot!.querySelector('litert-code-block')!;
+       await (initialBlock as unknown as {updateComplete: Promise<boolean>})
+           .updateComplete;
+       const scrollRegion = initialBlock.shadowRoot!.querySelector(
+                                '.code-scroll-region') as HTMLElement;
+       scrollRegion.dispatchEvent(
+           new WheelEvent('wheel', {deltaY: -80, bubbles: true}));
+       scrollRegion.scrollTop = 42;
+       scrollRegion.dispatchEvent(new Event('scroll'));
+
+       element.message = {
+         role: 'assistant',
+         text: `Here is code:\n\`\`\`js\n${lines}\nconst nextToken = 999;`,
+         senderName: 'Assistant',
+       };
+       await element.updateComplete;
+       await new Promise<void>(
+           resolve => requestAnimationFrame(() => resolve()));
+
+       const updatedBlock =
+           element.shadowRoot!.querySelector('litert-code-block')!;
+       expect(updatedBlock).toBe(initialBlock);
+       expect(scrollRegion.scrollTop).toBe(42);
+     });
 });
 
 describe('trimAmbiguousTail', () => {
@@ -442,4 +629,21 @@ describe('trimAmbiguousTail', () => {
       expect(trimAmbiguousTail(text)).withContext(text).toBe(text);
     }
   });
+
+  it('holds back incomplete GFM pipe-table headers until delimiter cells arrive',
+     () => {
+       expect(trimAmbiguousTail('Intro\n\n| Stage | Bound |')).toBe('Intro\n\n');
+       expect(trimAmbiguousTail('Intro\n\n| Stage | Bound |\n'))
+           .toBe('Intro\n\n');
+       expect(trimAmbiguousTail('Intro\n\n| Stage | Bound |\n| :--- |'))
+           .toBe('Intro\n\n');
+
+       const completeHeader =
+           'Intro\n\n| Stage | Bound |\n| :--- | :--- |';
+       expect(trimAmbiguousTail(completeHeader)).toBe(completeHeader);
+
+       const withDataRow =
+           'Intro\n\n| Stage | Bound |\n| :--- | :--- |\n| Prefill |';
+       expect(trimAmbiguousTail(withDataRow)).toBe(withDataRow);
+     });
 });
