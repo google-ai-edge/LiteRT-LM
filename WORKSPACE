@@ -17,6 +17,8 @@ ML_DRIFT_COMMIT = "e9229fa80c4a99f1855721aec8282f7f4ce86fe4"
 ML_DRIFT_SHA256 = "d485e49eb785ce5c0ee2589e3f5aa1a133c5bb9caa0ca88d8a266e96791eac69"
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
+load("//:android_ndk_env.bzl", "check_android_ndk_env", "stub_local_config_android")
 
 # Declared before `rules_shell_dependencies()` and `apple_rules_dependencies()`
 # because those macros also declare `bazel_skylib`, and the first declaration of
@@ -216,6 +218,12 @@ http_archive(
     strip_prefix = "tensorflow-" + TENSORFLOW_REF,
     url = "https://github.com/tensorflow/tensorflow/archive/" + TENSORFLOW_REF + ".tar.gz",
 )
+
+# Pre-declare a no-op `@local_config_android` before `tf_workspace1()` so
+# `tf_workspace0()`'s `android_workspace()` never instantiates legacy
+# `native.android_sdk_repository` / `native.android_ndk_repository` rules that
+# conflict with or shadow `@rules_android` and `@rules_android_ndk` below.
+stub_local_config_android(name = "local_config_android")
 
 # Initialize the TensorFlow repository and all dependencies.
 #
@@ -663,6 +671,18 @@ http_archive(
 
 # Android rules ####################################################################################
 
+# Resolve Android SDK and NDK paths from environment variables through a
+# repository rule (`current_android_ndk_env.bzl`), since WORKSPACE evaluation
+# cannot read host environment variables directly.
+check_android_ndk_env(name = "android_ndk_env")
+
+load(
+    "@android_ndk_env//:current_android_ndk_env.bzl",
+    "ANDROID_NDK_HOME_IS_SET",
+    "ANDROID_NDK_PATH",
+    "ANDROID_SDK_PATH",
+)
+
 # Android SDK
 load("@rules_android//:prereqs.bzl", "rules_android_prereqs")
 
@@ -678,7 +698,11 @@ java_tools_repos()
 
 load("@rules_android//rules:rules.bzl", "android_sdk_repository")
 
-android_sdk_repository(name = "androidsdk")
+maybe(
+    android_sdk_repository,
+    name = "androidsdk",
+    path = ANDROID_SDK_PATH,
+)
 
 register_toolchains(
     "@rules_android//toolchains/android:android_default_toolchain",
@@ -688,16 +712,11 @@ register_toolchains(
 # Android NDK. Need latest rules_android_ndk to use NDK 26+.
 load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
 
-android_ndk_repository(name = "androidndk")
-
-# Configure Android NDK only when ANDROID_NDK_HOME is set.
-# Creates current_android_ndk_env.bzl as a workaround since shell environment is available only
-# through repository rule's context.
-load("//:android_ndk_env.bzl", "check_android_ndk_env")
-
-check_android_ndk_env(name = "android_ndk_env")
-
-load("@android_ndk_env//:current_android_ndk_env.bzl", "ANDROID_NDK_HOME_IS_SET")
+maybe(
+    android_ndk_repository,
+    name = "androidndk",
+    path = ANDROID_NDK_PATH,
+)
 
 # Use "@android_ndk_env//:all" as a dummy toolchain target as register_toolchains() does not take
 # an empty string.

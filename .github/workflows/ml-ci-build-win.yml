@@ -54,9 +54,10 @@ jobs:
       GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
       HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
-      # Clear ANDROID_NDK_HOME as Windows_x64 has NDK where jobs don't have permission for
-      # androidndk rules to create symlinks.
+      # Clear ANDROID_NDK_HOME and its fallback ANDROID_NDK_ROOT as Windows_x64 has NDK where jobs
+      # don't have permission for androidndk rules to create symlinks.
       ANDROID_NDK_HOME:
+      ANDROID_NDK_ROOT:
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
     steps:
       - name: Install System Dependencies
