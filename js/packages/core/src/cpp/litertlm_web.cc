@@ -348,7 +348,6 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
 
   emscripten::enum_<litert::lm::Backend>("Backend")
       .value("UNSPECIFIED", litert::lm::Backend::UNSPECIFIED)
-      .value("CPU_ARTISAN", litert::lm::Backend::CPU_ARTISAN)
       .value("GPU_ARTISAN", litert::lm::Backend::GPU_ARTISAN)
       .value("CPU", litert::lm::Backend::CPU)
       .value("GPU", litert::lm::Backend::GPU)

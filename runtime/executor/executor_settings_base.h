@@ -36,7 +36,7 @@
 namespace litert::lm {
 
 // NOTE: `Backend` currently conflates the target hardware accelerator (`CPU`,
-// `GPU`, `NPU`) with the executor implementation (`CPU_ARTISAN`, `GPU_ARTISAN`,
+// `GPU`, `NPU`) with the executor implementation (`GPU_ARTISAN`,
 // `TENSOR_LLM`, and dynamically registered custom executors such as
 // `gemma_cpp`). To support running a custom executor across multiple hardware
 // backends (e.g., `gemma_cpp` on `CPU` vs. `GPU`), we should decouple the
@@ -45,9 +45,6 @@ namespace litert::lm {
 enum class Backend {
   // Unspecified backend.
   UNSPECIFIED,
-
-  // CPU hand-written path backend.
-  CPU_ARTISAN,
 
   // GPU hand-written path backend.
   GPU_ARTISAN,
@@ -76,7 +73,7 @@ bool IsCustomBackend(Backend backend);
 absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str);
 // Returns the string representation of the backend enum.
 std::string GetBackendString(Backend backend);
-// Returns true if `backend` runs on the CPU (CPU or CPU_ARTISAN), i.e. uses no
+// Returns true if `backend` runs on the CPU, i.e. uses no
 // accelerator. Custom backends are not assumed to be CPU-only.
 bool IsCpuBackend(Backend backend);
 

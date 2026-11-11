@@ -437,7 +437,7 @@ struct DiscoveredSections {
 //    backend.
 // 2. If present, the constraint string is split by comma and tokens are
 //    matched in order:
-//    - "cpu" / "cpu_artisan" -> enables CPU backend.
+//    - "cpu" -> enables CPU backend.
 //    - "gpu" / "gpu_artisan" -> enables GPU backend.
 //    - "npu" / "google_tensor_artisan" -> enables NPU backend.
 //    - "google_tensor_artisan" -> additionally flags the model as targeting
@@ -457,7 +457,7 @@ void ParseBackendConstraint(absl::string_view constraint,
   }
   for (auto b : absl::StrSplit(constraint, ',')) {
     b = absl::StripAsciiWhitespace(b);
-    if (b == "cpu" || b == "cpu_artisan") {
+    if (b == "cpu") {
       backends.cpu = true;
       if (std::find(backends.preferred_backends.begin(),
                     backends.preferred_backends.end(),

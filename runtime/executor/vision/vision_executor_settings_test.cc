@@ -73,10 +73,10 @@ TEST(VisionExecutorSettingsTest, CreateDefaultWithInvalidBackend) {
                   model_assets, /*encoder_backend=*/Backend::GPU_ARTISAN,
                   /*adapter_backend=*/Backend::GPU),
               StatusIs(absl::StatusCode::kInvalidArgument,
-                       "Unsupported encoder backend: 2"));
+                       "Unsupported encoder backend: 1"));
   EXPECT_THAT(VisionExecutorSettings::CreateDefault(
                   model_assets, /*encoder_backend=*/Backend::CPU,
-                  /*adapter_backend=*/Backend::CPU_ARTISAN),
+                  /*adapter_backend=*/Backend::GPU_ARTISAN),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        "Unsupported adapter backend: 1"));
 };

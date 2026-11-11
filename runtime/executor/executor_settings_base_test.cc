@@ -58,12 +58,7 @@ std::string GetTestModelPath() {
 TEST(LlmExecutorConfigTest, Backend) {
   Backend backend;
   std::stringstream oss;
-  backend = Backend::CPU_ARTISAN;
-  oss << backend;
-  EXPECT_EQ(oss.str(), "CPU_ARTISAN");
-
   backend = Backend::GPU_ARTISAN;
-  oss.str("");
   oss << backend;
   EXPECT_EQ(oss.str(), "GPU_ARTISAN");
 
@@ -89,9 +84,7 @@ TEST(LlmExecutorConfigTest, Backend) {
 }
 
 TEST(LlmExecutorConfigTest, StringToBackend) {
-  auto backend = GetBackendFromString("cpu_artisan");
-  EXPECT_EQ(*backend, Backend::CPU_ARTISAN);
-  backend = GetBackendFromString("gpu_artisan");
+  auto backend = GetBackendFromString("gpu_artisan");
   EXPECT_EQ(*backend, Backend::GPU_ARTISAN);
   backend = GetBackendFromString("gpu");
   EXPECT_EQ(*backend, Backend::GPU);
@@ -101,11 +94,12 @@ TEST(LlmExecutorConfigTest, StringToBackend) {
   EXPECT_EQ(*backend, Backend::GOOGLE_TENSOR_ARTISAN);
   backend = GetBackendFromString("npu");
   EXPECT_EQ(*backend, Backend::NPU);
+  EXPECT_THAT(GetBackendFromString("cpu_artisan"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(LlmExecutorConfigTest, IsCpuBackend) {
   EXPECT_TRUE(IsCpuBackend(Backend::CPU));
-  EXPECT_TRUE(IsCpuBackend(Backend::CPU_ARTISAN));
   EXPECT_FALSE(IsCpuBackend(Backend::GPU));
   EXPECT_FALSE(IsCpuBackend(Backend::GPU_ARTISAN));
   EXPECT_FALSE(IsCpuBackend(Backend::NPU));

@@ -83,12 +83,7 @@ using ::testing::status::StatusIs;
 TEST(LlmExecutorConfigTest, Backend) {
   Backend backend;
   std::stringstream oss;
-  backend = Backend::CPU_ARTISAN;
-  oss << backend;
-  EXPECT_EQ(oss.str(), "CPU_ARTISAN");
-
   backend = Backend::GPU_ARTISAN;
-  oss.str("");
   oss << backend;
   EXPECT_EQ(oss.str(), "GPU_ARTISAN");
 
@@ -114,9 +109,7 @@ TEST(LlmExecutorConfigTest, Backend) {
 }
 
 TEST(LlmExecutorConfigTest, StringToBackend) {
-  ASSERT_OK_AND_ASSIGN(auto backend, GetBackendFromString("cpu_artisan"));
-  EXPECT_EQ(backend, Backend::CPU_ARTISAN);
-  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("gpu_artisan"));
+  ASSERT_OK_AND_ASSIGN(auto backend, GetBackendFromString("gpu_artisan"));
   EXPECT_EQ(backend, Backend::GPU_ARTISAN);
   ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("gpu"));
   EXPECT_EQ(backend, Backend::GPU);

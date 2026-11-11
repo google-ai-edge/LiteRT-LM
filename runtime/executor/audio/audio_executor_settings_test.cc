@@ -81,10 +81,11 @@ TEST(AudioExecutorSettingsTest, SetAdapterBackendRejectsUnsupportedBackend) {
   ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
                        AudioExecutorSettings::CreateDefault(
                            model_assets, 10, Backend::GPU, Backend::CPU));
-  EXPECT_THAT(settings.SetAdapterBackend(Backend::CPU_ARTISAN),
+  EXPECT_THAT(settings.SetAdapterBackend(Backend::GOOGLE_TENSOR_ARTISAN),
               StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(AudioExecutorSettings::CreateDefault(
-                  model_assets, 10, Backend::GPU, Backend::CPU_ARTISAN),
+                  model_assets, 10, Backend::GPU,
+                  Backend::GOOGLE_TENSOR_ARTISAN),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -101,7 +102,7 @@ TEST(AudioExecutorSettingsTest, GetAndSetNumThreads) {
 TEST(AudioExecutorSettingsTest, CreateDefaultWithInvalidBackend) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
   EXPECT_THAT(AudioExecutorSettings::CreateDefault(
-                  model_assets, 10, Backend::CPU_ARTISAN, Backend::CPU),
+                  model_assets, 10, Backend::UNSPECIFIED, Backend::CPU),
               StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(
       AudioExecutorSettings::CreateDefault(

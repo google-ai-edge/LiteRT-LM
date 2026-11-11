@@ -27,12 +27,11 @@ export const Backend = {
   // Ideally, we'd pull these from the Wasm module, but we want them to be
   // available in JS before the Wasm module is loaded.
   UNSPECIFIED: 0,
-  CPU_ARTISAN: 1,
-  GPU_ARTISAN: 2,
-  CPU: 3,
-  GPU: 4,
-  GOOGLE_TENSOR_ARTISAN: 5,
-  NPU: 6,
+  GPU_ARTISAN: 1,
+  CPU: 2,
+  GPU: 3,
+  GOOGLE_TENSOR_ARTISAN: 4,
+  NPU: 5,
 };
 
 /**
@@ -623,7 +622,7 @@ export declare interface ReadableStreamDataStream extends Deletable {
 }
 
 type BackendEnum = EmscriptenEnum<{
-  UNSPECIFIED: Backend; CPU_ARTISAN: Backend; GPU_ARTISAN: Backend;
+  UNSPECIFIED: Backend; GPU_ARTISAN: Backend;
   CPU: Backend;
   GPU: Backend;
   GOOGLE_TENSOR_ARTISAN: Backend;

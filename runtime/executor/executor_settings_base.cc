@@ -216,8 +216,6 @@ bool IsCustomBackend(Backend backend) {
 
 std::string GetBackendString(Backend backend) {
   switch (backend) {
-    case Backend::CPU_ARTISAN:
-      return "CPU_ARTISAN";
     case Backend::GPU_ARTISAN:
       return "GPU_ARTISAN";
     case Backend::GPU:
@@ -244,9 +242,7 @@ std::ostream& operator<<(std::ostream& os, const Backend& backend) {
   return os << GetBackendString(backend);
 }
 
-bool IsCpuBackend(Backend backend) {
-  return backend == Backend::CPU || backend == Backend::CPU_ARTISAN;
-}
+bool IsCpuBackend(Backend backend) { return backend == Backend::CPU; }
 
 ::litert::HwAccelerators GetHwAcceleratorForBackend(Backend backend) {
   switch (backend) {
@@ -269,8 +265,6 @@ absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {
     return Backend::NPU;
   } else if (absl::EqualsIgnoreCase(backend_str, "gpu_artisan")) {
     return Backend::GPU_ARTISAN;
-  } else if (absl::EqualsIgnoreCase(backend_str, "cpu_artisan")) {
-    return Backend::CPU_ARTISAN;
   } else if (absl::EqualsIgnoreCase(backend_str, "google_tensor_artisan")) {
     return Backend::GOOGLE_TENSOR_ARTISAN;
   } else {
@@ -285,7 +279,7 @@ absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {
     return absl::InvalidArgumentError(
       absl::StrCat("Unsupported backend: ", backend_str,
                    ". Supported backends are: [CPU, GPU, NPU, GPU_ARTISAN, "
-                   "CPU_ARTISAN, GOOGLE_TENSOR_ARTISAN]"));
+                   "GOOGLE_TENSOR_ARTISAN]"));
   }
 }
 

@@ -776,6 +776,25 @@ TEST(ModelInfoFileTest, GetModelInfo_GpuBackendConstraint_GpuOnly) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kGpu);
 }
 
+TEST(ModelInfoFileTest, GetModelInfo_CpuArtisanBackendConstraint_Ignored) {
+  std::string file_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {{"tf_lite_prefill_decode", "cpu_artisan", "main_payload"}});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ModelInfo result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+
+  EXPECT_FALSE(llm.text_supported_backends.cpu);
+  EXPECT_FALSE(llm.text_supported_backends.gpu);
+  EXPECT_FALSE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.default_backend,
+            BackendType::kUnspecified);
+}
+
 TEST(ModelInfoFileTest, GetModelInfo_GpuAndNpuBackendConstraints_GpuAndNpu) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
