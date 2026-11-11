@@ -536,17 +536,7 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
   }
 
   std::unique_ptr<LlmExecutor> executor;
-
-  // Engine-scoped Debugger handle, enabled via
-  // `EngineSettings::SetEnableDebugger(true)`. Stays nullptr otherwise, so the
-  // debugger adds no graph callbacks or per-token work.
   std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr;
-  if (engine_settings.GetEnableDebugger()) {
-    // MaybeUpdateAndValidate() already rejected unusable cache dirs.
-    runtime_debugger =
-        RuntimeDebugger::Create(main_executor_settings.GetCacheDir());
-  }
-
   switch (main_executor_settings.GetBackend()) {
     default: {
       const Backend backend = main_executor_settings.GetBackend();
@@ -564,16 +554,26 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
         if (auto* litert_executor =
                 dynamic_cast<LlmLiteRtCompiledModelExecutorBase*>(
                     executor.get())) {
-          if (runtime_debugger != nullptr) {
-            litert_executor->UpdatePreGraphRunCallback(
-                runtime_debugger->CreatePreGraphRunCallback());
-            litert_executor->UpdatePostGraphRunCallback(
-                runtime_debugger->CreatePostGraphRunCallback());
+          if (engine_settings.GetEnableDebugger()) {
+            runtime_debugger =
+                RuntimeDebugger::Create(main_executor_settings.GetCacheDir());
+            if (runtime_debugger != nullptr) {
+              litert_executor->UpdatePreGraphRunCallback(
+                  runtime_debugger->CreatePreGraphRunCallback());
+              litert_executor->UpdatePostGraphRunCallback(
+                  runtime_debugger->CreatePostGraphRunCallback());
+            }
           }
         }
       }
     }
   };
+  if (engine_settings.GetEnableDebugger() && runtime_debugger == nullptr) {
+    ABSL_LOG(WARNING)
+        << "AI Edge Debugger is only supported on CPU and GPU LiteRT "
+           "compiled-model executors; disabling debugger.";
+    engine_settings.SetEnableDebugger(false);
+  }
 
   std::unique_ptr<VisionExecutorSettings> vision_executor_settings_ptr;
   if (engine_settings.GetVisionExecutorSettings().has_value()) {

@@ -71,6 +71,27 @@ bool IsPrefillSignature(absl::string_view signature_name) {
   return absl::StrContains(signature_name, "prefill");
 }
 
+// Deletes any existing files in `session_dir` and recreates it as an empty
+// directory.
+absl::Status ResetSessionDirectory(absl::string_view session_dir) {
+  std::error_code ec;
+  const std::filesystem::path path{std::string(session_dir)};
+  std::filesystem::remove_all(path, ec);
+  if (ec) {
+    return absl::InternalError(
+        absl::StrCat("Failed to delete debugger captures under ", session_dir,
+                     ": ", ec.message()));
+  }
+  std::filesystem::create_directories(path, ec);
+  std::error_code exists_ec;
+  if (ec && !std::filesystem::exists(path, exists_ec)) {
+    return absl::InternalError(
+        absl::StrCat("Failed to create debug session directory ", session_dir,
+                     ": ", ec.message()));
+  }
+  return absl::OkStatus();
+}
+
 // Serializes the content of a LiteRT tensor buffer to disk in HuggingFace
 // Safetensors format.
 absl::Status SaveTensorBufferToFile(absl::string_view root_directory,
@@ -129,6 +150,8 @@ absl::Status SaveTensorBufferToFile(absl::string_view root_directory,
       BuildSafetensorsHeader(full_tensor_name, dtype, shape, bytes, metadata);
   const uint64_t header_size = json_header.size();
 
+  std::error_code ec;
+  std::filesystem::create_directories(std::string(root_directory), ec);
   std::ofstream outfile(filepath, std::ios::binary);
   if (!outfile.is_open()) {
     return absl::InternalError(
@@ -200,7 +223,7 @@ void RuntimeDebugger::CaptureTensors(
     absl::MutexLock lock(mutex_);
     DebugSessionState* session =
         active_debug_session_.load(std::memory_order_acquire);
-    if (session != nullptr) {
+    if (session != nullptr && !session->capture_dir.empty()) {
       target_dir = session->capture_dir;
       session->last_step = current_step;
       if (session->kv_buffers.empty()) {
@@ -257,17 +280,22 @@ void RuntimeDebugger::RegisterDebugSession(
       (std::filesystem::path{std::string(base_dir)} /
        std::to_string(session_id))
           .string();
-  std::error_code ec;
-  std::filesystem::create_directories(session_dir, ec);
-  if (ec && !std::filesystem::exists(session_dir)) {
-    ABSL_LOG(ERROR) << "Failed to create debug session directory: "
-                    << session_dir << ", error: " << ec.message();
-    return;
-  }
 
   absl::MutexLock lock(mutex_);
   auto ctx = std::make_unique<DebugSessionState>();
-  ctx->capture_dir = std::move(session_dir);
+  if (const absl::Status status = ResetSessionDirectory(session_dir);
+      !status.ok()) {
+    ABSL_LOG(ERROR) << status;
+  } else {
+    ctx->capture_dir = std::move(session_dir);
+  }
+
+  const auto it = sessions_.find(session_id);
+  if (it != sessions_.end() &&
+      active_debug_session_.load(std::memory_order_relaxed) ==
+          it->second.get()) {
+    active_debug_session_.store(nullptr, std::memory_order_release);
+  }
   sessions_[session_id] = std::move(ctx);
 }
 
@@ -279,8 +307,25 @@ void RuntimeDebugger::UnregisterDebugSession(const int session_id) {
         it->second.get()) {
       active_debug_session_.store(nullptr, std::memory_order_release);
     }
+    std::string session_dir = std::move(it->second->capture_dir);
     sessions_.erase(it);
+    std::error_code ec;
+    if (!session_dir.empty()) {
+      std::filesystem::remove(session_dir, ec);
+    }
+    if (sessions_.empty() && !capture_dir_.empty()) {
+      std::filesystem::remove(capture_dir_, ec);
+    }
   }
+}
+
+absl::Status RuntimeDebugger::DeleteSessionCaptures(const int session_id) {
+  absl::MutexLock lock(mutex_);
+  const auto it = sessions_.find(session_id);
+  if (it == sessions_.end() || it->second->capture_dir.empty()) {
+    return absl::OkStatus();
+  }
+  return ResetSessionDirectory(it->second->capture_dir);
 }
 
 void RuntimeDebugger::SetActiveDebugSession(const int session_id) {
@@ -352,6 +397,8 @@ void RuntimeDebugger::WriteTokensToFile(absl::string_view target_dir,
   if (responses.GetTokenIds().empty() || target_dir.empty()) {
     return;
   }
+  std::error_code ec;
+  std::filesystem::create_directories(std::string(target_dir), ec);
   const std::string capture_path =
       (std::filesystem::path{std::string(target_dir)} /
        std::string(kGeneratedTokensFileName))

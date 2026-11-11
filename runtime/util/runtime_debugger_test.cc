@@ -16,6 +16,7 @@
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,6 +33,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/engine/io_types.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
@@ -56,6 +58,40 @@ TEST(RuntimeDebuggerTest, CreateHandlesValidAndInvalidCacheDirectories) {
   EXPECT_EQ(RuntimeDebugger::Create(":nocache"), nullptr);
 }
 
+TEST(RuntimeDebuggerTest,
+     RegisterDeletesStaleSessionCapturesAndUnregisterRemovesEmptyDirs) {
+  const std::filesystem::path cache_dir =
+      std::filesystem::path(testing::TempDir()) / "earlier_runs";
+  const std::filesystem::path stale_s0_file =
+      cache_dir / "litert_lm_debugger" / "0" / "generated_tokens.jsonl";
+  const std::filesystem::path other_s1_file =
+      cache_dir / "litert_lm_debugger" / "1" / "generated_tokens.jsonl";
+  std::filesystem::create_directories(stale_s0_file.parent_path());
+  std::filesystem::create_directories(other_s1_file.parent_path());
+  std::ofstream(stale_s0_file) << "{}\n";
+  std::ofstream(other_s1_file) << "{}\n";
+
+  // Creating a RuntimeDebugger does not wipe existing session directories.
+  std::unique_ptr<RuntimeDebugger> debugger =
+      RuntimeDebugger::Create(cache_dir.string());
+  ASSERT_NE(debugger, nullptr);
+  EXPECT_TRUE(std::filesystem::exists(stale_s0_file));
+  EXPECT_TRUE(std::filesystem::exists(other_s1_file));
+
+  // Registering session 0 resets only session 0's directory.
+  debugger->RegisterDebugSession(/*session_id=*/0);
+  EXPECT_FALSE(std::filesystem::exists(stale_s0_file));
+  EXPECT_TRUE(std::filesystem::exists(stale_s0_file.parent_path()));
+  EXPECT_TRUE(std::filesystem::exists(other_s1_file));
+
+  // Unregistering an empty session removes its empty directory, and removes
+  // `capture_dir()` once no files or subdirectories remain.
+  std::filesystem::remove_all(other_s1_file.parent_path());
+  debugger->UnregisterDebugSession(/*session_id=*/0);
+  EXPECT_FALSE(std::filesystem::exists(stale_s0_file.parent_path()));
+  EXPECT_FALSE(std::filesystem::exists(debugger->capture_dir()));
+}
+
 TEST(RuntimeDebuggerTest, SessionLifecycleAndSwitching) {
   std::string test_dir = testing::TempDir();
   auto debugger = RuntimeDebugger::Create(test_dir);
@@ -77,6 +113,16 @@ TEST(RuntimeDebuggerTest, SessionLifecycleAndSwitching) {
 
   // Setting non-existent session safely falls back without crash.
   debugger->SetActiveDebugSession(/*session_id=*/999);
+
+  // Re-registering an already-active session_id must not leave
+  // active_debug_session_ dangling.
+  debugger->RegisterDebugSession(/*session_id=*/1);
+  debugger->SetActiveDebugSession(/*session_id=*/1);
+  debugger->RegisterDebugSession(/*session_id=*/1);
+  auto post_callback = debugger->CreatePostGraphRunCallback();
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> empty_outputs;
+  post_callback("prefill_128", /*current_step=*/0, empty_outputs);
+  debugger->UnregisterDebugSession(/*session_id=*/1);
 
   // Unregister session 0 and verify cleanup.
   debugger->SetActiveDebugSession(/*session_id=*/0);
@@ -124,7 +170,8 @@ TEST(RuntimeDebuggerTest, DualCheckpointKvAndPerStepProbeCapturing) {
   auto env = ::litert::Environment::Create({});
   ASSERT_TRUE(env.HasValue());
 
-  std::string test_dir = testing::TempDir();
+  std::string test_dir =
+      (std::filesystem::path(testing::TempDir()) / "dual_checkpoint").string();
   RuntimeDebugger debugger(test_dir);
   debugger.RegisterDebugSession(/*session_id=*/0);
   debugger.SetActiveDebugSession(/*session_id=*/0);
@@ -193,9 +240,30 @@ TEST(RuntimeDebuggerTest, DualCheckpointKvAndPerStepProbeCapturing) {
   Responses done_response(TaskState::kDone, {"done"}, {1.0f}, {1}, {{123}});
   debugger.ObserveTokens(/*session_id=*/0, done_response);
 
-  EXPECT_TRUE(
-      std::filesystem::exists(std::filesystem::path(test_dir) / "0" /
-                              "decode_post_kv_cache_k_0_step_1.safetensors"));
+  const std::filesystem::path session_dir =
+      std::filesystem::path(test_dir) / "0";
+  EXPECT_TRUE(std::filesystem::exists(
+      session_dir / "decode_post_kv_cache_k_0_step_1.safetensors"));
+
+  // 5. Per-session deletion removes Turn 1's files while keeping the session
+  // writable (and self-healing if the session directory is removed externally).
+  EXPECT_OK(debugger.DeleteSessionCaptures(/*session_id=*/0));
+  EXPECT_TRUE(std::filesystem::exists(session_dir));
+  EXPECT_FALSE(std::filesystem::exists(
+      session_dir / "decode_post_kv_cache_k_0_step_1.safetensors"));
+  std::filesystem::remove_all(session_dir);
+  callback("decode", /*current_step=*/2, decode_outputs);
+  debugger.ObserveTokens(/*session_id=*/0, done_response);
+  EXPECT_TRUE(std::filesystem::exists(
+      session_dir / "decode_post_kv_cache_k_0_step_2.safetensors"));
+
+  // 6. Deleting session captures before unregistering removes both the empty
+  // session directory and the empty root capture directory.
+  EXPECT_OK(debugger.DeleteSessionCaptures(/*session_id=*/999));
+  EXPECT_OK(debugger.DeleteSessionCaptures(/*session_id=*/0));
+  debugger.UnregisterDebugSession(/*session_id=*/0);
+  EXPECT_FALSE(std::filesystem::exists(session_dir));
+  EXPECT_FALSE(std::filesystem::exists(debugger.capture_dir()));
 }
 
 }  // namespace

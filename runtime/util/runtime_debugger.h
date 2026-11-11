@@ -21,6 +21,7 @@
 
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -57,15 +58,22 @@ class RuntimeDebugger {
   LlmLiteRtCompiledModelExecutorBase::GraphRunCallback
   CreatePostGraphRunCallback();
 
-  // Registers a session-specific capture directory.
+  // Registers a session-specific capture directory. Any captures left under
+  // `<session_id>/` by an earlier session with the same ID are deleted.
   void RegisterDebugSession(int session_id,
                             absl::string_view preferred_cache_dir = "");
 
   // Returns the relative capture directory for a given session ID.
   static std::string GetSessionCaptureDir(int session_id);
 
-  // Unregisters a session-specific capture directory.
+  // Unregisters a session-specific capture directory and removes empty capture
+  // directories.
   void UnregisterDebugSession(int session_id);
+
+  // Deletes all captured files of `session_id` while keeping the session
+  // registered and its directory intact for subsequent turns. Succeeds without
+  // doing anything if `session_id` is not registered.
+  absl::Status DeleteSessionCaptures(int session_id);
 
   // Sets the active session for subsequent computation graph runs.
   void SetActiveDebugSession(int session_id);
