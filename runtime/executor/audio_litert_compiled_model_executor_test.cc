@@ -48,6 +48,7 @@
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
@@ -68,7 +69,10 @@ constexpr int kSpectrogramSequenceLength = 10;
 constexpr int kEmbeddingSequenceLength = 5;
 constexpr int kEmbeddingDimensions = 6;
 
+using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
+using ::testing::Not;
 using ::testing::status::StatusIs;
 
 template <typename T>
@@ -156,6 +160,38 @@ absl::StatusOr<std::vector<float>> EncodeOnesAndGetEmbeddings(
       auto embeddings, GetDataAsVector<float>(*projected_audio_embeddings_ptr));
   embeddings.resize(audio_data.GetValidTokens() * kEmbeddingDimensions);
   return embeddings;
+}
+
+// Writes a copy of `kTestAudioStreamingModelPath` to `dst_path` with its
+// FlatBuffer signature input "prev_key_0" (length 10) renamed in place to
+// "prev_mask" (length 9 + 1 trailing null byte) so tests can exercise both
+// `prev_mask` (initialized to 1s) and zero-initialized state buffers.
+absl::Status WriteStreamingModelWithPrevMaskInput(
+    const std::filesystem::path& dst_path) {
+  const std::filesystem::path src_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      std::string(kTestAudioStreamingModelPath);
+  std::ifstream src_file(src_model_path, std::ios::binary);
+  if (!src_file.is_open()) {
+    return absl::NotFoundError("Failed to open the streaming test model.");
+  }
+  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
+                          std::istreambuf_iterator<char>());
+  const std::string from_name("\x0a\x00\x00\x00prev_key_0", 14);
+  const std::string to_name("\x09\x00\x00\x00prev_mask\x00", 14);
+  const size_t pos = model_bytes.find(from_name);
+  if (pos == std::string::npos) {
+    return absl::NotFoundError(
+        "Expected prev_key_0 input not found in streaming test model.");
+  }
+  model_bytes.replace(pos, from_name.size(), to_name);
+
+  std::ofstream dst_file(dst_path, std::ios::binary | std::ios::trunc);
+  if (!dst_file.is_open()) {
+    return absl::InternalError("Failed to write patched streaming model.");
+  }
+  dst_file.write(model_bytes.data(), model_bytes.size());
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -929,31 +965,10 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
        ContextManagement_StreamingEncoder_CreateNewContextResetsStateIsolated) {
-  const std::filesystem::path src_model_path =
-      std::filesystem::path(::testing::SrcDir()) /
-      std::string(kTestAudioStreamingModelPath);
-  std::ifstream src_file(src_model_path, std::ios::binary);
-  ASSERT_TRUE(src_file.is_open());
-  std::string model_bytes((std::istreambuf_iterator<char>(src_file)),
-                          std::istreambuf_iterator<char>());
-  // Rename the FlatBuffer signature input "prev_key_0" (length 10) to
-  // "prev_mask" (length 9 + 1 trailing null byte) so we can exercise both
-  // kPrevMaskName (initialized to 1s) and other state buffers (initialized to
-  // 0s) in CreateNewContext().
-  const std::string from_name("\x0a\x00\x00\x00prev_key_0", 14);
-  const std::string to_name("\x09\x00\x00\x00prev_mask\x00", 14);
-  const size_t pos = model_bytes.find(from_name);
-  ASSERT_NE(pos, std::string::npos);
-  model_bytes.replace(pos, from_name.size(), to_name);
-
   const std::filesystem::path temp_model_path =
       std::filesystem::path(::testing::TempDir()) /
       "dummy_audio_streaming_prev_mask.litertlm";
-  {
-    std::ofstream dst_file(temp_model_path, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(dst_file.is_open());
-    dst_file.write(model_bytes.data(), model_bytes.size());
-  }
+  ASSERT_OK(WriteStreamingModelWithPrevMaskInput(temp_model_path));
 
   ASSERT_OK_AND_ASSIGN(
       auto audio_executor,
@@ -1998,6 +2013,204 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
   ASSERT_TRUE(flush_proj_type.HasValue());
   EXPECT_THAT(flush_proj_type->Layout().Dimensions(),
               ElementsAre(1, 4, kEmbeddingDimensions));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       CreateExecutorUnsupportedBackendReturnsInvalidArgument) {
+  const std::string static_model_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       std::string(kTestAudioModelPath))
+          .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets static_assets,
+                       ModelAssets::Create(static_model_path));
+
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings unsupported_encoder_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           static_assets, /*max_sequence_length=*/0,
+                           /*encoder_backend=*/Backend::GPU_ARTISAN,
+                           /*adapter_backend=*/Backend::CPU));
+  EXPECT_THAT(
+      AudioLiteRtCompiledModelExecutor::Create(unsupported_encoder_settings,
+                                               *env_),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Unsupported backend for Audio Static Encoder")));
+
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings unsupported_adapter_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           static_assets, /*max_sequence_length=*/0,
+                           /*encoder_backend=*/Backend::CPU,
+                           /*adapter_backend=*/Backend::GPU_ARTISAN));
+  EXPECT_THAT(AudioLiteRtCompiledModelExecutor::Create(
+                  unsupported_adapter_settings, *env_),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Unsupported backend for Audio Adapter")));
+
+  const std::string streaming_model_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       std::string(kTestAudioStreamingModelPath))
+          .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets streaming_assets,
+                       ModelAssets::Create(streaming_model_path));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings unsupported_streaming_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           streaming_assets, /*max_sequence_length=*/0,
+                           /*encoder_backend=*/Backend::GPU_ARTISAN,
+                           /*adapter_backend=*/Backend::CPU));
+  EXPECT_THAT(
+      AudioLiteRtCompiledModelExecutor::Create(unsupported_streaming_settings,
+                                               *env_),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Unsupported backend for Audio Streaming Encoder")));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       CreateExecutorGpuOptionConfigurationPaths) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestAudioModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+
+  // Exercises encoder GPU option configuration in CompileAudioSubmodel (host
+  // builds without a registered GPU accelerator fail cleanly during
+  // CompiledModel::Create rather than rejecting Backend::GPU as invalid).
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings gpu_encoder_settings,
+      AudioExecutorSettings::CreateDefault(model_assets,
+                                           /*max_sequence_length=*/0,
+                                           /*encoder_backend=*/Backend::GPU,
+                                           /*adapter_backend=*/Backend::CPU));
+  gpu_encoder_settings.SetCacheDir(":nocache");
+  auto gpu_encoder_result =
+      AudioLiteRtCompiledModelExecutor::Create(gpu_encoder_settings, *env_);
+  if (!gpu_encoder_result.ok()) {
+    EXPECT_THAT(gpu_encoder_result.status().message(),
+                Not(HasSubstr("Unsupported backend")));
+  }
+
+  // Exercises adapter GPU option configuration after compiling the encoder on
+  // CPU.
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings gpu_adapter_settings,
+      AudioExecutorSettings::CreateDefault(model_assets,
+                                           /*max_sequence_length=*/0,
+                                           /*encoder_backend=*/Backend::CPU,
+                                           /*adapter_backend=*/Backend::GPU));
+  gpu_adapter_settings.SetCacheDir(":nocache");
+  auto gpu_adapter_result =
+      AudioLiteRtCompiledModelExecutor::Create(gpu_adapter_settings, *env_);
+  if (!gpu_adapter_result.ok()) {
+    EXPECT_THAT(gpu_adapter_result.status().message(),
+                Not(HasSubstr("Unsupported backend")));
+  }
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StaticEncoderResetClearsInputsWhilePreservingLoRABuffers) {
+  const std::string model_path = (std::filesystem::path(::testing::TempDir()) /
+                                  "dummy_audio_static_lora_input.litertlm")
+                                     .string();
+  ASSERT_OK(WriteModelWithLoRAInput(kTestAudioModelPath, "mask", model_path));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, model_path, /*max_sequence_length=*/0,
+                          Backend::CPU));
+
+  auto& input_buffers = GetMutableEncoderInputBuffersMap(*audio_executor);
+  ASSERT_TRUE(input_buffers.contains(kTestAudioLoRAInputName));
+  ASSERT_TRUE(input_buffers.contains("src_inputs"));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto initial_lora_bytes,
+      GetDataAsVector<uint8_t>(input_buffers.at(kTestAudioLoRAInputName)));
+  std::vector<uint8_t> lora_pattern(initial_lora_bytes.size(), uint8_t{7});
+  ASSERT_TRUE(input_buffers.at(kTestAudioLoRAInputName)
+                  .Write<uint8_t>(absl::MakeConstSpan(lora_pattern))
+                  .HasValue());
+
+  ASSERT_OK_AND_ASSIGN(auto initial_src_inputs,
+                       GetDataAsVector<float>(input_buffers.at("src_inputs")));
+  std::vector<float> dirty_inputs(initial_src_inputs.size(), 3.5f);
+  ASSERT_TRUE(input_buffers.at("src_inputs")
+                  .Write<float>(absl::MakeConstSpan(dirty_inputs))
+                  .HasValue());
+
+  ASSERT_OK(audio_executor->Reset());
+
+  ASSERT_OK_AND_ASSIGN(
+      auto post_reset_lora_bytes,
+      GetDataAsVector<uint8_t>(input_buffers.at(kTestAudioLoRAInputName)));
+  EXPECT_THAT(post_reset_lora_bytes, Each(uint8_t{7}));
+
+  ASSERT_OK_AND_ASSIGN(auto post_reset_src_inputs,
+                       GetDataAsVector<float>(input_buffers.at("src_inputs")));
+  EXPECT_THAT(post_reset_src_inputs, Each(0.0f));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       StreamingEncoderResetRestoresPrevMaskToOnesAndClearsState) {
+  const std::filesystem::path temp_model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      "dummy_audio_streaming_reset_prev_mask.litertlm";
+  ASSERT_OK(WriteStreamingModelWithPrevMaskInput(temp_model_path));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_, temp_model_path.string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  auto& input_buffers = GetMutableEncoderInputBuffersMap(*audio_executor);
+  ASSERT_TRUE(input_buffers.contains("prev_mask"));
+  ASSERT_TRUE(input_buffers.contains("feature_state_0"));
+
+  ASSERT_OK_AND_ASSIGN(auto prev_mask_init,
+                       GetDataAsVector<uint8_t>(input_buffers.at("prev_mask")));
+  EXPECT_THAT(prev_mask_init, Each(uint8_t{1}));
+
+  std::vector<uint8_t> zeros(prev_mask_init.size(), 0);
+  ASSERT_TRUE(input_buffers.at("prev_mask")
+                  .Write<uint8_t>(absl::MakeConstSpan(zeros))
+                  .HasValue());
+  ASSERT_OK_AND_ASSIGN(
+      auto feature_state_init,
+      GetDataAsVector<float>(input_buffers.at("feature_state_0")));
+  std::vector<float> fives(feature_state_init.size(), 5.0f);
+  ASSERT_TRUE(input_buffers.at("feature_state_0")
+                  .Write<float>(absl::MakeConstSpan(fives))
+                  .HasValue());
+
+  ASSERT_OK(audio_executor->Reset());
+
+  ASSERT_OK_AND_ASSIGN(auto prev_mask_after_reset,
+                       GetDataAsVector<uint8_t>(input_buffers.at("prev_mask")));
+  EXPECT_THAT(prev_mask_after_reset, Each(uint8_t{1}));
+  ASSERT_OK_AND_ASSIGN(
+      auto feature_state_after_reset,
+      GetDataAsVector<float>(input_buffers.at("feature_state_0")));
+  EXPECT_THAT(feature_state_after_reset, Each(0.0f));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest, ProfilingCollectsAudioStats) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  EXPECT_THAT(audio_executor->StopProfiling(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  ASSERT_OK(audio_executor->StartProfiling());
+  ASSERT_OK(
+      EncodeOnesAndGetEmbeddings(*audio_executor, kSpectrogramSequenceLength));
+  ASSERT_OK_AND_ASSIGN(auto stats, audio_executor->StopProfiling());
+  EXPECT_EQ(stats.module_name, "Audio");
+  EXPECT_EQ(stats.GetMetricAsInt64("Audio num clips"), 1);
+  EXPECT_EQ(stats.GetMetricAsInt64("Audio num tokens"),
+            kEmbeddingSequenceLength);
+  EXPECT_TRUE(stats.GetLatency("Audio encoder inference").has_value());
+  EXPECT_TRUE(stats.GetLatency("Audio adapter inference").has_value());
 }
 
 }  // namespace

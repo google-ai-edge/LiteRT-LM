@@ -216,8 +216,6 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
    public:
     virtual ~AudioEncoder() = default;
 
-    virtual absl::Status Initialize() = 0;
-
     virtual absl::Status Reset() = 0;
 
     // Loads the LoRA model into the audio encoder.
@@ -292,9 +290,19 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     }
 
    protected:
-    explicit AudioEncoder(ModelResources& resources) : resources_(resources) {}
+    AudioEncoder() = default;
 
-    ModelResources& resources_;
+    // Stores `compiled_model`, creates and zero-initializes the signature 0
+    // input and output buffer maps, and binds the required spectrogram input
+    // and features output buffer pointers.
+    absl::Status InitializeBuffers(const Model& model,
+                                   CompiledModel compiled_model);
+
+    // Zero-fills all input buffers except LoRA weight buffers and the optional
+    // `skip_input_name` buffer.
+    absl::Status ClearNonLoraInputBuffers(
+        absl::string_view skip_input_name = "");
+
     CompiledModel compiled_model_;
 
     // The input buffer for the spectrogram mask.
@@ -328,38 +336,16 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
    public:
     // Create an AudioStaticEncoder to run audio static encoder LiteRT
     // CompiledModel.
-    // Args:
-    //   - env: The LiteRT environment.
-    //   - model: The audio encoder model.
-    // Returns:
-    //   A unique pointer to the AudioStaticEncoder if successful, or an error
-    //   status if failed.
     static absl::StatusOr<std::unique_ptr<AudioStaticEncoder>> Create(
         const AudioExecutorSettings& executor_settings, Environment& env,
         const Model* absl_nonnull model, ModelResources& resources);
 
-    // Initialize the AudioStaticEncoder, which will create the input and output
-    // buffers for the audio encoder model.
-    absl::Status Initialize() override;
-
-    absl::Status Reset() override { return ClearInputBuffers(); }
+    absl::Status Reset() override { return ClearNonLoraInputBuffers(); }
 
     bool IsStreaming() const override { return false; }
 
    private:
-    absl::Status ClearInputBuffers();
-
-    AudioStaticEncoder(const AudioExecutorSettings& executor_settings,
-                       Environment& env, const Model* absl_nonnull model,
-                       ModelResources& resources)
-        : AudioEncoder(resources),
-          executor_settings_(executor_settings),
-          env_(env),
-          model_(*model) {}
-
-    const AudioExecutorSettings& executor_settings_;
-    Environment& env_;
-    const Model& model_;
+    AudioStaticEncoder() = default;
   };
 
   // Audio Encoder for streaming LiteRT model, where the audio is provided in
@@ -403,21 +389,9 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
    public:
     // Create an AudioStreamingEncoder to run audio streaming encoder LiteRT
     // CompiledModel.
-    // Args:
-    //   - env: The LiteRT environment.
-    //   - model: The audio encoder model.
-    // Returns:
-    //   A unique pointer to the AudioStreamingEncoder if successful, or an
-    //   error status if failed.
     static absl::StatusOr<std::unique_ptr<AudioStreamingEncoder>> Create(
         const AudioExecutorSettings& executor_settings, Environment& env,
         const Model* absl_nonnull model, ModelResources& resources);
-
-    // Initialize the AudioStreamingEncoder, which will create the input and
-    // output buffers for the audio encoder model.
-    absl::Status Initialize() override;
-
-    int GetOverlapSize() const { return overlap_size_; }
 
     // Swap the internal state buffers between input and output buffers map, so
     // the previous state will be used for the current state.
@@ -450,18 +424,16 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
         std::unique_ptr<AudioStreamingContext> audio_streaming_context);
 
    private:
-    AudioStreamingEncoder(const AudioExecutorSettings& executor_settings,
-                          Environment& env, const Model* absl_nonnull model,
-                          ModelResources& resources)
-        : AudioEncoder(resources),
-          executor_settings_(executor_settings),
-          env_(env),
-          model_(*model) {}
+    enum class StateBufferInitMode { kZeroAndOnesPrevMask, kCopyCurrent };
 
-    AudioExecutorSettings executor_settings_;
+    AudioStreamingEncoder(Environment& env, bool audio_buffering_enabled)
+        : env_(env), audio_buffering_enabled_(audio_buffering_enabled) {}
+
+    absl::StatusOr<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+    BuildStateBuffersMap(StateBufferInitMode mode) const;
+
     Environment& env_;
-    const Model& model_;
-    int overlap_size_;
+    bool audio_buffering_enabled_ = false;
     bool is_first_chunk_ = true;
   };
 
@@ -473,19 +445,9 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   class AudioAdapter {
    public:
     // Create an AudioAdapter to run audio adapter LiteRT CompiledModel.
-    // Args:
-    //   - env: The LiteRT environment.
-    //   - model: The audio adapter model.
-    // Returns:
-    //   A unique pointer to the AudioAdapter if successful, or an error status
-    //   if failed.
     static absl::StatusOr<std::unique_ptr<AudioAdapter>> Create(
         const AudioExecutorSettings& executor_settings, Environment& env,
         const Model* absl_nonnull model, ModelResources& resources);
-
-    // Initialize the AudioAdapter, which will create the input and output
-    // buffers for the audio adapter model.
-    absl::Status Initialize();
 
     const CompiledModel& GetCompiledModel() const { return compiled_model_; }
 
@@ -515,18 +477,9 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     }
 
    private:
-    AudioAdapter(const AudioExecutorSettings& executor_settings,
-                 Environment& env, const Model* absl_nonnull model,
-                 ModelResources& resources)
-        : executor_settings_(executor_settings),
-          env_(env),
-          model_(*model),
-          resources_(resources) {}
+    explicit AudioAdapter(CompiledModel compiled_model)
+        : compiled_model_(std::move(compiled_model)) {}
 
-    AudioExecutorSettings executor_settings_;
-    Environment& env_;
-    const Model& model_;
-    ModelResources& resources_;
     CompiledModel compiled_model_;
     // The input buffers for the audio adapter model.
     std::vector<TensorBuffer> input_buffers_;
@@ -604,6 +557,18 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
   absl::StatusOr<LockedTensor> CreateAndLockAudioTensor(int num_tokens,
                                                         int dimensions);
+
+  enum class AudioSubmodelKind {
+    kStaticEncoder,
+    kStreamingEncoder,
+    kAdapter,
+  };
+
+  // Declared as a private static member because `CompiledModel::Create(env,
+  // LiteRtModel, options)` is `protected` and friends this executor class.
+  static absl::StatusOr<CompiledModel> CompileAudioSubmodel(
+      AudioSubmodelKind kind, const AudioExecutorSettings& executor_settings,
+      Environment& env, const Model& model, ModelResources& resources);
 
   // Returns whether `consumer` should take `producer` directly as its input
   // buffer instead of a host copy made by the executor.

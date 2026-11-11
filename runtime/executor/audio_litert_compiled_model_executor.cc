@@ -86,11 +86,11 @@ constexpr absl::string_view kAudioAdapterInferenceLatency =
 constexpr absl::string_view kAudioEncoderMetricsPrefix = "Audio encoder ";
 constexpr absl::string_view kAudioAdapterMetricsPrefix = "Audio adapter ";
 
-// Set the default GPU options for the model.
-absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
-                           litert::GpuOptions& gpu_options) {
-  ABSL_RETURN_IF_ERROR(
-      ::litert::lm::SetCommonGpuOptions(executor_settings, gpu_options));
+// Sets the default GPU options for the audio encoder model.
+absl::Status SetEncoderGpuOptions(
+    const AudioExecutorSettings& executor_settings,
+    litert::GpuOptions& gpu_options) {
+  ABSL_RETURN_IF_ERROR(SetCommonGpuOptions(executor_settings, gpu_options));
   gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
   gpu_options.EnableInfiniteFloatCapping(true);
   // Do not prepare command buffers ahead of time. The lookahead cache is only
@@ -113,11 +113,18 @@ absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
   return absl::OkStatus();
 }
 
-// Set the default CPU options for the model.
-absl::Status SetCpuOptions(const AudioExecutorSettings& executor_settings,
-                           litert::CpuOptions& cpu_options) {
-  return ::litert::lm::SetCpuOptions(cpu_options,
-                                     executor_settings.GetNumThreads());
+// Sets the default GPU options for the audio adapter model.
+void SetAdapterGpuOptions(const AudioExecutorSettings& executor_settings,
+                          litert::GpuOptions& gpu_options) {
+  gpu_options.EnableConstantTensorSharing(true);
+  gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+  gpu_options.SetPreferTextureWeights(true);
+  // "default" (unset) currently resolves to disabled.
+  LrtSetGpuOptionsUseIrModel(gpu_options.Get(),
+                             executor_settings.UseIrModel().value_or(false));
+#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
+  gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
+#endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
 }
 
 constexpr std::array<absl::string_view, 3> kAudioInputNames = {
@@ -125,10 +132,8 @@ constexpr std::array<absl::string_view, 3> kAudioInputNames = {
 constexpr absl::string_view kFeaturesName = "features";
 constexpr absl::string_view kMaskName = "mask";
 constexpr absl::string_view kMaskOutName = "mask_out";
-constexpr absl::string_view kSegmentValuesName = "segment_values";
 constexpr absl::string_view kSegmentMaskName = "segment_mask";
 constexpr absl::string_view kPrevMaskName = "prev_mask";
-constexpr absl::string_view kFeatureStatesNamePattern = "feature_state";
 
 template <typename T>
 absl::StatusOr<std::vector<T>> GetDataAsVector(TensorBuffer& tensor_buffer) {
@@ -156,20 +161,40 @@ absl::StatusOr<int> GetValidCount(const TensorBuffer& mask_buffer) {
   return GetValidCount(mask);
 }
 
-absl::Status InitializeBuffer(TensorBuffer& buffer) {
-  LITERT_ASSIGN_OR_RETURN(
-      auto buffer_lock_and_addr,
-      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kWrite));
-  LITERT_ASSIGN_OR_RETURN(auto packed_size, buffer.PackedSize());
-  memset(buffer_lock_and_addr.second, 0, packed_size);
+absl::Status ClearBuffers(absl::Span<TensorBuffer> buffers) {
+  for (TensorBuffer& buffer : buffers) {
+    LITERT_RETURN_IF_ERROR(buffer.Clear());
+  }
   return absl::OkStatus();
 }
 
-absl::Status InitializeBuffers(std::vector<TensorBuffer>& buffers) {
-  for (auto& buffer : buffers) {
-    ABSL_RETURN_IF_ERROR(InitializeBuffer(buffer));
+// Initializes `prev_mask` to 1 across all logical elements and 0 across any
+// trailing packed padding bytes under a single write lock.
+absl::Status FillPrevMaskWithOnes(TensorBuffer& buffer) {
+  LITERT_ASSIGN_OR_RETURN(auto mask_type, buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(const size_t num_elements,
+                          mask_type.Layout().NumElements());
+  LITERT_ASSIGN_OR_RETURN(const size_t packed_size, buffer.PackedSize());
+  RET_CHECK_LE(num_elements, packed_size);
+  LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
+                          TensorBufferScopedLock::Create<uint8_t>(
+                              buffer, TensorBuffer::LockMode::kWrite));
+  if (num_elements > 0) {
+    std::memset(lock_and_addr.second, 1, num_elements);
+  }
+  if (num_elements < packed_size) {
+    std::memset(lock_and_addr.second + num_elements, 0,
+                packed_size - num_elements);
   }
   return absl::OkStatus();
+}
+
+// Returns true if `name` is an internal streaming-encoder state buffer
+// (excluding per-chunk audio/mask inputs and shared LoRA weight buffers).
+bool IsStreamingStateBufferName(absl::string_view name) {
+  return name != kSegmentMaskName &&
+         absl::c_find(kAudioInputNames, name) == kAudioInputNames.end() &&
+         !IsLoRABufferInputName(name);
 }
 
 absl::StatusOr<TensorBuffer> ShrinkAudioTensor(Environment& env,
@@ -183,7 +208,7 @@ absl::StatusOr<TensorBuffer> ShrinkAudioTensor(Environment& env,
                           TensorBuffer::CreateManaged(
                               env, TensorBufferType::kHostMemory, tensor_type,
                               buffer_tokens * embedding_dim * sizeof(float)));
-  LITERT_RETURN_IF_ERROR(InitializeBuffer(shrunked_tensor));
+  LITERT_RETURN_IF_ERROR(shrunked_tensor.Clear());
 
   {
     LITERT_ASSIGN_OR_RETURN(auto src_lock_and_addr,
@@ -248,6 +273,112 @@ inline int CeilIntDiv(int a, int b) { return (a + b - 1) / b; }
 
 }  // namespace
 
+absl::StatusOr<CompiledModel>
+AudioLiteRtCompiledModelExecutor::CompileAudioSubmodel(
+    AudioSubmodelKind kind, const AudioExecutorSettings& executor_settings,
+    Environment& env, const Model& model, ModelResources& resources) {
+  // The adapter is not necessarily on the encoder's backend. Bundles that pin
+  // `AUDIO_ADAPTER` to CPU while leaving `AUDIO_ENCODER_HW` free rely on this.
+  Backend backend = executor_settings.GetBackend();
+  absl::string_view cache_model_name =
+      AudioExecutorSettings::kStaticEncoderName;
+  absl::string_view cpu_logging_prefix = AudioExecutorSettings::kEncoderName;
+  proto::LlmMetadata::TfLiteModelType model_type =
+      proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW;
+  absl::string_view submodel_label = "Audio Static Encoder";
+  switch (kind) {
+    case AudioSubmodelKind::kStaticEncoder:
+      break;
+    case AudioSubmodelKind::kStreamingEncoder:
+      cache_model_name = AudioExecutorSettings::kStreamingEncoderName;
+      submodel_label = "Audio Streaming Encoder";
+      break;
+    case AudioSubmodelKind::kAdapter:
+      backend = executor_settings.GetAdapterBackend();
+      cache_model_name = AudioExecutorSettings::kAdapterName;
+      cpu_logging_prefix = AudioExecutorSettings::kAdapterName;
+      model_type = proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER;
+      submodel_label = "Audio Adapter";
+      break;
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+  if (backend == Backend::GPU) {
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                            options.GetOptions<::litert::GpuOptions>());
+    ABSL_ASSIGN_OR_RETURN(
+        const auto cache_files,
+        GetGpuModelCacheData(executor_settings, cache_model_name));
+    if (kind == AudioSubmodelKind::kAdapter) {
+      SetAdapterGpuOptions(executor_settings, gpu_options);
+    } else {
+      ABSL_RETURN_IF_ERROR(
+          SetEncoderGpuOptions(executor_settings, gpu_options));
+    }
+    ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
+        cache_files.weight_cache_file, cache_files.program_cache_file,
+        cache_files.cache_key, /*logging_prefix=*/cache_model_name,
+        /*cache_compiled_shaders_only=*/false, gpu_options));
+    options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
+  } else if (backend == Backend::CPU) {
+    auto weight_cache_file = executor_settings.GetWeightCacheFile(
+        absl::StrCat(cache_model_name,
+                     ExecutorSettingsBase::kXnnpackCacheSuffix),
+        /*check_and_clean=*/true);
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                            options.GetOptions<::litert::CpuOptions>());
+    ABSL_RETURN_IF_ERROR(
+        SetCpuOptions(cpu_options, executor_settings.GetNumThreads()));
+    ABSL_RETURN_IF_ERROR(
+        SetCpuCacheOptions(weight_cache_file, cpu_logging_prefix, cpu_options));
+    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+#if !defined(LITERT_DISABLE_NPU)
+  } else if (backend == Backend::NPU) {
+    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
+                            options.GetOptions<qualcomm::QualcommOptions>());
+    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
+    qualcomm_options.SetHtpPerformanceMode(
+        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
+    google_tensor_options.SetPerformanceMode(
+        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
+#endif  // !defined(LITERT_DISABLE_NPU)
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported backend for ", submodel_label, ": ", backend));
+  }
+  ABSL_RETURN_IF_ERROR(
+      SetExternalWeightOptions(resources, model_type, options));
+
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(model_type));
+  }
+#endif
+  auto expected_compiled_model =
+      CompiledModel::Create(env, model.Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel("");
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(auto compiled_model,
+                          std::move(expected_compiled_model));
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  if (signatures.size() != 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The ", submodel_label,
+        " model must have exactly one signature but got ", signatures.size()));
+  }
+  return compiled_model;
+}
+
 bool AudioLiteRtCompiledModelExecutor::ShouldShareProducerBuffer(
     TensorBufferType producer_type, size_t producer_packed_size,
     TensorBufferType consumer_type, size_t consumer_packed_size) {
@@ -301,7 +432,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
       LITERT_ASSIGN_OR_RETURN(
           auto zero_buffer,
           compiled_model_.CreateInputBuffer(signature.Key(), input_name));
-      ABSL_RETURN_IF_ERROR(InitializeBuffer(zero_buffer));
+      LITERT_RETURN_IF_ERROR(zero_buffer.Clear());
       input_buffer = std::move(zero_buffer);
     }
   }
@@ -339,109 +470,26 @@ void AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::SetIsFirstChunk(
   is_first_chunk_ = is_first_chunk;
 }
 
-absl::StatusOr<
-    std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioStaticEncoder>>
-AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Create(
-    const AudioExecutorSettings& executor_settings, Environment& env,
-    const Model* absl_nonnull model, ModelResources& resources) {
-  auto handler = std::unique_ptr<AudioStaticEncoder>(
-      new AudioStaticEncoder(executor_settings, env, model, resources));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
-  return handler;
-}
-
-absl::Status
-AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
-  LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  auto weight_cache_file = executor_settings_.GetWeightCacheFile(
-      absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
-                   ExecutorSettingsBase::kXnnpackCacheSuffix),
-      /*check_and_clean=*/true);
-  if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
-                            options.GetOptions<::litert::GpuOptions>());
-    ABSL_ASSIGN_OR_RETURN(
-        const auto cache_files,
-        GetGpuModelCacheData(executor_settings_,
-                             AudioExecutorSettings::kStaticEncoderName));
-    ABSL_RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
-    ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
-        cache_files.weight_cache_file, cache_files.program_cache_file,
-        cache_files.cache_key,
-        /*logging_prefix=*/AudioExecutorSettings::kStaticEncoderName,
-        /*cache_compiled_shaders_only=*/false, gpu_options));
-    options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
-  } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
-                            options.GetOptions<::litert::CpuOptions>());
-    ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
-    ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
-        weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
-
-    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
-#if !defined(LITERT_DISABLE_NPU)
-  } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                            options.GetOptions<qualcomm::QualcommOptions>());
-    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
-    qualcomm_options.SetHtpPerformanceMode(
-        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-    LITERT_ASSIGN_OR_RETURN(
-        auto& google_tensor_options,
-        options.GetOptions<google_tensor::GoogleTensorOptions>());
-    google_tensor_options.SetPerformanceMode(
-        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                    litert::HwAccelerators::kCpu);
-#endif  // !defined(LITERT_DISABLE_NPU)
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported backend for AudioStaticEncoder: ",
-                     executor_settings_.GetBackend()));
-  }
-  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources_, proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW, options));
-
-#ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
-      __attribute__((weak));
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
-        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
-  }
-#endif
-  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
-#ifdef __EMSCRIPTEN__
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel("");
-  }
-#endif
-  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
-  if (signatures.size() != 1) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("The Audio Static Encoder model must have exactly one "
-                     "signature but got ",
-                     signatures.size()));
-  }
-  LITERT_ASSIGN_OR_RETURN(auto signature, model_.GetSignature(0));
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::InitializeBuffers(
+    const Model& model, CompiledModel compiled_model) {
+  compiled_model_ = std::move(compiled_model);
+  LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(0));
 
   // Initialize the input buffers.
-  LITERT_ASSIGN_OR_RETURN(auto input_buffers,
-                          compiled_model_.CreateInputBuffers(
-                              /*signature_index=*/0));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(input_buffers));
+  LITERT_ASSIGN_OR_RETURN(
+      auto input_buffers,
+      compiled_model_.CreateInputBuffers(/*signature_index=*/0));
+  ABSL_RETURN_IF_ERROR(ClearBuffers(absl::MakeSpan(input_buffers)));
   input_names_.reserve(signature.InputNames().size());
-  for (int i = 0; i < signature.InputNames().size(); ++i) {
-    std::string input_name = std::string(signature.InputNames()[i]);
-    input_names_.push_back(input_name);
-    absl::string_view input_name_view = input_names_[i];
-    input_buffers_map_[input_name_view] = std::move(input_buffers[i]);
+  for (size_t i = 0; i < signature.InputNames().size(); ++i) {
+    input_names_.emplace_back(signature.InputNames()[i]);
+    input_buffers_map_[input_names_[i]] = std::move(input_buffers[i]);
   }
 
-  // Get pointers to specific buffers after the map is fully populated.
-  std::string src_inputs_name = "";
-  for (const auto& input_name : kAudioInputNames) {
+  // Bind pointers to specific buffers only after the map is fully populated so
+  // `flat_hash_map` rehashing cannot invalidate them.
+  absl::string_view src_inputs_name;
+  for (absl::string_view input_name : kAudioInputNames) {
     if (input_buffers_map_.contains(input_name)) {
       src_inputs_name = input_name;
       break;
@@ -449,55 +497,72 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   }
   if (src_inputs_name.empty()) {
     return absl::InvalidArgumentError(
-        "The Audio Static Encoder model must have a src_inputs or audio "
-        "input buffer.");
-  }
-  if (input_buffers_map_.contains(kMaskName)) {
-    input_mask_buffer_ = &input_buffers_map_[kMaskName];
+        absl::StrCat("The Audio Encoder model must have an audio input buffer "
+                     "with name in ",
+                     absl::StrJoin(kAudioInputNames, ", ")));
   }
   spectrogram_buffer_ = &input_buffers_map_[src_inputs_name];
 
   // Initialize the output buffers.
-  LITERT_ASSIGN_OR_RETURN(auto output_buffers,
-                          compiled_model_.CreateOutputBuffers(
-                              /*signature_index=*/0));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(output_buffers));
+  LITERT_ASSIGN_OR_RETURN(
+      auto output_buffers,
+      compiled_model_.CreateOutputBuffers(/*signature_index=*/0));
+  ABSL_RETURN_IF_ERROR(ClearBuffers(absl::MakeSpan(output_buffers)));
   output_names_.reserve(signature.OutputNames().size());
-  for (int i = 0; i < signature.OutputNames().size(); ++i) {
-    std::string output_name = std::string(signature.OutputNames()[i]);
-    output_names_.push_back(output_name);
-    absl::string_view output_name_view = output_names_[i];
-    output_buffers_map_[output_name_view] = std::move(output_buffers[i]);
+  for (size_t i = 0; i < signature.OutputNames().size(); ++i) {
+    output_names_.emplace_back(signature.OutputNames()[i]);
+    output_buffers_map_[output_names_[i]] = std::move(output_buffers[i]);
   }
-  // Get pointers to specific buffers after the map is fully populated.
+
+  // Bind pointers to specific buffers only after the map is fully populated.
   if (!output_buffers_map_.contains(kFeaturesName)) {
     return absl::InvalidArgumentError(
-        "The Audio Static Encoder model must have a features output buffer.");
-  }
-  if (output_buffers_map_.contains(kMaskName)) {
-    output_mask_buffer_ = &output_buffers_map_[kMaskName];
-  } else if (output_buffers_map_.contains(kMaskOutName)) {
-    output_mask_buffer_ = &output_buffers_map_[kMaskOutName];
+        "The Audio Encoder model must have a features output buffer.");
   }
   output_features_buffer_ = &output_buffers_map_[kFeaturesName];
   return absl::OkStatus();
 }
 
 absl::Status
-AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::ClearInputBuffers() {
+AudioLiteRtCompiledModelExecutor::AudioEncoder::ClearNonLoraInputBuffers(
+    absl::string_view skip_input_name) {
   for (auto& [input_name, input_buffer] : input_buffers_map_) {
     // The LoRA buffers in the map share memory with the buffers owned by the
     // LoRA; clearing them would erase the LoRA weights for later runs.
-    if (IsLoRABufferInputName(input_name)) {
+    if (IsLoRABufferInputName(input_name) ||
+        (!skip_input_name.empty() && input_name == skip_input_name)) {
       continue;
     }
-    LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
-                            TensorBufferScopedLock::Create(
-                                input_buffer, TensorBuffer::LockMode::kWrite));
-    LITERT_ASSIGN_OR_RETURN(auto packed_size, input_buffer.PackedSize());
-    memset(buffer_lock_and_addr.second, 0, packed_size);
+    LITERT_RETURN_IF_ERROR(input_buffer.Clear());
   }
   return absl::OkStatus();
+}
+
+absl::StatusOr<
+    std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioStaticEncoder>>
+AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Create(
+    const AudioExecutorSettings& executor_settings, Environment& env,
+    const Model* absl_nonnull model, ModelResources& resources) {
+  RET_CHECK_NE(model, nullptr);
+  ABSL_ASSIGN_OR_RETURN(
+      CompiledModel compiled_model,
+      CompileAudioSubmodel(AudioSubmodelKind::kStaticEncoder, executor_settings,
+                           env, *model, resources));
+  auto handler = absl::WrapUnique(new AudioStaticEncoder());
+  ABSL_RETURN_IF_ERROR(
+      handler->InitializeBuffers(*model, std::move(compiled_model)));
+  if (auto it = handler->input_buffers_map_.find(kMaskName);
+      it != handler->input_buffers_map_.end()) {
+    handler->input_mask_buffer_ = &it->second;
+  }
+  if (auto it = handler->output_buffers_map_.find(kMaskName);
+      it != handler->output_buffers_map_.end()) {
+    handler->output_mask_buffer_ = &it->second;
+  } else if (auto out_it = handler->output_buffers_map_.find(kMaskOutName);
+             out_it != handler->output_buffers_map_.end()) {
+    handler->output_mask_buffer_ = &out_it->second;
+  }
+  return handler;
 }
 
 absl::StatusOr<
@@ -505,198 +570,48 @@ absl::StatusOr<
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
     const Model* absl_nonnull model, ModelResources& resources) {
-  auto handler = std::unique_ptr<AudioStreamingEncoder>(
-      new AudioStreamingEncoder(executor_settings, env, model, resources));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
-  return handler;
-}
-
-absl::Status
-AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
-  LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  auto weight_cache_file = executor_settings_.GetWeightCacheFile(
-      absl::StrCat(AudioExecutorSettings::kStreamingEncoderName,
-                   ExecutorSettingsBase::kXnnpackCacheSuffix),
-      /*check_and_clean=*/true);
-  if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
-                            options.GetOptions<::litert::GpuOptions>());
-    ABSL_ASSIGN_OR_RETURN(
-        const auto cache_files,
-        GetGpuModelCacheData(executor_settings_,
-                             AudioExecutorSettings::kStreamingEncoderName));
-    ABSL_RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
-    ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
-        cache_files.weight_cache_file, cache_files.program_cache_file,
-        cache_files.cache_key,
-        /*logging_prefix=*/AudioExecutorSettings::kStreamingEncoderName,
-        /*cache_compiled_shaders_only=*/false, gpu_options));
-    options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
-  } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
-                            options.GetOptions<::litert::CpuOptions>());
-    ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
-    ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
-        weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
-    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
-#if !defined(LITERT_DISABLE_NPU)
-  } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                            options.GetOptions<qualcomm::QualcommOptions>());
-    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
-    qualcomm_options.SetHtpPerformanceMode(
-        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-    LITERT_ASSIGN_OR_RETURN(
-        auto& google_tensor_options,
-        options.GetOptions<google_tensor::GoogleTensorOptions>());
-    google_tensor_options.SetPerformanceMode(
-        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                    litert::HwAccelerators::kCpu);
-#endif  // !defined(LITERT_DISABLE_NPU)
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported backend for AudioEncoder: ",
-                     executor_settings_.GetBackend()));
+  RET_CHECK_NE(model, nullptr);
+  ABSL_ASSIGN_OR_RETURN(
+      CompiledModel compiled_model,
+      CompileAudioSubmodel(AudioSubmodelKind::kStreamingEncoder,
+                           executor_settings, env, *model, resources));
+  auto handler = absl::WrapUnique(new AudioStreamingEncoder(
+      env, executor_settings.GetAudioBufferingEnabled()));
+  ABSL_RETURN_IF_ERROR(
+      handler->InitializeBuffers(*model, std::move(compiled_model)));
+  if (auto it = handler->input_buffers_map_.find(kSegmentMaskName);
+      it != handler->input_buffers_map_.end()) {
+    handler->input_mask_buffer_ = &it->second;
   }
-  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources_, proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW, options));
-
-#ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
-      __attribute__((weak));
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
-        proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
-  }
-#endif
-  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
-#ifdef __EMSCRIPTEN__
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel("");
-  }
-#endif
-  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
-  if (signatures.size() != 1) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "The Audio Encoder model must have exactly one signature but got ",
-        signatures.size()));
-  }
-
-  LITERT_ASSIGN_OR_RETURN(auto signature, model_.GetSignature(0));
-
-  // Initialize the input buffers.
-  LITERT_ASSIGN_OR_RETURN(auto input_buffers,
-                          compiled_model_.CreateInputBuffers(
-                              /*signature_index=*/0));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(input_buffers));
-  input_names_.reserve(signature.InputNames().size());
-  for (int i = 0; i < signature.InputNames().size(); ++i) {
-    std::string input_name = std::string(signature.InputNames()[i]);
-    input_names_.push_back(input_name);
-    absl::string_view input_name_view = input_names_[i];
-    input_buffers_map_[input_name_view] = std::move(input_buffers[i]);
-  }
-
-  if (input_buffers_map_.contains(kSegmentMaskName)) {
-    input_mask_buffer_ = &input_buffers_map_[kSegmentMaskName];
-  }
-  std::string src_inputs_name = "";
-  for (const auto& input_name : kAudioInputNames) {
-    if (input_buffers_map_.contains(input_name)) {
-      src_inputs_name = input_name;
-      break;
-    }
-  }
-  if (src_inputs_name.empty()) {
-    return absl::InvalidArgumentError(
-        "The Audio Streaming Encoder model must have an audio input buffer "
-        "with name in " +
-        absl::StrJoin(kAudioInputNames, ", "));
-  }
-  spectrogram_buffer_ = &input_buffers_map_[src_inputs_name];
-
-  // Initialize the output buffers.
-  LITERT_ASSIGN_OR_RETURN(auto output_buffers,
-                          compiled_model_.CreateOutputBuffers(
-                              /*signature_index=*/0));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(output_buffers));
-  output_names_.reserve(signature.OutputNames().size());
-  for (int i = 0; i < signature.OutputNames().size(); ++i) {
-    std::string output_name = std::string(signature.OutputNames()[i]);
-    output_names_.push_back(output_name);
-    absl::string_view output_name_view = output_names_[i];
-    output_buffers_map_[output_name_view] = std::move(output_buffers[i]);
-  }
-  // Get pointers to specific buffers after the map is fully populated.
-  if (!output_buffers_map_.contains(kFeaturesName)) {
-    return absl::InvalidArgumentError(
-        "The Audio Streaming Encoder model must have a features output "
-        "buffer.");
-  }
-  if (output_buffers_map_.contains(kMaskName)) {
-    output_mask_buffer_ = &output_buffers_map_[kMaskName];
-  }
-  output_features_buffer_ = &output_buffers_map_[kFeaturesName];
-
-  // Get the feature states tensor type and use it to get the overlap size.
-  std::string feature_states_name =
-      absl::StrCat(kFeatureStatesNamePattern, "_0");
-  if (input_buffers_map_.contains(feature_states_name)) {
-    LITERT_ASSIGN_OR_RETURN(
-        auto feature_states_tensor_type,
-        input_buffers_map_[feature_states_name].TensorType());
-    // The overlap size is the number of elements in the feature states tensor,
-    // which is 3 for gemma3n.
-    LITERT_ASSIGN_OR_RETURN(overlap_size_,
-                            feature_states_tensor_type.Layout().NumElements());
+  if (auto it = handler->output_buffers_map_.find(kMaskName);
+      it != handler->output_buffers_map_.end()) {
+    handler->output_mask_buffer_ = &it->second;
   }
   // Initialize the previous mask buffer to all ones.
-  if (input_buffers_map_.contains(kPrevMaskName)) {
-    LITERT_ASSIGN_OR_RETURN(auto prev_mask_type,
-                            input_buffers_map_[kPrevMaskName].TensorType());
-    LITERT_ASSIGN_OR_RETURN(int prev_mask_size,
-                            prev_mask_type.Layout().NumElements());
-    input_buffers_map_[kPrevMaskName].Write<uint8_t>(
-        std::vector<uint8_t>(prev_mask_size, 1));
+  if (auto it = handler->input_buffers_map_.find(kPrevMaskName);
+      it != handler->input_buffers_map_.end()) {
+    ABSL_RETURN_IF_ERROR(FillPrevMaskWithOnes(it->second));
   }
-
-  return absl::OkStatus();
+  return handler;
 }
 
 absl::Status AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::
     SwapInternalStateBuffers() {
-  std::vector<absl::string_view> all_input_names(input_names_.begin(),
-                                                 input_names_.end());
-  for (const auto& input_name : all_input_names) {
-    if (output_buffers_map_.contains(input_name)) {
-      std::swap(input_buffers_map_[input_name],
-                output_buffers_map_[input_name]);
+  for (const std::string& input_name : input_names_) {
+    if (auto out_it = output_buffers_map_.find(input_name);
+        out_it != output_buffers_map_.end()) {
+      std::swap(input_buffers_map_[input_name], out_it->second);
     }
   }
   return absl::OkStatus();
 }
 
 absl::Status AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Reset() {
-  for (auto& [input_name, input_buffer] : input_buffers_map_) {
-    // The LoRA buffers in the map share memory with the buffers owned by the
-    // LoRA; clearing them would erase the LoRA weights for later runs.
-    if (IsLoRABufferInputName(input_name)) {
-      continue;
-    }
-    LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
-                            TensorBufferScopedLock::Create(
-                                input_buffer, TensorBuffer::LockMode::kWrite));
-    LITERT_ASSIGN_OR_RETURN(auto packed_size, input_buffer.PackedSize());
-    if (input_name == kPrevMaskName) {
-      for (int i = 0; i < packed_size; ++i) {
-        auto* mask_ptr = static_cast<bool*>(buffer_lock_and_addr.second);
-        mask_ptr[i] = true;
-      }
-    } else {
-      memset(buffer_lock_and_addr.second, 0, packed_size);
-    }
+  ABSL_RETURN_IF_ERROR(
+      ClearNonLoraInputBuffers(/*skip_input_name=*/kPrevMaskName));
+  if (auto it = input_buffers_map_.find(kPrevMaskName);
+      it != input_buffers_map_.end()) {
+    ABSL_RETURN_IF_ERROR(FillPrevMaskWithOnes(it->second));
   }
   buffered_spectrogram_.clear();
   is_first_chunk_ = true;
@@ -707,127 +622,46 @@ absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioAdapter>>
 AudioLiteRtCompiledModelExecutor::AudioAdapter::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
     const Model* absl_nonnull model, ModelResources& resources) {
-  auto handler = std::unique_ptr<AudioAdapter>(
-      new AudioAdapter(executor_settings, env, model, resources));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
-  return handler;
-}
-
-absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
-  LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  auto weight_cache_file = executor_settings_.GetWeightCacheFile(
-      absl::StrCat(AudioExecutorSettings::kAdapterName,
-                   ExecutorSettingsBase::kXnnpackCacheSuffix),
-      /*check_and_clean=*/true);
-  // The adapter is not necessarily on the encoder's backend. Bundles that pin
-  // `AUDIO_ADAPTER` to CPU while leaving `AUDIO_ENCODER_HW` free rely on this.
-  const Backend backend = executor_settings_.GetAdapterBackend();
-  if (backend == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
-                            options.GetOptions<::litert::GpuOptions>());
-    ABSL_ASSIGN_OR_RETURN(
-        const auto cache_files,
-        GetGpuModelCacheData(executor_settings_,
-                             AudioExecutorSettings::kAdapterName));
-    ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
-        cache_files.weight_cache_file, cache_files.program_cache_file,
-        cache_files.cache_key,
-        /*logging_prefix=*/AudioExecutorSettings::kAdapterName,
-        /*cache_compiled_shaders_only=*/false, gpu_options));
-
-    gpu_options.EnableConstantTensorSharing(true);
-    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
-    gpu_options.SetPreferTextureWeights(true);
-    // "default" (unset) currently resolves to disabled.
-    LrtSetGpuOptionsUseIrModel(gpu_options.Get(),
-                               executor_settings_.UseIrModel().value_or(false));
-#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
-    gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
-#endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
-    options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
-  } else if (backend == Backend::CPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
-                            options.GetOptions<::litert::CpuOptions>());
-    ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
-
-    ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
-        weight_cache_file, AudioExecutorSettings::kAdapterName, cpu_options));
-
-    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
-#if !defined(LITERT_DISABLE_NPU)
-  } else if (backend == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                            options.GetOptions<qualcomm::QualcommOptions>());
-    qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
-    qualcomm_options.SetHtpPerformanceMode(
-        qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-    LITERT_ASSIGN_OR_RETURN(
-        auto& google_tensor_options,
-        options.GetOptions<google_tensor::GoogleTensorOptions>());
-    google_tensor_options.SetPerformanceMode(
-        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                    litert::HwAccelerators::kCpu);
-#endif  // !defined(LITERT_DISABLE_NPU)
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported backend for AudioAdapter: ", backend));
-  }
-  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources_, proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER, options));
-
-#ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
-      __attribute__((weak));
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(
-        TfLiteModelTypeToWireString(proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER));
-  }
-#endif
-  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
-#ifdef __EMSCRIPTEN__
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel("");
-  }
-#endif
-  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
-  if (signatures.size() != 1) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "The Audio Adapter model must have exactly one signature but got ",
-        signatures.size()));
-  }
-  LITERT_ASSIGN_OR_RETURN(input_buffers_, compiled_model_.CreateInputBuffers(
-                                              /*signature_index=*/0));
-  if (input_buffers_.size() != 1 && input_buffers_.size() != 2) {
+  RET_CHECK_NE(model, nullptr);
+  ABSL_ASSIGN_OR_RETURN(
+      CompiledModel compiled_model,
+      CompileAudioSubmodel(AudioSubmodelKind::kAdapter, executor_settings, env,
+                           *model, resources));
+  auto handler = absl::WrapUnique(new AudioAdapter(std::move(compiled_model)));
+  LITERT_ASSIGN_OR_RETURN(
+      handler->input_buffers_,
+      handler->compiled_model_.CreateInputBuffers(/*signature_index=*/0));
+  if (handler->input_buffers_.size() != 1 &&
+      handler->input_buffers_.size() != 2) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The Audio Adapter model must have 1 or 2 input buffers but got ",
-        input_buffers_.size()));
+        handler->input_buffers_.size()));
   }
-  LITERT_ASSIGN_OR_RETURN(output_buffers_, compiled_model_.CreateOutputBuffers(
-                                               /*signature_index=*/0));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(input_buffers_));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(output_buffers_));
-  if (output_buffers_.size() != 1) {
+  LITERT_ASSIGN_OR_RETURN(
+      handler->output_buffers_,
+      handler->compiled_model_.CreateOutputBuffers(/*signature_index=*/0));
+  ABSL_RETURN_IF_ERROR(ClearBuffers(absl::MakeSpan(handler->input_buffers_)));
+  ABSL_RETURN_IF_ERROR(ClearBuffers(absl::MakeSpan(handler->output_buffers_)));
+  if (handler->output_buffers_.size() != 1) {
     return absl::InvalidArgumentError(
         absl::StrCat("The Audio Adapter model must have exactly one output "
                      "buffer but got ",
-                     output_buffers_.size()));
+                     handler->output_buffers_.size()));
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto signature, model_.GetSignature(0));
-  for (int i = 0; i < signature.InputNames().size(); ++i) {
+  LITERT_ASSIGN_OR_RETURN(auto signature, model->GetSignature(0));
+  for (size_t i = 0; i < signature.InputNames().size(); ++i) {
     if (absl::StrContains(signature.InputNames()[i], kFeaturesName)) {
-      features_buffer_ = &input_buffers_[i];
+      handler->features_buffer_ = &handler->input_buffers_[i];
     } else if (absl::StrContains(signature.InputNames()[i], kMaskName)) {
-      mask_buffer_ = &input_buffers_[i];
+      handler->mask_buffer_ = &handler->input_buffers_[i];
     }
   }
-  if (features_buffer_ == nullptr) {
+  if (handler->features_buffer_ == nullptr) {
     return absl::InvalidArgumentError(
         "The Audio Adapter model must have a features input buffer.");
   }
-  return absl::OkStatus();
+  return handler;
 }
 
 absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
@@ -867,8 +701,6 @@ AudioLiteRtCompiledModelExecutor::Create(
   auto audio_adapter_model_or =
       resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_AUDIO_ADAPTER);
   std::unique_ptr<AudioEncoder> audio_encoder;
-  LITERT_ASSIGN_OR_RETURN(auto encoder_signature,
-                          audio_encoder_model->GetSignature(0));
   LITERT_ASSIGN_OR_RETURN(
       auto executor_properties,
       GetAudioExecutorPropertiesFromModelResources(resources));
@@ -920,18 +752,12 @@ AudioLiteRtCompiledModelExecutor::Create(
   const auto encoder_dims = encoder_output_tensor_type.Layout().Dimensions();
   const int audio_embedding_dimensions = encoder_dims.back();
 
-  int projected_audio_embedding_dimensions;
+  int projected_audio_embedding_dimensions = audio_embedding_dimensions;
   if (audio_adapter != nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             audio_adapter->GetOutputBuffers()[0].TensorType());
-    const auto dims = adapter_output_tensor_type.Layout().Dimensions();
-    projected_audio_embedding_dimensions = dims.back();
-  } else {
-    LITERT_ASSIGN_OR_RETURN(
-        auto encoder_output_tensor_type,
-        audio_encoder->GetOutputFeaturesBuffer().TensorType());
-    const auto dims = encoder_output_tensor_type.Layout().Dimensions();
-    projected_audio_embedding_dimensions = dims.back();
+    projected_audio_embedding_dimensions =
+        adapter_output_tensor_type.Layout().Dimensions().back();
   }
   const int encoder_shrinking_factor = executor_properties.audio_shrink_factor;
   if (!executor_properties.is_streaming_model) {
@@ -1477,22 +1303,12 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   return audio_data;
 }
 
-absl::StatusOr<std::unique_ptr<AudioStreamingContext>>
-AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
+absl::StatusOr<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::BuildStateBuffersMap(
+    StateBufferInitMode mode) const {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers;
-  LITERT_ASSIGN_OR_RETURN(auto signature, compiled_model_.GetSignature(0));
-  for (auto& [name, buffer] : input_buffers_map_) {
-    if (name == kSegmentValuesName || name == kSegmentMaskName) {
-      // Skip the segment values and mask buffers as they are not part of the
-      // state.
-      continue;
-    }
-    if (absl::c_find(kAudioInputNames, name) != kAudioInputNames.end()) {
-      // Skip audio input buffers.
-      continue;
-    }
-    if (IsLoRABufferInputName(name)) {
-      // Skip LoRA buffers as they are not part of the streaming state.
+  for (const auto& [name, buffer] : input_buffers_map_) {
+    if (!IsStreamingStateBufferName(name)) {
       continue;
     }
     LITERT_ASSIGN_OR_RETURN(auto tensor_type, buffer.TensorType());
@@ -1501,52 +1317,34 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
         auto new_buffer,
         TensorBuffer::CreateManaged(env_, TensorBufferType::kHostMemory,
                                     tensor_type, size));
-    if (name == kPrevMaskName) {
-      LITERT_ASSIGN_OR_RETURN(auto prev_mask_type, new_buffer.TensorType());
-      LITERT_ASSIGN_OR_RETURN(int prev_mask_size,
-                              prev_mask_type.Layout().NumElements());
-      std::vector<uint8_t> all_ones(prev_mask_size, 1);
-      LITERT_RETURN_IF_ERROR(new_buffer.Write<uint8_t>(all_ones));
+    if (mode == StateBufferInitMode::kCopyCurrent) {
+      ABSL_RETURN_IF_ERROR(CopyBuffer(buffer, new_buffer));
+    } else if (name == kPrevMaskName) {
+      ABSL_RETURN_IF_ERROR(FillPrevMaskWithOnes(new_buffer));
     } else {
-      LITERT_RETURN_IF_ERROR(InitializeBuffer(new_buffer));
+      LITERT_RETURN_IF_ERROR(new_buffer.Clear());
     }
     state_buffers[name] = std::move(new_buffer);
   }
-  auto audio_streaming_context =
-      std::make_unique<AudioStreamingContext>(std::move(state_buffers));
-  return audio_streaming_context;
+  return state_buffers;
+}
+
+absl::StatusOr<std::unique_ptr<AudioStreamingContext>>
+AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
+  ABSL_ASSIGN_OR_RETURN(
+      auto state_buffers,
+      BuildStateBuffersMap(StateBufferInitMode::kZeroAndOnesPrevMask));
+  return std::make_unique<AudioStreamingContext>(std::move(state_buffers));
 }
 
 absl::StatusOr<std::unique_ptr<AudioStreamingContext>>
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CloneContext() {
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers;
-  LITERT_ASSIGN_OR_RETURN(auto signature, compiled_model_.GetSignature(0));
-  for (const auto& [name, buffer] : input_buffers_map_) {
-    if (name == kSegmentValuesName || name == kSegmentMaskName) {
-      // Skip the segment values and mask buffers as they are not part of the
-      // state.
-      continue;
-    }
-    if (absl::c_find(kAudioInputNames, name) != kAudioInputNames.end()) {
-      // Skip audio input buffers.
-      continue;
-    }
-    if (IsLoRABufferInputName(name)) {
-      // Skip LoRA buffers as they are not part of the streaming state.
-      continue;
-    }
-    LITERT_ASSIGN_OR_RETURN(auto tensor_type, buffer.TensorType());
-    LITERT_ASSIGN_OR_RETURN(auto size, buffer.PackedSize());
-    LITERT_ASSIGN_OR_RETURN(
-        auto new_buffer,
-        TensorBuffer::CreateManaged(env_, TensorBufferType::kHostMemory,
-                                    tensor_type, size));
-    ABSL_RETURN_IF_ERROR(CopyBuffer(buffer, new_buffer));
-    state_buffers[name] = std::move(new_buffer);
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto state_buffers,
+      BuildStateBuffersMap(StateBufferInitMode::kCopyCurrent));
   auto audio_streaming_context =
       std::make_unique<AudioStreamingContext>(std::move(state_buffers));
-  if (executor_settings_.GetAudioBufferingEnabled()) {
+  if (audio_buffering_enabled_) {
     audio_streaming_context->buffered_spectrogram() = buffered_spectrogram_;
   }
   audio_streaming_context->SetIsFirstChunk(is_first_chunk_);
@@ -1557,24 +1355,18 @@ absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::RestoreContext(
     std::unique_ptr<AudioStreamingContext> audio_streaming_context) {
   for (auto& [name, buffer] : audio_streaming_context->state_buffers()) {
-    if (!input_buffers_map_.contains(name)) {
+    const auto it = input_buffers_map_.find(name);
+    if (it == input_buffers_map_.end()) {
       return absl::InvalidArgumentError(
           absl::StrCat("The Audio Streaming Encoder model must have a ", name,
                        " input buffer."));
     }
-    if (name == kSegmentValuesName || name == kSegmentMaskName) {
-      // Skip the segment values and mask buffers as they are not part of the
-      // state.
+    if (!IsStreamingStateBufferName(name)) {
       continue;
     }
-    if (IsLoRABufferInputName(name)) {
-      // Skip LoRA buffers as they are not part of the streaming state.
-      continue;
-    }
-
-    ABSL_RETURN_IF_ERROR(CopyBuffer(buffer, input_buffers_map_[name]));
+    ABSL_RETURN_IF_ERROR(CopyBuffer(buffer, it->second));
   }
-  if (executor_settings_.GetAudioBufferingEnabled()) {
+  if (audio_buffering_enabled_) {
     buffered_spectrogram_ = audio_streaming_context->buffered_spectrogram();
   }
   is_first_chunk_ = audio_streaming_context->IsFirstChunk();
@@ -1636,7 +1428,7 @@ AudioLiteRtCompiledModelExecutor::CreateAndLockAudioTensor(int num_tokens,
                           TensorBuffer::CreateManaged(
                               env_, TensorBufferType::kHostMemory, tensor_type,
                               num_tokens * dimensions * sizeof(float)));
-  LITERT_RETURN_IF_ERROR(InitializeBuffer(tensor));
+  LITERT_RETURN_IF_ERROR(tensor.Clear());
   LITERT_ASSIGN_OR_RETURN(auto lock_and_ptr,
                           TensorBufferScopedLock::Create<float>(
                               tensor, TensorBuffer::LockMode::kWrite));
