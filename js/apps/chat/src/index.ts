@@ -17,3 +17,5 @@
 // Register all custom Lit elements with CustomElementRegistry natively
 import './components/chat_app';
 import './components/learn_more_drawer';
+
+document.body.prepend(document.createElement('litert-lm-chat-app'));
