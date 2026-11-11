@@ -16,11 +16,15 @@
 
 import './chat_window';
 
+import {Engine} from '@litert-lm/core';
+
 import {LlmChatStateController} from '../state_controller.js';
 import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
+import {LocalDirectoryService} from '../stores/local_directory_service.js';
 import {ModelLoaderService} from '../stores/model_loader_service.js';
-import {SettingsStore} from '../stores/settings_store.js';
+import {MODELS, SettingsStore} from '../stores/settings_store.js';
 import {LitertChatWindow} from './chat_window.js';
+import {CustomDropdown} from './custom_dropdown.js';
 
 describe('litert-chat-window', () => {
   let element: LitertChatWindow;
@@ -28,6 +32,7 @@ describe('litert-chat-window', () => {
   let mockChatSession: jasmine.SpyObj<ChatSessionStore>;
   let mockSettings: jasmine.SpyObj<SettingsStore>;
   let mockModelLoader: jasmine.SpyObj<ModelLoaderService>;
+  let mockLocalDirService: jasmine.SpyObj<LocalDirectoryService>;
   let cachedModelsMap: Map<string, number>;
   let createdMedia: Map<string, PromptMedia>;
   const fakeImage: PromptMedia = {
@@ -67,6 +72,8 @@ describe('litert-chat-window', () => {
       'cancelGeneration',
       'createMedia',
       'getMedia',
+      'redoResponse',
+      'rewindAndEdit',
     ]);
     // Initialize properties used during render
     mockChatSession.isGenerating = false;
@@ -84,22 +91,45 @@ describe('litert-chat-window', () => {
     mockSettings = jasmine.createSpyObj('SettingsStore', ['saveSettings']);
     mockSettings.selectedModelPath =
         'https://example.com/path/to/model_file.litertlm';
+    mockSettings.customModels = [];
+    mockSettings.localDirModels = [];
+
+    mockLocalDirService = jasmine.createSpyObj('LocalDirectoryService', [
+      'mountDirectory',
+      'scanDirectory',
+      'getFile',
+    ]);
+    mockLocalDirService.isAuthorized = false;
+    (mockLocalDirService as unknown as {isSupported: boolean}).isSupported =
+        false;
+    (mockLocalDirService as unknown as {directoryName: string | null})
+        .directoryName = null;
 
     cachedModelsMap = new Map<string, number>();
     mockModelLoader = jasmine.createSpyObj('ModelLoaderService', [
       'loadModelWeights',
+      'deleteModelFromCache',
+      'clearAllCache',
+      'cancelDownload',
+      'addRemoteModel',
     ]);
     mockModelLoader.isModelLoading = false;
     mockModelLoader.cachedModels = cachedModelsMap;
+    mockModelLoader.downloadProgresses = new Map<string, number>();
+    mockModelLoader.downloadSpeeds = new Map<string, string>();
+    mockModelLoader.downloadAbortController = null;
 
     mockState = {
       chatSession: mockChatSession,
       settings: mockSettings,
       modelLoader: mockModelLoader,
+      localDirService: mockLocalDirService,
       statusText: 'Idle',
       addHost: jasmine.createSpy('addHost'),
       removeHost: jasmine.createSpy('removeHost'),
       requestUpdate: jasmine.createSpy('requestUpdate'),
+      storage: window.localStorage,
+      requestConfirm: jasmine.createSpy('requestConfirm').and.resolveTo(true),
     } as unknown as jasmine.SpyObj<LlmChatStateController>;
 
     element = document.createElement('litert-chat-window');
@@ -115,7 +145,10 @@ describe('litert-chat-window', () => {
   it('renders quick starters when messages are empty', () => {
     const starters = element.shadowRoot!.querySelectorAll('.btn-starter');
     expect(starters.length).toBe(3);
-    expect(starters[0]!.textContent!.trim()).toBe('Explain WebGPU');
+    expect(starters[0]!.querySelector('.starter-title')?.textContent?.trim())
+        .toBe('Explain WebGPU');
+    expect(starters[0]!.querySelector('.starter-subtitle')?.textContent?.trim())
+        .toBeTruthy();
   });
 
   it('does not render quick starters when messages exist', async () => {
@@ -134,6 +167,8 @@ describe('litert-chat-window', () => {
 
   it('disables input when model is loading', async () => {
     mockModelLoader.isModelLoading = true;
+    mockModelLoader.downloadProgresses =
+        new Map([[mockSettings.selectedModelPath, 64]]);
     element.requestUpdate();
     await element.updateComplete;
 
@@ -144,24 +179,45 @@ describe('litert-chat-window', () => {
 
     const sendBtn = element.shadowRoot!.querySelector('#btn-send') as HTMLButtonElement;
     expect(sendBtn.disabled).toBeTrue();
+    expect(sendBtn.textContent!.trim()).toBe('Loading 64%…');
   });
 
-  it('enables input when model is not loading', () => {
+  it('enables input when model is not loading and enables Send once prompt has content', async () => {
     const editor = getEditor();
     expect(editor.getAttribute('contenteditable')).toBe('true');
     expect(editor.dataset['placeholder']).toContain('Message LiteRT-LM...');
 
     const sendBtn = element.shadowRoot!.querySelector('#btn-send') as HTMLButtonElement;
+    expect(sendBtn.disabled).toBeTrue();
+
+    editor.textContent = 'Hello';
+    editor.dispatchEvent(new Event('input'));
+    await element.updateComplete;
     expect(sendBtn.disabled).toBeFalse();
   });
 
-  it('shows "Send" when model is cached', async () => {
+  it('shows "Send" when model is cached or already loaded in memory', async () => {
     cachedModelsMap.set(mockSettings.selectedModelPath, 1000);
     element.requestUpdate();
     await element.updateComplete;
 
     const sendBtn = element.shadowRoot!.querySelector('#btn-send') as HTMLButtonElement;
     expect(sendBtn.textContent!.trim()).toBe('Send');
+
+    cachedModelsMap.clear();
+    (mockModelLoader as unknown as {engine: object}).engine = {};
+    element.requestUpdate();
+    await element.updateComplete;
+    expect(sendBtn.textContent!.trim()).toBe('Send');
+  });
+
+  it('shows "Load & Send" when local-dir model is not yet loaded', async () => {
+    mockSettings.selectedModelPath = 'local-dir://gemma-4-e2b';
+    element.requestUpdate();
+    await element.updateComplete;
+
+    const sendBtn = element.shadowRoot!.querySelector('#btn-send') as HTMLButtonElement;
+    expect(sendBtn.textContent!.trim()).toBe('Load & Send');
   });
 
   it('shows "Download & Send" when model is not cached', () => {
@@ -181,9 +237,69 @@ describe('litert-chat-window', () => {
     expect(stopBtn).toBeTruthy();
     expect(stopBtn.textContent!.trim()).toBe('Stop');
 
+    stopBtn.focus();
     stopBtn.click();
     expect(mockChatSession.cancelGeneration).toHaveBeenCalled();
+
+    mockChatSession.isGenerating = false;
+    element.requestUpdate();
+    await element.updateComplete;
+    expect(element.shadowRoot!.activeElement).toBe(getEditor());
   });
+
+  it('renders Try again and Choose another model recovery buttons on error banner',
+     async () => {
+       mockState.errorMessage = 'WebGPU unavailable';
+       mockState.dismissError = jasmine.createSpy('dismissError');
+       element.requestUpdate();
+       await element.updateComplete;
+
+       const actions =
+           element.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+               '.btn-alert-action');
+       expect(actions.length).toBe(2);
+       expect(actions[0]!.textContent!.trim()).toBe('Try again');
+       expect(actions[1]!.textContent!.trim()).toBe('Choose another model');
+
+       let chooseModelFired = false;
+       element.addEventListener('choose-model', () => {
+         chooseModelFired = true;
+       });
+       actions[1]!.click();
+       expect(chooseModelFired).toBeTrue();
+
+       actions[0]!.click();
+       await Promise.resolve();
+       expect(mockState.dismissError).toHaveBeenCalled();
+       expect(mockModelLoader.loadModelWeights).toHaveBeenCalled();
+     });
+
+  it('calls redoResponse when Try again is clicked after a failed assistant turn',
+     async () => {
+       mockChatSession.redoResponse.and.resolveTo();
+       mockChatSession.messages = [
+         {role: 'user', text: 'Hi', senderName: 'User'},
+         {
+           role: 'assistant',
+           text: '',
+           thoughtText: 'Partial thought',
+           senderName: 'Assistant',
+         },
+       ];
+       mockState.errorMessage = 'Stream interrupted';
+       mockState.dismissError = jasmine.createSpy('dismissError');
+       element.requestUpdate();
+       await element.updateComplete;
+
+       const retryBtn = element.shadowRoot!.querySelector(
+                            '#btn-retry-error') as HTMLButtonElement;
+       retryBtn.click();
+       await Promise.resolve();
+
+       expect(mockState.dismissError).toHaveBeenCalled();
+       expect(mockChatSession.redoResponse).toHaveBeenCalledWith(1);
+       expect(mockModelLoader.loadModelWeights).not.toHaveBeenCalled();
+     });
 
   it('keeps the streaming bubble from shrinking until generation ends',
      async () => {
@@ -219,7 +335,9 @@ describe('litert-chat-window', () => {
   it('sends message on send button click', async () => {
     const editor = getEditor();
     editor.textContent = 'Test prompt';
-    
+    editor.dispatchEvent(new Event('input'));
+    await element.updateComplete;
+
     const sendBtn = element.shadowRoot!.querySelector('#btn-send') as HTMLButtonElement;
     sendBtn.click();
     await element.updateComplete;
@@ -399,5 +517,384 @@ describe('litert-chat-window', () => {
     const chip = editor.querySelector('.media-chip') as HTMLElement;
     expect(chip.dataset['mediaId']).toBe(fakeImage.id);
     expect(element.shadowRoot!.activeElement).toBe(editor);
+  });
+
+  it('immediately releases auto-scroll on upward wheel during streaming and re-pins via Latest button',
+     async () => {
+       const warnSpy = spyOn(console, 'warn').and.callThrough();
+       element.style.height = '320px';
+       element.style.display = 'flex';
+       const nextFrame = () =>
+           new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+       const longText = Array.from({length: 50}, (_, i) => `Line ${i + 1}`)
+                            .join('\n\n');
+       mockChatSession.isGenerating = true;
+       mockChatSession.messages = [
+         {role: 'user', text: 'Stream lines', senderName: 'User'},
+         {role: 'assistant', text: longText, senderName: 'Assistant'},
+       ];
+       element.requestUpdate();
+       await element.updateComplete;
+       await nextFrame();
+
+       const msgBox =
+           element.shadowRoot!.querySelector('#chat-messages') as HTMLDivElement;
+       expect(msgBox.scrollHeight).toBeGreaterThan(msgBox.clientHeight);
+       expect(element.shadowRoot!.querySelector('.btn-scroll-bottom'))
+           .toBeNull();
+
+       // Subtle upward trackpad wheel event (deltaY = -4) immediately unpins.
+       msgBox.dispatchEvent(
+           new WheelEvent('wheel', {deltaY: -4, bubbles: true}));
+       msgBox.scrollTop = Math.max(0, msgBox.scrollTop - 20);
+       msgBox.dispatchEvent(new Event('scroll'));
+       await element.updateComplete;
+
+       const pinnedUserTop = msgBox.scrollTop;
+       const latestBtn = element.shadowRoot!.querySelector(
+                             '.btn-scroll-bottom') as HTMLButtonElement;
+       expect(latestBtn).toBeTruthy();
+
+       // Subsequent streamed tokens must NOT fight or pull scrollTop back down.
+       mockChatSession.messages = [
+         {role: 'user', text: 'Stream lines', senderName: 'User'},
+         {
+           role: 'assistant',
+           text: `${longText}\n\nMore streamed output`,
+           senderName: 'Assistant',
+         },
+       ];
+       element.requestUpdate();
+       await element.updateComplete;
+       await nextFrame();
+       expect(msgBox.scrollTop).toBe(pinnedUserTop);
+
+       // Clicking Latest re-pins to the bottom immediately.
+       latestBtn.click();
+       await element.updateComplete;
+       expect(element.shadowRoot!.querySelector('.btn-scroll-bottom'))
+           .toBeNull();
+
+       const litScheduleWarnings = warnSpy.calls.allArgs().filter(
+           args => String(args[0] ?? '').includes('scheduled an update'));
+       expect(litScheduleWarnings).toEqual([]);
+     });
+
+  describe('unified bottom-left composer model picker', () => {
+    beforeEach(async () => {
+      mockSettings.selectedModelPath = MODELS[0]!.path;
+      element.requestUpdate();
+      await element.updateComplete;
+    });
+
+    it('renders upward model dropdown in bottom-left of composer without Shift+Enter hint',
+       () => {
+         expect(element.shadowRoot!.querySelector('.composer-hint')).toBeNull();
+         const dropdown = element.shadowRoot!.querySelector(
+             '#composer-model-dropdown') as CustomDropdown;
+         expect(dropdown).toBeTruthy();
+
+         const items = dropdown.querySelectorAll('.dropdown-item');
+         // Built-in models + upload + add-url
+         expect(items.length).toBe(MODELS.length + 2);
+         expect(items[0]!.querySelector('.model-name')!.textContent!.trim())
+             .toBe(MODELS[0]!.name);
+       });
+
+    it('triggers model load on model change and supports Clear All cached weights in menu footer',
+       async () => {
+         cachedModelsMap.set(MODELS[0]!.path, 2_300_000_000);
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const dropdown = element.shadowRoot!.querySelector(
+             '#composer-model-dropdown') as CustomDropdown;
+         const footerValue = dropdown.querySelector(
+             '.cache-footer-row .cache-bar-value') as HTMLElement;
+         expect(footerValue.textContent!.trim()).toBe('2.30 GB');
+
+         const clearBtn = dropdown.querySelector(
+             '#composer-model-clear-cache') as HTMLButtonElement;
+         expect(clearBtn.disabled).toBeFalse();
+         clearBtn.click();
+         expect(mockModelLoader.clearAllCache).toHaveBeenCalled();
+
+         dropdown.dispatchEvent(
+             new CustomEvent('change', {detail: MODELS[1]!.path}));
+         await element.updateComplete;
+         expect(mockSettings.selectedModelPath).toBe(MODELS[1]!.path);
+         expect(mockSettings.saveSettings).toHaveBeenCalled();
+         expect(mockModelLoader.loadModelWeights).toHaveBeenCalled();
+       });
+
+    it('deletes cached models via ✕ and resets selectedModelPath only when active model is deleted',
+       async () => {
+         mockModelLoader.deleteModelFromCache.and.returnValue(
+             Promise.resolve(true));
+         mockSettings.selectedModelPath = MODELS[1]!.path;
+         cachedModelsMap.set(MODELS[0]!.path, 1024 * 1024 * 1024);
+         element.requestUpdate();
+         await element.updateComplete;
+
+         let deleteBtn = element.shadowRoot!.querySelector(
+             '.delete-cache-btn') as HTMLButtonElement;
+         deleteBtn.click();
+         await new Promise(resolve => setTimeout(resolve));
+         expect(mockSettings.selectedModelPath).toBe(MODELS[1]!.path);
+         expect(mockSettings.saveSettings).not.toHaveBeenCalled();
+
+         // Now cache and delete the active model
+         cachedModelsMap.clear();
+         cachedModelsMap.set(MODELS[1]!.path, 1024 * 1024 * 1024);
+         element.requestUpdate();
+         await element.updateComplete;
+
+         deleteBtn = element.shadowRoot!.querySelector(
+             '.delete-cache-btn') as HTMLButtonElement;
+         deleteBtn.click();
+         await new Promise(resolve => setTimeout(resolve));
+         expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+         expect(mockSettings.saveSettings).toHaveBeenCalled();
+       });
+
+    it('supports select-dir and mounted local directory Rescan in menu footer',
+       async () => {
+         (mockLocalDirService as unknown as {isSupported: boolean})
+             .isSupported = true;
+         mockLocalDirService.isAuthorized = true;
+         (mockLocalDirService as unknown as {directoryName: string | null})
+             .directoryName = 'my-models';
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const dropdown = element.shadowRoot!.querySelector(
+             '#composer-model-dropdown') as CustomDropdown;
+         const selectDirItem =
+             dropdown.querySelector('[data-value="select-dir"]');
+         const uploadItem = dropdown.querySelector('[data-value="upload"]');
+         expect(selectDirItem).toBeTruthy();
+         expect(selectDirItem!.textContent).toContain('Change local directory');
+         expect(uploadItem).toBeTruthy();
+
+         dropdown.dispatchEvent(
+             new CustomEvent('change', {detail: 'select-dir'}));
+         await element.updateComplete;
+         expect(mockLocalDirService.mountDirectory).toHaveBeenCalled();
+
+         const rescanBtn =
+             dropdown.querySelector('.btn-rescan-dir') as HTMLButtonElement;
+         expect(rescanBtn).toBeTruthy();
+         rescanBtn.click();
+         expect(mockLocalDirService.scanDirectory).toHaveBeenCalled();
+       });
+
+    it('renders inline composer download progress strip with Cancel button while loading',
+       async () => {
+         mockModelLoader.isModelLoading = true;
+         mockState.statusText = 'Downloading Gemma 4 E2B...';
+         mockModelLoader.downloadProgresses.set(MODELS[0]!.path, 45);
+         mockModelLoader.downloadSpeeds.set(MODELS[0]!.path, '5.2 MB/s');
+         mockModelLoader.downloadAbortController = {} as AbortController;
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const bar = element.shadowRoot!.querySelector(
+             '#composer-loading-bar') as HTMLElement;
+         expect(bar).toBeTruthy();
+         expect(bar.textContent).toContain('Downloading Gemma 4 E2B...');
+         expect(bar.textContent).toContain('5.2 MB/s · 45%');
+
+         const cancelBtn = element.shadowRoot!.querySelector(
+             '#btn-composer-cancel-download') as HTMLButtonElement;
+         expect(cancelBtn).toBeTruthy();
+         cancelBtn.click();
+         expect(mockModelLoader.cancelDownload).toHaveBeenCalled();
+
+         const sendBtn = element.shadowRoot!.querySelector(
+             '#btn-send') as HTMLButtonElement;
+         expect(sendBtn.getAttribute('aria-label')).toContain('Loading 45%');
+       });
+
+    it('renders compact mobile state label alongside full state label for Reload on send',
+       async () => {
+         mockModelLoader.engine = {} as unknown as Engine;
+         mockModelLoader.needsModelReload = jasmine.createSpy().and.returnValue(true);
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const fullState = element.shadowRoot!.querySelector(
+             '#btn-composer-model .state-full') as HTMLElement;
+         const compactState = element.shadowRoot!.querySelector(
+             '#btn-composer-model .state-compact') as HTMLElement;
+         expect(fullState?.textContent?.trim()).toBe('Reload on send');
+         expect(compactState?.textContent?.trim()).toBe('Reload');
+       });
+
+    it('renders mobile download glyph on #btn-send while weights are uncached and switches back to up-arrow once cached or loaded',
+       async () => {
+         mockSettings.selectedModelPath = MODELS[0]!.path;
+         element.requestUpdate();
+         await element.updateComplete;
+
+         let sendBtn = element.shadowRoot!.querySelector(
+             '#btn-send') as HTMLButtonElement;
+         expect(sendBtn.classList.contains('needs-download')).toBeTrue();
+         expect(sendBtn.querySelector('.send-icon-download')).toBeTruthy();
+         expect(sendBtn.getAttribute('aria-label')).toBe('Download & Send');
+
+         cachedModelsMap.set(MODELS[0]!.path, 2_300_000_000);
+         element.requestUpdate();
+         await element.updateComplete;
+
+         sendBtn = element.shadowRoot!.querySelector(
+             '#btn-send') as HTMLButtonElement;
+         expect(sendBtn.classList.contains('needs-download')).toBeFalse();
+         expect(sendBtn.querySelector('.send-icon-download')).toBeNull();
+         expect(sendBtn.querySelector('.send-icon-up')).toBeTruthy();
+         expect(sendBtn.getAttribute('aria-label')).toBe('Send');
+       });
+
+    describe('adding a model by URL via upward composer popover', () => {
+      const remoteModel = {
+        name: 'SmolLM3-3B',
+        filename: 'SmolLM3-3B.litertlm',
+        path:
+            'https://huggingface.co/litert-community/SmolLM3-3B/resolve/c0ffee/SmolLM3-3B.litertlm',
+        size: '3.13 GB',
+      };
+
+      async function openForm(): Promise<HTMLFormElement> {
+        const dropdown = element.shadowRoot!.querySelector(
+            '#composer-model-dropdown') as HTMLElement;
+        dropdown.dispatchEvent(new CustomEvent('change', {detail: 'add-url'}));
+        await element.updateComplete;
+        return element.shadowRoot!.querySelector('#composer-add-model-form')!;
+      }
+
+      async function submit(form: HTMLFormElement, text: string) {
+        form.querySelector<HTMLInputElement>(
+            '#composer-add-model-input')!.value = text;
+        form.requestSubmit();
+        await new Promise(resolve => setTimeout(resolve));
+        await element.updateComplete;
+      }
+
+      it('adds, selects, and loads a remote model without duplicates, and removes uncached custom models',
+         async () => {
+           mockModelLoader.addRemoteModel.and.resolveTo(remoteModel);
+           const form = await openForm();
+           expect(form).toBeTruthy();
+           expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+
+           await submit(form, 'litert-community/SmolLM3-3B');
+           expect(mockModelLoader.addRemoteModel)
+               .toHaveBeenCalledOnceWith('litert-community/SmolLM3-3B');
+           expect(mockSettings.customModels).toEqual([remoteModel]);
+           expect(mockSettings.selectedModelPath).toBe(remoteModel.path);
+           expect(
+               element.shadowRoot!.querySelector('#composer-add-model-form'))
+               .toBeNull();
+
+           // Submitting same model again does not duplicate
+           mockModelLoader.addRemoteModel.and.resolveTo({...remoteModel});
+           await submit(await openForm(), 'litert-community/SmolLM3-3B');
+           expect(mockSettings.customModels).toEqual([remoteModel]);
+
+           // Removing uncached custom model from list
+           element.requestUpdate();
+           await element.updateComplete;
+           const removeBtn = element.shadowRoot!.querySelector<
+               HTMLButtonElement>('.delete-cache-btn[title="Remove from list"]')!;
+           removeBtn.click();
+           await Promise.resolve();
+           expect(mockSettings.customModels).toEqual([]);
+           expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+         });
+
+      it('keeps popover open on lookup error, disables while loading, and closes on Escape restoring focus',
+         async () => {
+           mockModelLoader.addRemoteModel.and.rejectWith(
+               new Error('Not found'));
+           const form = await openForm();
+           await submit(form, 'org/missing');
+           expect(
+               element.shadowRoot!.querySelector('#composer-add-model-form'))
+               .toBeTruthy();
+
+           const input = form.querySelector<HTMLInputElement>(
+               '#composer-add-model-input')!;
+           input.dispatchEvent(
+               new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+           await element.updateComplete;
+           expect(
+               element.shadowRoot!.querySelector('#composer-add-model-form'))
+               .toBeNull();
+           const triggerBtn = element.shadowRoot!.querySelector(
+               '#btn-composer-model') as HTMLButtonElement;
+           expect(element.shadowRoot!.activeElement).toBe(triggerBtn);
+
+           mockModelLoader.isModelLoading = true;
+           element.requestUpdate();
+           await element.updateComplete;
+           const disabledForm = await openForm();
+           expect(
+               disabledForm
+                   .querySelector<HTMLInputElement>('#composer-add-model-input')!
+                   .disabled)
+               .toBeTrue();
+         });
+    });
+
+    it('names the selected model and size in the high-VRAM confirmation dialog',
+       async () => {
+         window.localStorage.removeItem(
+             'litertlm-large-model-warning-dismissed');
+         const largeModel = MODELS.find(m => m.path.includes('gemma-4-26B'))!;
+         let capturedOptions: {title: string; message: string}|null = null;
+         mockState.requestConfirm.and.callFake(async (opts) => {
+           capturedOptions = {title: opts.title, message: opts.message};
+           return false;
+         });
+
+         const dropdown = element.shadowRoot!.querySelector(
+             '#composer-model-dropdown') as HTMLElement;
+         dropdown.dispatchEvent(
+             new CustomEvent('change', {detail: largeModel.path}));
+         await new Promise(resolve => setTimeout(resolve));
+         await element.updateComplete;
+
+         expect(capturedOptions).not.toBeNull();
+         expect(capturedOptions!.title)
+             .toContain(`${largeModel.name} (${largeModel.size})`);
+         expect(capturedOptions!.message)
+             .toContain(`${largeModel.name} (${largeModel.size}) needs`);
+       });
+
+    it('hides starter cards when the composer draft is non-empty and restores them when cleared',
+       async () => {
+         expect(element.shadowRoot!.querySelector('.starters-container'))
+             .toBeTruthy();
+
+         element.dispatchEvent(new CustomEvent('edit-prompt', {
+           detail: {parts: [{type: 'text', text: 'Draft prompt'}]},
+         }));
+         // Also trigger via bubble listener path: simulate typing in #chat-input
+         const chatInput =
+             element.shadowRoot!.querySelector('#chat-input') as HTMLElement;
+         chatInput.textContent = 'Draft prompt';
+         chatInput.dispatchEvent(new Event('input'));
+         await element.updateComplete;
+
+         expect(element.shadowRoot!.querySelector('.starters-container'))
+             .toBeNull();
+
+         chatInput.textContent = '';
+         chatInput.dispatchEvent(new Event('input'));
+         await element.updateComplete;
+
+         expect(element.shadowRoot!.querySelector('.starters-container'))
+             .toBeTruthy();
+       });
   });
 });

@@ -70,9 +70,8 @@ describe('SettingsStore', () => {
     store.systemPrompt = 'Be concise.';
     store.disabledTools = ['run_javascript'];
     store.temperature = 0.1;
-    spyOn(window, 'confirm').and.returnValue(true);
 
-    expect(store.resetDefaults('systemPrompt')).toBeTrue();
+    store.resetDefaults('systemPrompt');
 
     expect(store.systemPrompt).toBe('');
     expect(store.disabledTools).toEqual([]);
@@ -140,12 +139,8 @@ describe('SettingsStore', () => {
     store.enableSpeculativeDecoding = true;
     store.systemPrompt = 'Be concise.';
 
-    // Auto-mock window.confirm to bypass browser blocking prompt
-    spyOn(window, 'confirm').and.returnValue(true);
+    store.resetDefaults();
 
-    const wasReset = store.resetDefaults();
-
-    expect(wasReset).toBeTrue();
     expect(store.temperature).toBe(1.0);
     expect(store.contextLength).toBe(4096);
     expect(store.enableSpeculativeDecoding).toBeFalse();

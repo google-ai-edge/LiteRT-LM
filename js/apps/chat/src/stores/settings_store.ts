@@ -255,23 +255,15 @@ export class SettingsStore implements Settings {
   }
 
   /**
-   * Resets a group of settings to their defaults, if the user confirms.
-   * Returns whether they were reset.
+   * Resets a group of settings to their defaults. Callers confirm with the user
+   * first.
    */
   resetDefaults(group: SettingsGroup = 'modelConfig') {
     switch (group) {
       case 'modelConfig':
-        if (!confirm(
-                'Are you sure you want to reset all inference settings to their defaults?')) {
-          return false;
-        }
         Object.assign(this, DEFAULT_MODEL_CONFIG);
         break;
       case 'systemPrompt':
-        if (!confirm(
-                'Are you sure you want to reset the system prompt and tools to their defaults?')) {
-          return false;
-        }
         this.systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
         this.disabledTools = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
         break;
@@ -281,9 +273,7 @@ export class SettingsStore implements Settings {
         throw new Error(`Unknown settings group: ${unhandled}`);
       }
     }
-
     this.saveSettings();
-    return true;
   }
 }
 

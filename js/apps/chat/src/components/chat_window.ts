@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+import './camera_capture';
 import './chat_bubble';
+import './custom_dropdown';
 
 import {SUPPORTED_IMAGE_MIME_TYPES} from '@litert-lm/core';
-import {css, html, LitElement, render} from 'lit';
+import {html, LitElement, nothing, render, svg} from 'lit';
 import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
@@ -25,6 +27,11 @@ import {MediaKind, promptHasContent, PromptMedia, PromptPart, promptPartsToText}
 import {getModelKey} from '../stores/model_loader_service.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 import {AudioRecorder, toSupportedAudio} from '../utils/audio.js';
+import type {LitertCameraCapture} from './camera_capture.js';
+import {chatWindowStyles} from './chat_window_styles.js';
+import type {CustomDropdown} from './custom_dropdown.js';
+import {focusNowAndNextFrame} from './focus_util.js';
+import {addRemoteModelFromInput, getActiveModelSummary, modelSelectorStyles, renderModelDropdownItems, selectModelWithLargeModelCheck, triggerLitertModelUpload} from './model_selector_shared.js';
 
 /* tslint:disable:no-new-decorators */
 
@@ -51,18 +58,58 @@ async function toSupportedImage(blob: Blob): Promise<Blob> {
   }
 }
 
+/** Example prompts shown in the empty state. */
+const STARTERS = [
+  {
+    title: 'Explain WebGPU',
+    subtitle: 'How browser GPU shaders run LLMs locally',
+    prompt: 'Explain WebGPU in simple terms.',
+    icon: svg`<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>`,
+  },
+  {
+    title: 'Particle Effect',
+    subtitle: 'Interactive HTML5 canvas animation snippet',
+    prompt: 'Write a cool particle effect in Javascript in a single HTML page.',
+    icon: svg`<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.02 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>`,
+  },
+  {
+    title: 'Glow Button HTML',
+    subtitle: 'Dark-mode CSS button with live preview',
+    prompt: 'Create a modern dark-themed HTML button with hovering glow transitions.',
+    icon: svg`<polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline>`,
+  },
+];
+
 /** Main chat window component managing messages and input. */
 @customElement('litert-chat-window')
 export class LitertChatWindow extends LitElement {
   @property({ type: Object })
   state!: LlmChatStateController;
 
+  @property({type: String})
+  theme: 'dark'|'light' = 'dark';
+
   @state()
   private shouldAutoScroll = true;
 
+  @state() private hasScrollTop = false;
+
+  @state() private hasPromptContent = false;
+
   @state() private isDragOver = false;
   @state() private isCameraModalOpen = false;
-  private cameraStream: MediaStream|null = null;
+  @state() private isModelMenuOpen = false;
+  @state() private isAddingModel = false;
+  @state() private isLookingUpModel = false;
+  @state()
+  private isCompactViewport =
+      typeof window !== 'undefined' ? window.innerWidth <= 600 : false;
+  private readonly compactMediaQuery = typeof window !== 'undefined' ?
+      window.matchMedia('(max-width: 600px)') :
+      null;
+  private readonly handleCompactMediaChange = (e: MediaQueryListEvent) => {
+    this.isCompactViewport = e.matches;
+  };
 
   private readonly audioRecorder = new AudioRecorder();
   @state() private isRecording = false;
@@ -73,7 +120,13 @@ export class LitertChatWindow extends LitElement {
   private chipAudio: HTMLAudioElement|null = null;
 
   private wasGenerating = false;
-  private isProgrammaticScroll = false;
+  private pendingScrollOnConvSwitch = false;
+  private generationJustEnded = false;
+  private restoreFocusAfterStop = false;
+  private lastScrollTop = 0;
+  private lastUserScrollUpAt = 0;
+  private touchStartY: number|null = null;
+  private lastScrolledConvKey = '';
 
   /** The bubble being streamed into; its height only grows while streaming. */
   private streamingBubble: HTMLElement|null = null;
@@ -84,316 +137,55 @@ export class LitertChatWindow extends LitElement {
   @query('#chat-messages') private msgBox!: HTMLDivElement;
 
   @query('#chat-input') private chatInput!: HTMLDivElement;
+  @query('#composer-model-dropdown')
+  private modelDropdown?: CustomDropdown;
   @query('#media-input') private mediaInput?: HTMLInputElement;
   @query('#camera-fallback-input')
   private cameraFallbackInput?: HTMLInputElement;
-  @query('#camera-video') private cameraVideo?: HTMLVideoElement;
+  @query('litert-camera-capture') private camera?: LitertCameraCapture;
 
-  static override styles = [
-    sharedStyles, css`
-      :host {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-height: 0;
-        width: 100%;
-        overflow: hidden;
-      }
+  static override styles =
+      [sharedStyles, modelSelectorStyles, chatWindowStyles];
 
-      .chat-messages {
-        flex: 1;
-        overflow-y: auto;
-        overscroll-behavior: contain; 
-        padding: 24px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        background-color: var(--bg-chat);
+  private readonly handleGlobalScrollKeyDown = (e: KeyboardEvent) => {
+    if (!this.shouldAutoScroll || !this.msgBox) return;
+    const isUpScrollKey = e.key === 'PageUp' || e.key === 'ArrowUp' ||
+        e.key === 'Home' || (e.key === ' ' && e.shiftKey);
+    if (!isUpScrollKey) return;
+    for (const node of e.composedPath()) {
+      if (!(node instanceof HTMLElement)) continue;
+      const tag = node.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+          node.isContentEditable) {
+        return;
       }
-
-      .starters-container {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding: 16px 24px 8px 24px;
-        background-color: var(--bg-chat);
-        flex-shrink: 0;
-      }
-
-      .btn-starter {
-        background-color: rgba(30, 41, 59, 0.4);
-        border: 1px solid var(--border);
-        color: var(--text-muted);
-        padding: 6px 12px;
-        border-radius: 16px;
-        font-size: 0.75rem;
-        cursor: pointer;
-        transition: all 0.15s;
-      }
-
-      .btn-starter:hover:not(:disabled) {
-        background-color: var(--border);
-        color: var(--text);
-      }
-
-      .chat-input-container {
-        padding: 16px 24px 24px 24px;
-        background-color: var(--bg-card);
-        border-top: 1px solid var(--border);
-        display: flex;
-        gap: 12px;
-        align-items: flex-end;
-        flex-shrink: 0;
-      }
-
-      .input-wrapper {
-        display: flex;
-        flex: 1;
-        width: 100%;
-        gap: 8px;
-        position: relative;
-        align-items: center;
-        border-radius: 10px;
-        border: 1px dashed transparent;
-      }
-
-      .input-wrapper.drag-over {
-        border-color: var(--teal);
-        background: rgba(0, 201, 158, 0.08);
-      }
-
-      /*
-       * The prompt editor is a contenteditable so that images can be placed
-       * inline between words. Its children are managed imperatively (see
-       * setEditorParts) because re-rendering them with Lit on every keystroke
-       * would reset the caret.
-       */
-      .editor {
-        position: relative;
-        flex: 1;
-        min-height: 48px;
-        max-height: 160px;
-        overflow-y: auto;
-        background-color: var(--bg-input);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        color: var(--text);
-        padding: 12px 16px;
-        font-size: 0.85rem;
-        font-family: inherit;
-        line-height: 1.5;
-        outline: none;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        transition: border-color 0.15s;
-      }
-
-      .editor:focus {
-        border-color: var(--teal);
-      }
-
-      .editor[contenteditable='false'] {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      /*
-       * Positioned out of flow: as in-flow generated content it would push
-       * the caret after the placeholder text. Offsets match the padding.
-       */
-      .editor.is-empty::before {
-        content: attr(data-placeholder);
-        position: absolute;
-        left: 16px;
-        top: 12px;
-        color: var(--text-muted);
-        pointer-events: none;
-        user-select: none;
-      }
-
-      .media-chip {
-        display: inline-flex;
-        align-items: center;
-        vertical-align: middle;
-        gap: 6px;
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 2px 6px 2px 2px;
-        margin: 0 2px;
-        font-size: 0.75rem;
-        max-width: 220px;
-      }
-
-      .media-chip::selection,
-      .media-chip *::selection {
-        background: rgba(0, 201, 158, 0.35);
-      }
-
-      .chip-thumb {
-        width: 36px;
-        height: 36px;
-        border-radius: 6px;
-        object-fit: cover;
-        flex-shrink: 0;
-      }
-
-      .chip-play-btn {
-        width: 36px;
-        height: 36px;
-        border-radius: 6px;
-        border: none;
-        background: var(--bg-input);
-        color: var(--teal);
-        cursor: pointer;
-        font-size: 0.9rem;
-        flex-shrink: 0;
-        user-select: none;
-      }
-
-      .chip-name {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        user-select: none;
-      }
-
-      .chip-del-btn {
-        background: transparent;
-        border: none;
-        color: var(--text-muted);
-        cursor: pointer;
-        padding: 0 2px;
-        font-size: 0.75rem;
-        line-height: 1;
-        user-select: none;
-      }
-
-      .chip-del-btn:hover {
-        color: #ef4444;
-      }
-
-      .btn-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: transparent;
-        border: 1px solid transparent;
-        color: var(--text-muted);
-        font-size: 1.1rem;
-        cursor: pointer;
-        transition: all 0.15s;
-        flex-shrink: 0;
-      }
-
-      .btn-icon:hover:not(:disabled) {
-        background: var(--bg-input);
-        color: var(--text);
-        border-color: var(--border);
-      }
-
-      .btn-icon:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-      }
-
-      .btn-icon.plus {
-        font-size: 1.3rem;
-        font-weight: 700;
-        color: var(--teal);
-      }
-
-      .btn-icon.recording {
-        width: auto;
-        padding: 0 10px;
-        border-radius: 18px;
-        font-size: 0.8rem;
-        font-variant-numeric: tabular-nums;
-        color: #ef4444;
-        border-color: #ef4444;
-      }
-
-      .btn-input {
-        height: 38px;
-        padding: 0 16px;
-        font-size: 0.85rem;
-        font-weight: bold;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: background-color 0.15s;
-      }
-
-      /* Camera Modal */
-      .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        background-color: rgba(2, 8, 36, 0.85);
-        backdrop-filter: blur(6px);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1200;
-        padding: 20px;
-      }
-
-      .modal-card {
-        background-color: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        width: 100%;
-        max-width: 500px;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-      }
-
-      .modal-header {
-        padding: 14px 18px;
-        border-bottom: 1px solid var(--border);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-weight: 700;
-        color: var(--text);
-      }
-
-      .camera-preview-container {
-        background: #000000;
-        width: 100%;
-        aspect-ratio: 4 / 3;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-      }
-
-      .camera-stream {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-
-      .modal-actions {
-        padding: 14px 18px;
-        display: flex;
-        justify-content: flex-end;
-        gap: 10px;
-        border-top: 1px solid var(--border);
-      }
-    `
-  ];
+    }
+    if (this.msgBox.scrollHeight > this.msgBox.clientHeight + 1) {
+      this.lastUserScrollUpAt = performance.now();
+      this.shouldAutoScroll = false;
+    }
+  };
 
   override connectedCallback() {
     super.connectedCallback();
     // Register this chat window as a host of our centralized state
     this.state.addHost(this);
+    this.isCompactViewport = this.compactMediaQuery?.matches ??
+        (typeof window !== 'undefined' && window.innerWidth <= 600);
+    this.compactMediaQuery?.addEventListener(
+        'change', this.handleCompactMediaChange);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', this.handleGlobalScrollKeyDown);
+    }
   }
 
   override disconnectedCallback() {
-    this.closeCamera();
+    document.removeEventListener('click', this.handleAddModelOutsideClick);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', this.handleGlobalScrollKeyDown);
+    }
+    this.compactMediaQuery?.removeEventListener(
+        'change', this.handleCompactMediaChange);
     this.cancelRecording();
     this.chipAudio?.pause();
     this.chipAudio = null;
@@ -401,43 +193,151 @@ export class LitertChatWindow extends LitElement {
     super.disconnectedCallback();
   }
 
-  override firstUpdated() {
-    this.updateEmptyState();
-
-    // Bind scroll event listener to manage user-driven auto-scroll anchoring
-    if (this.msgBox) {
-      this.msgBox.addEventListener('scroll', () => {
-        // Ignore our own programmatic scrolls that follow the message stream.
-        if (this.isProgrammaticScroll) {
-          this.isProgrammaticScroll = false;
-          return;
+  private hasInnerScrollableUpTarget(e: WheelEvent): boolean {
+    for (const node of e.composedPath()) {
+      if (node === this.msgBox) break;
+      if (!(node instanceof HTMLElement)) continue;
+      if (node.scrollHeight > node.clientHeight + 1 && node.scrollTop > 0) {
+        const overflowY = window.getComputedStyle(node).overflowY;
+        if (overflowY === 'auto' || overflowY === 'scroll') {
+          return true;
         }
+      }
+    }
+    return false;
+  }
 
-        // Otherwise, it was a manual user scroll. Un-anchor if they scroll up.
-        const threshold = 6;
-        const atBottom = this.msgBox.scrollHeight - this.msgBox.scrollTop -
-                this.msgBox.clientHeight <=
-            threshold;
-
-        if (!atBottom) {
-          this.shouldAutoScroll = false;  // Manual scroll up, pause auto-scroll
-        } else {
-          this.shouldAutoScroll = true;  // Manual scroll down to bottom, resume
-        }
-      });
+  private handleMessagesWheel(e: WheelEvent) {
+    if (!this.msgBox || e.deltaY >= 0) return;
+    if (this.hasInnerScrollableUpTarget(e)) return;
+    if (this.msgBox.scrollHeight > this.msgBox.clientHeight + 1 ||
+        this.msgBox.scrollTop > 0) {
+      this.lastUserScrollUpAt = performance.now();
+      if (this.shouldAutoScroll) {
+        this.shouldAutoScroll = false;
+      }
     }
   }
 
-  protected override updated() {
-    const isGenerating = this.state.chatSession.isGenerating;
-    // Auto-scroll on new message.
-    if (isGenerating && !this.wasGenerating) {
+  private handleMessagesTouchStart(e: TouchEvent) {
+    this.touchStartY = e.touches[0]?.clientY ?? null;
+  }
+
+  private handleMessagesTouchMove(e: TouchEvent) {
+    if (this.touchStartY === null || !this.msgBox) return;
+    const currentY = e.touches[0]?.clientY;
+    if (currentY === undefined) return;
+    if (currentY - this.touchStartY > 3 &&
+        (this.msgBox.scrollHeight > this.msgBox.clientHeight + 1 ||
+         this.msgBox.scrollTop > 0)) {
+      this.lastUserScrollUpAt = performance.now();
+      if (this.shouldAutoScroll) {
+        this.shouldAutoScroll = false;
+      }
+    }
+  }
+
+  private readonly handleMessagesScroll = () => {
+    if (!this.msgBox) return;
+    const currentTop = this.msgBox.scrollTop;
+    const nextHasScrollTop = currentTop > 8;
+    if (this.hasScrollTop !== nextHasScrollTop) {
+      this.hasScrollTop = nextHasScrollTop;
+    }
+
+    const distFromBottom =
+        this.msgBox.scrollHeight - currentTop - this.msgBox.clientHeight;
+    const deltaTop = currentTop - this.lastScrollTop;
+    this.lastScrollTop = currentTop;
+
+    // Any upward scroll movement away from bottom immediately releases
+    // auto-follow (e.g. scrollbar thumb drag, trackpad momentum, keyboard up).
+    if (deltaTop < -0.5 && distFromBottom > 1) {
+      this.lastUserScrollUpAt = performance.now();
+      if (this.shouldAutoScroll) {
+        this.shouldAutoScroll = false;
+      }
+      return;
+    }
+
+    // Re-pin ONLY when auto-scroll was off, the user actively scrolled DOWN,
+    // outside trackpad bounce window, and genuinely reached the bottom.
+    if (!this.shouldAutoScroll && deltaTop > 0 &&
+        performance.now() - this.lastUserScrollUpAt > 180 &&
+        distFromBottom <= 12) {
       this.shouldAutoScroll = true;
     }
-    if (!isGenerating && this.wasGenerating) {
-      this.releaseStreamingHeight();
+  };
+
+  override firstUpdated() {
+    this.updateEmptyState();
+    this.msgBox?.addEventListener('scroll', this.handleMessagesScroll);
+  }
+
+  private scrollMessagesToBottomInstant() {
+    if (!this.msgBox || !this.shouldAutoScroll) return;
+    this.msgBox.scrollTop = this.msgBox.scrollHeight;
+    this.lastScrollTop = this.msgBox.scrollTop;
+    const nextHasScrollTop = this.msgBox.scrollTop > 8;
+    if (this.hasScrollTop !== nextHasScrollTop) {
+      this.hasScrollTop = nextHasScrollTop;
+    }
+  }
+
+  protected override willUpdate() {
+    if (!this.state?.chatSession) return;
+    const isGenerating = this.state.chatSession.isGenerating;
+    const messageCount = this.state.chatSession.messages.length;
+    const convKey = `${this.state.chatSession.activeSavedConvId ?? 'new'}:${
+        messageCount > 0 ? 'nonempty' : 'empty'}`;
+
+    if (!isGenerating && messageCount > 0 &&
+        convKey !== this.lastScrolledConvKey) {
+      this.lastScrolledConvKey = convKey;
+      this.shouldAutoScroll = true;
+      this.lastUserScrollUpAt = 0;
+      this.pendingScrollOnConvSwitch = true;
+    } else if (messageCount === 0) {
+      this.lastScrolledConvKey = convKey;
+      this.shouldAutoScroll = true;
+      this.hasScrollTop = false;
+      this.lastUserScrollUpAt = 0;
+    }
+
+    if (isGenerating && !this.wasGenerating) {
+      this.shouldAutoScroll = true;
+      this.lastUserScrollUpAt = 0;
+    } else if (!isGenerating && this.wasGenerating) {
+      this.generationJustEnded = true;
     }
     this.wasGenerating = isGenerating;
+  }
+
+  protected override updated() {
+    if (this.isModelMenuOpen) {
+      this.modelDropdown?.requestUpdate();
+    }
+    if (!this.state?.chatSession) return;
+    const isGenerating = this.state.chatSession.isGenerating;
+
+    if (this.pendingScrollOnConvSwitch) {
+      this.pendingScrollOnConvSwitch = false;
+      requestAnimationFrame(() => {
+        this.scrollMessagesToBottomInstant();
+      });
+    }
+
+    if (this.generationJustEnded) {
+      this.generationJustEnded = false;
+      this.releaseStreamingHeight();
+      if (this.restoreFocusAfterStop) {
+        this.restoreFocusAfterStop = false;
+        this.chatInput?.focus();
+      }
+      if (this.shouldAutoScroll) {
+        void this.syncScrollAfterStreamEnd();
+      }
+    }
 
     if (isGenerating) {
       // Bubbles re-render in a microtask after this, so measure next frame.
@@ -447,11 +347,24 @@ export class LitertChatWindow extends LitElement {
         if (!this.msgBox || !this.state.chatSession.isGenerating) return;
         this.holdStreamingHeight();
         if (this.shouldAutoScroll) {
-          this.isProgrammaticScroll = true;
-          this.msgBox.scrollTop = this.msgBox.scrollHeight;
+          this.scrollMessagesToBottomInstant();
         }
       });
     }
+  }
+
+  private async syncScrollAfterStreamEnd() {
+    const bubbles = this.msgBox?.querySelectorAll('litert-chat-bubble');
+    const lastBubble =
+        (bubbles?.[bubbles.length - 1] as LitElement | undefined) ?? null;
+    await lastBubble?.updateComplete;
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (!this.msgBox || !this.shouldAutoScroll) return;
+    this.scrollMessagesToBottomInstant();
+    requestAnimationFrame(() => {
+      if (!this.msgBox || !this.shouldAutoScroll) return;
+      this.scrollMessagesToBottomInstant();
+    });
   }
 
   /**
@@ -462,7 +375,9 @@ export class LitertChatWindow extends LitElement {
    * upwards.
    */
   private holdStreamingHeight() {
-    const bubble = this.msgBox.lastElementChild as HTMLElement | null;
+    const bubbles = this.msgBox.querySelectorAll('litert-chat-bubble');
+    const bubble =
+        (bubbles[bubbles.length - 1] as HTMLElement | undefined) ?? null;
     if (!bubble) return;
     if (bubble !== this.streamingBubble) {
       this.releaseStreamingHeight();
@@ -470,6 +385,17 @@ export class LitertChatWindow extends LitElement {
     }
     // offsetHeight already includes any previous min-height, so this is a max.
     bubble.style.minHeight = `${bubble.offsetHeight}px`;
+  }
+
+  private scrollToBottom() {
+    if (!this.msgBox) return;
+    this.shouldAutoScroll = true;
+    this.lastUserScrollUpAt = 0;
+    if (this.state?.chatSession?.isGenerating) {
+      this.scrollMessagesToBottomInstant();
+    } else {
+      this.msgBox.scrollTo({top: this.msgBox.scrollHeight, behavior: 'smooth'});
+    }
   }
 
   /** Lets the streaming bubble shrink to its natural height again. */
@@ -551,10 +477,14 @@ export class LitertChatWindow extends LitElement {
   private updateEmptyState() {
     const editor = this.chatInput;
     if (!editor) return;
-    editor.classList.toggle(
-        'is-empty',
-        (editor.textContent ?? '') === '' &&
-            editor.querySelector('.media-chip') === null);
+    const rawText = editor.textContent ?? '';
+    const hasChip = editor.querySelector('.media-chip') !== null;
+    editor.classList.toggle('is-empty', rawText === '' && !hasChip);
+    const nextHasContent =
+        hasChip || rawText.replace(/\u00a0/g, ' ').trim().length > 0;
+    if (this.hasPromptContent !== nextHasContent) {
+      this.hasPromptContent = nextHasContent;
+    }
   }
 
   /** Plays or stops the audio clip of a chip. */
@@ -807,59 +737,37 @@ export class LitertChatWindow extends LitElement {
     this.audioRecorder.cancel();
   }
 
+  /** Closes the camera modal if open, returning true when handled. */
+  dismissCameraModal(): boolean {
+    if (!this.isCameraModalOpen) return false;
+    this.camera?.close();
+    return true;
+  }
+
   private async openCamera() {
-    if (!navigator.mediaDevices?.getUserMedia) {
+    if (!(await this.camera?.open())) {
       this.cameraFallbackInput?.click();
-      return;
     }
+  }
 
-    try {
-      this.cameraStream = await navigator.mediaDevices.getUserMedia({
-        video: {facingMode: 'user', width: {ideal: 1280}, height: {ideal: 720}},
+  private handleCameraOpenChange(e: CustomEvent<{open: boolean}>) {
+    this.isCameraModalOpen = e.detail.open;
+    this.dispatchEvent(new CustomEvent('camera-open-change', {
+      detail: e.detail,
+      bubbles: true,
+      composed: true,
+    }));
+    if (!e.detail.open && this.isConnected) {
+      void this.updateComplete.then(() => {
+        this.renderRoot.querySelector<HTMLElement>('#btn-camera')?.focus();
       });
-      this.isCameraModalOpen = true;
-      await this.updateComplete;
-      if (this.cameraVideo && this.cameraStream) {
-        this.cameraVideo.srcObject = this.cameraStream;
-      }
-    } catch (err) {
-      console.warn(
-          '[LiteRT-LM] Camera stream failed, falling back to file picker:',
-          err);
-      this.cameraFallbackInput?.click();
     }
   }
 
-  private closeCamera() {
-    if (this.cameraStream) {
-      for (const track of this.cameraStream.getTracks()) {
-        track.stop();
-      }
-      this.cameraStream = null;
-    }
-    this.isCameraModalOpen = false;
-  }
-
-  private takeSnapshot() {
-    const video = this.cameraVideo;
-    if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      this.closeCamera();
-      return;
-    }
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    canvas.toBlob((blob) => {
-      if (blob) {
-        const name = `Camera photo ${new Date().toLocaleTimeString()}.jpg`;
-        this.insertMediaAtCaret(
-            this.state.chatSession.createMedia('image', name, blob));
-      }
-      this.closeCamera();
-    }, 'image/jpeg', 0.92);
+  private handlePhotoCaptured(e: CustomEvent<{photo: Blob}>) {
+    const name = `Camera photo ${new Date().toLocaleTimeString()}.jpg`;
+    this.insertMediaAtCaret(
+        this.state.chatSession.createMedia('image', name, e.detail.photo));
   }
 
   private handleEditPrompt(e: CustomEvent<{parts: PromptPart[]}>) {
@@ -896,53 +804,356 @@ export class LitertChatWindow extends LitElement {
         isTextOnly ? promptPartsToText(parts) : parts);
   }
 
-  private useStarter(text: string) {
-    this.setEditorParts([{type: 'text', text}]);
+  private handleStopGeneration() {
+    this.restoreFocusAfterStop = true;
+    this.state.chatSession.cancelGeneration();
+    this.chatInput?.focus();
+    void this.updateComplete.then(() => {
+      if (this.restoreFocusAfterStop) {
+        this.chatInput?.focus();
+      }
+    });
   }
 
-  private renderCameraModal() {
-    if (!this.isCameraModalOpen) return '';
-    return html`
-      <div class="modal-backdrop" @click=${(e: Event) => {
-      if (e.target === e.currentTarget) this.closeCamera();
-    }}>
-        <div class="modal-card">
-          <div class="modal-header">
-            <span>Take a photo</span>
-            <button class="btn-icon" title="Close" @click=${this.closeCamera}>
-              ✕
-            </button>
-          </div>
-          <div class="camera-preview-container">
-            <video
-              id="camera-video"
-              class="camera-stream"
-              autoplay
-              playsinline
-            ></video>
-          </div>
-          <div class="modal-actions">
-            <button class="btn btn-secondary" @click=${this.closeCamera}>
-              Cancel
-            </button>
-            <button class="btn btn-primary" @click=${this.takeSnapshot}>
-              📸 Take photo
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
+  private async handleRetryFromAlert() {
+    if (this.state.modelLoader.isModelLoading ||
+        this.state.chatSession.isGenerating) {
+      return;
+    }
+    this.state.dismissError?.();
+    const msgs = this.state.chatSession.messages;
+    const lastIdx = msgs.length - 1;
+    if (lastIdx >= 0 && msgs[lastIdx]?.role === 'user' &&
+        this.state.chatSession.rewindAndEdit) {
+      const parts = await this.state.chatSession.rewindAndEdit(lastIdx);
+      if (parts && promptHasContent(parts)) {
+        const isTextOnly = parts.every(p => p.type === 'text');
+        await this.state.chatSession.sendMessage(
+            isTextOnly ? promptPartsToText(parts) : parts);
+        return;
+      }
+    } else if (
+        lastIdx >= 0 && msgs[lastIdx]?.role === 'assistant' &&
+        this.state.chatSession.redoResponse) {
+      await this.state.chatSession.redoResponse(lastIdx);
+      return;
+    }
+    await this.state.modelLoader.loadModelWeights(
+        this.state.settings.modelSettings, async () => {
+          await this.state.chatSession.createConversationSession?.();
+        });
+  }
+
+  /** Opens and focuses the unified model picker in the composer. */
+  openModelPicker() {
+    if (this.isAddingModel) {
+      this.closeComposerAddModel(false);
+    }
+    this.modelDropdown?.open();
+    this.modelDropdown?.focusButton();
+  }
+
+  /** Focuses the prompt composer input (or active composer control if loading). */
+  focusInput() {
+    const editor = this.chatInput;
+    if (editor && editor.getAttribute('contenteditable') !== 'false') {
+      editor.focus();
+      return;
+    }
+    const fallback = this.renderRoot.querySelector<HTMLElement>(
+        '#btn-composer-cancel-download, #btn-composer-model');
+    fallback?.focus();
+  }
+
+  /**
+   * Dismisses any open model picker menu or Add-URL popover in the composer,
+   * returning true when an open control was closed.
+   */
+  dismissTransientMenus(): boolean {
+    if (this.modelDropdown?.isOpen) {
+      this.modelDropdown.close();
+      this.modelDropdown.focusButton();
+      return true;
+    }
+    if (this.isAddingModel) {
+      this.closeComposerAddModel(true);
+      return true;
+    }
+    return false;
+  }
+
+  /** Closes open composer popovers without stealing focus. */
+  closeTransientMenus() {
+    this.modelDropdown?.close();
+    if (this.isAddingModel) {
+      this.closeComposerAddModel(false);
+    }
+  }
+
+  private readonly handleAddModelOutsideClick = (e: MouseEvent) => {
+    if (!this.isAddingModel) return;
+    const anchor =
+        this.renderRoot.querySelector<HTMLElement>('.composer-model-anchor');
+    const popover = this.renderRoot.querySelector<HTMLElement>(
+        '#composer-add-model-popover');
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    const target = e.target as Node | null;
+    const insideAnchor = Boolean(
+        anchor &&
+        (path.includes(anchor) || (target && anchor.contains(target))));
+    const insidePopover = Boolean(
+        popover &&
+        (path.includes(popover) || (target && popover.contains(target))));
+    if (!insideAnchor && !insidePopover) {
+      this.closeComposerAddModel(false);
+    }
+  };
+
+  private openComposerAddModel() {
+    this.isAddingModel = true;
+    setTimeout(() => {
+      if (this.isConnected && this.isAddingModel) {
+        document.addEventListener('click', this.handleAddModelOutsideClick);
+      }
+    }, 0);
+    void this.updateComplete.then(() => {
+      const focusInput = () => {
+        if (!this.isAddingModel) return;
+        this.renderRoot
+            .querySelector<HTMLInputElement>('#composer-add-model-input')
+            ?.focus();
+      };
+      focusNowAndNextFrame(focusInput);
+    });
+  }
+
+  private closeComposerAddModel(restoreFocus = false) {
+    this.isAddingModel = false;
+    document.removeEventListener('click', this.handleAddModelOutsideClick);
+    if (restoreFocus) {
+      void this.updateComplete.then(() => {
+        this.modelDropdown?.focusButton();
+      });
+    }
+  }
+
+  private async handleComposerModelChange(e: CustomEvent<string>) {
+    const path = e.detail;
+    const dropdown = this.modelDropdown;
+    if (path !== 'add-url' && this.isAddingModel) {
+      this.closeComposerAddModel(false);
+    }
+    if (path === 'upload' || path === 'select-dir' || path === 'add-url') {
+      if (dropdown) {
+        dropdown.value = this.state.settings.selectedModelPath;
+      }
+      if (path === 'upload') {
+        triggerLitertModelUpload(this.state, () => {
+          this.requestUpdate();
+        });
+        return;
+      }
+      if (path === 'select-dir') {
+        void this.state.localDirService.mountDirectory();
+        return;
+      }
+      this.openComposerAddModel();
+      return;
+    }
+
+    const selected = await selectModelWithLargeModelCheck(this.state, path);
+    if (!selected && dropdown) {
+      dropdown.value = this.state.settings.selectedModelPath;
+    }
+    this.requestUpdate();
+  }
+
+  private async handleComposerAddModel(e: SubmitEvent) {
+    e.preventDefault();
+    const input = this.renderRoot.querySelector<HTMLInputElement>(
+        '#composer-add-model-input');
+    const text = input?.value.trim() ?? '';
+    if (!text || this.isLookingUpModel ||
+        this.state.modelLoader.isModelLoading) {
+      return;
+    }
+
+    this.isLookingUpModel = true;
+    try {
+      const added = await addRemoteModelFromInput(this.state, text, () => {
+        this.closeComposerAddModel(true);
+        this.requestUpdate();
+      });
+      if (!added) return;
+    } finally {
+      this.isLookingUpModel = false;
+    }
+  }
+
+  private handleChooseModelFromAlert() {
+    const event = new CustomEvent('choose-model', {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+    this.dispatchEvent(event);
+    if (!event.defaultPrevented) {
+      this.openModelPicker();
+    }
+  }
+
+  private useStarter(text: string) {
+    if (this.state.modelLoader.isModelLoading ||
+        this.state.chatSession.isGenerating) {
+      return;
+    }
+    this.setEditorParts([{type: 'text', text}]);
+    requestAnimationFrame(() => {
+      const editor = this.chatInput;
+      if (!editor) return;
+      const end = document.createRange();
+      end.selectNodeContents(editor);
+      end.collapse(false);
+      this.savedRange = end.cloneRange();
+      this.applyRange(end);
+    });
   }
 
   override render() {
     const isMessagesEmpty = this.state.chatSession.messages.length === 0;
-    const isCached = this.state.modelLoader.cachedModels.has(
-        getModelKey(this.state.settings.selectedModelPath));
+    const selectedPath = this.state.settings.selectedModelPath || '';
+    const activeModelKey = getModelKey(selectedPath);
+    const isCached = Boolean(
+        this.state.modelLoader.cachedModels?.has(activeModelKey));
+    const isLocalDir = selectedPath.startsWith('local-dir://');
+    const isLocalUploaded = selectedPath.startsWith('https://local-model/');
     const isLoading = this.state.modelLoader.isModelLoading;
+    const isGenerating = this.state.chatSession.isGenerating;
+    const downloadProgress =
+        this.state.modelLoader.downloadProgresses?.get(activeModelKey);
+    const downloadSpeed =
+        this.state.modelLoader.downloadSpeeds?.get(activeModelKey);
+    const hasWeightsAvailable = Boolean(
+        this.state.modelLoader.engine || isCached || isLocalUploaded ||
+        isLocalDir);
+    const needsWeightDownload = !isLoading && !hasWeightsAvailable;
+    const sendLabel = isLoading ?
+        (downloadProgress !== undefined ? `Loading ${downloadProgress}%…` :
+                                          'Loading…') :
+        (Boolean(this.state.modelLoader.engine) || isCached ||
+         isLocalUploaded) ? 'Send' :
+        isLocalDir        ? 'Load & Send' :
+                            'Download & Send';
+    const modelSummary = getActiveModelSummary(this.state);
+    const cleanModelName = modelSummary.name;
+    const isAddModelDisabled = this.isLookingUpModel || isLoading;
+    const showScrollBottom = !this.shouldAutoScroll && !isMessagesEmpty;
 
     return html`
-      <!-- Scrollable Messages Box -->
-      <div id="chat-messages" class="chat-messages">
+      <!-- Top Error Banner -->
+      ${this.state.errorMessage ? html`
+        <div class="banner-stack" ?inert=${this.isCameraModalOpen}>
+          <div class="alert-banner" role="alert">
+            <div class="alert-banner-left">
+              <svg class="alert-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+              <div class="alert-banner-body">
+                <span>${this.state.errorMessage}</span>
+                <div class="alert-actions">
+                  <button
+                    id="btn-retry-error"
+                    type="button"
+                    class="btn-alert-action primary"
+                    ?disabled=${isLoading || isGenerating}
+                    @click=${this.handleRetryFromAlert}
+                  >Try again</button>
+                  <button
+                    id="btn-choose-model-error"
+                    type="button"
+                    class="btn-alert-action"
+                    @click=${this.handleChooseModelFromAlert}
+                  >Choose another model</button>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="btn-dismiss-alert"
+              aria-label="Dismiss error"
+              title="Dismiss"
+              @click=${() => this.state.dismissError?.()}
+            >✕</button>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Scrollable Messages Box with Subtle Top Fade Scrim -->
+      <div
+        class="messages-viewport ${this.hasScrollTop && !isMessagesEmpty ? 'has-scroll-top' : ''}"
+        ?inert=${this.isCameraModalOpen}
+      >
+      <div
+        id="chat-messages"
+        class="chat-messages"
+        @wheel=${this.handleMessagesWheel}
+        @touchstart=${this.handleMessagesTouchStart}
+        @touchmove=${this.handleMessagesTouchMove}
+      >
+        ${isMessagesEmpty ? html`
+          <div class="empty-hero">
+            <div class="hero-mark" aria-hidden="true">
+              <img src=${this.theme === 'light' ? './assets/LiteRT_Logo_Symbol-only_RGB_Color_Blue.svg' : './assets/LiteRT_Logo_Symbol-only_RGB_Color_Teal.svg'} alt="" />
+            </div>
+            <h2 class="hero-heading">Private, on-device AI in your browser</h2>
+            <p class="hero-subtitle">
+              Run <strong>${cleanModelName}</strong> locally with WebGPU. Attach images or audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.
+            </p>
+
+            <ul class="capability-row" aria-label="Supported capabilities">
+              <li class="capability-tag">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                  <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+                Vision &amp; Audio
+              </li>
+              <li class="capability-tag">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="16 18 22 12 16 6"></polyline>
+                  <polyline points="8 6 2 12 8 18"></polyline>
+                </svg>
+                JS Tool Sandbox
+              </li>
+              <li class="capability-tag">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+                100% Local &amp; Cached
+              </li>
+            </ul>
+
+            ${!this.hasPromptContent ? html`<div class="starters-container">
+              ${STARTERS.map(({title, subtitle, prompt, icon}) => html`
+                <button
+                  type="button"
+                  class="btn-starter"
+                  ?disabled=${isLoading || isGenerating}
+                  @click=${() => this.useStarter(prompt)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>
+                  <span class="starter-copy">
+                    <span class="starter-title">${title}</span>
+                    <span class="starter-subtitle">${subtitle}</span>
+                  </span>
+                </button>
+              `)}
+            </div>` : nothing}
+          </div>
+        ` : ''}
 
         <!-- Active bubbles mapping -->
         ${this.state.chatSession.messages.map((msg, idx) => html`
@@ -950,35 +1161,34 @@ export class LitertChatWindow extends LitElement {
             .message=${msg}
             .index=${idx}
             .state=${this.state}
+            .disabled=${isGenerating}
             .streaming=${
-            this.state.chatSession.isGenerating &&
-            idx === this.state.chatSession.messages.length - 1}
+            isGenerating && idx === this.state.chatSession.messages.length - 1}
             @edit-prompt=${this.handleEditPrompt}
           ></litert-chat-bubble>
         `)}
       </div>
+      </div>
 
-      <!-- Quick Starters suggestions container (only visible if history is empty) -->
-      ${
-        isMessagesEmpty ?
-            html`
-        <div class="starters-container">
-          <button class="btn-starter" @click=${
-                () => this.useStarter(
-                    'Explain WebGPU in simple terms.')}>Explain WebGPU</button>
-          <button class="btn-starter" @click=${
-                () => this.useStarter(
-                    'Write a cool particle effect in Javascript in a single HTML page.')}>Particle Effect</button>
-          <button class="btn-starter" @click=${
-                () => this.useStarter(
-                    'Create a modern dark-themed HTML button with hovering glow transitions.')}>Glow Button HTML</button>
-        </div>
-      ` :
-            ''}
-
-
-      <!-- Input Area -->
-      <div class="chat-input-container">
+      <!-- 2-Row Rounded Card Composer with Unified Bottom-Left Model Picker -->
+      <div
+        class="chat-input-container ${showScrollBottom ? 'has-scroll-above' : ''}"
+        ?inert=${this.isCameraModalOpen}
+      >
+        ${showScrollBottom ? html`
+          <button
+            type="button"
+            class="btn-scroll-bottom"
+            aria-label="Scroll to latest message"
+            @click=${this.scrollToBottom}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <polyline points="19 12 12 19 5 12"></polyline>
+            </svg>
+            <span>Latest</span>
+          </button>
+        ` : ''}
         <input
           type="file"
           id="media-input"
@@ -1001,34 +1211,38 @@ export class LitertChatWindow extends LitElement {
           @dragleave=${this.handleDragLeave}
           @drop=${this.handleDrop}
         >
-          <button
-            id="btn-add-media"
-            class="btn-icon plus"
-            title="Add images or audio"
-            ?disabled=${isLoading}
-            @mousedown=${(e: Event) => e.preventDefault()}
-            @click=${() => this.mediaInput?.click()}
-          >+</button>
-          <button
-            id="btn-camera"
-            class="btn-icon"
-            title="Take a photo"
-            ?disabled=${isLoading}
-            @mousedown=${(e: Event) => e.preventDefault()}
-            @click=${this.openCamera}
-          >📷</button>
-          <button
-            id="btn-record"
-            class="btn-icon ${this.isRecording ? 'recording' : ''}"
-            title=${this.isRecording ? 'Stop recording' : 'Record audio'}
-            ?disabled=${isLoading}
-            @mousedown=${(e: Event) => e.preventDefault()}
-            @click=${this.toggleRecording}
-          >${
-        this.isRecording ?
-            `⏹ ${Math.floor(this.recordingSeconds / 60)}:${
-                String(this.recordingSeconds % 60).padStart(2, '0')}` :
-            '🎤'}</button>
+          ${isLoading ? html`
+            <div id="composer-loading-bar" class="composer-loading-bar" role="status" aria-live="polite">
+              <div class="composer-loading-top">
+                <div class="composer-loading-title">
+                  <span class="spinner" aria-hidden="true"></span>
+                  <span>${this.state.statusText || `Preparing ${cleanModelName}...`}</span>
+                </div>
+                <div class="composer-loading-right">
+                  ${downloadProgress !== undefined ? html`
+                    <span class="composer-loading-stats">${
+                        downloadSpeed ? html`<span class="composer-loading-speed-inline">${downloadSpeed} · </span>` : nothing}${downloadProgress}%</span>
+                  ` : nothing}
+                  ${this.state.modelLoader.downloadAbortController ? html`
+                    <button
+                      id="btn-composer-cancel-download"
+                      type="button"
+                      class="btn-composer-cancel"
+                      @click=${() => this.state.modelLoader.cancelDownload?.()}
+                    >Cancel</button>
+                  ` : nothing}
+                </div>
+              </div>
+              ${downloadProgress !== undefined ? html`
+                <div class="loading-progress-bar-wrap">
+                  <div class="loading-progress-bar-fill" style="width: ${downloadProgress}%;"></div>
+                </div>
+              ` : nothing}
+              ${downloadSpeed ? html`
+                <div class="composer-loading-sub">${downloadSpeed}</div>
+              ` : nothing}
+            </div>
+          ` : nothing}
 
           <!--
             Lit intentionally renders no children here; setEditorParts and the
@@ -1044,9 +1258,10 @@ export class LitertChatWindow extends LitElement {
             aria-label="Message"
             aria-disabled=${isLoading ? 'true' : 'false'}
             data-placeholder=${
-        isLoading ?
-            'Model is preparing, please wait...' :
-            'Message LiteRT-LM... Add images or audio anywhere in your message.'}
+        isLoading ? 'Model is preparing, please wait...' :
+                    (this.isCompactViewport ?
+                         'Message LiteRT-LM...' :
+                         'Message LiteRT-LM... Drop or attach images & audio.')}
             @input=${this.updateEmptyState}
             @keyup=${this.handleEditorSelect}
             @mouseup=${this.handleEditorSelect}
@@ -1055,30 +1270,186 @@ export class LitertChatWindow extends LitElement {
             @paste=${this.handleEditorPaste}
           ></div>
 
-          <!-- Dynamic Send / Stop action button -->
-          ${
-        this.state.chatSession.isGenerating ? html`
-            <button
-              class="btn btn-stop btn-input"
-              @click=${() => this.state.chatSession.cancelGeneration()}
-            >
-              Stop
-            </button>
-          ` :
-                                              html`
-            <button
-              id="btn-send"
-              class="btn btn-primary btn-input"
-              ?disabled=${isLoading}
-              @click=${this.triggerSendMessage}
-            >
-              ${isCached ? 'Send' : 'Download & Send'}
-            </button>
-          `}
+          <div class="composer-toolbar">
+            <div class="composer-tools-left">
+              <div class="composer-model-anchor">
+                <custom-dropdown
+                  id="composer-model-dropdown"
+                  .value=${selectedPath}
+                  @toggle-open=${(e: CustomEvent<{open: boolean}>) => {
+                    this.isModelMenuOpen = e.detail.open;
+                    if (e.detail.open && this.isAddingModel) {
+                      this.closeComposerAddModel(false);
+                    }
+                  }}
+                  @change=${this.handleComposerModelChange}
+                >
+                  <button
+                    slot="trigger"
+                    id="btn-composer-model"
+                    type="button"
+                    class="btn-composer-model ${
+                        this.isModelMenuOpen || this.isAddingModel ? 'open' : ''}"
+                    title="Active model (${modelSummary.name}) — click to switch model"
+                    aria-label="Active model: ${modelSummary.name}, status: ${modelSummary.stateLabel}. Click to switch model"
+                  >
+                    <span class="model-pill-dot ${modelSummary.dotClass}"></span>
+                    <span class="model-pill-name">${
+                        this.isCompactViewport && this.isRecording ?
+                            modelSummary.name.replace(/^Gemma 4\s+/i, '') :
+                            modelSummary.name}</span>
+                    ${modelSummary.isActiveState ? html`
+                      <span class="model-pill-state active-state state-full">${modelSummary.stateLabel}</span>
+                      ${modelSummary.compactStateLabel ? html`
+                        <span class="model-pill-state active-state state-compact">${modelSummary.compactStateLabel}</span>
+                      ` : nothing}
+                    ` : html`
+                      <span class="model-pill-state">${modelSummary.stateLabel}</span>
+                    `}
+                    <svg class="model-pill-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="18 15 12 9 6 15"></polyline>
+                    </svg>
+                  </button>
+                  ${renderModelDropdownItems(this.state, 'composer-model')}
+                </custom-dropdown>
+
+                ${this.isAddingModel ? html`
+                  <div
+                    id="composer-add-model-popover"
+                    class="composer-add-model-popover"
+                    role="group"
+                    aria-label="Add model by URL or Hugging Face repo"
+                  >
+                    <div class="composer-add-model-label">
+                      Add model from URL or Hugging Face
+                    </div>
+                    <form
+                      id="composer-add-model-form"
+                      class="add-model-form"
+                      @submit=${this.handleComposerAddModel}
+                      @keydown=${(e: KeyboardEvent) => {
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          this.closeComposerAddModel(true);
+                        }
+                      }}
+                    >
+                      <input
+                        id="composer-add-model-input"
+                        type="text"
+                        placeholder="org/repo or URL…"
+                        aria-label="Model URL or Hugging Face repo"
+                        ?disabled=${isAddModelDisabled}
+                      />
+                      <button
+                        type="submit"
+                        class="btn btn-primary btn-add-model"
+                        ?disabled=${isAddModelDisabled}
+                        style="padding: 7px 12px; font-size: 0.76rem;"
+                      >${this.isLookingUpModel ? 'Adding...' : 'Add'}</button>
+                      <button
+                        type="button"
+                        class="btn-cancel-add"
+                        title="Cancel"
+                        aria-label="Cancel adding model"
+                        @click=${() => {
+                          this.closeComposerAddModel(true);
+                        }}
+                      >✕</button>
+                    </form>
+                  </div>
+                ` : nothing}
+              </div>
+            </div>
+
+            <div class="composer-tools-right">
+              <div class="composer-media-tools ${this.isRecording ? 'is-recording' : ''}">
+                <button
+                  id="btn-add-media"
+                  type="button"
+                  class="btn-icon"
+                  title="Add images or audio"
+                  aria-label="Add images or audio"
+                  ?disabled=${isLoading}
+                  @mousedown=${(e: Event) => e.preventDefault()}
+                  @click=${() => this.mediaInput?.click()}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                </button>
+                <button
+                  id="btn-camera"
+                  type="button"
+                  class="btn-icon"
+                  title="Take a photo"
+                  aria-label="Take a photo"
+                  ?disabled=${isLoading}
+                  @mousedown=${(e: Event) => e.preventDefault()}
+                  @click=${this.openCamera}
+                >
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                  </svg>
+                </button>
+                <button
+                  id="btn-record"
+                  type="button"
+                  class="btn-icon ${this.isRecording ? 'recording' : ''}"
+                  title=${this.isRecording ? 'Stop and attach recording' : 'Record audio'}
+                  aria-label=${this.isRecording ? 'Stop and attach recording' : 'Record audio'}
+                  ?disabled=${isLoading}
+                  @mousedown=${(e: Event) => e.preventDefault()}
+                  @click=${this.toggleRecording}
+                >${this.isRecording ? html`⏹ ${Math.floor(this.recordingSeconds / 60)}:${
+                    String(this.recordingSeconds % 60).padStart(2, '0')}` : html`
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                  </svg>
+                `}</button>
+                ${this.isRecording ? html`
+                  <button
+                    type="button"
+                    class="btn-cancel-record"
+                    @mousedown=${(e: Event) => e.preventDefault()}
+                    @click=${this.cancelRecording}
+                  >Cancel</button>
+                ` : ''}
+              </div>
+              ${isGenerating ? html`
+                <button
+                  type="button"
+                  class="btn btn-stop btn-input"
+                  aria-label="Stop generating"
+                  @click=${this.handleStopGeneration}
+                ><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>Stop</button>
+              ` : html`
+                <button
+                  id="btn-send"
+                  type="button"
+                  class="btn btn-primary btn-input ${
+                      needsWeightDownload ? 'needs-download' : ''}"
+                  aria-label=${sendLabel}
+                  title=${sendLabel}
+                  ?disabled=${isLoading || !this.hasPromptContent}
+                  @click=${this.triggerSendMessage}
+                >${isLoading ? html`<span class="btn-spinner" aria-hidden="true"></span>` : html`<svg class="send-icon-up" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>${needsWeightDownload ? html`<svg class="send-icon-download" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>` : nothing}`}<span class="send-btn-label">${sendLabel}</span></button>
+              `}
+            </div>
+          </div>
         </div>
       </div>
 
-      ${this.renderCameraModal()}
+      <litert-camera-capture
+        @open-change=${this.handleCameraOpenChange}
+        @photo-captured=${this.handlePhotoCaptured}
+      ></litert-camera-capture>
     `;
   }
 }
