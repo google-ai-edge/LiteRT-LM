@@ -93,6 +93,7 @@ cc_test(
     srcs = ["llm_litert_npu_compiled_model_executor_utils_test.cc"],
     deps = [
         ":llm_litert_npu_compiled_model_executor_utils",
+        ":llm_litert_npu_embedder",
         ":llm_litert_npu_mask",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",

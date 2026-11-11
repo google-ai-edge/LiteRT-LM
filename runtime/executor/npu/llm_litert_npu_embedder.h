@@ -212,6 +212,12 @@ class NpuEmbedder {
           text_decoder_verify_input_buffers,
       bool has_per_layer_embeddings);
 
+  static absl::StatusOr<NpuEmbedder> CreateForTest(
+      std::optional<EmbedderContext> embedder_context,
+      std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
+          std::nullopt,
+      HWPleParams ple_params = {});
+
   absl::Status UpdateMultiModalEmbeddings(const ExecutorInputs& inputs);
   absl::Status CleanupMultiModalEmbeddings();
   std::vector<float> GetDefaultEmbeddingVector() const;
