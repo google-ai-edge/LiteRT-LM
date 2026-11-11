@@ -698,6 +698,17 @@ absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
       std::move(verify_ple_buffer));
 }
 
+absl::StatusOr<NpuEmbedder> NpuEmbedder::CreateForTest(
+    std::optional<EmbedderContext> embedder_context,
+    std::optional<EmbedderPerLayerContext> embedder_per_layer_context,
+    HWPleParams ple_params) {
+  return Create(/*embedding_lookup_manager=*/nullptr,
+                std::move(embedder_context),
+                std::move(embedder_per_layer_context),
+                /*per_layer_embedding_lookup_manager=*/nullptr,
+                /*embedder_per_layer_model=*/nullptr, std::move(ple_params));
+}
+
 absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager,
     std::optional<EmbedderContext> embedder_context,

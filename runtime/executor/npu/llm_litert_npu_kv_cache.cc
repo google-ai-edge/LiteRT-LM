@@ -167,9 +167,7 @@ absl::Status ClearKVCacheBuffers(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers,
     int64_t init_value) {
   for (auto& [buffer_name, buffer] : buffers) {
-    if (buffer_name.starts_with(kKvCacheKRootName) ||
-        buffer_name.starts_with(kKvCacheVRootName) ||
-        buffer_name.starts_with(kKvCacheCRootName)) {
+    if (IsKvCacheTensorName(buffer_name)) {
       LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer, init_value));
     }
   }
@@ -1121,9 +1119,7 @@ absl::Status NpuKVCache::CopyKVCache(
   }
 
   for (const auto& [name, src_buf] : src_buffers) {
-    if (!name.starts_with(kKvCacheKRootName) &&
-        !name.starts_with(kKvCacheVRootName) &&
-        !name.starts_with(kKvCacheCRootName)) {
+    if (!IsKvCacheTensorName(name)) {
       continue;
     }
     auto dst_it = dst_buffers.find(name);
