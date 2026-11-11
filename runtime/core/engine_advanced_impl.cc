@@ -37,6 +37,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/components/model_resources_hf_dir.h"
 #include "runtime/components/model_resources_streaming.h"
 #include "runtime/core/audio_session_advanced.h"
 #include "runtime/core/engine_vision_utils.h"
@@ -425,6 +426,9 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     ABSL_ASSIGN_OR_RETURN(
         model_resources,
         ModelResourcesRegistry::Instance().Create(model_assets));
+  } else if (model_assets.IsDirectory()) {
+    ABSL_ASSIGN_OR_RETURN(model_resources,
+                          ModelResourcesHfDir::Create(model_assets));
   } else {
     ABSL_ASSIGN_OR_RETURN(model_resources,
                           BuildLiteRtCompiledModelResources(
