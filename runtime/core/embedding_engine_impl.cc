@@ -27,6 +27,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -38,10 +39,12 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_streaming.h"
+#include "runtime/core/engine_init_utils.h"
 #include "runtime/engine/cpu_affinity_utils.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
@@ -72,7 +75,6 @@
 #include "runtime/util/streamed_weights_manager.h"
 #include "runtime/util/tensor_buffer_util.h"
 #include "schema/core/litertlm_header_schema_generated.h"
-#include "schema/core/litertlm_read.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
 #include "support/preprocessor/image_preprocessor.h"
@@ -103,51 +105,50 @@ absl::StatusOr<std::vector<int>> TokenUnionToTokenIds(
       "Neither token_str nor token_ids is set in TokenUnion.");
 }
 
+absl::Status PopulateTokenIdsIfPresent(bool has_token,
+                                       const proto::TokenUnion& token_union,
+                                       ::litert::support::Tokenizer& tokenizer,
+                                       std::vector<int>& out_ids) {
+  if (!has_token) {
+    return absl::OkStatus();
+  }
+  LITERT_ASSIGN_OR_RETURN(out_ids,
+                          TokenUnionToTokenIds(token_union, tokenizer));
+  return absl::OkStatus();
+}
+
 absl::StatusOr<SpecialTokens> ExtractSpecialTokens(
     const proto::EmbeddingMetadata& metadata,
     ::litert::support::Tokenizer& tokenizer) {
   SpecialTokens special_tokens;
-  if (metadata.has_bos_token()) {
-    LITERT_ASSIGN_OR_RETURN(
-        special_tokens.bos_token_ids,
-        TokenUnionToTokenIds(metadata.bos_token(), tokenizer));
-  }
-  if (metadata.has_eos_token()) {
-    LITERT_ASSIGN_OR_RETURN(
-        special_tokens.eos_token_ids,
-        TokenUnionToTokenIds(metadata.eos_token(), tokenizer));
-  }
-  if (!metadata.has_embedding_model_type()) {
+  ABSL_RETURN_IF_ERROR(
+      PopulateTokenIdsIfPresent(metadata.has_bos_token(), metadata.bos_token(),
+                                tokenizer, special_tokens.bos_token_ids));
+  ABSL_RETURN_IF_ERROR(
+      PopulateTokenIdsIfPresent(metadata.has_eos_token(), metadata.eos_token(),
+                                tokenizer, special_tokens.eos_token_ids));
+  if (!metadata.has_embedding_model_type() ||
+      !metadata.embedding_model_type().has_embedding_gemma_v2()) {
     return special_tokens;
   }
-  const auto& model_type = metadata.embedding_model_type();
-  if (model_type.has_embedding_gemma_v2()) {
-    const auto& embedding_gemma_v2 = model_type.embedding_gemma_v2();
-    if (embedding_gemma_v2.has_start_of_image_token()) {
-      LITERT_ASSIGN_OR_RETURN(
-          special_tokens.start_of_image_token_ids,
-          TokenUnionToTokenIds(embedding_gemma_v2.start_of_image_token(),
-                               tokenizer));
-    }
-    if (embedding_gemma_v2.has_end_of_image_token()) {
-      LITERT_ASSIGN_OR_RETURN(
-          special_tokens.end_of_image_token_ids,
-          TokenUnionToTokenIds(embedding_gemma_v2.end_of_image_token(),
-                               tokenizer));
-    }
-    if (embedding_gemma_v2.has_start_of_audio_token()) {
-      LITERT_ASSIGN_OR_RETURN(
-          special_tokens.start_of_audio_token_ids,
-          TokenUnionToTokenIds(embedding_gemma_v2.start_of_audio_token(),
-                               tokenizer));
-    }
-    if (embedding_gemma_v2.has_end_of_audio_token()) {
-      LITERT_ASSIGN_OR_RETURN(
-          special_tokens.end_of_audio_token_ids,
-          TokenUnionToTokenIds(embedding_gemma_v2.end_of_audio_token(),
-                               tokenizer));
-    }
-  }
+  const auto& embedding_gemma_v2 =
+      metadata.embedding_model_type().embedding_gemma_v2();
+  ABSL_RETURN_IF_ERROR(PopulateTokenIdsIfPresent(
+      embedding_gemma_v2.has_start_of_image_token(),
+      embedding_gemma_v2.start_of_image_token(), tokenizer,
+      special_tokens.start_of_image_token_ids));
+  ABSL_RETURN_IF_ERROR(PopulateTokenIdsIfPresent(
+      embedding_gemma_v2.has_end_of_image_token(),
+      embedding_gemma_v2.end_of_image_token(), tokenizer,
+      special_tokens.end_of_image_token_ids));
+  ABSL_RETURN_IF_ERROR(PopulateTokenIdsIfPresent(
+      embedding_gemma_v2.has_start_of_audio_token(),
+      embedding_gemma_v2.start_of_audio_token(), tokenizer,
+      special_tokens.start_of_audio_token_ids));
+  ABSL_RETURN_IF_ERROR(PopulateTokenIdsIfPresent(
+      embedding_gemma_v2.has_end_of_audio_token(),
+      embedding_gemma_v2.end_of_audio_token(), tokenizer,
+      special_tokens.end_of_audio_token_ids));
   return special_tokens;
 }
 
@@ -401,6 +402,165 @@ proto::EmbeddingMetadata::TfLiteModelType ParseEmbeddingModelType(
   return model_type;
 }
 
+void MaybeSetPixelCpuAffinity() {
+  if (IsPixelTensorDevice()) {
+    absl::Status status = SetCpuAffinity(GetPixelPerformanceCores());
+    if (!status.ok()) {
+      ABSL_LOG(WARNING) << "Failed to set CPU affinity: " << status;
+    }
+  }
+}
+
+absl::Status EnsureOwnedEnvironment(
+    EmbeddingEngineSettings& settings, ModelResources* absl_nullable resources,
+    std::unique_ptr<OwnedEnvironment>& owned_env) {
+  if (owned_env == nullptr) {
+    ABSL_ASSIGN_OR_RETURN(owned_env,
+                          CreateOwnedEnvironment(settings, resources));
+  }
+  return absl::OkStatus();
+}
+
+struct VisionMetadataConfigResult {
+  bool has_vision_encoder = false;
+  int max_num_patches = 0;
+  std::optional<SelectedVisionSignatureInfo> selected_signatures;
+};
+
+// Defaults `vision_tokens_per_image` from metadata if needed, updates the
+// patchify metadata in `settings`, and (unless `defer_signature_selection` is
+// true for lazy multimodal encoder loading) selects vision encoder/adapter
+// signatures when a vision encoder is present in `resources`.
+absl::StatusOr<VisionMetadataConfigResult> ConfigureVisionMetadataAndSignatures(
+    ModelResources& resources, EmbeddingEngineSettings& settings,
+    bool defer_signature_selection) {
+  if (settings.GetVisionExecutorSettings().has_value() &&
+      !settings.GetVisionTokensPerImage().has_value() &&
+      settings.GetEmbeddingMetadata().has_value()) {
+    std::optional<int> vision_tokens_per_image =
+        GetVisionTokensPerImageFromMetadata(*settings.GetEmbeddingMetadata());
+    if (vision_tokens_per_image.has_value() && *vision_tokens_per_image > 0) {
+      settings.SetVisionTokensPerImage(*vision_tokens_per_image);
+    }
+  }
+
+  VisionMetadataConfigResult result;
+  // When the encoders are loaded lazily, the model is not read until the first
+  // image input, and EnsureVisionExecutorLoaded() checks for the encoder then.
+  result.has_vision_encoder =
+      !defer_signature_selection &&
+      resources.GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
+          .ok();
+  if (!settings.GetVisionTokensPerImage().has_value()) {
+    return result;
+  }
+  if (!settings.GetVisionExecutorSettings().has_value()) {
+    return absl::FailedPreconditionError(
+        "Vision executor settings are not configured.");
+  }
+  const int vision_tokens_per_image = *settings.GetVisionTokensPerImage();
+  if (vision_tokens_per_image <= 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("vision_tokens_per_image must be positive, got: ",
+                     vision_tokens_per_image));
+  }
+  LITERT_RETURN_IF_ERROR(
+      ResolveMinVisionTokensPerImage(settings, vision_tokens_per_image));
+
+  int pooling_kernel_size = 1;
+  if (settings.GetEmbeddingMetadata().has_value() &&
+      settings.GetEmbeddingMetadata()->has_embedding_model_type() &&
+      settings.GetEmbeddingMetadata()
+          ->embedding_model_type()
+          .has_embedding_gemma_v2()) {
+    const auto& embedding_gemma_v2 = settings.GetEmbeddingMetadata()
+                                         ->embedding_model_type()
+                                         .embedding_gemma_v2();
+    pooling_kernel_size = embedding_gemma_v2.pooling_kernel_size() > 0
+                              ? embedding_gemma_v2.pooling_kernel_size()
+                              : 3;
+  }
+
+  const int patch_num_shrink_factor = pooling_kernel_size * pooling_kernel_size;
+  result.max_num_patches = vision_tokens_per_image * patch_num_shrink_factor;
+
+  auto* mutable_gemma_v2 = settings.GetMutableEmbeddingMetadata()
+                               .mutable_embedding_model_type()
+                               ->mutable_embedding_gemma_v2();
+  mutable_gemma_v2->set_max_num_patches(result.max_num_patches);
+  if (pooling_kernel_size > 1) {
+    mutable_gemma_v2->set_pooling_kernel_size(pooling_kernel_size);
+  }
+
+  // Selecting the signatures requires reading the vision encoder model. When
+  // lazy loading is enabled this is deferred to the first image input and
+  // performed together with the compilation of the vision encoder.
+  if (result.has_vision_encoder) {
+    LITERT_ASSIGN_OR_RETURN(
+        result.selected_signatures,
+        SelectAndApplyVisionSignatures(
+            resources, vision_tokens_per_image,
+            settings.GetMinVisionTokensPerImage(), result.max_num_patches,
+            *settings.GetMutableVisionExecutorSettings()));
+  } else if (!defer_signature_selection) {
+    // The value may come from the model metadata rather than the caller, so a
+    // text-only model must still be usable.
+    ABSL_LOG(WARNING) << "vision_tokens_per_image is set, but the model does "
+                         "not contain a vision encoder. Image inputs will "
+                         "not be supported.";
+  }
+  return result;
+}
+
+absl::Status AppendTokenIdsInput(absl::Span<const int> token_ids,
+                                 std::vector<InputData>& out_contents) {
+  if (token_ids.empty()) {
+    return absl::OkStatus();
+  }
+  LITERT_ASSIGN_OR_RETURN(
+      auto tensor,
+      ::litert::support::Tokenizer::TokenIdsToTensorBuffer(token_ids));
+  out_contents.push_back(InputText(std::move(tensor)));
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorVisionData> EncodePreprocessedImage(
+    const InputImage& image, VisionExecutor& vision_executor,
+    std::optional<BenchmarkInfo>& benchmark_info) {
+  if (image.IsTensorBuffer()) {
+    LITERT_ASSIGN_OR_RETURN(const auto* tensor_buffer,
+                            image.GetPreprocessedImageTensor());
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          benchmark_info->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+    }
+    LITERT_ASSIGN_OR_RETURN(ExecutorVisionData data,
+                            vision_executor.Encode(*tensor_buffer));
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          benchmark_info->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+    }
+    return data;
+  }
+  if (image.IsTensorBufferMap()) {
+    LITERT_ASSIGN_OR_RETURN(const auto* tensor_buffer_map,
+                            image.GetPreprocessedImageTensorMap());
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          benchmark_info->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+    }
+    LITERT_ASSIGN_OR_RETURN(ExecutorVisionData data,
+                            vision_executor.Encode(*tensor_buffer_map));
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          benchmark_info->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+    }
+    return data;
+  }
+  return absl::InternalError(
+      "Failed to get tensor buffer from preprocessed image.");
+}
+
 }  // namespace
 
 // static
@@ -463,13 +623,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     return absl::InvalidArgumentError("OwnedEnvironment cannot be null.");
   }
 
-  if (IsPixelTensorDevice()) {
-    auto cores = GetPixelPerformanceCores();
-    auto status = SetCpuAffinity(cores);
-    if (!status.ok()) {
-      ABSL_LOG(WARNING) << "Failed to set CPU affinity: " << status;
-    }
-  }
+  MaybeSetPixelCpuAffinity();
 
   // Resolve and validate first, then read the resolved metadata back out.
   const proto::EmbeddingMetadata* metadata_from_file = nullptr;
@@ -479,97 +633,23 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
   LITERT_RETURN_IF_ERROR(ResolveAndValidateSettings(*shared_resources, settings,
                                                     metadata_from_file));
-  std::optional<proto::EmbeddingMetadata> metadata =
-      settings.GetEmbeddingMetadata();
-
-  // Default vision_tokens_per_image from metadata if not explicitly set in
-  // settings.
-  if (settings.GetVisionExecutorSettings().has_value() &&
-      !settings.GetVisionTokensPerImage().has_value() && metadata.has_value()) {
-    auto vision_tokens_per_image =
-        GetVisionTokensPerImageFromMetadata(*metadata);
-    if (vision_tokens_per_image.has_value() && *vision_tokens_per_image > 0) {
-      settings.SetVisionTokensPerImage(*vision_tokens_per_image);
-    }
-  }
 
   LITERT_ASSIGN_OR_RETURN(
       std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info,
       SetTextEncoderSignaturesFromSettings(*shared_resources, settings));
 
-  // Auto-select vision encoder and adapter signatures if
-  // vision_tokens_per_image is set.
   const bool lazy_load_multimodal_encoders =
       settings.GetLazyLoadMultimodalEncoders();
-  // When the encoders are loaded lazily, the model is not read until the first
-  // image input, and EnsureVisionExecutorLoaded() checks for the encoder then.
-  const bool has_vision_encoder =
-      !lazy_load_multimodal_encoders &&
-      shared_resources
-          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
-          .ok();
+  ABSL_ASSIGN_OR_RETURN(
+      VisionMetadataConfigResult vision_config,
+      ConfigureVisionMetadataAndSignatures(*shared_resources, settings,
+                                           lazy_load_multimodal_encoders));
+  std::optional<proto::EmbeddingMetadata> metadata =
+      settings.GetEmbeddingMetadata();
+  const bool has_vision_encoder = vision_config.has_vision_encoder;
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
-      std::nullopt;
-  int vision_max_num_patches = 0;
-  if (settings.GetVisionTokensPerImage().has_value()) {
-    if (!settings.GetVisionExecutorSettings().has_value()) {
-      return absl::FailedPreconditionError(
-          "Vision executor settings are not configured.");
-    }
-    const int vision_tokens_per_image = *settings.GetVisionTokensPerImage();
-    if (vision_tokens_per_image <= 0) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("vision_tokens_per_image must be positive, got: ",
-                       vision_tokens_per_image));
-    }
-    LITERT_RETURN_IF_ERROR(
-        ResolveMinVisionTokensPerImage(settings, vision_tokens_per_image));
-
-    // Configure vision patch metadata.
-    int pooling_kernel_size = 1;
-    if (metadata.has_value() && metadata->has_embedding_model_type() &&
-        metadata->embedding_model_type().has_embedding_gemma_v2()) {
-      const auto& gemma_v2 =
-          metadata->embedding_model_type().embedding_gemma_v2();
-      pooling_kernel_size = gemma_v2.pooling_kernel_size() > 0
-                                ? gemma_v2.pooling_kernel_size()
-                                : 3;
-    }
-
-    const int patch_num_shrink_factor =
-        pooling_kernel_size * pooling_kernel_size;
-    vision_max_num_patches = vision_tokens_per_image * patch_num_shrink_factor;
-
-    if (!metadata.has_value()) {
-      metadata = proto::EmbeddingMetadata();
-    }
-    metadata->mutable_embedding_model_type()
-        ->mutable_embedding_gemma_v2()
-        ->set_max_num_patches(vision_max_num_patches);
-    if (pooling_kernel_size > 1) {
-      metadata->mutable_embedding_model_type()
-          ->mutable_embedding_gemma_v2()
-          ->set_pooling_kernel_size(pooling_kernel_size);
-    }
-
-    // Selecting the signatures requires reading the vision encoder model. When
-    // lazy loading is enabled this is deferred to the first image input, and
-    // performed together with the compilation of the vision encoder.
-    if (has_vision_encoder) {
-      LITERT_ASSIGN_OR_RETURN(
-          selected_vision_signature_info,
-          SelectAndApplyVisionSignatures(
-              *shared_resources, vision_tokens_per_image,
-              settings.GetMinVisionTokensPerImage(), vision_max_num_patches,
-              *settings.GetMutableVisionExecutorSettings()));
-    } else if (!lazy_load_multimodal_encoders) {
-      // The value may come from the model metadata rather than the caller, so
-      // a text-only model must still be usable.
-      ABSL_LOG(WARNING) << "vision_tokens_per_image is set, but the model does "
-                           "not contain a vision encoder. Image inputs will "
-                           "not be supported.";
-    }
-  }
+      std::move(vision_config.selected_signatures);
+  const int vision_max_num_patches = vision_config.max_num_patches;
 
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter = std::nullopt;
@@ -692,13 +772,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 // static
 absl::StatusOr<std::unique_ptr<EmbeddingEngine>>
 EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
-  if (IsPixelTensorDevice()) {
-    auto cores = GetPixelPerformanceCores();
-    auto status = SetCpuAffinity(cores);
-    if (!status.ok()) {
-      ABSL_LOG(WARNING) << "Failed to set CPU affinity: " << status;
-    }
-  }
+  MaybeSetPixelCpuAffinity();
 
   if (settings.GetLazyLoadMultimodalEncoders()) {
     // The weights of every submodel are consumed in a single pass over the
@@ -769,14 +843,9 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
       case schema::AnySectionDataType_EmbeddingMetadataProto: {
         ABSL_LOG(INFO)
             << "Processing section data type: EmbeddingMetadataProto";
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
-        if (!embedding_metadata.ParseFromString(
-                absl::string_view(buffer.data(), buffer.size()))) {
-          return absl::InternalError("Failed to parse EmbeddingMetadataProto");
-        }
+        ABSL_ASSIGN_OR_RETURN(embedding_metadata,
+                              section->ParseProto<proto::EmbeddingMetadata>(
+                                  "EmbeddingMetadataProto"));
         streaming_resources->SetEmbeddingMetadata(embedding_metadata);
         set_embedding_metadata = true;
         ABSL_RETURN_IF_ERROR(resolve_and_validate_settings());
@@ -784,62 +853,13 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         break;
       }
       case schema::AnySectionDataType_SP_Tokenizer: {
-        ABSL_LOG(INFO) << "Processing section data type: SP_Tokenizer";
-        if (benchmark_info.has_value()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
-#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
-        ABSL_ASSIGN_OR_RETURN(
-            tokenizer, SentencePieceTokenizer::CreateFromBuffer(
-                           absl::string_view(buffer.data(), buffer.size())));
-        ABSL_LOG(INFO) << "SentencePieceTokenizer created.";
-#else
-        return absl::UnimplementedError(
-            "SentencePieceTokenizer is not enabled in build.");
-#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
-        if (benchmark_info.has_value()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
+        ABSL_ASSIGN_OR_RETURN(tokenizer, LoadStreamedSentencePieceTokenizer(
+                                             *section, benchmark_info));
         break;
       }
       case schema::AnySectionDataType_HF_Tokenizer_Zlib: {
-        ABSL_LOG(INFO) << "Processing section data type: HF_Tokenizer_Zlib";
-        if (benchmark_info.has_value()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
-        std::vector<uint8_t> compressed_buffer(
-            section_metadata->end_offset() - section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            reinterpret_cast<char*>(compressed_buffer.data()), 0,
-            compressed_buffer.size()));
-
-        std::vector<uint8_t> decompressed_buffer;
-        ABSL_RETURN_IF_ERROR(schema::DecompressData(compressed_buffer.data(),
-                                                    compressed_buffer.size(),
-                                                    &decompressed_buffer));
-
-#ifdef ENABLE_HUGGINGFACE_TOKENIZER
-        std::string json_data(
-            reinterpret_cast<const char*>(decompressed_buffer.data()),
-            decompressed_buffer.size());
-        ABSL_ASSIGN_OR_RETURN(tokenizer,
-                              HuggingFaceTokenizer::CreateFromJson(json_data));
-        ABSL_LOG(INFO) << "HuggingFaceTokenizer created.";
-#else
-        return absl::UnimplementedError(
-            "HuggingFaceTokenizer is not enabled in build.");
-#endif  // ENABLE_HUGGINGFACE_TOKENIZER
-        if (benchmark_info.has_value()) {
-          ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
-              BenchmarkInfo::InitPhase::kTokenizer));
-        }
+        ABSL_ASSIGN_OR_RETURN(tokenizer, LoadStreamedHuggingFaceTokenizer(
+                                             *section, benchmark_info));
         break;
       }
       case schema::AnySectionDataType_TFLiteModel: {
@@ -852,18 +872,11 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
             ParseEmbeddingModelType(model_type_str);
         ABSL_LOG(INFO) << "Caching model from stream for type: "
                        << model_type_str;
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
+        ABSL_ASSIGN_OR_RETURN(std::vector<char> buffer, section->ReadBuffer());
         streaming_resources->SetModelBuffer(model_type_str, std::move(buffer));
-        if (model_type == proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER &&
-            owned_env == nullptr) {
-          ABSL_ASSIGN_OR_RETURN(
-              auto temp_owned_env,
-              CreateEnvironment(settings, streaming_resources.get()));
-          owned_env =
-              std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
+        if (model_type == proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER) {
+          ABSL_RETURN_IF_ERROR(EnsureOwnedEnvironment(
+              settings, streaming_resources.get(), owned_env));
         }
         break;
       }
@@ -875,27 +888,19 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         const std::string& model_type_str = *section->buffer_key.model_type;
         const proto::EmbeddingMetadata::TfLiteModelType model_type =
             ParseEmbeddingModelType(model_type_str);
+        const size_t size = section->Size();
         if (model_type ==
             proto::EmbeddingMetadata::TF_LITE_PER_LAYER_EMBEDDER) {
-          size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
               model_type, *section->data_stream, size));
         } else if (model_type == proto::EmbeddingMetadata::TF_LITE_EMBEDDER) {
-          size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_LOG(INFO) << "Reading embedder weights (" << size
                          << " bytes) into host memory...";
           ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
               model_type, *section->data_stream, size));
           ABSL_LOG(INFO) << "Embedder weights read.";
-          if (owned_env == nullptr) {
-            ABSL_ASSIGN_OR_RETURN(
-                auto temp_owned_env,
-                CreateEnvironment(settings, streaming_resources.get()));
-            owned_env =
-                std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-          }
+          ABSL_RETURN_IF_ERROR(EnsureOwnedEnvironment(
+              settings, streaming_resources.get(), owned_env));
           if (streaming_resources
                   ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_EMBEDDER)
                   .ok()) {
@@ -914,8 +919,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           if (settings.GetMainExecutorSettings().GetBackend() == Backend::CPU) {
             // The CPU backend restores external weights from host memory and
             // cannot consume a weights stream, so read them in here.
-            const size_t size = section_metadata->end_offset() -
-                                section_metadata->begin_offset();
             ABSL_LOG(INFO) << "Reading text encoder weights (" << size
                            << " bytes) into host memory...";
             ABSL_RETURN_IF_ERROR(streaming_resources->SetWeightsFromStream(
@@ -924,13 +927,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           } else {
             StoreWeightsStream(model_type, std::move(section->data_stream));
           }
-          if (owned_env == nullptr) {
-            ABSL_ASSIGN_OR_RETURN(
-                auto temp_owned_env,
-                CreateEnvironment(settings, streaming_resources.get()));
-            owned_env =
-                std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-          }
+          ABSL_RETURN_IF_ERROR(EnsureOwnedEnvironment(
+              settings, streaming_resources.get(), owned_env));
           if (streaming_resources
                   ->GetTFLiteModel(
                       proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER)
@@ -959,8 +957,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           // Vision and audio weights are always stored in host memory before
           // being loaded, even when their encoder runs on GPU, due to an issue
           // with streaming float32 weights.
-          const size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_LOG(INFO) << "Reading weights (" << size
                          << " bytes) for model type "
                          << proto::EmbeddingMetadata::TfLiteModelType_Name(
@@ -992,12 +988,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     return absl::InvalidArgumentError("Tokenizer cannot be null.");
   }
 
-  if (owned_env == nullptr) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto temp_owned_env,
-        CreateEnvironment(settings, streaming_resources.get()));
-    owned_env = std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-  }
+  ABSL_RETURN_IF_ERROR(
+      EnsureOwnedEnvironment(settings, streaming_resources.get(), owned_env));
 
   if (embedding_lookup == nullptr) {
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
@@ -1022,88 +1014,13 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
   }
 
-  // Default vision_tokens_per_image from metadata if not explicitly set in
-  // settings.
-  if (settings.GetVisionExecutorSettings().has_value() &&
-      !settings.GetVisionTokensPerImage().has_value() &&
-      settings.GetEmbeddingMetadata().has_value()) {
-    auto vision_tokens_per_image =
-        GetVisionTokensPerImageFromMetadata(*settings.GetEmbeddingMetadata());
-    if (vision_tokens_per_image.has_value() && *vision_tokens_per_image > 0) {
-      settings.SetVisionTokensPerImage(*vision_tokens_per_image);
-    }
-  }
-
-  // Auto-select vision encoder and adapter signatures if
-  // vision_tokens_per_image is set.
-  const bool has_vision_encoder =
-      streaming_resources
-          ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
-          .ok();
+  ABSL_ASSIGN_OR_RETURN(VisionMetadataConfigResult vision_config,
+                        ConfigureVisionMetadataAndSignatures(
+                            *streaming_resources, settings,
+                            /*defer_signature_selection=*/false));
+  const bool has_vision_encoder = vision_config.has_vision_encoder;
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
-      std::nullopt;
-  if (settings.GetVisionTokensPerImage().has_value()) {
-    if (!settings.GetVisionExecutorSettings().has_value()) {
-      return absl::FailedPreconditionError(
-          "Vision executor settings are not configured.");
-    }
-    const int vision_tokens_per_image = *settings.GetVisionTokensPerImage();
-    if (vision_tokens_per_image <= 0) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("vision_tokens_per_image must be positive, got: ",
-                       vision_tokens_per_image));
-    }
-    LITERT_RETURN_IF_ERROR(
-        ResolveMinVisionTokensPerImage(settings, vision_tokens_per_image));
-
-    int pooling_kernel_size = 1;
-    if (settings.GetEmbeddingMetadata().has_value() &&
-        settings.GetEmbeddingMetadata()->has_embedding_model_type() &&
-        settings.GetEmbeddingMetadata()
-            ->embedding_model_type()
-            .has_embedding_gemma_v2()) {
-      const auto& gemma_v2 = settings.GetEmbeddingMetadata()
-                                 ->embedding_model_type()
-                                 .embedding_gemma_v2();
-      pooling_kernel_size = gemma_v2.pooling_kernel_size() > 0
-                                ? gemma_v2.pooling_kernel_size()
-                                : 3;
-    }
-
-    const int patch_num_shrink_factor =
-        pooling_kernel_size * pooling_kernel_size;
-    const int max_num_patches =
-        vision_tokens_per_image * patch_num_shrink_factor;
-
-    if (!settings.GetEmbeddingMetadata().has_value()) {
-      settings.GetMutableEmbeddingMetadata() = proto::EmbeddingMetadata();
-    }
-    settings.GetMutableEmbeddingMetadata()
-        .mutable_embedding_model_type()
-        ->mutable_embedding_gemma_v2()
-        ->set_max_num_patches(max_num_patches);
-    if (pooling_kernel_size > 1) {
-      settings.GetMutableEmbeddingMetadata()
-          .mutable_embedding_model_type()
-          ->mutable_embedding_gemma_v2()
-          ->set_pooling_kernel_size(pooling_kernel_size);
-    }
-
-    if (has_vision_encoder) {
-      LITERT_ASSIGN_OR_RETURN(
-          selected_vision_signature_info,
-          SelectAndApplyVisionSignatures(
-              *streaming_resources, vision_tokens_per_image,
-              settings.GetMinVisionTokensPerImage(), max_num_patches,
-              *settings.GetMutableVisionExecutorSettings()));
-    } else {
-      // The value may come from the model metadata rather than the caller, so
-      // a text-only model must still be usable.
-      ABSL_LOG(WARNING) << "vision_tokens_per_image is set, but the model does "
-                           "not contain a vision encoder. Image inputs will "
-                           "not be supported.";
-    }
-  }
+      std::move(vision_config.selected_signatures);
 
   SpecialTokens special_tokens;
   std::optional<::litert::support::ImagePreprocessParameter>
@@ -1131,12 +1048,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   // Initialize the vision executor.
   std::unique_ptr<VisionExecutor> vision_executor = nullptr;
   if (has_vision_encoder && settings.GetVisionExecutorSettings().has_value()) {
-    if (owned_env == nullptr) {
-      ABSL_ASSIGN_OR_RETURN(
-          auto temp_owned_env,
-          CreateEnvironment(settings, streaming_resources.get()));
-      owned_env = std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-    }
     LITERT_ASSIGN_OR_RETURN(vision_executor,
                             VisionLiteRtCompiledModelExecutor::Create(
                                 *settings.GetVisionExecutorSettings(),
@@ -1156,12 +1067,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
            ->GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_AUDIO_ENCODER_HW)
            .ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
-    if (owned_env == nullptr) {
-      ABSL_ASSIGN_OR_RETURN(
-          auto temp_owned_env,
-          CreateEnvironment(settings, streaming_resources.get()));
-      owned_env = std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-    }
     LITERT_ASSIGN_OR_RETURN(audio_executor,
                             AudioLiteRtCompiledModelExecutor::Create(
                                 *settings.GetAudioExecutorSettings(),
@@ -1275,12 +1180,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       tokenizer_future = std::async(kTokenizerLaunchPolicy, create_tokenizer);
 
   // Create LiteRT environment.
-  std::unique_ptr<OwnedEnvironment> owned_env;
-  {
-    LITERT_ASSIGN_OR_RETURN(auto env,
-                            CreateEnvironment(settings, resources.get()));
-    owned_env = std::make_unique<OwnedEnvironment>(std::move(env));
-  }
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<OwnedEnvironment> owned_env,
+                        CreateOwnedEnvironment(settings, resources.get()));
 
   LITERT_ASSIGN_OR_RETURN(
       std::unique_ptr<EmbeddingEngine> engine,
@@ -1435,60 +1336,38 @@ absl::Status EmbeddingEngineImpl::UnloadAudioEncoder() {
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
   std::vector<InputData> new_contents;
-  if (!special_tokens_.bos_token_ids.empty()) {
-    LITERT_ASSIGN_OR_RETURN(auto bos_tensor,
-                            litert::support::Tokenizer::TokenIdsToTensorBuffer(
-                                special_tokens_.bos_token_ids));
-    new_contents.push_back(InputText(std::move(bos_tensor)));
-  }
+  ABSL_RETURN_IF_ERROR(
+      AppendTokenIdsInput(special_tokens_.bos_token_ids, new_contents));
   for (const auto& item : contents) {
     if (const auto* input_image = std::get_if<InputImage>(&item)) {
-      if (!special_tokens_.start_of_image_token_ids.empty()) {
-        LITERT_ASSIGN_OR_RETURN(
-            auto start_tensor,
-            litert::support::Tokenizer::TokenIdsToTensorBuffer(
-                special_tokens_.start_of_image_token_ids));
-        new_contents.push_back(InputText(std::move(start_tensor)));
-      }
+      ABSL_RETURN_IF_ERROR(AppendTokenIdsInput(
+          special_tokens_.start_of_image_token_ids, new_contents));
       LITERT_ASSIGN_OR_RETURN(auto image_copy, input_image->CreateCopy());
       new_contents.push_back(std::move(image_copy));
       if (special_tokens_.has_end_of_vision_model) {
         new_contents.push_back(InputImageEnd());
-      } else if (!special_tokens_.end_of_image_token_ids.empty()) {
-        LITERT_ASSIGN_OR_RETURN(
-            auto end_tensor, litert::support::Tokenizer::TokenIdsToTensorBuffer(
-                                 special_tokens_.end_of_image_token_ids));
-        new_contents.push_back(InputText(std::move(end_tensor)));
+      } else {
+        ABSL_RETURN_IF_ERROR(AppendTokenIdsInput(
+            special_tokens_.end_of_image_token_ids, new_contents));
       }
     } else if (const auto* input_audio = std::get_if<InputAudio>(&item)) {
-      if (!special_tokens_.start_of_audio_token_ids.empty()) {
-        LITERT_ASSIGN_OR_RETURN(
-            auto start_tensor,
-            litert::support::Tokenizer::TokenIdsToTensorBuffer(
-                special_tokens_.start_of_audio_token_ids));
-        new_contents.push_back(InputText(std::move(start_tensor)));
-      }
+      ABSL_RETURN_IF_ERROR(AppendTokenIdsInput(
+          special_tokens_.start_of_audio_token_ids, new_contents));
       LITERT_ASSIGN_OR_RETURN(auto audio_copy, input_audio->CreateCopy());
       new_contents.push_back(std::move(audio_copy));
       if (special_tokens_.has_end_of_audio_model) {
         new_contents.push_back(InputAudioEnd());
-      } else if (!special_tokens_.end_of_audio_token_ids.empty()) {
-        LITERT_ASSIGN_OR_RETURN(
-            auto end_tensor, litert::support::Tokenizer::TokenIdsToTensorBuffer(
-                                 special_tokens_.end_of_audio_token_ids));
-        new_contents.push_back(InputText(std::move(end_tensor)));
+      } else {
+        ABSL_RETURN_IF_ERROR(AppendTokenIdsInput(
+            special_tokens_.end_of_audio_token_ids, new_contents));
       }
     } else {
       LITERT_ASSIGN_OR_RETURN(auto item_copy, CreateInputDataCopy(item));
       new_contents.push_back(std::move(item_copy));
     }
   }
-  if (!special_tokens_.eos_token_ids.empty()) {
-    LITERT_ASSIGN_OR_RETURN(auto eos_tensor,
-                            litert::support::Tokenizer::TokenIdsToTensorBuffer(
-                                special_tokens_.eos_token_ids));
-    new_contents.push_back(InputText(std::move(eos_tensor)));
-  }
+  ABSL_RETURN_IF_ERROR(
+      AppendTokenIdsInput(special_tokens_.eos_token_ids, new_contents));
   return new_contents;
 }
 
@@ -1546,32 +1425,11 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
       // Compiles the vision encoder here if it is loaded lazily.
       ABSL_RETURN_IF_ERROR(EnsureVisionExecutorLoaded());
       ExecutorVisionData single_image_data;
-      if (input_image->IsTensorBuffer()) {
-        LITERT_ASSIGN_OR_RETURN(auto tensor_buffer,
-                                input_image->GetPreprocessedImageTensor());
-        if (benchmark_info_.has_value()) {
-          ABSL_RETURN_IF_ERROR(
-              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
-        }
-        LITERT_ASSIGN_OR_RETURN(single_image_data,
-                                vision_executor_->Encode(*tensor_buffer));
-        if (benchmark_info_.has_value()) {
-          ABSL_RETURN_IF_ERROR(
-              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
-        }
-      } else if (input_image->IsTensorBufferMap()) {
-        LITERT_ASSIGN_OR_RETURN(auto tensor_buffer_map,
-                                input_image->GetPreprocessedImageTensorMap());
-        if (benchmark_info_.has_value()) {
-          ABSL_RETURN_IF_ERROR(
-              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
-        }
-        LITERT_ASSIGN_OR_RETURN(single_image_data,
-                                vision_executor_->Encode(*tensor_buffer_map));
-        if (benchmark_info_.has_value()) {
-          ABSL_RETURN_IF_ERROR(
-              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
-        }
+      if (input_image->IsTensorBuffer() || input_image->IsTensorBufferMap()) {
+        ABSL_ASSIGN_OR_RETURN(
+            single_image_data,
+            EncodePreprocessedImage(*input_image, *vision_executor_,
+                                    benchmark_info_));
       } else {
         if (image_preprocessor_ == nullptr) {
           return absl::FailedPreconditionError(
@@ -1610,39 +1468,10 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
           ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
               std::string(kMarkImagePreprocessor)));
         }
-        if (preprocessed_image.IsTensorBuffer()) {
-          LITERT_ASSIGN_OR_RETURN(
-              auto tensor_buffer,
-              preprocessed_image.GetPreprocessedImageTensor());
-          if (benchmark_info_.has_value()) {
-            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
-                std::string(kMarkVisionExecutor)));
-          }
-          LITERT_ASSIGN_OR_RETURN(single_image_data,
-                                  vision_executor_->Encode(*tensor_buffer));
-          if (benchmark_info_.has_value()) {
-            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
-                std::string(kMarkVisionExecutor)));
-          }
-        } else if (preprocessed_image.IsTensorBufferMap()) {
-          LITERT_ASSIGN_OR_RETURN(
-              auto tensor_buffer_map,
-              preprocessed_image.GetPreprocessedImageTensorMap());
-          if (benchmark_info_.has_value()) {
-            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
-                std::string(kMarkVisionExecutor)));
-          }
-          LITERT_ASSIGN_OR_RETURN(
-              single_image_data,
-              vision_executor_->Encode(*tensor_buffer_map));
-          if (benchmark_info_.has_value()) {
-            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
-                std::string(kMarkVisionExecutor)));
-          }
-        } else {
-          return absl::InternalError(
-              "Failed to get tensor buffer from preprocessed image.");
-        }
+        ABSL_ASSIGN_OR_RETURN(
+            single_image_data,
+            EncodePreprocessedImage(preprocessed_image, *vision_executor_,
+                                    benchmark_info_));
       }
       LITERT_ASSIGN_OR_RETURN(auto embeddings_ptr,
                               single_image_data.GetEmbeddingsPtr());

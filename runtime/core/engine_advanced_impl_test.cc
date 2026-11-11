@@ -13,7 +13,9 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <memory>
@@ -30,6 +32,10 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/vector.h"  // from @flatbuffers
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -37,12 +43,14 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/util/data_stream.h"
+#include "runtime/util/file_data_stream.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 #ifdef ENGINE_ADVANCED
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/util/file_data_stream.h"
 #endif
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -62,6 +70,82 @@ absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
                         EngineFactory::Instance().ListEngineTypes());
   RET_CHECK_EQ(engine_types.size(), 1);
   return EngineFactory::CreateDefault(std::move(engine_settings));
+}
+
+class InMemoryDataStream : public DataStream {
+ public:
+  explicit InMemoryDataStream(std::string bytes) : bytes_(std::move(bytes)) {}
+
+  absl::Status ReadAndDiscard(void* buffer, uint64_t offset,
+                              uint64_t size) override {
+    return ReadAndPreserve(buffer, offset, size);
+  }
+
+  absl::Status ReadAndPreserve(void* buffer, uint64_t offset,
+                               uint64_t size) override {
+    if (offset + size > bytes_.size()) {
+      return absl::OutOfRangeError("Read out of bounds");
+    }
+    std::memcpy(buffer, bytes_.data() + offset, size);
+    return absl::OkStatus();
+  }
+
+  absl::Status Discard(uint64_t offset, uint64_t size) override {
+    if (offset + size > bytes_.size()) {
+      return absl::OutOfRangeError("Discard out of bounds");
+    }
+    return absl::OkStatus();
+  }
+
+ private:
+  std::string bytes_;
+};
+
+std::shared_ptr<DataStream> BuildSingleSectionLitertLmStream(
+    schema::AnySectionDataType data_type,
+    std::optional<std::string> model_type_kv, absl::string_view payload) {
+  constexpr uint64_t kPayloadOffset = 512;
+  flatbuffers::FlatBufferBuilder builder(256);
+  flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<schema::KeyValuePair>>>
+      items_offset = 0;
+  if (model_type_kv.has_value()) {
+    auto key_offset = builder.CreateString("model_type");
+    auto value_offset = schema::CreateStringValue(
+        builder, builder.CreateString(*model_type_kv));
+    auto kv = schema::CreateKeyValuePair(
+        builder, key_offset, schema::VData_StringValue, value_offset.Union());
+    items_offset = builder.CreateVector(
+        std::vector<flatbuffers::Offset<schema::KeyValuePair>>{kv});
+  }
+  auto section =
+      schema::CreateSectionObject(builder, items_offset, kPayloadOffset,
+                                  kPayloadOffset + payload.size(), data_type);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto root = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(root);
+
+  std::string out;
+  out.append("LITERTLM", 8);
+  const uint32_t major = 1;
+  const uint32_t zero = 0;
+  out.append(reinterpret_cast<const char*>(&major), sizeof(uint32_t));
+  out.append(reinterpret_cast<const char*>(&zero), sizeof(uint32_t));
+  out.append(reinterpret_cast<const char*>(&zero), sizeof(uint32_t));
+  out.append(reinterpret_cast<const char*>(&zero), sizeof(uint32_t));
+  const uint64_t header_end_offset = 32 + builder.GetSize();
+  out.append(reinterpret_cast<const char*>(&header_end_offset),
+             sizeof(uint64_t));
+  out.append(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  if (out.size() < kPayloadOffset) {
+    out.resize(kPayloadOffset, '\0');
+  }
+  out.append(payload.data(), payload.size());
+  return std::make_shared<InMemoryDataStream>(std::move(out));
 }
 
 #if defined(ENGINE_ADVANCED)
@@ -692,6 +776,63 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading_HfTokenizer) {
                        "Environment was not initialized during streaming."));
 }
 #endif  // ENABLE_HUGGINGFACE_TOKENIZER
+
+TEST(EngineTest, CreateEngine_StreamedModelLoading_NoModelType) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_no_model_type.litertlm";
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> file_stream,
+                       FileDataStream::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings engine_settings,
+      EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  EXPECT_OK(CreateEngine(std::move(engine_settings)));
+}
+
+TEST(EngineTest,
+     CreateEngine_StreamedModelLoading_ModalityWeightsAndExecutorMetadata) {
+  for (absl::string_view model_type :
+       {"TF_LITE_VISION_ENCODER", "TF_LITE_AUDIO_ADAPTER"}) {
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create(BuildSingleSectionLitertLmStream(
+                             schema::AnySectionDataType_TFLiteWeights,
+                             std::string(model_type), "weights")));
+    ASSERT_OK_AND_ASSIGN(
+        EngineSettings settings,
+        EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU));
+    EXPECT_THAT(CreateEngine(std::move(settings)),
+                testing::status::StatusIs(absl::StatusCode::kInternal));
+  }
+  {
+    ASSERT_OK_AND_ASSIGN(
+        ModelAssets model_assets,
+        ModelAssets::Create(BuildSingleSectionLitertLmStream(
+            schema::AnySectionDataType_TFLiteWeights,
+            std::string("TF_LITE_VISION_ENCODER"), "weights")));
+    ASSERT_OK_AND_ASSIGN(
+        EngineSettings settings,
+        EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU,
+                                      /*vision_backend=*/Backend::CPU));
+    EXPECT_THAT(CreateEngine(std::move(settings)),
+                testing::status::StatusIs(absl::StatusCode::kInternal));
+  }
+  {
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create(BuildSingleSectionLitertLmStream(
+                             schema::AnySectionDataType_ExecutorMetadataProto,
+                             std::nullopt, "")));
+    ASSERT_OK_AND_ASSIGN(
+        EngineSettings settings,
+        EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU));
+    EXPECT_THAT(CreateEngine(std::move(settings)),
+                testing::status::StatusIs(absl::StatusCode::kInternal));
+  }
+}
 #endif  // ENGINE_ADVANCED
 
 // TODO (b/397975034): Add more tests for Engine.

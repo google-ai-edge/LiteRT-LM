@@ -3823,5 +3823,91 @@ TEST(EmbeddingEngineImplTest,
                HasSubstr("min_vision_tokens_per_image (140) cannot be greater "
                          "than vision_tokens_per_image (70)")));
 }
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithBenchmarkRecordsInitPhases) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestEmbeddingModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.GetMutableBenchmarkParams();
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  const auto benchmark_info = engine->GetBenchmarkInfo();
+  ASSERT_TRUE(benchmark_info.has_value());
+  const auto& init_phases = benchmark_info->GetInitPhases();
+  EXPECT_THAT(init_phases, Contains(Key("Init Total")));
+  EXPECT_THAT(init_phases, Contains(Key("Init Executor")));
+  EXPECT_THAT(init_phases, Contains(Key("Init Tokenizer")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithImageTensorBufferMapAndBenchmarkRecordsVisionMark) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestEmbeddingModelPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ModelResources> real_resources,
+                       CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OwnedEnvironment> env,
+                       CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  constexpr int kTextEncoderInputEmbeddingDim = 512;
+  constexpr int kVisionTokensPerImage = 70;
+  const std::vector<uint8_t> vision_buffer = BuildDummyVisionModelBuffer(
+      {"vision_70"}, {kVisionTokensPerImage},
+      /*feature_dim=*/kTextEncoderInputEmbeddingDim,
+      /*image_channels=*/kTextEncoderInputEmbeddingDim);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      ::litert::Model vision_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                                 vision_buffer.size())));
+
+  // Declared before input tensor buffers so the owned environment outlives
+  // them on teardown.
+  std::unique_ptr<EmbeddingEngine> engine;
+
+  ASSERT_OK_AND_ASSIGN(
+      ::litert::TensorBuffer images_tensor,
+      CreateDummyTensorBuffer(env->env, {1, kVisionTokensPerImage * 4,
+                                         kTextEncoderInputEmbeddingDim}));
+  absl::flat_hash_map<std::string, ::litert::TensorBuffer> image_tensor_map;
+  image_tensor_map.emplace("images", std::move(images_tensor));
+  std::vector<InputData> image_contents;
+  image_contents.push_back(InputImage(std::move(image_tensor_map)));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/std::nullopt, /*vision_model=*/&vision_model);
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingEngineSettings settings,
+      EmbeddingEngineSettings::CreateDefault(model_assets, Backend::CPU,
+                                             /*vision_backend=*/Backend::CPU,
+                                             /*audio_backend=*/std::nullopt));
+  settings.SetVisionTokensPerImage(kVisionTokensPerImage);
+  settings.GetMutableBenchmarkParams();
+
+  ASSERT_OK_AND_ASSIGN(engine, EmbeddingEngineImpl::Create(
+                                   std::move(resources), std::move(env),
+                                   std::move(tokenizer), std::move(settings)));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+  ASSERT_OK(engine->ComputeEmbedding(image_contents, options));
+
+  const auto benchmark_info = engine->GetBenchmarkInfo();
+  ASSERT_TRUE(benchmark_info.has_value());
+  EXPECT_THAT(benchmark_info->GetMarkDurations(),
+              Contains(Key("vision_executor")));
+}
 }  // namespace
 }  // namespace litert::lm

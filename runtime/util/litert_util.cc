@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -196,6 +197,22 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   LITERT_ASSIGN_OR_RETURN(auto env,
                           Environment::Create(EnvironmentOptions(env_options)));
   return OwnedEnvironment{std::move(helper), std::move(env)};
+}
+
+absl::StatusOr<std::unique_ptr<OwnedEnvironment>> CreateOwnedEnvironment(
+    EngineSettings& engine_settings,
+    ModelResources* absl_nullable model_resources) {
+  ABSL_ASSIGN_OR_RETURN(OwnedEnvironment owned_env,
+                        CreateEnvironment(engine_settings, model_resources));
+  return std::make_unique<OwnedEnvironment>(std::move(owned_env));
+}
+
+absl::StatusOr<std::unique_ptr<OwnedEnvironment>> CreateOwnedEnvironment(
+    EmbeddingEngineSettings& settings,
+    ModelResources* absl_nullable model_resources) {
+  ABSL_ASSIGN_OR_RETURN(OwnedEnvironment owned_env,
+                        CreateEnvironment(settings, model_resources));
+  return std::make_unique<OwnedEnvironment>(std::move(owned_env));
 }
 
 absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets) {
