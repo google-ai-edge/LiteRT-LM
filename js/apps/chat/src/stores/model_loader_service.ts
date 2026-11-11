@@ -307,7 +307,7 @@ export class ModelLoaderService {
       if (!this.isWasmLoaded) {
         this.updateStatus('Loading LiteRT WASM runtime...');
         suppressKnownWasmWarnings();
-        const wasmPath = import.meta.env.DEV ? '/wasm' : undefined;
+        const wasmPath = (import.meta.env.DEV || import.meta.env.MODE === 'selfcontained') ? './wasm' : undefined;
         await this.loadWasm(wasmPath);
         this.isWasmLoaded = true;
       }

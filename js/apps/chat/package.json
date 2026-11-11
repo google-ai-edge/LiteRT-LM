@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "vite build",
+    "build-selfcontained": "vite build --mode selfcontained",
     "dev": "vite",
     "test": "node --loader=ts-node/esm ./node_modules/jasmine/bin/jasmine.js --config=test/support/jasmine.json"
   },
