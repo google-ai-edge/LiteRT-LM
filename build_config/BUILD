@@ -68,6 +68,23 @@ config_setting(
     values = { "apple_platform_type": "ios", "cpu": "ios_sim_arm64",},
 )
 
+config_setting(
+    name = "with_keep_symbols",
+    define_values = {"keep_litertlm_symbols": "true"},
+)
+
+config_setting(
+    name = "ios_with_keep_symbols",
+    constraint_values = ["@platforms//os:ios"],
+    define_values = {"keep_litertlm_symbols": "true"},
+)
+
+config_setting(
+    name = "macos_with_keep_symbols",
+    constraint_values = ["@platforms//os:macos"],
+    define_values = {"keep_litertlm_symbols": "true"},
+)
+
 alias(
     name = "patchelf_exe",
     actual = select({

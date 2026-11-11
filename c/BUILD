@@ -562,8 +562,6 @@ cc_binary(
         "//conditions:default": [
             # Report unresolved symbol references as errors during linking.
             "-Wl,--no-undefined",
-            # Strip all symbols to reduce library size (debug info is removed).
-            "-Wl,--strip-all",
             # Remove unused sections/functions to further reduce library size.
             "-Wl,--gc-sections",
             # Ensure symbols are resolved internally first.
@@ -575,6 +573,17 @@ cc_binary(
             # above does not apply to statically linked dependencies.
             "-Wl,--version-script=$(execpath :litert_lm_c_api_linux.lds)",
         ],
+    }) + select({
+        "//build_config:with_keep_symbols": [],
+        "//build_config:macos_with_keep_symbols": [],
+        "//build_config:ios_with_keep_symbols": [],
+        # Strip non-global Mach-O symbol and string table entries.
+        "@platforms//os:macos": ["-Wl,-x"],
+        # Strip non-global Mach-O symbol and string table entries.
+        "@platforms//os:ios": ["-Wl,-x"],
+        "@platforms//os:windows": [],
+        # Strip all symbols to reduce library size (debug info is removed).
+        "//conditions:default": ["-Wl,--strip-all"],
     }),
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
