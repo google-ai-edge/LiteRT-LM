@@ -26,6 +26,10 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
@@ -37,7 +41,11 @@ namespace litert::lm {
 namespace {
 
 using ::absl_testing::StatusIs;
+using ::testing::_;
 using ::testing::HasSubstr;
+using ::testing::NiceMock;
+using ::testing::Return;
+using ::testing::StrictMock;
 
 std::string GetTestModelPath() {
   const auto model_path =
@@ -169,6 +177,124 @@ TEST(LitertLmStreamingLoaderTest, HeaderTooSmall) {
   EXPECT_THAT(loader.GetNextSection().status(),
               StatusIs(absl::StatusCode::kInternal,
                        HasSubstr("Header end offset is too small")));
+}
+
+const schema::SectionObject* BuildSectionObject(
+    flatbuffers::FlatBufferBuilder& builder, uint64_t begin_offset,
+    uint64_t end_offset,
+    schema::AnySectionDataType data_type =
+        schema::AnySectionDataType_GenericBinaryData) {
+  auto offset = schema::CreateSectionObject(builder, /*items=*/0, begin_offset,
+                                            end_offset, data_type);
+  builder.Finish(offset);
+  return flatbuffers::GetRoot<schema::SectionObject>(
+      builder.GetBufferPointer());
+}
+
+TEST(SectionInfoTest, ReadBufferAndParseProtoSucceed) {
+  proto::LlmMetadata expected;
+  expected.set_max_num_tokens(2048);
+  const std::string serialized = expected.SerializeAsString();
+
+  flatbuffers::FlatBufferBuilder builder;
+  const schema::SectionObject* section_obj = BuildSectionObject(
+      builder, /*begin_offset=*/100, /*end_offset=*/100 + serialized.size(),
+      schema::AnySectionDataType_LlmMetadataProto);
+
+  auto mock_stream = std::make_shared<NiceMock<MockDataStream>>();
+  EXPECT_CALL(*mock_stream, ReadAndDiscard(_, 0, serialized.size()))
+      .WillOnce([&serialized](void* buffer, uint64_t, uint64_t size) {
+        std::memcpy(buffer, serialized.data(), size);
+        return absl::OkStatus();
+      });
+
+  SectionInfo section_info{.section = section_obj, .data_stream = mock_stream};
+  EXPECT_EQ(section_info.Size(), serialized.size());
+
+  ASSERT_OK_AND_ASSIGN(
+      proto::LlmMetadata parsed,
+      section_info.ParseProto<proto::LlmMetadata>("LlmMetadata"));
+  EXPECT_EQ(parsed.max_num_tokens(), 2048);
+}
+
+TEST(SectionInfoTest, EmptySectionSkipsStreamRead) {
+  flatbuffers::FlatBufferBuilder builder;
+  const schema::SectionObject* section_obj =
+      BuildSectionObject(builder, /*begin_offset=*/64, /*end_offset=*/64);
+
+  auto mock_stream = std::make_shared<StrictMock<MockDataStream>>();
+  SectionInfo section_info{.section = section_obj, .data_stream = mock_stream};
+  EXPECT_EQ(section_info.Size(), 0);
+
+  ASSERT_OK_AND_ASSIGN(auto buffer, section_info.ReadBuffer());
+  EXPECT_TRUE(buffer.empty());
+}
+
+TEST(SectionInfoTest, DiscardForwardsSectionSize) {
+  flatbuffers::FlatBufferBuilder builder;
+  const schema::SectionObject* section_obj =
+      BuildSectionObject(builder, /*begin_offset=*/32, /*end_offset=*/96);
+
+  auto mock_stream = std::make_shared<NiceMock<MockDataStream>>();
+  EXPECT_CALL(*mock_stream, Discard(0, 64)).WillOnce(Return(absl::OkStatus()));
+
+  SectionInfo section_info{.section = section_obj, .data_stream = mock_stream};
+  EXPECT_OK(section_info.Discard());
+}
+
+TEST(SectionInfoTest, ParseProtoReturnsInternalErrorOnCorruptData) {
+  const std::string corrupt_bytes =
+      "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01";
+  flatbuffers::FlatBufferBuilder builder;
+  const schema::SectionObject* section_obj = BuildSectionObject(
+      builder, /*begin_offset=*/0, /*end_offset=*/corrupt_bytes.size(),
+      schema::AnySectionDataType_LlmMetadataProto);
+
+  auto mock_stream = std::make_shared<NiceMock<MockDataStream>>();
+  EXPECT_CALL(*mock_stream, ReadAndDiscard(_, 0, corrupt_bytes.size()))
+      .WillOnce([&corrupt_bytes](void* buffer, uint64_t, uint64_t size) {
+        std::memcpy(buffer, corrupt_bytes.data(), size);
+        return absl::OkStatus();
+      });
+
+  SectionInfo section_info{.section = section_obj, .data_stream = mock_stream};
+  EXPECT_THAT(section_info.ParseProto<proto::LlmMetadata>("LlmMetadata"),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("Failed to parse LlmMetadata")));
+}
+
+TEST(SectionInfoTest, RejectsNullOrInvertedSectionBounds) {
+  SectionInfo null_section;
+  EXPECT_EQ(null_section.Size(), 0);
+  EXPECT_THAT(null_section.ReadBuffer(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(null_section.Discard(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  flatbuffers::FlatBufferBuilder valid_builder;
+  const schema::SectionObject* valid_obj =
+      BuildSectionObject(valid_builder, /*begin_offset=*/0, /*end_offset=*/16);
+  SectionInfo null_stream_section{.section = valid_obj, .data_stream = nullptr};
+  EXPECT_THAT(null_stream_section.ReadBuffer(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("data stream is null")));
+  EXPECT_THAT(null_stream_section.Discard(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("data stream is null")));
+
+  flatbuffers::FlatBufferBuilder builder;
+  const schema::SectionObject* inverted_obj =
+      BuildSectionObject(builder, /*begin_offset=*/200, /*end_offset=*/100);
+  auto mock_stream = std::make_shared<NiceMock<MockDataStream>>();
+  SectionInfo inverted_section{.section = inverted_obj,
+                               .data_stream = mock_stream};
+  EXPECT_EQ(inverted_section.Size(), 0);
+  EXPECT_THAT(inverted_section.ReadBuffer(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Invalid section range")));
+  EXPECT_THAT(inverted_section.Discard(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Invalid section range")));
 }
 
 }  // namespace

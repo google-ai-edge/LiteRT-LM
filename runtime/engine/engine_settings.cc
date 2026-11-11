@@ -680,6 +680,31 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   return absl::OkStatus();
 }
 
+absl::Status EngineSettings::MaybeUpdateAndValidateWithResources(
+    support::Tokenizer* absl_nullable tokenizer,
+    const proto::LlmMetadata* absl_nullable metadata_from_file,
+    absl::string_view input_prompt_as_hint,
+    ModelResources* absl_nullable model_resources) {
+  if (model_resources == nullptr) {
+    return MaybeUpdateAndValidate(tokenizer, metadata_from_file,
+                                  input_prompt_as_hint);
+  }
+  return MaybeUpdateAndValidate(
+      tokenizer, metadata_from_file, input_prompt_as_hint,
+      model_resources->GetTFLiteModelBackendConstraint(
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+      model_resources->GetTFLiteModelBackendConstraint(
+          proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+      model_resources->GetTFLiteModelBackendConstraint(
+          proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+      model_resources->GetTFLiteModelPreferActivationType(
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+      model_resources->GetTFLiteModelPreferActivationType(
+          proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+      model_resources->GetTFLiteModelPreferActivationType(
+          proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW));
+}
+
 EngineSettings::EngineSettings(
     LlmExecutorSettings executor_settings,
     std::optional<VisionExecutorSettings> vision_executor_settings,

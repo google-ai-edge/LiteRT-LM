@@ -546,5 +546,35 @@ TEST(LiteRtUtilTest, ModelHasExternalWeights_EmbeddedWeightsModel) {
   EXPECT_FALSE(has_external_weights);
 }
 
+TEST(LiteRtUtilTest, CreateOwnedEnvironmentEngineSettings) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::CPU));
+  FakeModelResources fake_resources;
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OwnedEnvironment> owned_env,
+                       CreateOwnedEnvironment(settings, &fake_resources));
+  ASSERT_NE(owned_env, nullptr);
+  EXPECT_NE(owned_env->magic_number_configs_helper, nullptr);
+  EXPECT_TRUE(owned_env->env.GetOptions().HasValue());
+}
+
+TEST(LiteRtUtilTest, CreateOwnedEnvironmentEmbeddingEngineSettings) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingEngineSettings settings,
+      EmbeddingEngineSettings::CreateDefault(model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OwnedEnvironment> owned_env,
+      CreateOwnedEnvironment(settings, /*model_resources=*/nullptr));
+  ASSERT_NE(owned_env, nullptr);
+  EXPECT_NE(owned_env->magic_number_configs_helper, nullptr);
+  EXPECT_TRUE(owned_env->env.GetOptions().HasValue());
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -30,6 +30,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -103,6 +104,15 @@ class EngineSettings {
           std::nullopt,
       const std::optional<std::string>& audio_prefer_activation_type =
           std::nullopt);
+
+  // Convenience wrapper that extracts the text, vision, and audio backend
+  // constraints and preferred activation types from `model_resources` (when
+  // non-null) and forwards to `MaybeUpdateAndValidate()`.
+  absl::Status MaybeUpdateAndValidateWithResources(
+      support::Tokenizer* absl_nullable tokenizer,
+      const proto::LlmMetadata* absl_nullable metadata_from_file,
+      absl::string_view input_prompt_as_hint,
+      ModelResources* absl_nullable model_resources);
 
   // Returns the LlmExecutorSettings.
   const LlmExecutorSettings& GetMainExecutorSettings() const;

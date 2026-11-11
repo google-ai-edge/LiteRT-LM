@@ -17,6 +17,7 @@
 
 #include <memory>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -39,6 +40,15 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
 
 absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     EmbeddingEngineSettings& settings, ModelResources* model_resources);
+
+// Creates a new heap-allocated OwnedEnvironment.
+absl::StatusOr<std::unique_ptr<OwnedEnvironment>> CreateOwnedEnvironment(
+    EngineSettings& engine_settings,
+    ModelResources* absl_nullable model_resources);
+
+absl::StatusOr<std::unique_ptr<OwnedEnvironment>> CreateOwnedEnvironment(
+    EmbeddingEngineSettings& settings,
+    ModelResources* absl_nullable model_resources);
 
 // Returns true if the model's main prefill/decode TFLite model stores its
 // weights in a separate TFLiteWeights section. Always returns false for
