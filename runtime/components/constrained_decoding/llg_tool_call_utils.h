@@ -53,7 +53,9 @@ struct ToolFormatConfig {
   std::string rule_suffix;
   std::string start_wrap;
   std::string end_wrap;
-  absl::AnyInvocable<std::string(const nlohmann::ordered_json&, bool) const>
+  absl::AnyInvocable<std::string(const nlohmann::ordered_json&, bool,
+                                 absl::string_view,
+                                 std::vector<std::string>&) const>
       generate_value_rule;
   // If true, the properties must be in alphabetical order, ignoring case, like
   // Jinja's dictsort sorts them, whether they're required or optional. Gemma 4
@@ -62,6 +64,7 @@ struct ToolFormatConfig {
   // first, in the order of "required", followed by the optional ones in any
   // order.
   bool alphabetical_properties = false;
+  bool quote_keys = false;
 };
 
 void ExtractToolProperties(const nlohmann::ordered_json& tool,
@@ -72,13 +75,33 @@ void ExtractToolProperties(const nlohmann::ordered_json& tool,
                            std::vector<std::string>& optional_props);
 
 void AppendRequiredProperties(const std::vector<std::string>& required_props,
-                              const std::string& tool_name,
+                              absl::string_view sanitized_prefix,
                               std::vector<std::string>& sequence);
 
 void AppendOptionalProperties(const std::vector<std::string>& optional_props,
-                              const std::string& tool_name,
+                              absl::string_view sanitized_prefix,
                               std::vector<std::string>& tool_blocks,
                               std::vector<std::string>& sequence);
+
+std::string AppendSchemaObjectRules(const nlohmann::ordered_json& schema,
+                                    absl::string_view sanitized_prefix,
+                                    const ToolFormatConfig& config,
+                                    std::vector<std::string>& tool_blocks);
+
+// Returns the rule for the values of `schema`'s unions (`one_of`/`oneOf`/
+// `any_of`/`anyOf`) or `type`. Without a union or `type`, `schema` is an object
+// if it has `properties` or `additionalProperties`, an array if it has `items`,
+// and else the rule is "". Unions, arrays with `items`, objects with
+// `properties`, and maps with `additionalProperties` get rules in `tool_blocks`
+// whose names start with `rule_prefix`, and `config` formats their values and
+// properties. `map_key` is the rule for the keys of maps, and `fallback_rule`
+// the rule for unknown types.
+std::string AppendTypeOrUnionRules(const nlohmann::ordered_json& schema,
+                                   absl::string_view rule_prefix,
+                                   const ToolFormatConfig& config,
+                                   absl::string_view map_key,
+                                   absl::string_view fallback_rule,
+                                   std::vector<std::string>& tool_blocks);
 
 void AppendToolRules(const nlohmann::ordered_json& tool,
                      const std::string& tool_name,

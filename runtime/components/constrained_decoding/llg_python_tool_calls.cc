@@ -35,7 +35,29 @@ namespace litert::lm {
 namespace {
 
 std::string GeneratePythonValueRule(const nlohmann::ordered_json& prop_schema,
-                                    bool is_req) {
+                                    bool is_req, absl::string_view rule_prefix,
+                                    std::vector<std::string>& tool_blocks);
+
+ToolFormatConfig GetPythonDictConfig() {
+  return ToolFormatConfig{
+      .pair_separator = ":",
+      .rule_suffix = "-object",
+      .start_wrap = "{",
+      .end_wrap = "}",
+      .generate_value_rule =
+          [](const nlohmann::ordered_json& prop_schema, bool /*is_req*/,
+             absl::string_view rule_prefix,
+             std::vector<std::string>& tool_blocks) {
+            return GeneratePythonValueRule(prop_schema, /*is_req=*/true,
+                                           rule_prefix, tool_blocks);
+          },
+      .quote_keys = true,
+  };
+}
+
+std::string GeneratePythonValueRule(const nlohmann::ordered_json& prop_schema,
+                                    bool is_req, absl::string_view rule_prefix,
+                                    std::vector<std::string>& tool_blocks) {
   std::string rule;
   if (prop_schema.contains("enum") && prop_schema["enum"].is_array()) {
     std::vector<std::string> enum_vals;
@@ -56,44 +78,20 @@ std::string GeneratePythonValueRule(const nlohmann::ordered_json& prop_schema,
   }
 
   if (rule.empty()) {
-    for (const char* key : {"one_of", "oneOf", "any_of", "anyOf"}) {
-      if (prop_schema.contains(key) && prop_schema[key].is_array()) {
-        std::vector<std::string> sub_rules;
-        sub_rules.reserve(prop_schema[key].size());
-        for (const auto& sub_schema : prop_schema[key]) {
-          sub_rules.push_back(
-              GeneratePythonValueRule(sub_schema, /*is_req=*/true));
-        }
-        if (!sub_rules.empty()) {
-          rule = absl::StrFormat("(%s)", absl::StrJoin(sub_rules, " | "));
-          break;
-        }
-      }
-    }
-  }
-
-  if (rule.empty() && prop_schema.contains("type")) {
-    const auto& type_node = prop_schema["type"];
-    if (type_node.is_string()) {
-      rule = GetRuleForType(type_node.get<std::string>(), "python_value");
-    } else if (type_node.is_array()) {
-      std::vector<std::string> types;
-      for (const auto& t : type_node) {
-        if (t.is_string()) {
-          types.push_back(GetRuleForType(t.get<std::string>(), "python_value"));
-        }
-      }
-      if (!types.empty()) {
-        rule = absl::StrFormat("(%s)", absl::StrJoin(types, " | "));
-      }
-    }
+    rule =
+        AppendTypeOrUnionRules(prop_schema, rule_prefix, GetPythonDictConfig(),
+                               /*map_key=*/"string",
+                               /*fallback_rule=*/"python_value", tool_blocks);
   }
 
   if (rule.empty()) {
     rule = "python_value";
   }
 
-  if (!is_req) {
+  const bool is_nullable = prop_schema.contains("nullable") &&
+                           prop_schema["nullable"].is_boolean() &&
+                           prop_schema["nullable"].get<bool>();
+  if ((!is_req || is_nullable) && rule != "NULL") {
     return absl::StrFormat("(%s | \"None\")", rule);
   }
 

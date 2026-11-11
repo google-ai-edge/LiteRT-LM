@@ -1089,6 +1089,20 @@ TEST_F(LlgPythonToolCallsTest, PythonNestedStructures) {
             "type": "object",
             "additionalProperties": { "type": "string" }
           }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["rectangle", "ellipse"]
+              },
+              "width": { "type": "number" }
+            },
+            "required": ["type"]
+          }
         }
       }
     }
@@ -1102,7 +1116,23 @@ TEST_F(LlgPythonToolCallsTest, PythonNestedStructures) {
 
   AssertAccepts(*constraint,
                 R"(```tool_code
-nested_tool(nested_arr=[[1,2],[3]], nested_obj={"a":{"b":"c"}})
+nested_tool(nested_arr=[[1,2],[3]], nested_obj={"a":{"b":"c"}}, elements=[{"type":"ellipse","width":10}])
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(nested_arr=[["bad"]])
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(nested_obj={"a":{"b":123}})
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(elements=[{"type":"circle"}])
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(elements=[{"width":10}])
 ```)");
 }
 
@@ -1584,6 +1614,133 @@ get_weather(location="Tokyo")
   // call, e.g. after the tool responses.
   AssertAccepts(*constraint, "");
   AssertRejects(*constraint, "It is sunny in Tokyo.");
+}
+
+// Returns a Python block that calls `tool` with `arguments`.
+std::string PythonCall(absl::string_view tool, absl::string_view arguments) {
+  return absl::StrCat("```tool_code\n", tool, "(", arguments, ")\n```");
+}
+
+// A schema feature: the parameters of a tool "f", arguments that match them,
+// and arguments that don't.
+struct SchemaFeature {
+  std::string name;
+  std::string parameters;
+  std::vector<std::string> accepted;
+  std::vector<std::string> rejected;
+};
+
+// Returns parameters with a required "v" that has the schema `v_schema`.
+std::string RequiredV(absl::string_view v_schema) {
+  return absl::StrCat(R"({"properties": {"v": )", v_schema,
+                      R"(}, "required": ["v"]})");
+}
+
+// Every new or otherwise untested schema feature has arguments that the grammar
+// must reject, so it can't stop being enforced without a test failing.
+TEST_F(LlgPythonToolCallsTest, EnforcesSchemaFeatures) {
+  const std::vector<SchemaFeature> features = {
+      {.name = "string",
+       .parameters = RequiredV(R"({"type": "string"})"),
+       .accepted = {R"(v="abc")", "v='abc'", R"(v="")"},
+       .rejected = {"v=1", "v=True", "v=None"}},
+      {.name = "number",
+       .parameters = RequiredV(R"({"type": "number"})"),
+       .accepted = {"v=1.5", "v=-2e3"},
+       .rejected = {R"(v="1.5")", "v=True"}},
+      {.name = "boolean",
+       .parameters = RequiredV(R"({"type": "boolean"})"),
+       .accepted = {"v=True", "v=False"},
+       .rejected = {"v=1", "v=true", R"(v="True")"}},
+      {.name = "null",
+       .parameters = RequiredV(R"({"type": "null"})"),
+       .accepted = {"v=None"},
+       .rejected = {"v=0", R"(v="None")"}},
+      {.name = "enum of numbers",
+       .parameters = RequiredV(R"({"enum": [1, 2.5]})"),
+       .accepted = {"v=1", "v=2.5"},
+       .rejected = {"v=3", R"(v="1")"}},
+      {.name = "list of types",
+       .parameters = RequiredV(R"({"type": ["string", "integer"]})"),
+       .accepted = {R"(v="a")", "v=1"},
+       .rejected = {"v=True", "v=1.5"}},
+      {.name = "anyOf",
+       .parameters =
+           RequiredV(R"({"anyOf": [{"type": "integer"}, {"enum": ["auto"]}]})"),
+       .accepted = {"v=3", R"(v="auto")"},
+       .rejected = {R"(v="manual")", "v=True"}},
+      {.name = "nullable",
+       .parameters = RequiredV(R"({"type": "string", "nullable": true})"),
+       .accepted = {R"(v="a")", "v=None"},
+       .rejected = {"v=1"}},
+      {.name = "nested object",
+       .parameters = RequiredV(R"json({
+         "type": "object",
+         "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+         "required": ["x", "y"]
+       })json"),
+       .accepted = {R"(v={"x": 1, "y": 2.5})", "v={'x': 1, 'y': 2}"},
+       .rejected = {R"(v={"x": 1})", R"(v={"x": 1, "y": 2, "z": 3})",
+                    R"(v={"x": "1", "y": 2})", R"(v={"y": 2, "x": 1})"}},
+      {.name = "no additional properties",
+       .parameters =
+           RequiredV(R"({"type": "object", "additionalProperties": false})"),
+       .accepted = {"v={}"},
+       .rejected = {R"(v={"a": 1})"}},
+      {.name = "any object",
+       .parameters = RequiredV(R"({"type": "object"})"),
+       .accepted = {R"(v={"a": [1, "x", None]})"},
+       .rejected = {"v=1", R"(v="x")", "v=[]"}},
+      {.name = "any array",
+       .parameters = RequiredV(R"({"type": "array"})"),
+       .accepted = {R"(v=[1, "x", {"a": True}])"},
+       .rejected = {"v={}", "v=1"}},
+  };
+
+  for (const SchemaFeature& feature : features) {
+    SCOPED_TRACE(feature.name);
+    nlohmann::ordered_json tool;
+    tool["name"] = "f";
+    tool["parameters"] = nlohmann::ordered_json::parse(feature.parameters);
+    nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+    auto constraint = CreateConstraint(
+        tools, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+    ASSERT_NE(constraint, nullptr);
+    for (const std::string& arguments : feature.accepted) {
+      AssertAccepts(*constraint, PythonCall("f", arguments));
+    }
+    for (const std::string& arguments : feature.rejected) {
+      AssertRejects(*constraint, PythonCall("f", arguments));
+    }
+  }
+}
+
+TEST_F(LlgPythonToolCallsTest, RequiredWithoutPropertiesAndDuplicateRequired) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "name": "no_props",
+      "parameters": {
+        "type": "object",
+        "required": ["a"]
+      }
+    },
+    {
+      "name": "dup_req",
+      "parameters": {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a", "a"]
+      }
+    }
+  ])json");
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+  AssertAccepts(*constraint, PythonCall("no_props", ""));
+  AssertAccepts(*constraint, PythonCall("dup_req", R"(a="ok")"));
+  AssertRejects(*constraint, PythonCall("dup_req", ""));
+  AssertRejects(*constraint, PythonCall("dup_req", R"(a="x", a="y")"));
 }
 
 }  // namespace

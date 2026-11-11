@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
@@ -51,6 +52,14 @@ constexpr char kTestdataDir[] =
 std::string GetTestdataPath(const std::string& file_name) {
   return (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / file_name)
       .string();
+}
+
+// Returns a Gemma 4 call to `tool` with `arguments`, in which ' stands for the
+// string delimiter <|"|>.
+std::string FcCall(absl::string_view tool, absl::string_view arguments) {
+  return absl::StrCat("<|tool_call>call:", tool, "{",
+                      absl::StrReplaceAll(arguments, {{"'", "<|\"|>"}}),
+                      "}<tool_call|><|tool_response>");
 }
 
 using Tokenizer = ::litert::support::Tokenizer;
@@ -950,6 +959,267 @@ TEST_F(LlgFcToolCallsTest, FcNestedStructures) {
   AssertAccepts(
       *constraint,
       R"(<|tool_call>call:nested_tool{nested_arr:[[1,2],[3]],nested_obj:{a:{b:<|"|>c<|"|>}}}<tool_call|><|tool_response>)");
+  // Reject non-integer items in the inner array.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:nested_tool{nested_arr:[[<|"|>a<|"|>]]}<tool_call|><|tool_response>)");
+  // Reject non-string values in the inner map.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:nested_tool{nested_obj:{a:{b:123}}}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FcAddElementsNestedSchemaRejectsMalformedToolCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "_0_add-elements",
+    "description": "Draws shapes, text, arrows, lines and frames.",
+    "parameters": {
+      "properties": {
+        "absolute": {"type": "boolean"},
+        "elements": {
+          "items": {
+            "properties": {
+              "arrowKind": {
+                "enum": ["straight", "curved", "elbow"],
+                "type": "string"
+              },
+              "backgroundColor": {"type": "string"},
+              "children": {
+                "items": {"type": "string"},
+                "type": "array"
+              },
+              "endArrowhead": {
+                "enum": [
+                  "arrow", "bar", "circle", "circle_outline",
+                  "triangle", "triangle_outline", "diamond", "diamond_outline"
+                ],
+                "type": "string"
+              },
+              "fillStyle": {
+                "enum": ["hachure", "cross-hatch", "solid", "zigzag"],
+                "type": "string"
+              },
+              "fontFamily": {
+                "enum": [
+                  "Virgil", "Helvetica", "Cascadia", "Excalifont", "Nunito",
+                  "Lilita One", "Comic Shanns", "Liberation Sans", "Assistant"
+                ],
+                "type": "string"
+              },
+              "fontSize": {"type": "number"},
+              "from": {"type": "string"},
+              "height": {"type": "number"},
+              "id": {"type": "string"},
+              "label": {"type": "string"},
+              "name": {"type": "string"},
+              "opacity": {"type": "number"},
+              "points": {
+                "items": {
+                  "items": {"type": "number"},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "roughness": {"type": "number"},
+              "roundness": {
+                "enum": ["round", "sharp"],
+                "type": "string"
+              },
+              "startArrowhead": {
+                "enum": [
+                  "arrow", "bar", "circle", "circle_outline",
+                  "triangle", "triangle_outline", "diamond", "diamond_outline"
+                ],
+                "type": "string"
+              },
+              "strokeColor": {"type": "string"},
+              "strokeStyle": {
+                "enum": ["solid", "dashed", "dotted"],
+                "type": "string"
+              },
+              "strokeWidth": {"type": "number"},
+              "text": {"type": "string"},
+              "textAlign": {
+                "enum": ["left", "center", "right"],
+                "type": "string"
+              },
+              "textColor": {"type": "string"},
+              "to": {"type": "string"},
+              "type": {
+                "enum": [
+                  "rectangle", "ellipse", "diamond", "text",
+                  "arrow", "line", "frame"
+                ],
+                "type": "string"
+              },
+              "verticalAlign": {
+                "enum": ["top", "middle", "bottom"],
+                "type": "string"
+              },
+              "width": {"type": "number"},
+              "x": {"type": "number"},
+              "y": {"type": "number"}
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "expectedSceneVersion": {"type": "integer"},
+        "position": {
+          "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"}
+          },
+          "required": ["x", "y"],
+          "type": "object"
+        },
+        "reveal": {"type": "boolean"},
+        "select": {"type": "boolean"}
+      },
+      "required": ["elements"],
+      "type": "object"
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  ASSERT_OK_AND_ASSIGN(std::string grammar,
+                       CreateLarkGrammarForTools(tools, options));
+  ASSERT_OK_AND_ASSIGN(
+      auto constraint,
+      provider_->CreateConstraint(LlGuidanceConstraintArg{
+          .constraint_type = LlgConstraintType::kLark,
+          .constraint_string = grammar}));
+
+  // Valid nested tool call with each element's properties in alphabetical
+  // order, like the tool's arguments, a nested `points` array, and a nested
+  // `position` object.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{height:10,id:<|"|>c1<|"|>,label:<|"|>circle<|"|>,type:<|"|>ellipse<|"|>,width:10},{from:<|"|>c1<|"|>,points:[[0,0],[10,5]],type:<|"|>arrow<|"|>}],position:{x:0,y:0}}<tool_call|><|tool_response>)");
+
+  // Reject missing required `type` in an element.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{id:<|"|>c1<|"|>}]}<tool_call|><|tool_response>)");
+
+  // Optional `id` comes before required `type` in alphabetical order, so it
+  // must be written first.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{id:<|"|>c1<|"|>,type:<|"|>ellipse<|"|>}]}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>ellipse<|"|>,id:<|"|>c1<|"|>}]}<tool_call|><|tool_response>)");
+
+  // Reject invalid `type` enum value ("circle" is not in the enum).
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>circle<|"|>}]}<tool_call|><|tool_response>)");
+
+  // Reject unknown nested property (`properties` is not in the element schema).
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>ellipse<|"|>,properties:{r:5}}]}<tool_call|><|tool_response>)");
+
+  // Reject missing required `y` in nested `position` object.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>ellipse<|"|>}],position:{x:0}}<tool_call|><|tool_response>)");
+
+  // Reject the malformed output from Gemma 4, where `type` had an empty string
+  // and undeclared nested fields were emitted.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{id:<|"|>label":"circle"1",type:<|"|>,properties:{r:5,_0_1_add_elements_add:1,_add:1,id:1,type:<|"|>,r_0_:5,type_"}},{"point_0_:00", "0", "05", "1},{ "10",", "0", "0", "0", "5"]]}<tool_response|>)");
+}
+
+// A schema feature: the parameters of a tool "f", arguments that match them,
+// and arguments that don't.
+struct SchemaFeature {
+  std::string name;
+  std::string parameters;
+  std::vector<std::string> accepted;
+  std::vector<std::string> rejected;
+};
+
+// Returns parameters with a required "v" that has the schema `v_schema`.
+std::string RequiredV(absl::string_view v_schema) {
+  return absl::StrCat(R"({"properties": {"v": )", v_schema,
+                      R"(}, "required": ["v"]})");
+}
+
+// Every new or otherwise untested schema feature has arguments that the grammar
+// must reject, so it can't stop being enforced without a test failing.
+TEST_F(LlgFcToolCallsTest, EnforcesSchemaFeatures) {
+  const std::vector<SchemaFeature> features = {
+      {.name = "string",
+       .parameters = RequiredV(R"({"type": "string"})"),
+       .accepted = {"v:'abc'", "v:''"},
+       .rejected = {"v:1", "v:true", "v:null"}},
+      {.name = "number",
+       .parameters = RequiredV(R"({"type": "number"})"),
+       .accepted = {"v:1.5", "v:-2e3"},
+       .rejected = {"v:'1.5'", "v:true"}},
+      {.name = "null",
+       .parameters = RequiredV(R"({"type": "null"})"),
+       .accepted = {"v:null"},
+       .rejected = {"v:0", "v:'null'"}},
+      {.name = "enum of numbers",
+       .parameters = RequiredV(R"({"enum": [1, 2.5]})"),
+       .accepted = {"v:1", "v:2.5"},
+       .rejected = {"v:3", "v:'1'"}},
+      {.name = "list of types",
+       .parameters = RequiredV(R"({"type": ["string", "integer"]})"),
+       .accepted = {"v:'a'", "v:1"},
+       .rejected = {"v:true", "v:1.5"}},
+      {.name = "anyOf",
+       .parameters =
+           RequiredV(R"({"anyOf": [{"type": "integer"}, {"enum": ["auto"]}]})"),
+       .accepted = {"v:3", "v:'auto'"},
+       .rejected = {"v:'manual'", "v:true"}},
+      {.name = "oneOf",
+       .parameters =
+           RequiredV(R"({"oneOf": [{"type": "boolean"}, {"type": "null"}]})"),
+       .accepted = {"v:true", "v:null"},
+       .rejected = {"v:0", "v:'true'"}},
+      {.name = "nullable",
+       .parameters = RequiredV(R"({"type": "string", "nullable": true})"),
+       .accepted = {"v:'a'", "v:null"},
+       .rejected = {"v:1"}},
+      {.name = "no additional properties",
+       .parameters =
+           RequiredV(R"({"type": "object", "additionalProperties": false})"),
+       .accepted = {"v:{}"},
+       .rejected = {"v:{a:1}"}},
+      {.name = "any object",
+       .parameters = RequiredV(R"({"type": "object"})"),
+       .accepted = {"v:{a:[1,'x',null]}"},
+       .rejected = {"v:1", "v:'x'", "v:[]"}},
+      {.name = "any array",
+       .parameters = RequiredV(R"({"type": "array"})"),
+       .accepted = {"v:[1,'x',{a:true}]"},
+       .rejected = {"v:{}", "v:1"}},
+  };
+
+  for (const SchemaFeature& feature : features) {
+    SCOPED_TRACE(feature.name);
+    nlohmann::ordered_json tool;
+    tool["name"] = "f";
+    tool["parameters"] = nlohmann::ordered_json::parse(feature.parameters);
+    nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+    auto constraint = CreateConstraint(
+        tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+    ASSERT_NE(constraint, nullptr);
+    for (const std::string& arguments : feature.accepted) {
+      AssertAccepts(*constraint, FcCall("f", arguments));
+    }
+    for (const std::string& arguments : feature.rejected) {
+      AssertRejects(*constraint, FcCall("f", arguments));
+    }
+  }
 }
 
 // Gemma 4 and FunctionGemma write the arguments in alphabetical order, whatever

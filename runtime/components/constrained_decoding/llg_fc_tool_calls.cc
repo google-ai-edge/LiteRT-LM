@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llg_tool_call_utils.h"
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
@@ -33,7 +34,27 @@ namespace litert::lm {
 namespace {
 
 std::string GenerateFcValueRule(const nlohmann::ordered_json& prop_schema,
-                                bool is_req) {
+                                bool is_req, absl::string_view rule_prefix,
+                                std::vector<std::string>& tool_blocks);
+
+ToolFormatConfig GetFcConfig() {
+  // See `SanitizeLarkRuleName` for why `-object` uses a hyphen separator.
+  // Nested objects use this config too, so their properties are in
+  // alphabetical order like the tool's arguments.
+  return ToolFormatConfig{
+      .pair_separator = ":",
+      .rule_suffix = "-object",
+      .start_wrap = "{",
+      .end_wrap = "}",
+      .generate_value_rule = GenerateFcValueRule,
+      .alphabetical_properties = true,
+  };
+}
+
+std::string GenerateFcValueRule(const nlohmann::ordered_json& prop_schema,
+                                bool /*is_req*/, absl::string_view rule_prefix,
+                                std::vector<std::string>& tool_blocks) {
+  std::string rule;
   if (prop_schema.contains("enum") && prop_schema["enum"].is_array()) {
     std::vector<std::string> enum_vals;
     for (const auto& val : prop_schema["enum"]) {
@@ -45,41 +66,28 @@ std::string GenerateFcValueRule(const nlohmann::ordered_json& prop_schema,
       }
     }
     if (!enum_vals.empty()) {
-      return absl::StrFormat("(%s)", absl::StrJoin(enum_vals, " | "));
+      rule = absl::StrFormat("(%s)", absl::StrJoin(enum_vals, " | "));
     }
   }
 
-  for (const char* key : {"one_of", "oneOf", "any_of", "anyOf"}) {
-    if (prop_schema.contains(key) && prop_schema[key].is_array()) {
-      std::vector<std::string> sub_rules;
-      sub_rules.reserve(prop_schema[key].size());
-      for (const auto& sub_schema : prop_schema[key]) {
-        sub_rules.push_back(GenerateFcValueRule(sub_schema, is_req));
-      }
-      if (!sub_rules.empty()) {
-        return absl::StrFormat("(%s)", absl::StrJoin(sub_rules, " | "));
-      }
-    }
+  if (rule.empty()) {
+    rule = AppendTypeOrUnionRules(prop_schema, rule_prefix, GetFcConfig(),
+                                  /*map_key=*/"IDENTIFIER",
+                                  /*fallback_rule=*/"json_value", tool_blocks);
   }
 
-  if (prop_schema.contains("type")) {
-    const auto& type_node = prop_schema["type"];
-    if (type_node.is_string()) {
-      return GetRuleForType(type_node.get<std::string>(), "json_value");
-    } else if (type_node.is_array()) {
-      std::vector<std::string> types;
-      for (const auto& t : type_node) {
-        if (t.is_string()) {
-          types.push_back(GetRuleForType(t.get<std::string>(), "json_value"));
-        }
-      }
-      if (!types.empty()) {
-        return absl::StrFormat("(%s)", absl::StrJoin(types, " | "));
-      }
-    }
+  if (rule.empty()) {
+    rule = "json_value";
   }
 
-  return "json_value";
+  if (prop_schema.contains("nullable") &&
+      prop_schema["nullable"].is_boolean() &&
+      prop_schema["nullable"].get<bool>() && rule != "json_value" &&
+      rule != "NULL") {
+    return absl::StrFormat("(%s | NULL)", rule);
+  }
+
+  return rule;
 }
 
 std::string GetFcGrammar(const LlgConstraintsOptions& options) {
@@ -135,16 +143,7 @@ absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
     }
     std::string tool_name = tool["name"].get<std::string>();
     tool_names.push_back(tool_name);
-    // See `SanitizeLarkRuleName` for why `-object` uses a hyphen separator.
-    const ToolFormatConfig fc_config = {
-        .pair_separator = ":",
-        .rule_suffix = "-object",
-        .start_wrap = "{",
-        .end_wrap = "}",
-        .generate_value_rule = GenerateFcValueRule,
-        .alphabetical_properties = true,
-    };
-    AppendToolRules(tool, tool_name, fc_config, tool_blocks);
+    AppendToolRules(tool, tool_name, GetFcConfig(), tool_blocks);
   }
 
   const std::vector<std::string>& allowed_names =

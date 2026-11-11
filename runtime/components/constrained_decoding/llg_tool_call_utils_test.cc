@@ -20,6 +20,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
 
@@ -42,7 +43,8 @@ TEST(LlgToolCallUtilsTest, ExtractToolProperties_NoParameters) {
       .rule_suffix = "_args",
       .start_wrap = "",
       .end_wrap = "",
-      .generate_value_rule = [](const nlohmann::ordered_json&, bool) {
+      .generate_value_rule = [](const nlohmann::ordered_json&, bool,
+                                absl::string_view, std::vector<std::string>&) {
         return "value";
       }};
 
@@ -76,7 +78,8 @@ TEST(LlgToolCallUtilsTest, ExtractToolProperties_WithProperties) {
       .rule_suffix = "-args",
       .start_wrap = "{",
       .end_wrap = "}",
-      .generate_value_rule = [](const nlohmann::ordered_json&, bool is_req) {
+      .generate_value_rule = [](const nlohmann::ordered_json&, bool is_req,
+                                absl::string_view, std::vector<std::string>&) {
         return is_req ? "req_val" : "opt_val";
       }};
 
@@ -88,6 +91,61 @@ TEST(LlgToolCallUtilsTest, ExtractToolProperties_WithProperties) {
                           R"(get_weather-opt-unit: "unit" ":" opt_val)"));
   EXPECT_THAT(required_props, ElementsAre("location"));
   EXPECT_THAT(optional_props, ElementsAre("unit"));
+}
+
+TEST(LlgToolCallUtilsTest,
+     ExtractToolProperties_IgnoresMissingAndDuplicateRequired) {
+  ToolFormatConfig config = {
+      .pair_separator = ":",
+      .rule_suffix = "-args",
+      .start_wrap = "{",
+      .end_wrap = "}",
+      .generate_value_rule = [](const nlohmann::ordered_json&, bool is_req,
+                                absl::string_view, std::vector<std::string>&) {
+        return is_req ? "req_val" : "opt_val";
+      }};
+
+  {
+    nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+      "name": "no_props",
+      "parameters": {
+        "type": "object",
+        "required": ["missing"]
+      }
+    })json");
+    std::vector<std::string> tool_blocks;
+    std::vector<std::string> required_props;
+    std::vector<std::string> optional_props;
+    ExtractToolProperties(tool, "no_props", config, tool_blocks, required_props,
+                          optional_props);
+    EXPECT_TRUE(tool_blocks.empty());
+    EXPECT_TRUE(required_props.empty());
+    EXPECT_TRUE(optional_props.empty());
+  }
+
+  {
+    nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+      "name": "dup_req",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "string" },
+          "b": { "type": "integer" }
+        },
+        "required": ["a", "missing", "a"]
+      }
+    })json");
+    std::vector<std::string> tool_blocks;
+    std::vector<std::string> required_props;
+    std::vector<std::string> optional_props;
+    ExtractToolProperties(tool, "dup_req", config, tool_blocks, required_props,
+                          optional_props);
+    EXPECT_THAT(tool_blocks,
+                ElementsAre(R"(dup_req-req-a: "a" ":" req_val)",
+                            R"(dup_req-opt-b: "b" ":" opt_val)"));
+    EXPECT_THAT(required_props, ElementsAre("a"));
+    EXPECT_THAT(optional_props, ElementsAre("b"));
+  }
 }
 
 TEST(LlgToolCallUtilsTest, AppendRequiredProperties) {
