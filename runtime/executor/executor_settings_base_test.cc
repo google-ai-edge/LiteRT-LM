@@ -234,19 +234,51 @@ TEST(LlmExecutorConfigTest, NpuPerformanceControl) {
   EXPECT_EQ(oss.str(), "PER_INFERENCE");
 }
 
+TEST(LlmExecutorConfigTest, MediatekSdkVersion) {
+  std::stringstream oss;
+  oss << MediatekSdkVersion::kDefault;
+  EXPECT_EQ(oss.str(), "DEFAULT");
+
+  oss.str("");
+  oss << MediatekSdkVersion::kVersion7;
+  EXPECT_EQ(oss.str(), "VERSION_7");
+
+  oss.str("");
+  oss << MediatekSdkVersion::kVersion8;
+  EXPECT_EQ(oss.str(), "VERSION_8");
+
+  oss.str("");
+  oss << MediatekSdkVersion::kVersion9;
+  EXPECT_EQ(oss.str(), "VERSION_9");
+}
+
+TEST(LlmExecutorConfigTest, MediatekNpuOptions) {
+  MediatekNpuOptions mediatek_options;
+  EXPECT_EQ(mediatek_options.sdk_version, MediatekSdkVersion::kDefault);
+
+  std::stringstream oss;
+  mediatek_options.sdk_version = MediatekSdkVersion::kVersion9;
+  oss << mediatek_options;
+  EXPECT_EQ(oss.str(), "MediatekNpuOptions{sdk_version: VERSION_9}");
+}
+
 TEST(LlmExecutorConfigTest, NpuOptions) {
   NpuOptions npu_options;
   EXPECT_EQ(npu_options.performance_mode, NpuPerformanceMode::kBurst);
   EXPECT_EQ(npu_options.performance_control,
             NpuPerformanceControl::kWhileLoaded);
+  EXPECT_EQ(npu_options.mediatek_options.sdk_version,
+            MediatekSdkVersion::kDefault);
 
   std::stringstream oss;
   npu_options.performance_mode = NpuPerformanceMode::kPowerSaver;
   npu_options.performance_control = NpuPerformanceControl::kPerInference;
+  npu_options.mediatek_options.sdk_version = MediatekSdkVersion::kVersion9;
   oss << npu_options;
   EXPECT_EQ(oss.str(),
             "NpuOptions{performance_mode: POWER_SAVER, performance_control: "
-            "PER_INFERENCE}");
+            "PER_INFERENCE, mediatek_options: MediatekNpuOptions{sdk_version: "
+            "VERSION_9}}");
 }
 
 TEST(LlmExecutorConfigTest, ModelAssets) {

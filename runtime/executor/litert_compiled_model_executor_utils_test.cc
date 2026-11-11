@@ -56,6 +56,7 @@
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_mediatek_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif  // !defined(LITERT_DISABLE_NPU)
 #include "litert/core/model/model.h"  // from @litert
@@ -83,6 +84,9 @@ namespace {
 using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
 using ::testing::ElementsAre;
 using ::testing::Pair;
+using ::testing::TestParamInfo;
+using ::testing::TestWithParam;
+using ::testing::Values;
 using ::testing::status::StatusIs;
 
 constexpr uint64_t kLiteRtLmPrefixSize = 32;
@@ -2343,6 +2347,47 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
               qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
   }
 }
+
+struct MediatekSdkVersionTestCase {
+  std::string test_name;
+  MediatekSdkVersion input_version;
+  mediatek::MediatekOptions::NeronSDKVersion expected_version;
+};
+
+class LlmLiteRTCompiledModelExecutorMediatekSdkVersionTest
+    : public TestWithParam<MediatekSdkVersionTestCase> {};
+
+TEST_P(LlmLiteRTCompiledModelExecutorMediatekSdkVersionTest,
+       SetNpuOptionsMapsMediatekSdkVersion) {
+  const MediatekSdkVersionTestCase& test_case = GetParam();
+  LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+  EXPECT_OK(SetNpuOptions(
+      {.mediatek_options = {.sdk_version = test_case.input_version}},
+      options));
+  auto mediatek_options = options.GetOptions<mediatek::MediatekOptions>();
+  ASSERT_TRUE(mediatek_options.HasValue());
+  EXPECT_EQ(mediatek_options.Value().GetNeronSDKVersionType(),
+            test_case.expected_version);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MediatekSdkVersions, LlmLiteRTCompiledModelExecutorMediatekSdkVersionTest,
+    Values(
+        MediatekSdkVersionTestCase{
+            "Default", MediatekSdkVersion::kDefault,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion8},
+        MediatekSdkVersionTestCase{
+            "V7", MediatekSdkVersion::kVersion7,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion7},
+        MediatekSdkVersionTestCase{
+            "V8", MediatekSdkVersion::kVersion8,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion8},
+        MediatekSdkVersionTestCase{
+            "V9", MediatekSdkVersion::kVersion9,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion9}),
+    [](const TestParamInfo<MediatekSdkVersionTestCase>& info) {
+      return info.param.test_name;
+    });
 #endif  // !defined(LITERT_DISABLE_NPU)
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,

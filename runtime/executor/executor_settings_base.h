@@ -178,8 +178,28 @@ enum class NpuPerformanceControl {
 std::ostream& operator<<(std::ostream& os,
                          const NpuPerformanceControl& control);
 
-// Vendor-agnostic NPU options applied when compiling a model for the NPU
-// backend. New NPU options should be added as fields of this struct.
+// MediaTek NeuroPilot SDK version used when loading the MediaTek NPU dispatch
+// runtime. Mirrors `litert::mediatek::MediatekOptions::NeronSDKVersion`.
+enum class MediatekSdkVersion {
+  // Do not set an explicit SDK version, i.e. use the vendor's default.
+  kDefault,
+  kVersion7,
+  kVersion8,
+  kVersion9,
+};
+std::ostream& operator<<(std::ostream& os, const MediatekSdkVersion& version);
+
+// MediaTek-specific NPU options. Only honored by MediaTek NPUs.
+struct MediatekNpuOptions {
+  // MediaTek NeuroPilot SDK version. Defaults to kDefault to preserve the
+  // historical behavior.
+  MediatekSdkVersion sdk_version = MediatekSdkVersion::kDefault;
+};
+std::ostream& operator<<(std::ostream& os,
+                         const MediatekNpuOptions& mediatek_options);
+
+// NPU options applied when compiling a model for the NPU backend, including
+// common cross-vendor options and vendor-specific sub-options.
 struct NpuOptions {
   // The NPU performance (power) mode. Defaults to kBurst to preserve the
   // historical behavior.
@@ -189,6 +209,9 @@ struct NpuOptions {
   // the historical behavior. Currently only honored by Qualcomm NPUs.
   NpuPerformanceControl performance_control =
       NpuPerformanceControl::kWhileLoaded;
+
+  // MediaTek-specific NPU options.
+  MediatekNpuOptions mediatek_options;
 };
 std::ostream& operator<<(std::ostream& os, const NpuOptions& npu_options);
 

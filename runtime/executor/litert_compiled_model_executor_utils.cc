@@ -62,6 +62,7 @@
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_mediatek_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif  // !defined(LITERT_DISABLE_NPU)
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -1246,13 +1247,46 @@ absl::Status SetNpuPerformanceControl(NpuPerformanceControl control,
       "Unsupported NPU performance control: ", static_cast<int>(control)));
 }
 
+// Applies `mediatek_options` to the MediaTek NPU options.
+absl::Status SetMediatekOptions(const MediatekNpuOptions& mediatek_options,
+                                litert::Options& options) {
+  using SdkVersion = mediatek::MediatekOptions::NeronSDKVersion;
+
+  std::optional<SdkVersion> sdk_version;
+  // No `default:`, so that -Wswitch flags a newly added enumerator.
+  switch (mediatek_options.sdk_version) {
+    case MediatekSdkVersion::kDefault:
+      return absl::OkStatus();
+    case MediatekSdkVersion::kVersion7:
+      sdk_version = SdkVersion::kVersion7;
+      break;
+    case MediatekSdkVersion::kVersion8:
+      sdk_version = SdkVersion::kVersion8;
+      break;
+    case MediatekSdkVersion::kVersion9:
+      sdk_version = SdkVersion::kVersion9;
+      break;
+  }
+  if (!sdk_version.has_value()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported MediaTek SDK version: ",
+                     static_cast<int>(mediatek_options.sdk_version)));
+  }
+  LITERT_ASSIGN_OR_RETURN(auto& litert_mediatek_options,
+                          options.GetOptions<mediatek::MediatekOptions>());
+  litert_mediatek_options.SetNeronSDKVersionType(*sdk_version);
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 absl::Status SetNpuOptions(const NpuOptions& npu_options,
                            litert::Options& options) {
   ABSL_RETURN_IF_ERROR(
       SetNpuPerformanceMode(npu_options.performance_mode, options));
-  return SetNpuPerformanceControl(npu_options.performance_control, options);
+  ABSL_RETURN_IF_ERROR(
+      SetNpuPerformanceControl(npu_options.performance_control, options));
+  return SetMediatekOptions(npu_options.mediatek_options, options);
 }
 #endif  // !defined(LITERT_DISABLE_NPU)
 

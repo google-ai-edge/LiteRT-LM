@@ -318,8 +318,9 @@ absl::Status SetCommonGpuOptions(
         std::nullopt);
 
 #if !defined(LITERT_DISABLE_NPU)
-// Applies the vendor-agnostic `npu_options` to the vendor-specific NPU options
-// (currently Qualcomm and Google Tensor) in `options`.
+// Applies `npu_options` (common cross-vendor options and vendor-specific
+// sub-options) to the vendor-specific NPU options (currently Qualcomm, Google
+// Tensor, and MediaTek) in `options`.
 //
 // `npu_options.performance_mode` is mapped to the Qualcomm HTP performance mode
 // and the Google Tensor performance mode. `NpuPerformanceMode::kVendorDefault`
@@ -327,6 +328,9 @@ absl::Status SetCommonGpuOptions(
 //
 // `npu_options.performance_control` is mapped to the Qualcomm HTP performance
 // control mode (kWhileLoaded -> kManual, kPerInference -> kAuto).
+//
+// `npu_options.mediatek_options.sdk_version` is mapped to the MediaTek
+// NeuroPilot SDK version (`MediatekSdkVersion::kDefault` leaves it untouched).
 absl::Status SetNpuOptions(const NpuOptions& npu_options,
                            litert::Options& options);
 #endif  // !defined(LITERT_DISABLE_NPU)

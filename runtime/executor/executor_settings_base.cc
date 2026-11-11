@@ -397,10 +397,30 @@ std::ostream& operator<<(std::ostream& os,
   return os << "UNKNOWN";
 }
 
+std::ostream& operator<<(std::ostream& os, const MediatekSdkVersion& version) {
+  switch (version) {
+    case MediatekSdkVersion::kDefault:
+      return os << "DEFAULT";
+    case MediatekSdkVersion::kVersion7:
+      return os << "VERSION_7";
+    case MediatekSdkVersion::kVersion8:
+      return os << "VERSION_8";
+    case MediatekSdkVersion::kVersion9:
+      return os << "VERSION_9";
+  }
+  return os << "UNKNOWN";
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MediatekNpuOptions& mediatek_options) {
+  return os << "MediatekNpuOptions{sdk_version: "
+            << mediatek_options.sdk_version << "}";
+}
+
 std::ostream& operator<<(std::ostream& os, const NpuOptions& npu_options) {
   return os << "NpuOptions{performance_mode: " << npu_options.performance_mode
             << ", performance_control: " << npu_options.performance_control
-            << "}";
+            << ", mediatek_options: " << npu_options.mediatek_options << "}";
 }
 
 // static
