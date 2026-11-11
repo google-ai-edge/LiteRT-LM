@@ -18,8 +18,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -40,6 +42,14 @@
 #include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni::asr {
+namespace {
+
+// Maximum number of initial decode steps reserved for emitting a structured
+// header prefix up to `decode_skip_until_token_id_` (e.g. `language <Lang>`
+// `<asr_text>` for Qwen3-ASR).
+constexpr int kSkipHeaderStepBudget = 8;
+
+}  // namespace
 
 absl::StatusOr<std::unique_ptr<LmDecoder>> LmDecoder::Create(
     LiteRtLmRunner* absl_nonnull lm_runner,
@@ -110,12 +120,13 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
   ABSL_RETURN_IF_ERROR(lm_runner_.Prefill(prefill_inputs));
 
   int effective_max_steps = max_decode_steps_;
+  const int skip_header_budget =
+      decode_skip_until_token_id_ >= 0 ? kSkipHeaderStepBudget : 0;
   if (decode_range.has_value() && decode_range->valid_fraction > 0.0f &&
       decode_range->valid_fraction < 1.0f) {
     const float start_fraction = std::clamp(decode_range->start_fraction, 0.0f,
                                             decode_range->valid_fraction);
     const float active_fraction = decode_range->valid_fraction - start_fraction;
-    const int skip_header_budget = decode_skip_until_token_id_ >= 0 ? 8 : 0;
     effective_max_steps = std::clamp(
         skip_header_budget +
             static_cast<int>(std::ceil(active_fraction * max_decode_steps_)),
@@ -154,7 +165,29 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> LmDecoder::Decode(
             logits_buf, ::litert::TensorBuffer::LockMode::kRead));
     const float* logits_ptr = logits_lock_and_addr.second;
     const float* max_it = std::max_element(logits_ptr, logits_ptr + num_logits);
-    const int token_id = static_cast<int>(max_it - logits_ptr);
+    int token_id = static_cast<int>(max_it - logits_ptr);
+    // Guard against premature termination by suppressing stop tokens during
+    // `kSkipHeaderStepBudget` until `decode_skip_until_token_id_` is observed.
+    // For example, Qwen3-ASR emits `language <Lang><asr_text>` before any
+    // transcript, where `<|im_end|>` can outrank `"language"` at step 0 on GPU.
+    const bool suppress_stop_tokens =
+        !seen_skip_until_token_id && step < skip_header_budget;
+    if (suppress_stop_tokens && stop_tokens_.contains(token_id)) {
+      int best_non_stop_id = -1;
+      float best_logit = -std::numeric_limits<float>::infinity();
+      for (size_t i = 0; i < num_logits; ++i) {
+        if (stop_tokens_.contains(static_cast<int>(i))) {
+          continue;
+        }
+        if (best_non_stop_id < 0 || logits_ptr[i] > best_logit) {
+          best_logit = logits_ptr[i];
+          best_non_stop_id = static_cast<int>(i);
+        }
+      }
+      if (best_non_stop_id >= 0) {
+        token_id = best_non_stop_id;
+      }
+    }
 
     if (stop_tokens_.contains(token_id)) {
       break;

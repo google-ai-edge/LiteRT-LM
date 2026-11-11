@@ -320,5 +320,94 @@ TEST(LmDecoderTest, DecodeScalesMaxStepsWithPartialDecodeRange) {
   EXPECT_EQ(decoded->size(), 20);
 }
 
+TEST(LmDecoderTest, DecodeSuppressesStopTokensUntilSkipUntilTokenIdSeen) {
+  MockLiteRtLmRunner runner;
+  EXPECT_CALL(runner, Reset()).WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
+
+  // On step 0 (before decode_skip_until_token_id = 2 is emitted), stop token 9
+  // has a higher logit (22.0f) than the header token 1 (20.0f). LmDecoder must
+  // suppress stop token 9 during the header budget, select token 1, then
+  // observe skip-until token 2, emit transcript token 5, and stop when token 9
+  // is emitted after token 2.
+  auto step0_logits =
+      CreateTestTensorBuffer({1, 10}, ::litert::ElementType::Float32);
+  std::vector<float> logits(10, 0.0f);
+  logits[1] = 20.0f;
+  logits[9] = 22.0f;
+  ASSERT_TRUE(step0_logits.Write<float>(absl::MakeConstSpan(logits)));
+
+  EXPECT_CALL(runner, Decode(_))
+      .WillOnce([&step0_logits](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, -1);
+        return std::move(step0_logits);
+      })
+      .WillOnce([](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, 1);
+        return CreateLogitsBuffer(2);
+      })
+      .WillOnce([](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, 2);
+        return CreateLogitsBuffer(5);
+      })
+      .WillOnce([](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, 5);
+        return CreateLogitsBuffer(9);
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
+                                         /*decode_stop_token_id=*/9,
+                                         /*decode_skip_until_token_id=*/2));
+
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer({1, 10, 16}));
+
+  auto decoded = decoder->Decode(encoder_outputs);
+  ASSERT_OK(decoded);
+  EXPECT_THAT(*decoded,
+              ElementsAre(Field(&SpeechRecognizer::DecodedToken::token_id, 5)));
+}
+
+TEST(LmDecoderTest, DecodeAllowsStopTokenAfterSkipHeaderBudgetExhausted) {
+  MockLiteRtLmRunner runner;
+  EXPECT_CALL(runner, Reset()).WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(runner, Prefill(_)).WillOnce(Return(absl::OkStatus()));
+
+  // Stop token 9 outranks non-stop token 1 on every step, and
+  // decode_skip_until_token_id (2) is never emitted. Stop token 9 is
+  // suppressed for the 8-step header budget (steps 0..7, selecting token 1),
+  // then allowed again at step 8 to terminate decoding without looping to
+  // max_decode_steps.
+  int decode_calls = 0;
+  EXPECT_CALL(runner, Decode(_))
+      .WillRepeatedly([&decode_calls](const lm::ExecutorInputs& inputs) {
+        ExpectInputTokenId(inputs, decode_calls == 0 ? -1 : 1);
+        ++decode_calls;
+        auto buf =
+            CreateTestTensorBuffer({1, 10}, ::litert::ElementType::Float32);
+        std::vector<float> logits(10, 0.0f);
+        logits[1] = 20.0f;
+        logits[9] = 22.0f;
+        EXPECT_TRUE(buf.Write<float>(absl::MakeConstSpan(logits)));
+        return buf;
+      });
+
+  ASSERT_OK_AND_ASSIGN(auto decoder,
+                       LmDecoder::Create(&runner, /*decode_start_token_ids=*/{},
+                                         /*decode_stop_token_id=*/9,
+                                         /*decode_skip_until_token_id=*/2,
+                                         /*max_decode_steps=*/32));
+
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(
+      CreateTestTensorBuffer({1, 4, 8}, ::litert::ElementType::Float32));
+
+  auto decoded = decoder->Decode(encoder_outputs);
+  ASSERT_OK(decoded);
+  EXPECT_EQ(decode_calls, 9);
+  EXPECT_THAT(*decoded, ::testing::IsEmpty());
+}
+
 }  // namespace
 }  // namespace litert::omni::asr
