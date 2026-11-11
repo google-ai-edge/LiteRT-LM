@@ -28,25 +28,57 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "hwy/highway.h"  // from @highway
 #include "runtime/components/sampling_uniforms.h"
 
 namespace litert::lm {
 
 namespace {
 
-// Equivalent to *std::max_element(x, x + kSize), but written in a way to coax
-// the compiler into autovectorizing it.
+#if HWY_TARGET != HWY_SCALAR
+#define LITERT_LM_SAMPLING_HAS_SIMD 1
+namespace hn = hwy::HWY_NAMESPACE;
+
+// Per lane: (a < b) ? b : a. This is exactly std::max(a, b), also for NaN and
+// signed zeros: a lane keeps `a` unless `a < b`.
+template <class V>
+HWY_INLINE V MaxLanes(V a, V b) {
+  return hn::IfThenElse(hn::Lt(a, b), b, a);
+}
+#endif
+
+// Max of x[0..kSize) as an 8-lane reduction: lane j folds x[j], x[j + 8], ...
+// with (a < b) ? b : a, then the 8 lanes are reduced with std::max_element.
+// Equals *std::max_element(x, x + kSize) when x has no NaN; with NaN the result
+// depends on which lanes hold the NaN values.
 template <int kSize>
 inline float Max(const float* x) {
   constexpr int kTileSize = 8;
   static_assert(kSize % kTileSize == 0);
   float max[kTileSize];
+#if defined(LITERT_LM_SAMPLING_HAS_SIMD)
+  // The same per-lane fold as the scalar loop below, with explicit Highway
+  // vectors (statically dispatched). Some toolchains (e.g. the Android arm64
+  // opt build) do not autovectorize the scalar loop. Two 4-lane vectors keep
+  // the 8-lane fold order on every target: max[0..3] is in max_lo and
+  // max[4..7] is in max_hi.
+  const hn::FixedTag<float, 4> d;
+  auto max_lo = hn::LoadU(d, x);
+  auto max_hi = hn::LoadU(d, x + 4);
+  for (int i = kTileSize; i < kSize; i += kTileSize) {
+    max_lo = MaxLanes(max_lo, hn::LoadU(d, x + i));
+    max_hi = MaxLanes(max_hi, hn::LoadU(d, x + i + 4));
+  }
+  hn::StoreU(max_lo, d, max);
+  hn::StoreU(max_hi, d, max + 4);
+#else
   std::copy_n(x, kTileSize, max);
   for (int i = kTileSize; i < kSize; i += kTileSize) {
     for (int j = 0; j < kTileSize; ++j) {
       max[j] = std::max(max[j], x[i + j]);
     }
   }
+#endif
   return *std::max_element(max, max + kTileSize);
 }
 

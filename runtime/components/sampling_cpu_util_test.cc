@@ -14,8 +14,10 @@
 
 #include "runtime/components/sampling_cpu_util.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <random>
 #include <utility>
 #include <vector>
@@ -486,6 +488,113 @@ TEST(SamplingCpuUtilTest, BenchmarkTopKTokenIds) {
   duration = end - start;
   std::printf("[BENCHMARK] TopK=1025 (full-sort) execution took: %.3f ms\n\n",
               absl::ToDoubleMilliseconds(duration) / kIterations);
+}
+
+// A verbatim copy of the scalar greedy arg max that TopKTokenIds() used before
+// it got explicit vectors. TopKTokenIds(k = 1) must return the same index for
+// every input, including NaN, signed zeros, infinities and ties.
+int ReferenceMaxElement(const float* logits, int size) {
+  constexpr int kTileSize = 128;
+  constexpr int kLaneCount = 8;
+  float max = logits[0];
+  int max_idx = 0;
+  int i = 0;
+  for (; i + kTileSize <= size; i += kTileSize) {
+    const float* tile_logits = logits + i;
+    float lanes[kLaneCount];
+    std::copy_n(tile_logits, kLaneCount, lanes);
+    for (int t = kLaneCount; t < kTileSize; t += kLaneCount) {
+      for (int j = 0; j < kLaneCount; ++j) {
+        lanes[j] = std::max(lanes[j], tile_logits[t + j]);
+      }
+    }
+    const float tile_max = *std::max_element(lanes, lanes + kLaneCount);
+    if (tile_max > max) {
+      for (int j = 0; j < kTileSize; ++j) {
+        if (tile_logits[j] == tile_max) {
+          max = tile_max;
+          max_idx = i + j;
+          break;
+        }
+      }
+    }
+  }
+  for (; i < size; ++i) {
+    if (logits[i] > max) {
+      max = logits[i];
+      max_idx = i;
+    }
+  }
+  return max_idx;
+}
+
+TEST(SamplingCpuUtilTest, TopKTokenIds_GreedyMatchesScalarReference) {
+  const float kNaN = std::numeric_limits<float>::quiet_NaN();
+  const float kInf = std::numeric_limits<float>::infinity();
+  std::mt19937 gen(1234);
+  std::uniform_int_distribution<int> special_dis(0, 15);
+  std::uniform_int_distribution<int> small_dis(-3, 3);
+  std::uniform_real_distribution<float> dis(-5.0f, 5.0f);
+  int num_checked = 0;
+  for (int size : {1, 7, 8, 127, 128, 129, 255, 256, 1000, 32000, 32003}) {
+    for (int trial = 0; trial < 80; ++trial) {
+      std::vector<float> logits(size);
+      for (float& val : logits) {
+        // Trials 0-9: continuous values. 10-29: few distinct values (many
+        // ties). 30-39: also NaN, +/-0 and +/-inf. 40-79: continuous values
+        // with NaN, +/-0 and +/-inf, so that a NaN at the start of a lane can
+        // hide a unique maximum.
+        if (trial < 10) {
+          val = dis(gen);
+        } else {
+          val = trial < 40 ? static_cast<float>(small_dis(gen)) : dis(gen);
+          if (trial >= 30) {
+            switch (special_dis(gen)) {
+              case 0:
+                val = kNaN;
+                break;
+              case 1:
+                val = 0.0f;
+                break;
+              case 2:
+                val = -0.0f;
+                break;
+              case 3:
+                val = kInf;
+                break;
+              case 4:
+                val = -kInf;
+                break;
+              default:
+                break;
+            }
+          }
+        }
+      }
+      if (trial >= 40 && std::isnan(logits[0])) {
+        // A NaN first element makes every later comparison false. Keep it
+        // finite here; trials 30-39 cover that case.
+        logits[0] = dis(gen);
+      }
+      auto ids = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/1);
+      ASSERT_TRUE(ids.ok());
+      ASSERT_EQ((*ids)[0][0], ReferenceMaxElement(logits.data(), size))
+          << "size " << size << " trial " << trial;
+      ++num_checked;
+    }
+  }
+  EXPECT_EQ(num_checked, 11 * 80);
+
+  // A NaN at the start of lane 2 of the second tile hides the unique maximum
+  // at index 138 (same lane). Also an earlier -0 and a later +0.
+  std::vector<float> logits(256, -1.0f);
+  logits[9] = -0.0f;
+  logits[17] = 0.0f;
+  logits[130] = kNaN;
+  logits[138] = 0.5f;
+  auto ids = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/1);
+  ASSERT_TRUE(ids.ok());
+  EXPECT_EQ((*ids)[0][0], ReferenceMaxElement(logits.data(), 256));
 }
 
 }  // namespace
