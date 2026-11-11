@@ -314,6 +314,27 @@ target_link_libraries(runtime_executor_llm_executor_settings
     LITERTLM_DEPS
 )
 # ==============================================================================
+# Fast CPU Ops
+# ==============================================================================
+add_litertlm_library(runtime_executor_fast_cpu_ops STATIC
+  fast_cpu_ops.cc
+)
+add_library(LiteRTLM::Runtime::Executor::FastCpuOps
+  ALIAS runtime_executor_fast_cpu_ops)
+
+target_include_directories(runtime_executor_fast_cpu_ops
+  PUBLIC
+    "${LITERTLM_GENERATED_SRC_DIR}"
+    "${LITERT_INCLUDE_DIR}"
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_executor_fast_cpu_ops
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LLM Executor Settings Utils
 # ==============================================================================
 add_litertlm_library(runtime_executor_llm_executor_settings_utils STATIC
@@ -332,6 +353,7 @@ target_include_directories(runtime_executor_llm_executor_settings_utils
 
 target_link_libraries(runtime_executor_llm_executor_settings_utils
   PUBLIC
+    LiteRTLM::Runtime::Executor::FastCpuOps
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Util
     LITERTLM_DEPS
@@ -834,6 +856,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::ExecutorSettingsBase
   LiteRTLM::Runtime::Executor::ExecutorStats
   LiteRTLM::Runtime::Executor::FakeLlmExecutor
+  LiteRTLM::Runtime::Executor::FastCpuOps
   LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
   LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
   LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens

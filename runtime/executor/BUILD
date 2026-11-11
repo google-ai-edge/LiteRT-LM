@@ -891,11 +891,65 @@ cc_test(
 )
 
 cc_library(
+    name = "fast_cpu_ops",
+    srcs = ["fast_cpu_ops.cc"],
+    hdrs = ["fast_cpu_ops.h"],
+    defines = select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [],
+        "@litert//litert:litert_runtime_link_mode_none": [],
+        "//conditions:default": ["LITERT_LM_ENABLE_FAST_CPU_OPS"],
+    }),
+    textual_hdrs = ["fast_cpu_ops_inl.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@highway//:hwy",
+        "@litert//litert/cc:litert_options",
+    ] + select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [],
+        "@litert//litert:litert_runtime_link_mode_none": [],
+        "//conditions:default": [
+            "@litert//litert/c:litert_common",
+            "@litert//litert/cc:litert_macros",
+            "@litert//litert/core:options",
+            "@litert//tflite:mutable_op_resolver",
+            "@litert//tflite/c:c_api_types",
+            "@litert//tflite/c:common",
+            "@litert//tflite/kernels:builtin_ops",
+            "@litert//tflite/schema:schema_fbs",
+        ],
+    }),
+)
+
+cc_test(
+    name = "fast_cpu_ops_test",
+    srcs = ["fast_cpu_ops_test.cc"],
+    deps = [
+        ":fast_cpu_ops",
+        "@com_google_googletest//:gtest_main",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_options",
+        "//runtime/util:test_utils",
+    ] + select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [],
+        "@litert//litert:litert_runtime_link_mode_none": [],
+        "//conditions:default": [
+            "@litert//litert/cc:litert_environment",
+            "@litert//litert/core:options",
+            "@litert//tflite:mutable_op_resolver",
+            "@litert//tflite/c:c_api_types",
+            "@litert//tflite/c:common",
+            "@litert//tflite/schema:schema_fbs",
+        ],
+    }),
+)
+
+cc_library(
     name = "llm_executor_settings_utils",
     srcs = ["llm_executor_settings_utils.cc"],
     hdrs = ["llm_executor_settings_utils.h"],
     deps = [
         ":executor_settings_base",
+        ":fast_cpu_ops",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
         "@com_google_absl//absl/status",
