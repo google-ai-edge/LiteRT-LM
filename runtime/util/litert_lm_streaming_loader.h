@@ -30,7 +30,9 @@
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -59,13 +61,38 @@ struct HeaderPreamble {
 // Information about a section in the Litert LM model.
 // Should not outlive the LitertLmStreamingLoader.
 struct SectionInfo {
-  const schema::SectionObject* section;
-  BufferKey buffer_key;
+  const schema::SectionObject* section = nullptr;
+  BufferKey buffer_key{schema::AnySectionDataType_NONE};
   std::optional<std::string> backend_constraint;
   std::optional<std::string> prefer_activation_type;
   std::shared_ptr<DataStream> data_stream;
 
   std::weak_ptr<schema::LitertlmHeader> header;
+
+  // Returns the byte length of this section (`end_offset - begin_offset`), or
+  // 0 if `section` is null or has invalid bounds.
+  size_t Size() const;
+
+  // Reads and discards the entire section payload from `data_stream` into a
+  // contiguous host buffer.
+  absl::StatusOr<std::vector<char>> ReadBuffer() const;
+
+  // Discards the entire section payload from `data_stream` without reading it.
+  absl::Status Discard() const;
+
+  // Reads and discards the section payload and parses it into a `ProtoT`
+  // message. `proto_name` is included in the returned error message on parse
+  // failure.
+  template <typename ProtoT>
+  absl::StatusOr<ProtoT> ParseProto(absl::string_view proto_name) const {
+    ABSL_ASSIGN_OR_RETURN(std::vector<char> buffer, ReadBuffer());
+    ProtoT proto;
+    if (!proto.ParseFromString(
+            absl::string_view(buffer.data(), buffer.size()))) {
+      return absl::InternalError(absl::StrCat("Failed to parse ", proto_name));
+    }
+    return proto;
+  }
 };
 
 // A streaming loader that reads a .litertlm file from a data stream and returns

@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -36,6 +37,48 @@
 #include "schema/core/litertlm_read.h"
 
 namespace litert::lm {
+
+size_t SectionInfo::Size() const {
+  if (section == nullptr || section->end_offset() < section->begin_offset()) {
+    return 0;
+  }
+  return section->end_offset() - section->begin_offset();
+}
+
+absl::StatusOr<std::vector<char>> SectionInfo::ReadBuffer() const {
+  if (section == nullptr) {
+    return absl::InvalidArgumentError("Section metadata is null.");
+  }
+  if (data_stream == nullptr) {
+    return absl::InvalidArgumentError("Section data stream is null.");
+  }
+  if (section->end_offset() < section->begin_offset()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid section range: [", section->begin_offset(), ", ",
+                     section->end_offset(), ")"));
+  }
+  std::vector<char> buffer(Size());
+  if (!buffer.empty()) {
+    ABSL_RETURN_IF_ERROR(
+        data_stream->ReadAndDiscard(buffer.data(), 0, buffer.size()));
+  }
+  return buffer;
+}
+
+absl::Status SectionInfo::Discard() const {
+  if (section == nullptr) {
+    return absl::InvalidArgumentError("Section metadata is null.");
+  }
+  if (data_stream == nullptr) {
+    return absl::InvalidArgumentError("Section data stream is null.");
+  }
+  if (section->end_offset() < section->begin_offset()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid section range: [", section->begin_offset(), ", ",
+                     section->end_offset(), ")"));
+  }
+  return data_stream->Discard(0, Size());
+}
 
 absl::Status LitertLmStreamingLoader::LoadHeader(bool preserve_stream) {
   if (header_loaded_) {
