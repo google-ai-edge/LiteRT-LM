@@ -68,6 +68,37 @@ bool IsLiteRTLMFile(std::istream& stream) {
   return true;
 }
 
+LitertlmHeader::LitertlmHeader(std::unique_ptr<uint8_t[]> buffer_) {
+  reset(std::move(buffer_));
+}
+
+LitertlmHeader::LitertlmHeader(LitertlmHeader&& other) noexcept
+    : buffer(std::move(other.buffer)),
+      metadata(std::exchange(other.metadata, nullptr)),
+      major_version(std::exchange(other.major_version, 0)),
+      minor_version(std::exchange(other.minor_version, 0)),
+      patch_version(std::exchange(other.patch_version, 0)) {}
+
+LitertlmHeader& LitertlmHeader::operator=(LitertlmHeader&& other) noexcept {
+  if (this != &other) {
+    buffer = std::move(other.buffer);
+    metadata = std::exchange(other.metadata, nullptr);
+    major_version = std::exchange(other.major_version, 0);
+    minor_version = std::exchange(other.minor_version, 0);
+    patch_version = std::exchange(other.patch_version, 0);
+  }
+  return *this;
+}
+
+void LitertlmHeader::reset(std::unique_ptr<uint8_t[]> buffer_) {
+  buffer = std::move(buffer_);
+  if (buffer) {
+    metadata = GetLiteRTLMMetaData(buffer.get());
+  } else {
+    metadata = nullptr;
+  }
+}
+
 absl::Status ReadHeaderFromLiteRTLM(std::istream& litertlm_stream,
                                     LitertlmHeader* header) {
   // 0. Read magic number and version.
