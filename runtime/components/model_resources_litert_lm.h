@@ -24,9 +24,11 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -41,7 +43,8 @@
 
 namespace litert::lm {
 
-// Model resources for the litert lm model.
+// Model resources for the litert lm model. Lazy model, metadata, and cached
+// tokenizer accessors are thread-safe.
 class ModelResourcesLitertLm : public ModelResources {
  public:
   static absl::StatusOr<std::unique_ptr<ModelResources>> Create(
@@ -62,9 +65,10 @@ class ModelResourcesLitertLm : public ModelResources {
   bool HasTFLiteModel(absl::string_view model_type_str) override;
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      proto::LlmMetadata::TfLiteModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override
+      ABSL_LOCKS_EXCLUDED(mutex_);
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      absl::string_view model_type_str) override;
+      absl::string_view model_type_str) override ABSL_LOCKS_EXCLUDED(mutex_);
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       proto::LlmMetadata::TfLiteModelType model_type) override;
@@ -93,23 +97,26 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
       absl::string_view model_type_str) override;
 
-  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
+  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
-  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
   absl::StatusOr<const proto::EmbeddingMetadata*> GetEmbeddingMetadata()
-      override;
+      override ABSL_LOCKS_EXCLUDED(mutex_);
 
   absl::StatusOr<const proto::Text2SpeechMetadata*> GetText2SpeechMetadata()
-      override;
+      override ABSL_LOCKS_EXCLUDED(mutex_);
 
   absl::StatusOr<const proto::Speech2TextMetadata*> GetSpeech2TextMetadata()
-      override;
+      override ABSL_LOCKS_EXCLUDED(mutex_);
 
   absl::StatusOr<const proto::Text2ImageMetadata*> GetText2ImageMetadata()
-      override;
+      override ABSL_LOCKS_EXCLUDED(mutex_);
 
-  absl::StatusOr<const proto::Any2AnyMetadata*> GetAny2AnyMetadata() override;
+  absl::StatusOr<const proto::Any2AnyMetadata*> GetAny2AnyMetadata() override
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
   absl::StatusOr<absl::string_view> GetGenericBinaryDataBuffer(
       absl::string_view name) override;
@@ -142,9 +149,10 @@ class ModelResourcesLitertLm : public ModelResources {
   bool enable_file_backed_model_loading_;
 
   absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
-      proto::LlmMetadata::TfLiteModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override
+      ABSL_LOCKS_EXCLUDED(mutex_);
   absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
-      absl::string_view model_type_str) override;
+      absl::string_view model_type_str) override ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
   // Returns the TFLite model section for the lower-cased model type `key`.
@@ -153,15 +161,24 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<litert::BufferRef<uint8_t>> GetTFLiteModelSectionBuffer(
       absl::string_view key);
 
-  absl::flat_hash_map<std::string, std::unique_ptr<litert::Model>> model_map_;
-  absl::flat_hash_map<std::string, std::unique_ptr<Tokenizer>> tokenizer_map_;
-  std::unique_ptr<proto::LlmMetadata> llm_metadata_;
-  std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_;
-  std::unique_ptr<proto::Text2SpeechMetadata> text2speech_metadata_;
-  std::unique_ptr<proto::Speech2TextMetadata> speech2text_metadata_;
-  std::unique_ptr<proto::Text2ImageMetadata> text2image_metadata_;
-  std::unique_ptr<proto::Any2AnyMetadata> any2any_metadata_;
-  std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
+  mutable absl::Mutex mutex_;
+  absl::flat_hash_map<std::string, std::unique_ptr<litert::Model>> model_map_
+      ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<std::string, std::unique_ptr<Tokenizer>> tokenizer_map_
+      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::LlmMetadata> llm_metadata_ ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_
+      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::Text2SpeechMetadata> text2speech_metadata_
+      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::Speech2TextMetadata> speech2text_metadata_
+      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::Text2ImageMetadata> text2image_metadata_
+      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::Any2AnyMetadata> any2any_metadata_
+      ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::ExecutorMetadata> executor_metadata_
+      ABSL_GUARDED_BY(mutex_);
 };
 
 }  // namespace litert::lm

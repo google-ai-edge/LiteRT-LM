@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -53,10 +54,6 @@ absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesTask::Create(
 
 bool ModelResourcesTask::HasTFLiteModel(
     proto::LlmMetadata::TfLiteModelType model_type) {
-  if (auto it = model_map_.find(model_type);
-      it != model_map_.end() && it->second != nullptr) {
-    return true;
-  }
   std::string model_file =
       litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
   auto buffer = model_asset_bundle_resources_->GetFile(model_file);
@@ -72,9 +69,11 @@ absl::StatusOr<absl::string_view> ModelResourcesTask::GetTFLiteModelBuffer(
 
 absl::StatusOr<const litert::Model*> ModelResourcesTask::GetTFLiteModel(
     proto::LlmMetadata::TfLiteModelType model_type) {
-  auto it = model_map_.find(model_type);
-  if (it != model_map_.end()) {
-    return it->second.get();
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (auto it = model_map_.find(model_type); it != model_map_.end()) {
+      return it->second.get();
+    }
   }
 
   std::string model_file =
@@ -88,8 +87,12 @@ absl::StatusOr<const litert::Model*> ModelResourcesTask::GetTFLiteModel(
   ABSL_VLOG(1) << "litert model size: " << buffer->size();
   auto buffer_ref = BufferRef<uint8_t>(buffer->data(), buffer->size());
   LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
-  model_map_[model_type] = std::make_unique<Model>(std::move(model));
-  return model_map_[model_type].get();
+  auto model_ptr = std::make_shared<Model>(std::move(model));
+
+  absl::MutexLock lock(mutex_);
+  auto [it, inserted] =
+      model_map_.try_emplace(model_type, std::move(model_ptr));
+  return it->second.get();
 }
 
 absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesTask::GetTokenizer() {
@@ -100,14 +103,23 @@ absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesTask::GetTokenizer() {
 }
 
 absl::StatusOr<const proto::LlmMetadata*> ModelResourcesTask::GetLlmMetadata() {
+  {
+    absl::ReaderMutexLock lock(mutex_);
+    if (llm_metadata_ != nullptr) {
+      return llm_metadata_.get();
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(auto string_view,
+                        model_asset_bundle_resources_->GetFile("METADATA"));
+  ABSL_ASSIGN_OR_RETURN(auto llm_metadata,
+                        ExtractOrConvertLlmMetadata(string_view));
+  auto parsed_metadata =
+      std::make_unique<proto::LlmMetadata>(std::move(llm_metadata));
+  ABSL_VLOG(1) << "The llm metadata: " << parsed_metadata->DebugString();
+
+  absl::MutexLock lock(mutex_);
   if (llm_metadata_ == nullptr) {
-    ABSL_ASSIGN_OR_RETURN(auto string_view,
-                          model_asset_bundle_resources_->GetFile("METADATA"));
-    ABSL_ASSIGN_OR_RETURN(auto llm_metadata,
-                          ExtractOrConvertLlmMetadata(string_view));
-    llm_metadata_ =
-        std::make_unique<proto::LlmMetadata>(std::move(llm_metadata));
-    ABSL_VLOG(1) << "The llm metadata: " << llm_metadata_->DebugString();
+    llm_metadata_ = std::move(parsed_metadata);
   }
   return llm_metadata_.get();
 }

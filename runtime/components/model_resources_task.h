@@ -18,9 +18,11 @@
 #include <memory>
 #include <utility>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -28,7 +30,8 @@
 
 namespace litert::lm {
 
-// Model resources for the task model.
+// Model resources for the task model. Lazy model and metadata accessors are
+// thread-safe.
 class ModelResourcesTask : public ModelResources {
  public:
   static absl::StatusOr<std::unique_ptr<ModelResources>> Create(
@@ -41,11 +44,13 @@ class ModelResourcesTask : public ModelResources {
 
   bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      proto::LlmMetadata::TfLiteModelType model_type) override;
+      proto::LlmMetadata::TfLiteModelType model_type) override
+      ABSL_LOCKS_EXCLUDED(mutex_);
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       proto::LlmMetadata::TfLiteModelType model_type) override;
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
-  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
+  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
   explicit ModelResourcesTask(
@@ -53,10 +58,11 @@ class ModelResourcesTask : public ModelResources {
       : model_asset_bundle_resources_(std::move(model_asset_bundle_resources)) {
   }
 
+  mutable absl::Mutex mutex_;
   absl::flat_hash_map<proto::LlmMetadata::TfLiteModelType,
                       std::shared_ptr<litert::Model>>
-      model_map_;
-  std::unique_ptr<proto::LlmMetadata> llm_metadata_;
+      model_map_ ABSL_GUARDED_BY(mutex_);
+  std::unique_ptr<proto::LlmMetadata> llm_metadata_ ABSL_GUARDED_BY(mutex_);
 
   // The model asset bundle resources produced by reading task bundle. Not null
   // only when the model is provided through .task format. If the model is

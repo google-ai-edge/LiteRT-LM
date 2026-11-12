@@ -99,7 +99,8 @@ class ResourceManager {
   absl::StatusOr<std::unique_ptr<ContextHandler>> CreateContextHandler(
       const SessionConfig& session_config) ABSL_LOCKS_EXCLUDED(lora_mutex_)
       ABSL_LOCKS_EXCLUDED(executor_mutex_)
-          ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
+          ABSL_LOCKS_EXCLUDED(vision_executor_mutex_)
+              ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Clones the context handler.
   // The cloned context handler will have the same shared processed context as
@@ -140,6 +141,10 @@ class ResourceManager {
   absl::StatusOr<std::unique_ptr<VisionExecutor>> AcquireVisionExecutor()
       ABSL_LOCKS_EXCLUDED(vision_executor_mutex_);
 
+  // Releases the vision executor if it can be reloaded on demand from a
+  // persistent CPU weight cache.
+  void MaybeUnloadVisionExecutor() ABSL_LOCKS_EXCLUDED(vision_executor_mutex_);
+
   // Try to load the audio executor if the audio executor is not loaded.
   absl::Status TryLoadingAudioExecutor()
       ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
@@ -147,6 +152,20 @@ class ResourceManager {
   // Acquires the audio executor.
   absl::StatusOr<std::unique_ptr<AudioExecutor>> AcquireAudioExecutor()
       ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
+
+  // Releases the audio executor if it is stateless and can be reloaded on
+  // demand from a persistent CPU weight cache.
+  void MaybeUnloadAudioExecutor() ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
+
+  // Flushes the audio executor if it is currently loaded. Returns
+  // `std::nullopt` without loading the executor when unloaded, or when
+  // `Flush()` is unimplemented.
+  absl::StatusOr<std::optional<ExecutorAudioData>> FlushAudioIfLoaded()
+      ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
+
+  // Resets the audio executor if it is currently loaded, without loading an
+  // unloaded executor.
+  void ResetAudioIfLoaded() ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Returns the audio executor properties.
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
@@ -169,12 +188,21 @@ class ResourceManager {
       ABSL_LOCKS_EXCLUDED(executor_mutex_);
 
  private:
-  // Creates the litert environment if it is not created yet.
-  absl::Status MaybeCreateLitertEnv();
+  // Returns the litert environment, creating it if it is not created yet.
+  absl::StatusOr<::litert::Environment*> GetOrCreateLitertEnv()
+      ABSL_LOCKS_EXCLUDED(litert_env_mutex_);
+
+  absl::Status EnsureVisionExecutorLoadedLocked()
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(vision_executor_mutex_);
+
+  absl::Status EnsureAudioExecutorLoadedLocked()
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(audio_executor_mutex_);
 
   std::optional<uint32_t> AssignLoraIdLocked(std::string lora_path,
                                              bool has_scoped_lora_file)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(lora_mutex_);
+
+  ModelResources* absl_nullable model_resources_;
 
   // Guards the llm_executor_.
   absl::Mutex executor_mutex_;
@@ -201,8 +229,16 @@ class ResourceManager {
   std::shared_ptr<VisionExecutor> vision_executor_
       ABSL_GUARDED_BY(vision_executor_mutex_);
 
+  bool vision_prepared_ ABSL_GUARDED_BY(vision_executor_mutex_) = false;
+
+  bool can_reload_vision_executor_ ABSL_GUARDED_BY(vision_executor_mutex_) =
+      false;
+
   // The vision executor options, needed for loading the vision executor.
   std::unique_ptr<VisionExecutorSettings> vision_executor_settings_;
+
+  bool has_bundled_vision_encoder_ = false;
+  std::optional<VisionExecutorProperties> cached_vision_properties_;
 
   // The mutex lock for the audio executor.
   absl::Mutex audio_executor_mutex_;
@@ -210,17 +246,30 @@ class ResourceManager {
   std::shared_ptr<AudioExecutor> audio_executor_
       ABSL_GUARDED_BY(audio_executor_mutex_);
 
+  bool audio_prepared_ ABSL_GUARDED_BY(audio_executor_mutex_) = false;
+
+  bool can_reload_audio_executor_ ABSL_GUARDED_BY(audio_executor_mutex_) =
+      false;
+
   // The audio executor options, needed for loading the audio executor.
   std::unique_ptr<AudioExecutorSettings> audio_executor_settings_;
 
+  bool has_bundled_audio_encoder_ = false;
+  std::optional<AudioExecutorProperties> cached_audio_properties_;
+
+  // Guards lazy initialization of `litert_env_` and `backup_litert_env_`.
+  absl::Mutex litert_env_mutex_;
+
   // The potential litert compiled model environment for the vision and audio
   // executor.
-  ::litert::Environment* absl_nullable litert_env_;
+  ::litert::Environment* absl_nullable litert_env_
+      ABSL_GUARDED_BY(litert_env_mutex_);
 
   // The backup litert compiled model environment for the vision and audio
   // executor, created if litert_env is not provided when resource manager is
   // created.
-  std::unique_ptr<::litert::Environment> backup_litert_env_;
+  std::unique_ptr<::litert::Environment> backup_litert_env_
+      ABSL_GUARDED_BY(litert_env_mutex_);
 
   // The llm executor settings.
   std::optional<LlmExecutorSettings> llm_executor_settings_;

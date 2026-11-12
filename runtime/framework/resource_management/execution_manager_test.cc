@@ -29,6 +29,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -37,13 +38,13 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
@@ -52,11 +53,13 @@
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/framework/resource_management/serial_execution_manager.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/runtime_debugger.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -344,7 +347,9 @@ class ExecutionManagerTest
       std::unique_ptr<FakeLlmExecutor> fake_llm_executor,
       std::unique_ptr<AudioExecutorSettings> audio_executor_settings = nullptr,
       std::unique_ptr<AudioExecutor> audio_executor = nullptr,
-      std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr) {
+      std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr,
+      std::unique_ptr<VisionExecutorSettings> vision_executor_settings =
+          nullptr) {
     // The objects are moved to execution_manager_ so we can't access them
     // after creation.
     if (GetParam() == ExecutionManagerType::kThreaded) {
@@ -354,7 +359,7 @@ class ExecutionManagerTest
               /*tokenizer=*/tokenizer_.get(),
               /*model_resources=*/model_resources_.get(),
               /*llm_executor=*/std::move(fake_llm_executor),
-              /*vision_executor_settings=*/nullptr,
+              /*vision_executor_settings=*/std::move(vision_executor_settings),
               std::move(audio_executor_settings),
               /*litert_env=*/nullptr, std::move(audio_executor),
               std::move(runtime_debugger)));
@@ -365,7 +370,7 @@ class ExecutionManagerTest
               /*tokenizer=*/tokenizer_.get(),
               /*model_resources=*/model_resources_.get(),
               /*llm_executor=*/std::move(fake_llm_executor),
-              /*vision_executor_settings=*/nullptr,
+              /*vision_executor_settings=*/std::move(vision_executor_settings),
               std::move(audio_executor_settings),
               /*litert_env=*/nullptr, std::move(audio_executor),
               std::move(runtime_debugger)));
@@ -2251,6 +2256,262 @@ TEST_P(ExecutionManagerTest,
               ElementsAre(std::optional<uint32_t>(0)));
 
   EXPECT_OK(execution_manager_->ReleaseSession(session_id));
+}
+
+class CountingCacheProvider {
+ public:
+  explicit CountingCacheProvider(const std::filesystem::path& dir) : dir_(dir) {
+    std::filesystem::create_directories(dir_);
+  }
+
+  ExecutorSettingsBase::CacheFileProvider AsProvider() {
+    return [this](const ExecutorSettingsBase::CacheFileRequest& req)
+               -> absl::StatusOr<std::shared_ptr<ScopedFile>> {
+      ++calls_;
+      auto& slot = files_[req.suffix];
+      if (slot == nullptr) {
+        const std::filesystem::path p =
+            dir_ / absl::StrCat("cache", req.suffix);
+        {
+          std::ofstream create_empty_file(p, std::ios::binary);
+        }
+        ABSL_ASSIGN_OR_RETURN(ScopedFile f,
+                              ScopedFile::OpenWritable(p.string()));
+        slot = std::make_shared<ScopedFile>(std::move(f));
+      }
+      return slot;
+    };
+  }
+
+  int calls() const { return calls_; }
+  void ResetCalls() { calls_ = 0; }
+
+ private:
+  std::filesystem::path dir_;
+  int calls_ = 0;
+  absl::flat_hash_map<std::string, std::shared_ptr<ScopedFile>> files_;
+};
+
+TEST_P(ExecutionManagerTest,
+       ReloadableStaticAudioDefersLoadEvictsPostEncodeAndSkipsUnloadedFlush) {
+  const std::string audio_model_path =
+      (std::filesystem::path(testing::SrcDir()) /
+       "litert_lm/runtime/testdata/dummy_audio_only.litertlm")
+          .string();
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetAudioModalityEnabled(true);
+
+  ASSERT_OK_AND_ASSIGN(ScopedFile model_file,
+                       ScopedFile::Open(audio_model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LitertLmLoader> loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(model_resources_,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets audio_assets,
+                       ModelAssets::Create(audio_model_path));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          audio_assets, /*max_sequence_length=*/10,
+          /*encoder_backend=*/Backend::CPU, /*adapter_backend=*/Backend::CPU));
+
+  CountingCacheProvider cache_provider(
+      std::filesystem::path(testing::TempDir()) /
+      absl::StrCat("exec_mgr_audio_cache_",
+                   GetParam() == ExecutionManagerType::kThreaded ? "threaded"
+                                                                 : "serial"));
+  audio_settings.SetCacheFileProvider(cache_provider.AsProvider());
+
+  // Expected prefill tokens across 3 turns:
+  // Turn 1: text {1, 2} + InputAudioEnd (-4) -> {1, 2, -4}
+  // Turn 2: 5 valid audio tokens (-2) + InputAudioEnd (-4) -> {-2, -2, -2, -2,
+  //         -2, -4}
+  // Turn 3: 5 valid audio tokens (-2) -> {-2, -2, -2, -2, -2}
+  std::vector<std::vector<int>> expected_prefills = {
+      {1, 2, ExecutorAudioData::kEndToken},
+      std::vector<int>(5, ExecutorAudioData::kSpecialToken),
+      std::vector<int>(5, ExecutorAudioData::kSpecialToken),
+  };
+  expected_prefills[1].push_back(ExecutorAudioData::kEndToken);
+
+  CreateExecutionManager(
+      CreateDefaultFakeLlmExecutor(std::move(expected_prefills)),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)));
+  cache_provider.ResetCalls();
+
+  // 1. RegisterNewSession must defer compilation.
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  EXPECT_EQ(cache_provider.calls(), 0);
+
+  // 1b. Empty-token prefill on a static audio session queries properties via
+  // ModelResources without loading the audio executor and fails cleanly.
+  {
+    absl::Status empty_status = absl::OkStatus();
+    ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddPrefillTask(
+        session_id, task_id, /*inputs=*/{}, {},
+        std::make_shared<std::atomic<bool>>(false),
+        [&](absl::StatusOr<Responses> responses) {
+          if (!responses.ok()) {
+            empty_status = responses.status();
+          }
+        }));
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(5)));
+    EXPECT_THAT(empty_status,
+                testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+  EXPECT_EQ(cache_provider.calls(), 0);
+
+  // 2. Text + InputAudioEnd prefill must not load an unloaded audio executor.
+  {
+    std::vector<InputData> inputs;
+    ASSERT_OK_AND_ASSIGN(auto input_text,
+                         tokenizer_->TokenIdsToTensorBuffer({1, 2}));
+    inputs.push_back(InputText(std::move(input_text)));
+    inputs.push_back(InputAudioEnd());
+    ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddPrefillTask(
+        session_id, task_id, std::move(inputs), {},
+        std::make_shared<std::atomic<bool>>(false), nullptr));
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(5)));
+  }
+  EXPECT_EQ(cache_provider.calls(), 0);
+
+  // 3. Raw InputAudio + InputAudioEnd loads on demand and evicts post-encode
+  // before InputAudioEnd (so FlushAudioIfLoaded does not reload).
+  {
+    std::vector<InputData> inputs;
+    auto spectrogram =
+        CopyToTensorBuffer<float>(std::vector<float>(10 * 8, 1.0f), {1, 10, 8});
+    ASSERT_TRUE(spectrogram.HasValue());
+    inputs.push_back(InputAudio(std::move(*spectrogram)));
+    inputs.push_back(InputAudioEnd());
+    ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddPrefillTask(
+        session_id, task_id, std::move(inputs), {},
+        std::make_shared<std::atomic<bool>>(false), nullptr));
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(5)));
+  }
+  const int calls_after_first_audio = cache_provider.calls();
+  EXPECT_GT(calls_after_first_audio, 0);
+
+  // 4. A second raw InputAudio turn warm-reloads from the cache provider,
+  // confirming post-encode eviction happened after Turn 2.
+  {
+    std::vector<InputData> inputs;
+    auto spectrogram =
+        CopyToTensorBuffer<float>(std::vector<float>(10 * 8, 1.0f), {1, 10, 8});
+    ASSERT_TRUE(spectrogram.HasValue());
+    inputs.push_back(InputAudio(std::move(*spectrogram)));
+    ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddPrefillTask(
+        session_id, task_id, std::move(inputs), {},
+        std::make_shared<std::atomic<bool>>(false), nullptr));
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(5)));
+  }
+  EXPECT_EQ(cache_provider.calls(), 2 * calls_after_first_audio);
+
+  // 5. ReleaseSession must not reload the already-evicted audio executor.
+  ASSERT_OK(execution_manager_->ReleaseSession(session_id));
+  EXPECT_EQ(cache_provider.calls(), 2 * calls_after_first_audio);
+}
+
+TEST_P(ExecutionManagerTest,
+       ReloadableVisionDefersLoadAndEvictsAfterFinalImageInPrefill) {
+  const std::string vision_model_path =
+      (std::filesystem::path(testing::SrcDir()) /
+       "litert_lm/runtime/testdata/dummy_vision_with_adapter.litertlm")
+          .string();
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetVisionModalityEnabled(true);
+
+  ASSERT_OK_AND_ASSIGN(ScopedFile model_file,
+                       ScopedFile::Open(vision_model_path));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LitertLmLoader> loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(model_resources_,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets vision_assets,
+                       ModelAssets::Create(vision_model_path));
+  ASSERT_OK_AND_ASSIGN(VisionExecutorSettings vision_settings,
+                       VisionExecutorSettings::CreateDefault(
+                           vision_assets, /*encoder_backend=*/Backend::CPU,
+                           /*adapter_backend=*/Backend::CPU));
+
+  CountingCacheProvider cache_provider(
+      std::filesystem::path(testing::TempDir()) /
+      absl::StrCat("exec_mgr_vision_cache_",
+                   GetParam() == ExecutionManagerType::kThreaded ? "threaded"
+                                                                 : "serial"));
+  vision_settings.SetCacheFileProvider(cache_provider.AsProvider());
+
+  // Turn 1 encodes TWO images back-to-back in a single prefill (each dummy
+  // vision encode produces 10 visual tokens): the vision executor must compile
+  // once for both images and evict after the second image.
+  // Turn 2 encodes ONE image: warm-reloads once and evicts again.
+  std::vector<std::vector<int>> expected_prefills = {
+      std::vector<int>(20, ExecutorVisionData::kSpecialToken),
+      std::vector<int>(10, ExecutorVisionData::kSpecialToken),
+  };
+
+  CreateExecutionManager(
+      CreateDefaultFakeLlmExecutor(std::move(expected_prefills)),
+      /*audio_executor_settings=*/nullptr, /*audio_executor=*/nullptr,
+      /*runtime_debugger=*/nullptr,
+      std::make_unique<VisionExecutorSettings>(std::move(vision_settings)));
+  cache_provider.ResetCalls();
+
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  EXPECT_EQ(cache_provider.calls(), 0);
+
+  // Turn 1: two images in a single prefill load encoder+adapter once (2 calls),
+  // not twice, and evict after the second image.
+  {
+    std::vector<InputData> inputs;
+    auto img1 =
+        CopyToTensorBuffer<float>(std::vector<float>(10 * 8, 1.0f), {1, 10, 8});
+    auto img2 =
+        CopyToTensorBuffer<float>(std::vector<float>(10 * 8, 1.0f), {1, 10, 8});
+    ASSERT_TRUE(img1.HasValue());
+    ASSERT_TRUE(img2.HasValue());
+    inputs.push_back(InputImage(std::move(*img1)));
+    inputs.push_back(InputImage(std::move(*img2)));
+    ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddPrefillTask(
+        session_id, task_id, std::move(inputs), {},
+        std::make_shared<std::atomic<bool>>(false), nullptr));
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(5)));
+  }
+  EXPECT_EQ(cache_provider.calls(), 2);
+
+  // Turn 2: single image warm-reloads encoder+adapter once more (+2 calls).
+  {
+    std::vector<InputData> inputs;
+    auto img =
+        CopyToTensorBuffer<float>(std::vector<float>(10 * 8, 1.0f), {1, 10, 8});
+    ASSERT_TRUE(img.HasValue());
+    inputs.push_back(InputImage(std::move(*img)));
+    ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddPrefillTask(
+        session_id, task_id, std::move(inputs), {},
+        std::make_shared<std::atomic<bool>>(false), nullptr));
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(5)));
+  }
+  EXPECT_EQ(cache_provider.calls(), 4);
+
+  ASSERT_OK(execution_manager_->ReleaseSession(session_id));
 }
 
 INSTANTIATE_TEST_SUITE_P(

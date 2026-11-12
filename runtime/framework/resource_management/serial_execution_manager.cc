@@ -15,6 +15,7 @@
 #include "runtime/framework/resource_management/serial_execution_manager.h"
 
 #include <atomic>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -28,6 +29,7 @@
 
 #include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -229,12 +231,6 @@ absl::StatusOr<SessionId> SerialExecutionManager::RegisterNewSession(
     return absl::InvalidArgumentError(absl::StrCat(
         "Session ", session_id, " already exists in session list."));
   }
-  if (session_info->session_config.AudioModalityEnabled()) {
-    ABSL_RETURN_IF_ERROR(resource_manager_->TryLoadingAudioExecutor());
-  }
-  if (session_info->session_config.VisionModalityEnabled()) {
-    ABSL_RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
-  }
   session_lookup_.insert({session_id, std::move(session_info)});
   if (runtime_debugger_ != nullptr) {
     runtime_debugger_->RegisterDebugSession(session_id);
@@ -250,9 +246,7 @@ absl::Status SerialExecutionManager::ReleaseSession(SessionId session_id) {
   }
   if (session_lookup_.at(session_id)->session_config.AudioModalityEnabled() &&
       session_lookup_.size() == 1) {
-    ABSL_ASSIGN_OR_RETURN(auto audio_executor,
-                          resource_manager_->AcquireAudioExecutor());
-    audio_executor->Reset().IgnoreError();
+    resource_manager_->ResetAudioIfLoaded();
   }
   std::erase_if(ready_queue_, [this, session_id](TaskId tid) {
     return task_lookup_.at(tid).session_id == session_id;
@@ -266,6 +260,8 @@ absl::Status SerialExecutionManager::ReleaseSession(SessionId session_id) {
   session_lookup_.erase(session_id);
   if (session_lookup_.empty()) {
     resource_manager_->ResetCurrentHandler();
+    resource_manager_->MaybeUnloadVisionExecutor();
+    resource_manager_->MaybeUnloadAudioExecutor();
   }
   return absl::OkStatus();
 }
@@ -594,6 +590,28 @@ absl::StatusOr<ExecutorInputs>
 SerialExecutionManager::ProcessAndCombineContents(
     const std::vector<InputData>& preprocessed_contents,
     std::optional<BenchmarkInfo>& benchmark_info) {
+  size_t remaining_images = 0;
+  size_t remaining_raw_audio = 0;
+  for (const auto& content : preprocessed_contents) {
+    if (std::holds_alternative<InputImage>(content)) {
+      ++remaining_images;
+    } else if (const auto* audio = std::get_if<InputAudio>(&content);
+               audio != nullptr && !audio->IsAudioEmbeddings()) {
+      ++remaining_raw_audio;
+    }
+  }
+  bool vision_unloaded = (remaining_images == 0);
+  bool audio_unloaded = (remaining_raw_audio == 0);
+  auto unload_reloadable_encoders =
+      absl::MakeCleanup([this, &vision_unloaded, &audio_unloaded] {
+        if (!vision_unloaded) {
+          resource_manager_->MaybeUnloadVisionExecutor();
+        }
+        if (!audio_unloaded) {
+          resource_manager_->MaybeUnloadAudioExecutor();
+        }
+      });
+
   std::vector<int> combined_token_ids;
   std::vector<ExecutorVisionData> all_image_data;
   std::vector<ExecutorAudioData> all_audio_data;
@@ -632,6 +650,10 @@ SerialExecutionManager::ProcessAndCombineContents(
       } else {
         return absl::FailedPreconditionError(
             "Image tensor or tensor map is null in preprocessed_contents.");
+      }
+      if (--remaining_images == 0) {
+        resource_manager_->MaybeUnloadVisionExecutor();
+        vision_unloaded = true;
       }
       if (benchmark_info.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("vision_executor"));
@@ -674,10 +696,16 @@ SerialExecutionManager::ProcessAndCombineContents(
         if (benchmark_info.has_value()) {
           ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
         }
-        ABSL_ASSIGN_OR_RETURN(auto audio_executor,
-                              resource_manager_->AcquireAudioExecutor());
-        ABSL_ASSIGN_OR_RETURN(single_audio_data,
-                              audio_executor->Encode(*spectrogram_tensor));
+        {
+          ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                                resource_manager_->AcquireAudioExecutor());
+          ABSL_ASSIGN_OR_RETURN(single_audio_data,
+                                audio_executor->Encode(*spectrogram_tensor));
+        }
+        if (--remaining_raw_audio == 0) {
+          resource_manager_->MaybeUnloadAudioExecutor();
+          audio_unloaded = true;
+        }
         if (benchmark_info.has_value()) {
           ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
         }
@@ -689,22 +717,16 @@ SerialExecutionManager::ProcessAndCombineContents(
                                   ExecutorAudioData::kSpecialToken);
       }
     } else if (std::holds_alternative<InputAudioEnd>(preprocessed_content)) {
-      // We allow audio end token even if the audio executor is not
-      // available.
-      auto audio_executor = resource_manager_->AcquireAudioExecutor();
-      if (audio_executor.ok()) {
-        // Flush any remaining buffered spectrogram frames from streaming
-        // Encode() calls.
-        auto flushed_audio_data = (*audio_executor)->Flush();
-        if (flushed_audio_data.ok()) {
-          const int flushed_tokens = flushed_audio_data->GetValidTokens();
-          if (flushed_tokens > 0) {
-            all_audio_data.push_back(std::move(*flushed_audio_data));
-            combined_token_ids.insert(combined_token_ids.end(), flushed_tokens,
-                                      ExecutorAudioData::kSpecialToken);
-          }
-        } else if (!absl::IsUnimplemented(flushed_audio_data.status())) {
-          return flushed_audio_data.status();
+      // Flush any remaining buffered spectrogram frames from streaming
+      // Encode() calls if an audio executor is currently loaded.
+      ABSL_ASSIGN_OR_RETURN(auto flushed_audio_data,
+                            resource_manager_->FlushAudioIfLoaded());
+      if (flushed_audio_data.has_value()) {
+        const int flushed_tokens = flushed_audio_data->GetValidTokens();
+        if (flushed_tokens > 0) {
+          all_audio_data.push_back(std::move(*flushed_audio_data));
+          combined_token_ids.insert(combined_token_ids.end(), flushed_tokens,
+                                    ExecutorAudioData::kSpecialToken);
         }
       }
       combined_token_ids.push_back(ExecutorAudioData::kEndToken);
@@ -779,27 +801,17 @@ absl::Status SerialExecutionManager::AddPrefillTask(
       if (executor_inputs.status().message() ==
               "No token IDs found in preprocessed_contents." &&
           session_info->session_config.AudioModalityEnabled()) {
-        {
-          auto audio_executor = resource_manager_->AcquireAudioExecutor();
-          if (!audio_executor.ok()) {
-            FinishTaskAndLogErrors(task_id, audio_executor.status(),
-                                   std::move(callback));
-            return;
-          }
-          auto audio_executor_properties =
-              (*audio_executor)->GetAudioExecutorProperties();
-          if (!audio_executor_properties.ok()) {
-            audio_executor.value().reset();
-            FinishTaskAndLogErrors(task_id, audio_executor_properties.status(),
-                                   std::move(callback));
-            return;
-          }
-          if (!audio_executor_properties->is_streaming_model) {
-            audio_executor.value().reset();
-            FinishTaskAndLogErrors(task_id, executor_inputs.status(),
-                                   std::move(callback));
-            return;
-          }
+        auto audio_executor_properties =
+            resource_manager_->GetAudioExecutorProperties();
+        if (!audio_executor_properties.ok()) {
+          FinishTaskAndLogErrors(task_id, audio_executor_properties.status(),
+                                 std::move(callback));
+          return;
+        }
+        if (!audio_executor_properties->is_streaming_model) {
+          FinishTaskAndLogErrors(task_id, executor_inputs.status(),
+                                 std::move(callback));
+          return;
         }
         ABSL_VLOG(1)
             << "Input audio chunk is smaller than the audio encoder input "
