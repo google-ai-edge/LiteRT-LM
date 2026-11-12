@@ -25,6 +25,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/executor/ynnpack_mode.h"
 
 ABSL_FLAG(std::optional<std::string>, vision_backend, std::nullopt,
           "Backend to use for the vision model (cpu, gpu, or npu). If not "
@@ -90,8 +91,10 @@ ABSL_FLAG(bool, multi_turns, false,
 ABSL_FLAG(int, num_cpu_threads, 0,
           "If greater than 0, the number of CPU threads to use for the LLM "
           "execution with CPU backend.");
-ABSL_FLAG(bool, enable_ynnpack, false,
-          "Delegate supported CPU operations to YNNPACK before XNNPACK.");
+ABSL_FLAG(litert::lm::YnnpackMode, enable_ynnpack,
+          litert::lm::YnnpackMode::kOff,
+          "Delegate supported CPU operations to YNNPACK before XNNPACK. "
+          "Supported values: true, false, auto.");
 ABSL_FLAG(bool, gpu_external_tensor_mode, false,
           "If false (by default), the GPU backend will use no external tensor "
           "mode which runs slightly faster during decode. It should be set "

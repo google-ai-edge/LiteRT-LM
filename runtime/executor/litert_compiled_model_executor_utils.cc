@@ -1529,6 +1529,58 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
   return absl::OkStatus();
 }
 
+bool ModelContainsSdpa(const tflite::Model* model) {
+  if (model == nullptr || model->subgraphs() == nullptr ||
+      model->operator_codes() == nullptr) {
+    return false;
+  }
+  const auto* opcodes = model->operator_codes();
+  for (const auto* subgraph : *model->subgraphs()) {
+    if (subgraph == nullptr || subgraph->operators() == nullptr) {
+      continue;
+    }
+    for (const auto* op : *subgraph->operators()) {
+      if (op == nullptr || op->opcode_index() >= opcodes->size()) {
+        continue;
+      }
+      const auto* opcode = opcodes->Get(op->opcode_index());
+      if (opcode == nullptr) continue;
+      auto builtin_code =
+          std::max(static_cast<int32_t>(opcode->builtin_code()),
+                   static_cast<int32_t>(opcode->deprecated_builtin_code()));
+      if (builtin_code == tflite::BuiltinOperator_CUSTOM) {
+        if (opcode->custom_code() != nullptr) {
+          absl::string_view custom_name = opcode->custom_code()->string_view();
+          if (custom_name == "odml.scaled_dot_product_attention" ||
+              custom_name == "odml.sdpa_transposed") {
+            return true;
+          }
+        }
+      } else if (builtin_code == tflite::BuiltinOperator_STABLEHLO_COMPOSITE) {
+        const auto* schema_params =
+            op->builtin_options_2_as_StableHLOCompositeOptions();
+        if (schema_params != nullptr && schema_params->name() != nullptr) {
+          absl::string_view name = schema_params->name()->string_view();
+          if (name == "odml.scaled_dot_product_attention" ||
+              name == "odml.sdpa_transposed") {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool ModelResourcesContainSdpa(ModelResources& resources) {
+  auto buffer_or = resources.GetTFLiteModelBuffer(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  if (!buffer_or.ok() || buffer_or->empty()) {
+    return false;
+  }
+  return ModelContainsSdpa(tflite::GetModel(buffer_or->data()));
+}
+
 absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,

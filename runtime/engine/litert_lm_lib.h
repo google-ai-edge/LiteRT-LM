@@ -43,6 +43,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/executor/ynnpack_mode.h"
 
 namespace litert {
 namespace lm {
@@ -111,7 +112,9 @@ struct LiteRtLmSettings {
   bool multi_turns = false;
   int num_cpu_threads = 0;
   // Delegate supported CPU operations to YNNPACK before XNNPACK.
-  bool enable_ynnpack = false;
+  // Can be true (on), false (off), or auto (enabled only if SDPA ops are
+  // present).
+  YnnpackMode enable_ynnpack = YnnpackMode::kOff;
   // Set external tensor mode false by default since it runs slightly faster
   // during decode as the layout changes optimized for GPU inference is done by
   // GPU, not by CPU.

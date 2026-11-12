@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/executor/ynnpack_mode.h"
 
 // Common flags for litert_lm_main and litert_lm_example.
 ABSL_DECLARE_FLAG(std::optional<std::string>, vision_backend);
@@ -48,7 +49,7 @@ ABSL_DECLARE_FLAG(bool, report_peak_memory_footprint);
 ABSL_DECLARE_FLAG(bool, force_f32);
 ABSL_DECLARE_FLAG(bool, multi_turns);
 ABSL_DECLARE_FLAG(int, num_cpu_threads);
-ABSL_DECLARE_FLAG(bool, enable_ynnpack);
+ABSL_DECLARE_FLAG(litert::lm::YnnpackMode, enable_ynnpack);
 ABSL_DECLARE_FLAG(bool, gpu_external_tensor_mode);
 ABSL_DECLARE_FLAG(bool, configure_magic_numbers);
 ABSL_DECLARE_FLAG(bool, allow_context_length_expansion);

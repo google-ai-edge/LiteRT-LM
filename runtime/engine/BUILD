@@ -221,6 +221,7 @@ cc_library(
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:mtp_gating_policy",
         "//runtime/executor:speculative_decoding_mode",
+        "//runtime/executor:ynnpack_mode",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
@@ -253,6 +254,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "//runtime/executor:speculative_decoding_mode",
+        "//runtime/executor:ynnpack_mode",
     ],
     alwayslink = 1,
 )

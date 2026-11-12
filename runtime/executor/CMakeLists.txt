@@ -310,6 +310,7 @@ target_link_libraries(runtime_executor_llm_executor_settings
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Executor::MtpGatingPolicy
     LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
+    LiteRTLM::Runtime::Executor::YnnpackMode
     LiteRTLM::Runtime::Util::Logging
     LITERTLM_DEPS
 )
@@ -603,6 +604,25 @@ target_link_libraries(runtime_executor_speculative_decoding_mode
 )
 
 # ==============================================================================
+# YNNPACK Mode
+# ==============================================================================
+add_litertlm_library(runtime_executor_ynnpack_mode INTERFACE)
+add_library(LiteRTLM::Runtime::Executor::YnnpackMode
+  ALIAS runtime_executor_ynnpack_mode)
+
+target_include_directories(runtime_executor_ynnpack_mode
+  INTERFACE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_ynnpack_mode
+  INTERFACE
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # MTP Gating Policy
 # ==============================================================================
 add_litertlm_library(runtime_executor_mtp_gating_policy STATIC
@@ -848,6 +868,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::MtpGatingPolicy
   LiteRTLM::Runtime::Executor::SpeculativeDecodingController
   LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
+  LiteRTLM::Runtime::Executor::YnnpackMode
   LiteRTLM::Runtime::Executor::Npu
   LiteRTLM::Runtime::Executor::LlmNpuCompiledModel
   LiteRTLM::Runtime::Executor::LlmProcessedContextInterface

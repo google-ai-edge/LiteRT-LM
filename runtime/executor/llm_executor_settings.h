@@ -37,6 +37,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/executor/ynnpack_mode.h"
 
 namespace litert::lm {
 
@@ -145,7 +146,9 @@ struct CpuConfig {
   uint32_t number_of_threads = 4;
 
   // Whether YNNPACK should delegate supported operations before XNNPACK.
-  bool enable_ynnpack = false;
+  // Can be true (on), false (off), or auto (enabled only if SDPA ops are
+  // present).
+  YnnpackMode enable_ynnpack = YnnpackMode::kOff;
 };
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 

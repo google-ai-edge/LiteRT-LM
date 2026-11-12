@@ -222,7 +222,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--async=<true|false>] [--force_f32=<true|false] "
            "[--report_peak_memory_footprint] [--multi_turns=<true|false>] "
            "[--num_cpu_threads=<num_cpu_threads>] "
-           "[--enable_ynnpack=<true|false>] "
+           "[--enable_ynnpack=<true|false|auto>] "
            "[--gpu_external_tensor_mode=<true|false>] "
            "[--configure_magic_numbers=<true|false>] "
            "[--allow_context_length_expansion=<true|false>] "

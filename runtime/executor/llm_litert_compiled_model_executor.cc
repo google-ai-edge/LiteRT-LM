@@ -2280,7 +2280,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   LITERT_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
-                               &signatures));
+                               &signatures, /*cache_suffix=*/std::nullopt,
+                               &resources));
 
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
@@ -2826,7 +2827,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
-                               /*signatures=*/std::nullopt));
+                               /*signatures=*/std::nullopt,
+                               /*cache_suffix=*/std::nullopt, &resources));
 
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,

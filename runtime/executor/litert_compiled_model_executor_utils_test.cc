@@ -2987,5 +2987,158 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
       &bool_host_mask));
 }
 
+TEST(ModelContainsSdpaTest, ReturnsTrueForCustomSdpa) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_CUSTOM;
+  opcode->custom_code = "odml.scaled_dot_product_attention";
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_TRUE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsTrueForSdpaTransposed) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_CUSTOM;
+  opcode->custom_code = "odml.sdpa_transposed";
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_TRUE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsTrueForStableHloCompositeSdpa) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_STABLEHLO_COMPOSITE;
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  tflite::StableHLOCompositeOptionsT composite_options;
+  composite_options.name = "odml.scaled_dot_product_attention";
+  op->builtin_options_2.Set(std::move(composite_options));
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_TRUE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsFalseForNonSdpaModel) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_ADD;
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_FALSE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsFalseForNullModel) {
+  EXPECT_FALSE(ModelContainsSdpa(nullptr));
+}
+
+TEST(ModelResourcesContainSdpaTest, ReturnsTrueWhenPrefillDecodeHasSdpa) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_CUSTOM;
+  opcode->custom_code = "odml.scaled_dot_product_attention";
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  std::string model_buffer(
+      reinterpret_cast<const char*>(builder.GetBufferPointer()),
+      builder.GetSize());
+
+  class FakeSdpaModelResources : public ModelResources {
+   public:
+    explicit FakeSdpaModelResources(std::string buffer)
+        : buffer_(std::move(buffer)) {}
+
+    bool HasTFLiteModel(
+        proto::LlmMetadata::TfLiteModelType model_type) override {
+      return model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE;
+    }
+
+    absl::StatusOr<const Model*> GetTFLiteModel(
+        proto::LlmMetadata::TfLiteModelType model_type) override {
+      return absl::UnimplementedError("Not implemented");
+    }
+
+    absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+        proto::LlmMetadata::TfLiteModelType model_type) override {
+      if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
+        return buffer_;
+      }
+      return absl::NotFoundError("Model not found");
+    }
+
+    absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
+      return absl::UnimplementedError("Not implemented");
+    }
+
+    absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
+      return absl::UnimplementedError("Not implemented");
+    }
+
+   private:
+    std::string buffer_;
+  };
+
+  FakeSdpaModelResources resources(std::move(model_buffer));
+  EXPECT_TRUE(ModelResourcesContainSdpa(resources));
+}
+
 }  // namespace
 }  // namespace litert::lm

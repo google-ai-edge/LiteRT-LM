@@ -37,7 +37,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     const ActivationDataType& activation_data_type,
     std::optional<ModelSignatures*> signatures,
-    std::optional<std::string> cache_suffix = std::nullopt);
+    std::optional<std::string> cache_suffix = std::nullopt,
+    ModelResources* resources = nullptr);
 
 }  // namespace litert::lm
 

@@ -857,6 +857,7 @@ cc_library(
         ":executor_settings_base",
         ":mtp_gating_policy",
         ":speculative_decoding_mode",
+        ":ynnpack_mode",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
@@ -898,6 +899,7 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
+        ":ynnpack_mode",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -913,6 +915,7 @@ cc_library(
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
         "@litert//litert/experimental/custom_ops/gated_delta_net:gated_delta_update_litert_custom_op",
+        "//runtime/components:model_resources",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
     ],
@@ -954,6 +957,27 @@ cc_library(
     deps = [
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "ynnpack_mode",
+    hdrs = ["ynnpack_mode.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_test(
+    name = "ynnpack_mode_test",
+    srcs = ["ynnpack_mode_test.cc"],
+    deps = [
+        ":ynnpack_mode",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
     ],
 )
 

@@ -174,6 +174,7 @@ target_include_directories(runtime_engine_shared_flags
 target_link_libraries(runtime_engine_shared_flags
   PUBLIC
     LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
+    LiteRTLM::Runtime::Executor::YnnpackMode
     LITERTLM_DEPS
 )
 

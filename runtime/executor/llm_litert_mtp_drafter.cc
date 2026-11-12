@@ -194,7 +194,7 @@ LlmLiteRtMtpDrafter::Create(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
                                /*signatures=*/std::nullopt,
-                               /*cache_suffix=*/cache_suffix));
+                               /*cache_suffix=*/cache_suffix, &resources));
   ABSL_RETURN_IF_ERROR(
       UpdateCompilationOptions(executor_settings, compilation_options));
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(

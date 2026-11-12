@@ -48,6 +48,10 @@
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 
+namespace tflite {
+class Model;
+}  // namespace tflite
+
 namespace litert::lm {
 
 // Prefill signature map for LiteRt APIs.
@@ -449,6 +453,14 @@ absl::Status SetExternalWeightOptions(ModelResources& resources,
   return SetExternalWeightOptions(
       resources, TfLiteModelTypeToWireString(model_type), compilation_options);
 }
+
+// Returns true if the TFLite model contains an SDPA composite op
+// ("odml.scaled_dot_product_attention" or "odml.sdpa_transposed").
+bool ModelContainsSdpa(const tflite::Model* model);
+
+// Returns true if the main text decoder (prefill/decode) model in resources
+// contains an SDPA composite op.
+bool ModelResourcesContainSdpa(ModelResources& resources);
 
 // Initializes the embedding lookup and per-layer embedding lookup managers from
 // the given model resources and environment.

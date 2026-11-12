@@ -131,7 +131,7 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
       CreateCompilationOptions(
           executor_settings, activation_data_type,
           signatures ? std::make_optional(&*signatures) : std::nullopt,
-          cache_suffix));
+          cache_suffix, &resources));
 
   // Set the MTP drafter compilation options. These would normally be set by
   // LlmLiteRtMtpDrafter::Create in regular non-streaming mode, but in streaming
