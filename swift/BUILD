@@ -238,6 +238,7 @@ ios_unit_test(
         "//runtime/testdata",
     ],
     minimum_os_version = "15.0",
+    requires_booted_simulator = True,
     # The ios_unit_test depends on the swift_library containing the test code.
     deps = [
         ":LiteRT_LM_EngineTestsLib",
