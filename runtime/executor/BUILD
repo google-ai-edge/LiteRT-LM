@@ -864,6 +864,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "//runtime/executor/gpu_artisan/utils:constraint_utils",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
@@ -971,6 +972,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components/constrained_decoding:constrained_decoder",
+        "//runtime/executor/gpu_artisan/utils:constraint_utils",
         "//runtime/util:logging_tensor_buffer",
     ],
 )
