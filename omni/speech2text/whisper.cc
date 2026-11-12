@@ -35,6 +35,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/model_utils.h"
 #include "omni/multi_staged_session.h"
@@ -43,7 +44,7 @@
 #include "omni/omni_session.h"
 #include "omni/speech2text/asr_session.h"
 #include "omni/speech2text/audio_source.h"
-#include "omni/speech2text/stateless_decoder.h"
+#include "omni/speech2text/whisper_decoder.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
 #include "runtime/proto/speech2text_model_type.pb.h"
@@ -206,11 +207,14 @@ class WhisperSessionFactory : public AsrSessionFactory {
     std::vector<int> start_token_ids(
         metadata().decode_start_token_ids().begin(),
         metadata().decode_start_token_ids().end());
+    WhisperDecoder::Options decoder_options;
+    decoder_options.enable_timestamps = true;
     ABSL_ASSIGN_OR_RETURN(
         auto decoder,
-        StatelessDecoder::Create(encoder.get(), std::move(start_token_ids),
-                                 metadata().decode_stop_token_id(),
-                                 metadata().decode_skip_until_token_id()));
+        WhisperDecoder::Create(
+            encoder.get(), "decode", /*num_non_state_inputs=*/2,
+            /*num_non_state_outputs=*/1, std::move(start_token_ids),
+            std::move(decoder_options)));
     return CreateMultiStagedSession(std::move(audio_source), std::move(encoder),
                                     std::move(decoder));
   }
@@ -236,6 +240,18 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetWhisperSessionFactory(
         "lm_resources must not be null (model_path: ", settings.model_path,
         ")."));
   }
+  // Enforces mixed precision (FP16 with FP32 accumulator) on GPU for
+  // whisper-medium for better quality, as medium model's deep layers easily
+  // overflow FP16 dynamic range.
+  if (settings.backend == OmniEngine::Settings::Backend::kGpu &&
+      !settings.force_fp32_on_gpu &&
+      absl::c_linear_search(kWhisperMediumModelNames, model_name)) {
+    auto gpu_options = options.GetGpuOptions();
+    if (gpu_options.HasValue()) {
+      (void)gpu_options->SetPrecision(
+          ::litert::GpuOptions::Precision::kFp16WithFp32Accum);
+    }
+  }
   ABSL_ASSIGN_OR_RETURN(
       auto compiled_model,
       CreateCompiledModel(
@@ -260,7 +276,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetWhisperSessionFactory(
       .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/whisper-tiny/resolve/main/"
-          "whisper_tiny_30s_i8.litertlm",
+          "whisper_tiny_30s_i8_stateful.litertlm",
   }));
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kWhisperBaseModelNames),
@@ -269,7 +285,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetWhisperSessionFactory(
       .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/whisper-base/resolve/main/"
-          "whisper_base_30s_i8.litertlm",
+          "whisper_base_30s_i8_stateful.litertlm",
   }));
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kWhisperSmallModelNames),
@@ -278,7 +294,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetWhisperSessionFactory(
       .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/whisper-small/resolve/main/"
-          "whisper_small_30s_i8.litertlm",
+          "whisper_small_30s_i8_stateful.litertlm",
   }));
   ABSL_CHECK_OK(OmniRegistry::Get().RegisterSessionFactory(RegistrySpec{
       .model_names = {std::begin(kWhisperMediumModelNames),
@@ -287,7 +303,7 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetWhisperSessionFactory(
       .session_config_type_id = "Speech2Text",
       .model_remote_url =
           "https://huggingface.co/litert-community/whisper-medium/resolve/main/"
-          "whisper_medium_30s_i8.litertlm",
+          "whisper_medium_30s_i8_stateful.litertlm",
   }));
   return true;
 }();

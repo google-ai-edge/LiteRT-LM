@@ -228,6 +228,91 @@ cc_test(
 )
 
 cc_library(
+    name = "stateful_decoder",
+    srcs = ["stateful_decoder.cc"],
+    hdrs = ["stateful_decoder.h"],
+    deps = [
+        ":litert_speech_recognizer",
+        ":speech_recognizer",
+        ":utils",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_runner",
+        "//omni/base:stateful_litert_runner",
+    ],
+)
+
+cc_test(
+    name = "stateful_decoder_test",
+    srcs = ["stateful_decoder_test.cc"],
+    deps = [
+        ":stateful_decoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_runner",
+        "//omni/base:mock_litert_runner",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "whisper_decoder",
+    srcs = ["whisper_decoder.cc"],
+    hdrs = ["whisper_decoder.h"],
+    deps = [
+        ":litert_speech_recognizer",
+        ":speech_recognizer",
+        ":stateful_decoder",
+        ":utils",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_runner",
+        "//omni/base:stateful_litert_runner",
+    ],
+)
+
+cc_test(
+    name = "whisper_decoder_test",
+    srcs = ["whisper_decoder_test.cc"],
+    deps = [
+        ":speech_recognizer",
+        ":whisper_decoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_runner",
+        "//omni/base:mock_litert_runner",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "tdt_decoder",
     srcs = ["tdt_decoder.cc"],
     hdrs = ["tdt_decoder.h"],
@@ -743,7 +828,7 @@ cc_library(
     deps = [
         ":asr_session",
         ":audio_source",
-        ":stateless_decoder",
+        ":whisper_decoder",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/log:absl_check",
@@ -755,6 +840,7 @@ cc_library(
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_options",
+        "@litert//litert/cc/options:litert_gpu_options",
         "//omni:multi_staged_session",
         "//omni:omni_engine_header",
         "//omni:omni_registry",

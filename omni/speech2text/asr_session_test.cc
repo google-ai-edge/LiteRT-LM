@@ -117,14 +117,14 @@ TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
   EXPECT_EQ(tiny_reg.canonical_model_name, "whisper-tiny");
   EXPECT_EQ(tiny_reg.model_remote_url,
             "https://huggingface.co/litert-community/whisper-tiny/resolve/main/"
-            "whisper_tiny_30s_i8.litertlm");
+            "whisper_tiny_30s_i8_stateful.litertlm");
 
   ASSERT_OK_AND_ASSIGN(auto base_reg,
                        OmniRegistry::Get().GetRegisteredModel("whisper-base"));
   EXPECT_EQ(base_reg.canonical_model_name, "whisper-base");
   EXPECT_EQ(base_reg.model_remote_url,
             "https://huggingface.co/litert-community/whisper-base/resolve/main/"
-            "whisper_base_30s_i8.litertlm");
+            "whisper_base_30s_i8_stateful.litertlm");
 
   ASSERT_OK_AND_ASSIGN(auto small_reg,
                        OmniRegistry::Get().GetRegisteredModel("whisper-small"));
@@ -132,7 +132,7 @@ TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
   EXPECT_EQ(
       small_reg.model_remote_url,
       "https://huggingface.co/litert-community/whisper-small/resolve/main/"
-      "whisper_small_30s_i8.litertlm");
+      "whisper_small_30s_i8_stateful.litertlm");
 
   ASSERT_OK_AND_ASSIGN(auto medium_reg, OmniRegistry::Get().GetRegisteredModel(
                                             "whisper-medium"));
@@ -140,7 +140,7 @@ TEST_F(AsrSessionTest, AllDefaultModelsAreRegistered) {
   EXPECT_EQ(
       medium_reg.model_remote_url,
       "https://huggingface.co/litert-community/whisper-medium/resolve/main/"
-      "whisper_medium_30s_i8.litertlm");
+      "whisper_medium_30s_i8_stateful.litertlm");
 }
 
 TEST_F(AsrSessionTest, WhisperResolvesLanguageTokenFromSessionConfig) {
