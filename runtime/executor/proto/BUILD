@@ -11,3 +11,37 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+load(
+    "@org_tensorflow//tensorflow/core/platform:build_config.bzl",
+    "tf_proto_library",
+)
+
+package(
+    default_hdrs_check = "strict",
+    default_visibility = [
+        "//visibility:public",
+    ],
+)
+
+licenses(["notice"])
+
+tf_proto_library(
+    name = "constrained_decoding_options",
+    srcs = ["constrained_decoding_options.proto"],
+)
+
+alias(
+    name = "constrained_decoding_options_proto",
+    actual = ":constrained_decoding_options",
+)
+
+alias(
+    name = "constrained_decoding_options_cc_proto",
+    actual = ":constrained_decoding_options_cc",
+)
+
+alias(
+    name = "constrained_decoding_options_py_pb2",
+    actual = ":constrained_decoding_options_py_proto",
+)

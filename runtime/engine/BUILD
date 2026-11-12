@@ -110,7 +110,13 @@ cc_library(
 # The selected engine implementations based on the build flags.
 cc_library(
     name = "engine_impl_selected",
-    deps = ["//runtime/core:engine_advanced_impl"],
+    deps = select({
+        "//build_config:disable_engine_advanced_impl": [],
+        "//conditions:default": ["//runtime/core:engine_advanced_impl"],
+    }) + select({
+        "//build_config:exclude_oss_engine_advanced_legacy_impl": [],
+        "//conditions:default": ["//runtime/core:engine_advanced_legacy_impl"],
+    }),
     alwayslink = 1,
 )
 
