@@ -217,13 +217,13 @@ async function toWireMessage(
     }
     const {data, ...rest} = part as ImageContentPart | AudioContentPart;
     if (typeof data === 'string') {
-      content.push({...rest, blob: data} as unknown as ContentPart);
+      content.push({...rest, 'blob': data} as unknown as ContentPart);
       continue;
     }
     const bytes = await toUint8Array(data);
     const blobIndex = blobs.length;
     blobs.push(bytes);
-    content.push({...rest, blob_index: blobIndex} as unknown as ContentPart);
+    content.push({...rest, 'blob_index': blobIndex} as unknown as ContentPart);
   }
   return {...message, content};
 }
