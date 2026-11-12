@@ -234,6 +234,31 @@ target_link_libraries(runtime_components_prompt_template
     LITERTLM_DEPS
 )
 
+# ==============================================================================
+# Model Resources HF Dir
+# ==============================================================================
+add_litertlm_library(runtime_components_model_resources_hf_dir STATIC
+  model_resources_hf_dir.cc
+)
+add_library(LiteRTLM::Runtime::Components::ModelResourcesHfDir
+  ALIAS runtime_components_model_resources_hf_dir)
+
+target_include_directories(runtime_components_model_resources_hf_dir
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+    ${THIRD_PARTY_DIR}/json/include
+)
+
+target_link_libraries(runtime_components_model_resources_hf_dir
+  PUBLIC
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Runtime::Components::TokenizerInterface
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LITERTLM_DEPS
+)
+
 add_litertlm_library(runtime_components_prompt_template_noop STATIC
   prompt_template_noop.cc
 )
@@ -455,6 +480,7 @@ target_link_libraries(runtime_components_libs INTERFACE
   LiteRTLM::Runtime::Components::ModelResourcesLitertLm
   LiteRTLM::Runtime::Components::ModelResourcesStreaming
   LiteRTLM::Runtime::Components::ModelResourcesTask
+  LiteRTLM::Runtime::Components::ModelResourcesHfDir
   LiteRTLM::Runtime::Components::PromptTemplate
   LiteRTLM::Runtime::Components::SamplerFactory
   LiteRTLM::Runtime::Components::SamplerParamsUtil

@@ -14,11 +14,13 @@
 
 #include "runtime/executor/executor_settings_base.h"
 
+#include <filesystem>  // NOLINT: Required for directory check.
 #include <initializer_list>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <system_error>  // NOLINT: Required for std::filesystem::is_directory.
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -472,6 +474,15 @@ ModelAssets::ModelAssets(
 
 ModelAssets::ModelAssets(std::shared_ptr<litert::lm::DataStream> data_stream)
     : data_stream_(std::move(data_stream)) {}
+
+bool ModelAssets::IsDirectory() const {
+  if (HasMemoryMappedFile() || HasScopedFile() || HasDataStream() ||
+      path_.empty()) {
+    return false;
+  }
+  std::error_code ec;
+  return std::filesystem::is_directory(std::filesystem::path(path_), ec);
+}
 
 absl::StatusOr<absl::string_view> ModelAssets::GetPath() const {
   if (!path_.empty()) {

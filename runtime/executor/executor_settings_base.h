@@ -235,6 +235,11 @@ class ModelAssets {
   bool HasMemoryMappedFile() const { return memory_mapped_file_ != nullptr; }
   bool HasDataStream() const { return data_stream_ != nullptr; }
 
+  // Returns true if the assets refer to an existing filesystem directory path
+  // (rather than a regular file, `ScopedFile`, `MemoryMappedFile`, or
+  // `DataStream`).
+  bool IsDirectory() const;
+
   // Returns the model file if it was created with the respective variant,
   // otherwise returns an error.
   absl::StatusOr<absl::string_view> GetPath() const;
