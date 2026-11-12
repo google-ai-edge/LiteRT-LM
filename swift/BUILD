@@ -129,6 +129,7 @@ C_LITERT_LM_PUBLIC_HDRS = [
     "//c:error_reporter.h",
     "//c:experimental.h",
     "//c:model_info.h",
+    "//c:model_sync.h",
 ]
 
 swift_interop_hint(
@@ -210,6 +211,7 @@ genrule(
        cp $(execpath //c:error_reporter.h) CLiteRTLM_mac/Headers/
        cp $(execpath //c:experimental.h) CLiteRTLM_mac/Headers/
        cp $(execpath //c:model_info.h) CLiteRTLM_mac/Headers/
+       cp $(execpath //c:model_sync.h) CLiteRTLM_mac/Headers/
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
 module CLiteRTLM {
@@ -220,6 +222,7 @@ module CLiteRTLM {
    header "error_reporter.h"
    header "experimental.h"
    header "model_info.h"
+   header "model_sync.h"
    export *
 }
 EOF

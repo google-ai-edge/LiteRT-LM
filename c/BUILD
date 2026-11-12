@@ -40,11 +40,14 @@ exports_files([
     "experimental.h",
     "model_info.cc",
     "model_info.h",
+    "model_sync.cc",
+    "model_sync.h",
 ])
 
 ENGINE_LITE_COMMON_DEPS = [
     ":c_api_internal",
     ":engine_internal",
+    ":error_reporter",
     ":error_reporter_headers",
     ":error_reporter_internal",
     "@com_google_absl//absl/base:core_headers",
@@ -145,6 +148,22 @@ cc_library(
     ],
 )
 
+# Implementation library for error reporter C API.
+cc_library(
+    name = "error_reporter",
+    srcs = ["error_reporter.cc"],
+    hdrs = ["error_reporter.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":api_export_headers",
+        ":error_reporter_headers",
+        ":error_reporter_internal",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+    alwayslink = True,
+)
+
 # Header library for engine + session C API.
 cc_library(
     name = "engine_headers",
@@ -175,6 +194,17 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":engine_headers",
+        ":error_reporter_headers",
+    ],
+)
+
+# Header library for model sync C API.
+cc_library(
+    name = "model_sync_headers",
+    hdrs = ["model_sync.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":api_export_headers",
         ":error_reporter_headers",
     ],
 )
@@ -239,6 +269,7 @@ cc_test(
         ":error_reporter_headers",
         ":experimental_headers",
         ":model_info_headers",
+        ":model_sync_headers",
     ],
 )
 
@@ -327,7 +358,6 @@ cc_library(
     name = "engine_lite",
     srcs = [
         "engine.cc",
-        "error_reporter.cc",
     ],
     hdrs = [
         "api_export.h",
@@ -346,7 +376,6 @@ cc_library(
     name = "engine_lite_cpu",
     srcs = [
         "engine.cc",
-        "error_reporter.cc",
     ],
     hdrs = [
         "api_export.h",
@@ -393,7 +422,6 @@ cc_library(
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
-        "error_reporter.cc",
         "experimental.cc",
         "model_info.cc",
     ],
@@ -405,9 +433,11 @@ cc_library(
         "error_reporter.h",
         "experimental.h",
         "model_info.h",
+        "model_sync.h",
     ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
+        ":model_sync",
         "//runtime/engine:engine_impl_selected",
     ],
     alwayslink = True,
@@ -420,7 +450,6 @@ cc_library(
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
-        "error_reporter.cc",
         "experimental.cc",
         "model_info.cc",
     ],
@@ -432,9 +461,11 @@ cc_library(
         "error_reporter.h",
         "experimental.h",
         "model_info.h",
+        "model_sync.h",
     ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
+        ":model_sync",
         "//runtime/engine:engine_impl_cpu_only_selected",
     ],
     alwayslink = True,
@@ -484,6 +515,45 @@ cc_test(
         ":engine",
         ":model_info_headers",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "model_sync",
+    srcs = ["model_sync.cc"],
+    hdrs = ["model_sync.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":api_export_headers",
+        ":error_reporter",
+        ":error_reporter_headers",
+        ":error_reporter_internal",
+        ":model_sync_headers",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+        "//sync:model_sync",
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "model_sync_test",
+    srcs = ["model_sync_test.cc"],
+    tags = ["requires-mac-inputs:hard"],
+    target_compatible_with = select({
+        "@platforms//os:ios": [],
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":error_reporter_headers",
+        ":model_sync",
+        ":model_sync_headers",
+        "@com_google_googletest//:gtest_main",
+        "//schema/core:litertlm_header_schema",
+        "//sync:test_utils",
     ],
 )
 
@@ -588,9 +658,9 @@ cc_binary(
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
-        "error_reporter.cc",
         "experimental.cc",
         "model_info.cc",
+        "model_sync.cc",
     ],
     # Used only on Linux and Android; see the default branch of `linkopts`.
     additional_linker_inputs = [":litert_lm_c_api_linux.lds"],
@@ -643,7 +713,9 @@ cc_binary(
         ":engine_headers",
         ":experimental_headers",
         ":model_info_headers",
+        ":model_sync_headers",
         "//runtime/engine:engine_impl_selected",
+        "//sync:model_sync",
     ] + select({
         "//conditions:default": [],
     }),

@@ -63,12 +63,25 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "test_utils",
+    testonly = True,
+    hdrs = ["test_utils.h"],
+    deps = [
+        ":sha256",
+        "@flatbuffers",
+        "//schema/core:litertlm_header",
+        "//schema/core:litertlm_header_schema",
+    ],
+)
+
 cc_test(
     name = "model_sync_test",
     srcs = ["model_sync_test.cc"],
     deps = [
         ":model_sync",
         ":sha256",
+        ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",

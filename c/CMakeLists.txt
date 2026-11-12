@@ -150,6 +150,26 @@ target_link_libraries(c_model_info
 )
 
 # ==============================================================================
+# Model Sync
+# ==============================================================================
+add_litertlm_library(c_model_sync STATIC
+  model_sync.cc
+)
+add_library(LiteRTLM::C::ModelSync ALIAS c_model_sync)
+
+target_include_directories(c_model_sync
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_model_sync
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::Sync::ModelSync
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(c_libs INTERFACE)
@@ -159,6 +179,7 @@ target_link_libraries(c_libs INTERFACE
   LiteRTLM::C::ErrorReporter
   LiteRTLM::C::Internal
   LiteRTLM::C::ModelInfo
+  LiteRTLM::C::ModelSync
   LiteRTLM::C::Conversation
   LiteRTLM::C::Engine
   LiteRTLM::C::EmbeddingEngine

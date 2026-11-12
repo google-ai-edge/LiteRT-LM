@@ -29,5 +29,6 @@
 #include "c/error_reporter.h"  // IWYU pragma: keep
 #include "c/experimental.h"  // IWYU pragma: keep
 #include "c/model_info.h"  // IWYU pragma: keep
+#include "c/model_sync.h"  // IWYU pragma: keep
 
 int main(void) { return 0; }

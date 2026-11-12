@@ -52,77 +52,13 @@
 #include "schema/core/litertlm_read.h"
 #include "support/util/test_utils.h"  // NOLINT
 #include "sync/sha256.h"
+#include "sync/test_utils.h"
 
 namespace litert::lm::sync {
 namespace {
 
 using ::testing::IsEmpty;
 using ::testing::status::StatusIs;
-
-struct TestSectionSpec {
-  schema::AnySectionDataType data_type;
-  std::string model_type;
-  std::string payload;
-  size_t begin_offset;
-};
-
-std::string CreateTestModel(const std::string& path,
-                            const std::vector<TestSectionSpec>& sections,
-                            bool include_sha256 = true) {
-  flatbuffers::FlatBufferBuilder builder;
-
-  std::vector<flatbuffers::Offset<schema::SectionObject>> section_objs;
-  for (const auto& sec : sections) {
-    std::vector<flatbuffers::Offset<schema::KeyValuePair>> items;
-    if (include_sha256) {
-      std::string sha = ComputeSha256Hex(sec.payload);
-      items.push_back(schema::CreateKeyValuePair(builder, "sha256", sha));
-    }
-    if (!sec.model_type.empty()) {
-      items.push_back(
-          schema::CreateKeyValuePair(builder, "model_type", sec.model_type));
-    }
-
-    size_t end_offset = sec.begin_offset + sec.payload.size();
-    section_objs.push_back(schema::CreateSectionObject(
-        builder, builder.CreateVector(items), sec.begin_offset, end_offset,
-        sec.data_type));
-  }
-
-  auto section_metadata_offset = schema::CreateSectionMetadata(
-      builder, builder.CreateVector(section_objs));
-  auto root_offset =
-      schema::CreateLiteRTLMMetaData(builder, 0, section_metadata_offset);
-  builder.Finish(root_offset);
-
-  uint8_t* fb_buf = builder.GetBufferPointer();
-  size_t fb_size = builder.GetSize();
-
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  out.write("LITERTLM", 8);
-  uint32_t major = 1, minor = 9, patch = 0, pad = 0;
-  out.write(reinterpret_cast<const char*>(&major), 4);
-  out.write(reinterpret_cast<const char*>(&minor), 4);
-  out.write(reinterpret_cast<const char*>(&patch), 4);
-  out.write(reinterpret_cast<const char*>(&pad), 4);
-
-  uint64_t header_end_offset = 32 + fb_size;
-  out.write(reinterpret_cast<const char*>(&header_end_offset), 8);
-  out.write(reinterpret_cast<const char*>(fb_buf), fb_size);
-
-  for (const auto& sec : sections) {
-    if (static_cast<uint64_t>(out.tellp()) < sec.begin_offset) {
-      size_t fill = sec.begin_offset - out.tellp();
-      std::string zeroes(fill, '\0');
-      out.write(zeroes.data(), fill);
-    }
-    out.seekp(sec.begin_offset);
-    out.write(sec.payload.data(), sec.payload.size());
-  }
-  out.close();
-
-  return path;
-}
 
 RangeFetcher CreateFileRangeFetcher(const std::string& remote_file_path,
                                     std::vector<ByteRange>* logged_ranges) {
