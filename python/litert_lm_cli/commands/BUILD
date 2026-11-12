@@ -188,3 +188,20 @@ py_test(
         requirement("click"),
     ],
 )
+
+py_test(
+    name = "run_test",
+    srcs = ["run_test.py"],
+    tags = [
+        "nomacos",
+        "nowindows",
+    ],
+    deps = [
+        ":run",
+        "//python/litert_lm",
+        "//python/litert_lm_cli:model",
+        "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
+        requirement("prompt_toolkit"),
+    ],
+)
