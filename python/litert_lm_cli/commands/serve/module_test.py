@@ -21,6 +21,7 @@ import sys
 import threading
 from typing import Any
 from unittest import mock
+import urllib.error
 import urllib.request
 
 from absl.testing import absltest
@@ -2604,6 +2605,189 @@ class ServeTest(parameterized.TestCase):
 
       self.assertEqual(mock_engine_instance.create_conversation.call_count, 1)
       self.assertEqual(mock_conv.send_message_async.call_count, 2)
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="invalid_string",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tools": [{
+                  "type": "function",
+                  "function": {"name": "get_weather"},
+              }],
+              "tool_choice": "sometimes",
+          },
+      ),
+      dict(
+          testcase_name="invalid_type_int",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tool_choice": 123,
+          },
+      ),
+      dict(
+          testcase_name="required_without_tools",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tool_choice": "required",
+          },
+      ),
+      dict(
+          testcase_name="unknown_forced_function",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tools": [{
+                  "type": "function",
+                  "function": {"name": "get_weather"},
+              }],
+              "tool_choice": {
+                  "type": "function",
+                  "function": {"name": "nonexistent_tool"},
+              },
+          },
+      ),
+      dict(
+          testcase_name="unknown_allowed_tool",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tools": [{
+                  "type": "function",
+                  "function": {"name": "get_weather"},
+              }],
+              "tool_choice": {
+                  "type": "allowed_tools",
+                  "allowed_tools": {
+                      "mode": "required",
+                      "tools": [{
+                          "type": "function",
+                          "function": {"name": "other_tool"},
+                      }],
+                  },
+              },
+          },
+      ),
+      dict(
+          testcase_name="malformed_tools_not_list",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tools": "not_a_list",
+          },
+      ),
+      dict(
+          testcase_name="malformed_tool_missing_name",
+          payload={
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tools": [{"type": "function", "function": {}}],
+          },
+      ),
+  )
+  def test_openai_chat_completions_invalid_tools_or_tool_choice_returns_400(
+      self, payload
+  ):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+    mock_litert_lm.Engine.return_value = mock.MagicMock()
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      for stream in (False, True):
+        req_body = dict(payload, stream=stream)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            data=json.dumps(req_body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+          urllib.request.urlopen(req)
+        self.assertEqual(ctx.exception.code, 400)
+        ctx.exception.close()
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
+  def test_openai_chat_completions_valid_tool_choice_forwarding(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_conv.get_benchmark_info.return_value.last_prefill_token_count = 8
+    mock_conv.get_benchmark_info.return_value.last_decode_token_count = 4
+    mock_engine_instance.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_conv.send_message_async.side_effect = lambda *args, **kwargs: iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+        })
+    ])
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+    try:
+      # 1. tool_choice="none" without tools forwards "none" cleanly.
+      req_none_no_tools = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hi"}],
+              "tool_choice": "none",
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req_none_no_tools) as response:
+        self.assertEqual(response.getcode(), 200)
+      self.assertEqual(
+          mock_conv.send_message_async.call_args_list[-1].kwargs["tool_choice"],
+          "none",
+      )
+
+      # 2. Forced function tool_choice forwards normalized dict.
+      forced = {"type": "function", "function": {"name": "get_weather"}}
+      req_forced = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Weather?"}],
+              "tools": tools,
+              "tool_choice": forced,
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req_forced) as response:
+        self.assertEqual(response.getcode(), 200)
+      self.assertEqual(
+          mock_conv.send_message_async.call_args_list[-1].kwargs["tool_choice"],
+          forced,
+      )
     finally:
       server.close_conversation()
       server.shutdown()
