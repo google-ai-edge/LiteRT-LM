@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -53,6 +54,7 @@
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -446,6 +448,22 @@ absl::StatusOr<int> FindMaxIndex(::litert::TensorBuffer& decoded_logits,
 // Applies greedy sampling (argmax) to the decoded logits.
 absl::StatusOr<int> ApplyGreedySampling(::litert::TensorBuffer& decoded_logits,
                                         bool use_neon_sampling);
+
+// Returns true when `sampler_params` selects greedy argmax decoding
+// (`TYPE_UNSPECIFIED`, `GREEDY`, `k == 1`, or valid `TOP_K`/`TOP_P` with
+// `temperature == 0`).
+bool IsGreedySampling(const proto::SamplerParameters& sampler_params);
+
+// Samples a single token ID from `decoded_logits` (Float32, Int16, or Int8)
+// according to `sampler_params`. Uses `ApplyGreedySampling` when
+// `IsGreedySampling(sampler_params)` is true; otherwise dequantizes quantized
+// logits using `scale` and `zero_point` and performs Top-K / Top-P sampling
+// using `rng` (lazily seeded from `sampler_params.seed()` when null).
+absl::StatusOr<int> ApplySampling(
+    ::litert::TensorBuffer& decoded_logits,
+    const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine>& rng, float scale,
+    int32_t zero_point, bool use_neon_sampling);
 
 struct HWQuantParams {
   float scale = 1.0f;

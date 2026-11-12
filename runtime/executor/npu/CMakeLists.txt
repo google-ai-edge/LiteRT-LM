@@ -37,6 +37,9 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_compiled_model_executo
     LiteRTLM::Runtime::Executor::LlmExecutorInterface
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::ModelResourcesTask
+    LiteRTLM::Runtime::Components::SamplerParamsUtil
+    LiteRTLM::Runtime::Components::SamplingCpuUtil
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
     LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
