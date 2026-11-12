@@ -1837,7 +1837,7 @@ export class LitertLmChatApp extends LitElement {
             class="brand-logo"
           />
           <div class="brand-titles">
-            <h1>LiteRT-LM<span class="brand-suffix">.js Chat</span></h1>
+            <h1>LiteRT-LM<span class="brand-suffix"> Web Chat</span></h1>
           </div>
         </div>
 

@@ -132,7 +132,7 @@ describe('litert-lm-chat-app', () => {
   it('renders header and container', () => {
     const header = element.shadowRoot!.querySelector('header');
     expect(header).toBeTruthy();
-    expect(header!.querySelector('h1')!.textContent!.trim()).toBe('LiteRT-LM.js Chat');
+    expect(header!.querySelector('h1')!.textContent!.trim()).toBe('LiteRT-LM Web Chat');
 
     const appContainer = element.shadowRoot!.querySelector('.app-container');
     expect(appContainer).toBeTruthy();
@@ -407,7 +407,7 @@ describe('litert-lm-chat-app', () => {
      async () => {
        expect(element.shadowRoot!.querySelector('.header-badge')).toBeNull();
        expect(element.shadowRoot!.querySelector('header h1')!.textContent!.trim())
-           .toBe('LiteRT-LM.js Chat');
+           .toBe('LiteRT-LM Web Chat');
 
        const chatWindow =
            element.shadowRoot!.querySelector('litert-chat-window')!;
@@ -663,7 +663,7 @@ describe('litert-lm-chat-app', () => {
          await element.updateComplete;
          expect(header.getBoundingClientRect().height).toBe(40);
          const h1 = header.querySelector('h1')!;
-         expect(h1.textContent!.trim()).toBe('LiteRT-LM.js Chat');
+         expect(h1.textContent!.trim()).toBe('LiteRT-LM Web Chat');
          if (window.innerWidth > 560) {
            expect(h1.getBoundingClientRect().width).toBeGreaterThan(20);
          }

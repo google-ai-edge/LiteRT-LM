@@ -1,6 +1,6 @@
 {
   "id": "./index.html",
-  "name": "LiteRT-LM.js Chat",
+  "name": "LiteRT-LM Web Chat",
   "short_name": "LiteRT-LM",
   "description": "Private, on-device WebGPU chat powered by LiteRT-LM.",
   "start_url": "./index.html",
