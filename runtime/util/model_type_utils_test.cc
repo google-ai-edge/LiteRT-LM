@@ -391,5 +391,83 @@ TEST(ModelTypeUtilsTest, GetModelTypeName) {
   EXPECT_EQ(GetModelTypeName(model_type), "minicpmv4");
 }
 
+TEST(ModelTypeUtilsTest,
+     GetDefaultJinjaPromptTemplateStripsOpenChannelFromHistoryModelPrefix) {
+  proto::LlmMetadata metadata;
+  metadata.mutable_llm_model_type()->mutable_generic_model();
+  metadata.mutable_prompt_templates()->mutable_user()->set_prefix(
+      "<|im_start|>user\n");
+  metadata.mutable_prompt_templates()->mutable_user()->set_suffix(
+      "<|im_end|>\n");
+  metadata.mutable_prompt_templates()->mutable_model()->set_prefix(
+      "<|im_start|>assistant\n<think>\n");
+  metadata.mutable_prompt_templates()->mutable_model()->set_suffix(
+      "<|im_end|>\n");
+  proto::Channel* thought = metadata.add_channels();
+  thought->set_channel_name("thought");
+  thought->set_start("<think>");
+  thought->set_end("</think>");
+
+  ASSERT_OK_AND_ASSIGN(const std::string jinja_source,
+                       GetDefaultJinjaPromptTemplate(metadata));
+  PromptTemplate prompt_template(jinja_source);
+
+  PromptTemplateInput input;
+  input.messages = {
+      {{"role", "user"},
+       {"content", {{{"type", "text"}, {"text", "What is 23 + 19?"}}}}},
+      {{"role", "assistant"},
+       {"content", {{{"type", "text"}, {"text", "42"}}}},
+       {"channels", {{"thought", "23 + 19 = 42."}}}},
+      {{"role", "assistant"}, {"content", nlohmann::ordered_json::array()}},
+      {{"role", "user"},
+       {"content", {{{"type", "text"}, {"text", "Double it."}}}}},
+  };
+  input.add_generation_prompt = true;
+
+  ASSERT_OK_AND_ASSIGN(const std::string rendered,
+                       prompt_template.Apply(input));
+  EXPECT_EQ(rendered,
+            "<|im_start|>user\nWhat is 23 + 19?<|im_end|>\n"
+            "<|im_start|>assistant\n42<|im_end|>\n"
+            "<|im_start|>assistant\n<|im_end|>\n"
+            "<|im_start|>user\nDouble it.<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n");
+}
+
+TEST(ModelTypeUtilsTest,
+     GetDefaultJinjaPromptTemplatePreservesClosedChannelInModelPrefix) {
+  proto::PromptTemplates prompt_templates;
+  prompt_templates.mutable_user()->set_prefix("<|im_start|>user\n");
+  prompt_templates.mutable_user()->set_suffix("<|im_end|>\n");
+  prompt_templates.mutable_model()->set_prefix(
+      "<|im_start|>assistant\n<think></think>\n");
+  prompt_templates.mutable_model()->set_suffix("<|im_end|>\n");
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_fast_vlm();
+
+  proto::Channel suffix_channel;
+  suffix_channel.set_channel_name("thought");
+  suffix_channel.set_start("think>");
+  suffix_channel.set_end("</think>");
+
+  ASSERT_OK_AND_ASSIGN(const std::string jinja_source,
+                       GetDefaultJinjaPromptTemplate(
+                           prompt_templates, llm_model_type, {suffix_channel}));
+  PromptTemplate prompt_template(jinja_source);
+
+  PromptTemplateInput input;
+  input.messages = {
+      {{"role", "assistant"},
+       {"content", {{{"type", "text"}, {"text", "Done"}}}}},
+  };
+  input.add_generation_prompt = false;
+
+  ASSERT_OK_AND_ASSIGN(const std::string rendered,
+                       prompt_template.Apply(input));
+  EXPECT_EQ(rendered,
+            "<|im_start|>assistant\n<think></think>\nDone<|im_end|>\n");
+}
+
 }  // namespace
 }  // namespace litert::lm

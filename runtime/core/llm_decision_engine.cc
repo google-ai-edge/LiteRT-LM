@@ -522,9 +522,8 @@ absl::StatusOr<std::unique_ptr<LlmDecisionEngine>> LlmDecisionEngine::Create(
   if (metadata->has_jinja_prompt_template()) {
     jinja_source = metadata->jinja_prompt_template();
   } else if (metadata->has_prompt_templates()) {
-    ABSL_ASSIGN_OR_RETURN(jinja_source, GetDefaultJinjaPromptTemplate(
-                                            metadata->prompt_templates(),
-                                            metadata->llm_model_type()));
+    ABSL_ASSIGN_OR_RETURN(jinja_source,
+                          GetDefaultJinjaPromptTemplate(*metadata));
   } else {
     return absl::InvalidArgumentError(
         "The model metadata has no prompt template.");
