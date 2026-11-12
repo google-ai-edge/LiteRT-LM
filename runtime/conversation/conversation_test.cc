@@ -5706,7 +5706,7 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
   // Init with preface.
   absl::string_view expected_prefill_preface =
       "<|turn>system\n"
-      "You are a helpful assistant.\n\n"
+      "You are a helpful assistant.\n"
       "<|tool>declaration:tool_name{"
       "description:<|\"|><|\"|>,"
       "parameters:{"
@@ -5794,7 +5794,7 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
       {.has_pending_message = true}));
 
   // Append the 3rd message.
-  absl::string_view expected_prefill_3 = "How can I help you today?";
+  absl::string_view expected_prefill_3 = " How can I help you today?";
   EXPECT_CALL(
       *mock_session_ptr,
       RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
@@ -5808,7 +5808,7 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
       {.has_pending_message = true}));
 
   // Append the 4th message.
-  absl::string_view expected_prefill_4 = "The message is ended.";
+  absl::string_view expected_prefill_4 = " The message is ended.";
   EXPECT_CALL(
       *mock_session_ptr,
       RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
@@ -5932,7 +5932,7 @@ TEST(AppendMessageTest, Gemma4ToolsPrefaceWithoutSystemMessage) {
                   }])json")};
 
   absl::string_view expected_tools_preface =
-      "<|turn>system\n\n\n"
+      "<|turn>system\n"
       "<|tool>declaration:tool_name{"
       "description:<|\"|><|\"|>,"
       "parameters:{"
