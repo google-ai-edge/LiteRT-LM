@@ -40,9 +40,10 @@
 namespace litert::omni::asr {
 
 absl::StatusOr<StatefulDecoder::RunnerContext>
-StatefulDecoder::InitRunnerContext(
-    LiteRtRunner* absl_nonnull runner, absl::string_view signature_name,
-    size_t num_non_state_inputs, size_t num_non_state_outputs) {
+StatefulDecoder::InitRunnerContext(LiteRtRunner* absl_nonnull runner,
+                                   absl::string_view signature_name,
+                                   size_t num_non_state_inputs,
+                                   size_t num_non_state_outputs) {
   if (runner == nullptr) {
     return absl::InvalidArgumentError("Runner cannot be null.");
   }
@@ -56,9 +57,14 @@ StatefulDecoder::InitRunnerContext(
 
   LITERT_ASSIGN_OR_RETURN(
       auto stateful_runner,
-      StatefulLiteRtRunnerImpl::Create(runner, signature_name,
-                                       num_non_state_inputs,
-                                       num_non_state_outputs));
+      StatefulLiteRtRunnerImpl::Create(
+          runner, signature_name, num_non_state_inputs, num_non_state_outputs));
+
+  if (stateful_runner->GetActiveInputStates().empty()) {
+    return absl::InvalidArgumentError(
+        "Stateful decoder requires recurrent state tensors in decode "
+        "signature.");
+  }
 
   auto out_buffers = stateful_runner->GetNonStateOutputBuffers();
   if (out_buffers.empty()) {
@@ -165,7 +171,8 @@ absl::Status StatefulDecoder::ResetAndInitStepInputs(
   return absl::OkStatus();
 }
 
-absl::StatusOr<absl::Span<const float>> StatefulDecoder::Step(int32_t token_id) {
+absl::StatusOr<absl::Span<const float>> StatefulDecoder::Step(
+    int32_t token_id) {
   if (step_inputs_.empty()) {
     return absl::FailedPreconditionError(
         "ResetAndInitStepInputs() must be called before Step().");

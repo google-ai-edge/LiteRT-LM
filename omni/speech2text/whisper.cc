@@ -25,6 +25,7 @@
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -44,6 +45,8 @@
 #include "omni/omni_session.h"
 #include "omni/speech2text/asr_session.h"
 #include "omni/speech2text/audio_source.h"
+#include "omni/speech2text/litert_speech_recognizer.h"
+#include "omni/speech2text/stateless_decoder.h"
 #include "omni/speech2text/whisper_decoder.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
@@ -191,8 +194,7 @@ class WhisperSessionFactory : public AsrSessionFactory {
   WhisperSessionFactory(
       const OmniEngine::Settings& settings,
       const MessageLite* absl_nullable session_config,
-      const MessageLite* absl_nullable metadata,
-      ::litert::Environment env,
+      const MessageLite* absl_nullable metadata, ::litert::Environment env,
       std::shared_ptr<lm::ModelResources> absl_nullable lm_resources,
       std::unique_ptr<::litert::support::Tokenizer> absl_nonnull tokenizer,
       std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model)
@@ -207,14 +209,34 @@ class WhisperSessionFactory : public AsrSessionFactory {
     std::vector<int> start_token_ids(
         metadata().decode_start_token_ids().begin(),
         metadata().decode_start_token_ids().end());
+    std::unique_ptr<LiteRtSpeechRecognizer::Decoder> decoder;
     WhisperDecoder::Options decoder_options;
     decoder_options.enable_timestamps = true;
-    ABSL_ASSIGN_OR_RETURN(
-        auto decoder,
-        WhisperDecoder::Create(
-            encoder.get(), "decode", /*num_non_state_inputs=*/2,
-            /*num_non_state_outputs=*/1, std::move(start_token_ids),
-            std::move(decoder_options)));
+    auto whisper_decoder = WhisperDecoder::Create(
+        encoder.get(), "decode", /*num_non_state_inputs=*/2,
+        /*num_non_state_outputs=*/1, start_token_ids,
+        std::move(decoder_options));
+    if (whisper_decoder.ok()) {
+      decoder = std::move(*whisper_decoder);
+    } else if (absl::IsInvalidArgument(whisper_decoder.status())) {
+      ABSL_LOG(INFO) << "Stateful WhisperDecoder not applicable ("
+                     << whisper_decoder.status()
+                     << "); falling back to StatelessDecoder.";
+      auto stateless_decoder = StatelessDecoder::Create(
+          encoder.get(), std::move(start_token_ids),
+          metadata().decode_stop_token_id(),
+          metadata().decode_skip_until_token_id());
+      if (!stateless_decoder.ok()) {
+        return absl::InternalError(absl::StrCat(
+            "Failed to initialize Whisper decoder as both stateful and "
+            "stateless decoder initialization failed. Stateful error: ",
+            whisper_decoder.status().ToString(),
+            "; Stateless error: ", stateless_decoder.status().ToString()));
+      }
+      decoder = std::move(*stateless_decoder);
+    } else {
+      return whisper_decoder.status();
+    }
     return CreateMultiStagedSession(std::move(audio_source), std::move(encoder),
                                     std::move(decoder));
   }
@@ -228,8 +250,8 @@ class WhisperSessionFactory : public AsrSessionFactory {
 absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetWhisperSessionFactory(
     absl::string_view model_name, const OmniEngine::Settings& settings,
     const MessageLite* absl_nullable session_config,
-    const MessageLite* absl_nullable metadata,
-    ::litert::Environment& env, ::litert::Options& options,
+    const MessageLite* absl_nullable metadata, ::litert::Environment& env,
+    ::litert::Options& options,
     std::shared_ptr<lm::ModelResources> absl_nullable lm_resources) {
   if (!absl::c_linear_search(kAllModelNames, model_name)) {
     return absl::InvalidArgumentError(

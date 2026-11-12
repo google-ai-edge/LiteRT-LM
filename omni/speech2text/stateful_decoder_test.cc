@@ -37,6 +37,7 @@ namespace litert::omni::asr {
 namespace {
 
 using ::testing::_;
+using ::testing::HasSubstr;
 using ::testing::Return;
 
 ::litert::TensorBuffer CreateTestTensorBuffer(size_t num_elements,
@@ -89,6 +90,33 @@ TEST(StatefulDecoderTest, CreateSuccessfully) {
                               /*num_non_state_inputs=*/2,
                               /*num_non_state_outputs=*/1));
   EXPECT_NE(decoder, nullptr);
+}
+
+TEST(StatefulDecoderTest, CreateWhenModelHasZeroStateTensorsReturnsError) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        // Non-state input buffers: token and encoder output.
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        // Non-state output buffer: logits.
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        return buffers;
+      });
+
+  auto status =
+      StatefulDecoder::Create(&mock_runner, "decode",
+                              /*num_non_state_inputs=*/2,
+                              /*num_non_state_outputs=*/1)
+          .status();
+  EXPECT_TRUE(absl::IsInvalidArgument(status));
+  EXPECT_THAT(status.message(), HasSubstr("recurrent state tensors"));
 }
 
 TEST(StatefulDecoderTest, DecodeFailsWhenEncoderOutputsEmpty) {

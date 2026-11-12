@@ -39,6 +39,7 @@ namespace {
 
 using ::testing::_;
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 
 constexpr size_t kVocabSize = 51865;
 
@@ -85,6 +86,33 @@ TEST(WhisperDecoderTest, CreateWhenMaxDecodeStepsInvalidReturnsError) {
   options.max_decode_steps = 0;
   EXPECT_FALSE(
       WhisperDecoder::Create(&mock_runner, "decode", 2, 1, {}, options).ok());
+}
+
+TEST(WhisperDecoderTest, CreateWhenModelHasZeroStateTensorsReturnsError) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        // Non-state input buffers: token and encoder output.
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        // Non-state output buffer: logits.
+        buffers.push_back(CreateTestTensorBuffer(kVocabSize, sizeof(float)));
+        return buffers;
+      });
+
+  auto status =
+      WhisperDecoder::Create(&mock_runner, "decode",
+                             /*num_non_state_inputs=*/2,
+                             /*num_non_state_outputs=*/1)
+          .status();
+  EXPECT_TRUE(absl::IsInvalidArgument(status));
+  EXPECT_THAT(status.message(), HasSubstr("recurrent state tensors"));
 }
 
 TEST(WhisperDecoderTest, CreateFiltersNoTimestampsWhenTimestampsEnabled) {
