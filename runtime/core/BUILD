@@ -342,6 +342,156 @@ alias(
 )
 
 cc_library(
+    name = "engine_legacy_streaming_utils",
+    srcs = ["engine_legacy_streaming_utils.cc"],
+    hdrs = ["engine_legacy_streaming_utils.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/proto:llm_metadata_cc_proto",
+    ],
+)
+
+cc_test(
+    name = "engine_legacy_streaming_utils_test",
+    srcs = ["engine_legacy_streaming_utils_test.cc"],
+    deps = [
+        ":engine_legacy_streaming_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/util:test_utils",
+    ],
+)
+
+ENGINE_LEGACY_IMPL_COMMON_DEPS = [
+    ":audio_session_advanced",
+    ":engine_legacy_streaming_utils",
+    ":engine_vision_utils",
+    ":session_advanced",
+    "@com_google_absl//absl/log:absl_log",
+    "@com_google_absl//absl/memory",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:status_macros",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/strings:string_view",
+    "@com_google_absl//absl/time",
+    "//runtime/components:model_data_provider",
+    "//runtime/components:model_resources",
+    "//runtime/components:model_resources_litert_lm_google",
+    "//runtime/components:model_resources_streaming",
+    "//support/tokenizer:sentencepiece_tokenizer",
+    "//support/tokenizer",
+    "//runtime/engine:engine_factory",
+    "//runtime/engine:engine_interface",
+    "//runtime/engine:engine_settings",
+    "//runtime/engine:io_types",
+    "//runtime/executor:audio_executor",
+    "//runtime/executor:audio_executor_settings",
+    "//runtime/executor:audio_litert_compiled_model_executor",
+    "//runtime/executor:executor_settings_base",
+    "//runtime/executor/gpu_artisan/utils:model_data",
+    "//runtime/executor:llm_executor",
+    "//runtime/executor:llm_executor_settings",
+    "//runtime/framework/resource_management:serial_execution_manager",
+    "//runtime/executor:vision_executor",
+    "//runtime/executor:vision_executor_settings",
+    "//runtime/executor:vision_litert_compiled_model_executor",
+    "//runtime/framework/resource_management:execution_manager",
+    "//runtime/framework/resource_management:threaded_execution_manager",
+    "//runtime/proto:llm_metadata_cc_proto",
+    "//runtime/proto:sampler_params_cc_proto",
+    "//runtime/util:data_stream",
+    "//runtime/util:file_format_util",
+    "//runtime/util:litert_lm_loader",
+    "//runtime/util:litert_lm_streaming_loader",
+    "//runtime/util:litert_status_util",
+    "//runtime/util:litert_util",
+    "//runtime/util:scoped_file",
+    "//schema/core:litertlm_header_schema",
+    "//schema/core:litertlm_read",
+    "@litert//litert/cc:litert_environment",
+    "@litert//litert/cc:litert_macros",
+] + select({
+    "//conditions:default": [],
+}) + select({
+    "//build_config:disable_huggingface_tokenizer": [
+        "//support/tokenizer:huggingface_tokenizer_noop",
+    ],
+    "//conditions:default": [
+        "//support/tokenizer:huggingface_tokenizer",
+    ],
+})
+
+cc_library(
+    name = "engine_advanced_legacy_impl",
+    srcs = ["engine_advanced_legacy_impl.cc"],
+    local_defines = ["LITERT_LM_EXCLUDE_LEGACY_EXECUTORS=1"],
+    visibility = [":engine_impl_users"],
+    deps = ENGINE_LEGACY_IMPL_COMMON_DEPS + [
+        "@litert//litert/cc:litert_model",
+        "//runtime/components:default_static_gpu_samplers",
+        "//runtime/executor:default_gpu_accelerator",
+        "//runtime/executor/gpu_artisan:llm_gpu_artisan_executor",
+        "//runtime/util:read_data_fn_util",
+    ] + select({
+        "//conditions:default": [],
+    }),
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "engine_advanced_legacy_impl_cpu_only",
+    srcs = ["engine_advanced_legacy_impl.cc"],
+    defines = ["LITERTLM_CPU_ONLY"],
+    local_defines = ["LITERT_LM_EXCLUDE_LEGACY_EXECUTORS=1"],
+    visibility = [":engine_impl_users"],
+    deps = ENGINE_LEGACY_IMPL_COMMON_DEPS,
+    alwayslink = 1,
+)
+
+cc_test(
+    name = "engine_gpu_artisan_test",
+    srcs = ["engine_gpu_artisan_test.cc"],
+    data = ["//runtime/testdata"],
+    local_defines = ["LITERT_LM_EXCLUDE_LEGACY_EXECUTORS=1"],
+    tags = ["requires-mac-inputs:hard"],
+    target_compatible_with = select({
+        "//build_config:exclude_oss_engine_advanced_legacy_impl": [
+            "@platforms//:incompatible",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers//:runtime_cc",
+        "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_impl_selected",  # buildcleaner: keep
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor/gpu_artisan/proto:llm_params_cc_proto",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:token_cc_proto",
+        "//runtime/util:file_data_stream",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:memory_mapped_file",
+        "//runtime/util:test_utils",
+        "//schema/core:litertlm_header_schema",
+        "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
+cc_library(
     name = "session_advanced",
     srcs = ["session_advanced.cc"],
     hdrs = ["session_advanced.h"],

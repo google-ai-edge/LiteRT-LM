@@ -29,6 +29,12 @@ set(LITERTLM_DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/download" CACHE PATH "Directory f
 set(LITERTLM_PYTHON_DOWNLOAD_DIR "${LITERTLM_DOWNLOAD_DIR}/python")
 
 option(ENABLE_UV "Enables uv virtual environment for the build" OFF)
+option(LITERT_LM_ENABLE_GPU_ARTISAN "Enable GPU Artisan backend" OFF)
+if(LITERT_LM_ENABLE_GPU_ARTISAN)
+  message(FATAL_ERROR
+    "LITERT_LM_ENABLE_GPU_ARTISAN is currently supported in Bazel builds "
+    "only; CMake external dependencies for ml_drift are not yet wired.")
+endif()
 set(LITERTLM_ENV_WRAPPER "" CACHE INTERNAL
   "LiteRT-LM: Environment variables for uv virtual environment")
 set(LITERTLM_UV_ARGS     "" CACHE INTERNAL
@@ -310,6 +316,7 @@ ExternalProject_Add(
       "-DLITERTLM_UV_ARGS=${LITERTLM_UV_ARGS}"
       "-DLITERTLM_VENV_DIR=${LITERTLM_VENV_DIR}"
       "-DLITERTLM_CROSSCOMPILING=${LITERTLM_CROSSCOMPILING}"
+      "-DLITERT_LM_ENABLE_GPU_ARTISAN=${LITERT_LM_ENABLE_GPU_ARTISAN}"
   BUILD_COMMAND 
     ${CMAKE_COMMAND} -E env ${LITERTLM_ENV_WRAPPER} 
     ${CMAKE_COMMAND} --build <BINARY_DIR> ${LITERTLM_BUILD_COMMAND_ARGS}
