@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {findModel, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, SettingsStore} from './settings_store.js';
+import {findModel, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, selectCustomModel, SettingsStore} from './settings_store.js';
 
 describe('SettingsStore', () => {
   let mockCallbackCount = 0;
@@ -270,5 +270,34 @@ describe('SettingsStore', () => {
          label: 'WebGPU · CPU',
          detail: 'Backend: WebGPU · CPU (Vision, Audio on CPU)',
        });
+     });
+
+  it('selects built-in models in selectCustomModel without adding duplicates to customModels',
+     () => {
+       const store = new SettingsStore(mockUpdateCallback);
+       store.textBackend = 'cpu';
+
+       selectCustomModel(store, MODELS[1]!);
+       expect(store.selectedModelPath).toBe(MODELS[1]!.path);
+       expect(store.customModels).toEqual([]);
+       expect(store.textBackend).toBe('gpu');
+
+       const custom = {
+         name: 'Mine',
+         filename: 'mine.litertlm',
+         path: 'hf://org/mine',
+         size: '1 GB',
+       };
+       const otherCustom = {
+         name: 'Other',
+         filename: 'other.litertlm',
+         path: 'hf://org/other',
+         size: '2 GB',
+       };
+       selectCustomModel(store, custom);
+       selectCustomModel(store, custom);
+       selectCustomModel(store, otherCustom);
+       expect(store.selectedModelPath).toBe(otherCustom.path);
+       expect(store.customModels).toEqual([custom, otherCustom]);
      });
 });

@@ -447,7 +447,8 @@ export function selectCustomModel(
         'customModels'|'selectedModelPath'|'saveSettings'|'textBackend'>&
     Partial<Pick<SettingsStore, 'localDirModels'>>,
     model: CustomModel) {
-  if (!settings.customModels.some(m => m.path === model.path)) {
+  if (!MODELS.some(m => m.path === model.path) &&
+      !settings.customModels.some(m => m.path === model.path)) {
     settings.customModels = [...settings.customModels, model];
   }
   settings.selectedModelPath = model.path;

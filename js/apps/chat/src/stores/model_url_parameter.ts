@@ -17,7 +17,7 @@
 import type {ChatSessionStore} from './chat_session_store.js';
 import {parseHuggingFaceModelReference} from './model_reference.js';
 import type {ModelLoaderService} from './model_loader_service.js';
-import {CustomModel, selectCustomModel, SettingsStore} from './settings_store.js';
+import {CustomModel, MODELS, selectCustomModel, SettingsStore} from './settings_store.js';
 
 /**
  * The URL parameter that loads a Hugging Face model when the demo opens, e.g.
@@ -64,14 +64,19 @@ async function loadHuggingFaceModel(
                  `Hugging Face repo (org/repo) or hf:// URI, not "${text}".`);
     return;
   }
+  const builtIn = MODELS.find(m => m.path === reference);
   let model: CustomModel;
-  try {
-    model = settings.textBackend === 'cpu' ?
-        await modelLoader.addRemoteModel(reference, 'cpu') :
-        await modelLoader.addRemoteModel(reference);
-  } catch {
-    // The model loader shows the error in the status.
-    return;
+  if (builtIn) {
+    model = builtIn;
+  } else {
+    try {
+      model = settings.textBackend === 'cpu' ?
+          await modelLoader.addRemoteModel(reference, 'cpu') :
+          await modelLoader.addRemoteModel(reference);
+    } catch {
+      // The model loader shows the error in the status.
+      return;
+    }
   }
   selectCustomModel(settings, model);
   await modelLoader.loadModelWeights(settings.modelSettings, async () => {

@@ -811,6 +811,16 @@ describe('litert-chat-window', () => {
            await Promise.resolve();
            expect(mockSettings.customModels).toEqual([]);
            expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+
+           // Entering a built-in Hugging Face repo selects the built-in entry
+           // directly without calling addRemoteModel or appending to customModels
+           mockModelLoader.addRemoteModel.calls.reset();
+           await submit(
+               await openForm(),
+               'litert-community/gemma-4-E4B-it-litert-lm');
+           expect(mockModelLoader.addRemoteModel).not.toHaveBeenCalled();
+           expect(mockSettings.customModels).toEqual([]);
+           expect(mockSettings.selectedModelPath).toBe(MODELS[1]!.path);
          });
 
       it('keeps popover open on lookup error, disables while loading, and closes on Escape restoring focus',

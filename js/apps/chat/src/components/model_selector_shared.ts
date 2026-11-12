@@ -18,6 +18,7 @@ import {css, html, nothing, TemplateResult} from 'lit';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
+import {parseModelReference} from '../stores/model_reference.js';
 import {coerceGpuOnlyTextBackend, CustomModel, findModel, getNonDefaultBackendSummary, MODELS, NonDefaultBackendSummary, selectCustomModel} from '../stores/settings_store.js';
 
 const LARGE_MODEL_WARNING_KEY = 'litertlm-large-model-warning-dismissed';
@@ -481,12 +482,19 @@ export async function addRemoteModelFromInput(
     state: LlmChatStateController,
     text: string,
     onSelected?: () => void): Promise<boolean> {
+  const reference = parseModelReference(text);
+  const builtIn =
+      reference ? MODELS.find(m => m.path === reference) : undefined;
   let customModel: CustomModel;
-  try {
-    customModel = await state.modelLoader.addRemoteModel(
-        text, state.settings.textBackend);
-  } catch {
-    return false;
+  if (builtIn) {
+    customModel = builtIn;
+  } else {
+    try {
+      customModel = await state.modelLoader.addRemoteModel(
+          text, state.settings.textBackend);
+    } catch {
+      return false;
+    }
   }
   selectCustomModel(state.settings, customModel);
   onSelected?.();
